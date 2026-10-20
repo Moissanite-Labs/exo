@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -213,8 +214,9 @@ def _coerce_capture(items: Any, kind: str) -> list[Signal]:
 
 
 def extract_rulings_and_corrections(messages: list[dict]) -> tuple[list[Signal], list[Signal]]:
-    """Use exo.capture when present (the seam), else the local heuristics. D-040: a user message whose ``author`` or
-    ``principal`` flag says it is not the principal's (peer, bus, job, a context note) is never a ruling."""
+    """Use exo.capture when present (the seam), else the local heuristics. D-040: a user message whose author,
+    read through `provenance.author_of` with its meta tags, is not the principal's (peer, bus, job, a context
+    note) is never a ruling."""
     messages = provenance.principal_view(messages)  # such a message becomes role "other", which both paths skip
     try:
         from . import capture
@@ -397,10 +399,29 @@ def _unquote_items(block: str) -> list[str]:
     return [i for i in items if i]
 
 
+def _pinned_spans(text: str) -> Iterable[tuple[int, int, int, int]]:
+    """(start, body_start, body_end, end) of each closed pinned block, in order. A linear `find`
+    scan (#322): the first open tag with no close after it ends the scan, since no later open can
+    close either. The lazy regex this replaces rescanned to the end from every unclosed open, so
+    a run of them cost quadratic time."""
+    pos = 0
+    while True:
+        start = text.find(PIN_OPEN, pos)
+        if start < 0:
+            return
+        body_start = start + len(PIN_OPEN)
+        body_end = text.find(PIN_CLOSE, body_start)
+        if body_end < 0:
+            return
+        pos = body_end + len(PIN_CLOSE)
+        yield start, body_start, body_end, pos
+
+
 def parse_pinned_blocks(text: str) -> dict[str, list[str]]:
     """Read every `<exo-pinned>` block in `text` back into verbatim items per kind."""
     out: dict[str, list[str]] = {k: [] for _, k, _ in _PIN_SECTIONS}
-    for body in re.findall(re.escape(PIN_OPEN) + r'(.*?)' + re.escape(PIN_CLOSE), text, re.S):
+    for _, body_start, body_end, _ in _pinned_spans(text):
+        body = text[body_start:body_end]
         for title, kind, _ in _PIN_SECTIONS:
             m = re.search(r'^### ' + re.escape(title) + r'\s*$(.*?)(?=^### |\Z)', body, re.S | re.M)
             if m:
@@ -410,7 +431,12 @@ def parse_pinned_blocks(text: str) -> dict[str, list[str]]:
 
 def strip_pinned(text: str) -> str:
     """`text` without any `<exo-pinned>` blocks."""
-    return re.sub(re.escape(PIN_OPEN) + r'.*?' + re.escape(PIN_CLOSE), '', text, flags=re.S)
+    parts, pos = [], 0
+    for start, _, _, end in _pinned_spans(text):
+        parts.append(text[pos:start])
+        pos = end
+    parts.append(text[pos:])
+    return ''.join(parts)
 
 
 def render_pinned_block(signals: Signals, handoff_path: str | os.PathLike | None = None,
@@ -452,11 +478,17 @@ def render_pinned_block(signals: Signals, handoff_path: str | os.PathLike | None
 
 def _may_carry(m: dict) -> bool:
     """D-040: a pinned block is carried only from a message that opens with it (exo-context's own block) or with a
-    compaction marker (a host's summary), from the system, the principal or an older host's untagged message. A block
-    in peer, bus, job, tool or agent text is data, and so is one quoted further down a message: the Exo core's system
+    compaction marker (a host's summary), whose author reads as the system or the principal through
+    `provenance.author_of`, meta tags included. An older host's untagged user turn still reads as the principal. An
+    untagged assistant turn reads as the agent's and does not carry, host summary or not (#371): its
+    `_compressed_summary` flag shows a host made the row, not that exo-context escaped its text when it was made,
+    and rows a host built on its own (a micro compaction, a stock summary restored on resume) never pass that
+    escaping. Continuity for those rows comes from the engine's session pins, not from carrying. A block in peer,
+    bus, job, tool or agent text is data, and so is one quoted further down a message: the Exo core's system
     message quotes each span too small to summarize word for word, a peer's turn included."""
-    meta = m.get('meta') or {}
-    if any(meta.get(k) for k in ('peer', 'bus', 'job')):
+    meta = m.get('meta')
+    meta = meta if isinstance(meta, Mapping) else {}
+    if any(meta.get(k) is not None for k in ('peer', 'bus', 'job')):
         return False  # an ingress tag in meta is not the principal, whatever the role says (#322)
     return m.get('role') not in ('other', 'tool') and provenance.author_of(m) in (
         provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith((PIN_OPEN, *SUMMARY_MARKERS))

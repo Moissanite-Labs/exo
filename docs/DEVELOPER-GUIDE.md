@@ -61,14 +61,14 @@ engine that `exo serve` runs; `exo.core.engine:create` forwards to it. The diagn
 goes in compose, new read-only views go in diagnostics, and neither goes into `CoreEngine`. These modules still read
 some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the split will replace with public queries.
 
-**The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the
-lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`
-(generated protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
-`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the
-headroom left (run it with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the
-rules (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on
-the engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol
-has its own cap (section 2).
+**The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
+in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
+protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
+`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the headroom left (run it
+with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the rules
+(`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on the
+engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol has
+its own cap (section 2).
 
 **Core, plugins, clients.** The core does the work and holds the state. Plugins add tools, commands, hooks, a memory
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
@@ -86,7 +86,9 @@ commands. Its collaborators have small interfaces:
   `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`. `stop()` keeps it restartable;
   `close()` closes schedule.sqlite and is final.
 - `await engine.close()` stops jobs, peers, channels and the scheduler, then closes schedule.sqlite and the
-  session store. The store is not final: a later read or write reopens sessions.sqlite (#281).
+  session store. The store is not final: a later read or write reopens sessions.sqlite (#281). Errors reported while
+  it stops them are still recorded as `harness.error` events. The engine drops its trace sink just before the
+  session store closes.
 - `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core
   (the scheduler) uses it, not the loop's private state.
 - A plugin callback that may be sync or async goes through `exo.core.hooks.maybe_await`. One that may not declare
@@ -297,11 +299,11 @@ methods matter for the principal's words:
   `checkpoint(reason="pre_compress")` and `on_compacted(session, node)` are optional siblings.
 
 Do not log or print message text from these hooks. Report errors through `exo.core.trace.report` so they show as
-`harness.error` and become findings. `trace.add_sink(fn)` subscribes to those reports. A bound method is held
-weakly and does not keep its owner alive, so keep the owner referenced for as long as it should receive reports
-(the engine registers its own and removes it in `close()`). Sinks are copy-on-write and no sink runs under a lock, so
-a sink or a finalizer may call `report`, `add_sink` or `remove_sink`; a report already delivering may still call a sink
-removed after it began.
+`harness.error` and become findings. `trace.add_sink(fn)` subscribes to those reports. A bound method is held weakly
+and does not keep its owner alive, so keep the owner referenced for as long as it should receive reports (the engine
+registers its own and removes it in `close()`, before the store closes). Sinks are copy-on-write and no sink runs
+under a lock, so a sink or a finalizer may call `report`, `add_sink` or `remove_sink`. A report already delivering
+may still call a sink removed after it began.
 
 **Context engine hooks.** `select_context(messages, session_id=)` gets each message with `author` and `principal`,
 like the memory hooks. After `session.undo` the core calls `on_session_switch(session, rewound=True, messages=,
