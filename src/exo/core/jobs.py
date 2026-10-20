@@ -346,11 +346,11 @@ class JobManager:
 
     def read_log(self, job_id: str) -> str:
         p = self.log_path(job_id)
-        old = p.with_suffix(".log.1")
-        parts = []
-        for f in (old, p):
+        parts: list[str] = []
+        for f in (p.with_suffix(".log.1"), p):  # with .log.1 read, the live log's note goes, so a split key is whole
             with contextlib.suppress(OSError):
-                parts.append(f.read_bytes().decode("utf-8", errors="replace"))
+                text = f.read_bytes().decode("utf-8", errors="replace")
+                parts.append(text.removeprefix(ROTATED.format(p.name)) if parts else text)
         return "".join(parts)
 
     def kill(self, job_id: str, by: str = "job_kill") -> bool:

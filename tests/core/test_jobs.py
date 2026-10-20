@@ -547,6 +547,26 @@ async def test_output_cap_rotates_the_log(tmp_path):
 
 
 @aio
+async def test_job_output_redacts_a_key_the_rotation_split(tmp_path, monkeypatch):
+    """job_output reads <id>.log.1 and then the live log. The live log's rotation note no longer sits between the two
+    parts of a key the rotation split, so the registry redacts the whole key. Without .log.1 the note stays."""
+    key = "sk-fake-QWERTYUIOPASDFGHJKLZXCVBNM0123456789"
+    monkeypatch.setenv("EXO_NOTICE_TEST_API_KEY", key)
+    eng = engine(tmp_path, jobs={"output_cap": 2000})  # the log rotates at byte 2000, 12 characters into the key
+    sid = (await eng.loop.create_session(agent="tester")).id
+    job = eng.jobs.start(f"head -c 1988 /dev/zero | tr '\\0' x; printf '%s\\nend\\n' {key}", str(tmp_path), sid)
+    await until(lambda: state(eng, job["id"]) == "done")
+    log = eng.jobs.log_path(job["id"])
+    assert log.with_suffix(".log.1").read_text().endswith(key[:12]) and log.read_text().startswith("[output rotated")
+    out = (await eng.registry.call(ToolCall(id="o", name="job_output", arguments={"id": job["id"]}), None)).text()
+    assert out.endswith("x" * 1988 + "[redacted]\nend") and not any(key[i:i + 6] in out for i in range(len(key) - 5))
+    assert eng.jobs.read_log(job["id"]) == "x" * 1988 + key + "\nend\n"
+    log.with_suffix(".log.1").unlink()  # pruned or never there: the note still says where earlier output went
+    assert eng.jobs.read_log(job["id"]) == log.read_text() and "[output rotated" in log.read_text()
+    await eng.close()
+
+
+@aio
 async def test_subagents_cannot_background(tmp_path):
     eng = engine(tmp_path)
     child = (await eng.loop.create_session(agent="tester", kind="subagent")).id
