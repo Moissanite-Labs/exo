@@ -116,6 +116,45 @@ def test_tool_rounds_and_events_written_before_publish(tmp_path):
     assert [e.seq for e in store.events_since(0)] == [e.seq for e in seen]
 
 
+@pytest.mark.parametrize("limits", [{}, {"max_iterations": 0}], ids=["default", "zero"])
+def test_unlimited_turn_completes_after_more_than_24_tool_rounds(tmp_path, limits):
+    prov = Script(*_spin(30), reply("finished"))
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=echo_tool, **limits)
+
+    async def go():
+        s = await loop.create_session()
+        return s, await loop.send(s.id, "long task")
+
+    s, res = run(go())
+    assert res.stop_reason == "end" and res.message.text() == "finished"
+    assert len(prov.calls) == 31
+    assert sum(e.type == "tool.completed" for e in seen) == 30
+    assert [e.body.iteration for e in seen if e.type == "model.call"] == list(range(1, 32))
+    assert not any(m.meta.get("wrap_up") for m in store.messages(s.id))
+    assert not any(e.type == "notice" and "stopped after" in e.body.text for e in seen)
+
+
+def test_unlimited_turn_can_be_interrupted_after_round_24(tmp_path):
+    ran = []
+
+    async def stop_after_25(call, ctx):
+        ran.append(call.id)
+        if len(ran) == 25:
+            assert loop.interrupt(ctx["session"])
+        return ToolResult.of_text(call.id, "done")
+
+    prov = Script(*_spin(30), reply("never"))
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=stop_after_25)
+
+    async def go():
+        s = await loop.create_session()
+        return await asyncio.wait_for(loop.send(s.id, "long task"), 5)
+
+    res = run(go())
+    assert res.stop_reason == "interrupted" and len(ran) == 25 and len(prov.calls) == 25
+    assert seen[-2].type == "turn.completed" and seen[-2].body.stop_reason == "interrupted"
+
+
 def test_max_iterations_and_retry(tmp_path):
     loop_call = [ToolCall(id="c", name="echo", arguments={})]
     prov = Script(*[reply("", loop_call) for _ in range(5)])

@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Top-level turns no longer stop after 24 tool rounds (#360). `Loop` defaults to `max_iterations=0` (unlimited);
+  explicit positive limits retain their cap and progress report, and delegated children retain `max_turns`
+  (24 by default). User stops, approvals, spend limits, bounded retries and child token/time limits still apply.
 - `Config.load()` read and parsed `config.json` on every call (#255, W1-3). It is called from engine setup, the CLI
   and plugin code, so one process read the same unchanged file many times. The parsed file is now cached on its
   size and `mtime_ns`, each load hands out a deep copy, and `save()` refreshes the cache with what it wrote. An

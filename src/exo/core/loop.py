@@ -2,7 +2,7 @@
 
 One turn: store the user message, build a fresh model input (context engine),
 stream the reply, run any tool calls, and loop until the model stops, the
-iteration cap is hit, or the turn is interrupted. Every step is an event,
+explicit iteration cap is hit, or the turn is interrupted. Every step is an event,
 written to sessions.sqlite before it is published (``EventBus.emit``).
 
 Injected, never imported: the provider (any ``exo.core.types.Provider``), the
@@ -26,6 +26,7 @@ import asyncio
 import inspect
 import time
 from dataclasses import dataclass, field
+from itertools import count
 from typing import Any, Awaitable, Callable, Iterable
 
 from exo import provenance
@@ -92,7 +93,7 @@ class Loop:
                  context: Any = None, memory: Any = None,
                  tool_specs: Iterable[ToolSpec] | Callable[[], Iterable[ToolSpec]] = (),
                  run_tool: ToolRunner | None = None, system_prompt: str = "",
-                 model: str | None = None, max_iterations: int = 24, max_retries: int = 3,
+                 model: str | None = None, max_iterations: int = 0, max_retries: int = 3,
                  retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None,
                  wrap_up: bool = True):
         self.store = store
@@ -106,7 +107,7 @@ class Loop:
         self.run_tool = run_tool
         self.system_prompt = system_prompt
         self.model = model
-        self.max_iterations = max_iterations
+        self.max_iterations = max_iterations  # zero: no round cap; positive values keep finite limits
         self.wrap_up = wrap_up  # at the round cap, one tool-less call to report progress and what remains
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -311,7 +312,7 @@ class Loop:
                       result: TurnResult) -> None:
         system, recall = await self._system(session, user.text())
         extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
-        for _ in range(self.max_iterations):
+        for _ in count() if self.max_iterations == 0 else range(self.max_iterations):
             if hasattr(self.context, "note"):
                 await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)

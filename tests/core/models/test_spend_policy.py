@@ -312,6 +312,31 @@ def test_offline_tool_flow_still_checks_global_stop(protected, tmp_path):
     assert router.spend_status()['pending_count'] == 0
 
 
+def test_unlimited_turn_still_checks_spend_stop_after_round_24(protected, tmp_path):
+    from exo.core.loop import Loop
+    from exo.core.sessions import SessionStore
+    calls = []
+    fake = RuleFake({'rules': [{'match': 'go', 'steps': [{'tool': 'run', 'args': {}}] * 30 + ['done']}]})
+    router = fake_router(fake)
+
+    async def tool(call, ctx):
+        calls.append(call.id)
+        if len(calls) == 25:
+            router.spend.freeze('principal review required')
+        return ToolResult.of_text(call.id, 'ok')
+
+    async def scenario():
+        loop = Loop(SessionStore(tmp_path / 'sessions.sqlite'), router.provider(),
+                    tool_specs=[ToolSpec('run', 'test')], run_tool=tool)
+        session = await loop.create_session()
+        return await asyncio.wait_for(loop.send(session.id, 'go'), 5)
+
+    result = asyncio.run(scenario())
+    assert result.stop_reason == 'error' and result.error and len(calls) == 25
+    assert router.spend_status()['state'] == 'stopped'
+    assert router.spend_status()['pending_count'] == 0
+
+
 def test_stopped_engine_factory_keeps_status_and_transcripts_available(protected, tmp_path, monkeypatch):
     from exo.core.engine import create
     from exo.protocol import schema as s

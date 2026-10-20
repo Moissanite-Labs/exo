@@ -28,6 +28,14 @@ blocked by it (D-077, `docs/ENGINE-SPLIT.md` "Budget policy"). `exo.protocol` an
 `exo.brief` are the learning side (`docs/LEARNING.md`, `docs/TOOLS-CLI.md`). `exo.bus` is the signed relay between
 seats. `exo.gate` is the action gate (`docs/GATE.md`). `exo.ingest` imports past conversations.
 
+## Turn limits
+
+`Loop` defaults to `max_iterations=0`, meaning no tool-round cap. Top-level turns continue until the model
+finishes, the user stops them, or an existing error or spend boundary stops them. A positive `max_iterations`
+still limits rounds and runs the existing tool-free wrap-up report (`docs/CORE-V2-INTERFACES.md`, "Round cap").
+Delegated children explicitly use their `max_turns` limit, or 24 when unset or zero. Approvals, spend admission,
+interrupts, provider retry limits and child token/time limits keep their existing checks.
+
 ## The protocol in numbers
 
 `src/exo/protocol/schema.py` is the source of truth. It holds 30 commands (the cap, all used) and 29 event types (the

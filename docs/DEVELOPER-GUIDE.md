@@ -96,6 +96,13 @@ A new subsystem that is a product feature built on the engine (like the schedule
 is attached by `exo.compose`, at the point in `CoreEngine.__init__` where its tools must register, so the tool order
 the model sees stays the same.
 
+**Turn limits (D-010).** `Loop` defaults to `max_iterations=0` (unlimited tool rounds). Pass a positive value
+when a caller needs a finite limit and the existing wrap-up report. The delegator explicitly passes
+`max_turns or 24`; keep that child boundary. Changes to the loop must preserve interrupt, approval, spend and
+retry checks. Regression tests cover completion and stops beyond round 24 in `tests/core/loop/test_loop.py`
+and `tests/core/models/test_spend_policy.py`, with child limits in `tests/agents/test_delegate.py`.
+Reference: `docs/CORE.md`, "Turn limits".
+
 ## 2. The protocol
 
 Source of truth: `src/exo/protocol/schema.py`. Commands go in, events come out, and every event has a `seq` so a
