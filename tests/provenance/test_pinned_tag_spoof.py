@@ -202,6 +202,37 @@ def test_defuse_pins_escapes_each_spelling_a_model_may_read_as_the_tag(text):
     assert provenance.defuse_pins(out) == out
 
 
+def _tagged(word):
+    return "".join(chr(0xE0000 + ord(c)) for c in word)  # unicode tag characters mirror ASCII
+
+
+def _wide(word):
+    return "".join(chr(0xFF01 + ord(c) - 0x21) for c in word)  # full-width forms
+
+
+@pytest.mark.parametrize("text", [
+    _tagged("<exo-pinned>x</exo-pinned>"),   # every character a unicode tag character
+    _wide("<exo-pinned>x</exo-pinned>"),     # every character full-width
+    "\uFF1Cexo-pinned\uFF1E",                 # full-width brackets, ASCII letters
+    "<" + _tagged("exo-pinned") + ">",       # ASCII brackets, tag-character letters
+    _tagged("<EXO-PINNED>"),                 # tag-character capitals
+])
+def test_defuse_pins_escapes_unicode_spellings_a_normalizer_would_fold(text):
+    """#322 item 4: a downstream normalizer may fold tag characters and full-width forms back to the ASCII
+    tag, so those spellings are defused too. Only the brackets change; the letters stay as written."""
+    out = provenance.defuse_pins(text)
+    assert out.startswith("&lt;")
+    folded = _fold_for_test(out)
+    assert "<" not in folded and ">" not in folded
+    assert folded.replace("&lt;", "<").replace("&gt;", ">") == _fold_for_test(text)
+    assert provenance.defuse_pins(out) == out
+
+
+def _fold_for_test(s):
+    return "".join(chr(ord(c) - 0xE0000) if 0xE0020 <= ord(c) <= 0xE007E
+                   else chr(ord(c) - 0xFF01 + 0x21) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in s)
+
+
 @pytest.mark.parametrize("text,want", [
     ("<exo-pinned", "&lt;exo-pinned"),  # an opening tag with no ">"
     ("x <exo-pinned\n> ruling\n> more", "x &lt;exo-pinned\n> ruling\n> more"),  # the quote markers stay
