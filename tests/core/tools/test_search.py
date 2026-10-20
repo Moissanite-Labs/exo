@@ -41,6 +41,17 @@ _SEAM_BYTES = [b"a", b"TODO", b" ", b"\n", b"\r", b"\r\n", b"\v", b"\f", b"\x1c"
                b"\xff", b"\xc3", b"\xe2\x80", b""]
 
 
+@pytest.mark.parametrize("raw", [
+    b"", b"\x1dTODO\x1d", b"\xef\xbb\xbfTODO\n", b"\xc0\xaf TODO\n", b"\xed\xa0\x80 TODO\n",
+    b"a" * 65_535 + "é".encode() + b"\r\nTODO\n",  # a multibyte char and CRLF across the 64 KiB seam
+    b"a" * 65_536 + b"\rTODO",  # a lone CR as the first byte past the seam
+])
+def test_streamed_lines_explicit_cases(tmp_path, raw):
+    p = tmp_path / "case.txt"
+    p.write_bytes(raw)
+    assert list(search._lines(p)) == raw.decode("utf-8", errors="replace").splitlines()
+
+
 @pytest.mark.parametrize("chunk", [1, 2, 3, 7, 65_536])
 def test_streamed_lines_equal_splitlines(tmp_path, monkeypatch, chunk):
     rng = random.Random(20261020)
