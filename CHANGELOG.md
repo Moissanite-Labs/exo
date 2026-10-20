@@ -18,6 +18,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
+  ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
+  answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the
+  principal alone, no grant), as is a write to where `EXO_BUS_REGISTRY`, `EXO_BUS_DB` or `EXO_BUS_KEYS_DIR` (or the
+  legacy `DIVAN_` names) point; `cp forged.json ~/.exo/bus/registry.json` was an allowed `shell`. (2) A relative name
+  read from a folder in `$EXO_HOME` is checked as the path it names, `..` included, so `cd ~/.exo/run/jobs && cat
+  ../exod*`, `grep -r . ..` there, `cd .. && ls` from there and `tar -C ~/.exo -czf - run` are `credentials` as the
+  absolute paths are; `cat 1.log` in `run/jobs` stays a read. The run folder's file names are store file names for
+  the `cd` check, and its `seats/` scan runs once per classify call instead of once per glob word. (3) A write through
+  a descriptor or process-folder path (`/dev/fd/3`, `/dev/stdin`, `/proc/self/fd/3`, `/proc/self/cwd`,
+  `/proc/<pid>/root`, also after `cd /dev` or `cd /proc/self`) is `store_write`, and so is a store file opened for
+  reading on a numbered descriptor (`exec 3< ~/.exo/state/gate-grants.json`, `{ ...; } 1< f`, and on stdout or
+  stderr any target from a variable, a glob or a relative name), because on Linux a later `> /dev/fd/3` or
+  `> /dev/stdout` writes it back; `exec 3< grants; printf X > /dev/fd/3` rewrote the grants file with no ask. Writes
+  to the writer's own stdout and stderr (`/dev/fd/1`, `/dev/stdout`) keep their class. A descriptor path used as an
+  input of a writing command asks too (`jq . /dev/stdin > out.json`, `patch -i /dev/stdin`, `gh ... --body-file
+  /dev/stdin`), as a principal-only store write whose card says the path is one the gate cannot resolve.
 - Gate policy (#191, #211, #208). A `categories: {X: deny}` line or a rule with `decision: deny` now denies a line
   when any part of it is X, as a `deny:` entry has since D-075: `echo $(git push origin main) > /tmp/f` was `log`
   under `categories: {local_write: deny}`, and a wrapped or fed-shell line asked under `categories: {opaque_exec:
