@@ -18,12 +18,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- A forged `## Next steps` heading in a handoff can no longer beat the genuine one (#353, D-040). #349 kept the
+  first section of each name, which is right for the principal's sections but wrong for Next steps, the one section
+  written last: a multiline tool path or an old file's unquoted summary could put a forged copy first, and its
+  steps reached the resume counts and the retrieval query. List fields (files, processes, open decisions, next
+  steps, the topic line) now lose their newlines when written, and `load_handoff` reads Next steps from its last
+  copy in the file. Principal sections still read the first. For files written before #349 this fixes the parsed
+  fields only: `resume_text` still carries the raw file, forged headings included.
 - A compaction summary in a handoff's `## State` can no longer forge a principal section (#315, D-040). The summary
   was written unquoted, so a `## Decisions made (principal's words, verbatim)` line in model text made a second
   section of that name, and `load_handoff` kept the later one: the forged ruling in, the principal's real ruling
   dropped, and the agent's last report read as a ruling. The summary is now quoted like the brief and the last
-  report, and the reader keeps the first section of each name, so old files with a duplicate heading read the
-  writer's real section.
+  report, and the reader keeps the first section of each name, so the parsed fields of an old file with a
+  duplicate heading read the writer's real section. `resume_text` still carries the raw file text.
 - `scripts/deploy-site.sh` pins the Vercel CLI (64.1.0, was `vercel@latest`) and refuses any deploy, versioned or
   not, when `site/` has untracked files. An unversioned staging deploy used to copy the whole folder, so an untracked
   private `site/pitch/` would have shipped. `.DS_Store` is skipped. `EXO_VERCEL_CLI` must be an exact `X.Y.Z`.
