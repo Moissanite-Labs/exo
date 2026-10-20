@@ -249,9 +249,13 @@ What uses it:
   only from a principal message. A fork's copy of the principal's message keeps its author, so the child thread pins
   it too (`is_principal` skips the copy, so capture does not take it twice). A copy of a message stored before D-040
   has no author to keep. It reads as `system`, so the fork does not pin it. The recalled-memory block before each
-  turn is authored `system`. A handoff carries a pinned block only from a message that opens with it (exo-context's
-  own block) or with a compaction marker (a host's summary). One in peer, bus, job, tool or agent text is not
-  carried, and neither is one quoted further down a message. The core's system message quotes each span too small to
+  turn is authored `system`. Host message dicts with no core stamp are read through `provenance.author_of` the same
+  way, meta tags included. A peer, bus or job tag in `meta` refuses at any role, an untagged user turn still reads
+  as the principal, and an untagged assistant turn reads as the agent's. A handoff carries a pinned block only from
+  a message that opens with it (exo-context's own block) or with a compaction marker (a host's summary). A host
+  summary in an assistant row, where the host alternates roles, carries by its in-process `_compressed_summary`
+  flag. One in peer, bus, job, tool or agent text is not carried, and neither is one quoted further down a message.
+  The core's system message quotes each span too small to
   summarize word for word, a peer's turn included, so a peer's block there is data too.
 - Where the harness prints a message for the model, a pinned-block tag in text the principal did not write is
   escaped: `<exo-pinned>` becomes `&lt;exo-pinned&gt;`, and the closing tag likewise (#279). That covers the
