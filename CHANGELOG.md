@@ -6,6 +6,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- The grep tool read, decoded and split each whole file before searching its lines (#255, W1-4). It now streams
+  the file in chunks and yields lines as they decode, so a search holds one chunk and the current line instead
+  of the bytes, the text and every line at once. Output is unchanged: the same rows, the same counts past the
+  limit and the same `[N more matches; narrow the search]` line. The refusals are unchanged too: a file that is
+  not regular, over the 2 MB cap (including growing past it while read), or binary in its first bytes is skipped
+  whole, matches already seen in it included. One limit stays: a file with no line breaks still buffers its
+  single line whole, as it did before, and searching such a file is slower than the old whole-file read.
 - The `scripts/deploy-site.sh` untracked-file guard no longer has three gaps (#350). A submodule under `site/` is
   one entry in the parent index, so the inventory never saw the ignored or untracked files inside it, yet `rsync`
   copied them; any submodule under `site/` now refuses the deploy (the tracked site has none). The inventory's exit
