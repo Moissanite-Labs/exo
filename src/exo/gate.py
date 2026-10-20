@@ -167,13 +167,16 @@ def _make(category: str, tool: str = "", **kw) -> Classification:
     kw.setdefault("reversibility", rev)
     kw.setdefault("exposure", exp)
     kw.setdefault("third_party", third)
-    kw.setdefault("own", _own_text.get())
+    if "own" not in kw:
+        slot = _own_text.get()
+        kw["own"] = slot[0] if slot else None
     return Classification(category=category, tool=tool, **kw)
 
 
-# The simple command being classified (#394): every part made for it carries its text (Classification.own), the
-# parts of a nested line their own. _classify_shell sets it for each simple command and clears it for the rest.
-_own_text: contextvars.ContextVar[str | None] = contextvars.ContextVar("exo_gate_own_text", default=None)
+# The text of the simple command being classified (#394), in a one-item list per line that classify_shell sets: every
+# part made for that command carries it (Classification.own), the parts of a nested line their own command's text.
+# _classify_shell fills the slot for each simple command and empties it for the rest. None outside a shell line.
+_own_text: contextvars.ContextVar[list[str | None] | None] = contextvars.ContextVar("exo_gate_own_text", default=None)
 
 
 def _severity(c: Classification) -> tuple:
@@ -395,7 +398,7 @@ class _Lexer:
         self.covered = 0                   # the source before here lies in a ${..} already recorded
         self.nest = nest                   # $( ), <( ) and $(( )) levels open around here (_NEST)
         self.cuts: list[tuple[int, int, str]] = []   # (start, end, stand-in) of each part not read, in order
-        self.marks: list[tuple[int, int]] = []        # the last run's token spans, one per token (#394)
+        self.marks: list[tuple[int, int]] = []        # the last run's token spans, one per token, with scan (#394)
 
     def _cut(self, w: _Word, a: int) -> None:
         """The $( ) or <( ) at s[a] lies past _NEST levels and is not read. The line lists _TOO_DEEP for it, and the
@@ -419,6 +422,8 @@ class _Lexer:
 
     def _source(self, a: int, b: int) -> str:
         """s[a:b], with each part not read (_cut, a here-doc body holding one) spelt as its stand-in."""
+        if not self.cuts:
+            return self.s[a:b]
         k = bisect.bisect_left(self.cuts, (a,))
         if k == len(self.cuts) or self.cuts[k][0] >= b:
             return self.s[a:b]
@@ -432,7 +437,8 @@ class _Lexer:
 
     def run(self, closer: bool = False) -> list:
         s, toks = self.s, []
-        marks: list[tuple[int, int]] = []    # where each token starts and ends in s, for a command's own text (#394)
+        # where each token starts and ends in s, for a command's own text (#394); only _parse reads them
+        marks: list[tuple[int, int]] | None = [] if self.scan else None
         state = {"w": _Word(), "delim": None}
         depth, start = 0, -1              # start: where the current word's source text begins
         w_at = hd_at = 0                  # where that word starts with its `<(`, and where a here-doc's `<<` does
@@ -455,11 +461,13 @@ class _Lexer:
                                       spelt)                # its end line is spelt so too (_read_heredocs)
                     self.pending.append(hd)
                     toks.append(("hd", hd))
-                    marks.append((hd_at, self.i))
+                    if marks is not None:
+                        marks.append((hd_at, self.i))
                     state["delim"] = None
                 else:
                     toks.append(("w", w))
-                    marks.append((w_at, self.i))
+                    if marks is not None:
+                        marks.append((w_at, self.i))
             state["w"] = _Word()
 
         while self.i < len(s):
@@ -473,7 +481,8 @@ class _Lexer:
             elif ch == "\n":
                 flush()
                 toks.append(("op", ";"))
-                marks.append((self.i, self.i + 1))
+                if marks is not None:
+                    marks.append((self.i, self.i + 1))
                 self.i += 1
                 self._read_heredocs()
             elif ch == "#" and not w.started:
@@ -522,17 +531,19 @@ class _Lexer:
                     state["delim"], hd_at = op == "<<-", op_at
                 else:
                     toks.append(("redir", op))
-                    marks.append((op_at, self.i))
+                    if marks is not None:
+                        marks.append((op_at, self.i))
             elif ch in ";&|()":
                 flush()
                 if ch == ")" and closer and depth == 0:
                     self.i += 1
-                    self.marks = marks
+                    self.marks = marks or []
                     return toks
                 op = next(o for o in _CTRL_OPS if s.startswith(o, self.i))
                 depth += {"(": 1, ")": -1}.get(op, 0)
                 toks.append(("op", op))
-                marks.append((self.i, self.i + len(op)))
+                if marks is not None:
+                    marks.append((self.i, self.i + len(op)))
                 self.i += len(op)
             else:
                 if ch in "*?" or (ch in "[{" and w.started):
@@ -543,7 +554,7 @@ class _Lexer:
                 w.started = True
                 self.i += 1
         flush()
-        self.marks = marks
+        self.marks = marks or []
         return toks
 
     def _read_heredocs(self) -> None:
@@ -1058,25 +1069,17 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     lead = True             # every word of cur so far is a reserved word
     taken: dict = {}        # first command -> (end, an exec inside set the shell's stdin) of a compound whose
                             # stdin is set (inner closers win); also _piped_text's memo
-    span = [-1, -1, -1]     # where cur's tokens start, where those after its leading reserved words start, the end
+    o_first = o_body = o_end = -1   # cur's own text: where its tokens start, where those after its reserved words do, its end
 
     def end(piped: bool = False) -> None:
-        nonlocal cur, shut, lead
+        nonlocal cur, shut, lead, o_first, o_body, o_end
         if shut is not None:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
-            first, body, last = span
-            cur.own = lx._source(first if body < 0 else body, last)
+            cur.own = lx._source(o_first if o_body < 0 else o_body, o_end)
             cmds.append(cur)
         cur, shut, lead = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True
-        span[:] = [-1, -1, -1]
-
-    def mark(a: int, b: int, body: bool) -> None:
-        if span[0] < 0:
-            span[0] = a
-        if body and span[1] < 0:
-            span[1] = a
-        span[2] = b
+        o_first = o_body = o_end = -1
 
     def push(entry: tuple) -> None:
         tops.setdefault(entry[0], []).append(len(opened))
@@ -1118,12 +1121,14 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                     cur.herestrings.append(toks[i + 1][1])
                 else:
                     cur.redirs.append((v, toks[i + 1][1]))
-                mark(marks[i][0], marks[i + 1][1], True)
+                a, o_end = marks[i][0], marks[i + 1][1]
+                o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
                 i += 2
                 continue
         elif kind == "hd":
             cur.heredocs.append(v)
-            mark(*marks[i], True)
+            a, o_end = marks[i]
+            o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
         else:
             if not v.quoted and _command_word(cur.words, lead):
                 if v.text in _COMPOUND_OPENERS:
@@ -1133,7 +1138,8 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                     if j >= 0:
                         close(j)
             lead = lead and not v.quoted and v.text in _OPENERS
-            mark(*marks[i], not lead)
+            a, o_end = marks[i]
+            o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 and not lead else o_body)
             cur.words.append(v)
             if after is not None:
                 after.operands.append(v)
@@ -3989,7 +3995,7 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
             _shell_seen.reset(token)
     key = ("shell", cmd, depth, _budgets())   # the budgets only fall: a line met after one fell is read again
     if key not in seen:
-        own = _own_text.set(None)             # not the text of the command this line is nested in (#394)
+        own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
             seen[key] = _classify_shell(cmd, depth)
         finally:
@@ -4026,16 +4032,15 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     ctx: dict = {"subs": subs}
     parts: list[Classification] = []
     prev: _Cmd | None = None
+    slot = _own_text.get() or [None]      # classify_shell gives each line its own
     for k in cmds:
         piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
         # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
         ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
-        token = _own_text.set(k.own)
-        try:
-            parts += _classify_simple(k, cmd, depth, ctx, piped)
-        finally:
-            _own_text.reset(token)
+        slot[0] = k.own
+        parts += _classify_simple(k, cmd, depth, ctx, piped)
         prev = k
+    slot[0] = None
     for sub in subs:
         parts.append(classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd))
     parts += ctx.get("late", [])
