@@ -20,6 +20,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `harness.error` event. The engine dropped its trace sink before it stopped anything, so such an error was only logged.
   It now drops it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP
   servers are recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
+- A summary node stored before the #302 upgrade no longer reaches the system message with a live pinned
+  block (#322, item 3). New summaries are escaped as they are made, but the tree view printed a stored
+  node's text as it was. Stored summary text is now escaped where the view prints it. The escape is
+  idempotent, so current summaries are unchanged.
+- exo-context defused the wrong message when a protected head message quoted the end-of-summary marker
+  (#322, item 2). The summary picker took the first message containing the marker, so the head message was
+  escaped and pinned into instead of the summary the compressor just made, and a block the summarizer had
+  copied stayed live. The picker now checks the summary flag and the compressor's own test first, and never
+  picks a message the compressor merely returned from its input.
 - A stamped host dict with malformed `meta` keeps its stamp again instead of raising (#375). The ingress
   veto read `meta` before the stamp, so a non-mapping `meta` crashed `author_of` where it previously
   returned the stamped author. The veto now skips a `meta` it cannot read.
