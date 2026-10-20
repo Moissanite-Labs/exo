@@ -500,6 +500,36 @@ async def test_a_notice_does_not_wait_for_a_busy_tool_thread(tmp_path):
     assert [m for m in eng.store.messages(sid) if m.meta.get("job")]
 
 
+@aio
+async def test_a_notice_cancelled_by_a_hard_stop_still_leaves_the_job_end_event(tmp_path, monkeypatch):
+    """A second ctrl+c can cancel close()'s wait for the notices. A notice task cancelled while its notice is built
+    loses that notice, but the job's end event still goes out to clients and the events table."""
+    import threading
+
+    from exo.core import jobs
+    eng = engine(tmp_path)
+    sid = (await eng.loop.create_session(agent="tester")).id
+    plain, entered, release = jobs.tail_text, threading.Event(), threading.Event()
+
+    def tail(*args):
+        entered.set()
+        release.wait(10)
+        return plain(*args)
+    monkeypatch.setattr(jobs, "tail_text", tail)
+    eng.jobs.live["j_done01"] = h = jobs.Handle("j_done01", None, sid, "make test", time.time())
+    eng.jobs._finish(h, 0)
+    await until(entered.is_set)
+    tasks = list(eng.jobs._tasks)
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    release.set()
+    assert all(t.cancelled() for t in tasks)
+    assert [(e.job_id, e.state, e.command) for e in events(eng)] == [("j_done01", "done", "make test")]
+    assert not [m for m in eng.store.messages(sid) if m.meta.get("job")]
+    await eng.close()
+
+
 @pytest.mark.parametrize("lost", [False, True])
 @aio
 async def test_close_waits_for_a_notice_still_being_built(tmp_path, monkeypatch, lost):

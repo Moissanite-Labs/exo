@@ -303,17 +303,18 @@ class JobManager:
         return task
 
     async def _announce(self, h: Handle, state: str, code: int, ended: float, detail: str) -> None:
-        if state != "killed" or h.kill_by != "job_kill":  # an agent that killed it knows: no notice for that
-            try:
+        try:
+            if state != "killed" or h.kill_by != "job_kill":  # an agent that killed it knows: no notice for that
                 rec = await self.path.submit(await self._built(h.id, state, code, h.command, h.started, ended,
                                                                h.session, detail))
                 detail = (detail + "; " if detail else "") + f"notice {rec.mode or rec.state}"
-            except Exception as exc:  # a delivery problem never loses the job's end
-                from exo.core import trace
+        except Exception as exc:  # a delivery problem never loses the job's end
+            from exo.core import trace
 
-                trace.report("jobs.notice", exc, h.session)
-                detail = (detail + "; " if detail else "") + f"notice failed: {exc}"
-        self.e.hub.publish(self._body(h.id, state, h.command, code, h.started, ended, detail), h.session)
+            trace.report("jobs.notice", exc, h.session)
+            detail = (detail + "; " if detail else "") + f"notice failed: {exc}"
+        finally:  # nor does a hard stop that cancels this task while the notice is built
+            self.e.hub.publish(self._body(h.id, state, h.command, code, h.started, ended, detail), h.session)
 
     async def _built(self, *args: Any) -> Ingress:
         """``_notice`` in the notice thread, as it reads and redacts the whole log. One at a time, in call order, so
