@@ -1457,6 +1457,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   block only from a message that opens with it (exo-context's own block) or with a compaction marker (a host's
   summary). A block quoted further down a message is data: the core's system message quotes small spans word for
   word, peer turns included.
+  *Amendment 2026-10-20 (#368, #370, #371):* the four readers of a host message dict now take its author from
+  `provenance.author_of`, meta tags included, the way core capture reads it. A peer, bus or job tag in `meta`
+  refuses at any role and outranks a stamped author, by presence rather than truthiness. An untagged assistant
+  message is the agent's and no longer counts as an older host's message. An untagged user message still reads as
+  the principal, so older hosts keep working. A host summary in an assistant row carries nothing, flagged or not.
+  The host persists its `_compressed_summary` flag and restores it on resume, so the flag shows a host made the
+  row. It does not show that exo-context escaped the row's text when it was made, and summaries a host built on
+  its own never pass that escaping. Continuity across those rows comes from exo-context's session pins instead.
+  The engine observes pins only from principal-classified text, persists them per session, and merges them at
+  compaction and at handoff write. A `meta` that is not a mapping names no tag and no author, and never raises.
+  Roles other than user, assistant and tool still read as the system's, as before.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
