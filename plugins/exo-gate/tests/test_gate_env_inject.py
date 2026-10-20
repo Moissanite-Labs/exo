@@ -750,3 +750,69 @@ def test_a_value_that_changes_nothing_keeps_the_class(cmd, category):
 ])
 def test_values_that_can_change_what_runs_still_ask(cmd, name):
     asks_naming(cmd, name)
+
+
+# --- delta review of 74df345: `$PATH` is the current PATH only where bash expands it -------------------
+# In single quotes, `$'..'` or after a backslash it is a folder named `$PATH` in the working folder.
+
+@pytest.mark.parametrize("cmd", [
+    "export PATH='$PATH:/usr/bin'; ls",
+    "export PATH=\\$PATH:/usr/bin; ls",
+    "declare -x PATH='$PATH'; ls",
+    "readonly PATH='$PATH'; ls",
+    "env PATH='$PATH' ls",
+    "env 'PATH=$PATH' ls",
+    "env PATH=/usr/bin:'$PATH' ls",
+    "sudo PATH='$PATH' ls",
+    "export PATH=$'\\x24PATH'; ls",
+    ": ${PATH:='$PATH:/usr/bin'}; ls",
+    ": ${PATH:=\\$PATH}; ls",
+    # a `..` element goes through whatever the folder before it links to
+    "PATH=/tmp/s/../../usr/bin ls",
+    "PATH=$PATH:/usr/local/../bin ls",
+    "export PATH=\"$PWD/x/../.venv/bin:$PATH\"",
+])
+def test_a_path_the_gate_cannot_vouch_for_asks(cmd):
+    c = asks_naming(cmd, "PATH") if not cmd.startswith(":") else classify(sh(cmd))
+    assert c.category == "opaque_exec" and "PATH" in c.summary, c
+    assert decide(c).outcome == "ask" and decide(c, DENY).outcome != "allow", c
+
+
+@pytest.mark.parametrize("cmd", [
+    'export PATH="$PATH:/usr/bin"; ls',                   # double quotes expand
+    "export PATH=$PATH:/usr/bin; ls",
+    ": ${PATH:=$PATH:/usr/bin}; ls",
+    'env PATH="${PATH}:./node_modules/.bin" ls',
+])
+def test_an_expanded_path_still_keeps_the_class(cmd):
+    c = classify(sh(cmd))
+    assert (c.category, decide(c).outcome) == ("read", "allow"), c
+
+
+# --- delta review of 74df345: git config's -t, and long options abbreviated as git allows ---------------
+
+@pytest.mark.parametrize("cmd,mention", [
+    ("git config -t bool include.path /tmp/c", "include.path"),
+    ("git config -tbool include.path /tmp/c", "include.path"),
+    ("git config -zt bool include.path /tmp/c", "include.path"),
+    ("git config --fil .git/config include.path /tmp/c", "include.path"),
+    ("git config --ty bool include.path /tmp/c", "include.path"),
+    ("git config --defa x include.path /tmp/c", "include.path"),
+    ("git config --fil .git/config --ad include.path /tmp/c", "include.path"),
+    ("git config --rename-sec x include", "include"),
+    ("git config --no-fil include.path /tmp/c", "include.path"),   # --no-file takes no value
+])
+def test_git_config_short_type_and_abbreviated_options_do_not_hide_the_key(cmd, mention):
+    asks(cmd, mention)
+
+
+@pytest.mark.parametrize("cmd", [
+    f"git config --ty bool core.pager '{RM}'",
+    f"git config -t bool core.pager '{RM}'",
+    f"git config --fil .git/config core.fsmonitor '{RM}'",
+    f"git config --rep core.sshCommand '{RM}'",
+])
+def test_git_config_abbreviated_options_still_read_the_command_value(cmd):
+    c = classify(sh(cmd))
+    assert c.category == "delete", c
+    assert decide(c).outcome == "ask" and decide(c, DENY).outcome == "deny", c

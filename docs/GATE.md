@@ -685,7 +685,10 @@ gate does not read:
   `GIT_CONFIG_SYSTEM` set to `/dev/null`, a `PATH` made only of the current one (`$PATH`) and
   folders the gate already trusts a program from by path, a system bin folder, a virtualenv's
   `bin` or `node_modules/.bin` (`PATH=$PATH:./node_modules/.bin eslint .`,
-  `export PATH="$PWD/.venv/bin:$PATH"`; `PATH+=:/usr/local/bin` is `$PATH:/usr/local/bin`), and
+  `export PATH="$PWD/.venv/bin:$PATH"`; `PATH+=:/usr/local/bin` is `$PATH:/usr/local/bin`; `$PATH`
+  counts as the current PATH only where bash expands it, so `export PATH='$PATH:/usr/bin'` and
+  `env 'PATH=$PATH' ls`, where it is a folder named `$PATH`, ask; so does a folder written with
+  `..`, such as `/tmp/s/../../usr/bin`, which the system resolves through links), and
   `PYTHONPATH` before `pytest` or `python -m pytest`, which already run the project's code.
   These still ask, on purpose: an empty `PATH` element, which is the current folder (`PATH= ls`,
   `PATH=$PATH: ls`), any other folder in `PATH`, appended or not, since it supplies every program
@@ -697,9 +700,10 @@ gate does not read:
   (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
   `-a`) or `printf -v` fills, as a `for` variable, through a nameref (`declare -n r=PATH`), or as
   an integer through arithmetic, an array subscript, or a `{PATH}>` redirection (`$((PATH=10))`,
-  `$((PATH++))`, `$((--PATH))`, `$((PATH<<=1))`, `a[PATH=10]=1`, `${a[PATH=10]}`). A subscript counts where bash reads the word as a variable
-  name: an assignment, `${a[...]}`, and the name an exporter, `unset`, `read`, `printf -v`, a
-  nameref or `test -v` takes. `mapfile` and `getopts` already ask. Parameter expansion that
+  `$((PATH++))`, `$((--PATH))`, `$((PATH<<=1))`, `a[PATH=10]=1`, `${a[PATH=10]}`). A subscript
+  counts where bash reads the word as a variable name: an assignment, `${a[...]}`, and the name an
+  exporter, `unset`, `read`, `printf -v`, a nameref or `test -v` takes. `mapfile` and `getopts`
+  already ask. Parameter expansion that
   only reads or substitutes (`${PATH}`, `${PATH:-/usr/bin}`, `${PATH#/x}`) assigns nothing and
   stays `allow`. So does text bash does not expand: single-quoted text, a quoted here-doc, and
   a bracket outside a subscript, which is a glob (`git commit -m 'read ${PATH:=.}'`,
@@ -730,8 +734,9 @@ gate does not read:
   `protocol.ext.allow`, a `url.ext::<...>.insteadOf` or `pushInsteadOf` rewrite, a remote `url`
   or `pushurl` that starts with `ext::`, and the `GIT_ALLOW_PROTOCOL` variable.
   `git config` is read as git reads it: the subcommand (`set`, `get`, `unset`...) and the values
-  of `-f`, `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url` are not
-  the key, so `git config set include.path x` and `git config -f .git/config core.fsmonitor x`
+  of `-f`, `-t`, `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url`
+  are not the key, also when a long option is shortened to a prefix git accepts (`--fil`,
+  `--ty`, `--rename-sec`), so `git config set include.path x` and `git config -f .git/config core.fsmonitor x`
   ask as `git config include.path x` does, and `git config rename-section x include` asks too:
   it can turn `x.path` into `include.path`. A key the gate cannot read, a `--config-env` value
   (it comes from a variable) for an exec key, and `git clone --template` or `git init

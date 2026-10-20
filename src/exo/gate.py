@@ -1038,31 +1038,41 @@ _EXPORTERS = ("export", "declare", "typeset", "readonly", "local")
 # empty CDPATH (it turns CDPATH off), and a PATH made of the current one and folders the gate already trusts a
 # program from by path (_trusted_path: a system bin folder, a virtualenv's or node_modules/.bin). An empty element
 # is the current folder, so `PATH= ls` and `PATH=$PATH: ls` still ask; so does any other folder, appended or not,
-# since it supplies every program the earlier ones lack.
+# since it supplies every program the earlier ones lack, and a folder written with `..`, which the system resolves
+# through links (`/tmp/s/../../usr/bin`). `$PATH` is the current value only where bash expands it: in single quotes,
+# `$'..'` or after a backslash it is a folder named `$PATH` (`literal`: the assignment holds such text).
 _EMPTY_IS_UNSET = frozenset("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
     DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH CDPATH""".split())
 
 
-def _harmless_value(name: str, value: str | None) -> bool:
+def _harmless_value(name: str, value: str | None, literal: bool = False) -> bool:
     if value is None:
         return False
     if name in _EMPTY_IS_UNSET:
         return value == ""
     if name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
         return value == "/dev/null"
-    return name == "PATH" and all(d in ("$PATH", "${PATH}") or d and not re.search(r"[*?\[]", d) and (
+    return name == "PATH" and all(not literal and d in ("$PATH", "${PATH}") or d and not re.search(r"[*?\[]", d)
+                                  and ".." not in d.split("/") and (
         os.path.normpath(_expand_text(d)) in _SYSTEM_BIN or bool(_ENV_BIN.search(d.rstrip("/") + "/x")))
         for d in value.split(":"))
 
 
-def _env_hazard(name: str, value: str | None = None) -> str:
+def _kept_text(raw: str) -> bool:
+    """The source text of an assignment holds text bash keeps as written: single quotes, `$'..'` or a backslash
+    (or no source text at all, which counts the same)."""
+    return not raw or "'" in raw or "\\" in raw
+
+
+def _env_hazard(name: str, value: str | None = None, literal: bool = False) -> str:
     """Why setting this variable matters to the gate ("" when it does not). `value` None means the line
-    sets it to a value the gate does not see (`read`, `printf -v`, a for loop, a nameref)."""
+    sets it to a value the gate does not see (`read`, `printf -v`, a for loop, a nameref). `literal`: the
+    assignment's source holds quoted or escaped text (_kept_text)."""
     if name == "PS4":
         return "is expanded, $( ) included, before each traced command"
     if name in _EXEC_ENV:
         return "holds a command a program runs"
-    if name in _EXEC_ENV_OPAQUE and not _harmless_value(name, value):
+    if name in _EXEC_ENV_OPAQUE and not _harmless_value(name, value, literal):
         return _EXEC_ENV_OPAQUE[name]
     if name == "LESS" and (value is None or "+" in value):
         return "sets a command less runs at start"
@@ -1157,13 +1167,14 @@ def _subscript_sets(name: str) -> list[str]:
     return [a.group(1) or a.group(2) for a in _ARITH_SET.finditer(m.group(1))] if m else []
 
 
-def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None]]:
-    """(name, value) for each variable the command assigns without a plain NAME=value word, each pair once. value
-    is None when the gate does not see it (an fd number, an arithmetic result). Covers parameter-expansion
+def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, bool]]:
+    """(name, value, literal) for each variable the command assigns without a plain NAME=value word, each once.
+    value is None when the gate does not see it (an fd number, an arithmetic result); literal: the value's source
+    holds quoted or escaped text (_kept_text). Covers parameter-expansion
     assignment, arithmetic, a subscript in an expansion (`${a[PATH=10]}`, also `${a[PATH=${i}]}`) or in
     `names` (the words bash reads as a variable name: assignments, exporter and unset arguments), and a
     `{NAME}>` redirection. Linear in the line: brackets, parens and braces are each matched in one pass."""
-    out: list[tuple[str, str | None]] = []
+    out: list[tuple[str, str | None, bool]] = []
     for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]:
         for vis, src, frames in w.exps:                   # only real expansions, quoted text blanked in vis
             if frames is None:                            # a $((..)): its ${..} as the lexer reads one
@@ -1185,14 +1196,15 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None]]:
                         asked, close_at = pos, src.find("}", pos)
                         close_at = len(src) if close_at < 0 else close_at
                     frames[m.start()] = [close_at, None, []]
-                out.append((m.group(1), _unquote_value(_brace_value(src, frames, m.start(), pos + op))))
+                raw = _brace_value(src, frames, m.start(), pos + op)
+                out.append((m.group(1), _unquote_value(raw), "'" in raw or "\\" in raw))
             arith, subs = _spans(vis)
             for region in (arith, subs):
                 for a, b in _covered(region):
-                    out += [(m.group(1) or m.group(2), None) for m in _ARITH_SET.finditer(vis, a, b)]
-    out += [(n, None) for name in names for n in _subscript_sets(name)]
+                    out += [(m.group(1) or m.group(2), None, False) for m in _ARITH_SET.finditer(vis, a, b)]
+    out += [(n, None, False) for name in names for n in _subscript_sets(name)]
     if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
-        out += [(fm.group(1), None) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
+        out += [(fm.group(1), None, False) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
     return list(dict.fromkeys(out))
 
 
@@ -1316,15 +1328,36 @@ def _git_config_kind(key: str, value: str) -> str:
 
 _GIT_CONFIG_DOES = {"exec": "runs a configured command", "load": "loads a config file or template the gate does not read",
                     "ext": "lets git run the command in an ext:: URL"}
-# `git config` (old and new forms): the subcommands, the old mode options, and the options that take a value
+# `git config` (old and new forms): the subcommands, and git's long options (git 2.54 `git config -h` and each
+# subcommand's), those that take a value marked with `=`. git takes any unique prefix of a long option
+# (`--fil`, `--ty`, `--rename-sec`) and `--no-` before the ones that take a value; `-f` and `-t` take one too.
 _GIT_CONFIG_SUBS = frozenset("list get set unset rename-section remove-section edit".split())
-_GIT_CONFIG_VALUE_OPTS = ("--file", "--blob", "--type", "--default", "--comment", "--value", "--url")
+_GIT_CONFIG_LONGS = tuple("""all append blob= comment= default= fixed-value global includes local name-only regexp
+    show-names show-origin show-scope system url= value= worktree add bool bool-or-int bool-or-str expiry-date get
+    get-all get-color get-colorbool get-regexp get-urlmatch int path remove-section rename-section replace-all unset
+    unset-all edit file= list type= null""".split())
+
+
+def _git_config_long(word: str) -> tuple[str, bool]:
+    """A `--option[=value]` word as git config reads it: (the option's full name, "" when git rejects it as
+    unknown or ambiguous, and whether it takes the next word as its value)."""
+    body, eq, _ = word[2:].partition("=")
+    for neg in ("", "no-"):
+        if neg and not body.startswith(neg):
+            continue
+        part = body[len(neg):]
+        names = [o for o in _GIT_CONFIG_LONGS if o.rstrip("=") == part] or \
+            [o for o in _GIT_CONFIG_LONGS if o.startswith(part) and not (neg and not o.endswith("="))]
+        if len(names) == 1:
+            name = names[0]
+            return neg + name.rstrip("="), name.endswith("=") and not neg and not eq
+    return "", False
 
 
 def _git_config_args(rest: list[str]) -> tuple[str, list[str]]:
     """`git config`'s words after `config` as git reads them: (the subcommand, or the old form's mode option
-    without its dashes, "" for none; the names and values left). The values of `-f`, `--file`, `--type`,
-    `--default` and the like are skipped, so neither they nor `set` is read as the key."""
+    without its dashes, "" for none; the names and values left). The values of `-f`, `-t`, `--file`, `--type`,
+    `--default` and the like, also abbreviated, are skipped, so neither they nor `set` is read as the key."""
     mode, pos, i = "", [], 0
     while i < len(rest):
         a, i = rest[i], i + 1
@@ -1332,17 +1365,17 @@ def _git_config_args(rest: list[str]) -> tuple[str, list[str]]:
             pos += rest[i:]
             break
         if a.startswith("--"):
-            name, eq, _ = a.partition("=")
-            if name in _GIT_CONFIG_VALUE_OPTS and not eq:
-                i += 1
-            elif name in ("--add", "--replace-all", "--get", "--get-all", "--get-regexp", "--get-urlmatch",
-                          "--unset", "--unset-all", "--rename-section", "--remove-section", "--list", "--edit",
-                          "--get-color", "--get-colorbool"):
-                mode = mode or name[2:]
-        elif a.startswith("-") and len(a) > 1:          # -f FILE, -fFILE, -l, -e, -z, clustered
-            flags, _, attached = a[1:].partition("f")
-            i += 1 if "f" in a[1:] and not attached else 0
-            mode = mode or ("list" if "l" in flags else "edit" if "e" in flags else "")
+            name, takes = _git_config_long(a)
+            i += takes
+            if name in ("add", "replace-all", "get", "get-all", "get-regexp", "get-urlmatch", "unset", "unset-all",
+                        "rename-section", "remove-section", "list", "edit", "get-color", "get-colorbool"):
+                mode = mode or name
+        elif a.startswith("-") and len(a) > 1:          # -f FILE, -tTYPE, -l, -e, -z, clustered
+            for n, ch in enumerate(a[1:], 2):
+                if ch in "ft":                          # takes the rest of the word, or the next word
+                    i += 0 if a[n:] else 1
+                    break
+                mode = mode or {"l": "list", "e": "edit"}.get(ch, "")
         elif not mode and not pos and a in _GIT_CONFIG_SUBS:
             mode = a
         else:
@@ -2530,18 +2563,20 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         appends = re.match(r"[A-Za-z_]\w*\+=", a) and name not in _EXEC_ENV
         return name, f"${{{name}}}{value}" if appends else value
 
-    assigns = [w.text for w in before[:n] if _ASSIGN.fullmatch(w.text)]
+    assign_words = [w for w in before[:n] if _ASSIGN.fullmatch(w.text)]
+    assigns = [w.text for w in assign_words]
     # pytest, or python -m pytest, before which PYTHONPATH adds nothing: the runner imports conftest.py and the
     # tests, project code the gate already lets it run (D-038 "Not done")
     runner = prog in ("pytest", "py.test") or bool(re.fullmatch(r"python[\d.]*", prog)) and argv[1:3] == ["-m", "pytest"]
-    sets: list[tuple[str, str | None, bool]] = [(*split_assign(a), not words) for a in assigns]
+    sets: list[tuple[str, str | None, bool, bool]] = [(*split_assign(w.text), not words, _kept_text(w.raw))
+                                                      for w in assign_words]
     if prog in _EXPORTERS:
-        sets += [(*split_assign(a), True) for a in argv[1:] if _ASSIGN.fullmatch(a)]
+        sets += [(*split_assign(w.text), True, _kept_text(w.raw)) for w in words[1:] if _ASSIGN.fullmatch(w.text)]
     named = assigns + (argv[1:] if prog in (*_EXPORTERS, "unset") else []) + \
         [b for a, b in zip(argv, argv[1:]) if prog in ("test", "[") and a == "-v"]   # where NAME[..] is arithmetic
-    sets += [(name, value, True) for name, value in _hidden_sets(k, named)]
+    sets += [(name, value, True, literal) for name, value, literal in _hidden_sets(k, named)]
     git_env: dict[tuple[str, ...], str] = {}
-    for name, value, runs_nothing in sets:
+    for name, value, runs_nothing, literal in sets:
         if name in _EXEC_ENV:
             c = nested(_prompt_text(value or "") if name == "PS4" else (value or "").lstrip("|"), name)
             if c is not None and runs_nothing and c.category == "opaque_exec":
@@ -2555,7 +2590,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             git_env[m.groups()] = value or ""
         elif name == "PYTHONPATH" and not runs_nothing and runner:
             pass                                         # a test runner already runs the project's code
-        elif why := _env_hazard(name, value):         # _EXEC_ENV_OPAQUE, and LESS with a `+` command
+        elif why := _env_hazard(name, value, literal):   # _EXEC_ENV_OPAQUE, and LESS with a `+` command
             parts.append(_opaque(f"{name} {why}", cmd))
     parts += _indirect_sets(prog, words, cmd)
     for (kind, num), value in git_env.items():
