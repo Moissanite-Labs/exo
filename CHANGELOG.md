@@ -25,8 +25,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Security
 - A known key split where a background job's log rotates at `output_cap` no longer leaves its end in the job's
-  completion notice (follow-up to #321). While the notice redacts the log, the end of `<id>.log.1` now stands in for
-  the rotation note at its start (docs/JOBS.md "The completion notice").
+  completion notice, or its two parts in `job_output` (follow-up to #321). While the notice redacts the log, the end of
+  `<id>.log.1` now stands in for the rotation note at its start. `job_output` joined both files with the note between
+  the two parts of the key, so redaction missed it. It now drops the note when it reads `<id>.log.1`, so the key is
+  whole and is redacted (docs/JOBS.md "The completion notice").
 - Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
   ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
   answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the
