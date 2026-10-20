@@ -59,14 +59,16 @@ def bus(seat: str) -> str:
 
 
 def _ingress_author(meta: Mapping[str, Any]) -> str:
-    """The author an ingress tag in ``meta`` names, or ``""`` when there is none (D-040, #370)."""
+    """The author an ingress tag in ``meta`` names, or ``""`` when there is none (D-040, #370).
+
+    Presence is what counts: an empty tag (``{}``, ``""``) still marks the message as ingress."""
     b = meta.get("bus")
-    if b:
+    if b is not None:
         return bus(str((b.get("from") if isinstance(b, Mapping) else b) or "unknown"))
-    if meta.get("peer"):
-        p = meta["peer"]
+    p = meta.get("peer")
+    if p is not None:
         return peer(str((p.get("from") if isinstance(p, Mapping) else p) or "unknown"))
-    if meta.get("job"):
+    if meta.get("job") is not None:
         return JOB
     return ""
 

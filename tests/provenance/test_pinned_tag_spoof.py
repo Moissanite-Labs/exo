@@ -306,6 +306,16 @@ def test_an_ingress_tag_outranks_a_principal_stamp(msg):
     assert provenance.author_of(msg) != provenance.PRINCIPAL
 
 
+@pytest.mark.parametrize("meta", [
+    {"bus": {}}, {"bus": ""}, {"peer": {}}, {"peer": ""}, {"job": {}}, {"job": ""},
+    {"bus": {"from": ""}}, {"peer": {"from": ""}},
+])
+def test_an_empty_ingress_tag_still_vetoes(meta):
+    msg = {"role": "user", "content": RULE, "meta": meta}
+    assert hf.extract_signals([msg]).rulings == []
+    assert provenance.author_of(msg) != provenance.PRINCIPAL
+
+
 def test_a_stamped_ingress_author_keeps_its_name():
     m = _user(RULE, bus={"from": "seat2"})
     m.meta["author"] = provenance.bus("seat2")
