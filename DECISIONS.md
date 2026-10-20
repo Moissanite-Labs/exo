@@ -1468,6 +1468,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   The engine observes pins only from principal-classified text, persists them per session, and merges them at
   compaction and at handoff write. A `meta` that is not a mapping names no tag and no author, and never raises.
   Roles other than user, assistant and tool still read as the system's, as before.
+  *Amendment 2026-10-20 (#385):* a row opening with a compaction marker carries nothing now, whatever its role.
+  A stock summary a host built on its own and stored as a user row reads as the principal's turn through
+  `author_of`, and nothing about the row separates it from a summary exo-context wrote and escaped itself. The
+  block is carried only from a system or user message that opens with it. The session pins take open decisions
+  beside rulings and corrections, principal deferrals only, read through `principal_view`. The pins also follow
+  the session id: a compression child session inherits its parent's pins, and a reset-only switch rebinds
+  through `bind_session_state`, a branch child inheriting its parent's pins. With those, everything a pinned
+  block held survives compaction by the pins instead, across session moves too.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
