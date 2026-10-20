@@ -102,6 +102,8 @@ when a caller needs a finite limit and the existing wrap-up report. The delegato
 retry checks. Regression tests cover completion and stops beyond round 24 in `tests/core/loop/test_loop.py`
 and `tests/core/models/test_spend_policy.py`, with child limits in `tests/agents/test_delegate.py`.
 Reference: `docs/CORE.md`, "Turn limits".
+`TurnResult` begins at `end`, and only `end` continues for a queued steer. The no-tools reply path retains that
+default for a missing, empty or `tool_use` stop reason. Preserve this rule when adding continuation paths.
 
 ## 2. The protocol
 

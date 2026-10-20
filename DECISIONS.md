@@ -165,6 +165,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   still pass `max_turns or 24`; approvals, interrupts, spend admission, bounded provider retries and child token/time
   limits are unchanged. A larger fixed default was rejected because it would interrupt longer tasks at another
   arbitrary count. Revisit if a separate principal-controlled top-level round policy is needed.
+  Terminal replies without tool calls retain the turn's initial `end` for a missing, empty or `tool_use` stop
+  reason, and copy other stop reasons. Only `end` continues for queued steers, preserving that default before
+  each reply. This normalization removes a redundant assignment. User behavior is unchanged. Developers must
+  preserve the default when extending the continuation path.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

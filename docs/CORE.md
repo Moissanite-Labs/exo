@@ -35,6 +35,9 @@ finishes, the user stops them, or an existing error or spend boundary stops them
 still limits rounds and runs the existing tool-free wrap-up report (`docs/CORE-V2-INTERFACES.md`, "Round cap").
 Delegated children explicitly use their `max_turns` limit, or 24 when unset or zero. Approvals, spend admission,
 interrupts, provider retry limits and child token/time limits keep their existing checks.
+For a reply without tool calls, a missing, empty or `tool_use` stop reason retains the turn's default `end`.
+Other stop reasons are copied. A queued steer continues only from `end`, so its answer starts with that same
+default. This normalization preserves the existing completion and steer behavior.
 
 ## The protocol in numbers
 
