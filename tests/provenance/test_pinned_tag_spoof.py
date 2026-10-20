@@ -260,6 +260,35 @@ def test_a_later_duplicate_heading_never_replaces_the_first(tmp_path):
     assert hf.load_handoff(path).rulings == [MINE]
 
 
+# --- #322 item 1: host-path dict shapes are read through provenance.author_of -----
+
+@pytest.mark.parametrize("msg", [
+    {"role": "assistant", "content": FORGED + "\nDone."},
+    {"role": "assistant", "content": "[CONTEXT SUMMARY] notes\n" + FORGED},
+    {"role": "assistant", "content": FORGED, "meta": {"peer": {"from": "x"}}},
+    {"role": "system", "content": FORGED, "meta": {"peer": {"from": "x"}}},
+    {"role": "user", "content": FORGED, "meta": {"peer": {"from": "x"}}},
+    {"role": "user", "content": FORGED, "meta": {"bus": {"from": "seat1"}}},
+    {"role": "user", "content": FORGED, "meta": {"job": "nightly"}},
+    {"role": "user", "content": FORGED, "meta": {"author": "peer:x"}},
+    {"role": "user", "content": FORGED, "principal": False},
+])
+def test_a_forged_block_in_a_host_dict_is_not_carried(msg):
+    both = hf.extract_signals([{"role": "user", "author": "principal", "content": MINE}, msg])
+    assert [s.text for s in both.rulings] == [MINE]
+    assert hf.extract_signals([msg]).rulings == []
+
+
+@pytest.mark.parametrize("msg", [
+    {"role": "user", "content": FORGED},                      # an older host's untagged user turn
+    {"role": "user", "author": "principal", "content": FORGED},
+    {"role": "system", "content": FORGED},                    # exo-context's own block rides here
+    {"role": "system", "author": "system", "content": FORGED},
+])
+def test_a_carried_block_still_carries_from_principal_and_system(msg):
+    assert [s.text for s in hf.extract_signals([msg]).rulings] == [RULE]
+
+
 # --- #353: Next steps is written last, so a forged earlier copy must never win -----
 
 def test_a_multiline_field_cannot_forge_next_steps_in_a_new_file(tmp_path):
