@@ -663,6 +663,30 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   grants are the principal's alone; list and revoke as a `command.run` command.
 - **Not done:** escalation along an org graph (P1-2); the TUI and web clients do not yet show `approvers`, echo
   `binding`, or sign as a seat (left for the UI work); no client helper beyond `sign_approval` for a seat to answer.
+- **Amendment 2026-10-19 (issue #208):** the posting step, the scrub and the binding saw only text on the line, and
+  a body from stdin, `@file`, `--input`, command output or a variable passed as empty. Such a post was allowed
+  under an internal scope, and an "always" bound to the line covered any later body. Now `_classify_gh` and
+  `_classify_http` mark it `unseen_body` (stdin not spelled out on the line, `@` fields, `--input`, `--fill`,
+  templates, the editor, generated notes, gist files, curl/wget/httpie file and stdin bodies, any expanded word
+  except a header or login value), and text options are read as gh reads them (the last of a repeated option, short
+  clusters). `gate.body_unseen` also counts a body file nobody read. Under the posting rules such a post asks with
+  a violation that names the cause; in every category it gets `once` (no "always") and no grant matches it; a
+  required executor refuses it as a recorded `deny`. The exo-gate hook reads a body file only by an absolute path:
+  it does not know the command's folder (`cd docs && gh ... --body-file notes.md`). An unrelated heredoc on the
+  line no longer fills in a body file's text, and curl's `-d@f` and gh api's `-fbody=x` are posts. Stdin is read only
+  where bash and the writer change nothing: a literal heredoc (no `$`, backtick or backslash unless the delimiter is
+  quoted), a plain here-string, or a pipe from one simple command (`cat` with such a heredoc, `echo` with no option or
+  backslash, `printf` with one plain format); a subshell or group before the pipe, `printf` formats and `echo -e` are
+  unseen. gh text options are read with gh's own table of options that take a value (`-t -b -b x`), `--attach` is
+  unseen, and curl's `--data-ascii`, `-K` and a host it cannot read (`-d x "$URL"`) are posts, not reads or local
+  writes. After a second review: a word bash may expand without `$` (brace expansion, a glob, a leading `~`) counts
+  as an expansion; only a heredoc or here-string on descriptor 0 is stdin (heredocs keep their fd number, on the
+  `_Word.fd` lexer change #305 also makes); a heredoc ended by a near match of its delimiter (`EOF `, ` EOF`, CR, a
+  tab under plain `<<`) is `ambiguous`, so its body is unseen; the long text options take a value in the gh table;
+  and the hook never reads a body file under `/dev` or `/proc`. Rejected:
+  resolving a relative path against the tool's `cwd` (the hook receives no cwd, and a `cd` on the line moves it);
+  reading the stdin source file in the gate (the same folder problem, and a host read before a required worker).
+  Limits: `docs/GATE.md` "What an approval covers".
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
@@ -872,6 +896,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   policy edit (new protocol surface, and the principal's own editor edits would trip it); trusting mtime plus a trace
   event (a tool write that the gate missed would still take effect); detecting "made by a non-tool path" (background
   jobs run beside the turn, so the gate cannot tell who wrote a file).
+  *Amendment 2026-10-19 (issue #211):* "the stricter of old and new" covered only the outcome. The approvers sent
+  with an ask and the length of a new grant read the pinned `approvals.yaml`, so a seat the principal had just
+  removed could still answer and an "always" outlived `days: 0`. Now an ask lists `gate.strictest_approvers`, the
+  approvers both tables allow in the pinned order (the principal is first in both, so it is never empty), and a
+  grant lasts the shorter of the pinned and changed `always` values. A wider table still waits for `/gate accept`;
+  a table that does not load counts as the defaults. Limits: an ask already open keeps its approvers, and grants
+  written before the change still match until they expire or are revoked.
 - **Cost:** about 70 everyday commands are pinned as `allow` in `plugins/exo-gate/tests/test_default_ask.py`
   (`pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test`...). New asks a user will see:
   `make`, `npm run`/`npm test`, scripts, `python -c`, unknown programs such as `kill` or `open`, and any write to the
@@ -1160,10 +1191,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `ssh host` starts runs ssh's stdin; a piped, heredoc or here-string text is read as shell, as for `bash -s`, and
   the line asks, with the parts `internal` (D-075). ssh's options after the host are read up to the remote command;
   `-n`, `-N`, `-f` or a remote command keep the old reading, and a word that may expand to no word or several before
-  the command, or as all of it, reads the stdin too (fail closed). As with wrappers and #191, the line takes the
-  category of what runs, so a `categories:` setting or rule written for the old dominant reading (`opaque_exec` for
-  the coproc lines, `shell` or the host as target for ssh) asks where it denied; `deny` and `reserved` entries see
-  every part and keep denying (D-075). Rejected: reading both coproc readings whenever
+  the command, or as all of it, reads the stdin too (fail closed). As with wrappers, the line takes the category of
+  what runs, but the old reading stays a part: `deny` and `reserved` entries see every part (D-075), and since #191
+  (#306) so does a `categories:` setting or rule that denies (`opaque_exec` for the coproc lines, `shell` or the host
+  as target for ssh), so these lines are denied as before. Rejected: reading both coproc readings whenever
   the line has any redirection (the issue's first sketch), which reads the name as a program in `coproc rm { echo
   >/dev/null hi; }`, where bash runs a named compound.
 
@@ -1984,6 +2015,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   are also read as the command and the line asks, since with `POSIXLY_CORRECT` set mosh runs them as the command;
   the same holds where the host the gate reads changed. The
   ledger view of a classification (`as_dict`) leaves the parts out, so approval bindings and trace rows are unchanged.
+  *Amendment 2026-10-19 (issue #191):* a `categories: {X: deny}` line or a rule with `decision: deny` was still
+  checked against the dominant part only, so `echo $(git push origin main) > /tmp/f` was `log` under
+  `categories: {local_write: deny}` while `deny: [local_write]` denied it. Now `decide` also decides each part
+  below the combined result as it would decide that command alone, by its category's line and then the first rule
+  that matches it (plus a deny rule whose `command` regex matches a decoded view of the line, #136); a `deny`
+  there denies the line, and the reason names the part. Only a deny reaches the parts: allow, log and ask lines
+  and rules keep deciding by the dominant part, and `reserved` stays the way to ask on any part. A deny on a
+  command the gate cannot read still becomes an ask (Limits below). Rejected: the most restrictive category line over all parts (a lower line on the dominant part would no longer
+  apply, and an allow rule on a part's target would stop counting).
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).

@@ -77,7 +77,9 @@ stores, so this ordering does not promise a cross-file atomic transaction.
 
 Required mode refuses `gh --body-file` inspection before touching the selected
 host path, including symlinks. Inline text can be checked without opening a file.
-An unseen body file cannot be approved by this gate. Policy, grant and scrub
+An unseen body cannot be approved by this gate: a body file, stdin, an `@file`
+field, `--input` or an expansion in the text is a recorded `deny` (#208,
+`docs/GATE.md` "Required executor audit"). Policy, grant and scrub
 name files come from trusted store/configuration paths and remain host code.
 
 Background bash arguments reach the broker before any host job starts. The
