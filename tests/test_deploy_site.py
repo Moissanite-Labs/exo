@@ -24,6 +24,8 @@ here = pathlib.Path(".")
 version = here / "version.json"
 pathlib.Path(os.environ["DEPLOY_LOG"]).write_text(json.dumps({
     "files": sorted(p.as_posix() for p in here.rglob("*") if p.is_file()),
+    "links": sorted(p.as_posix() for p in here.rglob("*") if p.is_symlink()),
+    "contents": {p.as_posix(): p.read_text() for p in here.rglob("*") if p.is_file() and p.suffix in (".txt", ".html")},
     "argv": sys.argv[1:],
     "version": json.loads(version.read_text()) if version.is_file() else None}))
 rc = int(os.environ.get("NPX_RC", "0"))
@@ -37,12 +39,16 @@ if mode == "fail":
 args = sys.argv[1:]
 skip = [args[i + 1] for i, a in enumerate(args[:-1]) if a == "--exclude"]
 if mode == "ok":
-    shutil.copytree(args[-2], args[-1], dirs_exist_ok=True, ignore=shutil.ignore_patterns(*skip))
+    # like rsync -a: links stay links, and a source directory that is itself a link is followed
+    shutil.copytree(args[-2], args[-1], dirs_exist_ok=True, symlinks=True, ignore=shutil.ignore_patterns(*skip))
 """
 GIT = """import os, sys
 args = sys.argv[1:]
-if "ls-files" in args and "--others" in args:
-    print("fatal: simulated failure reading the index", file=sys.stderr)
+fail = os.environ.get("GIT_FAIL", "ls-files")      # the one git subcommand that fails; all others are real
+sub = [a for a in args if not a.startswith("-") and a != "-C"]
+cmd = next((a for a in args if a in ("status", "ls-files")), None)
+if cmd == fail and (cmd != "ls-files" or "--others" in args):
+    print("fatal: simulated failure" if cmd == "status" else "fatal: simulated failure reading the index", file=sys.stderr)
     sys.exit(128)
 os.execv(os.environ["REAL_GIT"], ["git", *args])
 """
@@ -180,13 +186,17 @@ def test_ignored_untracked_file_also_refuses_but_finder_litter_does_not(site):
     assert ".DS_Store" not in deployed(site)["files"]
 
 
+def _install_git_shim(box):
+    (box / "git.py").write_text(GIT)
+    shim = box / "tools" / "git"
+    shim.unlink()
+    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{box / "git.py"}" "$@"\n')
+    shim.chmod(0o755)
+
+
 def test_a_failed_untracked_listing_stops_the_deploy(site):
     """git fails only the untracked-file listing (exit 128, no output); every other git call is real."""
-    (site / "git.py").write_text(GIT)
-    shim = site / "tools" / "git"
-    shim.unlink()
-    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{site / "git.py"}" "$@"\n')
-    shim.chmod(0o755)
+    _install_git_shim(site)
     r = deploy(site, extra_env={"REAL_GIT": shutil.which("git")})
     assert r.returncode == 1
     assert "could not list untracked files" in r.stderr and "git exit 128" in r.stderr
@@ -240,7 +250,7 @@ def test_a_corrupt_index_stops_the_deploy(site):
     (site / "repo" / "site" / "pitch" / "private.txt").write_text("private\n")
     (site / "repo" / ".git" / "index").write_bytes(b"not an index")
     r = deploy(site)
-    assert r.returncode != 0 and "could not list" in r.stderr and "nothing deployed" in r.stderr
+    assert r.returncode != 0 and "could not" in r.stderr and "git exit 128" in r.stderr and "nothing deployed" in r.stderr
     assert deployed(site) is None
 
 
@@ -256,3 +266,88 @@ def test_an_empty_cli_override_in_the_conf_file_is_refused(site):
     r = deploy(site, extra_env={"EXO_DEPLOY_CONF": str(conf)})
     assert r.returncode == 2 and "exact X.Y.Z" in r.stderr
     assert deployed(site) is None
+
+
+def test_a_failed_git_status_stops_a_versioned_deploy(site):
+    """#358: git fails only `status` (exit 128); a modified tracked file must not ship under a tag at HEAD."""
+    (site / "repo" / "site" / "index.html").write_text("DIRTY VERSION MUST NOT BE TAGGED\n")
+    _install_git_shim(site)
+    r = deploy(site, "--version", "site-v9.9-rc.77", extra_env={"REAL_GIT": shutil.which("git"), "GIT_FAIL": "status"})
+    assert r.returncode == 1
+    assert "could not read the status" in r.stderr and "git exit 128" in r.stderr and "nothing deployed" in r.stderr
+    assert deployed(site) is None and tags(site, "site-v9.9-rc.77") == ([], [])
+
+
+def _outside_private_dir(box):
+    out = box / "outside"
+    out.mkdir()
+    (out / "index.html").write_text("<h1>outside</h1>\n")
+    (out / "private.txt").write_text("outside private\n")
+    return out
+
+
+def test_a_tracked_symlink_as_the_site_root_refuses_the_deploy(site):
+    """#359: site is a tracked symlink to an outside directory; git lists nothing untracked, rsync would copy it all."""
+    repo = site / "repo"
+    out = _outside_private_dir(site)
+    git(repo, "rm", "-rq", "site")
+    shutil.rmtree(repo / "site", ignore_errors=True)
+    (repo / "site").symlink_to(out)
+    git(repo, "add", "site")
+    git(repo, "commit", "-qm", "site is a link")
+    assert git(repo, "ls-files", "--stage", "site").startswith("120000")
+    assert git(repo, "ls-files", "--others", "--", "site") == ""      # the inventory sees nothing, as in the report
+    for args in ((), ("--version", "site-v9.9-rc.78")):
+        r = deploy(site, *args)
+        assert r.returncode != 0 and "symlink" in r.stderr and "nothing deployed" in r.stderr
+        assert deployed(site) is None and tags(site, "site-v9.9-rc.78") == ([], [])
+
+
+def test_an_untracked_symlink_as_the_site_root_refuses_the_deploy(site):
+    repo = site / "repo"
+    out = _outside_private_dir(site)
+    shutil.rmtree(repo / "site")
+    (repo / "site").symlink_to(out)
+    r = deploy(site)
+    assert r.returncode != 0 and "symlink" in r.stderr
+    assert deployed(site) is None
+
+
+def test_a_site_root_tracked_as_a_symlink_but_checked_out_as_a_directory_refuses(site):
+    """The index says mode 120000 for site while the working tree holds a real directory: still refused."""
+    repo = site / "repo"
+    blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"], input="outside", text=True,
+                          capture_output=True, check=True).stdout.strip()
+    git(repo, "rm", "-rq", "--cached", "site")
+    git(repo, "update-index", "--add", "--cacheinfo", f"120000,{blob},site")
+    r = deploy(site)
+    assert r.returncode != 0 and "nothing deployed" in r.stderr
+    assert deployed(site) is None
+
+
+def test_a_symlink_inside_site_is_kept_as_a_link_and_its_target_is_not_copied(site):
+    """The existing behaviour: rsync -a keeps a link inside site/ and copies nothing from its target."""
+    repo = site / "repo"
+    out = _outside_private_dir(site)
+    (repo / "site" / "link").symlink_to(out)
+    git(repo, "add", "site/link")
+    git(repo, "commit", "-qm", "link inside site")
+    r = deploy(site)
+    assert r.returncode == 0, r.stderr + r.stdout
+    sent = deployed(site)
+    assert "link" in sent["links"]
+    assert not any(f.startswith("link/") or f.endswith("private.txt") for f in sent["files"])
+    assert "outside private" not in json.dumps(sent["contents"])
+
+
+def test_an_empty_cli_override_beats_the_conf_file(site):
+    """The environment wins even when it is set and empty: deploy.conf must not fill it in with 64.2.0."""
+    conf = site / "deploy.conf"
+    conf.write_text("EXO_VERCEL_CLI=64.2.0\n")
+    r = deploy(site, extra_env={"EXO_DEPLOY_CONF": str(conf), "EXO_VERCEL_CLI": ""})
+    assert r.returncode == 2 and "exact X.Y.Z" in r.stderr
+    assert deployed(site) is None
+    r = deploy(site, extra_env={"EXO_DEPLOY_CONF": str(conf), "EXO_VERCEL_CLI": "64.3.0"})   # a set value wins too
+    assert r.returncode == 0 and "vercel@64.3.0" in deployed(site)["argv"]
+    r = deploy(site, extra_env={"EXO_DEPLOY_CONF": str(conf)})                              # unset: the conf applies
+    assert r.returncode == 0 and "vercel@64.2.0" in deployed(site)["argv"]

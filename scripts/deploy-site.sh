@@ -7,7 +7,8 @@
 #                A failed copy or deploy exits non-zero and tags nothing. A versioned deploy needs a clean site/.
 #   Any deploy, versioned or not, refuses when site/ holds untracked files (so a private draft folder such as
 #   site/pitch/ can never ship). Commit them or move them out of site/. There is no override.
-#   It also refuses a submodule under site/, and refuses when git cannot list the files (a corrupt index).
+#   It also refuses a submodule under site/, a site/ that is itself a symlink (rsync would follow it and copy files git
+#   never listed), and refuses when git cannot list the files or report the tree's status (a corrupt index).
 #   The Vercel CLI is pinned (VERCEL_CLI_VERSION below). EXO_VERCEL_CLI may name another exact X.Y.Z, never a tag or an empty value.
 #   --redeploy   deploy only, skip the project/domain/DNS setup;  --yes   skip the typed confirmation
 # DNS is on Cloudflare. Both targets deploy from a git-free copy of site/.
@@ -41,8 +42,20 @@ while [ $# -gt 0 ]; do case "$1" in --prod) PROD=1;; --redeploy) REDEPLOY=1;; --
   *) echo "deploy-site: unknown option $1 (use --prod, --redeploy, --yes, --version)" >&2; exit 2;; esac; shift; done
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 command -v rsync >/dev/null || { echo "deploy-site: rsync is required to copy site/ out of git" >&2; exit 1; }
+# The source root must be a real directory. git does not descend through a symlink, so it would list nothing, but
+# rsync follows a source argument that ends in a slash and would copy the target's files, private ones included.
+SRC="$REPO/site"
+if [ -L "$SRC" ] || [ ! -d "$SRC" ]; then
+  echo "deploy-site: $SRC is a symlink or not a directory; nothing deployed. The site source must be a real directory inside the repository." >&2
+  exit 1
+fi
 # The tag names HEAD, so a versioned deploy must ship exactly what HEAD holds. An unversioned one is marked -dirty.
-DIRTY=$(git -C "$REPO" status --porcelain -- site ':(exclude)site/_shots')
+# A failed status is not a clean tree: an empty answer from a failed git would tag HEAD for bytes it does not hold.
+DIRTY=$(git -C "$REPO" status --porcelain -- site ':(exclude)site/_shots'); RC=$?
+if [ $RC != 0 ]; then
+  echo "deploy-site: could not read the status of site/ (git exit $RC); nothing deployed. Check the repository (git status, git fsck)." >&2
+  exit 1
+fi
 # Untracked files (ignored ones too) would be copied by rsync and shipped. Refuse before anything else happens.
 UNTRACKED=$(git -C "$REPO" ls-files --others -- site ':(exclude)site/_shots' ':(exclude)site/.DS_Store' ':(exclude)site/**/.DS_Store'); RC=$?
 if [ $RC != 0 ]; then
@@ -65,6 +78,12 @@ GITLINKS=$(printf '%s\n' "$STAGED" | sed -n 's/^160000 [0-9a-f]* [0-9]'"$(printf
 if [ -n "$GITLINKS" ]; then
   echo "deploy-site: site/ contains a submodule; nothing deployed. Its working tree can hold files git does not list. Vendor its files into site/ or move it out:" >&2
   printf '%s\n' "$GITLINKS" | head -10 | sed 's/^/  /' >&2
+  exit 1
+fi
+# A tracked entry for site/ itself with mode 120000 is a symlink in HEAD or the index: refuse it even if the working
+# tree now shows a directory. Symlinks inside site/ are fine: rsync -a keeps them as links and copies no targets.
+if printf '%s\n' "$STAGED" | grep -q "^120000 [0-9a-f]* [0-9]$(printf '\t')site\$"; then
+  echo "deploy-site: site/ is tracked as a symlink; nothing deployed. The site source must be a real directory." >&2
   exit 1
 fi
 if [ $PROD = 1 ]; then
@@ -91,7 +110,7 @@ vc() { curl -s -H "Authorization: Bearer $V" -H "Content-Type: application/json"
 cf() { curl -s -H "Authorization: Bearer $CF" -H "Content-Type: application/json" "$@"; }
 # Deploy from a copy outside git: Vercel reads the commit author and blocks emails that are not on the
 # team (a machine's git identity is often not a Vercel team login).
-SRC="$REPO/site"; W=$(mktemp -d)
+W=$(mktemp -d)
 rsync -a --exclude _shots --exclude .DS_Store "$SRC/" "$W/" && [ -f "$W/index.html" ] || { echo "deploy-site: copying $SRC failed or found no index.html; nothing deployed" >&2; exit 1; }
 # version.json at the site root, for the footer. Archive the outgoing production version before this step (docs/VERSIONING.md).
 COMMIT=$(git -C "$REPO" rev-parse HEAD); EXOV=$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO/pyproject.toml" | head -1)
