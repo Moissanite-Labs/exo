@@ -90,13 +90,9 @@ def fmt_elapsed(sec: float) -> str:
 
 
 def tail_text(path: Path, lines: int, chars: int, values: Sequence[str] = ()) -> str:
-    """The last ``lines`` lines of a log, at most ``chars`` characters (the end is kept). The whole file is read and
-    the key ``values`` are cut out as ``[redacted]`` before any cut, so no cut here splits a key. After a rotation,
-    the end of ``<id>.log.1`` stands in for the note while redacting, so a key split there is cut out too. That end
-    doubles until it is all of ``<id>.log.1`` or the text before it can change no span in the live log. Such text can
-    change a value's spans up to its length less one in. A match that starts where spans may change can come or go,
-    so they may change up to its end too, for the values after it as well. The spans the live log has on its own are
-    cut out as well, so this never redacts less than the live log alone would."""
+    """The last ``lines`` lines of a log, at most ``chars`` characters (the end is kept), with the key ``values`` cut
+    out before any cut. After a rotation the end of ``<id>.log.1`` stands in for the note and grows until no match in
+    it can change the live log's spans. The live log's own spans are cut out too (docs/JOBS.md, the D-039 amendment)."""
     try:
         data = path.read_bytes().decode("utf-8", errors="replace")
     except OSError:
@@ -255,8 +251,7 @@ class JobManager:
                         out.close()
                         os.replace(log, log.with_suffix(".log.1"))
                         out = open(log, "ab", buffering=0)
-                        note = ROTATED.format(log.name).encode()
-                        out.write(note)
+                        out.write(note := ROTATED.format(log.name).encode())
                         size = len(note)
                     part, chunk = chunk[:max(1, cap - size)], chunk[max(1, cap - size):]
                     out.write(part)
@@ -286,9 +281,8 @@ class JobManager:
 
     def _finish(self, h: Handle, code: int) -> None:
         """On the event loop: record the end, tell clients, and tell the owning thread."""
-        if h.id not in self.live:
+        if self.live.pop(h.id, None) is None:
             return
-        self.live.pop(h.id, None)
         ended = time.time()
         note = masked_note(h.side) if h.side else ""  # also removes the side file
         if h.reason == "killed":
@@ -296,14 +290,12 @@ class JobManager:
         elif h.reason == "timeout":
             state, detail = "timeout", f"killed after {fmt_elapsed(self.cfg.max_wall_s)} (the job wall limit)"
         else:
-            state = "done" if code == 0 else "failed"
-            detail = note if code == 0 else ""
+            state, detail = ("done", note) if code == 0 else ("failed", "")
         self.e.store._q("UPDATE jobs SET state=?, exit_code=?, ended=?, detail=? WHERE id=?", (state, code, ended, detail, h.id))
         self._spawn(self._announce(h, state, code, ended, detail))
 
     def _spawn(self, coro: Any) -> None:
-        task = asyncio.ensure_future(coro)
-        self._tasks.add(task)  # close() waits for these
+        self._tasks.add(task := asyncio.ensure_future(coro))  # close() waits for these
         task.add_done_callback(self._tasks.discard)
 
     async def _announce(self, h: Handle, state: str, code: int, ended: float, detail: str) -> None:
@@ -319,8 +311,7 @@ class JobManager:
             self.e.hub.publish(self._body(h.id, state, h.command, code, h.started, ended, detail), h.session)
 
     async def _built(self, *args: Any) -> Ingress:
-        """``_notice`` in the notice thread, as it reads and redacts the whole log. One at a time, in call order, so
-        each notice is handed on before the next one is built, in the order the jobs ended."""
+        """``_notice`` in the notice thread, one at a time, so each is handed on before the next, as the jobs ended."""
         async with self._order:
             return await asyncio.get_running_loop().run_in_executor(self._pool, self._notice, *args)
 
