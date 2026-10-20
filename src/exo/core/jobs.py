@@ -367,25 +367,25 @@ class JobManager:
     async def close(self) -> None:
         """Jobs end with exod: stop every running job's process group, then record it once, with no notice."""
         self.target.closed = True
-        with self._lock:  # out of live first, so _finish leaves these to this loop when the watcher sees them end
-            handles = list(self.live.values())
-            self.live.clear()
-        for h in handles:
-            h.reason, h.kill_by = "killed", "exod shutting down"
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(kill_process_group, h.proc)
-            if h.timer:
-                h.timer.cancel()
-            masked_note(h.side)  # removes the side file, as _finish would
-            self.e.store._q("UPDATE jobs SET state='killed', exit_code=?, ended=?, detail=? WHERE id=?",
-                            (h.proc.returncode, time.time(), "stopped when exod shut down", h.id))
-            self.e.hub.publish(self._body(h.id, "killed", h.command, h.proc.returncode, h.started, None,
-                                          "stopped when exod shut down"), h.session)
         try:
+            with self._lock:  # out of live first, so _finish leaves these to this loop when the watcher sees them end
+                handles = list(self.live.values())
+                self.live.clear()
+            for h in handles:
+                h.reason, h.kill_by = "killed", "exod shutting down"
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(kill_process_group, h.proc)
+                if h.timer:
+                    h.timer.cancel()
+                masked_note(h.side)  # removes the side file, as _finish would
+                self.e.store._q("UPDATE jobs SET state='killed', exit_code=?, ended=?, detail=? WHERE id=?",
+                                (h.proc.returncode, time.time(), "stopped when exod shut down", h.id))
+                self.e.hub.publish(self._body(h.id, "killed", h.command, h.proc.returncode, h.started, None,
+                                              "stopped when exod shut down"), h.session)
             await asyncio.gather(*self._tasks, return_exceptions=True)  # notices of jobs that ended just before
             with contextlib.suppress(RuntimeError):  # an earlier close() shut the pool down already
                 await asyncio.wrap_future(self._pool.submit(int))  # after every build before it, cancelled or not
-        finally:  # a hard stop cancels the wait: the pool still takes no more work, and its build runs on to its end
+        finally:  # a hard stop at any await here: the pool still takes no more work, and its build runs on to its end
             self._pool.shutdown(wait=False)
         self._pool.shutdown()  # its one thread is idle now, so this joins it at once
         await self.path.close()
