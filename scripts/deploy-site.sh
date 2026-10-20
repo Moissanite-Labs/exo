@@ -5,6 +5,9 @@
 #   --version V  production needs site-vX.Y (refused if that tag exists); staging may give site-vX.Y-rc.N.
 #                The deployed commit is tagged V and the tag pushed. See docs/VERSIONING.md.
 #                A failed copy or deploy exits non-zero and tags nothing. A versioned deploy needs a clean site/.
+#   Any deploy, versioned or not, refuses when site/ holds untracked files (so a private draft folder such as
+#   site/pitch/ can never ship). Commit them or move them out of site/. There is no override.
+#   The Vercel CLI is pinned (VERCEL_CLI_VERSION below). EXO_VERCEL_CLI may name another exact X.Y.Z, never a tag.
 #   --redeploy   deploy only, skip the project/domain/DNS setup;  --yes   skip the typed confirmation
 # DNS is on Cloudflare. Both targets deploy from a git-free copy of site/.
 # Tokens are read from the environment or a local env file and never printed.
@@ -14,9 +17,10 @@
 #   EXO_VERCEL_SCOPE  Vercel team slug
 #   EXO_DEPLOY_ENV    path to an env file that holds VERCEL_TOKEN and CF_API_TOKEN
 set -u
+VERCEL_CLI_VERSION="64.1.0"
 CONF="${EXO_DEPLOY_CONF:-$HOME/.config/exo/deploy.conf}"
 [ -r "$CONF" ] && while IFS='=' read -r k v; do
-  case "$k" in EXO_VERCEL_TEAM|EXO_VERCEL_SCOPE|EXO_DEPLOY_ENV) [ -z "${!k:-}" ] && export "$k=$(echo "$v" | tr -d "\"'")";; esac
+  case "$k" in EXO_VERCEL_TEAM|EXO_VERCEL_SCOPE|EXO_DEPLOY_ENV|EXO_VERCEL_CLI) [ -z "${!k:-}" ] && export "$k=$(echo "$v" | tr -d "\"'")";; esac
 done < "$CONF"
 # Tokens come from the environment first, then from the env file named above (never printed).
 ENVFILE="${EXO_DEPLOY_ENV:-$HOME/.config/exo/deploy.env}"
@@ -26,6 +30,8 @@ V=$(pick VERCEL_TOKEN); CF=$(pick CF_API_TOKEN)
 [ -n "$V" ] && [ -n "$CF" ] || { echo "deploy-site: set VERCEL_TOKEN and CF_API_TOKEN (or EXO_DEPLOY_ENV to an env file)" >&2; exit 1; }
 TEAM="${EXO_VERCEL_TEAM:-}"; SCOPE="${EXO_VERCEL_SCOPE:-}"
 [ -n "$TEAM" ] && [ -n "$SCOPE" ] || { echo "deploy-site: set EXO_VERCEL_TEAM and EXO_VERCEL_SCOPE (env or $CONF)" >&2; exit 1; }
+CLI="${EXO_VERCEL_CLI:-$VERCEL_CLI_VERSION}"
+[[ "$CLI" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "deploy-site: the Vercel CLI version must be an exact X.Y.Z, got '$CLI'" >&2; exit 2; }
 PROD=0; REDEPLOY=0; YES=0; VER=""
 while [ $# -gt 0 ]; do case "$1" in --prod) PROD=1;; --redeploy) REDEPLOY=1;; --yes) YES=1;;
   --version) [ $# -ge 2 ] || { echo "deploy-site: --version needs a value" >&2; exit 2; }; VER="$2"; shift;;
@@ -34,6 +40,13 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 command -v rsync >/dev/null || { echo "deploy-site: rsync is required to copy site/ out of git" >&2; exit 1; }
 # The tag names HEAD, so a versioned deploy must ship exactly what HEAD holds. An unversioned one is marked -dirty.
 DIRTY=$(git -C "$REPO" status --porcelain -- site ':(exclude)site/_shots')
+# Untracked files (ignored ones too) would be copied by rsync and shipped. Refuse before anything else happens.
+UNTRACKED=$(git -C "$REPO" ls-files --others -- site ':(exclude)site/_shots' ':(exclude)site/.DS_Store' ':(exclude)site/**/.DS_Store')
+if [ -n "$UNTRACKED" ]; then
+  echo "deploy-site: site/ has untracked files; nothing deployed. Commit them or move them out of site/:" >&2
+  printf '%s\n' "$UNTRACKED" | head -10 | sed 's/^/  /' >&2
+  exit 1
+fi
 if [ $PROD = 1 ]; then
   [ -n "$VER" ] || { echo "deploy-site: --prod needs --version site-vX.Y" >&2; exit 2; }
   [[ "$VER" =~ ^site-v[0-9]+\.[0-9]+$ ]] || { echo "deploy-site: production version must look like site-vX.Y, got $VER" >&2; exit 2; }
@@ -59,7 +72,7 @@ cf() { curl -s -H "Authorization: Bearer $CF" -H "Content-Type: application/json
 # Deploy from a copy outside git: Vercel reads the commit author and blocks emails that are not on the
 # team (a machine's git identity is often not a Vercel team login).
 SRC="$REPO/site"; W=$(mktemp -d)
-rsync -a --exclude _shots "$SRC/" "$W/" && [ -f "$W/index.html" ] || { echo "deploy-site: copying $SRC failed or found no index.html; nothing deployed" >&2; exit 1; }
+rsync -a --exclude _shots --exclude .DS_Store "$SRC/" "$W/" && [ -f "$W/index.html" ] || { echo "deploy-site: copying $SRC failed or found no index.html; nothing deployed" >&2; exit 1; }
 # version.json at the site root, for the footer. Archive the outgoing production version before this step (docs/VERSIONING.md).
 COMMIT=$(git -C "$REPO" rev-parse HEAD); EXOV=$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO/pyproject.toml" | head -1)
 printf '{"site":"%s","exo":"%s","commit":"%s","date":"%s"}\n' "${VER:-unversioned}" "$EXOV" "${COMMIT:0:7}${DIRTY:+-dirty}" "$(date -u +%Y-%m-%d)" > "$W/version.json"
@@ -68,7 +81,7 @@ if [ $PROD = 0 ]; then  # staging is never indexed: robots.txt plus an X-Robots-
   printf 'User-agent: *\nDisallow: /\n' > robots.txt
   printf '{"headers":[{"source":"/(.*)","headers":[{"key":"X-Robots-Tag","value":"noindex, nofollow"}]}]}\n' > vercel.json
 fi
-OUT=$(npx -y vercel@latest deploy --prod --yes --token "$V" --scope "$SCOPE" --name $P 2>&1); RC=$?
+OUT=$(npx -y "vercel@$CLI" deploy --prod --yes --token "$V" --scope "$SCOPE" --name $P 2>&1); RC=$?
 printf '%s\n' "$OUT" | grep -v -i token | grep -E "Production|Aliased|Error|error" | head -5
 [ $RC = 0 ] || { echo "deploy-site: vercel deploy failed (exit $RC)${VER:+; $VER is not tagged}" >&2; exit 1; }
 if [ -n "$VER" ]; then  # tag the deployed commit and push the tag
