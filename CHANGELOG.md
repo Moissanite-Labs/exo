@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
+  reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
+  with a compaction marker now carries nothing, whatever its role. Only a message that opens with the block
+  itself carries one. The session pins take open decisions beside rulings and corrections, so everything a
+  pinned block held still survives compaction, now by the pins.
 - The principal's pinned block no longer drops out when a host summary rides in an assistant row (#371).
   Hosts that alternate roles put the summary there, and the row reads as the agent's, so it carries nothing
   itself. That stays so. A host can also build summary rows exo-context never escaped, and the host's

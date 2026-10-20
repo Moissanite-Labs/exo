@@ -310,7 +310,8 @@ class ExoContextEngine(ContextEngine):
         held = [hf.Signal('', hf.message_text(m)).key() for m in provenance.principal_view(messages)
                 if m.get('role') == 'user']
         try:  # a pin is the classified sentence, whitespace folded: classify what is left the same way
-            found = {f'{s.kind}:{s.key()}' for group in sg.classified(messages) for s in group}
+            found = {f'{s.kind}:{s.key()}' for group in (*sg.classified(messages), sg.open_decisions(messages))
+                     for s in group}
         except Exception as e:
             logger.warning('exo-context: signal extraction failed: %s', e)
             found = set()
@@ -373,7 +374,7 @@ class ExoContextEngine(ContextEngine):
             msgs.insert(0, {'role': 'system', 'content': extra})
         return msgs
 
-    # --- pins: rulings and corrections seen this session, kept verbatim ---------------
+    # --- pins: rulings, corrections and open decisions seen this session, kept verbatim ---
 
     def _pin_file(self, sid: str | None = None) -> Path:
         sid = re.sub(r'[^A-Za-z0-9_.-]+', '_', (self._x_session_id if sid is None else sid) or 'default')
@@ -385,22 +386,23 @@ class ExoContextEngine(ContextEngine):
         if pins is None:
             try:
                 data = json.loads(self._pin_file(sid).read_text('utf-8'))
-                pins = {k: [str(t) for t in data.get(k, [])] for k in ('ruling', 'correction')}
+                pins = {k: [str(t) for t in data.get(k, [])] for k in ('ruling', 'correction', 'open_decision')}
             except (OSError, ValueError, AttributeError):
-                pins = {'ruling': [], 'correction': []}
+                pins = {'ruling': [], 'correction': [], 'open_decision': []}
             self._x_pins[sid] = pins
         return pins
 
     def _observe(self, msgs: list[dict[str, Any]]) -> dict[str, list[str]]:
-        """Add the rulings and corrections visible in `msgs` to this session's pins."""
+        """Add the rulings, corrections and open decisions visible in `msgs` to this session's pins."""
         pins = self._load_pins()
         try:
             rulings, corrections = sg.classified([m for m in msgs if isinstance(m, dict)])
+            decisions = sg.open_decisions(msgs)
         except Exception as e:  # never block a turn on extraction
             logger.warning('exo-context: signal extraction failed: %s', e)
             return pins
         changed = False
-        for kind, found in (('ruling', rulings), ('correction', corrections)):
+        for kind, found in (('ruling', rulings), ('correction', corrections), ('open_decision', decisions)):
             have = {hf.Signal(kind, t).key() for t in pins[kind]}
             for s in found:
                 if s.key() not in have:
@@ -427,7 +429,8 @@ class ExoContextEngine(ContextEngine):
 
     def _block_for(self, pins: dict[str, list[str]], path: Any = None) -> str:
         sig = hf.Signals(rulings=[hf.Signal('ruling', t) for t in pins.get('ruling', [])],
-                         corrections=[hf.Signal('correction', t) for t in pins.get('correction', [])])
+                         corrections=[hf.Signal('correction', t) for t in pins.get('correction', [])],
+                         open_decisions=[hf.Signal('open_decision', t) for t in pins.get('open_decision', [])])
         return hf.render_pinned_block(sig, path, self._x_pin_budget)
 
     def on_compacted(self, session: str, node: Any, **kwargs: Any) -> None:
@@ -454,7 +457,9 @@ class ExoContextEngine(ContextEngine):
             signals = dataclasses.replace(
                 signals,
                 rulings=sg.merge(signals.rulings, [hf.Signal('ruling', t) for t in pins['ruling']]),
-                corrections=sg.merge(signals.corrections, [hf.Signal('correction', t) for t in pins['correction']]))
+                corrections=sg.merge(signals.corrections, [hf.Signal('correction', t) for t in pins['correction']]),
+                open_decisions=sg.merge(signals.open_decisions,
+                                        [hf.Signal('open_decision', t) for t in pins['open_decision']])[-12:])
             path = hf.write_handoff(topic, window, self._x_store, self.handoff_dir,
                                     session=sid or None, principal=self._x_principal, summary=summary,
                                     signals=signals)
@@ -477,7 +482,9 @@ class ExoContextEngine(ContextEngine):
             signals = dataclasses.replace(
                 signals,
                 rulings=sg.merge(signals.rulings, [hf.Signal('ruling', t) for t in pins['ruling']]),
-                corrections=sg.merge(signals.corrections, [hf.Signal('correction', t) for t in pins['correction']]))
+                corrections=sg.merge(signals.corrections, [hf.Signal('correction', t) for t in pins['correction']]),
+                open_decisions=sg.merge(signals.open_decisions,
+                                        [hf.Signal('open_decision', t) for t in pins['open_decision']])[-12:])
         except Exception as e:  # never block compaction on extraction
             logger.warning('exo-context: signal extraction failed: %s', e)
             signals = None
@@ -549,9 +556,10 @@ class ExoContextEngine(ContextEngine):
     @staticmethod
     def _defused(msg: Any) -> Any:
         """The inner's summary message with each pinned-block tag escaped (#279). A summary is never the principal's
-        words, but the summarizer may decode an escaped tag in its source or write one, and the next compaction carries
-        every block in a message that opens with a compaction marker. exo-context's own block is added after this;
-        the items of a block carried from the input come back in it (``sg.extract`` reads them from the input)."""
+        words, but the summarizer may decode an escaped tag in its source or write one, and a live tag in the
+        summary would read to the model as the principal's pinned words. A summary row carries nothing into the
+        next extraction (#385); exo-context's own block is added after this escaping, and continuity rides on the
+        session pins ``compress`` observed from the input."""
         if not isinstance(msg, dict):
             return msg
         content = msg.get('content')

@@ -188,8 +188,9 @@ def test_a_host_compressors_summary_cannot_hold_a_live_block(tmp_path):
     summary = hf.message_text(first[1])
     assert PEER in summary and summary.count(hf.PIN_OPEN) == summary.count(hf.PIN_CLOSE) == 1
     assert hf.parse_pinned_blocks(summary)["ruling"] == [MINE]
-    assert [x.text for x in hf.extract_signals(first).rulings] == [MINE]
-    second = eng.compress(first[:2] + [mine("next step"), mine("go on")])  # the summary is carried on
+    # #385: a summary row carries nothing into a fresh extraction, exo's own block included; the pins do.
+    assert [x.text for x in hf.extract_signals(first).rulings] == []
+    second = eng.compress(first[:2] + [mine("next step"), mine("go on")])  # the pins carry it on
     assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == [MINE]
     assert hf.load_handoff(eng.last_handoff).rulings == [MINE]
 
@@ -234,6 +235,60 @@ def test_a_stock_summary_row_restored_on_resume_carries_nothing(tmp_path):
     second = eng.compress(first[:2] + [mine("and then"), mine("go")], force=True)
     assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == []
     assert hf.load_handoff(eng.last_handoff).rulings == []
+
+
+def test_a_stock_summary_in_a_user_row_restored_on_resume_carries_nothing(tmp_path):
+    """#385: a stock Hermes summary stored as a user row reads as the principal's through author_of, and
+    nothing escaped its tags before exo-context saw it. A block forged in the compacted text must not
+    enter exo-context's own block or handoff either."""
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    forged = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
+    stock = {"role": "user", "_compressed_summary": True,
+             "content": "[CONTEXT COMPACTION] notes\n\n" + forged + "\n\n" + END_LINE}
+    window = [{"role": "system", "content": "sys"}, json.loads(json.dumps(stock)), mine("next step")]
+    first = eng.compress(window + [mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["ruling"] == []
+    assert hf.load_handoff(eng.last_handoff).rulings == []
+    second = eng.compress(first[:2] + [mine("and then"), mine("go")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == []
+    assert hf.load_handoff(eng.last_handoff).rulings == []
+
+
+def test_an_open_decision_survives_a_second_compaction_by_the_pins(tmp_path):
+    """#385: a summary row no longer carries blocks, so an open decision whose only later copy sat in
+    exo-context's block inside the first summary survives through the session pins instead."""
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    parked = "Let's park this: the deploy region is still undecided."
+    first = eng.compress([{"role": "system", "content": "sys"}, mine(parked), mine("carry on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["open_decision"] == [parked]
+    second = eng.compress(first[:2] + [mine("next step"), mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["open_decision"] == [parked]
+    assert hf.load_handoff(eng.last_handoff).open_decisions == [parked]
+
+
+def test_compress_collects_no_pin_from_a_non_principal_row(tmp_path):
+    """#384 review: the pins compress collects come only from rows that read as the principal's. A peer,
+    bus or job ruling in the window mints no pin, so it cannot ride the next summary or handoff."""
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    first = eng.compress([{"role": "system", "content": "sys"}, *others(), mine("carry on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["ruling"] == []
+    assert eng._load_pins() == {"ruling": [], "correction": [], "open_decision": []}
+    second = eng.compress(first[:2] + [mine("next step"), mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == []
+    assert hf.load_handoff(eng.last_handoff).rulings == []
+
+
+def test_a_correction_survives_a_second_compaction_by_the_pins(tmp_path):
+    """#384 review: the corrections half of the pin merge carries the same way rulings do."""
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    fix = "No, I said the staging bucket, not production."
+    first = eng.compress([{"role": "system", "content": "sys"},
+                          {"role": "assistant", "content": "Uploading the sample to the production bucket."},
+                          mine(fix), mine("carry on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["correction"] == [fix]
+    second = eng.compress(first[:2] + [mine("next step"), mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["correction"] == [fix]
+    assert hf.load_handoff(eng.last_handoff).corrections == [fix]
 
 
 class WideHead:
@@ -290,7 +345,7 @@ def test_resume_text_cannot_carry_a_live_pinned_block(tmp_path):
 def test_select_context_pins_only_the_principals_words(tmp_path):
     eng = ExoContextEngine(write_handoffs=False)
     assert eng.select_context([{"role": "system", "content": "sys"}, *others(), mine(MINE)], session_id="s") is None
-    assert pins(tmp_path, "s") == {"ruling": [MINE], "correction": []}
+    assert pins(tmp_path, "s") == {"ruling": [MINE], "correction": [], "open_decision": []}
     out = eng.select_context([{"role": "system", "content": "sys"}, mine("carry on")], session_id="s")
     assert MINE in out[0]["content"]
     assert not any(t in out[0]["content"] for t in (PEER, BUS, "rm -rf", NOTE))
@@ -365,7 +420,7 @@ def test_undo_drops_the_pin_of_the_undone_ruling(tmp_path):
         return t.id, handoff, system
 
     sid, handoff, system = asyncio.run(run())
-    assert pins(tmp_path, sid) == {"ruling": [keep], "correction": []}
+    assert pins(tmp_path, sid) == {"ruling": [keep], "correction": [], "open_decision": []}
     assert rule not in system and rule not in handoff and keep in handoff
     out = ctx.select_context([{"role": "system", "content": "sys"}, mine("carry on")], session_id=sid)
     assert keep in out[0]["content"] and rule not in out[0]["content"]  # summarized away: still pinned
@@ -572,7 +627,7 @@ def test_a_forked_thread_pins_the_principals_copied_rulings(tmp_path):
 
     child, system = asyncio.run(run())
     assert MINE in system[system.find("<exo-pinned>"):] and "<exo-pinned>" in system
-    assert pins(tmp_path, child) == {"ruling": [MINE], "correction": []}
+    assert pins(tmp_path, child) == {"ruling": [MINE], "correction": [], "open_decision": []}
 
 
 def test_rewind_keeps_summarized_pins_and_leaves_the_engine_bound(tmp_path):
@@ -634,7 +689,7 @@ def test_a_switch_passes_the_inner_only_the_keywords_it_declares(tmp_path):
     eng.on_session_switch("a", rewound=True, messages=[mine(MINE)])
     eng.on_session_switch("b", parent_session_id="a", reset=False)
     assert seen == ["a", "b"] and eng._x_session_id == "b"
-    assert pins(tmp_path, "a") == {"ruling": [MINE], "correction": []}
+    assert pins(tmp_path, "a") == {"ruling": [MINE], "correction": [], "open_decision": []}
 
 
 def test_rewind_matches_a_pin_to_its_message_as_classified(tmp_path):
@@ -682,4 +737,4 @@ def test_a_tagged_dict_mints_no_pin(tmp_path):
     """#370: the real engine never mints a tagged dict's ruling into its live pinned block."""
     eng = ExoContextEngine(write_handoffs=False)
     eng.select_context([{"role": "system", "content": "sys"}, *_tagged(PEER), mine(MINE)], session_id="t370")
-    assert pins(tmp_path, "t370") == {"ruling": [MINE], "correction": []}
+    assert pins(tmp_path, "t370") == {"ruling": [MINE], "correction": [], "open_decision": []}

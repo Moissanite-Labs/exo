@@ -16,6 +16,12 @@ def classified(messages: list[dict[str, Any]]) -> tuple[list[hf.Signal], list[hf
     return hf.extract_rulings_and_corrections([m for m in messages if isinstance(m, dict)])
 
 
+def open_decisions(messages: list[dict[str, Any]]) -> list[hf.Signal]:
+    """Open decisions as ``exo.handoff`` finds them: a deferred call in the principal's turn, a marked one
+    in the agent's. The engine pins these beside rulings and corrections (#385)."""
+    return hf._open_decisions([m for m in messages if isinstance(m, dict)])
+
+
 def merge(*groups: Iterable[hf.Signal]) -> list[hf.Signal]:
     """Concatenate and drop repeats (same text ignoring whitespace and case), first wins."""
     return hf._dedupe([s for g in groups for s in g])
