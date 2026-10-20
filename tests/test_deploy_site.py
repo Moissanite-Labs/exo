@@ -39,6 +39,13 @@ skip = [args[i + 1] for i, a in enumerate(args[:-1]) if a == "--exclude"]
 if mode == "ok":
     shutil.copytree(args[-2], args[-1], dirs_exist_ok=True, ignore=shutil.ignore_patterns(*skip))
 """
+GIT = """import os, sys
+args = sys.argv[1:]
+if "ls-files" in args and "--others" in args:
+    print("fatal: simulated failure reading the index", file=sys.stderr)
+    sys.exit(128)
+os.execv(os.environ["REAL_GIT"], ["git", *args])
+"""
 
 
 def git(cwd, *args):
@@ -171,6 +178,20 @@ def test_ignored_untracked_file_also_refuses_but_finder_litter_does_not(site):
     r = deploy(site)
     assert r.returncode == 0, r.stderr + r.stdout
     assert ".DS_Store" not in deployed(site)["files"]
+
+
+def test_a_failed_untracked_listing_stops_the_deploy(site):
+    """git fails only the untracked-file listing (exit 128, no output); every other git call is real."""
+    (site / "git.py").write_text(GIT)
+    shim = site / "tools" / "git"
+    shim.unlink()
+    shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{site / "git.py"}" "$@"\n')
+    shim.chmod(0o755)
+    r = deploy(site, extra_env={"REAL_GIT": shutil.which("git")})
+    assert r.returncode == 1
+    assert "could not list untracked files" in r.stderr and "git exit 128" in r.stderr
+    assert "nothing deployed" in r.stderr
+    assert deployed(site) is None
 
 
 def test_vercel_cli_is_pinned(site):
