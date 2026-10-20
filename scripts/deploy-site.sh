@@ -56,6 +56,17 @@ if [ $RC != 0 ]; then
   echo "deploy-site: could not read the status of site/ (git exit $RC); nothing deployed. Check the repository (git status, git fsck)." >&2
   exit 1
 fi
+STAGED=$(git -C "$REPO" ls-files --stage -- site); RC=$?
+if [ $RC != 0 ]; then
+  echo "deploy-site: could not list the tracked files in site/ (git exit $RC); nothing deployed." >&2
+  exit 1
+fi
+# A tracked entry for site/ itself with mode 120000 is a symlink in HEAD or the index: refuse it even if the working
+# tree now shows a directory. Symlinks inside site/ are fine: rsync -a keeps them as links and copies no targets.
+if printf '%s\n' "$STAGED" | grep -q "^120000 [0-9a-f]* [0-9]$(printf '\t')site\$"; then
+  echo "deploy-site: site/ is tracked as a symlink; nothing deployed. The site source must be a real directory." >&2
+  exit 1
+fi
 # Untracked files (ignored ones too) would be copied by rsync and shipped. Refuse before anything else happens.
 UNTRACKED=$(git -C "$REPO" ls-files --others -- site ':(exclude)site/_shots' ':(exclude)site/.DS_Store' ':(exclude)site/**/.DS_Store'); RC=$?
 if [ $RC != 0 ]; then
@@ -69,21 +80,10 @@ if [ -n "$UNTRACKED" ]; then
 fi
 # A submodule is one entry in the parent index, so the inventory above never sees the files inside it, but rsync copies
 # them (untracked and ignored ones too). Refuse any submodule under site/ rather than trust what its working tree holds.
-STAGED=$(git -C "$REPO" ls-files --stage -- site); RC=$?
-if [ $RC != 0 ]; then
-  echo "deploy-site: could not list the tracked files in site/ (git exit $RC); nothing deployed." >&2
-  exit 1
-fi
 GITLINKS=$(printf '%s\n' "$STAGED" | sed -n 's/^160000 [0-9a-f]* [0-9]'"$(printf '\t')"'//p')
 if [ -n "$GITLINKS" ]; then
   echo "deploy-site: site/ contains a submodule; nothing deployed. Its working tree can hold files git does not list. Vendor its files into site/ or move it out:" >&2
   printf '%s\n' "$GITLINKS" | head -10 | sed 's/^/  /' >&2
-  exit 1
-fi
-# A tracked entry for site/ itself with mode 120000 is a symlink in HEAD or the index: refuse it even if the working
-# tree now shows a directory. Symlinks inside site/ are fine: rsync -a keeps them as links and copies no targets.
-if printf '%s\n' "$STAGED" | grep -q "^120000 [0-9a-f]* [0-9]$(printf '\t')site\$"; then
-  echo "deploy-site: site/ is tracked as a symlink; nothing deployed. The site source must be a real directory." >&2
   exit 1
 fi
 if [ $PROD = 1 ]; then
