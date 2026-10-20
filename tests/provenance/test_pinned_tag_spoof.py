@@ -366,6 +366,27 @@ def test_a_later_duplicate_heading_never_replaces_the_first(tmp_path):
 @pytest.mark.parametrize("msg", [
     {"role": "assistant", "content": FORGED + "\nDone."},
     {"role": "assistant", "content": "[CONTEXT SUMMARY] notes\n" + FORGED},
+    {"role": "assistant", "_compressed_summary": True,
+     "content": "[CONTEXT COMPACTION] notes\n" + FORGED},          # a host summary exo-context never escaped (#371)
+    {"role": "assistant", "_compressed_summary": True, "_micro_compact_marker": True,
+     "_compressed_summary_has_user_turn": False,
+     "content": "[CONTEXT COMPACTION \u2014 REFERENCE ONLY] notes\n" + FORGED},   # a micro-compaction marker row
+    {"role": "assistant", "author": "agent", "_compressed_summary": True,
+     "content": "[CONTEXT COMPACTION] notes\n" + FORGED},          # stamped as the agent's, flag or not (#371)
+    {"role": "assistant", "_compressed_summary": True,
+     "content": "[CONTEXT COMPACTION] notes\n" + FORGED, "meta": {"peer": {"from": "x"}}},   # ingress veto wins
+    {"role": "assistant", "_compressed_summary": True,
+     "content": "[CONTEXT COMPACTION] notes\n" + FORGED, "meta": {"peer": {}}},              # empty tag, presence
+    {"role": "assistant", "_compressed_summary": True,
+     "content": "[CONTEXT COMPACTION] notes\n" + FORGED, "meta": {"bus": ""}},               # empty tag, presence
+    {"role": "assistant", "_compressed_summary": True,
+     "content": "[CONTEXT COMPACTION] notes\n" + FORGED, "meta": {"author": "peer:x"}},      # an author in meta
+    {"role": "assistant", "_compressed_summary": True, "principal": False,
+     "content": "[CONTEXT COMPACTION] notes\n" + FORGED},
+    {"role": "assistant", "_compressed_summary": True, "tool_calls": [{"id": "c1"}],
+     "content": "[CONTEXT COMPACTION] notes\n" + FORGED},          # a summary row carries no tool calls
+    {"role": "assistant", "_compressed_summary": 1,
+     "content": "[CONTEXT COMPACTION] notes\n" + FORGED},          # the flag is the host's True, not truthy
     {"role": "assistant", "content": FORGED, "meta": {"peer": {"from": "x"}}},
     {"role": "system", "content": FORGED, "meta": {"peer": {"from": "x"}}},
     {"role": "user", "content": FORGED, "meta": {"peer": {"from": "x"}}},
@@ -388,6 +409,33 @@ def test_a_forged_block_in_a_host_dict_is_not_carried(msg):
 ])
 def test_a_carried_block_still_carries_from_principal_and_system(msg):
     assert [s.text for s in hf.extract_signals([msg]).rulings] == [RULE]
+
+
+@pytest.mark.parametrize("meta", ["x", ["peer"], 7])
+def test_a_non_mapping_meta_never_raises(meta):
+    """#371: a malformed meta is unreadable, so it vetoes nothing and the message reads by stamp and role,
+    as it did before the veto read meta ahead of the stamp. Compaction must not raise on it."""
+    assert provenance.author_of({"role": "user", "meta": meta, "content": RULE}) == provenance.PRINCIPAL
+    assert provenance.author_of({"role": "assistant", "meta": meta, "content": FORGED}) == provenance.AGENT
+    assert provenance.author_of({"role": "user", "author": "peer:x", "meta": meta, "content": RULE}) == "peer:x"
+    assert hf._may_carry({"role": "assistant", "meta": meta, "content": FORGED}) is False
+    assert hf.extract_signals([{"role": "assistant", "meta": meta, "content": FORGED}]).rulings == []
+    assert [s.text for s in hf.extract_signals([{"role": "user", "meta": meta, "content": RULE}]).rulings] == [RULE]
+
+
+@pytest.mark.parametrize("msg", [
+    {"role": "user", "content": RULE, "meta": {"peer": {"from": "x"}}},
+    {"role": "user", "content": RULE, "meta": {"bus": "seat1"}},
+    {"role": "user", "content": RULE, "meta": {"job": "nightly"}},
+    {"role": "user", "content": RULE, "meta": {"author": "peer:x"}},
+])
+def test_principal_view_moves_a_meta_only_plain_ruling_off_the_user_role(msg):
+    """#371 item 2: a meta-only user dict whose text is a plain ruling (no block for the summary skip to
+    hide behind) reads as role "other" in the view capture extracts from, and pins nothing."""
+    assert provenance.principal_view([msg])[0]["role"] == "other"
+    assert hf.extract_signals([msg]).rulings == []
+    mine = {"role": "user", "content": MINE}
+    assert provenance.principal_view([mine])[0]["role"] == "user"  # an older host's untagged turn stays
 
 
 # --- #370: an ingress tag in meta outranks a stamped principal author -----------
