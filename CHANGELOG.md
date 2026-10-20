@@ -113,6 +113,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#394, D-075 amendment): an allow or log rule's `command` regex no longer lowers a compound line whose
+  deciding command it does not name. The regex saw the whole line, so `{command: '^git status', decision: allow}`
+  allowed `git status; git push --force origin main`, also under `categories: {force_push: deny}`, and
+  `{command: 'rm -rf build', decision: allow}` lifted `categories: {github_post: deny}` from the post in
+  `gh pr comment 3 --body hi && rm -rf build`. Each simple command on a line now carries its own text, as written
+  with its redirections, nested ones too (`$( )`, `bash -c`, `eval`, a heredoc a shell reads, `ssh`). Such a rule
+  decides the line only when its regex matches the own text of every command that carries the line's category or
+  is as severe, and otherwise the next rule is tried. A part with no own text (an unread nest, a string literal in
+  code) matches no such rule. In the #191 pass it overrides a part's category deny only when it names that part.
+  Ask and deny rules and the `reserved:` and `deny:` lists still match the whole line and its decoded views. A line
+  of one simple command, and a tool that is not a shell, match as before. An allow or log rule written for a whole
+  compound line (`'^make && make install$'`) now has to match each deciding command, and until then the line gets
+  its matrix or category outcome. The ledger view leaves the own text out.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40

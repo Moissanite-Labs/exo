@@ -546,7 +546,8 @@ Mapping entries use the same matching. A rule with decision `deny` or `ask` whos
 is still chosen on the original text, and the pass lifts the outcome to the rule's decision only
 when the view matches and the original text did not, so an ordered list such as an allow for one
 push target before an ask on `^git push` keeps working for plainly spelled commands. Allow and
-lower rules, and grants, match the original text only. The view keeps operators and word
+lower rules, and grants, match the original text only, and on a compound line only the text of
+the commands that decide it (#394, below). The view keeps operators and word
 boundaries; whitespace, control characters and shell syntax inside a word are escaped, and
 dynamic words and heredoc bodies become placeholders made of control characters, which no
 literal word renders to and no regex naming letters or operators matches, so a veto on `>` or
@@ -598,24 +599,52 @@ gate does not read:
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
   delete is the more severe part and would otherwise set the card. A category line or rule that
-  denies a part denies the line too (#191): each part below the dominant one is decided as it
-  would be alone, by its category's line and then the first rule that matches it (or a deny rule
-  whose `command` regex matches a decoded view of the line), and a `deny` there denies the line,
-  with a reason that names the part (`denied by policy (category local_write: write /tmp/f)`). Only
-  a deny reaches the parts: allow, log and ask lines and rules, the opaque bump, third-party
-  escalation, posting checks and the floors see the dominant part (a `reserved:` entry gives an ask
-  on any part). A part carries the tool of the call it came in on
-  (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash) and the
-  views of its line, so a `command` regex matches a part as it matches the line (`g''it push
-  origin main && rm -rf build` is denied under `{category: vcs_push, command: 'git push'}`), the
-  `ssh` hop is a part whose target is the bare host (`user@`, `ssh://` and a `:port` stripped) and
-  the destination as written, and the inner commands of an `ssh` line are `internal`. A mapping entry
-  in `reserved` or `deny` counts only its match keys: any other key (`reason`, `name`, a note, a
-  typo) is dropped, so it widens the entry instead of voiding it, and an entry left with no match
-  key matches every action. The ledger view of a classification (`as_dict`) leaves the parts out.
-  `Decision.reserved` names the parts a reserved entry matched, once each, and the exo-gate hook
-  does not let a standing grant for the line's category cover one of them. Its ledger view
-  (`Decision.as_dict`) redacts URL userinfo (`https://***@host/...`).
+  denies a part denies the line too (#191): each part below the dominant one is decided by its
+  category's line and then the first rule that matches it (or a deny rule whose `command` regex
+  matches a decoded view of the line), and a `deny` there denies the line, with a reason that names
+  the part (`denied by policy (category local_write: write /tmp/f)`). There an allow or log rule's
+  `command` regex must match the part's own text, while an ask or deny rule's matches the whole
+  line (next item), so an allow rule written for another command on the line does not lift the
+  part's deny. Only a deny reaches the parts: allow, log and ask lines and rules, the opaque bump,
+  third-party escalation, posting checks and the floors see the dominant part (a `reserved:` entry
+  gives an ask on any part). A part carries the tool of the call it came in on (`tool:execute_code`
+  matches the `execute_code` tool, not `python -c` run from bash) and the views of its line, so the
+  `command` regex of a `reserved` or `deny` entry or a deny rule matches a part as it matches the
+  line (`g''it push origin main && rm -rf build` is denied under
+  `{category: vcs_push, command: 'git push'}`), the `ssh` hop is a part whose target is the bare
+  host (`user@`, `ssh://` and a `:port` stripped) and the destination as written, and the inner
+  commands of an `ssh` line are `internal`. A mapping entry in `reserved` or `deny` counts only its
+  match keys: any other key (`reason`, `name`, a note, a typo) is dropped, so it widens the entry
+  instead of voiding it, and an entry left with no match key matches every action. The ledger view
+  of a classification (`as_dict`) leaves the parts out. `Decision.reserved` names the parts a
+  reserved entry matched, once each, and the exo-gate hook does not let a standing grant for the
+  line's category cover one of them. Its ledger view (`Decision.as_dict`) redacts URL userinfo
+  (`https://***@host/...`).
+- How a rule's `command` regex matches a compound line (#394). Each part also carries its own text:
+  its simple command as written, with its redirections, after leading reserved words such as `then`
+  (`git push --force origin main` in `if x; then git push --force origin main; fi`). A prefix such
+  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A nested command
+  has its text in the nested line: `git push --force origin main` in
+  `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
+  reads and in `ssh host 'git push --force origin main'`. A part the gate makes up, a nest past a
+  depth or nesting cap and a string literal in code (only a guess at a command) have no own text.
+  Ask and deny rules, and the `command:` entries of `reserved:` and `deny:`, match the whole line
+  and its decoded views, so they can only catch more. An allow or log rule's `command` regex
+  decides a compound line only when it matches the own text of every part that carries the line's
+  category or is as severe as the combined result, and a part with no own text matches no such
+  rule. When it does not match, the rule is skipped and the next one is tried. So
+  `{command: '^git status', decision: allow}` no longer allows
+  `git status; git push --force origin main`: it asks, and under `categories: {force_push: deny}`
+  it is denied. `{command: 'git push --force origin main', decision: allow}` still allows
+  `cd repo && git push --force origin main`, and a rule has to name both pushes to allow
+  `git push --force origin main; git push --force origin dev`. Equally severe commands are matched
+  together, so their order does not change the outcome. The regex sees the text as written: an
+  allow rule for `git push` does not match `g''it push --force origin main`, and a deny rule for
+  `git push` still denies it. A line of one part (one simple command, or a tool that is not a
+  shell) is matched on its command text as before. A rule that matched a whole compound line, such
+  as `'^make && make install$'`, now has to match each deciding command (`'^make( install)?$'`),
+  and until then the line gets its matrix or category outcome. The ledger view of a classification
+  leaves the own text out.
 - Bash evaluates an array subscript in a variable name as arithmetic, and that runs a `$( )` or
   backticks in it, even inside single quotes. So the name arguments of `printf -v`, `read` (and
   `read -a`), `declare`, `typeset`, `local`, `unset`, `test -v` and `[ -v`, and `wait -p` are read
@@ -961,10 +990,13 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   denied under `categories: {web_read: deny}`, though the block is `opaque_exec`. An allow, log
   or ask line or rule applies to the line's own category only: under
   `categories: {github_post: ask}` the line above asks for the delete, and approving it sends
-  the post too. Use `reserved:` to ask on any part. Under either deny form the four-wrapper
-  example above is denied and the five-wrapper example asks as `opaque_exec`. So approving an
-  opaque card or a compound line can run an action the gate did not show. Read the whole command
-  before approving it: an approval does not vouch for what the gate did not classify.
+  the post too. An allow or log rule's `command` regex has to name the deciding command since
+  #394, but a less severe command on the line still rides on the outcome it gives:
+  `rm -rf build && git push --force origin main` is allowed under an allow rule for
+  `'^git push --force origin main$'`. Use `reserved:` to ask on any part. Under either deny form
+  the four-wrapper example above is denied and the five-wrapper example asks as `opaque_exec`. So
+  approving an opaque card or a compound line can run an action the gate did not show. Read the
+  whole command before approving it: an approval does not vouch for what the gate did not classify.
 - **Deny becomes ask.** Where the gate cannot read the command it files the line as
   `opaque_exec`, which asks, so a `deny:` or `categories:` entry for the hidden action becomes
   an ask, and the card names the wrapper rather than the action. For example: nesting past the

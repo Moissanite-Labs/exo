@@ -344,6 +344,12 @@ What the gate asks about, and why:
   against each command the gate reads on a line, so with pushes denied `git push origin main && rm -rf build` is
   denied, not asked about the delete. A `categories: {X: deny}` setting or a rule with `decision: deny` holds the
   same way (#191).
+- **An allow rule names the command it allows (#394).** A rule with `decision: allow` or `log` and a `command:`
+  regex lowers a line of several commands only when the regex matches the command that decides the line, as you
+  wrote it. So a rule for `^git status` no longer allows `git status; git push --force origin main`, while a rule
+  for `git push --force origin main` still allows `cd repo && git push --force origin main`. A rule written for a
+  whole line such as `make && make install` has to match each command now (`^make( install)?$`). Ask and deny
+  rules still see the whole line. `docs/GATE.md` has the details.
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
   covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,

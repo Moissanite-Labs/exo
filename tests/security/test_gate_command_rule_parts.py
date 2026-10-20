@@ -1,0 +1,316 @@
+"""An allow or log rule's `command` regex decides a compound line only when it names the line's deciding command (#394).
+
+`classify_shell` gave the combined result and every simple command on a line the whole line as `command`, so a rule's
+regex always saw the whole line. With `{command: '^git status', decision: allow}` the line `git status; git push
+--force origin main` was allowed although the push alone asks, and under `categories: {force_push: deny}` it was still
+allowed although the push alone is denied. The #191 pass decides each part below the dominant one by its category
+line and then the first rule that matches it, again on the whole line, so `{command: 'rm -rf build', decision: allow}`
+also lifted `categories: {github_post: deny}` from the post in `gh pr comment 3 --body hi && rm -rf build`.
+
+Now each part carries its own text (the simple command as written, with its redirections). An allow or log rule with
+a `command` key decides the line only when its regex matches the own text of every part that carries the line's
+category or is as severe as the combined result; the #191 pass matches such a rule on the part's own text. Ask and
+deny rules and the `reserved:` and `deny:` lists match the whole line and its decoded views as before.
+
+On main 6f72f931 the issue table and each line marked "main:" give the outcome noted there, so those tests fail by
+their outcome. The tests that read `own` fail there for want of it after their outcome checks pass, and the rest guard
+what stays. Classification and decision only; no command string here is run.
+"""
+import re
+from pathlib import Path
+
+import pytest
+
+from exo import gate
+from exo.gate import classify, decide, normalize_policies
+
+PUSH = "git push --force origin main"
+F = f"git status; {PUSH}"
+TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "principal-store" / "policies" / "gates.yaml"
+
+
+def sh(command):
+    return classify({"tool": "bash", "args": {"command": command}})
+
+
+def rule(command, decision="allow", **more):
+    return {"match": {"command": command, **more}, "decision": decision, "reason": f"{decision} {command}"}
+
+
+def pol(*rules, **gates):
+    return normalize_policies({"gates": {"rules": list(rules), **gates}})
+
+
+def outcome(line, policies):
+    return decide(sh(line), policies).outcome
+
+
+ALLOW_STATUS = rule("^git status")
+OPAQUE_OK = {"opaque_exec": "allow"}     # so the indirection floor does not hide what a rule decides
+
+
+# --- the issue table -----------------------------------------------------------------------------------------------
+
+ISSUE = [
+    # (line, policies, the line's outcome, the deciding command alone, its outcome)
+    (F, pol(ALLOW_STATUS), "ask", PUSH, "ask"),
+    (F, pol(ALLOW_STATUS, categories={"force_push": "deny"}), "deny", PUSH, "deny"),
+    ("gh pr comment 3 --body hi && rm -rf build", pol(rule("rm -rf build"), categories={"github_post": "deny"}),
+     "deny", "gh pr comment 3 --body hi", "deny"),
+]
+
+
+@pytest.mark.parametrize("line, policies, expected, alone, alone_expected", ISSUE)
+def test_the_issue_table(line, policies, expected, alone, alone_expected):
+    # main: allow, allow, allow
+    assert outcome(alone, policies) == alone_expected
+    d = decide(sh(line), policies)
+    assert d.outcome == expected, d
+
+
+def test_the_issue_post_row_names_the_post():
+    d = decide(sh("gh pr comment 3 --body hi && rm -rf build"),     # main: allow, by the rule
+               pol(rule("rm -rf build"), categories={"github_post": "deny"}))
+    assert (d.rule, d.reason) == ("category", "denied by policy (category github_post: GitHub PR comment on #3)"), d
+
+
+@pytest.mark.parametrize("gates, expected", [
+    ({"deny": ["force_push"]}, "deny"),
+    ({"deny": ["command:git push --force"]}, "deny"),
+    ({"deny": [{"match": {"category": "force_push", "command": "git push"}}]}, "deny"),
+    ({"reserved": ["force_push"], "categories": {"force_push": "allow"}}, "ask"),
+    ({"reserved": ["command:git push --force"], "categories": {"force_push": "allow"}}, "ask"),
+])
+def test_deny_and_reserved_lists_still_hold(gates, expected):
+    # The issue's last row: the lists see every part and the whole line, under the allow rule too.
+    d = decide(sh(F), pol(ALLOW_STATUS, **gates))
+    assert d.outcome == expected, d
+    if "reserved" in gates:
+        assert ("force_push", "origin") in d.reserved, d
+
+
+@pytest.mark.parametrize("line", [F, "git status; g''it push --force origin main", "git status; $'git' push -f origin main"])
+def test_a_deny_rule_after_the_allow_rule_still_denies(line):
+    assert outcome(line, pol(ALLOW_STATUS, rule("git push", "deny"))) == "deny"
+
+
+# --- what an allow or log rule's regex must match ------------------------------------------------------------------
+
+def test_every_command_of_the_line_s_category_must_match():
+    two = f"{PUSH}; git push --force origin dev"
+    assert outcome(two, pol(rule("^git push --force origin main"))) == "ask"      # main: allow
+    assert outcome(two, pol(rule(["^git push --force origin main$", "^git push --force origin dev$"]))) == "allow"
+    assert outcome(two, pol(rule("^git push --force origin (main|dev)$"))) == "allow"
+
+
+def test_equally_severe_commands_decide_whatever_their_order():
+    # A merge and a push rank the same; whichever comes first sets the line's category, so the rule must name both.
+    p = pol(rule("^git push origin main$"))
+    for line in ("gh pr merge 3 && git push origin main", "git push origin main && gh pr merge 3"):
+        assert outcome(line, p) == "log", line                 # the matrix cell for costly and internal
+    assert outcome("git push origin main && gh pr merge 3", pol(rule("^(git push origin main|gh pr merge 3)$"))) \
+        == "allow"                                                                 # main: log
+
+
+def test_a_harmless_prefix_keeps_an_allow_rule_on_the_dominant_command():
+    for line in (f"cd repo && {PUSH}", f"  cd repo &&  {PUSH}  # ship", f"git status\n{PUSH}"):
+        assert outcome(line, pol(rule(PUSH))) == "allow", line
+        assert outcome(line, pol(rule(f"^{PUSH}$"))) == "allow", line          # main: ask (the anchors saw the line)
+    # A redirection belongs to the command's own text.
+    line = f"git status; {PUSH} 2>/dev/null"
+    assert outcome(line, pol(rule(f"^{PUSH}$"))) == "ask"
+    assert outcome(line, pol(rule(f"^{PUSH} 2>/dev/null$"))) == "allow"
+
+
+NESTED = [
+    # (line, a rule written for the harmless outer command, the deciding command's own text, extra gates)
+    (f"echo $({PUSH})", "^echo", PUSH, {}),
+    (f"echo `{PUSH}`", "^echo", PUSH, {}),
+    (f"x=$({PUSH}) true", "^x=", PUSH, {}),
+    (f"cat <({PUSH})", "^cat", PUSH, {}),
+    (f"ssh build-host '{PUSH}'", "^ssh build-host", PUSH, {}),
+    (f"cd repo && sudo {PUSH}", "^cd repo", f"sudo {PUSH}", {}),
+    (f"cd repo && env FOO=1 timeout 5 {PUSH}", "^cd repo", f"env FOO=1 timeout 5 {PUSH}", {}),
+    (f"bash <<'EOF'\n{PUSH}\nEOF", "^bash", PUSH, {"categories": OPAQUE_OK}),
+    (f"bash -c '{PUSH}'", "^bash -c", PUSH, {"categories": OPAQUE_OK}),
+    (f"true; eval '{PUSH}'", "eval", PUSH, {"categories": OPAQUE_OK}),
+    (f"true; xargs {PUSH}", "^true", f"xargs {PUSH}", {"categories": OPAQUE_OK}),
+]
+
+
+@pytest.mark.parametrize("line, outer, own, gates", NESTED)
+def test_a_nested_dominant_command_is_matched_on_its_own_text(line, outer, own, gates):
+    assert outcome(line, pol(rule(outer), **gates)) == "ask"                       # main: allow
+    assert outcome(line, pol(rule(f"^{re.escape(own)}$"), **gates)) == "allow"     # main: ask
+    c = sh(line)
+    assert (c.category, c.own) == ("force_push", own)
+
+
+def test_a_wrapper_stays_part_of_the_command_s_own_text():
+    # sudo, env and the like are words of the simple command: a rule for the bare push does not cover them.
+    for line in (f"cd repo && sudo {PUSH}", f"cd repo && env FOO=1 {PUSH}", f"sudo {PUSH}"):
+        assert outcome(line, pol(rule(f"^{PUSH}$"))) == "ask", line
+
+
+def test_the_walk_goes_on_past_an_allow_rule_that_misses():
+    p = pol(ALLOW_STATUS, {"match": {"category": "force_push"}, "decision": "ask", "reason": "pushes ask"},
+            categories={"force_push": "allow"})
+    assert outcome(F, p) == "ask"                                                  # main: allow (first rule)
+    assert outcome(F, pol(ALLOW_STATUS, rule(PUSH))) == "allow"
+
+
+def test_an_ask_rule_on_a_lesser_command_still_asks():
+    line = "gh pr comment 3 --body hi && rm -rf build"
+    assert sh(line).category == "delete"
+    assert outcome(line, pol(rule("gh pr comment", "ask"), categories={"delete": "allow"})) == "ask"
+    assert outcome(line, pol(rule("^git status", "ask"), categories={"delete": "allow"})) == "allow"
+
+
+def test_a_log_rule_behaves_like_an_allow_rule():
+    assert outcome(F, pol(rule("^git status", "log"))) == "ask"                    # main: log
+    assert outcome(f"cd repo && {PUSH}", pol(rule(f"^{PUSH}$", "log"))) == "log"
+    d = decide(sh("gh pr comment 3 --body hi && rm -rf build"),
+               pol(rule("rm -rf build", "log"), categories={"github_post": "deny"}))
+    assert d.outcome == "deny", d                                                  # main: log
+
+
+@pytest.mark.parametrize("line", [
+    "git status; g''it push --force origin main",
+    "git status; \"git\" push --force origin main",
+    "git status; $'git' push --force origin main",
+    "git status; g\\it push --force origin main",
+])
+def test_a_quoted_own_text_is_not_matched_by_an_allow_rule(line):
+    assert outcome(line, pol(ALLOW_STATUS)) == "ask"                               # main: allow
+    assert outcome(line, pol(rule(PUSH))) == "ask"                                 # the regex sees the text as written
+    assert outcome(line, pol(rule(PUSH, "deny"))) == "deny"                        # a deny rule sees the decoded view
+    c = sh(line)
+    assert (c.category, c.own) == ("force_push", line.split("; ", 1)[1])
+
+
+def test_a_quoted_command_inside_bash_c_fails_closed_too():
+    line = "bash -c 'g\"\"it push --force origin main'"
+    assert outcome(line, pol(rule(PUSH), categories=OPAQUE_OK)) == "ask"
+    assert outcome(line, pol(rule(PUSH, "deny"), categories=OPAQUE_OK)) == "deny"
+
+
+# --- the #191 pass: each part below the dominant one -----------------------------------------------------------------
+
+def test_an_allow_rule_lifts_a_part_s_category_deny_only_when_it_names_that_part():
+    line = "gh pr comment 3 --body hi && rm -rf build"
+    deny_post = {"github_post": "deny"}
+    assert outcome(line, pol(rule("rm -rf build"), categories=deny_post)) == "deny"            # main: allow
+    assert outcome(line, pol(rule("^gh pr comment 3 --body hi$"), categories=deny_post)) == "ask"  # main: deny
+    assert outcome(line, pol(rule("^gh pr comment"), categories={**deny_post, "delete": "allow"})) == "allow"
+
+
+def test_a_part_with_no_own_text_keeps_its_category_deny():
+    # An unread nest stands for no command: no allow rule lifts a deny on it.
+    line = "rm -rf build; echo " + "$(" * 20 + "ls" + ")" * 20
+    p = pol(rule(".*"), categories={"opaque_exec": "deny"})
+    assert sh(line).category == "delete"
+    assert outcome(line, p) == "deny"                                              # main: ask
+
+
+# --- parts with no own text ------------------------------------------------------------------------------------------
+
+def test_parts_with_no_own_text_never_match():
+    deep = "echo " + "$(" * 20 + "ls" + ")" * 20
+    assert outcome(deep, pol(rule(".*", category="opaque_exec"))) == "ask"        # main: allow
+    assert outcome(deep, pol(rule(".*", "deny", category="opaque_exec"))) == "deny"
+    c = sh(deep)
+    assert c.category == "opaque_exec" and any(p.own is None for p in gate._each_part(c))
+
+
+@pytest.mark.parametrize("action", [
+    {"tool": "bash", "args": {"command": f"true; python3 -c 'import os; os.system(\"{PUSH}\")'"}},
+    {"tool": "execute_code", "args": {"code": f"import os\nos.system('{PUSH}')"}},
+])
+def test_a_string_literal_in_code_has_no_own_text(action):
+    # The gate only guesses that a literal is a command, so an allow rule never matches it.
+    c = classify(action)
+    assert decide(c, pol(rule(f"^{PUSH}$"), categories=OPAQUE_OK)).outcome == "ask"
+    assert decide(c, pol(rule(PUSH, "deny"), categories=OPAQUE_OK)).outcome == "deny"
+    assert c.category == "force_push" and c.own is None, c
+
+
+# --- what stays the same --------------------------------------------------------------------------------------------
+
+SINGLE = [
+    (PUSH, rule(f"^{PUSH}$"), "allow"),
+    (PUSH, rule("^git status"), "ask"),
+    (PUSH, rule(f"^{PUSH}$", "log"), "log"),
+    (PUSH, rule("push", "deny"), "deny"),
+    (f"sudo {PUSH}", rule(f"^sudo {PUSH}$"), "allow"),
+    (f"{PUSH}  # ship it", rule("ship it"), "allow"),
+    (f"{PUSH} > /tmp/push.log", rule(f"^{PUSH} > /tmp/push.log$"), "allow"),
+    (f"{PUSH} > /tmp/push.log", rule(f"^{PUSH}$"), "ask"),
+    ("rm -rf build", rule("^rm -rf build$"), "allow"),
+    ("git push origin main", rule("^git push origin main$"), "allow"),
+    ("git push origin main", rule("^git push origin main$", "ask"), "ask"),
+    ("make test", rule("^make test$", category="opaque_exec"), "allow"),
+    ("make test", rule("^make test$"), "ask"),
+]
+
+
+@pytest.mark.parametrize("line, r, expected", SINGLE)
+def test_a_single_simple_command_is_unchanged(line, r, expected):
+    assert outcome(line, pol(r)) == expected
+
+
+WRITE = {"tool": "write_file", "args": {"path": "/tmp/x", "content": "y"}}
+FETCH = {"tool": "web_extract", "args": {"url": "https://example.com/a"}}
+CODE = {"tool": "execute_code", "args": {"code": "print(1)"}}
+
+
+@pytest.mark.parametrize("action, r, gates, expected", [
+    (WRITE, rule("^$", "log"), {}, "log"),             # no shell text: a command regex sees the empty string
+    (WRITE, rule("x", "log"), {}, "allow"),
+    (WRITE, {"match": {"tool": "write_file"}, "decision": "log"}, {}, "log"),
+    (FETCH, rule("^$", "deny"), {}, "deny"),
+    (FETCH, rule("^$", "log"), {}, "log"),
+    (CODE, rule("print", "log", category="code"), {"categories": OPAQUE_OK}, "log"),
+    (CODE, rule("^nothing", "log", category="code"), {"categories": OPAQUE_OK}, "allow"),
+])
+def test_a_non_shell_tool_is_unchanged(action, r, gates, expected):
+    c = classify(action)
+    assert not c.parts, c
+    assert decide(c, pol(r, **gates)).outcome == expected
+
+
+def test_the_template_policies_parse_and_decide_single_commands_as_before():
+    raw = gate.parse_yaml(TEMPLATE.read_text(encoding="utf-8"))
+    base = normalize_policies({"gates": raw})
+    assert base["gates"]["rules"] == []
+    for line, expected in [("git status", "allow"), ("ls -la", "allow"), ("git commit -m x", "allow"),
+                           ("git push origin main", "log"), (PUSH, "ask"), ("rm -rf build", "ask"),
+                           ("gh pr comment 3 --body hi", "ask"), ("make test", "ask")]:
+        assert outcome(line, base) == expected, line
+    raw["rules"] = [rule("^git push origin main$"), rule("^rm -rf build$", "log")]
+    ruled = normalize_policies({"gates": raw})
+    assert outcome("git push origin main", ruled) == "allow"
+    assert outcome("rm -rf build", ruled) == "log"
+    assert outcome("cd repo && git push origin main", ruled) == "allow"              # main: log
+    assert outcome("git push origin main && rm -rf build", ruled) == "log"           # the delete outranks the push
+    assert outcome("rm -rf build && git push --force origin main", ruled) == "ask"
+
+
+def test_the_ledger_view_leaves_the_own_text_out():
+    c = sh(F)
+    assert c.own == PUSH
+    d = c.as_dict()
+    assert "own" not in d and "parts" not in d and d["command_chars"] == len(F)
+
+
+@pytest.mark.parametrize("line, owns", [
+    (F, [PUSH, "git status"]),
+    ("if true; then git push origin main; fi", ["git push origin main", "true", "fi"]),
+    ("{ rm -rf build; } 2>/dev/null", ["rm -rf build", "2>/dev/null"]),
+    ("cat 3<<EOF >out; ls\nbody\nEOF", ["cat 3<<EOF >out", "ls"]),
+    ("echo hi | tee -a /tmp/log", ["tee -a /tmp/log", "echo hi"]),
+    ("! git push origin main", ["git push origin main"]),
+])
+def test_own_text_is_each_simple_command_as_written(line, owns):
+    got = {p.own for p in gate._each_part(sh(line))}
+    assert set(owns) <= got, got
+    assert not any(p.own and ";" in p.own for p in gate._each_part(sh(line))), got
