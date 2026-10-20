@@ -713,6 +713,28 @@ async def test_a_restart_reports_running_jobs_as_lost(tmp_path):
     await eng2.close()
 
 
+@aio
+async def test_a_lost_job_notice_that_fails_is_reported(tmp_path, monkeypatch):
+    """recover() leaves each lost job's notice to a task, so a notice that fails cannot fail start(). It is reported
+    as a harness error, as a completion notice that fails is, and the lost event still went out."""
+    from exo.core import jobs
+    eng = engine(tmp_path)
+    sid = (await eng.loop.create_session(agent="tester")).id
+
+    def broken(*args):
+        raise RuntimeError("the log could not be read")
+    monkeypatch.setattr(jobs, "tail_text", broken)
+    eng.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) VALUES "
+                 "('j_dead01','tester',?,'make all','/tmp','running',999999,?,'/tmp/none.log')", (sid, time.time()))
+    assert await eng.jobs.recover() == ["j_dead01"]
+    await asyncio.gather(*eng.jobs._tasks)  # the task itself does not raise
+    errors = [(e.where, e.message) for e in events(eng, s.HarnessError)]
+    assert errors == [("jobs.notice", "the log could not be read")], errors
+    assert [(e.job_id, e.state) for e in events(eng)] == [("j_dead01", "lost")]
+    assert not [m for m in eng.store.messages(sid) if m.meta.get("job")]
+    await eng.close()
+
+
 @pytest.mark.parametrize("lost", [False, True])
 @aio
 async def test_first_commands_at_once_start_the_runtime_once(tmp_path, lost):

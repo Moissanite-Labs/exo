@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
+from exo.core import trace
 from exo.core.ingress import Ingress, IngressPath, Receipt
 from exo.core.models import keys
 from exo.core.peer_target import EngineTarget
@@ -312,8 +313,6 @@ class JobManager:
                                                                h.session, detail))
                 detail = (detail + "; " if detail else "") + f"notice {rec.mode or rec.state}"
         except Exception as exc:  # a delivery problem never loses the job's end
-            from exo.core import trace
-
             trace.report("jobs.notice", exc, h.session)
             detail = (detail + "; " if detail else "") + f"notice failed: {exc}"
         finally:  # nor does a hard stop that cancels this task while the notice is built
@@ -326,7 +325,10 @@ class JobManager:
             return await asyncio.get_running_loop().run_in_executor(self._pool, self._notice, *args)
 
     async def _queue(self, *args: Any) -> None:
-        await self.target.queue(args[6], await self._built(*args))  # queued in order, as _built hands each on
+        try:
+            await self.target.queue(args[6], await self._built(*args))  # queued in order, as _built hands each on
+        except Exception as exc:  # a lost job's notice that fails is reported, as _announce reports one
+            trace.report("jobs.notice", exc, args[6])
 
     def _notice(self, job_id: str, state: str, code: int | None, command: str, started: float, ended: float | None,
                 session: str | None, detail: str = "") -> Ingress:
@@ -421,8 +423,6 @@ class JobManager:
 
 def job_text(store: Any, session: str, last: int = 20) -> str:
     """Job events of a session for ``exo trace`` and ``/trace`` (D-032): start, end and how the notice was delivered."""
-    from exo.core import trace
-
     rows = [e for e in trace._events(store, session, deltas=False) if e.type == "job.updated"][-last:]
     if not rows:
         return ""
