@@ -641,12 +641,13 @@ async def test_a_notice_cancelled_by_a_hard_stop_still_leaves_the_job_end_event(
     await eng.close()
 
 
-@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("cancel", [None, "task", "close"])
 @aio
-async def test_close_shuts_the_notice_thread_down_once_its_last_build_ends(tmp_path, monkeypatch, cancelled):
+async def test_close_shuts_the_notice_thread_down_once_its_last_build_ends(tmp_path, monkeypatch, cancel):
     """close() shuts the notice thread down after the notices are handed on, so no idle worker outlives the engine.
-    A hard stop that cancels a notice task leaves its build running in that thread, so close() waits for that build
-    to end too. After close() the thread is gone and the pool takes no more work."""
+    A notice task cancelled while close() goes on leaves its build running in that thread, so close() waits for that
+    build to end too. After close() the thread is gone and the pool takes no more work. A hard stop (a second ctrl+c)
+    cancels close() itself in that wait. The pool still takes no more work, and the build runs on to its end."""
     import threading
 
     from exo.core import jobs
@@ -656,7 +657,7 @@ async def test_close_shuts_the_notice_thread_down_once_its_last_build_ends(tmp_p
 
     def tail(*args):
         entered.set()
-        if cancelled:
+        if cancel:
             release.wait(10)
         return plain(*args)
     monkeypatch.setattr(jobs, "tail_text", tail)
@@ -665,16 +666,26 @@ async def test_close_shuts_the_notice_thread_down_once_its_last_build_ends(tmp_p
     await until(entered.is_set)
     threads = set(eng.jobs._pool._threads)
     assert threads and all(t.name.startswith("exo-notice") for t in threads)
-    if cancelled:
+    if cancel == "task":
         for t in list(eng.jobs._tasks):
             t.cancel()
         await until(lambda: not eng.jobs._tasks)
     closing = asyncio.ensure_future(eng.close())
-    if cancelled:
+    if cancel:
         await asyncio.sleep(0.3)
-        assert not closing.done() and any(t.is_alive() for t in threads)  # the cancelled task's build still runs
+        assert not closing.done() and any(t.is_alive() for t in threads)  # the build still runs
+    if cancel == "close":
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(closing, 5)
+        assert eng.jobs._pool._shutdown and any(t.is_alive() for t in threads)  # it runs on, and nothing joins it
+        assert [(e.job_id, e.state) for e in events(eng)] == [("j_done01", "done")]  # the end event still goes out
         release.set()
-    await asyncio.wait_for(closing, 5)
+        for t in threads:
+            t.join(5)
+    else:
+        release.set()
+        await asyncio.wait_for(closing, 5)
     assert eng.jobs._pool._shutdown and not any(t.is_alive() for t in threads)
     with pytest.raises(RuntimeError):
         eng.jobs._pool.submit(int)
