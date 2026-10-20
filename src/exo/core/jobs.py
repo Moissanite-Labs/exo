@@ -25,13 +25,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
 from exo.core import trace
-from exo.core.ingress import Ingress, IngressPath, Receipt, frame
+from exo.core.ingress import Ingress, IngressPath, Receipt
 from exo.core.models import keys
 from exo.core.peer_target import EngineTarget
 from exo.core.sessions import new_id
 from exo.core.tools.builtin.shell import kill_process_group, masked_note, open_side, tool_env, wrap_pipestatus
 from exo.core.tools.registry import ToolContext, ToolError
-from exo.core.types import ContentPart, Message, ToolSpec
+from exo.core.types import ToolSpec
 from exo.protocol import schema as s
 
 if TYPE_CHECKING:
@@ -136,15 +136,9 @@ class JobTarget(EngineTarget):
             return not self.e.hub._subs
         return bool(self.cfg.wake)
 
-    def _message(self, ing: Ingress) -> Message:
-        return Message(role="user", content=[ContentPart.of_text(frame(ing))], meta=self._meta(ing))
-
     def _meta(self, ing: Ingress) -> dict[str, Any]:
         return {"job": {"id": ing.meta.get("job_id"), "state": ing.meta.get("state"), "msg_id": ing.id},
                 "author": "job"}  # D-040: the harness, not the principal
-
-    async def wake(self, session: str, ing: Ingress) -> None:
-        self.e.start_turn(session, frame(ing), self._meta(ing))
 
     async def record(self, ing: Ingress, receipt: Receipt, notify: bool) -> None:
         pass  # the job.updated event carries the delivery mode
