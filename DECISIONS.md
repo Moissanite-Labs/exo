@@ -2221,4 +2221,8 @@ part, classification signal, reserved action, secret/store access, model ask, sp
 The terminal has a session banner and explicit approval controls. Web mode controls remain outside this draft.
 See `docs/GATE.md` "Session permission mode".
 
+Plugin command dispatch reuses `call_plugin` for accepted optional keywords and `maybe_await` for sync or async
+results. Lookup guards retain their values directly. Built-in outputs and unknown-command error precedence stay
+unchanged. User impact from this simplification: none. Developer impact: reuse the existing callback adapter.
+
 Adapted from mozi and Claude Opus 5.5's source commit `0239ecda82259ae07ede222ecaac8b167a46e908`.

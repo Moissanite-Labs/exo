@@ -27,7 +27,7 @@ from exo.core import trace, workspace
 from exo.core.agents import Delegator
 from exo.core import agentlog
 from exo.core.context import AgentContext, ContextTree, DefaultCompressor, TurnContext, apply_selection as _apply_selection  # noqa: F401 - legacy named export
-from exo.core.hooks import accepted, maybe_await
+from exo.core.hooks import maybe_await
 from exo.core.findings import Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
@@ -779,16 +779,13 @@ class CoreRuntime:
         return await diagnostics.handoff_facts(self, session, path_arg)
 
     async def _command_run(self, b: s.CommandRun) -> dict[str, Any]:
-        out = await diagnostics.builtin_command(self, b)
-        if out is not diagnostics.MISSING:
+        if (out := await diagnostics.builtin_command(self, b)) is not diagnostics.MISSING:
             return {"output": out}
-        cmd = self.plugins.commands.get(b.name)
-        if cmd is None:
+        if (cmd := self.plugins.commands.get(b.name)) is None:
             raise CommandFailed("not_found", f"no command /{b.name}")
         if b.session:
             self._info(b.session)
-        out = await maybe_await(cmd.handler(b.args, **accepted(cmd.handler, {"session_id": b.session or "",
-                                                                           "request_approval": self.approvals.ask})))
+        out = await maybe_await(call_plugin(cmd.handler, b.args, session_id=b.session or "", request_approval=self.approvals.ask))
         return {"output": out if isinstance(out, (str, dict, list)) or out is None else str(out)}
 
     async def _schedule_edit(self, b: s.ScheduleEdit) -> dict[str, Any]:

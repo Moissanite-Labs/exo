@@ -30,6 +30,19 @@ def test_plugin_command_receives_existing_session_only(tmp_path):
         assert out.ok and out.result["output"] == sid and seen == [sid]
         out = await dispatch.run(s.Command.of(s.CommandRun(name="permissions", session="missing-fixture")))
         assert not out.ok and out.error.code == "not_found" and seen == [sid]
+        received = []
+
+        async def accepts_keywords(args, **kwargs):
+            received.append(kwargs)
+            return {"args": args, "session": kwargs["session_id"]}
+
+        cmd.handler = accepts_keywords
+        out = await dispatch.run(s.Command.of(s.CommandRun(name="permissions", args="async", session=sid)))
+        assert out.ok and out.result["output"] == {"args": "async", "session": sid}
+        assert received == [{"session_id": sid, "request_approval": eng.approvals.ask}]
+        out = await dispatch.run(s.Command.of(s.CommandRun(name="unknown-fixture", session="missing-fixture")))
+        assert not out.ok and out.error.code == "not_found" and out.error.message == "no command /unknown-fixture"
+        assert len(received) == 1
         await eng.close()
 
     asyncio.run(run())

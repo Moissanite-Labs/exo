@@ -179,6 +179,8 @@ gets its turn. Anything else goes to a command a plugin registered. To add one:
    string. Handlers requiring session scope must reject it rather than selecting a global default (D-065 draft).
    A handler may also accept `request_approval`, the existing approval desk's `ask` callback. Session mode
    selection uses principal-only approval with a binding and commits signed consent before changing mode.
+   Dispatch uses `exo.core.plugins.call_plugin` for accepted keywords (both optional arguments reach `**kwargs`)
+   and `maybe_await` for sync or async results. Reuse those adapters when extending command dispatch.
 3. **A TUI command.** Add a row to the `COMMANDS` table in `clients/tui/exo_tui/app.py`, and a branch in
    `ExoApp.slash` if the client does the work. `/help` is built from the table. A test checks that every command in
    `/help` appears in `skills/exo-intro/SKILL.md`, so add its line to the skill too.
