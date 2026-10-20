@@ -238,6 +238,20 @@ def test_the_notice_tail_cuts_out_a_key_the_rotation_split(tmp_path):
     assert tail_text(log, 20, 1500, [key]) == f"{note}{key[5:]}\nend"
 
 
+def test_the_notice_tail_after_a_rotation_never_redacts_less_than_the_live_log_alone(tmp_path):
+    """A key that overlaps itself can match across the rotation in the part put in front, where an earlier match that
+    starts before that part would have blocked it. Such a match never takes away a match the live log has alone."""
+    from exo.core.jobs import ROTATED, tail_text
+
+    log, old = tmp_path / "j_x.log", tmp_path / "j_x.log.1"
+    note = ROTATED.format(log.name)
+    for older, live, key, want in (("abaaaaabb", "bb", "bb", "[redacted]"), ("xab", "aba", "aba", "[redacted]"),
+                                   ("abaaaaabb", "bbxbb", "bb", "[redacted]x[redacted]")):
+        old.write_text(older)  # .log.1 ends with the key's start, and the live log holds the key whole too
+        log.write_text(note + live)
+        assert tail_text(log, 20, 1500, [key]) == note + want, (older, live)
+
+
 @aio
 async def test_the_notice_of_a_job_whose_log_rotated_inside_a_key_holds_no_part_of_it(tmp_path, monkeypatch):
     key = "sk-fake-QWERTYUIOPASDFGHJKLZXCVBNM0123456789"
