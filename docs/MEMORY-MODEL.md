@@ -272,8 +272,10 @@ What uses it:
   `exo` and `pinned` in any case, with any run of characters that are not an ASCII letter, a digit or an angle
   bracket around or inside them (spaces, `-`, `_`, `/`, zero-width and other invisible characters), and a `>` on
   the same line or none. Only the brackets change: the `<` always, the `>` when it closes the tag. A blockquote `>`
-  on the next line is left alone, `&` is not escaped, and escaping twice changes nothing. Not matched: full-width
-  brackets and look-alike letters from other scripts.
+  on the next line is left alone, `&` is not escaped, and escaping twice changes nothing. The match also runs over
+  same-length folded views of the text, so a tag spelled in characters a later NFKC pass or tag decode would fold
+  to ASCII is escaped too (#381). Not matched: look-alike letters from other scripts, and characters whose folded
+  form runs to more than one character.
 - Peer, bus and job text enters the context inside its own tag (`[peer message from ...]`, `[bus message from
   ...]`, `[job notice ...]`), with a closing line that says it is not the user.
 
