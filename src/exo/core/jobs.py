@@ -92,7 +92,8 @@ def fmt_elapsed(sec: float) -> str:
 def tail_text(path: Path, lines: int, chars: int, values: Sequence[str] = ()) -> str:
     """The last ``lines`` lines of a log, at most ``chars`` characters (the end is kept). The whole file is read and
     the key ``values`` are cut out as ``[redacted]`` before any cut, so no cut here splits a key. After a rotation,
-    the end of ``<id>.log.1`` stands in for the note while redacting, so a key split there is cut out too."""
+    the end of ``<id>.log.1`` stands in for the note while redacting, so a key split there is cut out too. The spans
+    the live log has on its own are cut out as well, so this never redacts less than the live log alone would."""
     try:
         data = path.read_bytes().decode("utf-8", errors="replace")
     except OSError:
@@ -101,11 +102,12 @@ def tail_text(path: Path, lines: int, chars: int, values: Sequence[str] = ()) ->
     if n > 0 and data.startswith(note):
         with contextlib.suppress(OSError):
             pre = path.with_suffix(".log.1").read_bytes()[-4 * n:].decode("utf-8", errors="replace")[-n:]
-    text, at, parts = pre + data[len(note):] if pre else data, len(pre), [note] if pre else []
-    for a, b in keys.secret_spans(text, values)[0]:
+    text, at, parts, red = pre + data[len(note):] if pre else data, len(pre), [note] if pre else [], -1
+    live = [(a + at, b + at) for a, b in keys.secret_spans(text[at:], values)[0]] if pre else []
+    for a, b in sorted(keys.secret_spans(text, values)[0] + live):  # with live, never less than the log alone
         if b > at:  # a span inside pre goes with it, and one that crosses into the log is cut out from its start
-            parts += (text[at:max(a, at)], keys.REDACTED)
-            at = b
+            parts += (text[at:max(a, at)], keys.REDACTED) if a >= red else ()  # one that overlaps the last joins it
+            at = red = b
     data = ("".join(parts) + text[at:]).rstrip("\n")
     out = "\n".join(data[-chars * 4:].splitlines()[-lines:])  # splitting all of data gives the same out
     return out if len(out) <= chars else "..." + out[-chars:]
