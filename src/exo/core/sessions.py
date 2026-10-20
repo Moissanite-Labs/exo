@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 import sqlite3
 import threading
 import time
@@ -25,7 +24,7 @@ from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.private import private_file
 from exo.core.types import Message, from_dict, to_dict
-from exo.protocol.schema import EVENTS, Event, SessionInfo, now_ts
+from exo.protocol.schema import EVENTS, Event, SessionInfo, new_id, now_ts
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -78,10 +77,6 @@ UPGRADES = (("sessions", "agent", "TEXT"), ("sessions", "kind", "TEXT NOT NULL D
             ("findings", "quiet", "TEXT"))  # D-025: {"turns", "days"} quiet since the fix (fixed_turns is unused)
 LOGGED_KINDS = ("thread", "scheduled", "private")  # thread kinds whose messages enter the agent log
 SCHEMA_VERSION = 2
-
-
-def new_id(prefix: str) -> str:
-    return f"{prefix}_{secrets.token_hex(8)}"
 
 
 def canonical_cwd(path: str | None) -> str | None:
@@ -143,7 +138,6 @@ class SessionStore:
                     if "locked" not in str(exc) or time.monotonic() >= deadline:
                         raise
                     time.sleep(0.05)
-            self._db.execute("PRAGMA foreign_keys=ON")
             # One write transaction: two processes opening the file at once cannot both add a column (#246).
             # BEGIN goes inside the script because executescript commits a pending transaction first.
             try:
@@ -226,8 +220,9 @@ class SessionStore:
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?)", (sid, title, seat, model, cwd, parent, fork_seq, ts, ts, agent, kind))
         return self.get_session(sid)  # type: ignore[return-value]
 
-    def _info(self, row: sqlite3.Row) -> SessionInfo:
-        (count,) = self._q("SELECT COUNT(*) FROM messages WHERE session=? AND hidden=0", (row["id"],))[0]
+    def _info(self, row: sqlite3.Row, count: int | None = None) -> SessionInfo:
+        if count is None:
+            (count,) = self._q("SELECT COUNT(*) FROM messages WHERE session=? AND hidden=0", (row["id"],))[0]
         return SessionInfo(id=row["id"], title=row["title"], seat=row["seat"], model=row["model"],
                            cwd=row["cwd"], parent=row["parent"], created=row["created"],
                            updated=row["updated"], message_count=count, agent=row["agent"], kind=row["kind"] or "")
@@ -237,10 +232,16 @@ class SessionStore:
         return self._info(rows[0]) if rows else None
 
     def list_sessions(self, limit: int = 50, seat: str | None = None, agent: str | None = None) -> list[SessionInfo]:
+        # One query: the limited selection is a subquery, so each correlated count runs only for a
+        # row the limit keeps. A count in the outer select runs before the sort, for every
+        # provisional candidate, however small the limit (#365).
         cols = {k: v for k, v in (("seat", seat), ("agent", agent)) if v is not None}
-        sql = "SELECT * FROM sessions" + (" WHERE " + " AND ".join(f"{k}=?" for k in cols) if cols else "")
-        rows = self._q(sql + " ORDER BY updated DESC, id LIMIT ?", (*cols.values(), limit))
-        return [self._info(r) for r in rows]
+        page = ("SELECT * FROM sessions" + (" WHERE " + " AND ".join(f"{k}=?" for k in cols) if cols else "")
+                + " ORDER BY updated DESC, id LIMIT ?")
+        rows = self._q("SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session=s.id AND m.hidden=0)"
+                       f" AS message_count FROM ({page}) s ORDER BY s.updated DESC, s.id",
+                       (*cols.values(), limit))
+        return [self._info(r, r["message_count"]) for r in rows]
 
     def thread(self, sid: str) -> tuple[str | None, str]:
         """(agent, kind) of a session; (None, "") outside any agent."""
@@ -289,8 +290,7 @@ class SessionStore:
     # ---------------------------------------------------------------- messages
 
     def last_seq(self, sid: str) -> int:  # counts hidden rows too, so a seq is never reused
-        (seq,) = self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,))[0]
-        return seq
+        return self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,))[0][0]
 
     def append_message(self, sid: str, msg: Message, turn_id: str | None = None) -> Message:
         """Store ``msg`` (assigning ``id`` and ``meta['seq']``) and return it."""
@@ -415,8 +415,7 @@ class SessionStore:
     # ---------------------------------------------------------------- agent log (D-028)
 
     def last_pos(self, agent: str) -> int:
-        (pos,) = self._q("SELECT COALESCE(MAX(pos), 0) FROM messages WHERE agent=?", (agent,))[0]
-        return pos
+        return self._q("SELECT COALESCE(MAX(pos), 0) FROM messages WHERE agent=?", (agent,))[0][0]
 
     def log(self, agent: str, since: int = 0, upto: int | None = None) -> list[LogEntry]:
         """Agent log entries with ``since < pos <= upto``, in order, hidden ones included (flagged)."""
@@ -572,8 +571,7 @@ class SessionStore:
         return out
 
     def last_event_seq(self) -> int:
-        (seq,) = self._q("SELECT COALESCE(MAX(seq), 0) FROM events")[0]
-        return seq
+        return self._q("SELECT COALESCE(MAX(seq), 0) FROM events")[0][0]
 
 
 Subscriber = Callable[[Event], Any]

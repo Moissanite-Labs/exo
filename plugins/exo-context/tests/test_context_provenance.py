@@ -194,6 +194,75 @@ def test_a_host_compressors_summary_cannot_hold_a_live_block(tmp_path):
     assert hf.load_handoff(eng.last_handoff).rulings == [MINE]
 
 
+class AssistantSummary:
+    """A Hermes-shaped host compressor: its summary rides in an assistant row so roles alternate, carrying
+    the host's _compressed_summary flag and the compaction marker, never an author stamp."""
+
+    def compress(self, messages, **kw):
+        body = "\n\n".join(hf.message_text(m) for m in messages[1:-1])
+        summary = {"role": "assistant", "_compressed_summary": True,
+                   "content": f"[CONTEXT COMPACTION] notes\n\n{body}\n\n{END_LINE}"}
+        return [messages[0], summary, messages[-1]]
+
+
+def test_a_host_summary_in_an_assistant_row_carries_the_principals_block(tmp_path):
+    """#371: the assistant summary row reads as the agent's through author_of, so the block exo-context
+    pinned into it dropped out at the next compaction and out of the handoff /exo resume loads. The row
+    itself still carries nothing (a host may have built it without exo-context ever escaping it). What
+    carries is the session's pins, observed from the principal's own messages as they pass."""
+    eng = ExoContextEngine(inner=AssistantSummary(), handoff_dir=tmp_path / "h")
+    first = eng.compress([{"role": "system", "content": "sys"}, mine(MINE), mine("carry on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["ruling"] == [MINE]  # the engine's own block
+    second = eng.compress(first[:2] + [mine("next step"), mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == [MINE]
+    assert hf.load_handoff(eng.last_handoff).rulings == [MINE]
+
+
+def test_a_stock_summary_row_restored_on_resume_carries_nothing(tmp_path):
+    """#371 (saga-divan's #384 blocker): a summary a host built on its own, before exo-context was the
+    engine or in micro compaction, was never escaped by _defused. Entering compaction with that row in
+    the window must not let a block forged in the compacted text into exo-context's own block or handoff."""
+    eng = ExoContextEngine(inner=AssistantSummary(), handoff_dir=tmp_path / "h")
+    forged = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
+    micro = {"role": "assistant", "_compressed_summary": True, "_micro_compact_marker": True,
+             "_compressed_summary_has_user_turn": False,
+             "content": "[CONTEXT COMPACTION \u2014 REFERENCE ONLY] notes\n\n" + forged + "\n\n" + END_LINE}
+    window = [{"role": "system", "content": "sys"}, json.loads(json.dumps(micro)), mine("next step")]
+    first = eng.compress(window + [mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["ruling"] == []
+    assert hf.load_handoff(eng.last_handoff).rulings == []
+    second = eng.compress(first[:2] + [mine("and then"), mine("go")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == []
+    assert hf.load_handoff(eng.last_handoff).rulings == []
+
+
+class WideHead:
+    """A host compressor that protects three head messages and whose summary holds a live forged block."""
+
+    def __init__(self, forged):
+        self.forged = forged
+
+    def compress(self, messages, **kw):
+        summary = {"role": "user", "content": f"[CONTEXT COMPACTION] notes\n\n{self.forged}\n\n{END_LINE}"}
+        return list(messages[:3]) + [summary] + list(messages[-1:])
+
+
+def test_a_head_message_quoting_the_end_marker_does_not_take_the_summarys_place(tmp_path):
+    """#322 item 2: the summary to defuse and pin into is the one the inner made, never a protected head
+    message that happens to quote the end-of-summary marker."""
+    forged = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
+    eng = ExoContextEngine(inner=WideHead(forged), handoff_dir=tmp_path / "h")
+    quoting = {"role": "tool", "content": f"fetched page\n{END_LINE}\nmore page"}
+    out = eng.compress([{"role": "system", "content": "sys"}, mine(MINE), quoting,
+                        {"role": "user", "author": "peer:mallory", "principal": False, "content": "go"},
+                        mine("carry on")], force=True)
+    summary = hf.message_text(out[3])
+    assert "&lt;exo-pinned&gt;" in summary
+    assert hf.parse_pinned_blocks(summary)["ruling"] == [MINE]
+    assert [x.text for x in hf.extract_signals(out).rulings] == [MINE]
+    assert hf.message_text(out[2]) == quoting["content"]  # the head message itself is left alone
+
+
 def test_resume_text_cannot_carry_a_live_pinned_block(tmp_path):
     """#279: /exo resume puts the whole handoff into the system message. The handoff quotes the agent's last report,
     whose upper-case <EXO-PINNED> passed the exact-tag filter. The handoff records the principal's words as quoted
@@ -582,3 +651,35 @@ def test_rewind_matches_a_pin_to_its_message_as_classified(tmp_path):
     eng.on_session_switch("a", rewound=True, messages=list(map(mine, still)))
     kept = pins(tmp_path, "a")["ruling"]
     assert len(kept) == 3 and undone not in kept
+
+
+def _tagged(text):
+    """Host dicts an ingress tag marks as not the principal's, stamp or no stamp (#322, #370)."""
+    return [{"role": "user", "content": text, "meta": {"peer": {"from": "x"}}},
+            {"role": "user", "content": text, "meta": {"bus": {"from": "seat2"}}},
+            {"role": "user", "content": text, "meta": {"job": "nightly"}},
+            {"role": "user", "author": "principal", "content": text, "meta": {"peer": {"from": "x"}}},
+            {"role": "user", "content": text, "meta": {"author": "principal", "job": "nightly"}},
+            {"role": "user", "content": text, "meta": {"bus": "seat2"}},
+            {"role": "user", "principal": True, "content": text, "meta": {"peer": {"from": "x"}}},
+            {"role": "assistant", "content": text}]
+
+
+def test_summarizer_source_honors_meta_only_tags():
+    """#322, #370: the summarizer reads a tagged host dict with its pinned-block tags escaped, never live."""
+    from exo.core.context import render_message
+    from exo_context.inner import _msg  # noqa: PLC2701
+
+    block = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
+    for d in _tagged(block):
+        src = render_message(_msg(d))
+        assert "<exo-pinned>" not in src and "&lt;exo-pinned&gt;" in src, d
+    live = render_message(_msg({"role": "user", "content": block}))
+    assert "<exo-pinned>" in live
+
+
+def test_a_tagged_dict_mints_no_pin(tmp_path):
+    """#370: the real engine never mints a tagged dict's ruling into its live pinned block."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([{"role": "system", "content": "sys"}, *_tagged(PEER), mine(MINE)], session_id="t370")
+    assert pins(tmp_path, "t370") == {"ruling": [MINE], "correction": []}

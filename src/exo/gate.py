@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import bisect
 import contextvars
+import copy
 import fnmatch
 import functools
 import hashlib
@@ -288,6 +289,13 @@ _AMOUNT_KEYS = ("amount", "price", "total", "cost", "value")
 # classifies the inner text too, and the result keeps the stricter of the two.
 
 _DEPTH = 4
+# How many levels of $( ), <( ) and $(( )) one lexer reads inside one another (#334). Each $( ) is listed at every
+# level above it and classified there again, so the work for a nest grows with its depth, and classify runs inside
+# the gate hook. A deeper part is not read: _nest_end finds where it ends, and it stands as _TOO_DEEP, an unread
+# part that asks, also in an exported value. No hand-written command comes near this.
+_NEST = 16
+_TOO_DEEP = "__exo_gate_nested_too_deep__"
+_STAND_INS = re.compile(r"(?:__exo_gate_nested_too_deep__(?:\n|\Z))+")   # a run of stand-in lines (_classify_shell)
 _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
@@ -371,6 +379,7 @@ class _Heredoc:
     ambiguous: bool = False    # delimiter spelled with $'..' or $"..": bash and dash end the body on different lines
     body: str = ""
     fd: str = ""               # the descriptor number before `<<` (`3<<EOF`); "" or 0 is stdin (#208)
+    cut: str = ""              # the delimiter as the levels around read it, when it holds a part not read (#334)
 
 
 @dataclass
@@ -387,13 +396,48 @@ class _Cmd:
 class _Lexer:
     """Shell words, operators, redirections and heredocs. Never raises; odd input gives odd words."""
 
-    def __init__(self, src: str, scan: bool = True):
+    def __init__(self, src: str, scan: bool = True, nest: int = 0):
         self.s = src
         self.i = 0
         self.subs: list[str] = []          # sources of $( ), ` ` and <( ) met at this level
         self.pending: list[_Heredoc] = []
         self.scan = scan                   # record _Word.exps, which only _parse's words are read for (_hidden_sets)
         self.covered = 0                   # the source before here lies in a ${..} already recorded
+        self.nest = nest                   # $( ), <( ) and $(( )) levels open around here (_NEST)
+        self.cuts: list[tuple[int, int, str]] = []   # (start, end, stand-in) of each part not read, in order
+
+    def _cut(self, w: _Word, a: int) -> None:
+        """The $( ) or <( ) at s[a] lies past _NEST levels and is not read. The line lists _TOO_DEEP for it, and the
+        sources of the levels around it hold a short stand-in, so its text is not read again. The word's text is
+        what the lexer would give it. A here-doc from before it whose body lies inside gets its body, read as at the
+        cap (a $( ) in it is not read either), and the stand-in ends that body with an empty one, so a level read
+        again does not take the lines after the part for the body."""
+        s = self.s
+        b, read = _nest_end(s, a + 2, self.pending)
+        for hd in read:
+            if not hd.quoted:
+                sub = _Lexer(hd.body, scan=False, nest=_NEST)
+                sub._dquote(_Word(), until_end=True)
+                self.subs += sub.subs
+        ends = "".join("\n" + (hd.cut or hd.delim) for hd in read) + "\n" if read else ""
+        self.cuts.append((a, b, s[a] + "(" + _TOO_DEEP + ends + ")"))
+        self.subs.append(_TOO_DEEP)
+        w.text += "<(..)" if s[a] in "<>" else "$(" + s[a + 2:max(a + 2, b - 1)] + ")"
+        w.dynamic = w.started = True
+        self.i = b
+
+    def _source(self, a: int, b: int) -> str:
+        """s[a:b], with each part not read (_cut, a here-doc body holding one) spelt as its stand-in."""
+        k = bisect.bisect_left(self.cuts, (a,))
+        if k == len(self.cuts) or self.cuts[k][0] >= b:
+            return self.s[a:b]
+        out = []
+        for x, y, stand_in in self.cuts[k:]:
+            if x >= b:
+                break
+            out += [self.s[a:x], stand_in]
+            a = max(a, min(y, b))
+        return "".join(out) + self.s[a:b]
 
     def run(self, closer: bool = False) -> list:
         s, toks = self.s, []
@@ -410,6 +454,12 @@ class _Lexer:
                 if state["delim"] is not None:
                     hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
                     hd.fd = w.fd
+                    at = self.i - len(w.raw)
+                    if bisect.bisect_left(self.cuts, (at,)) < len(self.cuts):     # it holds a part not read
+                        spelt = self._source(at, self.i)   # as the levels around spell it, read as a lexer reads it
+                        # from the first level, as the levels around read it ($(cat <<'E') is its text)
+                        hd.cut = next((t[1].text for t in _Lexer(spelt, scan=False).run() if t[0] == "w"),
+                                      spelt)                # its end line is spelt so too (_read_heredocs)
                     self.pending.append(hd)
                     toks.append(("hd", hd))
                     state["delim"] = None
@@ -454,8 +504,13 @@ class _Lexer:
             elif ch in "<>" and nxt == "(" and not w.started:
                 self.i += 2
                 start = self.i
+                if self.nest >= _NEST:
+                    self._cut(cast(_Word, w), start - 2)
+                    continue
+                self.nest += 1
                 self.run(closer=True)
-                self.subs.append(s[start:max(start, self.i - 1)])
+                self.nest -= 1
+                self.subs.append(self._source(start, max(start, self.i - 1)))
                 w.text += "<(..)"
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
@@ -490,30 +545,19 @@ class _Lexer:
         return toks
 
     def _read_heredocs(self) -> None:
-        s = self.s
         while self.pending:
             hd = self.pending.pop(0)
-            lines: list[str] = []
-            while self.i < len(s):
-                j = s.find("\n", self.i)
-                end = len(s) if j < 0 else j
-                line, start = s[self.i:end], self.i
-                self.i = len(s) if j < 0 else j + 1
-                bare = line.lstrip("\t" if hd.strip else "").strip()
-                if bare == hd.delim:
-                    # bash ends a heredoc only on the exact line (leading tabs dropped for <<-): `EOF `, ` EOF` or
-                    # `EOF` and a CR does not end it, so the body bash reads is not the one read here (#208).
-                    hd.ambiguous = hd.ambiguous or (line.lstrip("\t") if hd.strip else line) != hd.delim
-                    break
-                if bare.startswith(hd.delim) and bare[len(hd.delim):].strip(" )") == "":
-                    self.i = start + line.index(")", line.index(hd.delim))  # `EOF)` closes a $( ) too
-                    break
-                lines.append(line.lstrip("\t") if hd.strip else line)
-            hd.body = "\n".join(lines)
+            first = self.i
+            self.i, last = _heredoc_body(self.s, self.i, hd)
             if not hd.quoted:
-                sub = _Lexer(hd.body, scan=False)
+                sub = _Lexer(hd.body, scan=False, nest=self.nest)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
+                if sub.cuts:                   # the levels around hold a stand-in for the body, as for a cut
+                    self.cuts.append((first, last, "$(" + _TOO_DEEP + ")\n"))
+            if hd.cut and last < len(self.s):  # and its end line as they spell the delimiter, so the two still pair
+                at = self.s.find(hd.delim, last)
+                self.cuts.append((at, at + len(hd.delim), hd.cut))
 
     def _dquote(self, w: _Word, until_end: bool = False) -> None:
         s = self.s
@@ -537,10 +581,15 @@ class _Lexer:
 
     def _procsub(self, w: _Word) -> None:
         """<( ) or >( ) at i, as run() reads one at the start of a word (for the scans that read text again)."""
+        if self.nest >= _NEST:
+            self._cut(w, self.i)
+            return
         self.i += 2
         start = self.i
+        self.nest += 1
         self.run(closer=True)
-        self.subs.append(self.s[start:max(start, self.i - 1)])
+        self.nest -= 1
+        self.subs.append(self._source(start, max(start, self.i - 1)))
         w.text += "<(..)"
         w.dynamic = w.started = True
 
@@ -572,10 +621,14 @@ class _Lexer:
                 if depth == 0:
                     break
             body = s[i:j]
-            if "$(" in body[3:] or "`" in body:
-                sub = _Lexer(body[3:-2], scan=False)
+            if self.nest >= _NEST and (_SUBST.search(body, 3) or "`" in body):
+                self.cuts.append((i + 3, max(i + 3, j - 2), "$(" + _TOO_DEEP + ")"))
+                self.subs.append(_TOO_DEEP)
+            elif self.nest < _NEST and ("$(" in body[3:] or "`" in body):
+                sub = _Lexer(body[3:-2], scan=False, nest=self.nest + 1)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
+                self.cuts += [(x + i + 3, y + i + 3, stand_in) for x, y, stand_in in sub.cuts]
             w.cuts.append((len(w.text), len(w.text) + len(body)))
             if self.scan and i >= self.covered:
                 w.exps.append((body, body, None))
@@ -583,15 +636,20 @@ class _Lexer:
             w.dynamic = True
             self.i = j
         elif nxt == "(":
+            if self.nest >= _NEST:
+                self._cut(w, i)
+                return
             self.i = i + 2
             start = self.i
+            self.nest += 1
             toks = self.run(closer=True)
+            self.nest -= 1
             inner = s[start:max(start, self.i - 1)]
             lit = _literal_heredoc(toks)
             if lit is not None:
                 w.text += lit          # $(cat <<'EOF' ... EOF) is plain text
             else:
-                self.subs.append(inner)
+                self.subs.append(self._source(start, max(start, self.i - 1)))
                 w.cuts.append((len(w.text), len(w.text) + len(inner) + 3))
                 w.text += "$(" + inner + ")"
                 w.dynamic = True
@@ -599,7 +657,7 @@ class _Lexer:
             j = s.find("}", i)
             j = len(s) - 1 if j < 0 else j
             if self.scan and i >= self.covered:    # what bash reads: it may run past this first }
-                vis, close, frames = _dollar_brace(s, i, double)
+                vis, close, frames = _dollar_brace(s, i, double, self.nest)
                 w.exps.append((vis, s[i:close + 1], {at - i: [end - i, None if up is None else up - i]
                                                      for at, (end, up) in frames.items()}))
                 self.covered = close + 1
@@ -636,6 +694,242 @@ class _Lexer:
                 self.i = i + 1
 
 
+def _heredoc_body(s: str, i: int, hd: _Heredoc) -> tuple[int, int]:
+    """Read the body of ``hd`` from s[i] on, as bash ends it: at a line that is its delimiter. Sets hd.body and
+    returns where the lexer goes on and where the line that ended the body starts (len(s) when none did)."""
+    lines: list[str] = []
+    while i < len(s):
+        j = s.find("\n", i)
+        end = len(s) if j < 0 else j
+        line, start = s[i:end], i
+        i = len(s) if j < 0 else j + 1
+        bare = line.lstrip("\t" if hd.strip else "").strip()
+        if bare == hd.delim:
+            # bash ends a heredoc only on the exact line (leading tabs dropped for <<-): `EOF `, ` EOF` or
+            # `EOF` and a CR does not end it, so the body bash reads is not the one read here (#208).
+            hd.ambiguous = hd.ambiguous or (line.lstrip("\t") if hd.strip else line) != hd.delim
+            break
+        if bare.startswith(hd.delim) and bare[len(hd.delim):].strip(" )") == "":
+            i = start + line.index(")", line.index(hd.delim))     # `EOF)` closes a $( ) too
+            break
+        lines.append(line.lstrip("\t") if hd.strip else line)
+    else:
+        start = len(s)
+    hd.body = "\n".join(lines)
+    return i, start
+
+
+# For _nest_end: runs of characters an unquoted word and double-quoted text take as they stand, a backquoted body, a
+# variable reference, and the longest here-doc delimiter it keeps (a longer one ends no body, so the rest is unread).
+_WORD_RUN = re.compile(r"[^ \t\r\n\\'\"`$<>&;|()#]+")
+_DQ_RUN = re.compile(r"[^\"\\$`]+")
+_BT_BODY = re.compile(r"(?:[^`\\]|\\.)*", re.S)
+_ANSI_BODY = re.compile(r"(?:[^'\\]|\\.)*", re.S)
+_VAR_REF = re.compile(r"\$(?:[A-Za-z_]\w*|[0-9@*#?$!-])")
+_PARENS = re.compile(r"[()]")
+_SUBST = re.compile(r"\$\((?!\()")          # a $( that is not $((
+_DELIM_MAX = 1024
+
+
+def _match_end(rx: re.Pattern[str], s: str, i: int) -> int:
+    m = rx.match(s, i)
+    return m.end() if m else i
+
+
+class _Open:
+    """For _nest_end: a part it is inside. A $( ) or <( ) holds commands, read as run() reads them, with the state
+    of its current word (`text` collects it when it will be a here-doc delimiter). Double-quoted text belongs to the
+    word of the part below it (`owner`)."""
+    __slots__ = ("kind", "start", "owner", "depth", "delim", "started", "digits", "quoted", "dollar", "text", "size",
+                 "over")
+
+    def __init__(self, kind: str, start: int = 0, owner: _Open | None = None):
+        self.kind, self.start, self.owner, self.depth = kind, start, owner, 0
+        self.delim: bool | None = None           # a << before the word (True for <<-): it is a delimiter
+        self.new_word()
+
+    def new_word(self) -> None:
+        self.started, self.digits, self.quoted, self.dollar, self.size, self.over = False, True, False, False, 0, False
+        self.text: list[str] | None = [] if self.delim is not None else None
+
+    def add(self, s: str, a: int, b: int, wrap: str = "") -> None:
+        """Add s[a:b] to a delimiter's text, inside `wrap` (`$(` and `)`) when given, unless it grows past
+        _DELIM_MAX."""
+        if self.text is None or self.over:
+            return
+        size = self.size + max(0, min(b, len(s)) - a) + len(wrap)
+        if size > _DELIM_MAX:
+            self.over, self.text = True, []
+        else:
+            self.text.append(wrap[:2] + s[a:b] + wrap[2:])
+            self.size = size
+
+
+def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Heredoc]]:
+    """Where the $( ) or <( ) whose text starts at s[i] ends, as _Lexer.run ends it (#334): just past its closing `)`,
+    or at the end of s when none closes it. The text is read as the lexer reads it (quotes, comments, backquotes, the
+    $ forms, redirections and here-documents), but only to find that end: one pass, with a stack of the open parts in
+    place of the lexer's recursion, and no here-doc body read again. ``pending`` is the lexer's list of here-docs
+    waiting for a newline: a body read here leaves it, and a here-doc opened here whose body comes later joins it.
+    Also returns the here-docs from before the cut whose body was read here."""
+    n, before = len(s), {id(h) for h in pending}
+    read: list[_Heredoc] = []
+    stack = [_Open("$", i)]
+
+    def flush(f: _Open) -> None:                 # as run()'s flush: a started word after << is a delimiter
+        if f.started and f.delim is not None:
+            delim = "\n" if f.over else "".join(f.text or [])     # no body line is "\n": the body runs to the end
+            pending.append(_Heredoc(delim, f.delim, f.quoted, f.dollar))
+            f.delim = None
+        f.new_word()
+
+    def close(f: _Open, i: int) -> None:         # the part ends at i; its text goes into the word around it
+        stack.pop()
+        if f.kind != '"' and stack:
+            w = stack[-1].owner or stack[-1]
+            w.started, w.digits = True, False
+            if f.kind == "<":
+                w.add("<(..)", 0, 5)
+            else:
+                w.add(s, f.start, max(f.start, i - 1), "$()")
+
+    def dollar(w: _Open, i: int, double: bool) -> int:     # as _Lexer._dollar
+        nxt = s[i + 1:i + 2]
+        w.started, w.digits = True, False
+        if s.startswith("$((", i):
+            depth, j = 0, n
+            for m in _PARENS.finditer(s, i + 1):
+                depth += 1 if m.group() == "(" else -1
+                if depth == 0:
+                    j = m.end()
+                    break
+            w.add(s, i, j)
+            return j
+        if nxt == "(":
+            stack.append(_Open("$", i + 2))
+            return i + 2
+        if nxt == "{":
+            j = s.find("}", i)
+            j = n - 1 if j < 0 else j
+            w.add(s, i, j + 1)
+            return j + 1
+        if nxt == "'":
+            j = _match_end(_ANSI_BODY, s, i + 2)
+            j = n + 1 if j < n and s[j] == "\\" else j          # a backslash that ends s takes one more step
+            w.quoted = w.dollar = True
+            if w.text is not None:
+                try:
+                    text = _ansi_c(s[i + 2:j])
+                except (UnicodeError, ValueError):
+                    text = s[i + 2:j]
+                w.add(text, 0, len(text))
+            return j + 1
+        if nxt == '"' and not double:
+            w.quoted = w.dollar = True
+            stack.append(_Open('"', owner=w))
+            return i + 2
+        j = max(_match_end(_VAR_REF, s, i), i + 1)
+        w.add(s, i, j)
+        return j
+
+    def backtick(w: _Open, i: int) -> int:       # as _Lexer._backtick
+        j = _match_end(_BT_BODY, s, i + 1)
+        j = n if j < n and s[j] == "\\" else j
+        w.started, w.digits = True, False
+        if w.text is not None:
+            text = "`" + re.sub(r"\\(.)", r"\1", s[i + 1:j], flags=re.S) + "`"
+            w.add(text, 0, len(text))
+        return j + 1
+
+    while True:
+        f = stack[-1]
+        if i >= n:                               # the line ends: each open part ends as run() ends it
+            while stack:
+                if stack[-1].kind != '"':
+                    flush(stack[-1])
+                close(stack[-1], i)
+            return i, read
+        ch, nxt = s[i], s[i + 1:i + 2]
+        if f.owner is not None:                  # in double quotes, as _Lexer._dquote
+            if ch == '"':
+                stack.pop()
+                i += 1
+            elif ch == "\\" and nxt and nxt in '$`"\\\n':
+                f.owner.add(nxt, 0, 0 if nxt == "\n" else 1)
+                i += 2
+            elif ch == "$":
+                i = dollar(f.owner, i, True)
+            elif ch == "`":
+                i = backtick(f.owner, i)
+            else:
+                j = max(_match_end(_DQ_RUN, s, i), i + 1)
+                f.owner.add(s, i, j)
+                i = j
+        elif ch in " \t\r":
+            flush(f)
+            i += 1
+        elif ch == "\n":
+            flush(f)
+            i += 1
+            while pending:
+                hd = pending.pop(0)
+                i = _heredoc_body(s, i, hd)[0]
+                if id(hd) in before:
+                    read.append(hd)
+        elif ch == "#" and not f.started:
+            j = s.find("\n", i)
+            i = n if j < 0 else j
+        elif ch == "\\":
+            if nxt != "\n":
+                f.started, f.quoted, f.digits = True, True, False
+                f.add(nxt, 0, 1)
+            i += 2
+        elif ch == "'":
+            j = s.find("'", i + 1)
+            j = n if j < 0 else j
+            f.started, f.quoted, f.digits = True, True, False
+            f.add(s, i + 1, j)
+            i = j + 1
+        elif ch == '"':
+            f.started, f.quoted, f.digits = True, True, False
+            stack.append(_Open('"', owner=f))
+            i += 1
+        elif ch == "`":
+            i = backtick(f, i)
+        elif ch == "$":
+            i = dollar(f, i, False)
+        elif ch in "<>" and nxt == "(" and not f.started:
+            stack.append(_Open("<", i + 2))
+            i += 2
+        elif ch in "<>" or (ch == "&" and nxt == ">"):
+            if f.started and f.digits:           # an fd number belongs to the operator
+                f.new_word()
+            else:
+                flush(f)
+            op = next(o for o in _REDIR_OPS if s.startswith(o, i))
+            i += len(op)
+            if op in ("<<", "<<-"):
+                f.delim = op == "<<-"
+                f.new_word()
+        elif ch in ";&|()":
+            flush(f)
+            if ch == ")" and f.depth == 0:
+                i += 1
+                close(f, i)
+                if not stack:
+                    return i, read
+            else:
+                op = next(o for o in _CTRL_OPS if s.startswith(o, i))
+                f.depth += {"(": 1, ")": -1}.get(op, 0)
+                i += len(op)
+        else:
+            j = max(_match_end(_WORD_RUN, s, i), i + 1)   # `#` in a started word is text too
+            f.digits = f.digits and s[i:j].isdigit()
+            f.started = True
+            f.add(s, i, j)
+            i = j
+
+
 def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
     """The index just past the first `closer` from s[k] on, or len(s). With `escapes`, a backslash hides
     the next character."""
@@ -651,7 +945,7 @@ def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
 _DQ_QUOTING_OP = re.compile(r"[!#]?(?:[A-Za-z_]\w*|\d+|[-@*#?$!])(?:\[[^\][]*\])?(?:[#%/^,~@?]|:\?)")
 
 
-def _dollar_brace(s: str, i: int, dq: bool = False) -> tuple[str, int, dict[int, list]]:
+def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str, int, dict[int, list]]:
     """bash's reading of the `${` at s[i]: (its text with what bash does not expand blanked, the index of
     its closing `}`, len(s) if none, and start: [close, parent start] for every `${` met on the way, one
     that never closes closing at len(s)). Only a `}` outside quotes and escapes closes it, and only a
@@ -659,7 +953,7 @@ def _dollar_brace(s: str, i: int, dq: bool = False) -> tuple[str, int, dict[int,
     a subshell), and single-quoted or $'..' text, except where bash still expands it: in double quotes
     (`dq`) after an operator other than _DQ_QUOTING_OP's (`"${a:-'$x'}"`); a `${` in such text is read
     within it. One pass over s from i, every character once, so a long or deeply nested line stays linear
-    (classify runs inside the gate hook)."""
+    (classify runs inside the gate hook). `nest` is the lexer's (_NEST)."""
     frames: dict[int, list] = {}
 
     def open_(at: int, dq: bool, parent: int | None) -> list:   # [in a "..." inside it, sq expands, dq, start]
@@ -672,7 +966,7 @@ def _dollar_brace(s: str, i: int, dq: bool = False) -> tuple[str, int, dict[int,
         vis = re.sub(r"\\.", "  ", seg, flags=re.S)
         p = vis.find("${")
         while p >= 0:
-            _, close, inner = _dollar_brace(seg, p)
+            _, close, inner = _dollar_brace(seg, p, False, nest)
             for at, (end, up) in inner.items():
                 frames[a + at] = [a + end, parent if up is None else a + up]
             p = vis.find("${", close + 1)
@@ -694,8 +988,10 @@ def _dollar_brace(s: str, i: int, dq: bool = False) -> tuple[str, int, dict[int,
         elif ch == "`" or (s.startswith("$(", j) and not s.startswith("$((", j)):
             if ch == "`":
                 k = _skip(s, j + 1, "`", True)
+            elif nest >= _NEST:
+                k = _nest_end(s, j + 2, [])[0]
             else:
-                lx = _Lexer(s, scan=False)
+                lx = _Lexer(s, scan=False, nest=nest + 1)
                 lx.i = j + 2
                 lx.run(closer=True)
                 k = lx.i
@@ -728,8 +1024,25 @@ def _literal_heredoc(toks: list) -> str | None:
     return None
 
 
+# What one top-level classify_shell call has read (#334): each line parsed once, and classified once per depth for
+# each state of the call's budgets (_brace_budget, _exo_relative). The budgets only fall, so a line met again after
+# one fell is read again and spends it again. Every $( ) is listed at each level above it, so a nest of n levels was
+# classified about n**4 / 24 times without this.
+_shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_shell_seen", default=None)
+
+
 def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
-    """(simple commands, substitution sources, defines a function)."""
+    """(simple commands, substitution sources, defines a function). Within one classify_shell call a line is parsed
+    once (_shell_seen) and the result shared: no caller changes it."""
+    seen = _shell_seen.get()
+    if seen is None:
+        return _parse_line(src)
+    if ("parse", src) not in seen:
+        seen[("parse", src)] = _parse_line(src)
+    return seen[("parse", src)]
+
+
+def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     lx = _Lexer(src or "")
     toks = lx.run()
     fnames = {a or b for a, b in _FUNC_NAMES.findall(src or "")}   # a call to one may run `exec < f` (#161)
@@ -1482,14 +1795,17 @@ def _git_subcommand(argv: list[str], config: list[str] | None = None) -> int:
 
 
 def _classify_git(argv: list[str], cmd: str) -> Classification:
+    """git's own category, from its subcommand. Config set on the line (`git -c`, `--config-env`) does not replace it
+    (#335): _exec_options adds a part for each such pair, so the line asks and a deny on push, force_push or delete
+    still fires. Only an unknown subcommand, which that config may define, is opaque here."""
     config: list[str] = []
     i = _git_subcommand(argv, config)
-    for kv in config:
-        k, _, v = kv.partition("=")
-        if kind := _git_config_kind(k, v):
-            return _opaque(f"git -c {k} {_GIT_CONFIG_DOES[kind]}"[:120], cmd)
     sub, rest = (argv[i] if i < len(argv) else ""), argv[i + 1:]
     if sub and sub not in _GIT_SUBS:
+        for kv in config:
+            k, _, v = kv.partition("=")
+            if kind := _git_config_kind(k, v):
+                return _opaque(f"git -c {k} {_GIT_CONFIG_DOES[kind]}"[:120], cmd)
         return _opaque(f"git {sub} (an alias or extension the gate cannot see)", cmd)
     if sub == "config":
         mode, names = _git_config_args(rest)
@@ -1498,8 +1814,9 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
                            cmd)
         for kv in _git_config_sets(rest) or ([f"{names[0]}="] if names and mode in ("add", "replace-all") else []):
             k, _, v = kv.partition("=")
-            if kind := _git_config_kind(k, v):
-                return _opaque(f"git config sets {k}, which {_GIT_CONFIG_DOES[kind]}"[:120], cmd)
+            if kind := _git_config_kind(k, v):        # the write stays a part, so a deny on local_write fires
+                return _combine([_opaque(f"git config sets {k}, which {_GIT_CONFIG_DOES[kind]}"[:120], cmd),
+                                 _make("local_write", summary="git config", command=cmd)], cmd)
     if sub == "push":
         remote = next((a for a in rest if not a.startswith("-")), "")
         if _has(rest, "-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror") or \
@@ -2440,6 +2757,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         # the bare host, and the destination as written when it carries a user, a scheme or a port.
         c.parts += [_make("shell", summary=f"ssh {dest}", target=t, command=cmd, signals=["remote host"])
                     for t in dict.fromkeys(dests) if t]
+        if not here:                          # parts can be shared with a stored result (_own_copy): mark a copy
+            c = copy.deepcopy(c)
         for p in _each_part(c) if not here else ():   # every part runs on the remote host (D-075)
             if EXPOSURE.index(p.exposure) < 1:
                 p.exposure = "internal"
@@ -2780,7 +3099,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     for name, value, runs_nothing, literal in sets:
         if name in _EXEC_ENV:
             c = nested(_prompt_text(value or "") if name == "PS4" else (value or "").lstrip("|"), name)
-            if c is not None and runs_nothing and c.category == "opaque_exec":
+            if c is not None and runs_nothing and c.category == "opaque_exec" and "unread nest" not in c.signals:
                 parts.pop()                              # export runs nothing; an unknown value is not a hit
         elif name == "GIT_CONFIG_PARAMETERS":           # git's own format: 'key'='value' 'key2'='value2'
             try:
@@ -3740,7 +4059,46 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
 
 
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
-    """Classify a shell command line; a compound line takes its most severe part."""
+    """Classify a shell command line; a compound line takes its most severe part. Within one top-level call a line is
+    classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy."""
+    seen = _shell_seen.get()
+    if seen is None:
+        token = _shell_seen.set({})
+        try:
+            return classify_shell(cmd, depth)
+        finally:
+            _shell_seen.reset(token)
+    key = ("shell", cmd, depth, _budgets())   # the budgets only fall: a line met after one fell is read again
+    if key not in seen:
+        seen[key] = _classify_shell(cmd, depth)
+    return _own_copy(seen[key])
+
+
+def _budgets() -> tuple:
+    """What is left of the call's budgets (_brace_budget, _exo_relative), on which a line's result can depend."""
+    left, memo = _brace_left.get(), _call_memo.get()
+    return (None if left is None else tuple(left), None if memo is None else memo.get("exo_parts", [_EXO_PARTS])[0])
+
+
+def _own_copy(c: Classification) -> Classification:
+    """A stored result for one caller, who may change its fields and lists. The parts it was built from (D-075) are
+    shared: no caller changes a part in place but the ssh hop, which copies its result first."""
+    return replace(c, signals=list(c.signals), parts=list(c.parts), _command_views=list(c._command_views))
+
+
+def _unread_nest() -> Classification:
+    """What a $( ) nested past _NEST stands for: an opaque part, signed so that an exported value keeps it."""
+    c = _opaque(f"a $( ) nested more than {_NEST} levels deep, not read", "")
+    c.signals.append("unread nest")
+    return c
+
+
+def _classify_shell(cmd: str, depth: int) -> Classification:
+    # A run of stand-in lines (_Lexer._cut), also one written by hand, is one unread part, taken in one step so that no
+    # number of them recurses. The lines after it end here-doc bodies, and are read as any line.
+    if m := _STAND_INS.match(cmd or ""):
+        rest = cmd[m.end():]
+        return _combine([_unread_nest(), classify_shell(rest, depth)], cmd) if rest else _unread_nest()
     cmds, subs, func = _parse(cmd or "")
     ctx: dict = {"subs": subs}
     parts: list[Classification] = []
@@ -5149,19 +5507,31 @@ def _list_matches(entries: Iterable, c: Classification, line: Callable[[str], bo
     return ""
 
 
-def _scoped(c: Classification, scopes: Mapping, tool: str = "") -> Classification:
+def _scoped(c: Classification, scopes: Mapping, tool: str = "", seen: dict | None = None) -> Classification:
     """``c`` with the principal's scopes applied, and the same for every simple command it was built from.
-    A part carries the tool of the call it came in on, so a `tool:` entry matches it too."""
-    exposure, third = apply_scopes(c, scopes)
-    tool = c.tool or tool
-    return replace(c, exposure=exposure, third_party=third, tool=tool, parts=[_scoped(p, scopes, tool) for p in c.parts])
+    A part carries the tool of the call it came in on, so a `tool:` entry matches it too. A part shared by
+    several results (_shell_seen) is scoped once and stays shared."""
+    seen = {} if seen is None else seen
+    key = (id(c), tool)
+    if key not in seen:
+        exposure, third = apply_scopes(c, scopes)
+        inner = c.tool or tool
+        seen[key] = replace(c, exposure=exposure, third_party=third, tool=inner,
+                            parts=[_scoped(p, scopes, inner, seen) for p in c.parts])
+    return seen[key]
 
 
 def _each_part(c: Classification) -> Iterator[Classification]:
-    """The classification and every simple command it was built from, nested ones included."""
-    yield c
-    for p in c.parts:
-        yield from _each_part(p)
+    """The classification and every simple command it was built from, nested ones included, each once."""
+    seen: set[int] = set()
+    todo = [c]
+    while todo:
+        p = todo.pop()
+        if id(p) in seen:
+            continue
+        seen.add(id(p))
+        yield p
+        todo.extend(reversed(p.parts))
 
 
 def _line_matcher(c: Classification) -> Callable[[str], bool]:

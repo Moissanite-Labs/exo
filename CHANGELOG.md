@@ -6,6 +6,101 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A no-behaviour-change reduction took 40 lines out of the counted core (#373), undoing the #346 headroom
+  raise. Dead job-notice overrides now inherit, a duplicate id helper now imports from the schema, two git
+  helpers merged, and four exception clauses the next handler could never reach are gone. `CORE_HEADROOM`
+  is back at 1,000 (D-077), and the counted core stands at 15,801 against a ceiling of 15,813.
+- The principal's pinned block no longer drops out when a host summary rides in an assistant row (#371).
+  Hosts that alternate roles put the summary there, and the row reads as the agent's, so it carries nothing
+  itself. That stays so. A host can also build summary rows exo-context never escaped, and the host's
+  `_compressed_summary` flag does not tell the two apart. Compaction now merges the session's pins, observed
+  only from the principal's own messages and persisted per session, the way the handoff write already did.
+  A `meta` that is not a mapping no longer raises in `author_of` or the carry check. It names no tag and no
+  author, as it did before the veto read it.
+- A pinned-block tag with an invisible unicode tag character inside its name is escaped again (#381). The
+  fold added for #322 item 4 turned each tag character into its ASCII letter before matching, so a tag
+  character sitting in the name as filler broke the match and the tag passed through live. Detection now
+  runs over three same-length views of the text and escapes the union. The views are the text itself, the
+  fold of every character whose NFKC form is one ASCII character, and that fold with tag characters decoded.
+  The small brackets, mathematical and circled letters and other single-character NFKC folds are escaped too.
+  Only the bracket characters change.
+- A background job's completion notice no longer stalls the core (follow-up to #321). The notice reads and redacts the
+  job's whole log (up to `output_cap`, 5 MB). That ran on the event loop, and one emoji in a log made it take a few
+  hundred ms. Four jobs that ended together froze streams, approval cards and other turns for 2 to 3 seconds. A thread
+  of its own now builds each notice, one at a time and in the order the jobs ended. The longest stall measured for those
+  four fell from 1.6 to 3.0 seconds to about 30 to 110 ms. Shutting down still waits for a notice being built and, when
+  no turn runs, keeps it for the next turn. The notices of jobs lost in a restart are built the same way, and the core's
+  start does not wait for them, so two first commands at once still start the MCP servers only once. A turn still
+  running when such a notice is built takes it at its next tool round. A hard stop that cancels a notice while it is
+  built still sends the job's end event. A shutdown that runs to its end now waits for the last build and then stops the
+  notice thread, which no close stopped before. After a hard stop the thread takes no more work, and the build being
+  made runs on. The process waits for it as it exits. A notice that fails while exod shuts down is recorded as a
+  `harness.error` event. The engine dropped its trace sink before it stopped anything, so such an error was only logged.
+  It now drops it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP
+  servers are recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
+- Parsing pinned blocks no longer stalls on a run of unclosed `<exo-pinned>` open tags (#322, item 5). The
+  lazy match rescanned to the end of the text from every open with no close after it, so 96 KB of unclosed
+  opens took about five seconds in `parse_pinned_blocks` and `strip_pinned`. Both now share a linear scan
+  that stops at the first open with no close after it. Block boundaries and contents read as before.
+- A pinned-block tag spelled in unicode tag characters or full-width forms is now escaped like the ASCII
+  tag (#322, item 4). Before, those spellings passed `defuse_pins` untouched, and anything downstream that
+  folds them back to ASCII would have revived the live tag. Only the brackets change. The quoted words
+  stay as written.
+- A summary node stored before the #302 upgrade no longer reaches the system message with a live pinned
+  block (#322, item 3). New summaries are escaped as they are made, but the tree view printed a stored
+  node's text as it was. Stored summary text is now escaped where the view prints it. The escape is
+  idempotent, so current summaries are unchanged.
+- exo-context defused the wrong message when a protected head message quoted the end-of-summary marker
+  (#322, item 2). The summary picker took the first message containing the marker, so the head message was
+  escaped and pinned into instead of the summary the compressor just made, and a block the summarizer had
+  copied stayed live. The picker now checks the summary flag and the compressor's own test first, and never
+  picks a message the compressor merely returned from its input.
+- A stamped host dict with malformed `meta` keeps its stamp again instead of raising (#375). The ingress
+  veto read `meta` before the stamp, so a non-mapping `meta` crashed `author_of` where it previously
+  returned the stamped author. The veto now skips a `meta` it cannot read.
+- An empty ingress tag (`meta.bus: {}`, `""`) no longer reads as an untagged principal turn (#370
+  follow-up). The veto added for #370 tested the tag's truthiness, so an empty bus mapping fell through to
+  the legacy inference and a bus-marked message minted a principal ruling. Presence is what counts now,
+  for bus, peer and job alike.
+- A peer, bus or job tag in a host dict's `meta` now outranks a stamped `principal` author everywhere, not
+  only on the carried-block path (#370, follow-up to #368; D-040). Before, a tagged dict carrying
+  `author: "principal"` still yielded a fresh ruling and exo-context minted it into its live pinned block,
+  and a scalar `meta.bus` string read as an untagged principal turn. `provenance.author_of` applies the
+  ingress veto itself, so extraction, the summarizer source and the minted pins all read the tag.
+- On the host path, a pinned block inside a peer, bus or job dict was lifted as the principal's rulings when the
+  tag rode in `meta` or the dict carried no `author` at all (#322, item 1; D-040). An untagged assistant message
+  opening with the block, or a user dict tagged only by `meta`, now classifies by its author as the core path
+  does, and a peer, bus or job tag in `meta` never carries the block, whatever the role says. An untagged user
+  dict still reads as the principal, so older hosts keep working.
+- The grep tool read, decoded and split each whole file before searching its lines (#255, W1-4). It now streams
+  the file in chunks and yields lines as they decode, so a search holds one chunk and the current line instead
+  of the bytes, the text and every line at once. Output is unchanged: the same rows, the same counts past the
+  limit and the same `[N more matches; narrow the search]` line. The refusals are unchanged too: a file that is
+  not regular, over the 2 MB cap (including growing past it while read), or binary in its first bytes is skipped
+  whole, matches already seen in it included. One limit stays: a file with no line breaks still buffers its
+  single line whole, as it did before, and searching such a file is slower than the old whole-file read.
+- The `scripts/deploy-site.sh` untracked-file guard no longer has three gaps (#350). A submodule under `site/` is
+  one entry in the parent index, so the inventory never saw the ignored or untracked files inside it, yet `rsync`
+  copied them; any submodule under `site/` now refuses the deploy (the tracked site has none). The inventory's exit
+  status was dropped, so a corrupt index gave an empty list and the deploy went on; a failed inventory now stops the
+  deploy with exit 1. An empty `EXO_VERCEL_CLI` fell back to the pin; it now exits 2 like any malformed value, in the
+  environment or in `deploy.conf`. Found by independent review of #347.
+- Two more `scripts/deploy-site.sh` gaps closed (#358, #359). A failed `git status` of `site/` read as a clean tree, so a
+  versioned deploy could upload uncommitted bytes and tag `HEAD`; it now refuses with exit 1 and tags nothing. A `site/`
+  that is itself a symlink (untracked, or tracked with mode 120000) hid its target from the inventory while `rsync`
+  followed it; it now refuses. Symlinks inside `site/` are unchanged: `rsync -a` keeps them as links. Found by independent
+  review of #352.
+- `Config.load()` read and parsed `config.json` on every call (#255, W1-3). It is called from engine setup, the CLI
+  and plugin code, so one process read the same unchanged file many times. The parsed file is now cached on its
+  size and `mtime_ns`, each load hands out a deep copy, and `save()` refreshes the cache with what it wrote. An
+  external edit is seen when its size or `mtime_ns` moves. A `set()` whose `save()` then fails, and a caller
+  mutating a value `get()` returned, no longer reach the next load.
+- Listing sessions ran one extra database query per session (#255, W1-2). `list_sessions` counted each session's
+  messages with its own `COUNT`, so a list of 500 sessions ran 501 queries. The count now comes from the same
+  query as the list: the limited selection is a subquery and each count is a correlated count over it, evaluated
+  only for the rows the limit keeps (#365). A count in the outer select still ran before the sort, for every
+  provisional candidate, so a limit of 1 visited every session's messages. Listing always runs
+  one query and a small limit never visits other sessions' messages. Results, filters and order are unchanged.
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
@@ -18,6 +113,51 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
+  drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
+  `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
+  levels, over a minute at 200). From about 500 levels the lexer's recursion raised RecursionError, so the hook asked
+  for the whole line and a `git push --force` after the value was no longer denied under `deny: [force_push]`. One
+  classify call now reads each line once per depth, and a line read again spends the brace and store budgets again,
+  so no result changes. A lexer reads 16 levels of `$( )`, `<( )` and `$(( ))` inside one another. Past them it finds
+  where the nest ends in one pass, as the lexer would end it, and the nest stands as an unread `opaque_exec` part that
+  asks, also in an exported value. So the deny after it fires at any depth, and 5,000 levels take under a second.
+  Nests of 16 levels or fewer classify as before. `decide` scopes and walks each part of a result once, also a part
+  that several results share, so it stays linear in the line too. The levels around the unread part still pair a
+  here-document with the line that ends it when its delimiter, quoted or not, or its body holds that part, so a
+  command after the here-document is still read. Also #335: a `git -c` or `--config-env` key that loads a file,
+  allows a transport or names a program no longer hides git's subcommand.
+  `git -c include.path=/dev/null push --force origin main` is a `force_push` again (it asks, and `deny: [force_push]`
+  denies it), where #231 made it an `opaque_exec` that only asked. `git config include.path FILE` keeps its
+  `local_write` part, and an unknown subcommand still names the config that may define it.
+- A known key split where a background job's log rotates at `output_cap` no longer leaves its end in the job's
+  completion notice, or its two parts in `job_output` (follow-up to #321). While the notice redacts the log, the end of
+  `<id>.log.1` now stands in for the rotation note at its start. Keys that overlap each other or themselves can chain
+  from further back, so that end grows, up to the whole file, until the text before it can change no match in the live
+  log. So the notice never keeps a character that redacting both files as one text would cut out. `job_output` joined
+  both files with the note between the two parts of the key, so redaction missed it. It now drops the note when it reads
+  `<id>.log.1`, so the key is whole and is redacted, unless `job_output`'s own cut to the last 20,000 characters splits
+  it (and, with keys that overlap each other, a key next to it). A key split inside a character outside ASCII can still
+  leave a part. So can a key split at either end of output that rotated between `job_output`'s reads of the two files,
+  since that output is missing with no note where it was. The `job.updated` events carried the job's command unredacted
+  to clients and the events table. They now cut known key values out of it before they cut it to 300 characters, as the
+  notice does (docs/JOBS.md "The completion notice").
+- A forged `## Next steps` heading in a handoff can no longer beat the genuine one (#353, D-040). #349 kept the
+  first section of each name, which is right for the principal's sections but wrong for Next steps, the one section
+  written last: a multiline tool path or an old file's unquoted summary could put a forged copy first, and its
+  steps reached the resume counts and the retrieval query. List fields (files, processes, open decisions, next
+  steps, the topic line) now lose their newlines when written, and `load_handoff` reads Next steps from its last
+  copy in the file. Principal sections still read the first. For files written before #349 this fixes the parsed
+  fields only: `resume_text` still carries the raw file, forged headings included.
+- A compaction summary in a handoff's `## State` can no longer forge a principal section (#315, D-040). The summary
+  was written unquoted, so a `## Decisions made (principal's words, verbatim)` line in model text made a second
+  section of that name, and `load_handoff` kept the later one: the forged ruling in, the principal's real ruling
+  dropped, and the agent's last report read as a ruling. The summary is now quoted like the brief and the last
+  report, and the reader keeps the first section of each name, so the parsed fields of an old file with a
+  duplicate heading read the writer's real section. `resume_text` still carries the raw file text.
+- `scripts/deploy-site.sh` pins the Vercel CLI (64.1.0, was `vercel@latest`) and refuses any deploy, versioned or
+  not, when `site/` has untracked files. An unversioned staging deploy used to copy the whole folder, so an untracked
+  private `site/pitch/` would have shipped. `.DS_Store` is skipped. `EXO_VERCEL_CLI` must be an exact `X.Y.Z`.
 - Gate (#225, D-038): a `$( )`, backtick pair or `$(( ))` inside a word no longer hides a secret-store name. Bash
   drops an empty substitution, so `cat .e$(:)nv`, `cat ~/.n$(:)etrc`, `cat ~/.config/gh/ho$(:)sts.yml`,
   `cat $HOME/.kube/c$(:)onfig`, `cat ~/.config/gh/$(:)*` and `cat` of `.env` split by an empty backtick pair
