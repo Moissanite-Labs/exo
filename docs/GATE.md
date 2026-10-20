@@ -123,7 +123,9 @@ seat's Ed25519 key: `sig = exo.core.approvals.sign_approval(key, request_id, dec
 seat)`. The signature covers the request id, the decision, the request's binding hash and the
 seat name, so it cannot be reused for another request, decision or text. An unsigned or badly
 signed seat answer is refused as `forbidden`. The public key comes from the bus registry when
-that document verifies, else from `<keys dir>/<seat>.pub`.
+that document verifies, else from `<keys dir>/<seat>.pub`. Both are store paths (#210, "The store is
+credentials" below): a tool call that writes the registry, the relay database or the keys folder is a
+`store_write`, which only the principal approves.
 
 ## Who answered: the connection, not the body (D-039)
 
@@ -253,7 +255,11 @@ as before: what is below the folder apart from those files, so job output in `ru
 files by exact name. A bare relative `run` is never the folder (`uv run`, `npm run`, `gh run
 list`, `ls run`): the gate does not resolve `run` against its own working folder, though it does
 for `keys`, so with the gate's working folder at `$EXO_HOME`, `ls keys` asks and `ls run` does
-not. Brace sets are expanded first (#184), so `run/{*,}`, `{$EXO_HOME/run,x}/*`,
+not. A `cd`, `tar -C` or `git -C` into `$EXO_HOME` on the line is followed, though: a relative
+name is then read as the path it names from there (#269, "The working folder" below), so
+`tar -C ~/.exo -czf - run`, `cd ~/.exo && ls run` and, from `run/jobs`, `cat ../exod*`,
+`grep -r . ..` and `cd .. && ls` ask, while `cat 1.log` there stays `read`. Brace sets are
+expanded first (#184), so `run/{*,}`, `{$EXO_HOME/run,x}/*`,
 `$EXO_HOME/{run,x}/*` and `$EXO_HOME/r{u,}n/*` ask, and `run/jobs/{1,2}.log` stays `read`. A
 wildcard is matched with `.` and `..` resolved, for every secret store, so `cat ./.env*` asks like
 `cat .env*`. A wildcard with no folder is matched against the secrets' own file names, not their
@@ -269,10 +275,12 @@ matches the core's file names or spells `agent-` asks in any folder, such as `ls
 
 Limits. No environment variable carries the credential, and `tool_env` drops `EXOD_*`,
 `EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
-(`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`); a relative name when the folder is
+(`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`, also through `..`:
+`cd ~/.exo/run/jobs && grep -r secret ../..`); a relative name when the folder is
 the bash tool's own `cwd` argument rather than a `cd` on the line (`{"command": "cat *", "cwd":
 "~/.exo/run"}` is `read`, as is `cat id*` with `~/.ssh` as `cwd`; `cd ~/.exo/run && cat age*`,
-`cd ~/.exo && cat run/*` and `cd ~/.exo/run/jobs && cat ../*` ask, see "The working folder" below); a wildcard
+`cd ~/.exo && cat run/*`, `cd ~/.exo/run/jobs && cat ../*` and `cat ../exod*` ask, see "The working folder"
+below); a `..` from a folder spelt with a wildcard (`cd ~/.e*o/run/jobs && ls ..`); a wildcard
 in a folder name above a file (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for
 the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
 characters, the same as for `~/.ss?`; `~/.exo/r*` asks); an upper-case spelling on a
@@ -1005,6 +1013,26 @@ whole line in one pass:
   not one read from a file with `-f`), other heredoc text or a word with a space in it (a commit
   message, an `echo`, `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
 
+In `$EXO_HOME` (#269). The run folder is not a store folder by its name, since job output in `run/jobs`
+stays readable, so the checks above do not reach it through `..`. On a line that reaches a folder in
+`$EXO_HOME` or in any `.exo`, that folder and each relative name read from it are checked as the paths
+they are, resolved as the kernel resolves them (`..` included, through links), with the checks an
+absolute path gets: `cd ~/.exo/run/jobs && cat ../exod*`, `grep -r . ..`, `ls ..`,
+`cd ~/.exo/run/jobs && cd .. && ls`, `tar -C ~/.exo -czf - run` and `cd ~/.exo && ls run` ask, and
+`cd ~/.exo/run/jobs && cat 1.log` stays `read`. The folders are the targets, each relative target
+joined to each of them once, and every folder up to as many levels above them as the line's `cd ..`
+climb; an absolute target is also resolved, so a link into `run/jobs` counts. From a folder outside
+the store, a name that spells the store's folder name is joined too (`cd /srv && tar czf -
+exo-home/run` with `EXO_HOME=/srv/exo-home`). The run folder's credential file names are store file
+names as well (`exod.principal.key`, `exod.token`, the sampled `agent-<seat>.principal.key`), so
+`cat ../exod*` asks on any line that enters a store folder. A `cd ..` counts once, as levels up, so `cd
+~/.exo/run/jobs/7 && cd .. && ls` lists `run/jobs` and stays `read`. Each join of a folder with a target
+or name, and each level up, is charged the path parts it builds, as it is made, to one budget of 65,536
+parts for the whole tool call, which every `$( )` shares (each is classified again, nested ones too), so
+the work stays linear in the line however deep the names are. Past the budget, or on a line that reaches
+more than 64 such folders, the line asks (fails closed, no grant). A line that names no store folder
+makes no join. A folder spelt with a wildcard is left to the store-folder check above.
+
 A line that enters no store folder, and names none, is classified as before. The work is linear
 in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
 store tests per store folder (one per glob candidate), and a parent path kept only as deep as
@@ -1040,8 +1068,8 @@ own stdin however it is spelled or prefixed (`"exec"`, `\exec`, `command exec`, 
 `eval`, `source`, `.`, a program name from a variable or a function defined on the line, which can
 run such an exec unseen. When the closer has its own `<`, nothing is fed (the gate keeps no order
 between a closer's redirections, so it does not guess which one bash applies last: `{ bash; } <<EOF
-< f`), and a closer heredoc or here-string wins over a pipe in. That holds for stdin (fd 0). The
-lexer drops fd numbers, so a closer heredoc on another fd (`{ bash; } 3<<EOF`), where bash leaves
+< f`), and a closer heredoc or here-string wins over a pipe in. That holds for stdin (fd 0). Heredocs
+keep no fd number, so a closer heredoc on another fd (`{ bash; } 3<<EOF`), where bash leaves
 stdin alone, is read as stdin too: its body is fed (code inside can still run it, as `{ source
 /dev/fd/3; }` does), and text piped in reaches only the first command inside, as in any `echo ... |
 bash`. So `echo 'rm -rf build' | { bash; } 3<<EOF` is a `delete` whichever text bash runs, but in
@@ -1170,11 +1198,16 @@ the sandbox is the real fix.
 
 The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/`
 (including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
-`$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets) and `$EXO_HOME/seats`, any
-`seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals`
-(`exo init --root`, `exo import-store --root`), for every id, not only the active one.
-Distinctive names match anywhere, so a relative `policies/gates.yaml` or
-`state/approval-grants.json` counts too.
+`$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats` and `$EXO_HOME/bus`
+(the bus registry that signed seat answers and the relay trust, the relay database and its
+`-wal`, `-shm` and `-journal` files, #210), any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store
+root recorded in config `principals` (`exo init --root`, `exo import-store --root`), for every id,
+not only the active one. When the environment moves a bus file, the gate protects where it points:
+the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with the database's sidecars) and the folder
+`EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_` name, and both spellings when both are
+set. Distinctive names match anywhere, so a relative `policies/gates.yaml`,
+`state/approval-grants.json`, `bus/registry.json` or `bus/relay.sqlite` counts too, and `.exo/bus`
+counts whatever `EXO_HOME` is.
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
@@ -1207,9 +1240,41 @@ write to the outside spelling is a local write. Name and prefix checks are case-
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
-followed, and the bash tool's `cwd` argument is not read here (the secret-store checks read it, #209). File-descriptor magic links (`/dev/fd/N`,
-`/proc/self/fd/N`) name whatever an earlier redirection opened, so
-`exec 3< ~/.exo/state/gate-grants.json; printf X > /dev/fd/3` is not seen as a store write (#217).
+followed, and the bash tool's `cwd` argument is not read here (the secret-store checks read it, #209).
+
+Descriptor paths (#217). `/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/fd/N`, `/proc/<pid>/cwd`,
+`/proc/<pid>/root` and `/proc/<pid>/map_files` (`<pid>` also `self`, `thread-self` or `$$`, with or
+without `task/<tid>/`) name whatever the writing process holds there, which the gate cannot resolve
+from its own process. On Linux a write through one reopens that file for writing, so
+`exec 3< ~/.exo/state/gate-grants.json; printf X > /dev/fd/3` rewrote the grants. A write to such a
+path or below it is a `store_write`, however it is spelt: a redirection, `tee`, `cp`, `dd of=`, a link
+to it (`ln -s /proc/self/fd/3 x`), a file tool's path, `//dev/fd/3`, `/dev/fd/$fd`, or a relative
+`dev/fd/3` (after `cd /`). So is a writing command after a `cd` into one, or into `/dev`, `/proc`,
+`/proc/<pid>` or `/proc/<pid>/task/<tid>` (`cd /dev && printf x > fd/3`). The writer's own stdout and
+stderr stay ordinary (`> /dev/fd/1`, `> /proc/self/fd/2`, `> /dev/stdout`). A store path opened for
+reading on a descriptor other than stdin (`3< f`, `exec 2< f`, `{ ...; } 1< f`) is a `store_write`
+too, because `> /dev/fd/3` or `> /dev/stdout` later on the line, or in a later call of a persistent
+shell, writes it back. On stdout or stderr, where the write back is an ordinary write, any target the
+gate cannot pin to a path counts as well: a variable (`1< "$f"`), a substitution, a glob
+(`2< ~/.exo/sta*/gate-grants.json`) or a relative name (`exec 1< gate-grants.json`). `cat < f`,
+`cat 0< f`, `exec 3< "$f"` and `exec 2< /dev/null` stay reads.
+
+Known limits. A descriptor path is matched as written, not resolved (the gate's own realpath would run
+through its own descriptors). A link to one, or to `/dev` or `/proc/self`, is a store write when a shell
+line makes it (`ln -s /dev x`), as is code that names a descriptor path, but one made where the gate
+does not see it (code linking to `/dev` is `code`, which policy may lower), or already there, is
+followed by nothing: a store file opened on descriptor 3 or above through a spelling the gate cannot
+read (a variable, a glob in a folder part, a named `{fd}`) and written back through that link passes
+(`exec 3< "$f"; printf X > /tmp/link-to-dev/fd/3`). So does a store file reached through a hardlink and
+opened on stdout (`exec 1< /tmp/hardlink; printf X > /dev/stdout`), as for any hardlink above. Both are
+tracked in #324. Known friction (fails closed, no grant): a descriptor path used as an input of a command that
+writes asks too, since the words of a writing command are not told apart (`jq . /dev/stdin > out.json`,
+`cat /dev/stdin > f`, `patch -i /dev/stdin`, `diff /proc/self/fd/3 x > out`); `jq . < /dev/stdin >
+out.json` does not. So does a post whose body file is a descriptor path written out
+(`gh pr comment 5 --body-file /dev/stdin`): it is this store write, which only the principal answers, never
+granted, rather than the unseen-body ask of a post (#208), which a seat may answer; its card says the
+path is one the gate cannot resolve, not that the command writes it. A body file that only links to one
+(`--body-file notes.md`, a link to `/dev/stdin`) keeps the unseen-body ask.
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,

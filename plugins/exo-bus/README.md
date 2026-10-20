@@ -50,6 +50,9 @@ python -m exo.bus checkpoint --db $EXO_HOME/bus/relay.sqlite --relay-key <relay 
 ```
 
 An existing Divan relay database and `registry.json` open unchanged (same schema and signatures).
+Under the Exo gate these files are the principal's: a tool call that writes `$EXO_HOME/bus/` (the registry, the
+relay database and its `-wal`, `-shm` and `-journal` files) or the files `EXO_BUS_REGISTRY`, `EXO_BUS_DB` and
+`EXO_BUS_KEYS_DIR` name is a `store_write` and asks the principal (`docs/GATE.md`, #210).
 The `/mcp` endpoint mounts when the `mcp` package (v2) is installed; set `EXO_BUS_MCP=0` to turn it off.
 
 The read-only web view at `/` takes no signed headers, so anyone who can reach the port can open it. It lists each
