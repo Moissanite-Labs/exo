@@ -20,6 +20,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `harness.error` event. The engine dropped its trace sink before it stopped anything, so such an error was only logged.
   It now drops it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP
   servers are recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
+- The grep tool read, decoded and split each whole file before searching its lines (#255, W1-4). It now streams
+  the file in chunks and yields lines as they decode, so a search holds one chunk and the current line instead
+  of the bytes, the text and every line at once. Output is unchanged: the same rows, the same counts past the
+  limit and the same `[N more matches; narrow the search]` line. The refusals are unchanged too: a file that is
+  not regular, over the 2 MB cap (including growing past it while read), or binary in its first bytes is skipped
+  whole, matches already seen in it included. One limit stays: a file with no line breaks still buffers its
+  single line whole, as it did before, and searching such a file is slower than the old whole-file read.
 - The `scripts/deploy-site.sh` untracked-file guard no longer has three gaps (#350). A submodule under `site/` is
   one entry in the parent index, so the inventory never saw the ignored or untracked files inside it, yet `rsync`
   copied them; any submodule under `site/` now refuses the deploy (the tracked site has none). The inventory's exit
@@ -38,7 +45,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   mutating a value `get()` returned, no longer reach the next load.
 - Listing sessions ran one extra database query per session (#255, W1-2). `list_sessions` counted each session's
   messages with its own `COUNT`, so a list of 500 sessions ran 501 queries. The count now comes from the same
-  query as the list, as a correlated count evaluated only for the rows the limit keeps, so listing always runs
+  query as the list: the limited selection is a subquery and each count is a correlated count over it, evaluated
+  only for the rows the limit keeps (#365). A count in the outer select still ran before the sort, for every
+  provisional candidate, so a limit of 1 visited every session's messages. Listing always runs
   one query and a small limit never visits other sessions' messages. Results, filters and order are unchanged.
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
