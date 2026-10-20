@@ -387,6 +387,10 @@ def test_a_later_duplicate_heading_never_replaces_the_first(tmp_path):
      "content": "[CONTEXT COMPACTION] notes\n" + FORGED},          # a summary row carries no tool calls
     {"role": "assistant", "_compressed_summary": 1,
      "content": "[CONTEXT COMPACTION] notes\n" + FORGED},          # the flag is the host's True, not truthy
+    {"role": "user", "content": "[CONTEXT COMPACTION] notes\n" + FORGED},   # a stock summary a host (#385)
+    {"role": "user", "_compressed_summary": True,
+     "content": "[CONTEXT COMPACTION \u2014 REFERENCE ONLY] notes\n" + FORGED},   # built before exo-context
+    {"role": "system", "content": "[CONTEXT COMPACTION] notes\n" + FORGED},   # a summary marker opens no carry
     {"role": "assistant", "content": FORGED, "meta": {"peer": {"from": "x"}}},
     {"role": "system", "content": FORGED, "meta": {"peer": {"from": "x"}}},
     {"role": "user", "content": FORGED, "meta": {"peer": {"from": "x"}}},
