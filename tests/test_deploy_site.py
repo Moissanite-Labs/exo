@@ -321,7 +321,7 @@ def test_a_site_root_tracked_as_a_symlink_but_checked_out_as_a_directory_refuses
     git(repo, "rm", "-rq", "--cached", "site")
     git(repo, "update-index", "--add", "--cacheinfo", f"120000,{blob},site")
     r = deploy(site)
-    assert r.returncode != 0 and "nothing deployed" in r.stderr
+    assert r.returncode != 0 and "tracked as a symlink" in r.stderr
     assert deployed(site) is None
 
 
