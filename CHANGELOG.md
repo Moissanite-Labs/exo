@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A pinned-block tag spelled in unicode tag characters or full-width forms is now escaped like the ASCII
+  tag (#322, item 4). Before, those spellings passed `defuse_pins` untouched, and anything downstream that
+  folds them back to ASCII would have revived the live tag. Only the brackets change. The quoted words
+  stay as written.
 - A summary node stored before the #302 upgrade no longer reaches the system message with a live pinned
   block (#322, item 3). New summaries are escaped as they are made, but the tree view printed a stored
   node's text as it was. Stored summary text is now escaped where the view prints it. The escape is
