@@ -565,7 +565,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a 5 MB log. The thread belongs to the job manager, not to the loop's default pool, so a busy tool thread never holds
   a notice up. Notices are built one at a time and handed on in the order the jobs ended. Shutting down waits for a
   notice still being built and, when no turn runs, keeps it for the next turn. A hard stop that cancels a notice while
-  it is built loses that notice, but the job's end still goes out as a `job.updated` event. The notices of jobs lost
+  it is built loses that notice, but the job's end still goes out as a `job.updated` event. Shutting down waits for
+  that build to end too, and then stops the thread, so no worker outlives the engine. The notices of jobs lost
   in a restart are built the same way, in tasks the core's start does not wait for, so two first commands at once
   still start the runtime once. A turn still running when such a notice is built takes it at its next tool round, as
   it takes a completion notice. Before, a lost job's notice was queued before any turn could start. A lost job's

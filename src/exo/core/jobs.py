@@ -391,6 +391,9 @@ class JobManager:
             self.e.hub.publish(self._body(h.id, "killed", h.command, h.proc.returncode, h.started, None,
                                           "stopped when exod shut down"), h.session)
         await asyncio.gather(*self._tasks, return_exceptions=True)  # notices of jobs that ended just before
+        with contextlib.suppress(RuntimeError):  # an earlier close() shut the pool down already
+            await asyncio.wrap_future(self._pool.submit(int))  # after any build still running, a cancelled task's too
+        self._pool.shutdown()  # its one thread is idle now, so this returns at once
         await self.path.close()
 
     async def recover(self) -> list[str]:
