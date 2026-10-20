@@ -19,6 +19,7 @@ import re
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
@@ -156,7 +157,7 @@ class JobManager:
         self.path = IngressPath(self.target, lambda ing: ("auto", "a job the agent started"))
         self._lock = threading.Lock()
         self._tasks: set[asyncio.Task] = set()
-        self._order = asyncio.Lock()
+        self._order, self._pool = asyncio.Lock(), ThreadPoolExecutor(1, "exo-notice")  # its own: tools never hold it
         self.recovered = False
 
     # ---------------------------------------------------------------- start
@@ -315,10 +316,10 @@ class JobManager:
         self.e.hub.publish(self._body(h.id, state, h.command, code, h.started, ended, detail), h.session)
 
     async def _built(self, *args: Any) -> Ingress:
-        """``_notice`` in a worker thread, as it reads and redacts the whole log. One at a time, in call order, so
+        """``_notice`` in the notice thread, as it reads and redacts the whole log. One at a time, in call order, so
         each notice is handed on before the next one is built, in the order the jobs ended."""
         async with self._order:
-            return await asyncio.to_thread(self._notice, *args)
+            return await asyncio.get_running_loop().run_in_executor(self._pool, self._notice, *args)
 
     async def _queue(self, *args: Any) -> None:
         await self.target.queue(args[6], await self._built(*args))  # queued in order, as _built hands each on

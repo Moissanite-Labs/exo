@@ -477,6 +477,29 @@ async def test_a_worker_thread_builds_the_notice_and_jobs_keep_their_order(tmp_p
     await eng.close()
 
 
+@aio
+async def test_a_notice_does_not_wait_for_a_busy_tool_thread(tmp_path):
+    """Sync tool handlers, foreground bash among them, run in the event loop's default thread pool. The notice has a
+    thread of its own, so it goes out while every thread of that pool is busy, and close() does not wait for them."""
+    import concurrent.futures
+    import threading
+
+    loop, release = asyncio.get_running_loop(), threading.Event()
+    loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(1))
+    eng = engine(tmp_path)
+    sid = (await eng.loop.create_session(agent="tester")).id
+    busy = loop.run_in_executor(None, release.wait, 20)  # the default pool's only thread
+    try:
+        eng.jobs.start("echo built", str(tmp_path), sid)
+        await until(lambda: any(e.state == "done" and "queued" in e.detail for e in events(eng)), 4)
+        await asyncio.wait_for(eng.close(), 4)
+        assert not busy.done()
+    finally:
+        release.set()
+    await busy
+    assert [m for m in eng.store.messages(sid) if m.meta.get("job")]
+
+
 @pytest.mark.parametrize("lost", [False, True])
 @aio
 async def test_close_waits_for_a_notice_still_being_built(tmp_path, monkeypatch, lost):
