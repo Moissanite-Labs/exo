@@ -1648,8 +1648,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a branch-based flow (the site is deployed from a git-free copy on purpose).
 - **Revisit if:** the site gains a build step or more than one maintainer deploys, when CI should own promotion.
   *Amendment 2026-10-20 (PRs #352, #358, #359):* the script fails closed where git's view of `site/` and the copy could
-  differ. Any deploy refuses when `site/` holds untracked files (ignored ones too), contains a submodule, or is itself a
-  symlink (untracked, or tracked with mode 120000), and when git cannot list the files or read the status of `site/`; a
+  differ. Any deploy refuses when `site/` holds untracked files (ignored ones too), contains a submodule, is itself a
+  symlink (untracked, or tracked with mode 120000) or is not a directory, and when git cannot list the files or read the status of `site/`; a
   versioned deploy also needs a clean `site/`. An empty `EXO_VERCEL_CLI` exits 2 rather than falling back to the pin.
   There is no override. Symlinks inside `site/` stay allowed: `rsync -a` copies them as links, not their targets.
 - **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
