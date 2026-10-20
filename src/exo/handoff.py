@@ -237,6 +237,7 @@ def extract_rulings_and_corrections(messages: list[dict]) -> tuple[list[Signal],
 
 
 def _open_decisions(messages: list[dict]) -> list[Signal]:
+    messages = provenance.principal_view(messages)  # D-040: a deferral in a peer, bus or job row is not open
     last_user = max((i for i, _, _ in _principal_turns(messages)), default=-1)
     out: list[Signal] = []
     for i, m in enumerate(messages):
@@ -492,7 +493,7 @@ def _may_carry(m: dict) -> bool:
     meta = meta if isinstance(meta, Mapping) else {}
     if any(meta.get(k) is not None for k in ('peer', 'bus', 'job')):
         return False  # an ingress tag in meta is not the principal, whatever the role says (#322)
-    return m.get('role') not in ('other', 'tool') and provenance.author_of(m) in (
+    return m.get('role') in ('system', 'user') and provenance.author_of(m) in (
         provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith(PIN_OPEN)
 
 

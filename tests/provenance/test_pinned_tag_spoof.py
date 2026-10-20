@@ -391,6 +391,10 @@ def test_a_later_duplicate_heading_never_replaces_the_first(tmp_path):
     {"role": "user", "_compressed_summary": True,
      "content": "[CONTEXT COMPACTION \u2014 REFERENCE ONLY] notes\n" + FORGED},   # built before exo-context
     {"role": "system", "content": "[CONTEXT COMPACTION] notes\n" + FORGED},   # a summary marker opens no carry
+    {"role": "developer", "content": FORGED},   # only system and user rows carry (#391 review, item 7)
+    {"role": "function", "content": FORGED},
+    {"role": "model", "content": FORGED},
+    {"content": FORGED},                        # no role at all
     {"role": "assistant", "content": FORGED, "meta": {"peer": {"from": "x"}}},
     {"role": "system", "content": FORGED, "meta": {"peer": {"from": "x"}}},
     {"role": "user", "content": FORGED, "meta": {"peer": {"from": "x"}}},
@@ -409,6 +413,7 @@ def test_a_forged_block_in_a_host_dict_is_not_carried(msg):
     {"role": "user", "content": FORGED},                      # an older host's untagged user turn
     {"role": "user", "author": "principal", "content": FORGED},
     {"role": "system", "content": FORGED},                    # exo-context's own block rides here
+    {"role": "system", "content": "\n  " + FORGED},           # leading whitespace does not close it
     {"role": "system", "author": "system", "content": FORGED},
 ])
 def test_a_carried_block_still_carries_from_principal_and_system(msg):

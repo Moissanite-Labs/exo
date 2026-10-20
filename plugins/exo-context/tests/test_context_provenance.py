@@ -278,6 +278,106 @@ def test_compress_collects_no_pin_from_a_non_principal_row(tmp_path):
     assert hf.load_handoff(eng.last_handoff).rulings == []
 
 
+def test_pins_follow_a_compression_session_move(tmp_path):
+    """#391 review: with compression.in_place false, Hermes starts a child session after each compaction.
+    The pins are kept per session id, so they must follow that move or every carried signal drops."""
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    fix = "No, I said the staging bucket, not production."
+    parked = "Let's park this: the deploy region is still undecided."
+    eng.on_session_start("p0")
+    first = eng.compress([{"role": "system", "content": "sys"}, mine(MINE),
+                          {"role": "assistant", "content": "Uploading the sample to the production bucket."},
+                          mine(fix), mine(parked), mine("carry on")], force=True)
+    eng.on_session_start("p1", boundary_reason="compression", old_session_id="p0")
+    second = eng.compress(first[:2] + [mine("next step"), mine("go on")], force=True)
+    block = hf.parse_pinned_blocks(hf.message_text(second[1]))
+    assert block["ruling"] == [MINE] and block["correction"] == [fix] and block["open_decision"] == [parked]
+    handed = hf.load_handoff(eng.last_handoff)
+    assert handed.rulings == [MINE] and handed.corrections == [fix] and handed.open_decisions == [parked]
+
+
+class FakeSessionDB:
+    """The slice of Hermes' SessionDB bind_session_state is handed: a row lookup with a parent link."""
+
+    def __init__(self, parents):
+        self.parents = parents
+
+    def get_session(self, sid):
+        return {"id": sid, "parent_session_id": self.parents.get(sid)}
+
+
+def test_bind_session_state_rebinds_and_stops_the_previous_sessions_pins_leaking(tmp_path):
+    """#391 review: on a reset-only switch (/new, /resume, /branch) Hermes calls bind_session_state and no
+    on_session_start. The engine must rebind there, so the resumed session reads its own pins and the
+    previous session's stop riding its block. A /branch child inherits its parent's pins."""
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    eng.on_session_start("a")
+    eng.compress([{"role": "system", "content": "sys"}, mine(MINE), mine("carry on")], force=True)
+    eng.on_session_start("b")
+    other = "From now on, keep every deploy behind a feature flag."
+    eng.compress([{"role": "system", "content": "sys"}, mine(other), mine("carry on")], force=True)
+    eng.bind_session_state(FakeSessionDB({}), "a")  # /resume back to a, no on_session_start
+    out = eng.select_context([{"role": "system", "content": "sys"}, mine("next")])
+    assert MINE in hf.message_text(out[0]) and other not in hf.message_text(out[0])
+    eng.bind_session_state(FakeSessionDB({"kid": "a"}), "kid")  # /branch: the child inherits a's pins
+    out = eng.select_context([{"role": "system", "content": "sys"}, mine("next")])
+    assert MINE in hf.message_text(out[0])
+
+
+def test_an_open_decision_pin_comes_only_from_the_principal(tmp_path):
+    """#391 review: deferral lines in peer, bus and job rows, a peer stamp, principal False and the agent's
+    own marked line mint no open-decision pin. Only the principal's deferral is pinned, and only it rides
+    the per-turn block once the deferral itself has left the window."""
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    defer = "Hold off on {}: it is undecided."
+    rows = [{"role": "user", "content": defer.format(w), "meta": {k: {"from": "x"}}}
+            for w, k in (("the peer item", "peer"), ("the bus item", "bus"), ("the job item", "job"))]
+    rows += [{"role": "user", "author": "peer:x", "content": defer.format("the stamped item")},
+             {"role": "user", "principal": False, "content": defer.format("the flagged item")},
+             {"role": "assistant", "content": "Open decision: " + defer.format("the agent item")}]
+    mine_parked = "Let's park this: the deploy region is still undecided."
+    eng.select_context([{"role": "system", "content": "sys"}, mine("check the queue"), *rows,
+                        mine(mine_parked), mine("carry on")], session_id="od")
+    assert pins(tmp_path, "od")["open_decision"] == [mine_parked]
+    out = eng.select_context([{"role": "system", "content": "sys"}, mine("next")], session_id="od")
+    assert mine_parked in hf.message_text(out[0])
+    for w in ("peer", "bus", "job", "stamped", "flagged", "agent"):
+        assert defer.format(f"the {w} item") not in hf.message_text(out[0])
+
+
+def test_an_open_decision_reaches_the_core_handoff_by_the_pins(tmp_path):
+    """#391 review: on_compacted writes the handoff from the window plus the pins. A deferral the window
+    no longer holds reaches that handoff only through the pin merge in _write_handoff."""
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    parked = "Let's park this: the deploy region is still undecided."
+    eng.select_context([{"role": "system", "content": "sys"}, mine(parked), mine("carry on")], session_id="s")
+    eng.on_turn_complete([{"role": "system", "content": "sys"}, mine("later")], session_id="s")
+    eng.on_compacted("s", SimpleNamespace(id="n1", start=1, end=2, text="NODE NOTES", session="s"))
+    assert hf.load_handoff(eng.last_handoff).open_decisions == [parked]
+
+
+def test_the_open_decision_merge_keeps_only_the_last_twelve(tmp_path):
+    """#391 review: compress caps the merged open decisions the way extract_signals does."""
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    parked = [f"Let's park this: item {i} is still undecided." for i in range(13)]
+    first = eng.compress([{"role": "system", "content": "sys"}, *[mine(p) for p in parked], mine("carry on")],
+                         force=True)
+    got = hf.parse_pinned_blocks(hf.message_text(first[1]))["open_decision"]
+    assert len(got) == 12 and parked[0] in got and parked[-1] in got and parked[1] not in got
+
+
+def test_undo_prunes_an_open_decision_pin_like_a_ruling(tmp_path):
+    """#391 review: the core undo test reads open decisions back the way they were pinned, so a deferral
+    still visible keeps its pin and an undone one loses it."""
+    eng = ExoContextEngine(write_handoffs=False)
+    parked = "Let's park this: the deploy region is still undecided."
+    eng.select_context([{"role": "system", "content": "sys"}, mine(parked), mine(MINE)], session_id="u")
+    eng.on_session_switch("u", rewound=True, messages=[mine(parked), mine(MINE)])
+    assert pins(tmp_path, "u")["open_decision"] == [parked]
+    eng.on_session_switch("u", rewound=True, messages=[mine(MINE)])
+    assert pins(tmp_path, "u")["open_decision"] == []
+
+
 def test_a_correction_survives_a_second_compaction_by_the_pins(tmp_path):
     """#384 review: the corrections half of the pin merge carries the same way rulings do."""
     eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")

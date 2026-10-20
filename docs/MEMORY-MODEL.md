@@ -245,7 +245,7 @@ What uses it:
   logs a peer's or job's turn under that author, not the principal's id.
 - The learning loop's chat capture (`record_chat_signals`) and `/handoff` pins read the same flags.
 - The context plugin's `select_context` gets `author` and `principal` on each message, with `principal` read from
-  the author alone. exo-context pins a ruling or correction, and quotes it in a handoff as the principal's words,
+  the author alone. exo-context pins a ruling, correction or open decision, and quotes it in a handoff as the principal's words,
   only from a principal message. A fork's copy of the principal's message keeps its author, so the child thread pins
   it too (`is_principal` skips the copy, so capture does not take it twice). A copy of a message stored before D-040
   has no author to keep. It reads as `system`, so the fork does not pin it. The recalled-memory block before each
