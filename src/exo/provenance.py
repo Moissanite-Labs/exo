@@ -83,7 +83,7 @@ def author_of(msg: Any) -> str:
         role, meta, stamped = msg.get("role"), msg.get("meta") or {}, msg.get("author")
     else:
         role, meta, stamped = getattr(msg, "role", None), getattr(msg, "meta", None) or {}, None
-    tag = _ingress_author(meta)
+    tag = _ingress_author(meta) if isinstance(meta, Mapping) else ""
     if tag:
         return tag
     if stamped:
