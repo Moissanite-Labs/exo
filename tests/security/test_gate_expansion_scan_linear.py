@@ -71,7 +71,7 @@ def test_a_listed_variable_deep_in_a_long_line_is_still_found(cmd):
     # the card may name a stronger part (since #307 the `${a[` run reads as a glob that could match a secret store),
     # so the scan itself is asked what it found
     cmds, _, _ = gate._parse(cmd)
-    assert any(name == "PATH" for name, _ in gate._hidden_sets(cmds[0], [])), cmd[:40]
+    assert any(name == "PATH" for name, _, _ in gate._hidden_sets(cmds[0], [])), cmd[:40]
 
 
 def test_a_command_value_nest_reads_each_value_once():

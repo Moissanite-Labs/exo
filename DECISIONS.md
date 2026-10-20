@@ -1112,8 +1112,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `GIT_CONFIG_PARAMETERS`. The value of an exec key is classified as a command, so a category deny fires on it
   (`git clone -c core.sshCommand='rm -rf ...'` is `delete`); a key that loads another config file or a template
   (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as do `git clone --template` and `git init
-  --template`. `git config` is read as git reads it: its subcommand (`set`, `get`...) and the values of `-f`,
-  `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url` are not the key, a value set for an
+  --template`. `git config` is read as git reads it: its subcommand (`set`, `get`...) and the values of `-f`, `-t`,
+  `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url` are not the key, also under any
+  unique prefix git accepts for a long option (`--fil`, `--ty`, `--rename-sec`), a value set for an
   exec key is classified as the command it is, and `rename-section` asks (it can turn `x.path` into
   `include.path`). The exec keys also cover any key whose last part ends in `command` or `cmd`,
   `interactive.diffFilter`, `remote.<name>.uploadpack`/`receivepack` and a difftool, mergetool, man or browser
@@ -1130,10 +1131,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   sets one of these variables asks where it was allowed, except for values that change nothing the gate relies on:
   an empty loader variable, `GIT_CONFIG_GLOBAL`/`SYSTEM` set to `/dev/null`, a `PATH` of `$PATH` and folders the
   gate already trusts a program from by path (system bin folders, a virtualenv's `bin`, `node_modules/.bin`), and
-  `PYTHONPATH` before `pytest` or `python -m pytest`, which already run the project's code. Deliberate asks: an
-  empty `PATH` element (the current folder), any other `PATH` folder, appended or not, since it supplies every
-  program the earlier folders lack (`export PATH="$HOME/.local/bin:$PATH"`), and `PYTHONPATH` before any other
-  program or exported. Rejected: exempting any append-only `PATH`, which lets a planted program stand in for one the
+  `PYTHONPATH` before `pytest` or `python -m pytest`, which already run the project's code. `$PATH` counts as the
+  current value only where bash expands it: an assignment whose source holds single quotes, `$'..'` or a backslash
+  gets no PATH exemption, since there `$PATH` can be a folder of that name (`export PATH='$PATH:/usr/bin'`).
+  Deliberate asks: an empty `PATH` element (the current folder), a folder written with `..` (resolved through
+  links, not lexically), any other `PATH` folder, appended or not, since it supplies every program the earlier
+  folders lack (`export PATH="$HOME/.local/bin:$PATH"`), and `PYTHONPATH` before any other program or exported. Rejected: exempting any append-only `PATH`, which lets a planted program stand in for one the
   gate trusts by name but the machine lacks.
   *Amendment 2026-10-19 (issues #209, #202, #225, #199):* four spellings reached a secret store without its name,
   and the gate read them as plain reads. A link is judged by where it leads: a path is resolved from the gate's own
