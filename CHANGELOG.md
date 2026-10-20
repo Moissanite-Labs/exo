@@ -20,6 +20,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `harness.error` event. The engine dropped its trace sink before it stopped anything, so such an error was only logged.
   It now drops it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP
   servers are recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
+- On the host path, a pinned block inside a peer, bus or job dict was lifted as the principal's rulings when the
+  tag rode in `meta` or the dict carried no `author` at all (#322, item 1; D-040). An untagged assistant message
+  opening with the block, or a user dict tagged only by `meta`, now classifies by its author as the core path
+  does, and a peer, bus or job tag in `meta` never carries the block, whatever the role says. An untagged user
+  dict still reads as the principal, so older hosts keep working.
 - The grep tool read, decoded and split each whole file before searching its lines (#255, W1-4). It now streams
   the file in chunks and yields lines as they decode, so a search holds one chunk and the current line instead
   of the bytes, the text and every line at once. Output is unchanged: the same rows, the same counts past the

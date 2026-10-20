@@ -159,7 +159,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Router wait hint and `retry_after` come from the role's own routes only (#239, D-081) | `docs/PROVIDERS.md` "Other failures" | n/a | n/a | n/a |
 | Optimization program of October 18, 2026: Hermes-style audit, 12 ranked findings, Waves 0-3 with per-unit ownership and acceptance commands (issues #252-#266) | `docs/OPTIMIZATION.md` | n/a (plan) | n/a | n/a |
 | #255 W1-4 the grep tool streams each file line by line (incremental decode, splitlines-exact) instead of reading, decoding and splitting it whole; output and refusals unchanged | `docs/OPTIMIZATION.md` (#255 status row, W1-4), `CHANGELOG.md`, `src/exo/core/tools/builtin/search.py` | n/a (no user commands changed) | n/a | n/a |
-| #255 W1-2 `list_sessions` reads its message counts in the list query itself (a correlated count per kept row), one query at any limit instead of one COUNT per session | `docs/OPTIMIZATION.md` (#255 status row, W1-2), `CHANGELOG.md`, `src/exo/core/sessions.py` | n/a (no user commands changed) | n/a | n/a |
+| #255 W1-2 `list_sessions` reads its message counts in the list query itself (the limited page is a subquery, a correlated count per kept row outside it), one query at any limit instead of one COUNT per session, count work bound by the limit | `docs/OPTIMIZATION.md` (#255 status row, W1-2), `CHANGELOG.md`, `src/exo/core/sessions.py` | n/a (no user commands changed) | n/a | n/a |
 
 ## Whitepaper gaps
 
