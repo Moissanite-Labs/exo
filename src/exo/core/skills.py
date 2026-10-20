@@ -97,12 +97,7 @@ def scan(folder: Path) -> list[Skill]:
         found.append(folder / "SKILL.md")
     if folder.is_dir():
         found += sorted(p for p in folder.glob("*/SKILL.md") if p.is_file())
-    out = []
-    for p in found:
-        sk = read_skill(p)
-        if sk:
-            out.append(sk)
-    return out
+    return [sk for p in found if (sk := read_skill(p))]
 
 
 class SkillIndex:

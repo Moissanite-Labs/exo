@@ -120,14 +120,9 @@ class Usage:
         cost = None
         if self.cost_usd is not None or other.cost_usd is not None:
             cost = (self.cost_usd or 0.0) + (other.cost_usd or 0.0)
-        return Usage(
-            input_tokens=self.input_tokens + other.input_tokens,
-            output_tokens=self.output_tokens + other.output_tokens,
-            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
-            cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
-            reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
-            cost_usd=cost,
-        )
+        counts = {f.name: getattr(self, f.name) + getattr(other, f.name)
+                  for f in dataclasses.fields(self) if f.name != "cost_usd"}
+        return Usage(**counts, cost_usd=cost)
 
 
 @dataclass

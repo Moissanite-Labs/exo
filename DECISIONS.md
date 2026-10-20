@@ -1978,6 +1978,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   merge from main). Main (859fbcc) is at 14,999, so 814 lines are left. No source changed.
 - **Revisit if:** the headroom is raised more than once for non-security work, or the floor stops falling for a long time.
 - **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
+- **Amendment 2026-10-19 (reduction):** a no-behavior-change reduction took the counted core from 15,800 to 15,706 (94 lines: dead code, merged duplicates, shorter equivalent forms). `CORE_FLOOR` stays 14,813: the count was already above the floor, and D-077 says the floor never goes up, so setting it to 15,706 would have lifted the ceiling by 893 lines. Floor and headroom are unchanged, ceiling 15,813, and headroom left rises from 13 to 107.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
 
