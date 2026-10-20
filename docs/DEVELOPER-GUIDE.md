@@ -462,8 +462,11 @@ sets it to `~/Work/handoffs`.
 `~/.config/exo/deploy.conf`. It deploys from a copy outside git, made with `rsync`. A failed copy or deploy stops it
 with a non-zero exit before anything is tagged. Any deploy, versioned or not, refuses when `site/` holds untracked
 files (ignored ones too, `.DS_Store` aside), so a private draft folder such as `site/pitch/` can never ship; commit it
-or move it out. The Vercel CLI is pinned to an exact version set at the top of the script. `EXO_VERCEL_CLI` may name
-another exact `X.Y.Z` (a tag such as `latest` is refused). To move the pin, change the script in a PR.
+or move it out. It also refuses when `site/` contains a submodule (its working tree can hold files git does not list)
+and when git cannot list the files or read the status of `site/` (a corrupt index), rather than treating that as an empty
+list or a clean tree. It refuses a `site/` that is itself a symlink, untracked or tracked with mode 120000, because git does
+not see through it while `rsync` follows it; symlinks inside `site/` are copied as links. The Vercel CLI is pinned to an exact version set at the top of the script. `EXO_VERCEL_CLI` may name
+another exact `X.Y.Z` (a tag such as `latest`, or an empty value, is refused with exit 2). To move the pin, change the script in a PR.
 
 Staging first (D-047). With no flag the script deploys to `staging.exo.askaconsult.com` (Vercel project
 `exo-site-staging`), which sends `X-Robots-Tag: noindex, nofollow` and serves a `robots.txt` that disallows everything.
