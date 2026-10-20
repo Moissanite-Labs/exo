@@ -5,8 +5,8 @@ skills, which MCP servers, which plugins and channels. Run one with `exo serve -
 (sets `EXO_SEAT`; the engine factory reads it). `seat.list` shows the files and the active seat.
 A second seat beside a running `exo serve` needs its own `--socket`, for example
 `exo serve --seat scout --socket $EXO_HOME/run/scout.sock`, and its clients pass the same `--socket`. `exo serve`
-refuses a socket that another core answers on and exits 1 without loading the seat. Only the core on
-`run/exod.sock` writes `run/exod.pid`, so `exo stop` stops that core and never a seat on its own socket.
+refuses a socket that another core answers on, or is starting on at the same moment (an `exod.sock.lock` file
+beside the socket, held for the core's life), and exits 1. Only the core that holds `run/exod.sock` writes `run/exod.pid`, so `exo stop` stops that core and never a seat on its own socket.
 
 This is the one seat format. The role templates in `plugins/exo-orchestra/seats/*/seat.toml` are written in
 it (see `plugins/exo-orchestra/SEATS.md`), and `/orchestra check <file>` validates a file against it.

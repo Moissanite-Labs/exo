@@ -5,6 +5,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Fixed
+- Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
+  two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
+  `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
+  core that starts next is never unlinked by the one before it). The loser exits 1 naming the running core's pid, and
+  only the lock holder writes `run/exod.pid`. A crashed core's lock is dropped by the OS. The lock covers all four
+  `start_unix` callers (`exo serve`, peers, the TUI window server, the exo-bus plugin); TCP needed none, since a
+  taken port fails at bind. `exo web`'s starter no longer removes a stale socket or writes the pid file (the core does
+  both under the lock), `exo stop` leaves a starting core's files alone, only the lock refusals are reported as a
+  plain line (any other error keeps its traceback in `exod.log`), and a socket in a symlinked folder (macOS `/tmp`)
+  still binds.
+
 ### Security
 - Gate policy (#191, #211, #208). A `categories: {X: deny}` line or a rule with `decision: deny` now denies a line
   when any part of it is X, as a `deny:` entry has since D-075: `echo $(git push origin main) > /tmp/f` was `log`
