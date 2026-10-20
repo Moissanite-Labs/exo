@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
+  while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
+  acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
+  without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
 - `Config.load()` read and parsed `config.json` on every call (#255, W1-3). It is called from engine setup, the CLI
   and plugin code, so one process read the same unchanged file many times. The parsed file is now cached on its
   size and `mtime_ns`, each load hands out a deep copy, and `save()` refreshes the cache with what it wrote. An
