@@ -41,10 +41,16 @@ def test_no_stale_categories_deny_text():
     # Since #191 (D-075 amendment, 2026-10-19) a categories: deny reaches every part of a
     # line. The D-038 passages, the gates.yaml template comment and the DOCS-MAP row once
     # said the opposite; keep the stale wording out (#344).
-    stale = ("sees only the line's most severe part", "sees only the dominant part", "until #191")
+    # "sees only the line's most severe part" alone is no longer bannable: since the #394 fix it
+    # truly describes allow/log/ask category lines. The stale claim was the deny reading of it.
+    stale = ("sees only the dominant part", "until #191",
+             "a category under categories: sees only the line's most severe part",
+             "fires only when the denied category is the line's most severe part",
+             "#191 tracks the `categories` form")
     paths = (DECISIONS, MAP, ROOT / "templates" / "principal-store" / "policies" / "gates.yaml")
     for path in paths:
-        flat = re.sub(r"\s*#\s*", " ", path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        flat = re.sub(r"(?m)^[ \t]*#[ \t]?", "", text)  # strip comment markers, not #'s in prose
         flat = re.sub(r"\s+", " ", flat)
         for phrase in stale:
             assert phrase not in flat, f"{path.name} still says {phrase!r} (stale since #191)"
