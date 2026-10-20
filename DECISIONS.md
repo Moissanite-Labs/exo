@@ -2143,6 +2143,33 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   and rules keep deciding by the dominant part, and `reserved` stays the way to ask on any part. A deny on a
   command the gate cannot read still becomes an ask (Limits below). Rejected: the most restrictive category line over all parts (a lower line on the dominant part would no longer
   apply, and an allow rule on a part's target would stop counting).
+  *Amendment 2026-10-20 (issue #394):* a rule's `command` regex saw the whole line, for the combined result and for
+  every part. That is right for a veto (#136), but an allow or log rule written for one command then lowered lines
+  whose deciding command it did not name. `{command: '^git status', decision: allow}` allowed
+  `git status; git push --force origin main`, also under `categories: {force_push: deny}`, although the push alone
+  asks or is denied. In the #191 pass `{command: 'rm -rf build', decision: allow}` lifted
+  `categories: {github_post: deny}` from the post in `gh pr comment 3 --body hi && rm -rf build`. Now each part
+  carries its own text (`Classification.own`): its simple command as written, with its redirections, after leading
+  reserved words such as `then`. A prefix such as `sudo`, `env` or `timeout` stays in it. A nested command (`$( )`,
+  backticks, `<( )`, a heredoc or `bash -c` string a shell runs, `eval`, an `ssh` remote command) has its text in that
+  nested line. A part the gate makes up, a nest past a depth or nesting cap and a string literal in code (a guess at a
+  command) have none. An allow or log rule with a `command` key decides a compound line only when its regex matches
+  the own text of every part that carries the line's category or is as severe as the combined result. A part with no
+  own text matches no such rule. When the regex misses, the rule is skipped and the first-match walk goes on. In the
+  #191 pass such a rule overrides a part's category line only when it matches that part's own text. Ask and deny rules
+  and `reserved:` and `deny:` entries still match the whole line and its decoded views, so they catch at least what
+  they caught before: an ask rule on `gh pr comment` still asks for `gh pr comment 3 --body hi && rm -rf build` under
+  `categories: {delete: allow}`. A line of one part (one simple command, or a tool that is not a shell) is matched on
+  its command text as before, and the ledger view (`as_dict`) leaves the own text out. Allow and log rules that
+  matched a whole compound line, such as `'^make && make install$'`, now have to match each deciding command's own
+  text (`'^make( install)?$'`). Until they do, such a line fails closed to its matrix or category outcome. Equally
+  severe commands are matched together, so the outcome does not depend on which comes first. Limits: a less severe
+  command on the line rides on the rule's outcome, as it does under a category line, so
+  `rm -rf build && git push --force origin main` is allowed under an allow rule for `'^git push --force origin main$'`
+  (before, that anchored rule matched no compound line). A `deny:` or `reserved:` entry, or a category line or rule
+  that denies that command, still stops it. Rejected: matching ask and deny rules and the lists on own text instead of
+  the whole line (that narrows a veto: the ask rule on `gh pr comment` above would no longer ask), and deciding every
+  part alone with the strictest outcome winning (rejected above for category lines).
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).
