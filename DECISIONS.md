@@ -1422,6 +1422,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   block only from a message that opens with it (exo-context's own block) or with a compaction marker (a host's
   summary). A block quoted further down a message is data: the core's system message quotes small spans word for
   word, peer turns included.
+  *Amendment 2026-10-20 (#322 item 4):* `defuse_pins` also escapes the tag spelled in unicode tag characters
+  (U+E0020-E007E) or full-width forms (U+FF01-FF5E), which a downstream normalizer may fold back to the ASCII
+  tag. Detection folds those characters to ASCII in a same-length copy and escapes the original text at the
+  same offsets. The quoted spans themselves are not normalized.
 - *Amendment 2026-10-18 (fix sweep, #221):* the anchors are written after the append's COMMIT, from the committed
   head, so a writer killed in between leaves them one event behind, never ahead. That lag of one event is accepted.
   The copy under `keys/heads/` is written even when the anchor beside the ledger fails. Before it writes, an append
