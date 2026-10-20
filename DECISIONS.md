@@ -973,6 +973,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   lexer drops fd numbers, so one on another fd (`{ bash; } 3<<EOF`) is read as stdin: its body is fed, and text piped
   in reaches only the first command inside, so in `echo ... | { true; bash; } 3<<EOF` bash is read with the body, not
   the pipe it reads. A shell read that way still asks at least, as `bash 3<<EOF` does and as main asks.
+  *Amendment 2026-10-19 (issue #328):* the lexer ended a heredoc at the first line that equalled the delimiter once
+  its surrounding whitespace was stripped, so a delimiter with a space (`<<'EOF '`, `<<"EOF "`, `<<' EOF'`, `<<EOF\ `)
+  never matched: every later line, including the real terminator, was read as body, and the commands after it were
+  never classified. `cat <<'EOF ' ... EOF ` then a force push was `allow` as a bare `cat`. Now the lexer ends the body
+  on the line that equals the delimiter exactly, as bash does: the delimiter is the opener word after quote removal
+  (its spaces, tabs and other characters kept; leading tabs dropped on the terminator only for `<<-`), matched for
+  every quoting form (`'..'`, `".."`, `\`-escapes, mixed quoting). When no line ends the body, or a line ends it only
+  once surrounding whitespace is dropped, the gate reads the body as commands too, fail closed. The `<<$'EOF'`/`<<$"EOF"`
+  case keeps its own fail-closed reading (bash and dash disagree; bash, verified, expands a `$'..'` delimiter). A
+  `{var}<<` heredoc or `{var}<<<` here-string, which bash 4.1+ puts on a new descriptor rather than stdin, is no longer
+  read as a command's stdin, as a numbered `3<<` already was not: so a gh post whose real body is a pipe is not
+  mistaken for the heredoc, and its body stays unseen and asks. Still open from the same review: a `~` after `=` in a
+  word (`body=~/F`) is not yet an expansion to the lexer, so the home-path scrub reads it literally (a privacy nuance,
+  not a hidden command; `_expands` is used widely, so it wants its own scoped change).
   *Amendment 2026-10-17 (issue #192):* on a line that enters a folder that can hold a secret store, a relative read of
   a store file is `credentials`. The hints come from the sample store paths, per call: the store folders (a dot folder
   along a sample below home by its name, a plain one only below its parent, such as `.config/gh`, `.exo/keys` or
