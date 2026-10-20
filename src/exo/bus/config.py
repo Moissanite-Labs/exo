@@ -8,11 +8,16 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import overload
 
 DEFAULT_URL = "http://127.0.0.1:8787"
 DEFAULT_BIND = "127.0.0.1:8787"
 
 
+@overload
+def env(name: str, default: str, environ=None) -> str: ...
+@overload
+def env(name: str, default: None = None, environ=None) -> str | None: ...
 def env(name: str, default: str | None = None, environ=None) -> str | None:
     environ = os.environ if environ is None else environ
     for key in (f"EXO_BUS_{name}", f"DIVAN_{name}"):

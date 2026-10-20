@@ -10,6 +10,51 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
   without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
+- A pinned-block tag with an invisible unicode tag character inside its name is escaped again (#381). The
+  fold added for #322 item 4 turned each tag character into its ASCII letter before matching, so a tag
+  character sitting in the name as filler broke the match and the tag passed through live. Detection now
+  runs over three same-length views of the text and escapes the union. The views are the text itself, the
+  fold of every character whose NFKC form is one ASCII character, and that fold with tag characters decoded.
+  The small brackets, mathematical and circled letters and other single-character NFKC folds are escaped too.
+  Only the bracket characters change.
+- A background job's completion notice no longer stalls the core (follow-up to #321). The notice reads and redacts the
+  job's whole log (up to `output_cap`, 5 MB). That ran on the event loop, and one emoji in a log made it take a few
+  hundred ms. Four jobs that ended together froze streams, approval cards and other turns for 2 to 3 seconds. A thread
+  of its own now builds each notice, one at a time and in the order the jobs ended. The longest stall measured for those
+  four fell from 1.6 to 3.0 seconds to about 30 to 110 ms. Shutting down still waits for a notice being built and, when
+  no turn runs, keeps it for the next turn. The notices of jobs lost in a restart are built the same way, and the core's
+  start does not wait for them, so two first commands at once still start the MCP servers only once. A turn still
+  running when such a notice is built takes it at its next tool round. A hard stop that cancels a notice while it is
+  built still sends the job's end event. A shutdown that runs to its end now waits for the last build and then stops the
+  notice thread, which no close stopped before. After a hard stop the thread takes no more work, and the build being
+  made runs on. The process waits for it as it exits. A notice that fails while exod shuts down is recorded as a
+  `harness.error` event. The engine dropped its trace sink before it stopped anything, so such an error was only logged.
+  It now drops it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP
+  servers are recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
+- Parsing pinned blocks no longer stalls on a run of unclosed `<exo-pinned>` open tags (#322, item 5). The
+  lazy match rescanned to the end of the text from every open with no close after it, so 96 KB of unclosed
+  opens took about five seconds in `parse_pinned_blocks` and `strip_pinned`. Both now share a linear scan
+  that stops at the first open with no close after it. Block boundaries and contents read as before.
+- A pinned-block tag spelled in unicode tag characters or full-width forms is now escaped like the ASCII
+  tag (#322, item 4). Before, those spellings passed `defuse_pins` untouched, and anything downstream that
+  folds them back to ASCII would have revived the live tag. Only the brackets change. The quoted words
+  stay as written.
+- A summary node stored before the #302 upgrade no longer reaches the system message with a live pinned
+  block (#322, item 3). New summaries are escaped as they are made, but the tree view printed a stored
+  node's text as it was. Stored summary text is now escaped where the view prints it. The escape is
+  idempotent, so current summaries are unchanged.
+- exo-context defused the wrong message when a protected head message quoted the end-of-summary marker
+  (#322, item 2). The summary picker took the first message containing the marker, so the head message was
+  escaped and pinned into instead of the summary the compressor just made, and a block the summarizer had
+  copied stayed live. The picker now checks the summary flag and the compressor's own test first, and never
+  picks a message the compressor merely returned from its input.
+- A stamped host dict with malformed `meta` keeps its stamp again instead of raising (#375). The ingress
+  veto read `meta` before the stamp, so a non-mapping `meta` crashed `author_of` where it previously
+  returned the stamped author. The veto now skips a `meta` it cannot read.
+- An empty ingress tag (`meta.bus: {}`, `""`) no longer reads as an untagged principal turn (#370
+  follow-up). The veto added for #370 tested the tag's truthiness, so an empty bus mapping fell through to
+  the legacy inference and a bus-marked message minted a principal ruling. Presence is what counts now,
+  for bus, peer and job alike.
 - A peer, bus or job tag in a host dict's `meta` now outranks a stamped `principal` author everywhere, not
   only on the carried-block path (#370, follow-up to #368; D-040). Before, a tagged dict carrying
   `author: "principal"` still yielded a fresh ruling and exo-context minted it into its live pinned block,
@@ -61,6 +106,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- A known key split where a background job's log rotates at `output_cap` no longer leaves its end in the job's
+  completion notice, or its two parts in `job_output` (follow-up to #321). While the notice redacts the log, the end of
+  `<id>.log.1` now stands in for the rotation note at its start. Keys that overlap each other or themselves can chain
+  from further back, so that end grows, up to the whole file, until the text before it can change no match in the live
+  log. So the notice never keeps a character that redacting both files as one text would cut out. `job_output` joined
+  both files with the note between the two parts of the key, so redaction missed it. It now drops the note when it reads
+  `<id>.log.1`, so the key is whole and is redacted, unless `job_output`'s own cut to the last 20,000 characters splits
+  it (and, with keys that overlap each other, a key next to it). A key split inside a character outside ASCII can still
+  leave a part. So can a key split at either end of output that rotated between `job_output`'s reads of the two files,
+  since that output is missing with no note where it was. The `job.updated` events carried the job's command unredacted
+  to clients and the events table. They now cut known key values out of it before they cut it to 300 characters, as the
+  notice does (docs/JOBS.md "The completion notice").
 - A forged `## Next steps` heading in a handoff can no longer beat the genuine one (#353, D-040). #349 kept the
   first section of each name, which is right for the principal's sections but wrong for Next steps, the one section
   written last: a multiline tool path or an old file's unquoted summary could put a forged copy first, and its
