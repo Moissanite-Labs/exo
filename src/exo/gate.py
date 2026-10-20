@@ -295,6 +295,7 @@ _DEPTH = 4
 # part that asks, also in an exported value. No hand-written command comes near this.
 _NEST = 16
 _TOO_DEEP = "__exo_gate_nested_too_deep__"
+_STAND_INS = re.compile(r"(?:__exo_gate_nested_too_deep__(?:\n|\Z))+")   # a run of stand-in lines (_classify_shell)
 _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
@@ -3975,8 +3976,10 @@ def _unread_nest() -> Classification:
 
 
 def _classify_shell(cmd: str, depth: int) -> Classification:
-    first, _, rest = (cmd or "").partition("\n")
-    if first == _TOO_DEEP:     # a stand-in (_Lexer._cut). Lines after it end here-doc bodies, and are read as any line
+    # A run of stand-in lines (_Lexer._cut), also one written by hand, is one unread part, taken in one step so that no
+    # number of them recurses. The lines after it end here-doc bodies, and are read as any line.
+    if m := _STAND_INS.match(cmd or ""):
+        rest = cmd[m.end():]
         return _combine([_unread_nest(), classify_shell(rest, depth)], cmd) if rest else _unread_nest()
     cmds, subs, func = _parse(cmd or "")
     ctx: dict = {"subs": subs}

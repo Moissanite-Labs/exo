@@ -1233,7 +1233,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   here-doc waiting for other text, since the lexer reads that `$( )` as its body. Each level around the unread part
   pairs every here-doc with its end line, also when the delimiter holds that part, quoted or not (the line is spelt
   the way the level reads the delimiter) or the body lies inside it (the stand-in ends the body), so a command after
-  the here-doc is still read. The cost: a command inside the unread part is not read, so a deny on it asks, and a
+  the here-doc is still read. A run of stand-in lines, one written by hand too, is read in one step, and a command
+  after it is still read. The cost: a command inside the unread part is not read, so a deny on it asks, and a
   here-doc delimiter there longer than 1,024 characters ends no body. *git -c (#335).* #231 widened the keys `git -c`
   flags and kept the early return that made the whole line opaque for one, so
   `git -c include.path=/dev/null push --force origin main` asked where the gate before #231 denied it. A flagged
