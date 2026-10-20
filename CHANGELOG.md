@@ -29,12 +29,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Security
 - A known key split where a background job's log rotates at `output_cap` no longer leaves its end in the job's
   completion notice, or its two parts in `job_output` (follow-up to #321). While the notice redacts the log, the end of
-  `<id>.log.1` now stands in for the rotation note at its start. `job_output` joined both files with the note between
-  the two parts of the key, so redaction missed it. It now drops the note when it reads `<id>.log.1`, so the key is
-  whole and is redacted. A key split inside a character outside ASCII, or one whose end repeats its start, can still
-  leave a part. The `job.updated` events carried the job's command unredacted to clients and the events table. They now
-  cut known key values out of it before they cut it to 300 characters, as the notice does (docs/JOBS.md "The completion
-  notice").
+  `<id>.log.1` now stands in for the rotation note at its start. Keys that overlap each other or themselves can chain
+  from further back, so that end grows, up to the whole file, until the text before it can change no match in the live
+  log. So the notice never keeps a character that redacting both files as one text would cut out. `job_output` joined
+  both files with the note between the two parts of the key, so redaction missed it. It now drops the note when it
+  reads `<id>.log.1`, so the key is whole and is redacted. A key split inside a character outside ASCII can still leave
+  a part. So can a key split at either end of output that rotated between `job_output`'s reads of the two files, since
+  that output is missing with no note where it was. The `job.updated` events carried the job's command unredacted to
+  clients and the events table. They now cut known key values out of it before they cut it to 300 characters, as the
+  notice does (docs/JOBS.md "The completion notice").
 - `scripts/deploy-site.sh` pins the Vercel CLI (64.1.0, was `vercel@latest`) and refuses any deploy, versioned or
   not, when `site/` has untracked files. An unversioned staging deploy used to copy the whole folder, so an untracked
   private `site/pitch/` would have shipped. `.DS_Store` is skipped. `EXO_VERCEL_CLI` must be an exact `X.Y.Z`.

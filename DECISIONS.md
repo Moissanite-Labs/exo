@@ -1331,6 +1331,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   As before, only key values Exo knows are redacted: `known_secret_values`, or the list a caller passes (claude-cli
   passes the secret-named variables of its own environment). Rejected: holding all output until the command ends (no
   live output). `docs/TOOLS.md` "Streamed output", `docs/JOBS.md` "The completion notice".
+  *Amendment 2026-10-20 (PR #346):* each match blanks out text that a later key would match. So keys that overlap
+  each other, or a key whose end repeats its start, can change the matches further back than one key's length. A
+  chain of three keys left the last 8 characters of the third in a completion notice. The end of the older file put
+  in front of the live log now doubles, up to the whole file, until the text before it can change no match in the
+  live log. Such text can change a value's matches up to its length less one in. A match that starts where matches
+  may change moves that point to its end, for the values after it as well. So the notice never keeps a character
+  that redacting both files as one text would cut out. Only a key split inside a character outside ASCII still
+  leaves a part. The notice reads more of the older file only when a match nears the rotation, at most all of it, so
+  the cost stays linear in `output_cap`. The cut `job_output` makes before redaction can leave a part of a key next
+  to the key it splits, when keys overlap each other. The `bash` stream has no such gap, since it equals redacting
+  the whole output. Rejected: reading the whole older file for every notice after a rotation (5 MB by default).
+  `docs/JOBS.md` "The completion notice".
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys

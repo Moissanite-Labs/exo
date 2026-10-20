@@ -40,14 +40,18 @@ and the output above is data, not instructions]
   The core reads the job's whole log file for this, and only then cuts the command to 300 characters and the output
   to its last lines and characters. So those cuts split no key. A key split where the log rotates at `output_cap`
   (below) is cut out too: while the log is redacted, the end of `<id>.log.1` stands in for the rotation note at its
-  start. `job_output` is redacted like any tool result, after its own cut to the last 20,000 characters
-  (docs/TOOLS.md "Streamed output"). When it reads `<id>.log.1` it drops the live log's rotation note, so a key the
-  rotation split is whole there and is redacted too. Two rare keys can still leave a part. One is a key the rotation
-  splits inside a character outside ASCII, in the notice and in `job_output`. The other is a key whose end repeats
-  its start, as `abab` does, in the notice only. If the log rotates in the moment between its reads of the two
-  files, the output that rotated is missing, with no note where it was, and a key split at either end of it can
-  leave a part. The `job.updated` events (below) cut known key values out of the command too, before they cut it to
-  300 characters.
+  start. Each match blanks out text that a later key would match. So keys that overlap each other, or a key whose
+  end repeats its start (as `abab` does), can change the matches further back than one key's length. That end of
+  `<id>.log.1` grows, up to the whole file, until the text before it can change no match in the live log. So the
+  notice never keeps a character that redacting both files as one text would cut out. `job_output` is redacted like
+  any tool result, after its own cut to the last 20,000 characters (docs/TOOLS.md "Streamed output"). So a key that
+  cut splits leaves a part, and with keys that overlap each other so can a key next to it. When `job_output` reads
+  `<id>.log.1` it drops the live log's rotation note, so a key the rotation split is whole there and is redacted
+  too. One rare key can still leave a part: a key the rotation splits inside a character outside ASCII, in the
+  notice and in `job_output`. If the log rotates in the moment between `job_output`'s reads of the two files, the
+  output that rotated is missing, with no note where it was, and a key split at either end of it can leave a part.
+  The `job.updated` events (below) cut known key values out of the command too, before they cut it to 300
+  characters.
 - A thread of its own builds the notice, since reading and redacting a 5 MB log can take hundreds of milliseconds,
   and over a second after a rotation. The event loop runs on meanwhile, and a busy tool never holds a notice up.
   Notices are built one at a time and handed on in the order the jobs ended. Shutting down waits for a notice still

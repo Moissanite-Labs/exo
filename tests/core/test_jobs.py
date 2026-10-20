@@ -273,6 +273,82 @@ def test_the_notice_tail_after_a_rotation_never_redacts_less_than_the_live_log_a
         assert tail_text(log, 20, 1500, [key]) == note + want, (older, live)
 
 
+def _both_files_as_one(older, live, vals):
+    """What the notice must cut out of the live log after a rotation: the spans of redacting <id>.log.1 and the live
+    log as one text (the note left out) that reach the live log, and the spans of the live log alone. Spans that
+    overlap go in one marker, as tail_text merges them."""
+    from exo.core.models.keys import REDACTED, secret_spans
+
+    k = len(older)
+    spans = [(max(a - k, 0), b - k) for a, b in secret_spans(older + live, vals)[0] if b > k]
+    out, at = "", 0
+    for a, b in sorted(spans + secret_spans(live, vals)[0]):
+        if b > at:
+            out, at = out + (live[at:a] + REDACTED if a >= at else ""), b
+    return out + live[at:]
+
+
+def test_the_notice_tail_cuts_out_a_chain_of_keys_that_starts_far_back_in_the_rotated_log(tmp_path):
+    """Each match blanks out text a later key would match, so keys that overlap each other can chain from further back
+    than the longest key. Here the first key's match takes the second key's start, so the third key matches whole
+    and its end is in the live log. The end of <id>.log.1 put in front grows until it holds the whole chain."""
+    from exo.core.jobs import ROTATED, tail_text
+
+    log, old = tmp_path / "j_x.log", tmp_path / "j_x.log.1"
+    note, vals = ROTATED.format(log.name), ["ABCDEFGHIJKLMNOPQRST", "MNOPQRSTUVWXYZab", "YZabcdefghij"]
+    stream = "x" * 996 + "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"  # output_cap 1024 rotates it 8 characters from its end
+    old.write_text(stream[:1024])
+    log.write_text(note + stream[1024:] + "\nend\n")
+    assert _both_files_as_one(stream[:1024], stream[1024:], vals) == "[redacted]"
+    assert tail_text(log, 20, 1500, vals) == note + "[redacted]\nend"
+    for key, older, live in (("AAAA", "x" + "A" * 3, "A"), ("ABAB", "ABABA", "BAB"), ("AA", "A" * 501, "A")):
+        old.write_text(older)  # a key that overlaps itself: its matches chain back to the start of <id>.log.1
+        log.write_text(note + live)
+        assert tail_text(log, 20, 1500, [key]) == note + _both_files_as_one(older, live, [key]), (key, older, live)
+
+
+def test_the_notice_tail_after_a_rotation_cuts_out_what_both_files_as_one_would(monkeypatch):
+    """A differential check against redacting both files as one text. Chains of 2 to 5 keys of 2 to 20 characters
+    over alphabets of 2 to 4 letters overlap each other and themselves far more often than real keys. Each output
+    rotates at every point. The notice must cut out exactly what _both_files_as_one gives, so it never keeps a
+    character that either would cut. The files are held in memory, so the thousands of splits stay fast."""
+    import io
+    import random
+
+    from exo.core import jobs
+
+    files, note = {}, jobs.ROTATED.format("j_x.log")
+
+    class Log:
+        name = "j_x.log"
+
+        def read_bytes(self):
+            return files["j_x.log"]
+
+        def with_suffix(self, suffix):
+            return "j_x" + suffix
+    monkeypatch.setattr(jobs, "open", lambda path, mode: io.BytesIO(files[path]), raising=False)
+    rnd, splits = random.Random(346), 0
+    for _ in range(400):
+        abc = "ABCD"[:rnd.randrange(2, 5)]
+        base = "".join(rnd.choice(abc) for _ in range(rnd.randrange(20, 70)))
+        vals, a = [], rnd.randrange(len(base) // 4)
+        for _ in range(rnd.randrange(2, 6)):  # a chain: each key starts inside the one before
+            if a > len(base) - 2:
+                break
+            vals.append(base[a:a + rnd.randrange(2, 21)])
+            a = rnd.randrange(a + 1, a + len(vals[-1]))
+        vals = sorted(set(vals), key=len, reverse=True)  # the order known_secret_values gives
+        stream = "".join(rnd.choice(abc + "x") for _ in range(rnd.randrange(40))) + base + abc * rnd.randrange(3)
+        for cut in range(1, len(stream)):
+            older, live = stream[:cut], stream[cut:]
+            files["j_x.log.1"], files["j_x.log"] = older.encode(), (note + live).encode()
+            assert jobs.tail_text(Log(), 10**6, 10**9, vals) == note + _both_files_as_one(older, live, vals), (
+                vals, older, live)
+            splits += 1
+    assert splits > 20_000
+
+
 @aio
 async def test_the_notice_of_a_job_whose_log_rotated_inside_a_key_holds_no_part_of_it(tmp_path, monkeypatch):
     key = "sk-fake-QWERTYUIOPASDFGHJKLZXCVBNM0123456789"
