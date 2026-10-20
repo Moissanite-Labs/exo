@@ -50,8 +50,8 @@ def _msg(d: dict[str, Any]) -> Message:
     if isinstance(text, list):
         text = '\n'.join(p.get('text', '') for p in text if isinstance(p, dict))
     # D-040, #279: keep who wrote it, so render_message escapes a pinned-block tag in text that is not the principal's
-    author = d.get('author') or (provenance.LOCAL if d.get('principal') is False or d.get('role') == 'other' else '')
-    meta = {'author': str(author)} if author else {}
+    author = provenance.LOCAL if d.get('principal') is False or d.get('role') == 'other' else provenance.author_of(d)
+    meta = {'author': str(author)}
     return Message(role=role, content=[ContentPart.of_text(str(text or ''))], meta=meta)
 
 
