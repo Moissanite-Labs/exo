@@ -6,6 +6,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Gate policy (#191, #211, #208). A `categories: {X: deny}` line or a rule with `decision: deny` now denies a line
+  when any part of it is X, as a `deny:` entry has since D-075: `echo $(git push origin main) > /tmp/f` was `log`
+  under `categories: {local_write: deny}`, and a wrapped or fed-shell line asked under `categories: {opaque_exec:
+  deny}`, as do #303's coproc and ssh-fed lines under an `opaque_exec`, `shell` or host deny. Only a deny reaches the parts, and the reason names the part (D-075 amendment). A changed
+  `approvals.yaml` now narrows who may answer at once and shortens new grants (`gate.strictest_approvers`, the
+  shorter `always` value), where a seat the principal had just removed could still approve and `days: 0` still
+  wrote a 7-day grant; a wider file still waits for `/gate accept` (D-038 amendment). A post whose body the gate
+  cannot read asks: stdin (`--body-file -` with a pipe or `<`), `gh api` `@file` fields and `--input`, `--fill`,
+  templates, gist files, curl/wget/httpie file and stdin bodies, `$( )`, backticks or a variable in the text, a
+  repeated or clustered text option, and a body file the hook did not read. The hook reads a body file only by an
+  absolute path (it read a relative one from exod's own folder, so `cd docs && gh ... --body-file notes.md` passed),
+  and a missing, oversized or unread file asks. Such a post gets no "always", no standing grant matches it, and a
+  required executor refuses it as a recorded deny instead of an internal error. An unrelated heredoc no longer
+  fills in a body file's text, and `curl -d@f` and `gh api -fbody=x` are posts (D-033 amendment). Piped stdin
+  counts only from one simple command whose output bash does not rewrite: `(cat f; echo F) | gh ... --body-file -`,
+  `printf 'Zo\x72k' |`, `echo -e` and an unquoted heredoc with a backslash ask. gh text options follow gh's own
+  list of options that take a value (`gh issue create -t -b -b x`), `--attach` asks, and `curl --data-ascii @f`,
+  `curl -K cfg URL` and `curl -d x "$URL"` are posts where they were a read or a local write. A word bash expands
+  without `$` (`Zo{r,}k`, a glob, a leading `~`), a heredoc or here-string on another descriptor (`3<<EOF`), a
+  heredoc whose delimiter line only nearly matches (`EOF `), `--title --body --body x`, and a body file under
+  `/dev` or `/proc` ask too.
 - Gate (#207, #240, D-038): two shell forms ran a program the gate did not read. A redirection, heredoc or
   here-string between `coproc`, its name and a compound opener (`coproc rm >/dev/null { -rf x`, `coproc 2>/dev/null
   rm { ...`) makes bash run the name as a simple command; the gate skipped it as a name, so such a line asked under
