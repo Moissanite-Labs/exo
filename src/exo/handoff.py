@@ -456,7 +456,7 @@ def _may_carry(m: dict) -> bool:
     in peer, bus, job, tool or agent text is data, and so is one quoted further down a message: the Exo core's system
     message quotes each span too small to summarize word for word, a peer's turn included."""
     meta = m.get('meta') or {}
-    if any(meta.get(k) for k in ('peer', 'bus', 'job')):
+    if any(meta.get(k) is not None for k in ('peer', 'bus', 'job')):
         return False  # an ingress tag in meta is not the principal, whatever the role says (#322)
     return m.get('role') not in ('other', 'tool') and provenance.author_of(m) in (
         provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith((PIN_OPEN, *SUMMARY_MARKERS))
