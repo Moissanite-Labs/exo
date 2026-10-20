@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A summary node stored before the #302 upgrade no longer reaches the system message with a live pinned
+  block (#322, item 3). New summaries are escaped as they are made, but the tree view printed a stored
+  node's text as it was. Stored summary text is now escaped where the view prints it. The escape is
+  idempotent, so current summaries are unchanged.
 - exo-context defused the wrong message when a protected head message quoted the end-of-summary marker
   (#322, item 2). The summary picker took the first message containing the marker, so the head message was
   escaped and pinned into instead of the summary the compressor just made, and a block the summarizer had
