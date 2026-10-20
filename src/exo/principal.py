@@ -159,12 +159,6 @@ def peer_cred(sock: object) -> tuple[int, int] | None:
     return None
 
 
-def peer_pid(sock: object) -> int | None:
-    """Pid of the process at the other end of a Unix socket, or None where the OS will not say."""
-    cred = peer_cred(sock)
-    return cred[0] if cred and cred[0] > 0 else None
-
-
 def accepted(sock: object) -> Peer:
     """Bind the kernel's peer identity to a connection as it is accepted, with the start identity of that pid."""
     cred = peer_cred(sock)
@@ -192,14 +186,31 @@ def _proc_darwin(pid: int) -> Proc | None:
     return Proc(ppid, sec + usec / 1e6, f"{sec}.{usec:06d}") if got == pid else None
 
 
+def _stat_linux(pid: int) -> tuple[int, int]:
+    """``(ppid, starttime)`` from /proc/<pid>/stat: fields 4 and 22 (starttime in clock ticks after boot)."""
+    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    return int(fields[1]), int(fields[19])
+
+
+_BOOT_ID = ""
+
+
+def _boot_id() -> str:
+    """This boot's id, read once: it is fixed for the life of the kernel, so for the life of this process."""
+    global _BOOT_ID
+    if not _BOOT_ID:
+        _BOOT_ID = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    return _BOOT_ID
+
+
 def _proc_linux(pid: int) -> Proc | None:
-    """/proc/<pid>/stat: ppid is field 4 and starttime (clock ticks after boot) field 22; boot id and btime anchor it."""
+    """Parent and start of ``pid``: the boot id and starttime pin it, and btime puts the start on the wall clock.
+    btime is read each time, not cached: Linux moves it when the wall clock steps, and ``start`` is compared with a
+    fresh ``time.time()``. The parent walk does not come here (``_ppid``)."""
     try:
-        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-        ppid, ticks = int(fields[1]), int(fields[19])
-        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        ppid, ticks = _stat_linux(pid)
         btime = next(int(ln.split()[1]) for ln in Path("/proc/stat").read_text().splitlines() if ln.startswith("btime "))
-        return Proc(ppid, btime + ticks / os.sysconf("SC_CLK_TCK"), f"{boot}:{ticks}")
+        return Proc(ppid, btime + ticks / os.sysconf("SC_CLK_TCK"), f"{_boot_id()}:{ticks}")
     except (OSError, IndexError, ValueError, StopIteration):
         return None
 
@@ -219,7 +230,14 @@ def proc_info(pid: int) -> Proc | None:
 
 
 def _ppid(pid: int) -> int | None:
-    if (info := proc_info(pid)) is not None:
+    """The parent of a live process. On Linux the walk reads only each ancestor's stat line (no boot id, btime or
+    start); elsewhere ``proc_info``. Then ``ps``, and None when nothing can say."""
+    if sys.platform.startswith("linux"):
+        try:
+            return _stat_linux(pid)[0]
+        except (OSError, IndexError, ValueError):
+            pass
+    elif (info := proc_info(pid)) is not None:
         return info.ppid
     try:
         out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=2)
@@ -293,6 +311,15 @@ def stamp(sent: str | None, token: str | None, peer: Peer | object, label: str =
 RECORD_MAX = 4096
 
 
+def _unreadable() -> str:
+    """Why this platform may not give a process's start identity, for a message."""
+    if sys.platform.startswith("linux"):
+        return "/proc hidden by hidepid, ProtectProc or ProcSubset?"
+    if sys.platform == "darwin":
+        return "libproc would not answer for it"
+    return f"Exo reads process start identities only on Linux and macOS, and this is {sys.platform}"
+
+
 def token_path(sock: str | os.PathLike) -> Path:
     p = Path(sock)
     return p.with_name(p.stem + ".principal.key")
@@ -307,7 +334,7 @@ def issue(sock: str | os.PathLike, instance: str = "") -> str:
     token = secrets.token_urlsafe(32)
     me = proc_info(os.getpid())
     if me is None:
-        print(f"exod: cannot read this process's own start identity (/proc hidden?); principal clients of {sock} "
+        print(f"exod: cannot read this process's own start identity ({_unreadable()}); principal clients of {sock} "
               "will be refused", file=sys.stderr)
     record = {"v": 1, "token": token, "pid": os.getpid(), "uid": os.geteuid(),
               "start": me.ident if me else "", "instance": instance}
@@ -343,8 +370,8 @@ def read_record(sock: str | os.PathLike) -> dict:
     """The launch record (``_load``), well formed. Raises PeerRefused."""
     rec = _load(token_path(sock))
     if isinstance(rec, dict) and rec.get("v") == 1 and rec.get("start") == "":
-        raise PeerRefused("the core could not read its own process start identity (/proc hidden by hidepid, "
-                          "ProtectProc or ProcSubset?), so principal mode is unavailable with it")
+        raise PeerRefused(f"the core could not read its own process start identity ({_unreadable()}), so "
+                          "principal mode is unavailable with it")
     if not (isinstance(rec, dict) and rec.get("v") == 1 and isinstance(rec.get("token"), str) and rec["token"]
             and isinstance(rec.get("pid"), int) and isinstance(rec.get("start"), str) and rec["start"]
             and isinstance(rec.get("instance", ""), str)):

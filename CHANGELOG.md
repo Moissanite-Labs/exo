@@ -243,6 +243,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   gap above `RESUME_GAP`) never showed, though the terminal client could answer it. It now also adds each open request
   from `approvals.list` that the page lacks, with no asked-time (the card shows none, not "asked never"), and an
   approval already shown is no longer added or counted again when the stream replays it.
+- Peer authentication follow-ups (#226, D-060). The terminal says `not sent: <reason>` when a command never left
+  (its peer check refused the core, or the core could not be reached), instead of "connection lost; this may not
+  have been delivered", and keeps the text. `hello` names a heartbeat only where the transport sends one: over HTTP
+  it is that server's interval, and stdio and in-process callers get no `heartbeat` key or capability. The Python
+  client holds at most 16 Mi characters of one event-stream line, so it skips an oversized frame without reading
+  all of it (a 40 MiB line was read in full), and it ends lines only at CRLF, LF or CR, as SSE does. The core's
+  parent walk reads one stat line per ancestor instead of the boot id and all of `/proc/stat` each time. A core
+  that cannot read its own start identity names its platform's cause instead of a hidden `/proc`. The unused
+  `principal.peer_pid` is gone, and the macOS peer-credential and process-lookup branches are tested.
 - `apply_patch` no longer replaces a changed `-` line by similarity (#236). A hunk with context, such as
   `-TIMEOUT = 30` over `TIMEOUT = 45` plus `RETRIES = 3`, passed the two-line rule through its context line and
   silently overwrote the 45. Each `-` line must now match its file line up to whitespace, Unicode or a literal `\t`;

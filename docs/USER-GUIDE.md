@@ -430,6 +430,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |
 | The web page says "missing or wrong page token" | Open the link `exo web` printed this time. Each launch has a new token. |
+| The terminal says `not sent: principal connection refused: ...` | The window checked the process on the core's socket against the core's launch record, and the check failed (the message says why: a stale record, another process on the socket, or a core from before an update), so nothing was sent. The text stays in the box. Run `exo stop`, then start `exo` again (`docs/GATE.md` "Unix peer authentication"). |
 | The web page says "this browser link was already used or has expired" | The browser link is good once, for two minutes. Paste the link `exo web` printed in the terminal into this tab; do not click it in the terminal. If the terminal also warned that a link was used twice, paste the new link it printed into the browser that is already open. |
 | Keys must stay private | Exo never writes secrets through `config.set`, and removes known key values from tool output. See `docs/SEATS.md`. |
 
