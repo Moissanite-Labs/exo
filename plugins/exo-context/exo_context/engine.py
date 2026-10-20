@@ -472,7 +472,12 @@ class ExoContextEngine(ContextEngine):
         if self.inner is None:  # the core never calls update_model: build the default inner now
             self._build_inner(model='', context_length=0)
         try:
+            pins = self._observe(messages)  # #371: pins observed from principal text carry across summaries
             signals = sg.extract(messages)
+            signals = dataclasses.replace(
+                signals,
+                rulings=sg.merge(signals.rulings, [hf.Signal('ruling', t) for t in pins['ruling']]),
+                corrections=sg.merge(signals.corrections, [hf.Signal('correction', t) for t in pins['correction']]))
         except Exception as e:  # never block compaction on extraction
             logger.warning('exo-context: signal extraction failed: %s', e)
             signals = None
