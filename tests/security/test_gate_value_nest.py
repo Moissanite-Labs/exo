@@ -10,8 +10,8 @@ denied.
 Now one classify call reads each line once per depth, and a lexer reads 16 levels of $( ), <( ) and $(( )) inside one
 another. Past them it finds the end of the nest in one pass (gate._nest_end), and the nest stands as an unread part
 that asks, also in an exported value. Each test here fails on main 5f434b15, by its time or lexer count, by
-RecursionError or by its outcome, except the two marked as guards for the per-call memo and the three arithmetic
-nests of 500 levels, which main still reads (it raises RecursionError for one of 1,000).
+RecursionError or by its outcome, except the guards: the two for the per-call memo, the three arithmetic nests of 500
+levels, which main still reads (it raises RecursionError for one of 1,000), and the three stand-ins written by hand.
 
 Every command string here is data for exo.gate.classify/decide; none is run."""
 import random
@@ -233,6 +233,51 @@ def test_a_stand_in_written_on_the_line_hides_no_command(line):
     assert gate.decide(c, DELETE).outcome == "deny", c
 
 
+def test_a_heredoc_body_read_in_the_unread_part_is_still_read(classified):
+    """A here-doc opened at the cap whose body lies in the part past it still gets its body, and a backquoted
+    command in it is read. Main reads it too, in 8 s."""
+    c = classified("echo " + "$(echo " * 15 + "$(cat <<EOF " + "$(echo " * 3 + "x\n`rm -rf /srv/data`\nEOF\n"
+                   + ")" * 4 + ")" * 15)
+    assert "unread nest" in c.signals and gate.decide(c, DELETE).outcome == "deny", c
+
+
+def test_an_arithmetic_nest_counts_toward_the_cap(classified):
+    """$(( )) levels count like $( ) levels: 16 are read as before, and a $( ) inside the 17th is not read and asks.
+    Without the unread part in its place, that text would be left out and the line allowed."""
+    c = classified("echo " + "$((1+" * 15 + "$(rm -rf /srv/data)" + "))" * 15)
+    assert gate.decide(c, DELETE).outcome == "deny", c
+    for line in ("echo " + "$((1+" * 17 + "$(rm -rf /srv/data)" + "))" * 17,
+                 "export GIT_PAGER='" + "$((1+" * 17 + "`rm -rf /srv/data`" + "))" * 17 + "'"):
+        c = classified(line)
+        assert "unread nest" in c.signals and gate.decide(c).outcome == "ask", c
+        assert gate.decide(c, DELETE).outcome != "allow", c
+
+
+def test_the_levels_around_an_unread_part_hold_a_stand_in():
+    """Each level's source spells the part past the cap as a short stand-in, so classifying the levels never reads
+    the deep text again (on main each source held all the levels below it)."""
+    _, subs, _ = gate._parse("echo " + "$(echo " * 40 + "x" + ")" * 40)
+    assert gate._TOO_DEEP == STAND_IN and STAND_IN in subs and max(map(len, subs)) < 200, max(map(len, subs))
+
+
+def test_a_brace_past_the_cap_finds_its_end_without_a_lexer(monkeypatch):
+    """_dollar_brace finds where a $( ) inside ${..} ends with a lexer that counts the levels around it toward the
+    cap, and past the cap with _nest_end, which builds none. Either way it ends where the lexer ends it."""
+    text = "${x:-" + "$(echo " * 40 + "x" + ")" * 40 + "}"
+    nests: list[int] = []
+    init = gate._Lexer.__init__
+
+    def recording(self, *a, **kw):
+        init(self, *a, **kw)
+        nests.append(self.nest)
+
+    monkeypatch.setattr(gate._Lexer, "__init__", recording)
+    for nest in (0, gate._NEST - 3, gate._NEST, gate._NEST + 5):
+        nests.clear()
+        assert gate._dollar_brace(text, 0, False, nest)[1] == len(text) - 1, nest
+        assert nests == ([nest + 1] if nest < gate._NEST else []), (nest, nests)
+
+
 # --- the end of a nest past the cap is where the lexer ends it ---------------------------------------------
 
 _PIECES = ["$(", "<(", ">(", "(", ")", ")", ")", "'", '"', "`", "\\", "\n", "\n", "#", " ", " ", ";", "&", "|", "<<",
@@ -243,7 +288,9 @@ _PIECES = ["$(", "<(", ">(", "(", ")", ")", ")", "'", '"', "`", "\\", "\n", "\n"
 
 def test_the_nest_end_is_the_lexer_s():
     """On random text from what either reader treats specially, _nest_end ends where the lexer ends a $( ) and
-    leaves the same here-docs waiting, with the same bodies read."""
+    leaves the same here-docs waiting, with the same bodies read. The pieces leave out a delimiter word holding
+    `$(cat <<X ...)`, which the lexer reads as that here-doc's body: there the text a here-doc waits for can
+    differ, while the end does not (docs/GATE.md)."""
     rnd = random.Random(334)
     for _ in range(3000):
         text = "".join(rnd.choice(_PIECES) for _ in range(rnd.randint(1, 60)))
