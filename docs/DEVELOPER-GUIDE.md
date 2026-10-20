@@ -453,7 +453,10 @@ sets it to `~/Work/handoffs`.
 **Deploying the site.** `scripts/deploy-site.sh` reads the Vercel team id and slug from `EXO_VERCEL_TEAM` and
 `EXO_VERCEL_SCOPE`, and the token file from `EXO_DEPLOY_ENV`. Put them in the environment or in an untracked
 `~/.config/exo/deploy.conf`. It deploys from a copy outside git, made with `rsync`. A failed copy or deploy stops it
-with a non-zero exit before anything is tagged.
+with a non-zero exit before anything is tagged. Any deploy, versioned or not, refuses when `site/` holds untracked
+files (ignored ones too, `.DS_Store` aside), so a private draft folder such as `site/pitch/` can never ship; commit it
+or move it out. The Vercel CLI is pinned to an exact version set at the top of the script. `EXO_VERCEL_CLI` may name
+another exact `X.Y.Z` (a tag such as `latest` is refused). To move the pin, change the script in a PR.
 
 Staging first (D-047). With no flag the script deploys to `staging.exo.askaconsult.com` (Vercel project
 `exo-site-staging`), which sends `X-Robots-Tag: noindex, nofollow` and serves a `robots.txt` that disallows everything.
