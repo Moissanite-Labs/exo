@@ -160,7 +160,7 @@ def _principal_turns(messages: list[dict]) -> list[tuple[int, dict, str]]:
     for i, m in enumerate(messages):
         if not isinstance(m, dict) or m.get('role') != 'user':
             continue
-        if m.get('principal') is False or (m.get('author') and m.get('author') != 'principal'):
+        if m.get('principal') is False or provenance.author_of(m) != provenance.PRINCIPAL:
             continue  # D-040: a peer, bus or job message is not the principal's ruling
         text = message_text(m).strip()
         if len(text) < 2 or is_summary_text(text):
@@ -455,7 +455,10 @@ def _may_carry(m: dict) -> bool:
     compaction marker (a host's summary), from the system, the principal or an older host's untagged message. A block
     in peer, bus, job, tool or agent text is data, and so is one quoted further down a message: the Exo core's system
     message quotes each span too small to summarize word for word, a peer's turn included."""
-    return m.get('role') not in ('other', 'tool') and (m.get('author') or provenance.SYSTEM) in (
+    meta = m.get('meta') or {}
+    if any(meta.get(k) for k in ('peer', 'bus', 'job')):
+        return False  # an ingress tag in meta is not the principal, whatever the role says (#322)
+    return m.get('role') not in ('other', 'tool') and provenance.author_of(m) in (
         provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith((PIN_OPEN, *SUMMARY_MARKERS))
 
 
