@@ -116,10 +116,7 @@ def error_body(where: str, exc: BaseException | str, error_type: str = "", tb: s
     if isinstance(exc, BaseException):
         error_type = error_type or type(exc).__name__
         tb = tb or "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)[-4:])
-        message = str(exc)
-    else:
-        message = str(exc)
-    return ev.HarnessError(where=scrub(where, 120), error_type=scrub(error_type, 80), message=scrub(message, 300),
+    return ev.HarnessError(where=scrub(where, 120), error_type=scrub(error_type, 80), message=scrub(str(exc), 300),
                            traceback=scrub(tb, 1200))
 
 
@@ -496,12 +493,7 @@ class _Parse:
             self._flush()
             t.complete, t.stop_reason, t.timing = True, b.stop_reason, dict(b.timing or {})
             t.wall_ms = int(ts - t.t0)
-            if self.recorded:
-                t.calls, t.derived = self.recorded, False
-                t.served = list(dict.fromkeys(c.route for c in self.recorded if c.route))
-                t.fallbacks = sum(1 for c in t.calls for a in c.attempts if a.get("outcome") not in ("ok", None))
-            else:
-                t.calls, t.derived, t.fallbacks = self.guess, True, self.fell
+            self._settle(t)
             if "wall_ms" in t.timing:
                 t.wall_ms = int(t.timing["wall_ms"])
             if "approval_ms" in t.timing:
@@ -514,15 +506,20 @@ class _Parse:
                                    self.session))
             self.pending = []
 
+    def _settle(self, t: TurnTrace) -> None:
+        """Calls, served routes and fallbacks from the recorded model calls, else from the derived guesses."""
+        t.calls, t.derived = (self.recorded or self.guess), not self.recorded
+        if self.recorded:
+            t.served = list(dict.fromkeys(c.route for c in self.recorded if c.route))
+            t.fallbacks = sum(1 for c in t.calls for a in c.attempts if a.get("outcome") not in ("ok", None))
+        else:
+            t.fallbacks = self.fell
+
     def done(self) -> list[TurnTrace]:
         t = self.cur
         self._flush()
         if t is not None and not t.complete:  # still running, or the process died mid turn
-            t.calls, t.derived = (self.recorded or self.guess), not self.recorded
-            t.fallbacks = self.fell if not self.recorded else sum(
-                1 for c in t.calls for a in c.attempts if a.get("outcome") not in ("ok", None))
-            if self.recorded:
-                t.served = list(dict.fromkeys(c.route for c in self.recorded if c.route))
+            self._settle(t)
         return self.turns
 
 
@@ -715,8 +712,7 @@ def table(turns: list[TurnTrace], title: str = "", calls: bool = False) -> str:
         if t.calls and (calls or t is turns[-1]):
             lines += ["", *_call_lines(t, i)]
     if flags:
-        lines.append("")
-        lines.append("flags")
+        lines += ["", "flags"]
         for f in sorted(flags, key=lambda f: _SEV.get(f.severity, 9)):
             lines.append(f"  [{f.severity}] {f.signature}: {f.title}" + (f" ({f.detail})" if f.detail else ""))
     return "\n".join(lines)

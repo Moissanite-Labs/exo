@@ -58,9 +58,7 @@ def secret_service_get(name: str) -> str | None:
         return None
     import shutil
     exe = shutil.which("secret-tool")
-    if not exe:
-        return None
-    return _run_lookup([exe, "lookup", "service", KEYCHAIN_SERVICE, "account", name])
+    return _run_lookup([exe, "lookup", "service", KEYCHAIN_SERVICE, "account", name]) if exe else None
 
 
 def _file_pairs(text: str) -> Iterator[tuple[str, str]]:
@@ -94,10 +92,7 @@ def file_get(name: str, path: Path | None = None) -> str | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
-    for k, v in _file_pairs(text):
-        if k == name:
-            return v or None
-    return None
+    return next((v or None for k, v in _file_pairs(text) if k == name), None)
 
 
 _loaded: set[str] = set()   # values this process has looked up (Keychain ones included); never logged
@@ -145,8 +140,7 @@ def _keys_file_values(path: Path | None = None) -> list[str]:
         text = (path or keys_file_path()).read_text(encoding="utf-8")
     except OSError:
         return []
-    out = [v for _, v in _file_pairs(text)]
-    return [v for v in out if len(v) >= MIN_SECRET_LEN]
+    return [v for _, v in _file_pairs(text) if len(v) >= MIN_SECRET_LEN]
 
 
 def known_secret_values(env: Mapping[str, str] | None = None) -> list[str]:

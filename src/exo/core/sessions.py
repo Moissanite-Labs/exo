@@ -237,15 +237,9 @@ class SessionStore:
         return self._info(rows[0]) if rows else None
 
     def list_sessions(self, limit: int = 50, seat: str | None = None, agent: str | None = None) -> list[SessionInfo]:
-        where, args = [], []
-        if seat is not None:
-            where.append("seat=?")
-            args.append(seat)
-        if agent is not None:
-            where.append("agent=?")
-            args.append(agent)
-        sql = "SELECT * FROM sessions" + (" WHERE " + " AND ".join(where) if where else "")
-        rows = self._q(sql + " ORDER BY updated DESC, id LIMIT ?", (*args, limit))
+        cols = {k: v for k, v in (("seat", seat), ("agent", agent)) if v is not None}
+        sql = "SELECT * FROM sessions" + (" WHERE " + " AND ".join(f"{k}=?" for k in cols) if cols else "")
+        rows = self._q(sql + " ORDER BY updated DESC, id LIMIT ?", (*cols.values(), limit))
         return [self._info(r) for r in rows]
 
     def thread(self, sid: str) -> tuple[str | None, str]:
