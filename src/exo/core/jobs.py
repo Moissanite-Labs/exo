@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
 from exo.core.ingress import Ingress, IngressPath, Receipt
+from exo.core.models import keys
 from exo.core.peer_target import EngineTarget
 from exo.core.sessions import new_id
 from exo.core.tools.builtin.shell import kill_process_group, masked_note, open_side, tool_env, wrap_pipestatus
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
 
 ACTIVE = "running"
 KEEP_DAYS = 14
+ROTATED = "[output rotated: earlier output is in {}.1]\n"  # the live log's first line after it rotates
 
 
 @dataclass
@@ -88,12 +90,22 @@ def fmt_elapsed(sec: float) -> str:
 
 def tail_text(path: Path, lines: int, chars: int, values: Sequence[str] = ()) -> str:
     """The last ``lines`` lines of a log, at most ``chars`` characters (the end is kept). The whole file is read and
-    the key ``values`` are cut out as ``[redacted]`` before any cut, so no cut here splits a key."""
-    from exo.core.models.keys import redact_secrets
+    the key ``values`` are cut out as ``[redacted]`` before any cut, so no cut here splits a key. After a rotation,
+    the end of ``<id>.log.1`` stands in for the note while redacting, so a key split there is cut out too."""
     try:
-        data = redact_secrets(path.read_bytes().decode("utf-8", errors="replace"), values).rstrip("\n")
+        data = path.read_bytes().decode("utf-8", errors="replace")
     except OSError:
         return ""
+    note, n, pre = ROTATED.format(path.name), max(map(len, values), default=0) - 1, ""
+    if n > 0 and data.startswith(note):
+        with contextlib.suppress(OSError):
+            pre = path.with_suffix(".log.1").read_bytes()[-4 * n:].decode("utf-8", errors="replace")[-n:]
+    text, at, parts = pre + data[len(note):] if pre else data, len(pre), [note] if pre else []
+    for a, b in keys.secret_spans(text, values)[0]:
+        if b > at:  # a span inside pre goes with it, and one that crosses into the log is cut out from its start
+            parts += (text[at:max(a, at)], keys.REDACTED)
+            at = b
+    data = ("".join(parts) + text[at:]).rstrip("\n")
     out = "\n".join(data[-chars * 4:].splitlines()[-lines:])  # splitting all of data gives the same out
     return out if len(out) <= chars else "..." + out[-chars:]
 
@@ -232,7 +244,7 @@ class JobManager:
                         out.close()
                         os.replace(log, log.with_suffix(".log.1"))
                         out = open(log, "ab", buffering=0)
-                        note = f"[output rotated: earlier output is in {log.name}.1]\n".encode()
+                        note = ROTATED.format(log.name).encode()
                         out.write(note)
                         size = len(note)
                     part, chunk = chunk[:max(1, cap - size)], chunk[max(1, cap - size):]

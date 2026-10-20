@@ -194,6 +194,42 @@ def test_the_notice_tail_redacts_the_whole_log_so_no_key_part_is_left(tmp_path):
     assert tail_text(log, cfg.notice_lines, 100, [tok]) == "..." + (("x" * 7 + "[redacted]") * 6)[-100:]
 
 
+def test_the_notice_tail_cuts_out_a_key_the_rotation_split(tmp_path):
+    from exo.core.jobs import tail_text
+
+    key, short = "sk-probe-Q7w8E9r0T1y2U3i4O5p6A7s8D9f0G1h2J3k4L5", "tok-0123456789abcdef"
+    log, old, note = tmp_path / "j_x.log", tmp_path / "j_x.log.1", "[output rotated: earlier output is in j_x.log.1]\n"
+    for cut in range(1, len(key)):  # .log.1 ends with the key's start, the live log holds the note and the rest
+        old.write_text(f"{short} older\nAuthorization: Bearer {key[:cut]}")
+        log.write_text(f"{note}{key[cut:]}\n{short} end\n")
+        out = tail_text(log, 20, 1500, [key, short])
+        assert out == f"{note}[redacted]\n[redacted] end", cut
+        assert not any(key[i:i + 6] in out for i in range(len(key) - 5)), cut
+    old.write_text(f"older {key}")  # a key wholly in .log.1 goes with the part put in front
+    log.write_text(f"{note}{key}x\n")
+    assert tail_text(log, 20, 1500, [key]) == f"{note}[redacted]x"
+    log.write_text(f"{key[5:]}\nend\n")  # no note: .log.1 is not this log's start, so nothing goes in front
+    assert tail_text(log, 20, 1500, [key]) == f"{key[5:]}\nend"
+    old.unlink()
+    log.write_text(f"{note}{key[5:]}\nend\n")
+    assert tail_text(log, 20, 1500, [key]) == f"{note}{key[5:]}\nend"
+
+
+@aio
+async def test_the_notice_of_a_job_whose_log_rotated_inside_a_key_holds_no_part_of_it(tmp_path, monkeypatch):
+    key = "sk-fake-QWERTYUIOPASDFGHJKLZXCVBNM0123456789"
+    monkeypatch.setenv("EXO_NOTICE_TEST_API_KEY", key)
+    eng = engine(tmp_path, jobs={"output_cap": 2000})  # the log rotates at byte 2000, 12 characters into the key
+    sid = (await eng.loop.create_session(agent="tester")).id
+    job = eng.jobs.start(f"head -c 1988 /dev/zero | tr '\\0' x; printf '%s\\nend\\n' {key}", str(tmp_path), sid)
+    await until(lambda: any(e.state == "done" and "queued" in e.detail for e in events(eng)))
+    log = eng.jobs.log_path(job["id"])
+    assert log.with_suffix(".log.1").read_text().endswith(key[:12]) and log.read_text().startswith("[output rotated")
+    text = next(m for m in eng.store.messages(sid) if m.meta.get("job")).text()
+    assert "rotated: earlier output is in" in text and "[redacted]\nend" in text
+    assert not any(key[i:i + 6] in text for i in range(len(key) - 5))
+    await eng.close()
+
 def test_the_notice_tail_splits_only_the_end_of_the_log_and_gets_the_same_lines(tmp_path):
     import random
 
