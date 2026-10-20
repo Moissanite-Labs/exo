@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
 from exo.core import trace
-from exo.core.ingress import Ingress, IngressPath, Receipt
+from exo.core.ingress import Ingress, IngressPath, Receipt, frame
 from exo.core.models import keys
 from exo.core.peer_target import EngineTarget
 from exo.core.sessions import new_id
@@ -53,8 +53,7 @@ class JobConfig:
 
     @classmethod
     def of(cls, raw: dict[str, Any] | None) -> "JobConfig":
-        raw = raw or {}
-        c = cls()
+        raw, c = raw or {}, cls()
         for k in ("max_concurrent", "max_wall_s", "output_cap", "notice_lines", "notice_chars"):
             if raw.get(k) not in (None, ""):
                 setattr(c, k, max(1, int(raw[k])))
@@ -93,17 +92,28 @@ def fmt_elapsed(sec: float) -> str:
 def tail_text(path: Path, lines: int, chars: int, values: Sequence[str] = ()) -> str:
     """The last ``lines`` lines of a log, at most ``chars`` characters (the end is kept). The whole file is read and
     the key ``values`` are cut out as ``[redacted]`` before any cut, so no cut here splits a key. After a rotation,
-    the end of ``<id>.log.1`` stands in for the note while redacting, so a key split there is cut out too. The spans
-    the live log has on its own are cut out as well, so this never redacts less than the live log alone would."""
+    the end of ``<id>.log.1`` stands in for the note while redacting, so a key split there is cut out too. That end
+    doubles until it is all of ``<id>.log.1`` or the text before it can change no span in the live log. Such text can
+    change a value's spans up to its length less one in. A match that starts where spans may change can come or go,
+    so they may change up to its end too, for the values after it as well. The spans the live log has on its own are
+    cut out as well, so this never redacts less than the live log alone would."""
     try:
         data = path.read_bytes().decode("utf-8", errors="replace")
     except OSError:
         return ""
-    note, n, pre = ROTATED.format(path.name), max(map(len, values), default=0) - 1, ""
-    if n > 0 and data.startswith(note):
+    note, m, pre = ROTATED.format(path.name), max(map(len, values), default=0), ""
+    n = m - 1 if data.startswith(note) else 0
+    while n > 0:  # a character takes 4 bytes at most, so the last n characters of 4n bytes are those of the file
+        whole, u = True, 0  # also when <id>.log.1 cannot be read: then pre stays as it was
         with contextlib.suppress(OSError), open(path.with_suffix(".log.1"), "rb") as f:
-            f.seek(max(0, f.seek(0, os.SEEK_END) - 4 * n))  # only its end: n characters take 4n bytes at most
-            pre = f.read().decode("utf-8", errors="replace")[-n:]
+            whole = not f.seek(max(0, f.seek(0, os.SEEK_END) - 4 * n))
+            pre = f.read().decode("utf-8", errors="replace")[0 if whole else -n:]
+        text = pre + data[len(note):len(note) + m]  # a match that starts in pre ends in here
+        for v in values:  # in redaction order, u is where spans may change, from pre's start
+            u = max(u, len(v) - 1)
+            while (i := text.rfind(v, 0, u + len(v) - 1)) + len(v) > u:  # the last match that starts before u
+                u = i + len(v)
+        n = 0 if whole or u <= len(pre) else 2 * n
     text, at, parts, red = pre + data[len(note):] if pre else data, len(pre), [note] if pre else [], -1
     live = [(a + at, b + at) for a, b in keys.secret_spans(text[at:], values)[0]] if pre else []
     for a, b in sorted(keys.secret_spans(text, values)[0] + live):  # with live, never less than the log alone
@@ -131,19 +141,13 @@ class JobTarget(EngineTarget):
         return bool(self.cfg.wake)
 
     def _message(self, ing: Ingress) -> Message:
-        from exo.core.ingress import frame
-
-        msg = Message(role="user", content=[ContentPart.of_text(frame(ing))])
-        msg.meta.update(self._meta(ing))
-        return msg
+        return Message(role="user", content=[ContentPart.of_text(frame(ing))], meta=self._meta(ing))
 
     def _meta(self, ing: Ingress) -> dict[str, Any]:
         return {"job": {"id": ing.meta.get("job_id"), "state": ing.meta.get("state"), "msg_id": ing.id},
                 "author": "job"}  # D-040: the harness, not the principal
 
     async def wake(self, session: str, ing: Ingress) -> None:
-        from exo.core.ingress import frame
-
         self.e.start_turn(session, frame(ing), self._meta(ing))
 
     async def record(self, ing: Ingress, receipt: Receipt, notify: bool) -> None:
@@ -171,9 +175,8 @@ class JobManager:
         if loop is None:
             with contextlib.suppress(RuntimeError):
                 loop = asyncio.get_running_loop()
-        if loop is None or loop.is_closed():
-            return
-        loop.call_soon_threadsafe(fn, *args)
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(fn, *args)
 
     def _known(self) -> list[str]:
         with contextlib.suppress(Exception):  # a failed key lookup never loses a notice or an event
@@ -244,9 +247,7 @@ class JobManager:
 
     def _pump(self, h: Handle, log: Path) -> None:
         """Copy the job's output to its log; past the cap the log rotates (one older file is kept)."""
-        cap = self.cfg.output_cap
-        out = open(log, "ab", buffering=0)
-        size = 0
+        cap, size, out = self.cfg.output_cap, 0, open(log, "ab", buffering=0)
         try:
             for chunk in iter(lambda: h.proc.stdout.read1(65536), b""):  # type: ignore[union-attr]
                 while chunk:
@@ -300,11 +301,10 @@ class JobManager:
         self.e.store._q("UPDATE jobs SET state=?, exit_code=?, ended=?, detail=? WHERE id=?", (state, code, ended, detail, h.id))
         self._spawn(self._announce(h, state, code, ended, detail))
 
-    def _spawn(self, coro: Any) -> asyncio.Task:
+    def _spawn(self, coro: Any) -> None:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)  # close() waits for these
         task.add_done_callback(self._tasks.discard)
-        return task
 
     async def _announce(self, h: Handle, state: str, code: int, ended: float, detail: str) -> None:
         try:
@@ -347,9 +347,8 @@ class JobManager:
     # ---------------------------------------------------------------- queries and control
 
     def rows(self, limit: int = 30) -> list[dict[str, Any]]:
-        rs = self.e.store._q("SELECT * FROM jobs WHERE agent=? ORDER BY (state='running') DESC, started DESC LIMIT ?",
-                             (self.e.agent, limit))
-        return [dict(r) for r in rs]
+        return [dict(r) for r in self.e.store._q("SELECT * FROM jobs WHERE agent=? ORDER BY (state='running') DESC, "
+                                                 "started DESC LIMIT ?", (self.e.agent, limit))]
 
     def get(self, job_id: str) -> dict[str, Any]:
         rs = self.e.store._q("SELECT * FROM jobs WHERE agent=? AND id=?", (self.e.agent, job_id.strip()))
