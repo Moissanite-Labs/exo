@@ -285,8 +285,9 @@ does not enable that operation. Installation details are in `docs/EXECUTORS.md`.
 The handoff facts also mark Git information unavailable; inspecting Git runs
 through the installed executor instead of the host handoff collector.
 If the required gate cannot save its decision or approval evidence, the tool
-returns an error and does not run. Body-file posting requests are also blocked
-before host inspection; inline text can be checked by the gate.
+returns an error and does not run. A post whose text the gate cannot read on the
+line (a body file, stdin, `$( )` or a variable) is also refused; inline text can
+be checked by the gate.
 Simultaneous approvals are recorded separately. Changed policies and standing
 grants become active only after their required authorization audit succeeds.
 
@@ -313,11 +314,12 @@ What the gate asks about, and why:
   name (#209). `docs/GATE.md` lists the other spellings it misses.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
-  are asked again. This is so a draft you read cannot be swapped for another.
+  are asked again. This is so a draft you read cannot be swapped for another. A post whose text the gate cannot
+  read (piped in, a file given by a relative path, `$( )` or a variable) asks, and offers no "always". The gate
+  reads a body file given by its full path.
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
-  the post and lists what it found. The sweep and the exact-text check see only text in the command itself: a body
-  that comes from standard input, a command or a file the gate cannot load is not swept, and an "always" for that
-  post can cover a later body (#208).
+  the post and lists what it found. The sweep and the exact-text check see only text the gate can read, so a body
+  it cannot read asks instead (#208, above).
 - **Code the gate cannot see into asks (D-038).** A script file, `python -c`, `node -e`, a heredoc fed to a shell,
   `make`, `npm run` or `npm test`, `npx`, `xargs`, `find -exec`, a variable or `$( )` in the program's place, a shell
   function, `source`, or a program the gate does not know: each asks once, for that exact command. Read the whole
@@ -336,8 +338,8 @@ What the gate asks about, and why:
   when your policy denies it (#137).
 - **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
   against each command the gate reads on a line, so with pushes denied `git push origin main && rm -rf build` is
-  denied, not asked about the delete. A `categories:` setting or a rule still sees only the line's most severe
-  command, so it can ask where a `deny:` entry would deny (#191).
+  denied, not asked about the delete. A `categories: {X: deny}` setting or a rule with `decision: deny` holds the
+  same way (#191).
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
   covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
@@ -348,6 +350,8 @@ What the gate asks about, and why:
   `docs/GATE.md` lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
+  This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length
+  (or 0) applies at once. A seat you add waits for `/gate accept`.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
   act on a public place. Reading and local edits do not. Your `policies/gates.yaml` can change any cell.
 
@@ -391,7 +395,7 @@ Details: `docs/PEERS.md`.
 A seat is one named setup of an agent: whom it serves, which models, tools, skills and plugins it has, and where its
 threads start. Seat files live in `$EXO_HOME/seats/`. Run one with `exo serve --seat NAME` or `exo tui --seat NAME`.
 When an `exo serve` already runs, a second seat needs its own socket:
-`exo serve --seat NAME --socket $EXO_HOME/run/NAME.sock`. Without it, `exo serve` refuses to start and says so.
+`exo serve --seat NAME --socket $EXO_HOME/run/NAME.sock`. Without it, `exo serve` refuses to start and says so, and so does the second of two started at the same moment.
 Ready-made role templates are in `plugins/exo-orchestra/seats/`. To write your own, see `docs/SEATS.md`.
 
 A seat can set the folder its threads start in, with `[session] cwd` in `seat.toml`. Exo warns once when a thread's
