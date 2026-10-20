@@ -21,14 +21,12 @@ MAX_FILE_BYTES = 2_000_000
 _CHUNK = 65_536
 _LINE_BOUNDS = "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"  # every boundary str.splitlines() splits on
 
-
 def _lines(p: Path) -> Iterator[str]:
     """A regular file's lines, streamed: exactly decode('utf-8', 'replace').splitlines() without
     holding the file, its text and its line list at once (#255 W1-4). Guards as in read_regular."""
     if not p.is_file(): raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")  # noqa: E701
     with open(os.open(p, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)), "rb") as f:
-        st = os.fstat(f.fileno())
-        if not stat.S_ISREG(st.st_mode):
+        if not stat.S_ISREG((st := os.fstat(f.fileno())).st_mode):
             raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
         if st.st_size > MAX_FILE_BYTES:
             raise ToolError(f"{p} is {st.st_size:,} bytes, over the {MAX_FILE_BYTES:,}-byte limit")
@@ -152,8 +150,7 @@ def grep(args: dict[str, Any], ctx: ToolContext) -> str:
                         file_out.append(rel if files_only else f"{rel}:{n}:{line[:300]}")
         except (OSError, ToolError):
             continue
-        out += file_out
-        total += file_total
+        out += file_out; total += file_total  # noqa: E702
     if total > len(out):
         out.append(f"[{total - len(out)} more matches; narrow the search]")
     return "\n".join(filter(None, [*(out or ["No matches."]), skip.note()]))
