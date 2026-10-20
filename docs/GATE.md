@@ -820,7 +820,7 @@ gate does not read:
   git reach a remote through `ext::`, whose URL is a command git runs: `protocol.allow`,
   `protocol.ext.allow`, a `url.ext::<...>.insteadOf` or `pushInsteadOf` rewrite, a remote `url`
   or `pushurl` that starts with `ext::`, and the `GIT_ALLOW_PROTOCOL` variable. Such a key
-  never hides git's subcommand (#334): its part stands beside the subcommand's own category, so
+  never hides git's subcommand (#335): its part stands beside the subcommand's own category, so
   `git -c include.path=/dev/null push --force origin main` is `force_push`, asks, and is denied
   under `deny: [force_push]` or `categories: {force_push: deny}`. On a read (`git -c
   core.pager=less log`) the key's part decides, and the line asks. Only an unknown subcommand,

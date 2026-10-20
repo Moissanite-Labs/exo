@@ -677,7 +677,7 @@ def test_git_config_that_runs_nothing_is_unchanged(cmd, category, outcome):
     assert (c.category, decide(c).outcome) == (category, outcome), c
 
 
-# --- #334: config set on the line never hides git's subcommand, so a deny on it still fires -----------------
+# --- #335: config set on the line never hides git's subcommand, so a deny on it still fires -----------------
 
 # A `git -c` key that loads a file, allows a transport or names a program stood for the whole line on main 5f434b15,
 # so the push behind it was not read: each line here only asked under DENY, where main before #231 (ad635f03) denied

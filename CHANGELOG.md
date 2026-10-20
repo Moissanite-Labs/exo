@@ -27,11 +27,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   so no result changes. A lexer reads 16 levels of `$( )`, `<( )` and `$(( ))` inside one another. Past them it finds
   where the nest ends in one pass, as the lexer would end it, and the nest stands as an unread `opaque_exec` part that
   asks, also in an exported value. So the deny after it fires at any depth, and 5,000 levels take under a second.
-  Nests of 16 levels or fewer classify as before. A `git -c` or `--config-env` key that loads a file, allows a
-  transport or names a program no longer hides git's subcommand: `git -c include.path=/dev/null push --force origin
-  main` is a `force_push` again (it asks, and `deny: [force_push]` denies it), where #231 made it an `opaque_exec`
-  that only asked. `git config include.path FILE` keeps its `local_write` part, and an unknown subcommand still names
-  the config that may define it.
+  Nests of 16 levels or fewer classify as before. Also #335: a `git -c` or `--config-env` key that loads a file,
+  allows a transport or names a program no longer hides git's subcommand. `git -c include.path=/dev/null push
+  --force origin main` is a `force_push` again (it asks, and `deny: [force_push]` denies it), where #231 made it an
+  `opaque_exec` that only asked. `git config include.path FILE` keeps its `local_write` part, and an unknown
+  subcommand still names the config that may define it.
 - Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
   ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
   answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the
