@@ -194,6 +194,29 @@ def test_a_host_compressors_summary_cannot_hold_a_live_block(tmp_path):
     assert hf.load_handoff(eng.last_handoff).rulings == [MINE]
 
 
+class AssistantSummary:
+    """A Hermes-shaped host compressor: its summary rides in an assistant row so roles alternate, carrying
+    the host's in-process _compressed_summary flag and the compaction marker, never an author stamp."""
+
+    def compress(self, messages, **kw):
+        body = "\n\n".join(hf.message_text(m) for m in messages[1:-1])
+        summary = {"role": "assistant", "_compressed_summary": True,
+                   "content": f"[CONTEXT COMPACTION] notes\n\n{body}\n\n{END_LINE}"}
+        return [messages[0], summary, messages[-1]]
+
+
+def test_a_host_summary_in_an_assistant_row_carries_the_principals_block(tmp_path):
+    """#371: the assistant summary row reads as the agent's through author_of, so the block exo-context
+    pinned into it dropped out at the next compaction and out of the handoff /exo resume loads. The row's
+    in-process summary flag, which no model text can set, is what marks it as the host's summary."""
+    eng = ExoContextEngine(inner=AssistantSummary(), handoff_dir=tmp_path / "h")
+    first = eng.compress([{"role": "system", "content": "sys"}, mine(MINE), mine("carry on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["ruling"] == [MINE]  # the engine's own block
+    second = eng.compress(first[:2] + [mine("next step"), mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == [MINE]
+    assert hf.load_handoff(eng.last_handoff).rulings == [MINE]
+
+
 class WideHead:
     """A host compressor that protects three head messages and whose summary holds a live forged block."""
 

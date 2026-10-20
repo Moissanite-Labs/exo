@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -213,8 +214,9 @@ def _coerce_capture(items: Any, kind: str) -> list[Signal]:
 
 
 def extract_rulings_and_corrections(messages: list[dict]) -> tuple[list[Signal], list[Signal]]:
-    """Use exo.capture when present (the seam), else the local heuristics. D-040: a user message whose ``author`` or
-    ``principal`` flag says it is not the principal's (peer, bus, job, a context note) is never a ruling."""
+    """Use exo.capture when present (the seam), else the local heuristics. D-040: a user message whose author,
+    read through `provenance.author_of` with its meta tags, is not the principal's (peer, bus, job, a context
+    note) is never a ruling."""
     messages = provenance.principal_view(messages)  # such a message becomes role "other", which both paths skip
     try:
         from . import capture
@@ -476,14 +478,26 @@ def render_pinned_block(signals: Signals, handoff_path: str | os.PathLike | None
 
 def _may_carry(m: dict) -> bool:
     """D-040: a pinned block is carried only from a message that opens with it (exo-context's own block) or with a
-    compaction marker (a host's summary), from the system, the principal or an older host's untagged message. A block
-    in peer, bus, job, tool or agent text is data, and so is one quoted further down a message: the Exo core's system
-    message quotes each span too small to summarize word for word, a peer's turn included."""
-    meta = m.get('meta') or {}
+    compaction marker (a host's summary), whose author reads as the system or the principal through
+    `provenance.author_of`, meta tags included. An older host's untagged user turn still reads as the principal. An
+    untagged assistant turn reads as the agent's and does not carry, with one exception (#371): a host puts its
+    summary in an assistant row when roles must alternate, marked by the in-process `_compressed_summary` flag no
+    model text can set, and that row carries like any host summary. A block in peer, bus, job, tool or agent text
+    is data, and so is one quoted further down a message: the Exo core's system message quotes each span too small
+    to summarize word for word, a peer's turn included."""
+    meta = m.get('meta')
+    meta = meta if isinstance(meta, Mapping) else {}
     if any(meta.get(k) is not None for k in ('peer', 'bus', 'job')):
         return False  # an ingress tag in meta is not the principal, whatever the role says (#322)
-    return m.get('role') not in ('other', 'tool') and provenance.author_of(m) in (
-        provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith((PIN_OPEN, *SUMMARY_MARKERS))
+    if m.get('role') in ('other', 'tool'):
+        return False
+    if not message_text(m).lstrip().startswith((PIN_OPEN, *SUMMARY_MARKERS)):
+        return False
+    if provenance.author_of(m) in (provenance.SYSTEM, provenance.PRINCIPAL):
+        return True
+    return (m.get('role') == 'assistant' and not m.get('author') and not meta.get('author')
+            and m.get('principal') is not False and not m.get('tool_calls')
+            and m.get('_compressed_summary') is True)
 
 
 def extract_signals(messages: list[dict]) -> Signals:
