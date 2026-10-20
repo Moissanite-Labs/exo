@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A pinned block forged in a stock host summary no longer carries (#385). A summary a host built
+  on its own, stored as a user row, was never escaped by exo-context, and a user row reads as the
+  principal, so a block planted in the compacted text entered the engine's own pinned block and
+  the handoff. Extraction now reads any row holding a block that exo-context did not write — the
+  rows without its summary flag — defused. Its own summaries are exempt: they were defused when
+  written. The principal's own pins still carry, merged from what the session observed.
 - The principal's pinned block no longer drops out when a host summary rides in an assistant row (#371).
   Hosts that alternate roles put the summary there, and the row reads as the agent's, so it carries nothing
   itself. That stays so. A host can also build summary rows exo-context never escaped, and the host's
