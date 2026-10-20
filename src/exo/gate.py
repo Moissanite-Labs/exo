@@ -1000,8 +1000,9 @@ def _literal_heredoc(toks: list) -> str | None:
 
 
 # What one top-level classify_shell call has read (#334): each line parsed once, and classified once per depth for
-# each state of the call's budgets (_brace_budget, _exo_relative), which a result read again spends again. Every $( )
-# is listed at each level above it, so a nest of n levels was classified about n**4 / 24 times without this.
+# each state of the call's budgets (_brace_budget, _exo_relative). The budgets only fall, so a line met again after
+# one fell is read again and spends it again. Every $( ) is listed at each level above it, so a nest of n levels was
+# classified about n**4 / 24 times without this.
 _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_shell_seen", default=None)
 
 
@@ -3939,28 +3940,16 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
             return classify_shell(cmd, depth)
         finally:
             _shell_seen.reset(token)
-    key = ("shell", cmd, depth, _budgets())
+    key = ("shell", cmd, depth, _budgets())   # the budgets only fall: a line met after one fell is read again
     if key not in seen:
-        c = _classify_shell(cmd, depth)
-        seen[key] = (c, _budgets())
-    else:
-        _spend_to(seen[key][1])
-    return _own_copy(seen[key][0])
+        seen[key] = _classify_shell(cmd, depth)
+    return _own_copy(seen[key])
 
 
 def _budgets() -> tuple:
     """What is left of the call's budgets (_brace_budget, _exo_relative), on which a line's result can depend."""
     left, memo = _brace_left.get(), _call_memo.get()
     return (None if left is None else tuple(left), None if memo is None else memo.get("exo_parts", [_EXO_PARTS])[0])
-
-
-def _spend_to(after: tuple) -> None:
-    """Set the budgets to what a stored result left them at: a line read again costs what it cost the first time."""
-    left, memo = _brace_left.get(), _call_memo.get()
-    if left is not None:
-        left[:] = after[0]
-    if memo is not None and after[1] != memo.get("exo_parts", [_EXO_PARTS])[0]:
-        memo.setdefault("exo_parts", [_EXO_PARTS])[0] = after[1]
 
 
 def _own_copy(c: Classification) -> Classification:
