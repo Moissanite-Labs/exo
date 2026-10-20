@@ -20,6 +20,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `harness.error` event. The engine dropped its trace sink before it stopped anything, so such an error was only logged.
   It now drops it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP
   servers are recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
+- An empty ingress tag (`meta.bus: {}`, `""`) no longer reads as an untagged principal turn (#370
+  follow-up). The veto added for #370 tested the tag's truthiness, so an empty bus mapping fell through to
+  the legacy inference and a bus-marked message minted a principal ruling. Presence is what counts now,
+  for bus, peer and job alike.
 - A peer, bus or job tag in a host dict's `meta` now outranks a stamped `principal` author everywhere, not
   only on the carried-block path (#370, follow-up to #368; D-040). Before, a tagged dict carrying
   `author: "principal"` still yielded a fresh ruling and exo-context minted it into its live pinned block,
