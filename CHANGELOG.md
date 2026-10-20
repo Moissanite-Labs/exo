@@ -109,6 +109,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
+  drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
+  `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
+  levels, over a minute at 200). From about 500 levels the lexer's recursion raised RecursionError, so the hook asked
+  for the whole line and a `git push --force` after the value was no longer denied under `deny: [force_push]`. One
+  classify call now reads each line once per depth, and a line read again spends the brace and store budgets again,
+  so no result changes. A lexer reads 16 levels of `$( )`, `<( )` and `$(( ))` inside one another. Past them it finds
+  where the nest ends in one pass, as the lexer would end it, and the nest stands as an unread `opaque_exec` part that
+  asks, also in an exported value. So the deny after it fires at any depth, and 5,000 levels take under a second.
+  Nests of 16 levels or fewer classify as before. `decide` scopes and walks each part of a result once, also a part
+  that several results share, so it stays linear in the line too. The levels around the unread part still pair a
+  here-document with the line that ends it when its delimiter, quoted or not, or its body holds that part, so a
+  command after the here-document is still read. Also #335: a `git -c` or `--config-env` key that loads a file,
+  allows a transport or names a program no longer hides git's subcommand.
+  `git -c include.path=/dev/null push --force origin main` is a `force_push` again (it asks, and `deny: [force_push]`
+  denies it), where #231 made it an `opaque_exec` that only asked. `git config include.path FILE` keeps its
+  `local_write` part, and an unknown subcommand still names the config that may define it.
 - A known key split where a background job's log rotates at `output_cap` no longer leaves its end in the job's
   completion notice, or its two parts in `job_output` (follow-up to #321). While the notice redacts the log, the end of
   `<id>.log.1` now stands in for the rotation note at its start. Keys that overlap each other or themselves can chain
