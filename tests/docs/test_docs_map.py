@@ -35,3 +35,16 @@ def test_every_named_file_exists():
 def test_the_four_layers_exist():
     for name in ("USER-GUIDE.md", "DEVELOPER-GUIDE.md", "WHITEPAPER.md", "DOCS-MAP.md"):
         assert (ROOT / "docs" / name).is_file(), name
+
+
+def test_no_stale_categories_deny_text():
+    # Since #191 (D-075 amendment, 2026-10-19) a categories: deny reaches every part of a
+    # line. The D-038 passages, the gates.yaml template comment and the DOCS-MAP row once
+    # said the opposite; keep the stale wording out (#344).
+    stale = ("sees only the line's most severe part", "sees only the dominant part", "until #191")
+    paths = (DECISIONS, MAP, ROOT / "templates" / "principal-store" / "policies" / "gates.yaml")
+    for path in paths:
+        flat = re.sub(r"\s*#\s*", " ", path.read_text(encoding="utf-8"))
+        flat = re.sub(r"\s+", " ", flat)
+        for phrase in stale:
+            assert phrase not in flat, f"{path.name} still says {phrase!r} (stale since #191)"
