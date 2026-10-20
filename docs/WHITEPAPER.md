@@ -991,8 +991,8 @@ see inside (a `bash -c` with plain text, or a heredoc or pipe fed to a shell, al
 A line of several commands is decided by its most severe part, which sets the card. A deny or reserved entry
 is checked against every part, nested ones included, so with pushes denied `git push origin main && rm -rf
 build` is denied, where before it asked about the delete and ran the push once approved (D-075, #126). A
-category setting or a rule still sees only the most severe part, so it can ask where a deny entry would deny
-(#191).
+category setting or a rule that denies one part denies the line the same way (#191); settings that allow, log
+or ask still see the most severe part.
 An "always" on opaque code covers that exact command only. About 70 everyday commands (`pytest`, `git
 status`, `ls`, `rg`, `npm install`, `cargo test` and so on) are pinned by a test to run without asking, so
 the gate stays usable.
@@ -1077,9 +1077,9 @@ word, so a seat called "scout" does not hold every post that mentions a scout. A
 hyphen, underscore or digit, also matches inside longer words and with any separator. The sweep leans toward
 holding, because the costs are lopsided: a false hit costs one question, a miss leaks a name for good. The
 rule came from a real slip, when a public repository shipped with task ids, profile names, model strings and
-a home path in it. The scrub and the exact-text binding see only the text the gate can read: a post whose body
-comes from standard input, a command or a file the gate cannot load is not swept, and a standing grant for
-that post can cover a later body it never saw (#208).
+a home path in it. The scrub and the exact-text binding see only the text the gate can read, so a post whose
+body comes from standard input, a command, a variable or a file the gate cannot load asks, offers no "always"
+and never rides on a standing grant (#208).
 
 The gate is built and tested as a library and as the `exo-gate` plugin, which runs it on every tool call on
 the core and, when a principal store with a signing key is attached, writes each decision to the signed
@@ -2310,7 +2310,7 @@ page token (#177, for #166); Exo's run folder, which holds the principal credent
 for #169); commands in array subscripts of variable names read (#189, for #179); a `$( )` in a quoted compound,
 `-i` or `-n` value given to `declare`, `typeset` or `local` read (#194, for #188); commands behind wrappers such as
 `setsid`, `flock` and `watch` read (#196, for #160); a deny or reserved entry checked against every part of a
-line, while a category setting or a rule still sees only the most severe part (D-075, #126; #191 is open); a
+line, and since #191 a category setting or a rule that denies one part too (D-075, #126); a
 compound's heredoc, here-string or pipe fed to the commands inside it (#198, for #161); shell startup hooks
 dropped from tool environments (#168, for #135); the built-in `grep` and `glob` tools skipping secret stores and
 `code_find` refusing folders that hold them (#287, for #241); follow-ups to #164's reading of command options and
