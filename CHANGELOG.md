@@ -12,7 +12,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   its own now builds each notice, one at a time and in the order the jobs ended. The longest stall measured for those
   four fell from 1.6 to 2.2 seconds to 48 to 124 ms. Shutting down still waits for a notice being built and keeps it for
   the next turn. The notices of jobs lost in a restart are built the same way, and the core's start does not wait for
-  them, so two first commands at once still start the MCP servers only once (docs/JOBS.md "The completion notice").
+  them, so two first commands at once still start the MCP servers only once. A hard stop that cancels a notice while it
+  is built still sends the job's end event (docs/JOBS.md "The completion notice").
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
