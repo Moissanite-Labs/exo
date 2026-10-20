@@ -35,6 +35,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   leave a part. The `job.updated` events carried the job's command unredacted to clients and the events table. They now
   cut known key values out of it before they cut it to 300 characters, as the notice does (docs/JOBS.md "The completion
   notice").
+- `scripts/deploy-site.sh` pins the Vercel CLI (64.1.0, was `vercel@latest`) and refuses any deploy, versioned or
+  not, when `site/` has untracked files. An unversioned staging deploy used to copy the whole folder, so an untracked
+  private `site/pitch/` would have shipped. `.DS_Store` is skipped. `EXO_VERCEL_CLI` must be an exact `X.Y.Z`.
 - Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
   ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
   answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the

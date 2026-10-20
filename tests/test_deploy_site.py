@@ -24,6 +24,7 @@ here = pathlib.Path(".")
 version = here / "version.json"
 pathlib.Path(os.environ["DEPLOY_LOG"]).write_text(json.dumps({
     "files": sorted(p.as_posix() for p in here.rglob("*") if p.is_file()),
+    "argv": sys.argv[1:],
     "version": json.loads(version.read_text()) if version.is_file() else None}))
 rc = int(os.environ.get("NPX_RC", "0"))
 print("Production: https://site.invalid" if rc == 0 else "Error: Deployment failed (rate limited)")
@@ -81,13 +82,13 @@ def site(tmp_path, monkeypatch):
     return tmp_path
 
 
-def deploy(box, *args, npx_rc=0, rsync="ok"):
+def deploy(box, *args, npx_rc=0, rsync="ok", extra_env=None):
     """Run the script; rsync=None leaves rsync off PATH, "fail" makes it fail, "empty" copies nothing."""
     env = {k: v for k, v in os.environ.items() if k.startswith("GIT_")}
     path = [box / "npx-bin", *([box / "rsync-bin"] if rsync else []), box / "tools"]
     env.update(PATH=os.pathsep.join(map(str, path)), HOME=str(box / "home"), TMPDIR=str(box / "tmp"),
                VERCEL_TOKEN="x", CF_API_TOKEN="y", EXO_VERCEL_TEAM="team_x", EXO_VERCEL_SCOPE="scope",
-               DEPLOY_LOG=str(box / "deployed.json"), NPX_RC=str(npx_rc), RSYNC_MODE=rsync or "")
+               DEPLOY_LOG=str(box / "deployed.json"), NPX_RC=str(npx_rc), RSYNC_MODE=rsync or "", **(extra_env or {}))
     return subprocess.run([BASH, "scripts/deploy-site.sh", "--redeploy", "--yes", *args], cwd=box / "repo",
                           env=env, capture_output=True, text=True, timeout=60)
 
@@ -143,3 +144,47 @@ def test_tag_push_failure_exits_nonzero(site):
     r = deploy(site, "--version", "site-v9.9-rc.3")
     assert r.returncode != 0 and "pushing the tag failed" in r.stderr
     assert deployed(site) is not None
+
+
+@pytest.mark.parametrize("args", [(), ("--version", "site-v9.9-rc.4")])
+def test_untracked_files_in_site_refuse_every_deploy(site, args):
+    pitch = site / "repo" / "site" / "pitch"
+    pitch.mkdir()
+    (pitch / "index.html").write_text("<h1>private</h1>\n")
+    r = deploy(site, *args)
+    assert r.returncode != 0 and "untracked files" in r.stderr and "site/pitch/index.html" in r.stderr
+    assert deployed(site) is None and tags(site, "site-v9.9-rc.4") == ([], [])
+    shutil.rmtree(pitch)                                          # once it is gone the deploy goes through
+    r = deploy(site, *args)
+    assert r.returncode == 0, r.stderr + r.stdout
+
+
+def test_ignored_untracked_file_also_refuses_but_finder_litter_does_not(site):
+    (site / "repo" / ".gitignore").write_text("site/secret.txt\n")
+    git(site / "repo", "add", ".gitignore")
+    git(site / "repo", "commit", "-qm", "ignore")
+    (site / "repo" / "site" / ".DS_Store").write_text("x")
+    (site / "repo" / "site" / "secret.txt").write_text("x")
+    r = deploy(site)
+    assert r.returncode != 0 and "site/secret.txt" in r.stderr and ".DS_Store" not in r.stderr
+    (site / "repo" / "site" / "secret.txt").unlink()
+    r = deploy(site)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert ".DS_Store" not in deployed(site)["files"]
+
+
+def test_vercel_cli_is_pinned(site):
+    r = deploy(site)
+    assert r.returncode == 0, r.stderr + r.stdout
+    pins = [a for a in deployed(site)["argv"] if a.startswith("vercel@")]
+    assert len(pins) == 1 and pins[0] != "vercel@latest"
+    assert pins[0].removeprefix("vercel@").replace(".", "").isdigit()
+
+
+@pytest.mark.parametrize("bad", ["latest", "64", "^64.1.0", "64.1.0 --foo"])
+def test_an_unpinned_cli_override_is_refused(site, bad):
+    r = deploy(site, extra_env={"EXO_VERCEL_CLI": bad})
+    assert r.returncode == 2 and "exact X.Y.Z" in r.stderr
+    assert deployed(site) is None
+    r = deploy(site, extra_env={"EXO_VERCEL_CLI": "64.2.0"})
+    assert r.returncode == 0 and "vercel@64.2.0" in deployed(site)["argv"]
