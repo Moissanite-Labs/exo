@@ -470,9 +470,7 @@ def _renames(repo: str | Path, base: str, target: str, path: str) -> tuple[str |
         cols = line.split("\t")
         if len(cols) == 3 and cols[0].startswith("R") and cols[1] == new:
             new = cols[2]
-    if new != path:
-        return new, False
-    return None, True
+    return (new, False) if new != path else (None, True)
 
 
 _ATTRS: Path | None = None

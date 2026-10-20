@@ -68,8 +68,7 @@ def write_file(args: dict[str, Any], ctx: ToolContext) -> str:
         raise ToolError(f"{args['path']} is a directory")
     existed = p.exists()
     write_atomic(p, args["content"])
-    verb = "Overwrote" if existed else "Created"
-    return f"{verb} {args['path']} ({len(args['content'])} chars)"
+    return f"{'Overwrote' if existed else 'Created'} {args['path']} ({len(args['content'])} chars)"
 
 
 def edit_file(args: dict[str, Any], ctx: ToolContext) -> str:

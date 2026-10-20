@@ -256,8 +256,7 @@ class Registry:
             return ToolResult.of_text(call.id, f"Unknown tool {call.name!r}. "
                                       f"Available: {', '.join(self.names())}", is_error=True)
         if not tool.available():
-            return ToolResult.of_text(call.id, f"Tool {call.name!r} is not available here",
-                                      is_error=True)
+            return ToolResult.of_text(call.id, f"Tool {call.name!r} is not available here", is_error=True)
         identity = (call.id, call.name)
         request = None
         if self.executor_required:
@@ -345,8 +344,7 @@ class Registry:
         if isinstance(out, ToolResult):
             out.call_id = call.id
             return _cap_result(out)
-        text = out if isinstance(out, str) else str(out)
-        return _cap_result(ToolResult.of_text(call.id, text))
+        return _cap_result(ToolResult.of_text(call.id, str(out)))
 
     async def _post(self, call: ToolCall, result: ToolResult, ctx: ToolContext) -> ToolResult:
         for hook in list(self._hooks[POST_TOOL_CALL]):

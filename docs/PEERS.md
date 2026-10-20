@@ -121,4 +121,6 @@ The `exo-bus` plugin carries a peers module. Turn it on per profile with `EXO_PE
 
 Held messages live in memory: a restart drops them. The web client gets the events through the protocol but
 has no `/peers` view yet. Bus sends are posted and not receipted. A bus seat's first key is trusted as the registry
-serves it (trust on first use); pin it by hand first if the relay is not yours.
+serves it (trust on first use); pin it by hand first if the relay is not yours. On the machine itself the gate
+guards where those keys come from: a tool call that writes `$EXO_HOME/bus/` or the keys folder asks the principal
+(`docs/GATE.md` "The store is credentials", #210).

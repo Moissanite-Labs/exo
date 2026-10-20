@@ -336,10 +336,6 @@ class Router:
         cd = self.cooldowns.get(key)
         return cd is None or cd.until <= now
 
-    def _pick(self, route: Route, now: float) -> tuple[Credential, bool] | None:
-        creds = self.credentials(route.provider)
-        return self._choose(route, now, creds)
-
     async def _pick_async(self, route: Route, *, failed: set[str] | None = None,
                           attempted: set[tuple[str, str]] | None = None) -> tuple[Credential, bool] | None:
         creds = await asyncio.to_thread(self.credentials, route.provider)
@@ -647,10 +643,9 @@ class Router:
             for route in self.chain(role):
                 creds = self.credentials(route.provider)
                 out.append({"role": role, "route": route.ref, "configured": bool(creds),
-                            "available": self._pick(route, now) is not None,
+                            "available": self._choose(route, now, creds) is not None,
                             **{k: v for k, v in self.models.get(route.ref, {}).items() if k == "context"}})
         return out
-
 
     def providers_status(self) -> list[dict[str, Any]]:
         """Each configured provider: display URL without userinfo and key presence (never the value)."""

@@ -2,7 +2,8 @@
 
 Exo accepts only hooks its core currently fires. Several additional names are known from
 Hermes plugin declarations, but registering them here would silently do nothing, so they
-are rejected until Exo adds a fire site. Callbacks get keyword arguments only. A failing
+are rejected until Exo adds a fire site. Callbacks get keyword arguments only: the ones each declares, or all of
+them when it takes ``**kwargs``, so a keyword the core adds later never breaks an older callback. A failing
 ``pre_tool_call`` callback returns a block verdict; other failing callbacks are logged and
 skipped (fail open). The engine also refuses to execute tools when no ``pre_tool_call``
 callback is registered. Required-executor engines propagate failures of the trusted gate's
@@ -107,7 +108,7 @@ class HookRegistry:
         out = []
         for e in self.entries(name):
             try:
-                r = e.callback(**kwargs)
+                r = e.callback(**accepted(e.callback, kwargs))
             except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
                 trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)
@@ -136,7 +137,7 @@ class HookRegistry:
             try:
                 # Broker-bound tool hooks inspect independent JSON copies of the request.
                 call_kw = {**kwargs, "args": deepcopy(kwargs["args"])} if _isolate_arguments else kwargs
-                r = await maybe_await(e.callback(**call_kw))
+                r = await maybe_await(e.callback(**accepted(e.callback, call_kw)))
             except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
                 trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)
