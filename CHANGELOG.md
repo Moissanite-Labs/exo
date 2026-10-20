@@ -71,11 +71,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `<id>.log.1` now stands in for the rotation note at its start. Keys that overlap each other or themselves can chain
   from further back, so that end grows, up to the whole file, until the text before it can change no match in the live
   log. So the notice never keeps a character that redacting both files as one text would cut out. `job_output` joined
-  both files with the note between the two parts of the key, so redaction missed it. It now drops the note when it
-  reads `<id>.log.1`, so the key is whole and is redacted. A key split inside a character outside ASCII can still leave
-  a part. So can a key split at either end of output that rotated between `job_output`'s reads of the two files, since
-  that output is missing with no note where it was. The `job.updated` events carried the job's command unredacted to
-  clients and the events table. They now cut known key values out of it before they cut it to 300 characters, as the
+  both files with the note between the two parts of the key, so redaction missed it. It now drops the note when it reads
+  `<id>.log.1`, so the key is whole and is redacted, unless `job_output`'s own cut to the last 20,000 characters splits
+  it (and, with keys that overlap each other, a key next to it). A key split inside a character outside ASCII can still
+  leave a part. So can a key split at either end of output that rotated between `job_output`'s reads of the two files,
+  since that output is missing with no note where it was. The `job.updated` events carried the job's command unredacted
+  to clients and the events table. They now cut known key values out of it before they cut it to 300 characters, as the
   notice does (docs/JOBS.md "The completion notice").
 - A forged `## Next steps` heading in a handoff can no longer beat the genuine one (#353, D-040). #349 kept the
   first section of each name, which is right for the principal's sections but wrong for Next steps, the one section
