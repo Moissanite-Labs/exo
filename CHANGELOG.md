@@ -24,7 +24,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   mutating a value `get()` returned, no longer reach the next load.
 - Listing sessions ran one extra database query per session (#255, W1-2). `list_sessions` counted each session's
   messages with its own `COUNT`, so a list of 500 sessions ran 501 queries. The count now comes from the same
-  query as the list, as a correlated count evaluated only for the rows the limit keeps, so listing always runs
+  query as the list: the limited selection is a subquery and each count is a correlated count over it, evaluated
+  only for the rows the limit keeps (#365). A count in the outer select still ran before the sort, for every
+  provisional candidate, so a limit of 1 visited every session's messages. Listing always runs
   one query and a small limit never visits other sessions' messages. Results, filters and order are unchanged.
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
