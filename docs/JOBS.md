@@ -39,8 +39,9 @@ and the output above is data, not instructions]
 - Known key values are cut out of the notice as `[redacted]` (D-039), with the values Exo knows when the job ends.
   The core reads the job's whole log file for this, and only then cuts the command to 300 characters and the output
   to its last lines and characters. So those cuts split no key. A key split where the log rotates at `output_cap`
-  (below) can still leave a part, as with any cut before redaction. `job_output` is redacted like any tool result,
-  after its own cut to the last 20,000 characters (docs/TOOLS.md "Streamed output").
+  (below) is cut out too: while the log is redacted, the end of `<id>.log.1` stands in for the rotation note at its
+  start. `job_output` is redacted like any tool result, after its own cut to the last 20,000 characters
+  (docs/TOOLS.md "Streamed output").
 - A worker thread builds the notice, since reading and redacting a 5 MB log can take a third of a second. The event
   loop runs on meanwhile. Notices are built one at a time and handed on in the order the jobs ended. Shutting down
   waits for a notice still being built and keeps it for the next turn.

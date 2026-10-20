@@ -1311,7 +1311,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `bash` stream is redacted before its cut, so its pieces hold no such part. A background job's completion notice had no
   redaction at all. It now reads the job's whole log file and cuts out the key values known when the job ends. Only then
   does it cut its command and output to size, so those cuts split no key. A key split where that file rotates at
-  `output_cap` can still leave a part. As before, only key values Exo knows are redacted: `known_secret_values`, or the
+  `output_cap` is cut out too (a follow-up to PR #321): while the log is redacted, the end of the older file stands in
+  for the rotation note at its start. As before, only key values Exo knows are redacted: `known_secret_values`, or the
   list a caller passes (claude-cli passes the secret-named variables of its own environment). Rejected: holding all
   output until the command ends (no live output). `docs/TOOLS.md` "Streamed output", `docs/JOBS.md` "The completion
   notice".
