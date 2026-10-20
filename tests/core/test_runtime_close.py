@@ -302,6 +302,7 @@ def test_concurrent_add_remove_report_and_gc_have_no_errors():
         def on(self, body, session):
             pass
 
+    gc.collect()  # free sinks whose owners earlier tests dropped, so the baseline counts only live ones
     baseline = len(trace._live_sinks())  # other tests may leave sinks of their own
     keep = [Persistent() for _ in range(3)]
     for k in keep:
