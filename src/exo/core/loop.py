@@ -324,9 +324,8 @@ class Loop:
             reply = self._assemble(stream, msg_id)
             result.message = await self._add(session, reply, turn_id)
             if not reply.tool_calls:
-                result.stop_reason = stream.done.stop_reason or "end"
-                if result.stop_reason == "tool_use":
-                    result.stop_reason = "end"
+                if (stop := stream.done.stop_reason) and stop != "tool_use":
+                    result.stop_reason = stop
                 if st.steer and result.stop_reason == "end":  # a message came in during this call: answer it now
                     await self._drain_steer(session, turn_id, st)
                     continue

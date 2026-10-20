@@ -742,8 +742,15 @@ def test_compaction_skips_tiny_spans_and_summaries_that_do_not_shrink():
     assert {st for st, _ in tree(lean)} == {"done"}  # big enough and shrinks
 
 
-def test_steer_during_the_final_reply_gets_its_own_answer(tmp_path):
-    prov = Script(["WAIT", *reply("first answer")], reply("answer to the steer"))
+@pytest.mark.parametrize(("stop_reason", "expected"), [
+    (None, "end"), ("", "end"), ("tool_use", "end"), ("end", "end"),
+    ("max_tokens", "max_tokens"), ("interrupted", "interrupted"), ("error", "error"),
+])
+def test_steer_during_the_final_reply_gets_its_own_answer(tmp_path, stop_reason, expected):
+    first, last = reply("first answer"), reply("answer to the steer")
+    first[-1].stop_reason = "tool_use"  # no actual tool call: normalize to end and answer the queued steer
+    last[-1].stop_reason = stop_reason
+    prov = Script(["WAIT", *first], last)
     prov.gate = asyncio.Event()
     store, loop, seen = make(tmp_path, prov)
 
@@ -757,6 +764,8 @@ def test_steer_during_the_final_reply_gets_its_own_answer(tmp_path):
         return s, await task
 
     s, res = run(go())
+    assert res.stop_reason == expected
+    assert [e.body.stop_reason for e in seen if e.type == "turn.completed"] == [expected]
     assert res.message.text() == "answer to the steer"
     assert len(prov.calls) == 2 and "one more thing" in [m.text() for m in prov.calls[1]]
     roles = [(m.role, m.text()) for m in store.messages(s.id)]
