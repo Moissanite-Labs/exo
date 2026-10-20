@@ -33,7 +33,7 @@ from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar
                              EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
 CLIENT_ID = "exo-tui"
-LOST = "connection_lost"  # post's code for a command whose reply never came (D-060: it is not resent)
+LOST = "connection_lost"  # post's code for a command whose reply never came or that never went out (D-060: not resent)
 DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
 MAX_FILE = 64 * 1024
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
@@ -918,7 +918,10 @@ class ExoApp(App):
         try:
             resp = await self.client.send(body)
         except (httpx.TransportError, OSError) as exc:  # the request may have reached the core: say so, never resend
-            self.note("connection lost; this may not have been delivered. Check before you send it again.", "error")
+            if isinstance(exc, httpx.ConnectError):  # no connection, so no byte went out; a refused peer check says why
+                self.note(f"not sent: {str(exc) or 'no connection to the core'}", "error")
+            else:
+                self.note("connection lost; this may not have been delivered. Check before you send it again.", "error")
             if isinstance(body, s.ApprovalRespond):
                 self.run_worker(self.restore_approvals(), exit_on_error=False)
             return s.Response(id="", ok=False, error=s.ErrorInfo(code=LOST, message=str(exc)))
