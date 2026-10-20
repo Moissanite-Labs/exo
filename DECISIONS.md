@@ -159,6 +159,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Revisit if:** the lean core misses its wave 1 exit test by more than two waves of effort, or Hermes
   splits out a small, dependency-free core library that Exo could depend on without inheriting the rest.
 
+- *Amendment 2026-10-20 (#360, continuous top-level turns):* the core loop defaults to `max_iterations=0`, with no
+  tool-round cap, so a top-level task can continue beyond 24 rounds until it finishes or a user stop, error or
+  spend boundary ends it. Explicit positive limits retain the existing cap and wrap-up report. Delegated children
+  still pass `max_turns or 24`; approvals, interrupts, spend admission, bounded provider retries and child token/time
+  limits are unchanged. A larger fixed default was rejected because it would interrupt longer tasks at another
+  arbitrary count. Revisit if a separate principal-controlled top-level round policy is needed.
+
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
   anima), group (Eldunari nexus); agent and group stores nest inside the person's store so one folder can

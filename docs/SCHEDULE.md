@@ -49,7 +49,8 @@ sleeps at most a minute, so a job that another seat's core adds or resumes start
   `harness.error` (`scheduler tick`) and the loop waits a few seconds and goes on. If the loop ever ends by
   itself, that is recorded too (`scheduler loop`) and a
   warning notice is shown.
-- A run that hits the tool-round cap (24) is a failed run, `stopped early (max_iterations)`. The loop's wrap-up reply
+- Scheduled turns also default to no tool-round cap. If a caller sets a positive
+  `max_iterations` and a run hits it, it is a failed run, `stopped early (max_iterations)`. The loop's wrap-up reply
   (what was done, what is open, the next step; see `docs/CORE-V2-INTERFACES.md`) is appended to its status and
   warning notice. When there is no complete wrap-up reply (it failed, had no text, or `wrap_up` is off), nothing
   is appended; the last tool round's text is never shown as the report.
