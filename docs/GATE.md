@@ -705,9 +705,11 @@ gate does not read:
   unread part, a delimiter word holding `$(cat <<X ...)` can make a here-document wait for other
   text than the lexer would, and a delimiter longer than 1,024 characters ends no body. Then
   lines after the part can be read as a body, so a deny on a command there can become an ask.
-  With a nested `${..}` that holds a `$( )` (#143), the stand-in can change where a level reads
-  the `${..}` to end, so a deny on a command after the nest can also become an ask. A `command:`
-  pattern still matches the line as written.
+  Past the cap, text bash itself rejects, such as a here-document whose body never ends, can be
+  read by a level around otherwise than in full. A deny after it can then ask, though bash runs
+  nothing after it. With a nested `${..}` that holds a `$( )` (#143), the stand-in can change
+  where a level reads the `${..}` to end, so a deny on a command after the nest can also become
+  an ask. A `command:` pattern still matches the line as written.
 - Options of trusted programs whose value is a command are followed as a nested command, like
   `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
   `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
