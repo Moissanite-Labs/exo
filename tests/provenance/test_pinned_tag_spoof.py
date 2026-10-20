@@ -316,6 +316,12 @@ def test_an_empty_ingress_tag_still_vetoes(meta):
     assert provenance.author_of(msg) != provenance.PRINCIPAL
 
 
+def test_a_stamped_dict_with_malformed_meta_keeps_its_stamp():
+    """#375: malformed meta must not crash the veto before the stamp is read, as it did not before #372."""
+    assert provenance.author_of({"role": "tool", "author": "tool", "meta": ["x"]}) == provenance.TOOL
+    assert provenance.author_of({"role": "user", "author": "peer:x", "meta": "junk"}) == "peer:x"
+
+
 def test_a_stamped_ingress_author_keeps_its_name():
     m = _user(RULE, bus={"from": "seat2"})
     m.meta["author"] = provenance.bus("seat2")
