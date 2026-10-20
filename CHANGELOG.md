@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Parsing pinned blocks no longer stalls on a run of unclosed `<exo-pinned>` open tags (#322, item 5). The
+  lazy match rescanned to the end of the text from every open with no close after it, so 96 KB of unclosed
+  opens took about five seconds in `parse_pinned_blocks` and `strip_pinned`. Both now share a linear scan
+  that stops at the first open with no close after it. Block boundaries and contents read as before.
 - A pinned-block tag spelled in unicode tag characters or full-width forms is now escaped like the ASCII
   tag (#322, item 4). Before, those spellings passed `defuse_pins` untouched, and anything downstream that
   folds them back to ASCII would have revived the live tag. Only the brackets change. The quoted words
