@@ -1757,7 +1757,7 @@ def _git_subcommand(argv: list[str], config: list[str] | None = None) -> int:
 
 def _classify_git(argv: list[str], cmd: str) -> Classification:
     """git's own category, from its subcommand. Config set on the line (`git -c`, `--config-env`) does not replace it
-    (#334): _exec_options adds a part for each such pair, so the line asks and a deny on push, force_push or delete
+    (#335): _exec_options adds a part for each such pair, so the line asks and a deny on push, force_push or delete
     still fires. Only an unknown subcommand, which that config may define, is opaque here."""
     config: list[str] = []
     i = _git_subcommand(argv, config)
