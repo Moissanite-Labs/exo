@@ -126,8 +126,7 @@ def principal_view(messages: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]
     for m in messages:
         if not isinstance(m, Mapping):
             continue
-        if m.get("role") == "user" and (m.get("principal") is False
-                                         or (m.get("author") and not is_principal_author(m.get("author")))):
+        if m.get("role") == "user" and (m.get("principal") is False or author_of(m) != PRINCIPAL):
             m = {**m, "role": "other"}
         out.append(dict(m))
     return out
