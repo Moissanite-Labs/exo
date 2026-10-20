@@ -582,3 +582,18 @@ def test_rewind_matches_a_pin_to_its_message_as_classified(tmp_path):
     eng.on_session_switch("a", rewound=True, messages=list(map(mine, still)))
     kept = pins(tmp_path, "a")["ruling"]
     assert len(kept) == 3 and undone not in kept
+
+
+def test_summarizer_source_honors_meta_only_tags():
+    """#322: a host dict tagged only in meta (peer/bus/job, or meta.author) is not the principal for the
+    summarizer: its pinned-block tags are escaped, and its ruling sentence is never extracted as theirs."""
+    from exo_context.inner import _msg  # noqa: PLC2701
+
+    block = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
+    for d in ({"role": "user", "content": block, "meta": {"peer": {"from": "x"}}},
+              {"role": "user", "content": block, "meta": {"bus": {"from": "seat2"}}},
+              {"role": "user", "content": block, "meta": {"job": "nightly"}},
+              {"role": "user", "content": block, "meta": {"author": "peer:x"}},
+              {"role": "assistant", "content": block}):
+        assert provenance.author_of(_msg(d)) != provenance.PRINCIPAL, d
+    assert provenance.author_of(_msg({"role": "user", "content": block})) == provenance.PRINCIPAL
