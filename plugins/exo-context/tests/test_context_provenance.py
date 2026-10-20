@@ -584,16 +584,33 @@ def test_rewind_matches_a_pin_to_its_message_as_classified(tmp_path):
     assert len(kept) == 3 and undone not in kept
 
 
+def _tagged(text):
+    """Host dicts an ingress tag marks as not the principal's, stamp or no stamp (#322, #370)."""
+    return [{"role": "user", "content": text, "meta": {"peer": {"from": "x"}}},
+            {"role": "user", "content": text, "meta": {"bus": {"from": "seat2"}}},
+            {"role": "user", "content": text, "meta": {"job": "nightly"}},
+            {"role": "user", "author": "principal", "content": text, "meta": {"peer": {"from": "x"}}},
+            {"role": "user", "content": text, "meta": {"author": "principal", "job": "nightly"}},
+            {"role": "user", "content": text, "meta": {"bus": "seat2"}},
+            {"role": "user", "principal": True, "content": text, "meta": {"peer": {"from": "x"}}},
+            {"role": "assistant", "content": text}]
+
+
 def test_summarizer_source_honors_meta_only_tags():
-    """#322: a host dict tagged only in meta (peer/bus/job, or meta.author) is not the principal for the
-    summarizer: its pinned-block tags are escaped, and its ruling sentence is never extracted as theirs."""
+    """#322, #370: the summarizer reads a tagged host dict with its pinned-block tags escaped, never live."""
+    from exo.core.context import render_message
     from exo_context.inner import _msg  # noqa: PLC2701
 
     block = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
-    for d in ({"role": "user", "content": block, "meta": {"peer": {"from": "x"}}},
-              {"role": "user", "content": block, "meta": {"bus": {"from": "seat2"}}},
-              {"role": "user", "content": block, "meta": {"job": "nightly"}},
-              {"role": "user", "content": block, "meta": {"author": "peer:x"}},
-              {"role": "assistant", "content": block}):
-        assert provenance.author_of(_msg(d)) != provenance.PRINCIPAL, d
-    assert provenance.author_of(_msg({"role": "user", "content": block})) == provenance.PRINCIPAL
+    for d in _tagged(block):
+        src = render_message(_msg(d))
+        assert "<exo-pinned>" not in src and "&lt;exo-pinned&gt;" in src, d
+    live = render_message(_msg({"role": "user", "content": block}))
+    assert "<exo-pinned>" in live
+
+
+def test_a_tagged_dict_mints_no_pin(tmp_path):
+    """#370: the real engine never mints a tagged dict's ruling into its live pinned block."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([{"role": "system", "content": "sys"}, *_tagged(PEER), mine(MINE)], session_id="t370")
+    assert pins(tmp_path, "t370") == {"ruling": [MINE], "correction": []}
