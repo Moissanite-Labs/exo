@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- The grep tool read, decoded and split each whole file before searching its lines (#255, W1-4). It now streams
+  the file in chunks and yields lines as they decode, so a search holds one chunk and the current line instead
+  of the bytes, the text and every line at once. Output is unchanged: the same rows, the same counts past the
+  limit and the same `[N more matches; narrow the search]` line. The refusals are unchanged too: a file that is
+  not regular, over the 2 MB cap (including growing past it while read), or binary in its first bytes is skipped
+  whole, matches already seen in it included.
 - Listing sessions ran one extra database query per session (#255, W1-2). `list_sessions` counted each session's
   messages with its own `COUNT`, so a list of 500 sessions ran 501 queries. The count now comes from the same
   query as the list (a `LEFT JOIN` grouped by session), so listing always runs one query. Results, filters and
