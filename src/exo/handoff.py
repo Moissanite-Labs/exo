@@ -237,6 +237,7 @@ def extract_rulings_and_corrections(messages: list[dict]) -> tuple[list[Signal],
 
 
 def _open_decisions(messages: list[dict]) -> list[Signal]:
+    messages = provenance.principal_view(messages)  # D-040: a deferral in a peer, bus or job row is not open
     last_user = max((i for i, _, _ in _principal_turns(messages)), default=-1)
     out: list[Signal] = []
     for i, m in enumerate(messages):
@@ -477,21 +478,23 @@ def render_pinned_block(signals: Signals, handoff_path: str | os.PathLike | None
 # --- extraction ------------------------------------------------------------------
 
 def _may_carry(m: dict) -> bool:
-    """D-040: a pinned block is carried only from a message that opens with it (exo-context's own block) or with a
-    compaction marker (a host's summary), whose author reads as the system or the principal through
-    `provenance.author_of`, meta tags included. An older host's untagged user turn still reads as the principal. An
-    untagged assistant turn reads as the agent's and does not carry, host summary or not (#371): its
-    `_compressed_summary` flag shows a host made the row, not that exo-context escaped its text when it was made,
-    and rows a host built on its own (a micro compaction, a stock summary restored on resume) never pass that
-    escaping. Continuity for those rows comes from the engine's session pins, not from carrying. A block in peer,
-    bus, job, tool or agent text is data, and so is one quoted further down a message: the Exo core's system
-    message quotes each span too small to summarize word for word, a peer's turn included."""
+    """D-040: a pinned block is carried only from a message that opens with it (exo-context's own block rides in a
+    system message, or an older host's untagged user turn opens with one), whose author reads as the system or the
+    principal through `provenance.author_of`, meta tags included. A row opening with a compaction marker (a host's
+    summary) carries nothing, whatever its role or author (#385): exo-context escapes the tags of summaries it
+    writes itself, and its own block rides inside them, but a stock summary a host built on its own (made before
+    exo-context was the engine, restored from state.db on resume, a micro compaction) never passed that escaping,
+    and nothing about the row tells the two apart: the `_compressed_summary` flag shows a host made it, not that
+    exo-context escaped it (#371), and a user-role summary reads as the principal's own turn. Continuity for those
+    rows comes from the engine's session pins, not from carrying. A block in peer, bus, job, tool or agent text is
+    data, and so is one quoted further down a message: the Exo core's system message quotes each span too small to
+    summarize word for word, a peer's turn included."""
     meta = m.get('meta')
     meta = meta if isinstance(meta, Mapping) else {}
     if any(meta.get(k) is not None for k in ('peer', 'bus', 'job')):
         return False  # an ingress tag in meta is not the principal, whatever the role says (#322)
-    return m.get('role') not in ('other', 'tool') and provenance.author_of(m) in (
-        provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith((PIN_OPEN, *SUMMARY_MARKERS))
+    return m.get('role') in ('system', 'user') and provenance.author_of(m) in (
+        provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith(PIN_OPEN)
 
 
 def extract_signals(messages: list[dict]) -> Signals:
