@@ -188,3 +188,50 @@ def test_an_unpinned_cli_override_is_refused(site, bad):
     assert deployed(site) is None
     r = deploy(site, extra_env={"EXO_VERCEL_CLI": "64.2.0"})
     assert r.returncode == 0 and "vercel@64.2.0" in deployed(site)["argv"]
+
+
+def _add_submodule(box):
+    """A tracked gitlink under site/ whose working tree holds an ignored private file (the #350 repro)."""
+    sub = box / "repo" / "site" / "modules" / "private"
+    sub.mkdir(parents=True)
+    git(sub, "init", "-q")
+    (sub / ".gitignore").write_text("secret.txt\n")
+    (sub / "page.html").write_text("<p>public</p>\n")
+    git(sub, "add", "-A")
+    git(sub, "commit", "-qm", "sub")
+    (sub / "secret.txt").write_text("private\n")
+    git(box / "repo", "add", "site/modules/private")
+    git(box / "repo", "commit", "-qm", "add submodule")
+    assert "160000" in git(box / "repo", "ls-files", "--stage", "site/modules")
+    return sub
+
+
+@pytest.mark.parametrize("args", [(), ("--version", "site-v9.9-rc.5")])
+def test_a_submodule_under_site_refuses_every_deploy(site, args):
+    _add_submodule(site)
+    r = deploy(site, *args)
+    assert r.returncode != 0 and "submodule" in r.stderr and "site/modules/private" in r.stderr
+    assert deployed(site) is None and tags(site, "site-v9.9-rc.5") == ([], [])
+
+
+def test_a_corrupt_index_stops_the_deploy(site):
+    (site / "repo" / "site" / "pitch").mkdir()
+    (site / "repo" / "site" / "pitch" / "private.txt").write_text("private\n")
+    (site / "repo" / ".git" / "index").write_bytes(b"not an index")
+    r = deploy(site)
+    assert r.returncode != 0 and "could not list" in r.stderr and "nothing deployed" in r.stderr
+    assert deployed(site) is None
+
+
+def test_an_empty_cli_override_is_refused(site):
+    r = deploy(site, extra_env={"EXO_VERCEL_CLI": ""})
+    assert r.returncode == 2 and "exact X.Y.Z" in r.stderr
+    assert deployed(site) is None
+
+
+def test_an_empty_cli_override_in_the_conf_file_is_refused(site):
+    conf = site / "deploy.conf"
+    conf.write_text("EXO_VERCEL_CLI=\n")
+    r = deploy(site, extra_env={"EXO_DEPLOY_CONF": str(conf)})
+    assert r.returncode == 2 and "exact X.Y.Z" in r.stderr
+    assert deployed(site) is None

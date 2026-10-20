@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- The `scripts/deploy-site.sh` untracked-file guard no longer has three gaps (#350). A submodule under `site/` is
+  one entry in the parent index, so the inventory never saw the ignored or untracked files inside it, yet `rsync`
+  copied them; any submodule under `site/` now refuses the deploy (the tracked site has none). The inventory's exit
+  status was dropped, so a corrupt index gave an empty list and the deploy went on; a failed inventory now stops the
+  deploy with exit 1. An empty `EXO_VERCEL_CLI` fell back to the pin; it now exits 2 like any malformed value, in the
+  environment or in `deploy.conf`. Found by independent review of #347.
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a

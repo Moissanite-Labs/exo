@@ -7,7 +7,8 @@
 #                A failed copy or deploy exits non-zero and tags nothing. A versioned deploy needs a clean site/.
 #   Any deploy, versioned or not, refuses when site/ holds untracked files (so a private draft folder such as
 #   site/pitch/ can never ship). Commit them or move them out of site/. There is no override.
-#   The Vercel CLI is pinned (VERCEL_CLI_VERSION below). EXO_VERCEL_CLI may name another exact X.Y.Z, never a tag.
+#   It also refuses a submodule under site/, and refuses when git cannot list the files (a corrupt index).
+#   The Vercel CLI is pinned (VERCEL_CLI_VERSION below). EXO_VERCEL_CLI may name another exact X.Y.Z, never a tag or an empty value.
 #   --redeploy   deploy only, skip the project/domain/DNS setup;  --yes   skip the typed confirmation
 # DNS is on Cloudflare. Both targets deploy from a git-free copy of site/.
 # Tokens are read from the environment or a local env file and never printed.
@@ -20,7 +21,9 @@ set -u
 VERCEL_CLI_VERSION="64.1.0"
 CONF="${EXO_DEPLOY_CONF:-$HOME/.config/exo/deploy.conf}"
 [ -r "$CONF" ] && while IFS='=' read -r k v; do
-  case "$k" in EXO_VERCEL_TEAM|EXO_VERCEL_SCOPE|EXO_DEPLOY_ENV|EXO_VERCEL_CLI) [ -z "${!k:-}" ] && export "$k=$(echo "$v" | tr -d "\"'")";; esac
+  case "$k" in
+    EXO_VERCEL_CLI) [ -z "${!k+x}" ] && export "$k=$(echo "$v" | tr -d "\"'")";;  # set-but-empty stays empty and is refused below
+    EXO_VERCEL_TEAM|EXO_VERCEL_SCOPE|EXO_DEPLOY_ENV) [ -z "${!k:-}" ] && export "$k=$(echo "$v" | tr -d "\"'")";; esac
 done < "$CONF"
 # Tokens come from the environment first, then from the env file named above (never printed).
 ENVFILE="${EXO_DEPLOY_ENV:-$HOME/.config/exo/deploy.env}"
@@ -30,7 +33,7 @@ V=$(pick VERCEL_TOKEN); CF=$(pick CF_API_TOKEN)
 [ -n "$V" ] && [ -n "$CF" ] || { echo "deploy-site: set VERCEL_TOKEN and CF_API_TOKEN (or EXO_DEPLOY_ENV to an env file)" >&2; exit 1; }
 TEAM="${EXO_VERCEL_TEAM:-}"; SCOPE="${EXO_VERCEL_SCOPE:-}"
 [ -n "$TEAM" ] && [ -n "$SCOPE" ] || { echo "deploy-site: set EXO_VERCEL_TEAM and EXO_VERCEL_SCOPE (env or $CONF)" >&2; exit 1; }
-CLI="${EXO_VERCEL_CLI:-$VERCEL_CLI_VERSION}"
+CLI="${EXO_VERCEL_CLI-$VERCEL_CLI_VERSION}"  # no colon: an empty value is malformed, not "use the pin"
 [[ "$CLI" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "deploy-site: the Vercel CLI version must be an exact X.Y.Z, got '$CLI'" >&2; exit 2; }
 PROD=0; REDEPLOY=0; YES=0; VER=""
 while [ $# -gt 0 ]; do case "$1" in --prod) PROD=1;; --redeploy) REDEPLOY=1;; --yes) YES=1;;
@@ -41,10 +44,27 @@ command -v rsync >/dev/null || { echo "deploy-site: rsync is required to copy si
 # The tag names HEAD, so a versioned deploy must ship exactly what HEAD holds. An unversioned one is marked -dirty.
 DIRTY=$(git -C "$REPO" status --porcelain -- site ':(exclude)site/_shots')
 # Untracked files (ignored ones too) would be copied by rsync and shipped. Refuse before anything else happens.
-UNTRACKED=$(git -C "$REPO" ls-files --others -- site ':(exclude)site/_shots' ':(exclude)site/.DS_Store' ':(exclude)site/**/.DS_Store')
+UNTRACKED=$(git -C "$REPO" ls-files --others -- site ':(exclude)site/_shots' ':(exclude)site/.DS_Store' ':(exclude)site/**/.DS_Store'); RC=$?
+if [ $RC != 0 ]; then
+  echo "deploy-site: could not list untracked files in site/ (git exit $RC); nothing deployed. Check the repository (git status, git fsck)." >&2
+  exit 1
+fi
 if [ -n "$UNTRACKED" ]; then
   echo "deploy-site: site/ has untracked files; nothing deployed. Commit them or move them out of site/:" >&2
   printf '%s\n' "$UNTRACKED" | head -10 | sed 's/^/  /' >&2
+  exit 1
+fi
+# A submodule is one entry in the parent index, so the inventory above never sees the files inside it, but rsync copies
+# them (untracked and ignored ones too). Refuse any submodule under site/ rather than trust what its working tree holds.
+STAGED=$(git -C "$REPO" ls-files --stage -- site); RC=$?
+if [ $RC != 0 ]; then
+  echo "deploy-site: could not list the tracked files in site/ (git exit $RC); nothing deployed." >&2
+  exit 1
+fi
+GITLINKS=$(printf '%s\n' "$STAGED" | sed -n 's/^160000 [0-9a-f]* [0-9]'"$(printf '\t')"'//p')
+if [ -n "$GITLINKS" ]; then
+  echo "deploy-site: site/ contains a submodule; nothing deployed. Its working tree can hold files git does not list. Vendor its files into site/ or move it out:" >&2
+  printf '%s\n' "$GITLINKS" | head -10 | sed 's/^/  /' >&2
   exit 1
 fi
 if [ $PROD = 1 ]; then
