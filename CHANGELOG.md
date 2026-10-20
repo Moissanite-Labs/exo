@@ -8,8 +8,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Fixed
 - A background job's completion notice no longer stalls the core (follow-up to #321). The notice reads and redacts the
   job's whole log (up to `output_cap`, 5 MB). That ran on the event loop, and one emoji in a log made it take about
-  300 ms. Four jobs that ended together froze streams, approval cards and other turns for about 2 seconds. A worker
-  thread now builds each notice, one at a time and in the order the jobs ended. The longest stall measured for those
+  300 ms. Four jobs that ended together froze streams, approval cards and other turns for about 2 seconds. A thread of
+  its own now builds each notice, one at a time and in the order the jobs ended. The longest stall measured for those
   four fell from 1.6 to 2.2 seconds to 48 to 124 ms. Shutting down still waits for a notice being built and keeps it for
   the next turn. The notices of jobs lost in a restart are built the same way, and the core's start does not wait for
   them, so two first commands at once still start the MCP servers only once (docs/JOBS.md "The completion notice").
