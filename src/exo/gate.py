@@ -356,7 +356,7 @@ class _Heredoc:
     ambiguous: bool = False    # delimiter spelled with $'..' or $"..": bash and dash end the body on different lines
     body: str = ""
     fd: str = ""               # the descriptor number before `<<` (`3<<EOF`); "" or 0 is stdin (#208)
-    cut: str = ""              # the delimiter as the levels around spell it, when it holds a part not read (#334)
+    cut: str = ""              # the delimiter as the levels around read it, when it holds a part not read (#334)
 
 
 @dataclass
@@ -432,8 +432,10 @@ class _Lexer:
                     hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
                     hd.fd = w.fd
                     at = self.i - len(w.raw)
-                    if w.text == w.raw and bisect.bisect_left(self.cuts, (at,)) < len(self.cuts):
-                        hd.cut = self._source(at, self.i)      # its end line is spelt so too (_read_heredocs)
+                    if bisect.bisect_left(self.cuts, (at,)) < len(self.cuts):     # it holds a part not read
+                        spelt = self._source(at, self.i)   # as the levels around spell it, read as a lexer reads it
+                        hd.cut = next((t[1].text for t in _Lexer(spelt, scan=False, nest=_NEST).run() if t[0] == "w"),
+                                      spelt)                # its end line is spelt so too (_read_heredocs)
                     self.pending.append(hd)
                     toks.append(("hd", hd))
                     state["delim"] = None

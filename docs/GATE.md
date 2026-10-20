@@ -697,14 +697,16 @@ gate does not read:
   opened before the nest whose body lies inside it still gets its body, and a `$( )` in that
   body is an unread part too. Each level around the nest holds a short stand-in for it, and
   still pairs every here-document with the line that ends it: when the delimiter holds the
-  unread part, that line is spelt the way the delimiter is, and when the body lies inside the
-  part, the stand-in ends the body. So a command after such a here-document is still read. A
-  here-document opened inside the unread part, with its body after it, is not seen by the levels
-  around, which read that body as commands. Inside the unread part, a delimiter word holding
-  `$(cat <<X ...)` can make a here-document wait for other text than the lexer would, and a
-  delimiter longer than 1,024 characters ends no body. Then lines after the part can be read as
-  a body, so a deny on a command there can become an ask. A `command:` pattern still matches the
-  line as written.
+  unread part, quoted or not, that line is spelt the way the level reads the delimiter, and when
+  the body lies inside the part, the stand-in ends the body. So a command after such a
+  here-document is still read. A here-document opened inside the unread part, with its body
+  after it, is not seen by the levels around, which read that body as commands. Inside the
+  unread part, a delimiter word holding `$(cat <<X ...)` can make a here-document wait for other
+  text than the lexer would, and a delimiter longer than 1,024 characters ends no body. Then
+  lines after the part can be read as a body, so a deny on a command there can become an ask.
+  With a nested `${..}` that holds a `$( )` (#143), the stand-in can change where a level reads
+  the `${..}` to end, so a deny on a command after the nest can also become an ask. A `command:`
+  pattern still matches the line as written.
 - Options of trusted programs whose value is a command are followed as a nested command, like
   `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
   `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
