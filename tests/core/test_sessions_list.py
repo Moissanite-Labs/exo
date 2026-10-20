@@ -44,3 +44,32 @@ def test_list_sessions_counts_filters_and_order_match_get_session():
         "s008", "s007", "s005", "s004", "s002", "s001"]
     assert [i.id for i in st.list_sessions(limit=2)] == ["s008", "s007"]
     assert st.list_sessions(limit=500, seat="nobody") == []
+
+
+def test_a_small_limit_does_not_visit_every_sessions_messages():
+    """#365: the count must run only for the rows the limit keeps. VM steps via the progress
+    handler pin the work itself, not a wall clock: in chronological order (updated grows with
+    the index, the normal shape) limit=1 must cost far less than listing everything."""
+    st = SessionStore(":memory:")
+    for i in range(60):
+        st.create_session(title=f"s{i}", id=f"s{i:03d}")
+        st._q("UPDATE sessions SET updated=? WHERE id=?",
+              (f"2026-01-01T{i // 60:02d}:{i % 60:02d}:00Z", f"s{i:03d}"))
+    st._db.executemany("INSERT INTO messages (id, session, seq, role, created, data, hidden)"
+                       " VALUES (?,?,?,?,?,?,0)",
+                       [(f"m{i}-{j}", f"s{i:03d}", j, "user", "2026-01-01T00:00:00Z", "{}")
+                        for i in range(60) for j in range(50)])
+
+    def steps(limit):
+        n = [0]
+        st._db.set_progress_handler(lambda: n.__setitem__(0, n[0] + 1) or 0, 1000)
+        try:
+            out = st.list_sessions(limit)
+        finally:
+            st._db.set_progress_handler(None, 0)
+        return n[0] * 1000, out
+
+    one_steps, one = steps(1)
+    all_steps, _ = steps(500)
+    assert [i.id for i in one] == ["s059"] and one[0].message_count == 50
+    assert one_steps * 5 < all_steps, (one_steps, all_steps)
