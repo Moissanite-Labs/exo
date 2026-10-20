@@ -18,6 +18,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- A compaction summary in a handoff's `## State` can no longer forge a principal section (#315, D-040). The summary
+  was written unquoted, so a `## Decisions made (principal's words, verbatim)` line in model text made a second
+  section of that name, and `load_handoff` kept the later one: the forged ruling in, the principal's real ruling
+  dropped, and the agent's last report read as a ruling. The summary is now quoted like the brief and the last
+  report, and the reader keeps the first section of each name, so old files with a duplicate heading read the
+  writer's real section.
 - `scripts/deploy-site.sh` pins the Vercel CLI (64.1.0, was `vercel@latest`) and refuses any deploy, versioned or
   not, when `site/` has untracked files. An unversioned staging deploy used to copy the whole folder, so an untracked
   private `site/pitch/` would have shipped. `.DS_Store` is skipped. `EXO_VERCEL_CLI` must be an exact `X.Y.Z`.
