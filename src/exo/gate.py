@@ -5483,9 +5483,10 @@ def _override_deny(c: Classification, gates: Mapping) -> tuple[Classification, s
     if not (cats or rules):
         return None
     line = _line_matcher(c)
+    lowers = any(r["decision"] in _LOWERS and "command" in r["match"] for r in rules)
     for p in list(_each_part(c))[1:]:
         out, why, step = cats.get(p.category), f"category {p.category}", "category"
-        own = _own_test([p.own])
+        own = _own_test([p.own]) if lowers else None
         first = next((r for r in rules if _rule_matches(r["match"], p, own=own if r["decision"] in _LOWERS else None)),
                      None)
         if first is not None:
