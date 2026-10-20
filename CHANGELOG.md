@@ -18,6 +18,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
+  drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
+  `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
+  levels, over a minute at 200). From about 500 levels the lexer's recursion raised RecursionError, so the hook asked
+  for the whole line and a `git push --force` after the value was no longer denied under `deny: [force_push]`. One
+  classify call now reads each line once per depth, and a line read again spends the brace and store budgets again,
+  so no result changes. A lexer reads 16 levels of `$( )`, `<( )` and `$(( ))` inside one another. Past them it finds
+  where the nest ends in one pass, as the lexer would end it, and the nest stands as an unread `opaque_exec` part that
+  asks, also in an exported value. So the deny after it fires at any depth, and 5,000 levels take under a second.
+  Nests of 16 levels or fewer classify as before.
 - Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
   ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
   answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the

@@ -680,6 +680,24 @@ gate does not read:
   `remote host` exposure and the first host as target (so a `target:` deny on it still
   matches), and the rest asks as `opaque_exec` (#153). A chain the gate can read to the end is
   classified by what runs at the end.
+- `$( )`, `<( )` and `$(( ))` are read 16 levels inside one another (#334). Each `$( )` is
+  listed at every level above it and classified there again, so the work grows with the depth,
+  and classify runs inside the gate hook. One classify call reads each line once per depth. A
+  line read again spends the brace and store budgets again, so no result changes. Past 16 levels
+  the lexer does not read the nest. It finds where the nest ends in one pass, reading the text
+  as it would (quotes, comments, backquotes, the `$` forms, redirections and here-documents) but
+  keeping only that end. The nest stands as an `opaque_exec` part, `a $( ) nested more than 16
+  levels deep, not read`, with the `unread nest` signal. It asks, also in an exported value
+  (`export` drops other values it cannot read, as values that run nothing), and a command after
+  it is still read. So `export PROMPT_COMMAND='$($(...'; git push --force origin main` is denied
+  under `deny: [force_push]` at any depth, the same in `PS4`, `BROWSER`, `GIT_PAGER`, `git -c
+  core.sshCommand` and the other values above. Before #334, 40 levels took 15 s, and from
+  about 500 levels the lexer raised RecursionError, so the hook asked for the whole line.
+  A command inside the unread part is not read, so a deny on it becomes an ask. A here-document
+  opened before the nest whose body lies inside it still gets its body, and a `$( )` in that
+  body is an unread part too. Inside the unread part, a here-document delimiter longer than
+  1,024 characters ends no body, so the rest of the line is unread and asks. A `command:`
+  pattern still matches the line as written.
 - Options of trusted programs whose value is a command are followed as a nested command, like
   `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
   `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
@@ -906,10 +924,13 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   again at the last level: one `bash -c` inside `os.system(...)` is read; a second usually is
   not (it depends on how the literals are quoted) and the line asks, as `opaque_exec` or, through
   `execute_code`, as `code`. A chain that mixes wrappers and code strings can therefore be read
-  deeper than four levels. Nested `$( )` is flattened by the lexer and not capped; nested
-  backticks are: four levels are read, and at five the line is `opaque_exec`, `nested too deep to
-  read`. An `ssh` or `mosh` chain with more hops than the cap asks as `opaque_exec` too, with the
-  first host as its target, so a `target:` deny on that host still denies it (#153, fixed by
+  deeper than four levels. Nested `$( )` is flattened by the lexer, so each one is read at
+  depth one, up to 16 levels inside one another (#334, above). Past that the nest is an unread
+  `opaque_exec` part and a command inside it is not read, while a command after it still is.
+  Nested backticks are capped at the inspection depth: four levels are read, and at five the
+  line is `opaque_exec`, `nested too deep to read`. An `ssh` or `mosh` chain with more hops than
+  the cap asks as `opaque_exec` too, with the first host as its target, so a `target:` deny on
+  that host still denies it (#153, fixed by
   #164). Past the cap the line asks unless the principal has set a policy for `opaque_exec` (a
   `command:` deny entry or a deny rule that matches the text still denies it).
 - **Only a deny reaches every part of a line.** `classify_shell` keeps the most severe part of
