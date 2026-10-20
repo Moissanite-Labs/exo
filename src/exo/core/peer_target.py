@@ -62,9 +62,7 @@ class EngineTarget(Target):
         if ing.session and self.e.store.get_session(ing.session) is not None:
             return ing.session
         live = self.live_sessions()
-        if live:
-            return live[0]["id"]
-        return None  # no live thread: a delivered message is refused, a held one waits with no thread
+        return live[0]["id"] if live else None  # none: a delivered message is refused, a held one waits
 
     def state(self, session: str) -> str:
         st = self.e.loop._state.get(session)

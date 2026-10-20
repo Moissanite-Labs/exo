@@ -5,6 +5,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Fixed
+- Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
+  two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
+  `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
+  core that starts next is never unlinked by the one before it). The loser exits 1 naming the running core's pid, and
+  only the lock holder writes `run/exod.pid`. A crashed core's lock is dropped by the OS. The lock covers all four
+  `start_unix` callers (`exo serve`, peers, the TUI window server, the exo-bus plugin); TCP needed none, since a
+  taken port fails at bind. `exo web`'s starter no longer removes a stale socket or writes the pid file (the core does
+  both under the lock), `exo stop` leaves a starting core's files alone, only the lock refusals are reported as a
+  plain line (any other error keeps its traceback in `exod.log`), and a socket in a symlinked folder (macOS `/tmp`)
+  still binds.
+
 ### Security
 - Gate (#225, D-038): a `$( )`, backtick pair or `$(( ))` inside a word no longer hides a secret-store name. Bash
   drops an empty substitution, so `cat .e$(:)nv`, `cat ~/.n$(:)etrc`, `cat ~/.config/gh/ho$(:)sts.yml`,
@@ -49,6 +61,66 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   naming it after a `cd ..` (`cd ~/.exo/run/jobs && cd .. && grep -r x`), and a recursive read of `~/.exo` or a
   principal's store by its full path (`grep -r x ~/.exo`, as before). The `seats/` folder is read once per gate
   call, not once per glob word (a line of 1,000 globs with 4,096 seat files took 10 s).
+- Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
+  ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
+  answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the
+  principal alone, no grant), as is a write to where `EXO_BUS_REGISTRY`, `EXO_BUS_DB` or `EXO_BUS_KEYS_DIR` (or the
+  legacy `DIVAN_` names) point; `cp forged.json ~/.exo/bus/registry.json` was an allowed `shell`. (2) A relative name
+  read from a folder in `$EXO_HOME` is checked as the path it names, `..` included, so `cd ~/.exo/run/jobs && cat
+  ../exod*`, `grep -r . ..` there, `cd .. && ls` from there and `tar -C ~/.exo -czf - run` are `credentials` as the
+  absolute paths are; `cat 1.log` in `run/jobs` stays a read. The run folder's file names are store file names for
+  the `cd` check, and its `seats/` scan runs once per classify call instead of once per glob word. (3) A write through
+  a descriptor or process-folder path (`/dev/fd/3`, `/dev/stdin`, `/proc/self/fd/3`, `/proc/self/cwd`,
+  `/proc/<pid>/root`, also after `cd /dev` or `cd /proc/self`) is `store_write`, and so is a store file opened for
+  reading on a numbered descriptor (`exec 3< ~/.exo/state/gate-grants.json`, `{ ...; } 1< f`, and on stdout or
+  stderr any target from a variable, a glob or a relative name), because on Linux a later `> /dev/fd/3` or
+  `> /dev/stdout` writes it back; `exec 3< grants; printf X > /dev/fd/3` rewrote the grants file with no ask. Writes
+  to the writer's own stdout and stderr (`/dev/fd/1`, `/dev/stdout`) keep their class. A descriptor path used as an
+  input of a writing command asks too (`jq . /dev/stdin > out.json`, `patch -i /dev/stdin`, `gh ... --body-file
+  /dev/stdin`), as a principal-only store write whose card says the path is one the gate cannot resolve.
+- Gate policy (#191, #211, #208). A `categories: {X: deny}` line or a rule with `decision: deny` now denies a line
+  when any part of it is X, as a `deny:` entry has since D-075: `echo $(git push origin main) > /tmp/f` was `log`
+  under `categories: {local_write: deny}`, and a wrapped or fed-shell line asked under `categories: {opaque_exec:
+  deny}`, as do #303's coproc and ssh-fed lines under an `opaque_exec`, `shell` or host deny. Only a deny reaches the parts, and the reason names the part (D-075 amendment). A changed
+  `approvals.yaml` now narrows who may answer at once and shortens new grants (`gate.strictest_approvers`, the
+  shorter `always` value), where a seat the principal had just removed could still approve and `days: 0` still
+  wrote a 7-day grant; a wider file still waits for `/gate accept` (D-038 amendment). A post whose body the gate
+  cannot read asks: stdin (`--body-file -` with a pipe or `<`), `gh api` `@file` fields and `--input`, `--fill`,
+  templates, gist files, curl/wget/httpie file and stdin bodies, `$( )`, backticks or a variable in the text, a
+  repeated or clustered text option, and a body file the hook did not read. The hook reads a body file only by an
+  absolute path (it read a relative one from exod's own folder, so `cd docs && gh ... --body-file notes.md` passed),
+  and a missing, oversized or unread file asks. Such a post gets no "always", no standing grant matches it, and a
+  required executor refuses it as a recorded deny instead of an internal error. An unrelated heredoc no longer
+  fills in a body file's text, and `curl -d@f` and `gh api -fbody=x` are posts (D-033 amendment). Piped stdin
+  counts only from one simple command whose output bash does not rewrite: `(cat f; echo F) | gh ... --body-file -`,
+  `printf 'Zo\x72k' |`, `echo -e` and an unquoted heredoc with a backslash ask. gh text options follow gh's own
+  list of options that take a value (`gh issue create -t -b -b x`), `--attach` asks, and `curl --data-ascii @f`,
+  `curl -K cfg URL` and `curl -d x "$URL"` are posts where they were a read or a local write. A word bash expands
+  without `$` (`Zo{r,}k`, a glob, a leading `~`), a heredoc or here-string on another descriptor (`3<<EOF`), a
+  heredoc whose delimiter line only nearly matches (`EOF `), `--title --body --body x`, and a body file under
+  `/dev` or `/proc` ask too.
+- Gate (#207, #240, D-038): two shell forms ran a program the gate did not read. A redirection, heredoc or
+  here-string between `coproc`, its name and a compound opener (`coproc rm >/dev/null { -rf x`, `coproc 2>/dev/null
+  rm { ...`) makes bash run the name as a simple command; the gate skipped it as a name, so such a line asked under
+  `deny: [delete]`. It now reads the name as the program too, and the line is denied. With no remote command, `ssh
+  host` runs its stdin in the login shell on the host; text piped or fed by heredoc or here-string (`echo 'rm -rf
+  /data' | ssh prod-db`, `ssh prod-db <<EOF`) was a plain `ssh` and allowed even under category denies. It is now read
+  as shell, as for `bash -s`: the line asks, a denied command in it is denied, and its parts stay `internal`. `-n`,
+  `-N`, `-f` and a remote command keep the old reading; options after the host (`ssh host -T`) are read as ssh reads
+  them.
+- Gate (#209, #202, #225, #199, D-038): four spellings of a secret-store path were allowed reads and now ask. A
+  harmlessly named link into a store (`notes.txt` to `~/.ssh/id_rsa`, `cfg` to `~/.ssh`, `app.cfg` to a project
+  `.env`) is judged by where it leads, resolved from the session's working folder (the core now passes it to tool
+  hooks as `cwd`), from the gate's own and, for a shell tool, from the call's own `cwd` argument; a `cwd` argument on
+  a file tool, which the tool ignores, changes nothing. Each hook callback now gets only the keyword arguments it
+  declares (all of them with `**kwargs`), so a callback without `cwd` keeps working. A `.pub` name exempts
+  only a path that resolves to one. `${EXO_HOME:-$HOME/.exo}/keys` and the other `${VAR<op>word}` forms of `HOME`,
+  `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the default. An
+  expansion inside a store name (`cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc`, `cat ${x}.env`) is read as
+  empty, and as any text between two literal parts (`cat .e$(echo n)v`). A glob in bash's bracket syntax
+  (`~/.kube/[^x]onfig`, `[[:alpha:]]onfig`) is read as bash reads it, and `/proc/<pid>/<glob>` is matched against
+  `environ`. One classify call now shares its file-system lookups across the line's words, so a 10 KB line
+  classifies several times faster. Limits in GATE.md "Other spellings of a store path".
 - A pinned block in text the principal did not write no longer reads as one to the model (#279, D-040 amendment).
   The core's system message quotes each span too small to summarize word for word, so a peer's, bus seat's, job
   notice's or tool result's copy of exo-context's `<exo-pinned>` block sat there looking like the principal's pinned
@@ -248,6 +320,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- The core releases its SQLite handles (#281). `CoreRuntime.close()` closes the session store and schedule.sqlite, the
+  spend journal closes the connection that creates it, and the harness-error sink list holds engines weakly, so an
+  engine nobody closed can be collected; the sink list is copy-on-write and no sink runs under a lock, so a
+  garbage-collector finalizer that reports or adds a sink cannot hang the thread. `close()` still closes the scheduler
+  and the store when the peers or jobs step raises, then raises the first error. The root suite no longer climbs to
+  about 930 open files, and runs in a macOS Terminal at its default 256. A closed session store reopens on its next use,
+  and `Scheduler.close()` is final (`stop()` stays restartable).
 - The router's wait hint and `retry_after` count only the role's own routes (#239). They took the earliest reopening
   over every cooldown, so a cooldown on another provider, or on a model outside the chain (the gate's aux side call,
   D-081), could make a main call say "next route reopens in 20s" while main's own key reopened later, and the loop
@@ -257,6 +336,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   gap above `RESUME_GAP`) never showed, though the terminal client could answer it. It now also adds each open request
   from `approvals.list` that the page lacks, with no asked-time (the card shows none, not "asked never"), and an
   approval already shown is no longer added or counted again when the stream replays it.
+- Peer authentication follow-ups (#226, D-060). The terminal says `not sent: <reason>` when a command never left
+  (its peer check refused the core, or the core could not be reached), instead of "connection lost; this may not
+  have been delivered", and keeps the text. `hello` names a heartbeat only where the transport sends one: over HTTP
+  it is that server's interval, and stdio and in-process callers get no `heartbeat` key or capability. The Python
+  client holds at most 16 Mi characters of one event-stream line, so it skips an oversized frame without reading
+  all of it (a 40 MiB line was read in full), and it ends lines only at CRLF, LF or CR, as SSE does. The core's
+  parent walk reads one stat line per ancestor instead of the boot id and all of `/proc/stat` each time. A core
+  that cannot read its own start identity names its platform's cause instead of a hidden `/proc`. The unused
+  `principal.peer_pid` is gone, and the macOS peer-credential and process-lookup branches are tested.
 - `apply_patch` no longer replaces a changed `-` line by similarity (#236). A hunk with context, such as
   `-TIMEOUT = 30` over `TIMEOUT = 45` plus `RETRIES = 3`, passed the two-line rule through its context line and
   silently overwrote the 45. Each `-` line must now match its file line up to whitespace, Unicode or a literal `\t`;
@@ -288,6 +376,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   by `src`.
 
 ### Changed
+- Gate timing tests (#308): the linear-time checks in `tests/security` and `plugins/exo-gate/tests` measure process CPU time
+  (`time.process_time`) instead of wall time, and the scaling checks retry up to three times before they fail, so a
+  suite running beside other suites no longer trips them. A quadratic step still fails every attempt. Test-only.
 - Web `/model` and `/default` (#146): the composer opens a model picker or sets the route without starting a model
   turn, and a failed change keeps the line in the box. `/model` goes through the core's principal-only `models.set`
   (`POST /api/chat/sessions/<id>/model`); `/default` saves through the loopback-only provider routes. A command the
@@ -431,7 +522,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
   In `apply_patch` a hunk's context lines count toward the two; since #236 each `-` line must also match its file
-  line, so a changed `-` line is refused there too.
+  line, so a changed `-` line is refused there too. In `edit_file` the rule counts lines, not exact lines: a changed
+  line plus a lone `}` or the `def` line still matches by similarity. So copy `old_string` from a fresh read
+  (docs/TOOLS.md "Edit matching").
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
   is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
   only a string names a principal.
@@ -776,10 +869,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   halves. A read now holds back an ending that could start a key until the next read. Key redaction now finds every
   key in the text itself and puts the `[redacted]` markers in after, so a key no longer matches across a marker.
   Output changes only for a key value that holds `[` or `]` or is part of the word "redacted". The stream is cut
-  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output
-  for any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or
-  `]`. A key value learned while the command runs is cut out only inside one piece. The stream and the result also
-  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
+  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output for
+  any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or `]`. A
+  key value learned while the command runs is cut out only inside one piece. The stream and the result also decode a
+  character split between reads (non-ASCII output got U+FFFD there). The result is still redacted after a tool cuts its
+  output, so a key split by that cut (for example, `bash` keeps 15,000 characters at each end) leaves a part in the
+  result, as before. See docs/TOOLS.md "Streamed output". A background job's completion notice had no key redaction. It
+  now cuts known key values out of its command and its whole log before it cuts them to size (docs/JOBS.md).
 - The gate's decision call no longer falls back to the main model (D-081). With no decision or aux route, the rule
   outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
   stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
@@ -898,6 +994,43 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `~/.exo/{policies,x}/default.yaml` were allowed local writes, so one tool call could rewrite the gate's policy
   or grants without a card. They are `store_write` now and ask the principal. Quoted and escaped braces stay
   literal, as in bash. The store checks have their own brace budget, so no secret-store outcome changes.
+- Environment variables that load code or move where programs and config are found (`LD_PRELOAD`, `PATH`,
+  `PYTHONPATH`, `NODE_OPTIONS`, `BASH_ENV`, `HOME` and the rest of the audited list in `docs/GATE.md`) are
+  `opaque_exec` and ask, named in the summary, when set before a program, through `env`, `sudo` or `timeout`,
+  exported or bare (`export -p` and `readonly -p` assign too), as a parameter-expansion assignment
+  (`${PATH:=.}`, `${PATH=.}`), through `read`, `printf -v`, a `for` loop or a nameref, or as an integer through
+  arithmetic, an array subscript or a `{PATH}>` redirection (`$((PATH=10))`, `a[PATH=10]=1`). So does an
+  exporter, `read` or `printf -v` name the gate cannot read, whether spliced from a variable (`export $X=...`)
+  or a glob the shell expands first (`export PAT?=.`, `read HOM[E]`). So do `MANOPT`, `ZIPOPT`,
+  `RIPGREP_CONFIG_PATH`, `LESS` with a
+  `+` command, and a non-empty `CDPATH`, which moved a `cd` into the Exo store unseen. More command-valued
+  variables are read as commands (`GIT_PROXY_COMMAND`, `GH_PAGER`, `PSQL_PAGER`, `SUDO_ASKPASS`...). Git config
+  from the environment (`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`), `git
+  --config-env` in both forms and `git clone --config`/`-c` take the `git -c` exec-key check, and the value of
+  an exec key is classified as a command, `git -c` included, so a `deny: [delete]` fires on it. A key that loads
+  another config file or a template (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as do `git
+  clone --template` and `git init --template`. `git config set`, `-f FILE`, `-t X`, `--type X` and `--default X`,
+  also abbreviated as git allows (`--fil`, `--ty`), no longer hide the key, `git config rename-section` asks, and a
+  value `git config` sets for an exec key is read as the command it is. More keys run a command: any whose last part
+  ends in `command` or `cmd` (`gpg.ssh.defaultKeyCommand`, `core.alternateRefsCommand`), `interactive.diffFilter`,
+  `remote.<name>.uploadpack`/`receivepack` and a tool's `.path`; `protocol.allow`, `protocol.ext.allow`, an `ext::`
+  URL rewrite or remote URL and `GIT_ALLOW_PROTOCOL` ask, since an `ext::` URL is a command git runs. A quoted
+  `NAME=VALUE` after `env` or `sudo` is the assignment those programs read it as.
+  `PS4` is read as the text bash expands before every traced command, so `export PS4='$(rm -rf x) '; set -x` is a
+  delete; `$((PATH++))`, `$((--PATH))` and `$((PATH<<=1))` assign too. A value that changes nothing keeps the line's
+  class: an empty loader variable (`LD_PRELOAD= ls`), `GIT_CONFIG_GLOBAL=/dev/null`, a `PATH` of `$PATH` and system,
+  virtualenv or `node_modules/.bin` folders, and `PYTHONPATH` before `pytest` or `python -m pytest`; any other
+  `PATH` folder (`export PATH="$HOME/.local/bin:$PATH"`), an empty `PATH` element, a folder written with `..` and a
+  `$PATH` bash does not expand (`export PATH='$PATH:/usr/bin'`) still ask.
+  `IFS=`, `CDPATH=`, `LESS=-R`, `PAGER=cat` and other harmless assignments are unchanged, and so is text bash
+  does not expand: single-quoted text (also inside an unquoted `${a:-'...'}`), a quoted here-doc and a bracket
+  outside a subscript, so `git commit -m 'read ${PATH:=.}'`, `pytest -q 'test_x[HOME=/tmp]'` and `echo [HOME=x]`
+  stay `allow`. A
+  partly quoted value loses its quotes as bash removes them (`${GIT_SSH_COMMAND:=rm' -rf x'}` is `rm -rf x`).
+  The scan is linear in the line, so a long run of unclosed or nested expansions cannot stall the gate hook.
+  The rarer expansion forms that can still set a variable unseen are listed in `docs/GATE.md`. This is the inline
+  form, distinct from #135, which drops `BASH_ENV` inherited from the parent environment (builds on #154,
+  D-038).
 - The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
   the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
   the card shows every argument of the call.

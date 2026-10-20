@@ -169,6 +169,33 @@ def test_stream_equals_whole_output_redaction_for_random_keys(monkeypatch, alpha
             assert k - _safe_cut(output[:k], vals) < 2 * sum(map(len, vals)), (vals, output[:k])
 
 
+def _key_start_at_every_place(text, vals):
+    """``shell._key_start`` as first written: every tail shorter than a value, tested against every value."""
+    return max((len(text) - i for v in vals for i in range(max(len(text) - len(v) + 1, 0), len(text))
+                if v.startswith(text[i:])), default=0)
+
+
+def test_key_start_skips_only_places_that_cannot_start_a_key(monkeypatch):
+    """``_key_start`` tests only the places that hold a key's first character and could give a longer tail. Many
+    keys that share first characters, small reads and tails full of those characters must give what testing every
+    place gives, and the stream must still equal redacting the whole output."""
+    from exo.core.tools.builtin.shell import _Capped, _drain, _key_start
+    rnd, vals = random.Random("key-start"), []
+    monkeypatch.setattr(keys, "known_secret_values", lambda: vals)
+    for _ in range(300):
+        found = {rnd.choice("ab") + "".join(rnd.choices("abc", k=rnd.randint(1, 12))) for _ in range(rnd.randint(1, 30))}
+        vals[:] = sorted(found, key=len, reverse=True)
+        output = "".join(rnd.choice([rnd.choice(vals)[:rnd.randint(1, 13)], *"abcx\n"]) for _ in range(30))
+        assert _key_start("", vals) == 0
+        for k in range(1, len(output) + 1):
+            assert _key_start(output[:k], vals) == _key_start_at_every_place(output[:k], vals), (vals, output[:k])
+        whole, data = keys.redact_secrets(output, vals), output.encode()
+        for size in (1, 3, 8, 80):
+            seen = []
+            _drain(_Proc([data[i:i + size] for i in range(0, len(data), size)]), _Capped(10_000), seen.append)
+            assert "".join(seen) == whole, (vals, output, size)
+
+
 def test_a_bracket_key_does_not_let_another_key_reach_the_stream(monkeypatch):
     """The review's repro. The first key ends in "]" and the second starts with it. Redacting the whole output
     matched the second key across the first key's marker, while the stream cut only for matches in the output

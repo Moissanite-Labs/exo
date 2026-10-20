@@ -131,11 +131,8 @@ class SessionStore:
 
     def __init__(self, path: str | Path = ":memory:", migrate: bool = True):
         self.path = str(path)
-        if self.path != ":memory:":
-            private_file(self.path)
-        self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
-        self._db.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self._conn: sqlite3.Connection | None = self._open()
         with self._lock:
             deadline = time.monotonic() + 2  # a new file's switch to WAL can be busy without waiting (#246)
             while True:
@@ -165,9 +162,38 @@ class SessionStore:
         if migrate:
             self.migrate_agents()
 
+    def _open(self) -> sqlite3.Connection:
+        if self.path != ":memory:":
+            private_file(self.path)  # owner-only, also when a late reader reopens a file that was removed
+        db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")  # per connection; WAL mode stays set in the file itself
+        return db
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        """The connection, reopened if it is used after close() (a late reader at shutdown, a test that inspects)."""
+        db = self._conn
+        if db is None:
+            with self._lock:
+                if self._conn is None:
+                    if self.path == ":memory:":  # a new connection would be an empty database
+                        raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+                    self._conn = self._open()
+                db = self._conn
+        return db
+
     def close(self) -> None:
+        """Release the connection and its file handles.
+
+        Not final: any later use opens the file again, so a reader or writer that runs after
+        ``CoreRuntime.close()`` (a turn finishing, a test that inspects) keeps working, and holds a
+        handle until the next close. Only a ``:memory:`` store stays closed.
+        """
         with self._lock:
-            self._db.close()
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def _q(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:
@@ -211,15 +237,9 @@ class SessionStore:
         return self._info(rows[0]) if rows else None
 
     def list_sessions(self, limit: int = 50, seat: str | None = None, agent: str | None = None) -> list[SessionInfo]:
-        where, args = [], []
-        if seat is not None:
-            where.append("seat=?")
-            args.append(seat)
-        if agent is not None:
-            where.append("agent=?")
-            args.append(agent)
-        sql = "SELECT * FROM sessions" + (" WHERE " + " AND ".join(where) if where else "")
-        rows = self._q(sql + " ORDER BY updated DESC, id LIMIT ?", (*args, limit))
+        cols = {k: v for k, v in (("seat", seat), ("agent", agent)) if v is not None}
+        sql = "SELECT * FROM sessions" + (" WHERE " + " AND ".join(f"{k}=?" for k in cols) if cols else "")
+        rows = self._q(sql + " ORDER BY updated DESC, id LIMIT ?", (*cols.values(), limit))
         return [self._info(r) for r in rows]
 
     def thread(self, sid: str) -> tuple[str | None, str]:

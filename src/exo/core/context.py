@@ -279,9 +279,6 @@ class SummaryNode:
     attempts: int = 0   # failed tries; only non-retryable failures become permanently skipped
 
 
-Summarizer = Callable[..., Awaitable[str]]
-
-
 def is_principal(msg: Message) -> bool:
     """A message the principal wrote and a capture store should see (D-032): a live user message in a thread.
     Not peer, bus or job text, context notes, imports, scheduled prompts, delegation briefs, slash commands or
@@ -352,6 +349,15 @@ def apply_selection(msgs: list[Message], flat: list[dict[str, Any]], out: list[d
         elif role in ("system", "user", "assistant"):
             out_msgs.append(Message(role=role, content=[ContentPart.of_text(str(d.get("content") or ""))]))
     return out_msgs
+
+
+def _with_view(system: str, header: str, parts: list[str], tail: list[Message]) -> list[Message]:
+    """The model input: the system text with the view appended (when there is one), then the verbatim tail."""
+    text = (system + "\n\n" if system else "") + header + "\n\n" + "\n\n".join(parts) if parts else system
+    out = [Message.system(text)] if text else []
+    if tail and tail[0].role == "assistant":
+        out.append(Message.user("(continuing the conversation summarized above)"))
+    return out + tail
 
 
 class TreeContext:
@@ -640,13 +646,11 @@ class TreeContext:
                 parts.append(f"## {label} {n.start}-{n.end}\n{n.text}")
             elif n.lane == "import" and n.status != "skipped":
                 parts.append(f"## {label} {n.start}-{n.end}\n[imported history, summary in progress]")
+            elif n.status == "skipped":  # a level above 0 is two summaries kept as they are
+                tag = "" if n.level else " (verbatim)"
+                parts.append(f"## {label} {n.start}-{n.end}{tag}\n{self._body(n)}")
             else:
-                note = "verbatim" if n.status == "skipped" else "verbatim, summary pending"
-                body = self._body(n) if n.status == "skipped" else self._verbatim(n)
-                if n.level and n.status == "skipped":  # two summaries kept as they are
-                    parts.append(f"## {label} {n.start}-{n.end}\n{body}")
-                else:
-                    parts.append(f"## {label} {n.start}-{n.end} ({note})\n{body}")
+                parts.append(f"## {label} {n.start}-{n.end} (verbatim, summary pending)\n{self._verbatim(n)}")
         return parts
 
     async def settle(self, session: str, timeout: float | None = None, lane: str | None = "live") -> bool:
@@ -676,13 +680,7 @@ class TreeContext:
             lead.append(render_message(tail.pop(0), self.render_limit))
         if lead:
             parts.append("## Tool results continuing the above\n" + "\n".join(lead))
-        text = system
-        if parts:
-            text = (system + "\n\n" if system else "") + VIEW_HEADER + "\n\n" + "\n\n".join(parts)
-        out = [Message.system(text)] if text else []
-        if tail and tail[0].role == "assistant":
-            out.append(Message.user("(continuing the conversation summarized above)"))
-        return out + tail
+        return _with_view(system, VIEW_HEADER, parts, tail)
 
 
 # ---------------------------------------------------------------- one agent, one memory (D-028)
@@ -931,7 +929,7 @@ class AgentContext(TreeContext):
         tail = self._thread_tail(session, frontier)
         notes = [m for m in tail if m.meta.get("note") == "threads"]
         recent = [m for m in tail if m.meta.get("note") != "threads"]
-        pending_last, pending_text = self._unseen(session, key, frontier, self.store.get_meta(session))
+        _, pending_text = self._unseen(session, key, frontier, self.store.get_meta(session))
         nodes = self.store.summaries(key)
         count = {st: sum(1 for n in nodes if n.status == st) for st in ("done", "pending", "skipped", "failed")}
         last = self._last(key)
@@ -1004,9 +1002,6 @@ class AgentContext(TreeContext):
             if self._own(session):  # D-068 on its own tree: a long private thread's first leaves are nearly done
                 await settle_for_turn(self, session)
         top, frontier, parts = self._view(key)
-        text = system
-        if parts:
-            text = (system + "\n\n" if system else "") + AGENT_VIEW_HEADER + "\n\n" + "\n\n".join(parts)
         self.sync_thread(session, frontier)
         tail = self._thread_tail(session, frontier)
         if recall:
@@ -1017,10 +1012,7 @@ class AgentContext(TreeContext):
             if at is None:
                 at = max((i for i, m in enumerate(tail) if m.role == "user" and not m.meta.get("note")), default=len(tail))
             tail.insert(at, block)
-        out = [Message.system(text)] if text else []
-        if tail and tail[0].role == "assistant":
-            out.append(Message.user("(continuing the conversation summarized above)"))
-        return out + tail
+        return _with_view(system, AGENT_VIEW_HEADER, parts, tail)
 
     def _own(self, key: str) -> bool:
         """A private thread (D-028): its entries stay out of the agent tree, so it keeps a tree of its own."""

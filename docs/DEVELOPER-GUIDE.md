@@ -83,7 +83,10 @@ commands. Its collaborators have small interfaces:
 - `engine.peers` is the `PeerService` from `exo.peers`, or `None`. `exo.compose` passes
   `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
 - `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes
-  `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`.
+  `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`. `stop()` keeps it restartable;
+  `close()` closes schedule.sqlite and is final.
+- `await engine.close()` stops jobs, peers, channels and the scheduler, then closes schedule.sqlite and the
+  session store. The store is not final: a later read or write reopens sessions.sqlite (#281).
 - `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core
   (the scheduler) uses it, not the loop's private state.
 - A plugin callback that may be sync or async goes through `exo.core.hooks.maybe_await`. One that may not declare
@@ -126,14 +129,16 @@ Rules for changes (written in the file header): additive only, within a protocol
 defaults, or new types. Never rename or remove. Commands are strict: an unknown field is rejected. Clients decode
 events with `strict=False` so a newer server does not break them.
 
-Recovery fields (D-060): `hello` returns `instance` and `heartbeat`; `approvals.list` returns a `cursor`
+Recovery fields (D-060): `hello` returns `instance`, and over HTTP also `heartbeat` (that server's ping interval,
+with `heartbeat` in `capabilities`); stdio and in-process callers get no pings and no `heartbeat` (#226).
+`approvals.list` returns a `cursor`
 (`instance`, `seq`) taken with the list. A client replaces its pending approvals from the list, applies events above
 `cursor.seq`, and takes a new snapshot when `instance` changes. Never resend a turn or an approval answer whose
 reply was lost; reconcile from the snapshot instead. Principal clients on the Unix socket go through
 `exo.protocol.client.Client(principal=...)`, which checks the peer with the kernel first (`docs/GATE.md`); a refusal
 is `exo.peerauth.PrincipalRefused`, a `ConnectError` whose message names the reason. `GET /events` frames are raw
-UTF-8 JSON (U+0085, U+2028, U+2029 and lone surrogates escaped); the Python client skips a frame over 16 Mi characters and
-resumes after its seq, with or without `reconnect`, so a caller that keeps its own `since` gets the next event and
+UTF-8 JSON (U+0085, U+2028, U+2029 and lone surrogates escaped); the Python client splits lines at CRLF, LF or CR
+(`exo.peerauth.bounded_lines`), holds at most 16 Mi characters of one, skips a frame over that and resumes after its seq, with or without `reconnect`, so a caller that keeps its own `since` gets the next event and
 never sees the skipped one.
 
 Who sent a command is stamped by the transport, not read from the body (D-039, `docs/GATE.md` "Who answered").
@@ -244,7 +249,11 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 
 **Hooks.** `register_hook` accepts only the six names in `VALID_HOOKS` in `src/exo/core/hooks.py`, which the
 core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
-`on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. A failing callback is logged and
+`on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. The tool hooks (`pre_tool_call`,
+`post_tool_call`, `transform_tool_result`) get `tool_name`, `args`, `session_id`, `task_id`, `tool_call_id`,
+`turn_id`, `risk` and `cwd`, the session's working folder from which relative paths in `args` resolve (the gate
+reads them there, #209). Each callback gets only the keywords it declares, or all of them when it takes
+`**kwargs`, so a key added later does not break an older callback. A failing callback is logged and
 skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
@@ -279,7 +288,11 @@ methods matter for the principal's words:
   `checkpoint(reason="pre_compress")` and `on_compacted(session, node)` are optional siblings.
 
 Do not log or print message text from these hooks. Report errors through `exo.core.trace.report` so they show as
-`harness.error` and become findings.
+`harness.error` and become findings. `trace.add_sink(fn)` subscribes to those reports. A bound method is held
+weakly and does not keep its owner alive, so keep the owner referenced for as long as it should receive reports
+(the engine registers its own and removes it in `close()`). Sinks are copy-on-write and no sink runs under a lock, so
+a sink or a finalizer may call `report`, `add_sink` or `remove_sink`; a report already delivering may still call a sink
+removed after it began.
 
 **Context engine hooks.** `select_context(messages, session_id=)` gets each message with `author` and `principal`,
 like the memory hooks. After `session.undo` the core calls `on_session_switch(session, rewound=True, messages=,

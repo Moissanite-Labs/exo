@@ -335,7 +335,10 @@ class _Word:
     started: bool = False
     raw: str = ""              # the source text of the word, quotes kept
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
+    redir_after: bool = False  # a redirection, heredoc or here-string follows it before the next word (#207)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
+    exps: list = field(default_factory=list)  # (scan text, source, ${ frames) per ${..} and $((..)) bash expands
+    fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
     cuts: list = field(default_factory=list)     # (start, end) in text of each $( ), ` ` and $(( )) (#225)
 
 
@@ -367,6 +370,7 @@ class _Heredoc:
     quoted: bool
     ambiguous: bool = False    # delimiter spelled with $'..' or $"..": bash and dash end the body on different lines
     body: str = ""
+    fd: str = ""               # the descriptor number before `<<` (`3<<EOF`); "" or 0 is stdin (#208)
 
 
 @dataclass
@@ -377,29 +381,35 @@ class _Cmd:
     herestrings: list = field(default_factory=list)  # _Word
     piped_in: bool = False
     operands: list = field(default_factory=list)     # _Word after an unquoted NAME=(..): more of its operands
+    piped_group: bool = False    # piped from a compound (`( .. )`, `{ ..; }`, a loop), not from one simple command
 
 
 class _Lexer:
     """Shell words, operators, redirections and heredocs. Never raises; odd input gives odd words."""
 
-    def __init__(self, src: str):
+    def __init__(self, src: str, scan: bool = True):
         self.s = src
         self.i = 0
         self.subs: list[str] = []          # sources of $( ), ` ` and <( ) met at this level
         self.pending: list[_Heredoc] = []
+        self.scan = scan                   # record _Word.exps, which only _parse's words are read for (_hidden_sets)
+        self.covered = 0                   # the source before here lies in a ${..} already recorded
 
     def run(self, closer: bool = False) -> list:
         s, toks = self.s, []
         state = {"w": _Word(), "delim": None}
         depth, start = 0, -1              # start: where the current word's source text begins
+        fd = ""                           # the fd number of the redirection whose target comes next (`3< f`)
 
         def flush():
-            nonlocal start
+            nonlocal start, fd
             w = state["w"]
             w.raw, start = s[start:self.i], -1
             if w.started:
+                w.fd, fd = fd, ""
                 if state["delim"] is not None:
                     hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
+                    hd.fd = w.fd
                     self.pending.append(hd)
                     toks.append(("hd", hd))
                     state["delim"] = None
@@ -450,7 +460,7 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 if w.started and w.text.isdigit() and not w.quoted:
-                    state["w"], start = _Word(), -1    # an fd number belongs to the operator
+                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text    # an fd number belongs to the operator
                 else:
                     flush()
                 op = next(o for o in _REDIR_OPS if s.startswith(o, self.i))
@@ -491,6 +501,9 @@ class _Lexer:
                 self.i = len(s) if j < 0 else j + 1
                 bare = line.lstrip("\t" if hd.strip else "").strip()
                 if bare == hd.delim:
+                    # bash ends a heredoc only on the exact line (leading tabs dropped for <<-): `EOF `, ` EOF` or
+                    # `EOF` and a CR does not end it, so the body bash reads is not the one read here (#208).
+                    hd.ambiguous = hd.ambiguous or (line.lstrip("\t") if hd.strip else line) != hd.delim
                     break
                 if bare.startswith(hd.delim) and bare[len(hd.delim):].strip(" )") == "":
                     self.i = start + line.index(")", line.index(hd.delim))  # `EOF)` closes a $( ) too
@@ -498,7 +511,7 @@ class _Lexer:
                 lines.append(line.lstrip("\t") if hd.strip else line)
             hd.body = "\n".join(lines)
             if not hd.quoted:
-                sub = _Lexer(hd.body)
+                sub = _Lexer(hd.body, scan=False)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
 
@@ -560,10 +573,12 @@ class _Lexer:
                     break
             body = s[i:j]
             if "$(" in body[3:] or "`" in body:
-                sub = _Lexer(body[3:-2])
+                sub = _Lexer(body[3:-2], scan=False)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
             w.cuts.append((len(w.text), len(w.text) + len(body)))
+            if self.scan and i >= self.covered:
+                w.exps.append((body, body, None))
             w.text += body
             w.dynamic = True
             self.i = j
@@ -583,6 +598,11 @@ class _Lexer:
         elif nxt == "{":
             j = s.find("}", i)
             j = len(s) - 1 if j < 0 else j
+            if self.scan and i >= self.covered:    # what bash reads: it may run past this first }
+                vis, close, frames = _dollar_brace(s, i, double)
+                w.exps.append((vis, s[i:close + 1], {at - i: [end - i, None if up is None else up - i]
+                                                     for at, (end, up) in frames.items()}))
+                self.covered = close + 1
             w.text += s[i:j + 1]
             w.dynamic = True
             self.i = j + 1
@@ -614,6 +634,87 @@ class _Lexer:
             else:
                 w.text += "$"
                 self.i = i + 1
+
+
+def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
+    """The index just past the first `closer` from s[k] on, or len(s). With `escapes`, a backslash hides
+    the next character."""
+    while k < len(s) and s[k] != closer:
+        k += 2 if escapes and s[k] == "\\" else 1
+    return min(k + 1, len(s))
+
+
+# The operators after which bash quotes single-quoted text even inside double quotes (a pattern, a case
+# change, `@`, an error message): `"${f%'$x'}"` expands nothing, `"${f:-'$x'}"` expands $x. A subscript is
+# read only up to the next bracket, so a long run of `${a[` costs one step each (a nested subscript there
+# counts as no operator, and the text stays visible).
+_DQ_QUOTING_OP = re.compile(r"[!#]?(?:[A-Za-z_]\w*|\d+|[-@*#?$!])(?:\[[^\][]*\])?(?:[#%/^,~@?]|:\?)")
+
+
+def _dollar_brace(s: str, i: int, dq: bool = False) -> tuple[str, int, dict[int, list]]:
+    """bash's reading of the `${` at s[i]: (its text with what bash does not expand blanked, the index of
+    its closing `}`, len(s) if none, and start: [close, parent start] for every `${` met on the way, one
+    that never closes closing at len(s)). Only a `}` outside quotes and escapes closes it, and only a
+    nested `${` opens another (a bare `{` does not). Blanked: escaped characters, a ` ` or $( ) (it runs in
+    a subshell), and single-quoted or $'..' text, except where bash still expands it: in double quotes
+    (`dq`) after an operator other than _DQ_QUOTING_OP's (`"${a:-'$x'}"`); a `${` in such text is read
+    within it. One pass over s from i, every character once, so a long or deeply nested line stays linear
+    (classify runs inside the gate hook)."""
+    frames: dict[int, list] = {}
+
+    def open_(at: int, dq: bool, parent: int | None) -> list:   # [in a "..." inside it, sq expands, dq, start]
+        frames[at] = [len(s), parent]
+        return [False, dq and not _DQ_QUOTING_OP.match(s, at + 2), dq, at]
+
+    def quoted_text(a: int, b: int, parent: int) -> str:
+        # single-quoted text bash expands: the visible text, and the frames of the ${ in it, read within it
+        seg = s[a:b]
+        vis = re.sub(r"\\.", "  ", seg, flags=re.S)
+        p = vis.find("${")
+        while p >= 0:
+            _, close, inner = _dollar_brace(seg, p)
+            for at, (end, up) in inner.items():
+                frames[a + at] = [a + end, parent if up is None else a + up]
+            p = vis.find("${", close + 1)
+        return vis
+
+    out, stack, j = ["${"], [open_(i, dq, None)], i + 2   # one entry per ${ still open, no recursion
+    while j < len(s):
+        inq, sq, fdq, start = stack[-1]
+        ch, k = s[j], j + 1
+        if ch == "\\":
+            k = min(j + 2, len(s))
+            out.append(" " * (k - j))
+        elif s.startswith("$'", j) and not inq:      # where bash expands '..' it expands $'..' too
+            k = _skip(s, j + 2, "'", True)
+            out.append(" " + quoted_text(j + 1, k, start) if sq else " " * (k - j))
+        elif ch == "'" and not inq:
+            k = _skip(s, j + 1, "'", False)
+            out.append(quoted_text(j, k, start) if sq else " " * (k - j))
+        elif ch == "`" or (s.startswith("$(", j) and not s.startswith("$((", j)):
+            if ch == "`":
+                k = _skip(s, j + 1, "`", True)
+            else:
+                lx = _Lexer(s, scan=False)
+                lx.i = j + 2
+                lx.run(closer=True)
+                k = lx.i
+            out.append(" " * (k - j))
+        elif s.startswith("${", j):
+            stack.append(open_(j, fdq or inq, start))
+            out.append("${")
+            k = j + 2
+        elif ch == "}" and not inq:
+            frames[start][0] = j
+            stack.pop()
+            out.append("}")
+            if not stack:
+                return "".join(out), j, frames
+        else:
+            stack[-1][0] = inq ^ (ch == '"')
+            out.append(ch)
+        j = k
+    return "".join(out), len(s), frames
 
 
 def _literal_heredoc(toks: list) -> str | None:
@@ -651,7 +752,7 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
             cmds.append(cur)
-        cur, shut, lead = _Cmd(piped_in=piped), None, True
+        cur, shut, lead = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True
 
     def push(entry: tuple) -> None:
         tops.setdefault(entry[0], []).append(len(opened))
@@ -667,6 +768,8 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
 
     while i < len(toks):
         kind, v = toks[i]
+        if kind in ("redir", "hd") and cur.words:
+            cur.words[-1].redir_after = True
         if kind == "op":
             last = cur.words[-1] if cur.words else None
             # a NAME=( after an earlier NAME=(..) is still an operand of that earlier command
@@ -930,11 +1033,224 @@ _GIT_VALUE_OPTS = {"rebase": "CsXx", "push": "o", "archive": "o", "fetch": "jo",
 # lower-case keyword ssh matches (see _ssh_setting).
 _SSH_EXEC_SETTINGS = {k.lower(): k for k in ("ProxyCommand", "LocalCommand", "RemoteCommand", "KnownHostsCommand")}
 _SSH_LIB_SETTINGS = {k.lower(): k for k in ("PKCS11Provider", "SecurityKeyProvider")}
+# Variables set before a program (also through env or sudo), exported or assigned bare on the line.
+# _EXEC_ENV: the value is a command line the program runs, classified as a nested command.
 _EXEC_ENV = frozenset("""
 GIT_SSH_COMMAND GIT_SSH GIT_PAGER GIT_EDITOR GIT_SEQUENCE_EDITOR GIT_EXTERNAL_DIFF GIT_ASKPASS SSH_ASKPASS
-RSYNC_RSH PAGER MANPAGER EDITOR VISUAL LESSOPEN LESSCLOSE
+RSYNC_RSH PAGER MANPAGER EDITOR VISUAL LESSOPEN LESSCLOSE GIT_PROXY_COMMAND BROWSER GH_PAGER GH_EDITOR GH_BROWSER
+PSQL_PAGER PSQL_EDITOR SUDO_ASKPASS SUDO_EDITOR RSYNC_CONNECT_PROG PROMPT_COMMAND PS4
 """.split())
-_EXEC_ENV_OPAQUE = frozenset(["TAR_OPTIONS"])
+# PS4 is not a command line but a prompt bash expands before every traced command (`set -x`), interactive or not:
+# its `$( )` and backticks run. Its value is read as that double-quoted text (_prompt_text).
+# _EXEC_ENV_OPAQUE: the value is not a command the gate can read but decides what code runs: options the
+# program parses, libraries the loader injects, or where programs, modules, startup and config files are
+# found (HOME picks ~/.gitconfig, ~/.ssh/config and ~/.exo), and CDPATH, which moves a relative `cd` where
+# the gate cannot tell whether later writes land in the Exo store. Opaque, named. An empty CDPATH turns
+# it off (`CDPATH= cd src`). Left out: IFS, which does not change how literal words split (expansions are
+# opaque already). LESS counts only with a `+` command in it (`LESS=-R` stays allow).
+_EXEC_ENV_OPAQUE = {
+    **dict.fromkeys("TAR_OPTIONS NODE_OPTIONS PERL5OPT RUBYOPT MANOPT ZIPOPT".split(),
+                    "sets options the gate does not read"),
+    "RIPGREP_CONFIG_PATH": "points rg at a config file the gate does not read",
+    **dict.fromkeys("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
+        DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH OPENSSL_CONF OPENSSL_ENGINES
+        OPENSSL_MODULES""".split(), "changes which libraries are loaded"),
+    **dict.fromkeys("""PATH HOME XDG_CONFIG_HOME BASH_ENV ENV ZDOTDIR GIT_EXEC_PATH GIT_TEMPLATE_DIR
+        GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE PERL5LIB PERLLIB
+        RUBYLIB NODE_PATH PSQLRC""".split(), "changes which programs, modules or startup and config files are used"),
+    "CDPATH": "moves cd, so the gate cannot tell whether writes land in the Exo store",
+    "GIT_ALLOW_PROTOCOL": "lets git use transports such as ext::, whose URL is a command git runs",
+}
+# git config from the environment, `git -c` by another name: GIT_CONFIG_KEY_<n> with GIT_CONFIG_VALUE_<n>
+# (GIT_CONFIG_COUNT alone sets nothing), and GIT_CONFIG_PARAMETERS. The pairs take _git_config_kind.
+_GIT_CONFIG_ENV = re.compile(r"GIT_CONFIG_(KEY|VALUE)_(\d+)")
+_EXPORTERS = ("export", "declare", "typeset", "readonly", "local")
+
+
+# Values of a listed variable that change nothing the gate relies on, so everyday lines keep their class: an empty
+# loader variable (the loader skips it), git's global or system config pointed at /dev/null (nothing is read), an
+# empty CDPATH (it turns CDPATH off), and a PATH made of the current one and folders the gate already trusts a
+# program from by path (_trusted_path: a system bin folder, a virtualenv's or node_modules/.bin). An empty element
+# is the current folder, so `PATH= ls` and `PATH=$PATH: ls` still ask; so does any other folder, appended or not,
+# since it supplies every program the earlier ones lack, and a folder written with `..`, which the system resolves
+# through links (`/tmp/s/../../usr/bin`). `$PATH` is the current value only where bash expands it: in single quotes,
+# `$'..'` or after a backslash it is a folder named `$PATH` (`literal`: the assignment holds such text).
+_EMPTY_IS_UNSET = frozenset("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
+    DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH CDPATH""".split())
+
+
+def _harmless_value(name: str, value: str | None, literal: bool = False) -> bool:
+    if value is None:
+        return False
+    if name in _EMPTY_IS_UNSET:
+        return value == ""
+    if name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
+        return value == "/dev/null"
+    return name == "PATH" and all(not literal and d in ("$PATH", "${PATH}") or d and not re.search(r"[*?\[]", d)
+                                  and ".." not in d.split("/") and (
+        os.path.normpath(_expand_text(d)) in _SYSTEM_BIN or bool(_ENV_BIN.search(d.rstrip("/") + "/x")))
+        for d in value.split(":"))
+
+
+def _kept_text(raw: str) -> bool:
+    """The source text of an assignment holds text bash keeps as written: single quotes, `$'..'` or a backslash
+    (or no source text at all, which counts the same)."""
+    return not raw or "'" in raw or "\\" in raw
+
+
+def _env_hazard(name: str, value: str | None = None, literal: bool = False) -> str:
+    """Why setting this variable matters to the gate ("" when it does not). `value` None means the line
+    sets it to a value the gate does not see (`read`, `printf -v`, a for loop, a nameref). `literal`: the
+    assignment's source holds quoted or escaped text (_kept_text)."""
+    if name == "PS4":
+        return "is expanded, $( ) included, before each traced command"
+    if name in _EXEC_ENV:
+        return "holds a command a program runs"
+    if name in _EXEC_ENV_OPAQUE and not _harmless_value(name, value, literal):
+        return _EXEC_ENV_OPAQUE[name]
+    if name == "LESS" and (value is None or "+" in value):
+        return "sets a command less runs at start"
+    if name == "GIT_CONFIG_PARAMETERS" or _GIT_CONFIG_ENV.fullmatch(name):
+        return "sets git config"
+    return ""
+
+
+# A variable the gate assigns without a plain NAME=value word. Parameter expansion assigns with `:=` or
+# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`) and an array subscript (`a[NAME=n]`,
+# itself arithmetic) assign an integer; a `{NAME}>` redirection drops the fd number into NAME. Each sets the
+# variable as a side effect, whatever the program is, so a listed variable set this way must be read too.
+# Only what bash expands counts: the ${..} and $((..)) the lexer met outside single quotes (_Word.exps), each
+# read to the } bash closes it with and with quoted text blanked (_dollar_brace), and a bracket only as the
+# subscript of a name (`echo [HOME=x]` is a glob, `'${PATH:=.}'` and `${a:-'${PATH:=.}'}` are text).
+_PARAM_NAME = re.compile(r"\$\{([A-Za-z_]\w*)")            # then a subscript, and `:=` or `=` to assign
+_ARITH_SET = re.compile(r"\b([A-Za-z_]\w*)\s*(?:(?:<<|>>|[-+*/%&|^])?=(?!=)|\+\+|--)|(?:\+\+|--)\s*([A-Za-z_]\w*)")
+_SUBSCRIPT = re.compile(r"[A-Za-z_]\w*\[([^\]]*)\]")
+_EXP_SUBSCRIPT = re.compile(r"\$\{[#!]?[A-Za-z_]\w*\[")
+_FD_VAR = re.compile(r"\{([A-Za-z_]\w*)\}")
+_LONG_VALUE = 64   # a nested ${..} longer than this stands in a value as `${_}`, so no text is copied twice
+
+
+def _pairs(text: str, opener: str, closer: str) -> dict[int, int]:
+    """Each `opener` in text: the index of the `closer` that matches it, as bash counts them (len(text) if none).
+    One stack pass, so a long run of unclosed openers stays linear."""
+    out, stack = {}, []
+    for m in re.finditer(re.escape(opener) + "|" + re.escape(closer), text):
+        if m.group() == opener:
+            stack.append(m.start())
+        elif stack:
+            out[stack.pop()] = m.start()
+    out.update(dict.fromkeys(stack, len(text)))
+    return out
+
+
+def _spans(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` not inside
+    another, and the subscript of each `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare
+    `NAME=n` assigns."""
+    parens, brackets = _pairs(text, "(", ")"), _pairs(text, "[", "]")
+    arith, i = [], 0
+    while (j := text.find("$((", i)) >= 0:
+        end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
+        arith.append((j + 3, end))
+        i = max(end, j + 3)
+    return arith, [(m.end(), brackets[m.end() - 1]) for m in _EXP_SUBSCRIPT.finditer(text)]
+
+
+def _covered(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The spans merged into disjoint ones, in order."""
+    out: list[tuple[int, int]] = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _brace_value(src: str, frames: dict, at: int, start: int) -> str:
+    """The text of the `${` at `at` from `start` to its close, with each nested ${..} longer than _LONG_VALUE as
+    `${_}`: each character is copied into one value at most, however deep the nesting."""
+    pieces, pos = [], start
+    for child in frames[at][2]:
+        end = frames[child][0]
+        if end < pos:
+            continue
+        pieces += [src[pos:child]] if child >= pos else []
+        pieces.append(src[child:end + 1] if child >= pos and end + 1 - child <= _LONG_VALUE else "${_}")
+        pos = end + 1
+    return "".join(pieces) + src[pos:frames[at][0]]
+
+
+def _unquote_value(v: str) -> str:
+    """The value a parameter-expansion assignment gives, quotes removed as bash removes them, so a command
+    value (`${GIT_PAGER:='rm -rf x'}`, `${GIT_SSH_COMMAND:=rm' -rf x'}`) reads as the command it is."""
+    return re.sub(r"'([^']*)'|\"([^\"]*)\"|\\(.)", lambda m: "".join(g or "" for g in m.groups()), v)
+
+
+def _prompt_text(value: str) -> str:
+    """A PS4 value as the command line that expands it the way bash does (`: "<value>"`), or "" when nothing in it
+    runs. Backslashes are dropped first: bash decodes the prompt's own escapes (`\\$` is `$`) before it expands."""
+    if "$" not in value and "`" not in value:
+        return ""
+    return ': "' + value.replace("\\", "").replace('"', '\\"') + '"'
+
+
+def _subscript_sets(name: str) -> list[str]:
+    """The variables assigned inside the subscript of a `NAME[...]` word (`a[PATH=10]` sets PATH)."""
+    m = _SUBSCRIPT.match(name)
+    return [a.group(1) or a.group(2) for a in _ARITH_SET.finditer(m.group(1))] if m else []
+
+
+def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, bool]]:
+    """(name, value, literal) for each variable the command assigns without a plain NAME=value word, each once.
+    value is None when the gate does not see it (an fd number, an arithmetic result); literal: the value's source
+    holds quoted or escaped text (_kept_text). Covers parameter-expansion
+    assignment, arithmetic, a subscript in an expansion (`${a[PATH=10]}`, also `${a[PATH=${i}]}`) or in
+    `names` (the words bash reads as a variable name: assignments, exporter and unset arguments), and a
+    `{NAME}>` redirection. Linear in the line: brackets, parens and braces are each matched in one pass."""
+    out: list[tuple[str, str | None, bool]] = []
+    for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]:
+        for vis, src, frames in w.exps:                   # only real expansions, quoted text blanked in vis
+            if frames is None:                            # a $((..)): its ${..} as the lexer reads one
+                frames = _dollar_brace(src, 0)[2]
+            frames = {at: [end, up, []] for at, (end, up) in frames.items()}
+            for at, (_, up, _) in frames.items():         # in order of start, so each child list is too
+                if up in frames:
+                    frames[up][2].append(at)
+            brackets, asked, close_at = _pairs(vis, "[", "]"), 0, -1
+            for m in _PARAM_NAME.finditer(vis):
+                pos = m.end()
+                if vis.startswith("[", pos):              # a subscript: PATH[0] is PATH
+                    pos = brackets[pos] + 1
+                op = 2 if vis.startswith(":=", pos) else 1 if vis.startswith("=", pos) else 0
+                if not op:
+                    continue
+                if m.start() not in frames:               # not a ${ the scan opened: up to the next }
+                    if not asked <= pos <= close_at:      # the last answer holds while pos stays before it
+                        asked, close_at = pos, src.find("}", pos)
+                        close_at = len(src) if close_at < 0 else close_at
+                    frames[m.start()] = [close_at, None, []]
+                raw = _brace_value(src, frames, m.start(), pos + op)
+                out.append((m.group(1), _unquote_value(raw), "'" in raw or "\\" in raw))
+            arith, subs = _spans(vis)
+            for region in (arith, subs):
+                for a, b in _covered(region):
+                    out += [(m.group(1) or m.group(2), None, False) for m in _ARITH_SET.finditer(vis, a, b)]
+    out += [(n, None, False) for name in names for n in _subscript_sets(name)]
+    if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
+        out += [(fm.group(1), None, False) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
+    return list(dict.fromkeys(out))
+
+
+def _unreadable_name(w: "_Word") -> bool:
+    """The variable name in this word is one the gate cannot resolve: a glob the shell expands before the
+    builtin sees it (`PAT?=.`, `read HOM[E]`), or a name spliced from an expansion (`export $X=...`)."""
+    if w.glob:
+        return True
+    name = re.split(r"\[|\+?=", w.text, maxsplit=1)[0]
+    return w.dynamic and bool(re.search(r"[$`]", name))
+
+
 # sqlite3/duckdb dot-commands (any unambiguous prefix works, so match prefixes): .shell and .system run a
 # command, .once/.output/.import/.read run one when an argument starts with `|` (after options too:
 # `.import --csv '|cmd' t`), .once/.output/.read/.load otherwise use a file or library the gate does not see
@@ -964,14 +1280,56 @@ symbolic-ref update-ref ls-remote ls-tree show-ref version help range-diff whatc
 maintenance count-objects verify-commit verify-tag merge-base name-rev check-ignore check-attr var
 """.split())
 _GIT_EXEC_KEY = re.compile(r"^(alias\..+|core\.(pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy)|"
-                           r"sequence\.editor|diff\.external|.+\.(command|cmd|textconv|clean|smudge|process|"
-                           r"driver|program|helper)|credential\..*|pager\..+|filter\..+|uploadpack\..+)$", re.I)
+                           r"sequence\.editor|diff\.external|interactive\.difffilter|.+\.[\w-]*(command|cmd)|"
+                           r".+\.(textconv|clean|smudge|process|driver|program|helper)|credential\..*|pager\..+|"
+                           r"filter\..+|uploadpack\..+|remote\..+\.(uploadpack|receivepack)|"
+                           r"(difftool|mergetool|man|browser)\..+\.path)$", re.I)
+# git config keys that load more config or a template the gate does not read: an included file can set any
+# exec key, and the hooks in a template run (init.templateDir is git clone --template by another name).
+_GIT_LOAD_KEY = re.compile(r"^(include\.path|includeif\..+\.path|init\.templatedir)$", re.I)
+# git config that lets git reach a remote through `ext::`, whose URL is a command git runs: the switches that
+# allow the transport (it is off by default), a URL rewrite to an ext:: base, and a remote whose URL is one.
+_GIT_EXT_ALLOW = re.compile(r"^protocol\.(ext\.)?allow$", re.I)
+_GIT_EXT_URL_KEY = re.compile(r"^(url\.ext::.*\.(push)?insteadof|remote\..+\.(push)?url)$", re.I | re.S)
 _GH_GROUPS = frozenset("""
 pr issue repo api auth release gist workflow run label secret variable ssh-key gpg-key search browse status
 project cache ruleset org config attestation completion discussion help version --version --help
 """.split())
 _DATA_FLAGS = ("-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form",
-               "--json", "-T", "--upload-file", "--form-string")
+               "--json", "-T", "--upload-file", "--form-string", "--data-ascii", "--expand-data")
+# #208: where a post's text comes from somewhere the line does not show. gh builds the body itself (--fill, a
+# template, the editor, generated notes); the HTTP clients read a file, stdin or a config file.
+_GH_UNSEEN_FLAGS = {
+    ("pr", "create"): ("-f", "--fill", "--fill-first", "--fill-verbose", "-e", "--editor", "-T", "--template",
+                       "--recover", "--attach"),
+    ("issue", "create"): ("-e", "--editor", "-T", "--template", "--recover", "--attach"),
+    ("pr", "comment"): ("-e", "--editor", "--attach"), ("issue", "comment"): ("-e", "--editor", "--attach"),
+    ("pr", "edit"): ("--attach",), ("issue", "edit"): ("--attach",),
+    ("release", "create"): ("--generate-notes", "--notes-from-tag"), ("release", "edit"): ("--generate-notes",),
+}
+# gh's options that take a value, per command (gh 2.102 `--help`; `-R`/`--repo` is inherited), so the gate reads
+# a line as gh does: in `gh issue create -t -b -b x` the title is `-b` and the body `x` (#208).
+_GH_TAKES = {
+    ("pr", "create"): ("aBbFHlmprTtR", "--assignee --attach --base --head --label --milestone --project --recover "
+                                       "--reviewer --template --repo"),
+    ("pr", "comment"): ("bFR", "--attach --repo"), ("pr", "review"): ("bFR", "--repo"),
+    ("pr", "edit"): ("BbFmtR", "--add-assignee --add-label --add-project --add-reviewer --attach --base --milestone "
+                               "--remove-assignee --remove-label --remove-project --remove-reviewer --repo"),
+    ("issue", "create"): ("abFlmpTtR", "--assignee --attach --blocked-by --blocking --label --milestone --parent "
+                                       "--project --recover --template --type --repo"),
+    ("issue", "comment"): ("bFR", "--attach --repo"),
+    ("issue", "edit"): ("bFmtR", "--add-assignee --add-blocked-by --add-blocking --add-label --add-project "
+                                 "--add-sub-issue --attach --milestone --parent --remove-assignee --remove-blocked-by "
+                                 "--remove-blocking --remove-label --remove-project --remove-sub-issue --type --repo"),
+    ("release", "create"): ("nFtR", "--discussion-category --notes-start-tag --target --repo"),
+    ("release", "edit"): ("nFtR", "--discussion-category --tag --target --repo"),
+}
+_GH_API_FIELDS = ("-f", "--raw-field", "-F", "--field")
+_GH_API_TAKES = "FHqXpft"      # gh api's short options that take a value
+# Option values that are not the request body, so a variable there (a token in a header) leaves it readable.
+_HTTP_META = {"curl": ("-H", "--header", "-u", "--user", "-A", "--user-agent", "--oauth2-bearer"),
+              "wget": ("--header", "--user", "--password", "--http-user", "--http-password"),
+              "http": ("-a", "--auth"), "https": ("-a", "--auth"), "xh": ("-a", "--auth"), "httpie": ("-a", "--auth")}
 _SQL_DESTRUCTIVE = re.compile(r"\b(drop\s+(table|database|schema|trigger|view|index)|truncate\s+|delete\s+from)\b",
                               re.I)
 _URL = re.compile(r"https?://[^\s'\"<>]+")
@@ -1019,13 +1377,104 @@ def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection
     return c
 
 
+def _git_config_kind(key: str, value: str) -> str:
+    """What a git config pair makes git do: "exec" for an exec key (an alias, the pager, the editor,
+    core.sshCommand, a hook path, a filter, any key whose last part ends in `command` or `cmd`...) or a
+    `!shell` value, "load" for a key that loads another config file or a template, "ext" for one that lets
+    git run an `ext::` URL, "" otherwise. One check for `git -c`, `git config`, `git clone --config` and the
+    GIT_CONFIG_* variables."""
+    if _GIT_EXEC_KEY.match(key) or value.startswith("!"):
+        return "exec"
+    if _GIT_LOAD_KEY.match(key):
+        return "load"
+    m = _GIT_EXT_URL_KEY.match(key)
+    ext = _GIT_EXT_ALLOW.match(key) or m and (m.group(1).lower().startswith("url.") or
+                                              value.lower().startswith("ext::"))
+    return "ext" if ext else ""
+
+
+_GIT_CONFIG_DOES = {"exec": "runs a configured command", "load": "loads a config file or template the gate does not read",
+                    "ext": "lets git run the command in an ext:: URL"}
+# `git config` (old and new forms): the subcommands, and git's long options (git 2.54 `git config -h` and each
+# subcommand's), those that take a value marked with `=`. git takes any unique prefix of a long option
+# (`--fil`, `--ty`, `--rename-sec`) and `--no-` before the ones that take a value; `-f` and `-t` take one too.
+_GIT_CONFIG_SUBS = frozenset("list get set unset rename-section remove-section edit".split())
+_GIT_CONFIG_LONGS = tuple("""all append blob= comment= default= fixed-value global includes local name-only regexp
+    show-names show-origin show-scope system url= value= worktree add bool bool-or-int bool-or-str expiry-date get
+    get-all get-color get-colorbool get-regexp get-urlmatch int path remove-section rename-section replace-all unset
+    unset-all edit file= list type= null""".split())
+
+
+def _git_config_long(word: str) -> tuple[str, bool]:
+    """A `--option[=value]` word as git config reads it: (the option's full name, "" when git rejects it as
+    unknown or ambiguous, and whether it takes the next word as its value)."""
+    body, eq, _ = word[2:].partition("=")
+    for neg in ("", "no-"):
+        if neg and not body.startswith(neg):
+            continue
+        part = body[len(neg):]
+        names = [o for o in _GIT_CONFIG_LONGS if o.rstrip("=") == part] or \
+            [o for o in _GIT_CONFIG_LONGS if o.startswith(part) and not (neg and not o.endswith("="))]
+        if len(names) == 1:
+            name = names[0]
+            return neg + name.rstrip("="), name.endswith("=") and not neg and not eq
+    return "", False
+
+
+def _git_config_args(rest: list[str]) -> tuple[str, list[str]]:
+    """`git config`'s words after `config` as git reads them: (the subcommand, or the old form's mode option
+    without its dashes, "" for none; the names and values left). The values of `-f`, `-t`, `--file`, `--type`,
+    `--default` and the like, also abbreviated, are skipped, so neither they nor `set` is read as the key."""
+    mode, pos, i = "", [], 0
+    while i < len(rest):
+        a, i = rest[i], i + 1
+        if a == "--":
+            pos += rest[i:]
+            break
+        if a.startswith("--"):
+            name, takes = _git_config_long(a)
+            i += takes
+            if name in ("add", "replace-all", "get", "get-all", "get-regexp", "get-urlmatch", "unset", "unset-all",
+                        "rename-section", "remove-section", "list", "edit", "get-color", "get-colorbool"):
+                mode = mode or name
+        elif a.startswith("-") and len(a) > 1:          # -f FILE, -tTYPE, -l, -e, -z, clustered
+            for n, ch in enumerate(a[1:], 2):
+                if ch in "ft":                          # takes the rest of the word, or the next word
+                    i += 0 if a[n:] else 1
+                    break
+                mode = mode or {"l": "list", "e": "edit"}.get(ch, "")
+        elif not mode and not pos and a in _GIT_CONFIG_SUBS:
+            mode = a
+        else:
+            pos.append(a)
+    return mode, pos
+
+
+def _git_config_sets(rest: list[str]) -> list[str]:
+    """The KEY=VALUE pairs `git config ...` writes (`set`, `--add`, `--replace-all`, or a name and a value)."""
+    mode, pos = _git_config_args(rest)
+    return [f"{pos[0]}={pos[1]}"] if mode in ("", "set", "add", "replace-all") and len(pos) > 1 else []
+
+
+def _git_config_env(spec: str) -> str:
+    """`--config-env=KEY=ENVVAR` as the `-c KEY=VALUE` it is: the value comes from a variable the gate
+    does not see. git splits at the last `=`."""
+    key, _, var = spec.rpartition("=")
+    return f"{key}=${{{var}}}"
+
+
 def _git_subcommand(argv: list[str], config: list[str] | None = None) -> int:
     """Index of the git subcommand after the global options; `-c`/`--config-env` values go to `config`."""
     i = 1
     while i < len(argv) and argv[i].startswith("-"):
+        if argv[i].startswith("--config-env="):
+            if config is not None:
+                config.append(_git_config_env(argv[i].split("=", 1)[1]))
+            i += 1
+            continue
         if argv[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"):
             if argv[i] in ("-c", "--config-env") and i + 1 < len(argv) and config is not None:
-                config.append(argv[i + 1])
+                config.append(argv[i + 1] if argv[i] == "-c" else _git_config_env(argv[i + 1]))
             i += 2
             continue
         i += 1
@@ -1037,15 +1486,20 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
     i = _git_subcommand(argv, config)
     for kv in config:
         k, _, v = kv.partition("=")
-        if _GIT_EXEC_KEY.match(k) or v.startswith("!"):
-            return _opaque(f"git -c {k} runs a configured command", cmd)
+        if kind := _git_config_kind(k, v):
+            return _opaque(f"git -c {k} {_GIT_CONFIG_DOES[kind]}"[:120], cmd)
     sub, rest = (argv[i] if i < len(argv) else ""), argv[i + 1:]
     if sub and sub not in _GIT_SUBS:
         return _opaque(f"git {sub} (an alias or extension the gate cannot see)", cmd)
     if sub == "config":
-        names = [a for a in rest if not a.startswith("-")]
-        if names and _GIT_EXEC_KEY.match(names[0]) and (len(names) > 1 or _has(rest, "--add", "--replace-all")):
-            return _opaque(f"git config {names[0]} sets a command git will run", cmd)
+        mode, names = _git_config_args(rest)
+        if mode == "rename-section" and len(names) > 1:   # moves every key of a section under a new name
+            return _opaque(f"git config renames a section to {names[1]}, which can make its keys run a command"[:120],
+                           cmd)
+        for kv in _git_config_sets(rest) or ([f"{names[0]}="] if names and mode in ("add", "replace-all") else []):
+            k, _, v = kv.partition("=")
+            if kind := _git_config_kind(k, v):
+                return _opaque(f"git config sets {k}, which {_GIT_CONFIG_DOES[kind]}"[:120], cmd)
     if sub == "push":
         remote = next((a for a in rest if not a.startswith("-")), "")
         if _has(rest, "-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror") or \
@@ -1096,26 +1550,73 @@ def _gh_target(argv: list[str]) -> tuple[str, str]:
     return target, link
 
 
-def _classify_gh(argv: list[str], cmd: str, bodies: list[str]) -> Classification:
+def _gh_text_options(group: str) -> tuple:
+    """The options that carry a gh post's text: body (or release notes), its file, and the title."""
+    if group == "release":
+        return ("--notes", "-n"), ("--notes-file", "-F"), ("--title", "-t")
+    return ("--body", "-b"), ("--body-file", "-F"), ("--title", "-t")
+
+
+def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
+    """Whether a gh post's text is not all on the line as the gate read it (#208): a word from an expansion
+    (any word can be an option, `--body-file=f` included), a text option the gate's reading and gh's disagree
+    on (gh takes the last of a repeated option, and short options cluster: `-db text`), a body file `-` with no
+    literal stdin, a body gh builds itself (`--fill`, a template, the editor, generated notes), a gist's files,
+    or a `gh api` request body or field read from a file (`--input`, `field=@path`)."""
+    group, verb = (argv + ["", ""])[1:3]
+    if any(i in dynamic for i in range(1, len(argv))) or group == "gist":
+        return True
+    if group == "api":
+        fields = _option_values(argv, _GH_API_FIELDS, takes=_GH_API_TAKES, least=99)
+        return _opt(argv, "--input") is not None or any(f.partition("=")[2].startswith("@") for f in fields)
+    takes, longs = _GH_TAKES.get((group, verb), ("", ""))
+    body, body_file, title = _gh_text_options(group)
+    # The text options take a value too: in `--title --body --body x` the title is `--body` and the body `x`.
+    longs_all = tuple(longs.split()) + tuple(n for names in (body, body_file, title) for n in names if n[:2] == "--")
+    for names in (body, body_file, title):
+        got = _opt(argv, *names)
+        if _option_values(argv, names, takes=takes, longs=longs_all, least=99) != ([] if got is None else [got]):
+            return True
+    if _opt(argv, *body_file) == "-" and stdin is None:
+        return True
+    flags = _GH_UNSEEN_FLAGS.get((group, verb), ())
+    return _has(argv, *flags) or any(a.startswith(f + "=") for a in argv for f in flags if f.startswith("--"))
+
+
+def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
+                 dynamic: frozenset = frozenset()) -> Classification:
+    """A gh command. ``stdin`` is its stdin when the line spells it out (`_literal_stdin`), ``dynamic`` the
+    indexes of words that come from an expansion. An outbound post whose text the gate cannot fully read
+    carries the ``unseen_body`` signal (#208)."""
+    c = _gh_kind(argv, cmd, stdin)
+    gist = c.category == "remote_write" and argv[1:2] == ["gist"]          # a secret gist's create or edit
+    if (c.category in OUTBOUND or gist) and _gh_unseen(argv, stdin, dynamic):
+        c.signals.append("unseen_body")
+    return c
+
+
+def _gh_kind(argv: list[str], cmd: str, stdin: str | None) -> Classification:
     group = argv[1] if len(argv) > 1 else ""
     verb = argv[2] if len(argv) > 2 else ""
     if group and group not in _GH_GROUPS:
         return _opaque(f"gh {group} (an alias or extension the gate cannot see)", cmd)
     target, link = _gh_target(argv)
-    body = _opt(argv, "--body", "-b") or ""
-    title = _opt(argv, "--title", "-t") or ""
-    body_file = (_opt(argv, "--body-file", "-F") or "") if group != "api" else ""
+    body_opt, file_opt, title_opt = _gh_text_options(group)
+    body = _opt(argv, *body_opt) or ""
+    title = _opt(argv, *title_opt) or ""
+    body_file = (_opt(argv, *file_opt) or "") if group != "api" else ""
     if body_file == "-":
         body_file = ""
-        if bodies and not body:
-            body = bodies[0]
+        if stdin is not None and not body:
+            body = stdin
     kw = dict(target=target, link=link, text=body, title=title, text_file=body_file, command=cmd)
     where = f" on {target}" if target else ""
     if group == "auth" or group == "secret" or (group == "ssh-key" and verb in ("add", "delete")):
         return _make("credentials", summary=f"gh {group} {verb}", **kw)
     if group == "api":
         method = (_opt(argv, "-X", "--method") or "").upper()
-        fields = _opts(argv, "-f", "--raw-field", "-F", "--field")
+        # Read as gh reads them, so an attached value (`-fbody=x`) makes it a POST too (#208).
+        fields = _option_values(argv, _GH_API_FIELDS, takes=_GH_API_TAKES, least=99)
         if not method:
             method = "POST" if fields or _opt(argv, "--input") else "GET"
         endpoint = next((a for a in argv[2:] if not a.startswith("-") and "/" in a and "=" not in a), "")
@@ -1172,22 +1673,55 @@ def _classify_gh(argv: list[str], cmd: str, bodies: list[str]) -> Classification
     return _make("read", summary=f"gh {group} {verb}".strip(), **kw)
 
 
-def _classify_http(argv: list[str], cmd: str) -> Classification:
+def _http_unseen(prog: str, argv: list[str], dynamic: frozenset, fed: bool) -> bool:
+    """Whether an HTTP client's request body is not all on the line (#208): a word from an expansion other than
+    a header or login value, a body read from a file or stdin (curl `-d @f`, `-F k=@f`, `-F k=<f`, `-T`, `-K`;
+    wget `--post-file`; httpie `k=@f`, `k:=@f`, `k@f` or a fed stdin)."""
+    meta = _HTTP_META.get(prog, ())
+    exempt = {i + 1 for i, a in enumerate(argv) if a in meta}
+    exempt |= {i for i, a in enumerate(argv) if any(a.startswith(m + "=") for m in meta if m.startswith("--"))}
+    if any(i in dynamic and i not in exempt for i in range(1, len(argv))):
+        return True
+    if prog == "curl":
+        values = lambda *names: _option_values(argv, names, least=99)  # noqa: E731
+        return bool(values("-T", "--upload-file") or values("-K", "--config") or values("--expand-data")
+                    or any(v.startswith("@") for v in values("-d", "--data", "--data-binary", "--data-ascii", "--json"))
+                    or any(re.match(r"[^=]*@", v) for v in values("--data-urlencode"))
+                    or any(re.match(r"[^=]*=[@<]", v) for v in values("-F", "--form")))
+    if prog == "wget":
+        return _opt(argv, "--post-file", "--body-file", "--config", "--execute", "-e") is not None
+    return (fed and not _has(argv, "--ignore-stdin", "-I")) or any(re.match(r"[\w.-]+(=@|:=@|@)", a) for a in argv[1:])
+
+
+def _classify_http(argv: list[str], cmd: str, dynamic: frozenset = frozenset(), fed: bool = False) -> Classification:
+    """curl, wget or httpie. A post whose body the gate cannot fully read carries ``unseen_body`` (#208)."""
+    c = _http_kind(argv, cmd)
+    if c.category == "web_post" and _http_unseen(argv[0], argv, dynamic, fed):
+        c.signals.append("unseen_body")
+    return c
+
+
+def _http_kind(argv: list[str], cmd: str) -> Classification:
     prog = argv[0]
     urls = [a for a in argv[1:] if _URL.match(a)]
     if not urls:
-        urls = [a for a in argv[1:] if not a.startswith("-") and "." in a and "=" not in a][:1]
+        urls = [a for a in argv[1:] if not a.startswith("-") and "=" not in a
+                and ("." in a or re.match(r"(localhost|\[::1\])(:\d+)?(/|$)", a))][:1]
     url = urls[0] if urls else ""
     host = _host_of(url) if url else ""
     method, data = "GET", ""
+    # curl -K reads options, data and URLs from a file the gate does not read: a request it cannot see (#208).
+    config = prog == "curl" and bool(_option_values(argv, ("-K", "--config"), least=99))
     if prog == "curl":
         method = (_opt(argv, "-X", "--request") or "").upper()
-        datas = _opts(argv, *_DATA_FLAGS)
+        datas = _option_values(argv, _DATA_FLAGS, least=99)   # an attached value (`-d@f`) is a POST too (#208)
         data = " ".join(datas)
         if not method:
             method = "POST" if datas or _has(argv, "-T", "--upload-file") else "GET"
         if _has(argv, "-I", "--head"):
             method = "HEAD"
+        if config and method in ("GET", "HEAD", "OPTIONS"):
+            method = "POST"
     elif prog == "wget":
         method = (_opt(argv, "--method") or "").upper() or ("POST" if _opt(argv, "--post-data", "--post-file") else "GET")
         data = _opt(argv, "--post-data") or ""
@@ -1199,17 +1733,18 @@ def _classify_http(argv: list[str], cmd: str) -> Classification:
     kw = dict(target=host, link=url, command=cmd, text=data)
     if method in ("GET", "HEAD", "OPTIONS"):
         return _make("web_read", summary=f"{method} {host or url}", **kw)
-    if _is_local_host(host):
+    if host and _is_local_host(host) and not config:   # a host the gate cannot read is not local (#208)
         return _make("local_write", summary=f"{method} to local service {host or url}", **kw)
     return _make("web_post", summary=f"{method} to {host}", **kw)
 
 
 def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
-    """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text)."""
-    sudo = False
+    """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text).
+    env and sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too."""
+    sudo = own_argv = False
     while words:
         t = words[0].text
-        if not words[0].quoted and _ASSIGN.fullmatch(t):
+        if (own_argv or not words[0].quoted) and _ASSIGN.fullmatch(t):
             words = words[1:]
             continue
         base = t.rsplit("/", 1)[-1]
@@ -1218,6 +1753,7 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
         if base == "command" and words[1:2] and words[1].text in ("-v", "-V"):
             break
         sudo = sudo or base in ("sudo", "doas")
+        own_argv = base in ("env", "sudo")
         takes, words = _PREFIXES[base], words[1:]
         while words and words[0].text.startswith("-") and words[0].text != "-":
             f = words[0].text
@@ -1361,6 +1897,51 @@ def _trusted_path(prog: str) -> bool:
     return p.startswith("/") and os.path.dirname(os.path.normpath(p)) in _SYSTEM_BIN
 
 
+def _expands(w: _Word) -> bool:
+    """Whether bash may turn a word into other text or into several words (#208): a `$` expansion or backticks,
+    a brace expansion (`Zo{r,}k`, `{1..3}`), a glob character, or a leading `~`. `{owner}` with no comma or
+    `..` stays as it is."""
+    return (w.dynamic or w.raw.startswith("~") or (w.glob and bool(re.search(r"[*?\[]", w.text)))
+            or (w.brace and bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
+
+
+def _literal_stdin(k: _Cmd, piped: str | None) -> str | None:
+    """A command's stdin when the line spells it out and bash changes nothing in it (#208): its one heredoc with
+    a quoted delimiter, or with no `$`, backtick or backslash in the body (bash expands those and joins a line
+    ending in `\\`); its one here-string with no expansion; or ``piped``, what `_literal_pipe` read from the one
+    simple command writing the pipe. None for a `<` redirection, more than one source, or a stdin the gate
+    cannot see (a compound's, `exec <`, the tool's own)."""
+    docs = [h for h in k.heredocs if not h.fd.lstrip("0")]          # a heredoc on fd 3 is not stdin
+    strings = [w for w in k.herestrings if not w.fd.lstrip("0")]
+    if any(op in _READ_REDIRS for op, _ in k.redirs) or len(docs) + len(strings) > 1:
+        return None
+    if docs:
+        h = docs[0]
+        return h.body if not h.ambiguous and (h.quoted or not re.search(r"[$`\\]", h.body)) else None
+    if strings:
+        return None if _expands(strings[0]) else strings[0].text
+    return piped
+
+
+def _literal_pipe(w: _Cmd | None) -> str | None:
+    """What one simple command writes to a pipe, when bash and the program change nothing in it (#208): `cat`
+    with no arguments and a literal heredoc or here-string (`_literal_stdin`), `echo` with no option word and
+    no backslash, or `printf` with one format and no `%` or backslash in it. Anything else (escapes, formats,
+    options, a redirection, an expansion, another program) is None: the gate cannot tell what the pipe carries."""
+    if w is None or w.redirs or not w.words or any(_expands(x) for x in w.words):
+        return None
+    prog, args = w.words[0].text, [x.text for x in w.words[1:]]
+    if prog == "cat" and not args:
+        return _literal_stdin(w, None)
+    if w.heredocs or w.herestrings or "\\" in "".join(args):
+        return None
+    if prog == "echo" and not any(a.startswith("-") for a in args):
+        return " ".join(args)
+    if prog == "printf" and len(args) == 1 and "%" not in args[0] and not args[0].startswith("-"):
+        return args[0]
+    return None
+
+
 def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
     out = [h.body for h in k.heredocs] + [w.text for w in k.herestrings]
     if piped is not None:
@@ -1474,7 +2055,7 @@ def _arith_scan(text: str, i: int, nested: bool = True, procsub: bool = False) -
     """Read text from i as bash reads an arithmetic subscript: to the ] that ends it (a quote or \\ hides a ]), or
     to the end when not `nested`, outside any subscript. (end, the $( ) and ` ` bodies in it, and the <( ) ones
     with `procsub`, any expansion or quoting there.)"""
-    lx, level, other, q, inner = _Lexer(text), 1 if nested else 0, False, "", 0
+    lx, level, other, q, inner = _Lexer(text, scan=False), 1 if nested else 0, False, "", 0
     lx.i = i
     while lx.i < len(text) and (level or not nested):
         ch = text[lx.i]
@@ -1502,7 +2083,7 @@ def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
     """A compound value `(..)` that declare parses again as words: the $( ), ` ` and <( ) bodies in it, read in
     any quoting, and whether it holds what bash evaluates again: an expansion or quoting in a `[key]=` subscript,
     or with -i (`arith`) an expansion in an element."""
-    lx, q, start, other = _Lexer(value), "", True, False
+    lx, q, start, other = _Lexer(value, scan=False), "", True, False
     lx.i = 1
     while lx.i < len(value):
         ch = value[lx.i]
@@ -1598,7 +2179,9 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     words = list(k.words)
     while words and not words[0].quoted and words[0].text in _OPENERS:
         words = words[1:]
+    loop: list[Classification] = []
     if words and not words[0].quoted and words[0].text == "for":
+        loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
         words = []                                   # a for header lists words, not programs
     before = words
     words, sudo, split = _strip_prefix_words(words)
@@ -1615,6 +2198,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
+        parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
     if sudo:
         parts[0].signals.append("sudo")
         if parts[0].reversibility == "reversible":
@@ -1636,7 +2220,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
     hit = _store_touch(k, words, parts, ctx)
     if hit:
-        c = _make("store_write", summary=f"write to the Exo store: {hit}"[:120], target=hit, link=hit, command=cmd)
+        # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
+        # command is known to write there (`gh ... --body-file /dev/stdin` reads it), so the card says just that
+        what = (f"uses {hit}, a descriptor path or folder the gate cannot resolve (it may lead to an Exo store file)"
+                if _fd_path(hit) or _FD_DIR.fullmatch(os.path.normpath(hit)) else f"write to the Exo store: {hit}")
+        c = _make("store_write", summary=what[:120], target=hit, link=hit, command=cmd)
         c.signals.append("exo store")
         parts.append(c)
     if any(w.locale for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]):
@@ -1683,19 +2271,23 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # bash: `coproc [NAME] compound_command`, `function NAME compound_command`. The name is
             # skipped before a compound opener; before a simple command (`coproc w echo hi`) the first
             # word is the program. Keep the original words so quotes, expansion flags and stdin survive.
-            body = words[1:]
+            body, alt = words[1:], []
             if len(body) > 1 and not body[1].quoted and body[1].text in _COMPOUND:
+                if prog == "coproc" and (words[0].redir_after or body[0].redir_after):
+                    # A redirection between `coproc`, the name and the opener: bash reads a simple command that
+                    # runs the name (#207). The skipped reading stays too, so nothing it caught is lost.
+                    alt = body
                 body = body[1:]
             elif prog == "function":
                 body = []                        # `function f() { ...; }`: the body is parsed as its own command
-            parts += inner_words(body)
+            parts += inner_words(body) + inner_words(alt)
             # An environment dump is credentials; classify_shell looks for one only in top-level commands.
-            i = 0
-            while i < len(body) and not body[i].quoted and body[i].text in _OPENERS:
-                i += 1
-            if _env_dump(_strip_prefixes_keep_env([w.text for w in body[i:]])[0]):
-                parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
-                                   signals=["secret store"]))
+            for ws in (body, alt):
+                i = next((n for n, w in enumerate(ws) if w.quoted or w.text not in _OPENERS), len(ws))
+                if _env_dump(_strip_prefixes_keep_env([w.text for w in ws[i:]])[0]):
+                    parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
+                                       signals=["secret store"]))
+                    break
         if prog == "trap" and len(argv) > 1 and depth < _DEPTH:
             parts.append(classify_shell(argv[1], inner_depth))
         return parts
@@ -1750,6 +2342,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if target and (_in_store_dir_words(_shell_words(target, ctx.setdefault("store_braces", {}), "dir")) or
                        _wild_store(target, inside=True)):
             ctx["store_cwd"] = True
+            into = _expand_text(dest).strip()
+            if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
+                ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -1768,9 +2363,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "exo":
         return [_classify_exo(argv, cmd)]
     if prog == "gh":
-        return [_classify_gh(argv, cmd, [h.body for h in k.heredocs[:1]])]
+        return [_classify_gh(argv, cmd, ctx.get("post_stdin"), frozenset(i for i, w in enumerate(words) if _expands(w)))]
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
-        return [_classify_http(argv, cmd)]
+        return [_classify_http(argv, cmd, frozenset(i for i, w in enumerate(words) if _expands(w)),
+                               k.piped_in or _own_stdin(k))]
     if prog in ("ssh", "mosh"):
         rest, i, moved, runs, here = argv[1:], 0, "", [], False
         # The host and command as the gate read them before D-075, for both programs.
@@ -1794,16 +2390,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                     if o2 in ("ssh", "client", "server"):
                         runs.append((o2, v2))
                         moved = moved or f"--{opt}: takes a value that reads as --{o2}"
-        while prog == "ssh" and i < len(rest) and rest[i].startswith("-"):
-            w = rest[i]
-            i += 1
-            if w.startswith("--"):
-                continue
-            # Short options cluster as in getopt: the first letter that takes a value ends the word, and the
-            # value is the rest of it or the next word (`-vp 22`, `-oPort=22`, `-B eth0`).
-            v = next((j for j, ch in enumerate(w[1:], 1) if ch in _SSH_VALUE_OPTS), 0)
-            if v and v == len(w) - 1:
-                i += 1
+        flags = ""
+        if prog == "ssh":
+            i, flags = _ssh_options(rest, 0)
         dest = rest[i] if i < len(rest) else ""
         host = _ssh_host(dest)
         tail = rest[i + 1:]
@@ -1819,6 +2408,12 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c = classify_shell(inner, inner_depth)
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
+        if prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags):
+            # #240: the login shell on the host runs ssh's stdin. It is read as shell, as for `bash -s`, and asks.
+            fed = [_opaque(f"ssh {dest} runs its stdin as commands on the remote host"[:120], cmd)]
+            if depth < _DEPTH:
+                fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
+            c = _combine([c, *fed], cmd)
         dests = [host, dest]
         if dest != old_dest:
             # The gate used to read another word as the host. The line asks and both readings' parts are
@@ -1975,6 +2570,46 @@ def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "
     return out
 
 
+def _ssh_options(args: list[str], i: int, after: bool = False) -> tuple[int, str]:
+    """Where ssh's options from args[i] end, and the letters of its flags among them. Short options cluster as in
+    getopt: the first letter that takes a value ends the word, and the value is the rest of it or the next word
+    (`-vp 22`, `-oPort=22`, `-B eth0`). Before the host a word starting with `--` is passed over, as the gate has
+    read it since D-075. After the host (`after`) ssh reads options again, up to its remote command, and `--`
+    ends them."""
+    letters = ""
+    while i < len(args) and args[i].startswith("-") and not (after and args[i] == "-"):
+        w = args[i]
+        i += 1
+        if w.startswith("--"):
+            if after and w == "--":
+                break
+            continue
+        v = next((j for j, ch in enumerate(w[1:], 1) if ch in _SSH_VALUE_OPTS), 0)
+        letters += w[1:v or None]
+        if v and v == len(w) - 1:
+            i += 1
+    return i, letters
+
+
+def _ssh_stdin_runs(words: list, k: _Cmd, piped: str | None, i: int, flags: str) -> bool:
+    """Whether the login shell on the remote host runs ssh's stdin as commands (#240). That takes a stdin the line
+    gives ssh (a pipe, a heredoc, a here-string, a `<` from anything but /dev/null), none of `-n`, `-N` and `-f`
+    (ssh then does not read it) and no remote command: ssh reads options after the host too (`ssh host -T`), up
+    to the command, and an empty word is no command. A word that may expand to no word or several (`$A`, a glob)
+    among the options and the host, or as every word of the command, leaves them uncountable, so the stdin is read
+    then too. `words` is ssh's argv as words; `i` is the host's index in words[1:], `flags` the letters before it."""
+    if not (k.piped_in or piped is not None or k.heredocs or k.herestrings
+            or any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs)):
+        return False
+    texts = [w.text for w in words[1:]]
+    wild = [w.dynamic or (not w.quoted and (w.glob or bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
+            for w in words[1:]]
+    j, late = (i + 1, "") if "--" in texts[:i] else _ssh_options(texts, i + 1, after=True)
+    if any(wild[:j]):
+        return True
+    return not set(flags + late) & set("nNf") and (" ".join(texts[j:]) == "" or all(wild[j:]))
+
+
 def _ssh_setting(text: str) -> tuple[str, str]:
     """An ssh `-o` setting split as ssh's readconf splits it: (keyword in lower case, the command value). Leading
     whitespace is skipped; the keyword may be quoted and ends at whitespace, a quote or `=`; a command value is
@@ -1995,15 +2630,75 @@ def _ssh_setting(text: str) -> tuple[str, str]:
     return key.lower(), rest.lstrip(" \t\r\n=")
 
 
+def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
+    """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
+    `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
+    comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
+    name the gate cannot read. A for-loop variable comes here from _classify_simple with prog "for"."""
+    args, targets, parts = words[1:], [], []
+    if prog == "for":
+        targets = args[:1]
+    elif prog == "read":
+        i = 0
+        while i < len(args) and args[i].text.startswith("-") and args[i].text != "-":
+            t, i = args[i].text, i + 1
+            if t == "--":
+                break
+            for j, ch in enumerate(t[1:], 1):
+                if ch in "adinNptu":                 # the options that take a value; -a names an array
+                    val = _Word(text=t[j + 1:], dynamic=args[i - 1].dynamic) if t[j + 1:] else \
+                        (args[i] if i < len(args) else None)
+                    i += 0 if t[j + 1:] else 1
+                    if ch == "a" and val is not None:
+                        targets.append(val)
+                    break
+        targets += args[i:]
+    elif prog == "printf" and args[:1] and args[0].text.startswith("-v"):
+        targets = [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+    elif prog in _EXPORTERS:
+        i, flags = 0, ""
+        while i < len(args) and args[i].text[:1] in "-+" and len(args[i].text) > 1:
+            if args[i].text == "--":
+                i += 1
+                break
+            flags += args[i].text[1:] if args[i].text[0] == "-" else ""
+            i += 1
+        if "f" in flags or "F" in flags:                  # names functions, not variables
+            return []
+        if "p" in flags and prog in ("declare", "typeset", "local"):  # prints; export/readonly -p still assign
+            return []
+        for w in args[i:]:
+            name, (_, sep, ref) = re.split(r"\[|\+?=", w.text, maxsplit=1)[0], w.text.partition("=")
+            if _unreadable_name(w):
+                targets.append(w)
+            elif "n" in flags and prog != "export":     # a nameref: what it points at is what gets set
+                if not sep:
+                    parts.append(_opaque(f"{prog} -n {name} makes a reference the gate cannot follow"[:120], cmd))
+                else:
+                    targets.append(_Word(text=ref, dynamic=w.dynamic))
+    for w in targets:
+        name = re.split(r"\[|\+?=", w.text, maxsplit=1)[0]
+        if _unreadable_name(w):
+            parts.append(_opaque(f"{prog} sets a variable whose name the gate cannot read", cmd))
+        elif why := _env_hazard(name):
+            parts.append(_opaque(f"{name} {why} (set by {prog})", cmd))
+        parts += [_opaque(f"{n} {why} (set in a subscript)", cmd)    # `read 'a[PATH=1]'` sets PATH too
+                  for n in _subscript_sets(w.text) if (why := _env_hazard(n))]
+    return parts
+
+
 def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                   piped: str | None) -> list[Classification]:
     """Commands a trusted program is told to run (#154): an exec option (`tar --to-command`, `rsync -e`,
     `man -P`, `git rebase -x`...), an ssh `-o ProxyCommand`, a sqlite3/psql shell command, or an environment variable
     such as GIT_SSH_COMMAND set before the program. Each is classified as a nested command; a value the
-    gate cannot read (a script file, `.output FILE`) is opaque."""
-    if not words or words[0].dynamic:
+    gate cannot read (a script file, `.output FILE`) is opaque, and so is a variable that loads code or
+    moves where programs and config are found (LD_PRELOAD, PATH...). Git config set on the line (`git -c`,
+    `git --config-env`, `git clone --config`, GIT_CONFIG_*) takes _git_config_kind. `words` is empty for a
+    bare assignment."""
+    if words and words[0].dynamic:
         return []
-    prog, argv = words[0].text.rsplit("/", 1)[-1], [w.text for w in words]
+    prog, argv = (words[0].text.rsplit("/", 1)[-1] if words else ""), [w.text for w in words]
     parts: list[Classification] = []
 
     def nested(text: str, what: str) -> Classification | None:
@@ -2039,21 +2734,71 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         return _option_values(argv, names, start, takes if sub_takes is None else sub_takes, longs,
                               1 if prog == "ssh" else None, least, wild)
 
-    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env; a partly quoted one is
-    # left in `words`) and export's arguments, never an argument that merely looks like one (`grep EDITOR=x`)
+    def git_config(pairs: list[str], what: str) -> None:
+        # KEY=VALUE pairs checked as `git -c` is: an exec key or a `!` value is opaque, and the value is read
+        # as the command it is, so a category deny on it fires; a key that loads a config file or a template
+        # is opaque; a key from a variable is opaque.
+        for kv in pairs:
+            key, _, value = kv.partition("=")
+            kind = _git_config_kind(key, value)
+            if re.search(r"[$`]", key):
+                parts.append(_opaque(f"{what} sets a git config key the gate cannot read", cmd))
+            elif kind == "exec":
+                parts.append(_opaque(f"{what} sets {key}, which makes git run a command"[:120], cmd))
+                nested(value.removeprefix("!"), f"{what} {key}")
+            elif kind:
+                parts.append(_opaque(f"{what} sets {key}, which {_GIT_CONFIG_DOES[kind]}"[:120], cmd))
+
+    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env, sudo or timeout; a partly
+    # quoted one is left in `words`), export's arguments, a bare assignment the rest of the line inherits, and
+    # the ones hidden in an expansion, arithmetic or a redirection (`${PATH:=.}`, `$((PATH=10))`, `{PATH}>f`);
+    # never an argument that merely looks like one (`grep EDITOR=x`). Only a real program position runs a value.
     n = len(before) - len(words)
     while n < len(before) and _ASSIGN.fullmatch(before[n].text):
         n += 1
-    env_words = [w.text for w in before[:n] if _ASSIGN.fullmatch(w.text)]
-    exported = [a for a in argv[1:] if _ASSIGN.fullmatch(a)] if prog in ("export", "declare", "typeset") else []
-    for a in env_words + exported:
-        name, _, value = a.partition("=")
+
+    def split_assign(a: str) -> tuple[str, str]:
+        # NAME+=v appends: for a listed variable that is the value $NAME then v (`PATH+=:/usr/bin` is
+        # `$PATH:/usr/bin`); a command-valued one keeps v, the command text it adds
+        name, value = re.split(r"\+?=|\[", a, maxsplit=1)[0], a.partition("=")[2]
+        appends = re.match(r"[A-Za-z_]\w*\+=", a) and name not in _EXEC_ENV
+        return name, f"${{{name}}}{value}" if appends else value
+
+    assign_words = [w for w in before[:n] if _ASSIGN.fullmatch(w.text)]
+    assigns = [w.text for w in assign_words]
+    # pytest, or python -m pytest, before which PYTHONPATH adds nothing: the runner imports conftest.py and the
+    # tests, project code the gate already lets it run (D-038 "Not done")
+    runner = prog in ("pytest", "py.test") or bool(re.fullmatch(r"python[\d.]*", prog)) and argv[1:3] == ["-m", "pytest"]
+    sets: list[tuple[str, str | None, bool, bool]] = [(*split_assign(w.text), not words, _kept_text(w.raw))
+                                                      for w in assign_words]
+    if prog in _EXPORTERS:
+        sets += [(*split_assign(w.text), True, _kept_text(w.raw)) for w in words[1:] if _ASSIGN.fullmatch(w.text)]
+    named = assigns + (argv[1:] if prog in (*_EXPORTERS, "unset") else []) + \
+        [b for a, b in zip(argv, argv[1:]) if prog in ("test", "[") and a == "-v"]   # where NAME[..] is arithmetic
+    sets += [(name, value, True, literal) for name, value, literal in _hidden_sets(k, named)]
+    git_env: dict[tuple[str, ...], str] = {}
+    for name, value, runs_nothing, literal in sets:
         if name in _EXEC_ENV:
-            c = nested(value.lstrip("|"), name)
-            if c is not None and a in exported and c.category == "opaque_exec":
+            c = nested(_prompt_text(value or "") if name == "PS4" else (value or "").lstrip("|"), name)
+            if c is not None and runs_nothing and c.category == "opaque_exec":
                 parts.pop()                              # export runs nothing; an unknown value is not a hit
-        elif name in _EXEC_ENV_OPAQUE:
-            parts.append(_opaque(f"{name} sets options the gate does not read", cmd))
+        elif name == "GIT_CONFIG_PARAMETERS":           # git's own format: 'key'='value' 'key2'='value2'
+            try:
+                git_config(shlex.split(value or ""), name)
+            except ValueError:
+                parts.append(_opaque(f"{name} sets git config the gate cannot read", cmd))
+        elif m := _GIT_CONFIG_ENV.fullmatch(name):
+            git_env[m.groups()] = value or ""
+        elif name == "PYTHONPATH" and not runs_nothing and runner:
+            pass                                         # a test runner already runs the project's code
+        elif why := _env_hazard(name, value, literal):   # _EXEC_ENV_OPAQUE, and LESS with a `+` command
+            parts.append(_opaque(f"{name} {why}", cmd))
+    parts += _indirect_sets(prog, words, cmd)
+    for (kind, num), value in git_env.items():
+        if kind == "KEY":
+            git_config([f"{value}={git_env.get(('VALUE', num), '')}"], f"GIT_CONFIG_KEY_{num}")
+        elif ("KEY", num) not in git_env:
+            parts.append(_opaque(f"GIT_CONFIG_VALUE_{num} sets git config whose key is not on the line", cmd))
     for v in values(_EXEC_OPTS.get(prog, ())):
         nested(v, f"{prog} option")
     for v in values(_EXEC_FILE_OPTS.get(prog, ())):
@@ -2064,9 +2809,20 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             if v.startswith("exec="):
                 nested(v[5:], "tar --checkpoint-action")
     if prog == "git":
-        i = _git_subcommand(argv)
+        config: list[str] = []
+        i = _git_subcommand(argv, config)
         sub, rest = (argv[i] if i < len(argv) else ""), argv[i + 1:]
-        for v in values(_GIT_EXEC_OPTS.get(sub, ()), start=i + 1, sub_takes=_GIT_VALUE_OPTS.get(sub, "")):
+        sub_takes = _GIT_VALUE_OPTS.get(sub, "")
+        git_config(config, "git -c")
+        if sub == "clone":                               # clone's own config
+            git_config(values(("--config", "-c"), start=i + 1, sub_takes=sub_takes), "git clone --config")
+        if sub == "config":                              # a command value set for later is read now
+            git_config(_git_config_sets(rest), "git config")
+        if sub in ("clone", "init"):                     # a template whose hooks run
+            for v in values(("--template",), start=i + 1, sub_takes=sub_takes):
+                if v:
+                    parts.append(_opaque(f"git {sub} runs the hooks in the template {v}"[:120], cmd))
+        for v in values(_GIT_EXEC_OPTS.get(sub, ()), start=i + 1, sub_takes=sub_takes):
             nested(v, f"git {sub} option")
         if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:
             parts.append(_opaque("git bisect run runs a command per step", cmd))
@@ -2307,9 +3063,16 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
     seen = ctx.setdefault("store_braces", {})
     for op, t in k.redirs:
-        if op in _WRITE_REDIRS:
+        # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
+        # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. A
+        # write to stdout or stderr is not itself a store write, so on 1 or 2 any target the gate cannot pin to a
+        # path counts too: one from a variable, a glob (`~/.exo/sta*/x`) or a relative name (the tool's folder).
+        n = t.fd.lstrip("0") if t.fd.isascii() else ""     # compared as text: any length, never int()
+        held = op == "<" and n != ""
+        if op in _WRITE_REDIRS or held:
             targets = _shell_words(t, seen, "target")
-            if targets is None or any(_store_word(x) for x in targets) or _wild_store(t):
+            if targets is None or any(_store_word(x) for x in targets) or _wild_store(t) or \
+                    held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 return t.text
     if all(p.category == "read" for p in parts):
         return ""
@@ -2333,7 +3096,7 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                 _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")) or _wild_store(words[i + 1], inside=True)):
             return words[i + 1].text            # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
-        return "a path inside the store (after cd)"
+        return ctx.get("fd_cwd") or "a path inside the store (after cd)"
     return ""
 
 
@@ -2381,9 +3144,9 @@ def _store_hints() -> tuple[set, dict, set]:
     """(store folder names, {(parent, folder): its sample path}, store file names) from the sample store paths. A
     dot folder (`.kube`) or `Netlify` is a store folder by its name; a plain one only below its parent (`.config/gh`,
     `.config/exo`, `.exo/keys`, `/proc`), so a checkout called exo or gh is not. Folders below home count from home
-    ("~") down, one outside home (EXO_HOME, its keys) by its last part. The store file names include the run
-    folder's secrets (_run_secrets), so `cd ~/.exo/run/jobs && cat ../exod*` asks (#269). HOME and EXO_HOME
-    apply per call."""
+    ("~") down, one outside home (EXO_HOME, its keys) by its last part. HOME and EXO_HOME apply per call. The run
+    folder's secrets are store file names too (#269: `cd ~/.exo/run/jobs && cat ../exod*`), but `run` is not a
+    store folder here: that would make job output in run/jobs a secret (`cat 1.log` there stays a read)."""
     home = os.path.normpath(_home())
     root = home.rstrip("/") + "/"                   # HOME=/ too
     singles, pairs, names = {"Netlify"}, {}, set(_STORE_FILES)
@@ -2790,7 +3553,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 fp = f"{path}/{'/'.join(rest)}".rstrip("/").split("/")
                 if parts[-1] in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
                     return q
-        return ""
+        return _exo_relative(split, max(ups), candidates)
     nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
     # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
     roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
@@ -2853,16 +3616,6 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     for q, parts, globbed in candidates():
         if every or not parts and held:             # `tar czf - .` in a store, or in a store folder
             return q
-        if runs:
-            # A name counts when it could be the run folder or a folder that holds one: up its leading `..`, then
-            # down its other parts (`../..` and `../../principals/me/run` from run/jobs, `principals/me` from
-            # EXO_HOME, `.` in a principal's store). Each part once.
-            n = next((j for j, s in enumerate(parts) if not maybe(s, "..")), len(parts))
-            at = {RUN, HOLDS, PRINCIPALS} if wide else lv.get(n, set())
-            for s in parts[n:]:
-                at = step(at, s)
-            if at:
-                return q
         if not parts:
             continue
         inner = parts[:-1]              # a store folder counts when the name goes into it (`mkdir .kube` reads none)
@@ -2870,7 +3623,120 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 not pairs.keys().isdisjoint(zip(inner, inner[1:])) or globbed and any(
                     _could_name(s, hints) for s in parts if _GLOBBY.search(s)):
             return q
+    hit = _exo_relative(split, max(ups), candidates)
+    if hit or not runs:
+        return hit
+    for q, parts, _ in candidates():
+        # A name counts when it could be the run folder or a folder that holds one: up its leading `..`, then
+        # down its other parts (`../..` and `../../principals/me/run` from run/jobs, `principals/me` from
+        # EXO_HOME, `.` in a principal's store). Each part once.
+        n = next((j for j, s in enumerate(parts) if not maybe(s, "..")), len(parts))
+        at = {RUN, HOLDS, PRINCIPALS} if wide else lv.get(n, set())
+        for s in parts[n:]:
+            at = step(at, s)
+        if at:
+            return "a path in the Exo store (too many to resolve)" if wide else q
     return ""
+
+
+_EXO_PARTS = 65536   # path parts of the folders and paths _exo_relative may build in one classify call (#269)
+
+
+class _Spent(Exception):
+    pass
+
+
+def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]]) -> str:
+    """#269: on a line that reaches a folder in `$EXO_HOME` (or any `.exo`), that folder and each relative name read
+    from it are checked as the paths they are, as the kernel resolves them, `..` included, so `cd ~/.exo/run/jobs &&
+    grep -r . ..`, `cat ../exod*` there, `cd ~/.exo/run/jobs && cd .. && ls` and `tar -C ~/.exo -czf - run` reach the
+    run folder and its secrets as the absolute path would (is_sensitive_path, a glob in it). The folders are the
+    targets (``split``, as _cd_store_read reads them; one with a glob is left to the store-folder check), each
+    relative target joined to each of them, and every folder up to ``up`` levels above them (`cd ..`, counted once:
+    a `..` target is not joined too); an absolute target is also resolved (a link into the store). From a folder above the store only a target or name with the
+    store's folder name as a part (`.exo`, `exo-home`) is joined, so `cd /srv && tar cf -
+    exo-home/run` counts and a line that names no store folder joins nothing. Each join and each level up is charged,
+    as it is made, the path parts of what it builds (its checks cost about that much: a deep glob name costs more than a
+    short one) to one budget of _EXO_PARTS shared by the whole classify call (each `$( )` is classified again, nested
+    ones too), so the work stays linear in the line; past it, or past 64 store folders, the line counts (fails
+    closed). The name or folder, or ''."""
+    home = os.path.normpath(_home())
+    exo = os.path.normpath(_exo_home())
+    roots = _path_forms(exo)
+    marks = {".exo", os.path.basename(exo)} - {""}
+    memo = _call_memo.get()
+    left = [_EXO_PARTS] if memo is None else memo.setdefault("exo_parts", [_EXO_PARTS])
+    if left[0] < 0:
+        return "a path in the Exo store (too many to resolve)"
+
+    def inside(b: str, real: bool = False) -> bool:
+        return any(re.search(r"(^|/)\.exo(/|$)", f) or any(f == r or f.startswith(r.rstrip("/") + "/") for r in roots)
+                   for f in (_path_forms(b) if real else {os.path.normpath(b)}))
+
+    def near(q: str) -> bool:                       # a relative path that can lead into the store from above it
+        return not marks.isdisjoint(q.split("/"))
+
+    def charge(path: str) -> None:                  # one join or level up, by the path parts it builds
+        left[0] -= path.count("/") + 1
+        if left[0] < 0:
+            raise _Spent
+
+    def join(b: str, q: str) -> str:
+        w = os.path.join(b, q)
+        charge(w)
+        return w
+
+    def grow(bases: set, more: str) -> None:
+        bases.add(more)
+        if len(bases) > 64:
+            raise _Spent
+
+    folders = []
+    for p, _, _ in split:
+        if not (_GLOBBY.search(p) or "$" in p):
+            folders.append(os.path.join(home, p[2:]) if p.startswith("~/") else home if p == "~" else p)
+    folders = list(dict.fromkeys(folders))
+    # a `cd ..` is the level-up walk below (``up`` counts every one on the line), not a join as well
+    relative = [r for r in folders if not r.startswith("/") and set(r.split("/")) != {".."}]
+    try:
+        bases: set = set()
+        for b in folders:
+            if inside(b, b.startswith("/")):
+                grow(bases, b)
+        # a folder outside the store that a name can lead into it from: one above it (a relative folder adds nothing
+        # a name with `.exo` in it does not already spell)
+        outer = [b for b in folders if b.startswith("/") and b not in bases and any(
+            r.startswith(b.rstrip("/") + "/") for r in roots)]
+        toward = [r for r in relative if near(r)]
+        for b in outer:
+            for r in toward:
+                j = os.path.normpath(join(b, r))
+                if inside(j):
+                    grow(bases, j)
+        for b in list(bases):
+            for r in relative:
+                j = os.path.normpath(join(b, r))
+                if inside(j):
+                    grow(bases, j)
+        for b in list(bases):
+            for _ in range(min(up, 64)):
+                charge(b)
+                b = os.path.dirname(b)
+                if not b or not inside(b):
+                    break
+                grow(bases, b)
+        hit = next((b for b in sorted(bases) if _sensitive_words([b])), "")
+        if hit:
+            return hit
+        names = list(dict.fromkeys(q for q, _, _ in candidates()))
+        words = [(q, join(b, q)) for b in sorted(bases) for q in names]
+        toward = [q for q in names if near(q)]
+        words += [(q, w) for b in outer for q in toward for w in [join(b, q)] if inside(w)]
+    except _Spent:
+        return "a path in the Exo store (too many to resolve)"
+    if not words or not (_sensitive_words([w for _, w in words]) or _glob_words([w for _, w in words])):
+        return ""
+    return next((q for q, w in words if _sensitive_words([w]) or _glob_words([w])), words[0][0])
 
 
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
@@ -2881,6 +3747,8 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     prev: _Cmd | None = None
     for k in cmds:
         piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
+        # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
+        ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
         parts += _classify_simple(k, cmd, depth, ctx, piped)
         prev = k
     for sub in subs:
@@ -2915,9 +3783,10 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         _policy_command_view(cmd),
         *(view for part in parts for view in part._command_views),
     ]))
-    # Outbound text: if several gh segments post text, keep the most severe one's text.
+    # Outbound text: if several gh segments post text, keep the most severe one's text. Never for a post whose
+    # body is a file: another command's heredoc is not that file, and the caller reads the file (#208).
     body = next((h.body for k in cmds for h in k.heredocs), None)
-    if not c.text and c.category in OUTBOUND and body is not None and c.category != "web_post":
+    if not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
         c.text = body
     return c
 
@@ -3028,8 +3897,60 @@ def _exo_home() -> str:
     return os.path.expanduser(os.environ.get("EXO_HOME") or "") or os.path.join(_home(), ".exo")
 
 
-def _expand_text(text: str) -> str:
-    """~, $HOME and $EXO_HOME (also ${...}) spelled out; nothing else is evaluated."""
+_STORE_VAR = re.compile(r"\$\{(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?=[^}\w])")
+_BRACE_EVENTS = re.compile(r"\\.|\$\{|\}|\n", re.S)
+
+
+def _store_var(name: str) -> str | None:
+    """A store variable as _expand_text spells it: HOME, EXO_HOME and CLAUDE_CONFIG_DIR as the gate reads them, set or
+    not; EXO_PRINCIPAL_STORE only when set."""
+    if name == "HOME":
+        return _home()
+    if name == "EXO_HOME":
+        return _exo_home()
+    if name == "CLAUDE_CONFIG_DIR":
+        return os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(_home(), ".claude"))
+    store = os.environ.get("EXO_PRINCIPAL_STORE")
+    return os.path.expanduser(store) if store else None
+
+
+def _store_var_ops(text: str, unset: bool, depth: int) -> str:
+    """``text`` with each `${VAR<op>word}` of a store variable spelt out (#202). `:-`, `-`, `:=` and `=` give the
+    value (_store_var), or the word when ``unset`` or the variable has none; `:+` and `+` give the word, or nothing
+    when ``unset``; `:?`, `?` and any other operator (`%/`, `#*/`, `:0`) give the value. The word is spelt out in turn,
+    its quotes dropped, to 8 levels. A form that does not close on its line, or with no value to give, stays as is."""
+    m = _STORE_VAR.search(text)
+    if not m:
+        return text
+    closes, opened = {}, []          # where each `${` closes, in one pass: a hostile line costs linear time
+    for e in _BRACE_EVENTS.finditer(text, m.start()):
+        if e[0] == "${":
+            opened.append(e.start())
+        elif e[0] == "}" and opened:
+            closes[opened.pop()] = e.start()
+        elif e[0] == "\n":
+            opened.clear()
+    out, i = [], 0
+    while m:
+        j = closes.get(m.start())
+        if j is not None:
+            op = re.match(r":?[-=?+]", text[m.end():j])
+            kind, word, rep = op[0][-1] if op else "", text[m.end() + (op.end() if op else 0):j], _store_var(m[1])
+            if kind == "+" and unset:
+                rep = ""
+            elif kind == "+" or kind in ("-", "=") and (unset or rep is None):
+                rep = _expand_text(word.replace('"', "").replace("'", ""), unset, depth + 1) if depth < 8 else None
+            if rep is not None:
+                out.append(text[i:m.start()] + rep)
+                i = j + 1
+        m = _STORE_VAR.search(text, j + 1 if j is not None else m.end())
+    return "".join(out) + text[i:]
+
+
+def _expand_text(text: str, unset: bool = False, depth: int = 0) -> str:
+    """~, $HOME and $EXO_HOME (also ${...}, and ${EXO_HOME:-word} and the other operators, see _store_var_ops) spelled
+    out; nothing else is evaluated. With ``unset``, a `${VAR:-word}` form is read as bash reads it when VAR is unset."""
+    text = _store_var_ops(text, unset, depth)
     home, exo = _home(), _exo_home()
     store = os.environ.get("EXO_PRINCIPAL_STORE")
     if store:
@@ -3071,13 +3992,13 @@ def _run_secrets() -> list[str]:
     """The credential files a run folder can hold: the core's, and the principal key of each agent that may serve
     there, run/agent-<seat>.principal.key (`default`, $EXO_SEAT and up to 64 seats under $EXO_HOME/seats, named
     as internal_names does: filtered, then sorted, then capped, so other files there take no place; the scan reads
-    at most 4,096 entries). Read once per classify call (_brace_budget's memo), not once per glob word (#269)."""
-    memo, key = _call_memo.get(), ("run_secrets", _exo_home(), os.environ.get("EXO_SEAT") or "")
-    if memo is not None and key in memo:
-        return memo[key]
-    names = ["default", key[2]]
+    at most 4,096 entries, once per classify call: every glob word and the cd check share it, #269)."""
+    memo = _call_memo.get()
+    if memo is not None and "run_secrets" in memo:
+        return memo["run_secrets"]
+    names = ["default", os.environ.get("EXO_SEAT") or ""]
     try:
-        with os.scandir(os.path.join(_exo_home(), "seats")) as it:   # bounded
+        with os.scandir(os.path.join(_exo_home(), "seats")) as it:   # bounded: outside classify, once per glob word
             seats = {e.name if e.is_dir() else os.path.splitext(e.name)[0] for e in itertools.islice(it, 4096)
                      if not e.name.startswith((".", "_")) and (e.is_dir() or e.name.endswith((".toml", ".json")))}
             names += sorted(seats)[:64]
@@ -3085,7 +4006,7 @@ def _run_secrets() -> list[str]:
         pass
     out = ["exod.principal.key", "exod.token"] + [f"agent-{n}.principal.key" for n in dict.fromkeys(names) if n]
     if memo is not None:
-        memo[key] = out
+        memo["run_secrets"] = out
     return out
 
 
@@ -3109,7 +4030,7 @@ def _brace_cost(word: str) -> int:
 
 def _brace_budget(fn: _F) -> _F:
     """Give ``fn`` one _BRACE_BUDGET shared by every word it brace-expands, nested calls included, and one memo
-    for what does not change within a call (_run_secrets)."""
+    (_call_memo) for what a call reads from disk once (_run_secrets)."""
     @functools.wraps(fn)
     def run(*a: Any, **kw: Any) -> Any:
         if _brace_left.get() is not None:
@@ -3120,6 +4041,51 @@ def _brace_budget(fn: _F) -> _F:
         finally:
             _brace_left.reset(token)
             _call_memo.reset(memo)
+    return cast(_F, run)
+
+
+@dataclass
+class _Scope:
+    """What the secret-store checks of one classify call share: the folders the tool may read from (#209), the gate's
+    own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot."""
+    cwds: tuple[str, ...] = ()
+    here: str | None = None                      # the gate's own folder; "" when it cannot be read
+    roots: set[str] | None = None
+    real: dict[str, str] = field(default_factory=dict)
+
+
+_scope: contextvars.ContextVar[_Scope | None] = contextvars.ContextVar("exo_gate_scope", default=None)
+
+
+def _runs_shell(tool: str, args: Mapping) -> bool:
+    """A call classify reads as a shell command line. Only these run in their own `cwd` argument; the file tools
+    take unknown arguments and still read from the session's folder."""
+    return tool in ("terminal", "shell", "bash", "run_command", "exec_command") or (
+        tool not in TOOLS and isinstance(args.get("command"), str) and tool.endswith(("terminal", "shell")))
+
+
+def _in_tool_folder(fn: _F) -> _F:
+    """Run ``fn(action, cwd)`` in one _Scope that holds the folders the tool may read from (#209): ``cwd``, the
+    session's working folder as the core passes it, always; and for a shell tool, that folder joined with the
+    call's own `cwd` argument. A relative path is resolved from each of them and from the gate's own folder."""
+    @functools.wraps(fn)
+    def run(action: Any, cwd: str | None = None) -> Any:
+        folders: list[str] = []
+        try:
+            tool, args = _args_of(action)
+            base = os.path.expanduser(cwd) if isinstance(cwd, str) and cwd else ""
+            if base:
+                folders.append(os.path.abspath(base))
+            sub = args.get("cwd")
+            if isinstance(sub, str) and sub and _runs_shell(tool, args):
+                folders.append(os.path.abspath(os.path.join(base, os.path.expanduser(sub))))
+        except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
+            pass
+        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders))))
+        try:
+            return fn(action, cwd)
+        finally:
+            _scope.reset(token)
     return cast(_F, run)
 
 
@@ -3266,11 +4232,14 @@ def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
 
 
 def _expand_words(words: list[str]) -> list[str]:
-    """_expand_text of each word, in one pass when no word holds a newline."""
+    """_expand_text of each word, in one pass when no word holds a newline. A word with a `${VAR:-word}` form of a
+    store variable is also read with VAR unset, so both its value and its default count (#202)."""
     if not any("~" in w or "$" in w for w in words):
         return words
     out = [] if any("\n" in w for w in words) else _expand_text("\n".join(words)).split("\n")
-    return out if len(out) == len(words) else [_expand_text(w) for w in words]
+    out = out if len(out) == len(words) else [_expand_text(w) for w in words]
+    unset = [_expand_text(w, unset=True) for w in words if _STORE_VAR.search(w)]
+    return out + [w for w in dict.fromkeys(unset) if w not in out] if unset else out
 
 
 def _real(path: str, memo: dict[str, str]) -> str:
@@ -3293,23 +4262,49 @@ def is_sensitive_path(path: str) -> bool:
 
 
 def _sensitive_words(words: list[str]) -> bool:
-    """is_sensitive_path for any of ``words``, which are already brace-expanded."""
-    words = [w.strip() for w in _expand_words(words)]
-    words = [w for w in words if w and not w.endswith(".pub")]   # public keys are meant to be shared
-    if any(_SENSITIVE_PATH.search(w.replace("\\", "/")) for w in words):
+    """is_sensitive_path for any of ``words``, which are already brace-expanded. A word is matched as written, and
+    as resolved from the gate's own folder and from the tool's (_Scope, #209): its absolute and real forms against
+    the dynamic stores, and, when a link led elsewhere, its real form by name too (for a relative word that lands
+    below the folder it was read from, only the part below it, so a folder like a repo's `.claude` does not count).
+    A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads."""
+    words = [w for w in (w.strip() for w in _expand_words(words)) if w]
+    if any(_SENSITIVE_PATH.search(w.replace("\\", "/")) for w in words if not w.endswith(".pub")):
         return True
-    roots = {r for root in _dynamic_secret_paths() for r in (os.path.abspath(root), os.path.realpath(root))}
-    memo: dict[str, str] = {}
-    for w in words:
+    scope = _scope.get() or _Scope()
+    if scope.roots is None:
+        scope.roots = {r for root in _dynamic_secret_paths() for r in (os.path.abspath(root), os.path.realpath(root))}
         try:
-            a = os.path.abspath(w)
-            real = os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)
-            cands = {a, real}
-        except (OSError, ValueError):
-            real, cands = "", {w}
-        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots) or _is_run_dir(w, real):
-            return True
+            scope.here = os.getcwd()
+        except OSError:
+            scope.here = ""
+    roots, memo = scope.roots, scope.real
+    for base in dict.fromkeys(("", *scope.cwds)):       # "": the gate's own folder
+        for w in words:
+            p = os.path.join(base, w)                    # an absolute word stays as it is
+            try:
+                a = os.path.normpath(os.path.join(scope.here, p)) if scope.here else os.path.abspath(p)
+                real = os.path.realpath(p) if ".." in p.split(os.sep) or a.startswith("//") else _real(a, memo)
+                cands = {a, real}
+            except (OSError, ValueError):
+                real, cands = "", {p}
+            cands = {c for c in cands if not c.endswith(".pub")}
+            if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots) or _is_run_dir(p, real):
+                return True
+            if real in cands and real != a and _SENSITIVE_PATH.search(_below(real, base or scope.here, w, memo)):
+                return True
     return False
+
+
+def _below(real: str, folder: str | None, word: str, memo: dict[str, str]) -> str:
+    """A resolved path as _sensitive_words matches it by name: the part below the ``folder`` a relative ``word`` was
+    read from, when it lands there; else the whole path."""
+    if os.path.isabs(word) or not folder:
+        return real
+    try:
+        top = _real(os.path.normpath(folder), memo).rstrip(os.sep) + os.sep
+    except (OSError, ValueError):
+        return real
+    return real[len(top):] if real.startswith(top) else real
 
 
 class StoreSkip:
@@ -3409,9 +4404,15 @@ def _glob_words(words: list[str]) -> bool:
     return any(_glob_word(w, home, samples, secrets, runs) for w in words)
 
 
+_PROC_FILE = re.compile(r"/proc/[^/]+/([^/]+)")
+
+
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
+    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ of any process (#199)
+    if proc and _glob_names(proc[1], ("environ",)):
+        return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
@@ -3442,23 +4443,41 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
 
 @functools.lru_cache(maxsize=4096)
 def _glob_rx(tok: str) -> re.Pattern[str]:
-    """fnmatch's pattern for ``tok``, also matching after any `/` when ``tok`` is relative."""
-    return re.compile(("" if tok.startswith("/") else r"(?s:.*/)?") + fnmatch.translate(tok))
+    """The bash glob ``tok`` as a pattern, also matching after any `/` when ``tok`` is relative. Read as bash reads it
+    (_fn_glob: `[^x]` is `[!x]`, a POSIX class is spelt out, #199); one that could match anything matches everything."""
+    pat = _fn_glob(tok)
+    return re.compile(("" if tok.startswith("/") else r"(?s:.*/)?") + (r"(?s:.*)\Z" if pat is None else fnmatch.translate(pat)))
 
 
-# D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files and
-# the core sockets steer the gate itself, so a write to them always asks the principal. Names that are
-# distinctive match anywhere (a relative `policies/gates.yaml` may sit in the tool's working folder);
-# absolute paths are also checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE and every
-# store root recorded in config `principals` (`exo init --root`, `exo import-store --root`).
+# D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files,
+# the core sockets and the bus folder (the seat registry signed answers trust and the relay database, #210)
+# steer the gate itself, so a write to them always asks the principal. Names that are distinctive match
+# anywhere (a relative `policies/gates.yaml` may sit in the tool's working folder); absolute paths are also
+# checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
+# `principals` (`exo init --root`, `exo import-store --root`) and the bus folder and files (_bus_paths).
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
+    r"\.exo/bus(/|$)|bus/registry\.json$|bus/relay\.sqlite(-wal|-shm|-journal)?$|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
     r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
     r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
 _HOME_PROTECTED = ("policies", "state", "keys", "run", "seats")
 _STORE_PROTECTED = ("policies", "state", "keys")
+# #210: $EXO_HOME/bus, and the bus settings that move a file the gate trusts out of it: the registry, the relay
+# database and its sidecars, and the seat keys folder. Each name is read as EXO_BUS_<NAME> and as the legacy
+# DIVAN_<NAME>, both when both are set (exo.bus.config takes the first; approvals.seat_pubkeys reads EXO_BUS_REGISTRY
+# alone).
+_BUS_FILES = (("REGISTRY", ("",)), ("DB", ("", "-wal", "-shm", "-journal")), ("KEYS_DIR", ("",)))
+# #217: a descriptor or process folder names whatever the writing process holds there (`/dev/fd/3` after
+# `exec 3< f`, `/proc/self/cwd`), which the gate cannot resolve from its own process, so a write through one is
+# a store write. It matches anywhere in a path as written, so a relative `dev/fd/3` after `cd /` counts; a
+# resolved spelling is not tested (the gate's own realpath of /dev/stdout runs through its own descriptors). The
+# writer's stdout and stderr (`/dev/fd/1`, `/proc/self/fd/2`) are left out: a store file opened on them is caught
+# where it is opened (_store_touch).
+_FD_PATH = re.compile(r"(^|/)(dev/(fd|stdin)|proc/(self|thread-self|\d+|\$[^/]*)(/task/[^/]+)?/(fd|cwd|root|map_files))(/|$)")
+_STD_FD = re.compile(r"(^|/)(dev/fd|proc/(self|thread-self)(/task/[^/]+)?/fd)/0*[12]$")
+_FD_DIR = re.compile(r"/+(dev|proc(/[^/]+(/task(/[^/]+)?)?)?)")      # cd here, then `> fd/3` or `> self/fd/3`
 
 
 def _store_roots() -> list[tuple[str, tuple, bool]]:
@@ -3469,6 +4488,23 @@ def _store_roots() -> list[tuple[str, tuple, bool]]:
                       False))
     from .store import explicit_roots  # stores made with --root (config `principals`): live, outside the home
     return roots + [(os.path.abspath(r), _STORE_PROTECTED, False) for r in explicit_roots(_exo_home()).values()]
+
+
+def _bus_paths() -> list[tuple[str, tuple]]:
+    """(folder, protected names in it): the bus folder in EXO_HOME, and each bus file the environment sets."""
+    out: list[tuple[str, tuple]] = [(_exo_home(), ("bus",))]
+    for name, ends in _BUS_FILES:
+        for value in filter(None, (os.environ.get(f"EXO_BUS_{name}"), os.environ.get(f"DIVAN_{name}"))):
+            folder, base = os.path.split(os.path.abspath(os.path.expanduser(value)))
+            out.append((folder, tuple(base + e for e in ends)))
+    return out
+
+
+def _fd_path(p: str) -> bool:
+    """A descriptor or process-folder path (_FD_PATH), as written or normalised, other than stdout or stderr spelt
+    plainly. As written counts too: the kernel resolves `/dev/fd/3/../..` from descriptor 3's folder."""
+    return bool(p) and any(_FD_PATH.search(f) for f in (p, os.path.normpath(p))) and \
+        not _STD_FD.search(p.rstrip("/") or p)
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
@@ -3556,8 +4592,8 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
-    if _STORE_NAMES.search(p):
-        return True
+    if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
+        return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
     if not p.startswith("/"):
         return False                     # relative: names only; the tool's working folder is not known here
     # Resolve the original spelling: normpath first would erase symlink/.. traversal.
@@ -3566,6 +4602,7 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
     if any(_STORE_NAMES.search(c) for c in candidates):
         return True
     roots = [(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)]
+    roots += [(r, names, False) for root, names in _bus_paths() for r in _path_forms(root)]
     for candidate in candidates:
         for r, names, principals in roots:
             if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
@@ -3584,8 +4621,11 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
 
 
 def _in_store_dir(path: str) -> bool:
-    """A `cd` target inside EXO_HOME or the principal store: relative names after it may be the store."""
+    """A `cd` target inside EXO_HOME or the principal store: relative names after it may be the store. So is a
+    descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217)."""
     p = _expand_text(path).strip()
+    if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")):
+        return True
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
     roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
@@ -3676,13 +4716,56 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
         words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
         if words is None:
             return raw
-        if len(words) > 1 or '$"' in raw:
-            groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for w in words[1:] or words
-                           for d in _dequote(w, wild=True)]
+        alts = words[1:] or words
+        found = [d for w in alts for d in _dequote(w, wild=True)] if len(words) > 1 or '$"' in raw else []
+        found += [d for w in alts for f in _unknown_forms(w) for d in _dequote(f)]   # what an expansion may print
+        if found:
+            groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for d in found]
     words = [w for ws in groups.values() for w in ws]
     if words and (_sensitive_words(words) or _glob_words(words)):
         return next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
     return ""
+
+
+_PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
+_KNOWN_PARAM = re.compile(r"\$\{?(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?!\w)")
+
+
+def _unknown_forms(src: str) -> list[str]:
+    """Spellings of a shell word whose source text ``src`` (quotes kept) holds an expansion the gate cannot spell
+    out (#225): a $( ) or ` `, or a ${..} or $name other than the store variables _expand_text spells out. Each is
+    read as empty, which joins the text around it (`.e$(:)nv` is `.env`, `${x}.env` is `.env`), and, where literal
+    text stands on both sides of it, as `*` for any output (`.e$(echo n)v` is the glob `.e*v`, which then asks where
+    that glob would). [] when the word holds none."""
+    if "$" not in src and "`" not in src:
+        return []
+    lx, q = _Lexer(src), ""
+    parts: list[str | None] = []                      # literal source text, None for an expansion
+    lit: list[str] = []
+    while lx.i < len(src):
+        ch = src[lx.i]
+        if q != "'" and (ch == "`" or src.startswith("$(", lx.i) and not src.startswith("$((", lx.i)):
+            parts += ["".join(lit), None]
+            lit = []
+            _SCANS[ch](lx, _Word())                   # past the substitution, read as the lexer reads it
+            continue
+        m = _PARAM.match(src, lx.i) if ch == "$" and q != "'" else None
+        if m and not _KNOWN_PARAM.match(m[0]):
+            parts += ["".join(lit), None]
+            lit = []
+            lx.i = m.end()
+            continue
+        step = len(m[0]) if m else 2 if ch == "\\" and q != "'" else 1
+        if ch in "'\"" and q in ("", ch):
+            q = "" if q else ch
+        lit.append(src[lx.i:lx.i + step])
+        lx.i += step
+    parts.append("".join(lit))
+    if len(parts) == 1:
+        return []
+    text = [k for k, p in enumerate(parts) if p and p.strip("'\"")]   # parts with literal text, not only quotes
+    star = "".join(p if p is not None else "*" if text and text[0] < k < text[-1] else "" for k, p in enumerate(parts))
+    return list(dict.fromkeys(["".join(p or "" for p in parts), star]))
 
 
 def _dequote(word: str, wild: bool = False) -> list[str]:
@@ -3693,7 +4776,7 @@ def _dequote(word: str, wild: bool = False) -> list[str]:
         return [word]
     out: list[str] = []
     for src in dict.fromkeys((word, word.replace('$"', '"'))):
-        toks = _Lexer("\\" + src if src.startswith("#") else src).run()
+        toks = _Lexer("\\" + src if src.startswith("#") else src, scan=False).run()
         out += [x for kind, w in toks if kind == "w" for x in [w.text] + (_wild(w) if wild else [])]
     return out
 
@@ -3798,11 +4881,12 @@ def _args_of(action: Any) -> tuple[str, dict]:
 
 
 @_brace_budget
-def classify(action: Any) -> Classification:
-    """Classify one tool call from its name and arguments. Pure; never raises on odd args."""
+@_in_tool_folder
+def classify(action: Any, cwd: str | None = None) -> Classification:
+    """Classify one tool call from its name and arguments. Pure; never raises on odd args. ``cwd`` is the folder the
+    tool runs in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
     tool, args = _args_of(action)
-    if tool in ("terminal", "shell", "bash", "run_command", "exec_command") or (
-            tool not in TOOLS and isinstance(args.get("command"), str) and tool.endswith(("terminal", "shell"))):
+    if _runs_shell(tool, args):
         c = classify_shell(str(args.get("command") or args.get("cmd") or ""))
     elif tool == "execute_code":
         c = classify_code(str(args.get("code") or ""))
@@ -3987,7 +5071,7 @@ def _policy_command_view(command: str) -> str:
     This is an additional veto view, never an authorization view. Dynamic words stay
     opaque. Execution strings get their own views only through classify_shell recursion.
     """
-    tokens = _Lexer(command).run()
+    tokens = _Lexer(command, scan=False).run()
     rendered = []
     for kind, value in tokens:
         if kind == "w":
@@ -4080,12 +5164,8 @@ def _each_part(c: Classification) -> Iterator[Classification]:
         yield from _each_part(p)
 
 
-def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classification, str]]:
-    """Each part of the classification (the combined result first, then every simple command it was built
-    from) with the reserved or deny entry that matches it (D-075): a compound line is denied when any simple
-    command on it is. A `command` pattern matches a part on the part's own text or on any decoded view of the
-    line (#136); each pattern is run over the line's views once, not once per part."""
-    entries = list(entries)
+def _line_matcher(c: Classification) -> Callable[[str], bool]:
+    """Whether a `command` pattern matches any decoded view of the line (#136), each pattern run once."""
     views = list(dict.fromkeys(v for p in _each_part(c) for v in p._command_views))
     seen: dict[str, bool] = {}
 
@@ -4094,7 +5174,40 @@ def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classificatio
             regex = re.compile(pattern)
             seen[pattern] = any(regex.search(v) for v in views)
         return seen[pattern]
+    return line
+
+
+def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classification, str]]:
+    """Each part of the classification (the combined result first, then every simple command it was built
+    from) with the reserved or deny entry that matches it (D-075): a compound line is denied when any simple
+    command on it is. A `command` pattern matches a part on the part's own text or on any decoded view of the
+    line (#136); each pattern is run over the line's views once, not once per part."""
+    entries = list(entries)
+    line = _line_matcher(c)
     return [(p, hit) for p in _each_part(c) if (hit := _list_matches(entries, p, line))]
+
+
+def _override_deny(c: Classification, gates: Mapping) -> tuple[Classification, str, str] | None:
+    """The first part of the line, below the combined result, that a category line or rule denies as it would
+    deny that command alone (#191): its category's line, then the first rule that matches it; or a deny rule
+    whose `command` regex matches only a decoded view of the line (#136). ``(part, why, step)`` or None."""
+    cats, rules = gates.get("categories") or {}, gates.get("rules") or []
+    if not (cats or rules):
+        return None
+    line = _line_matcher(c)
+    for p in list(_each_part(c))[1:]:
+        out, why, step = cats.get(p.category), f"category {p.category}", "category"
+        first = next((r for r in rules if _rule_matches(r["match"], p)), None)
+        if first is not None:
+            out, why, step = first["decision"], first["reason"], "rule"
+        if out != "deny":
+            veto = next((r for r in rules if r["decision"] == "deny" and "command" in r["match"]
+                         and _rule_matches(r["match"], p, veto=True, line=line)), None)
+            if veto is None:
+                continue
+            why, step = veto["reason"], "rule"
+        return p, why, step
+    return None
 
 
 def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
@@ -4112,6 +5225,18 @@ def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
         if _glob_any(repo, scopes.get("internal") or []):
             return ("internal" if c.exposure == "public" else c.exposure), False
     return c.exposure, c.third_party
+
+
+UNSEEN_BODY = ("the gate cannot read the body (stdin, a file it did not read, $(..) or a variable); "
+               "pass the text inline or as an absolute --body-file path")
+
+
+def body_unseen(c: Classification) -> bool:
+    """Whether an outbound body, title or field on the line is out of the gate's sight (#208): a part with the
+    ``unseen_body`` signal, or a post's body file nobody read into its text. Such a post asks under the posting
+    rules, never gets a standing grant, and a required executor refuses it."""
+    return any("unseen_body" in p.signals or (p.text_file and not p.text and p.category in OUTBOUND)
+               for p in _each_part(c))
 
 
 def check_post(text: str, posting: Mapping, *, title: str = "", agents: Iterable[str] = (),
@@ -4148,8 +5273,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     Order: matrix cell, then a category override, then the first matching rule (each may lower
     or raise). Then only raises: a deny or ask rule whose `command` regex matches the literal-word
     view but not the text, reserved actions, escalations (budget, third party, listed categories),
-    posting violations and the operator floor. A deny entry wins over everything. A line with a
-    `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
+    posting violations (a body the gate cannot read is one) and the operator floor. A deny entry wins
+    over everything, and so does a category line or rule that denies any part of a compound line. A line
+    with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
     `context` may carry `spent_today` for the daily budget.
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
@@ -4216,10 +5342,13 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         bump("ask", f"{eff.category} always asks", "escalate")
 
     violations: list[str] = []
-    if eff.category in (posting.get("applies_to") or POSTING_DEFAULT) and (eff.text or eff.title):
+    unseen = body_unseen(eff)
+    if eff.category in (posting.get("applies_to") or POSTING_DEFAULT) and (eff.text or eff.title or unseen):
         violations = check_post(eff.text, posting, title=eff.title, agents=pol.get("agents") or [],
                                 exposure=eff.exposure)
         violations += check_scrub(eff.text, pol.get("scrub"), title=eff.title, exposure=eff.exposure)  # D-033
+        if unseen:  # #208: the checks above saw only part of the post, so they cannot pass it
+            violations.append(UNSEEN_BODY)
         if violations:
             bump("ask", "posting rules: " + "; ".join(violations), "posting")
 
@@ -4235,6 +5364,10 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     if eff.category == "store_write":
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
 
+    # #191: a category line or rule that would deny a part alone denies the line, as a deny entry does (D-075).
+    if outcome != "deny" and (part := _override_deny(eff, gates)):
+        p, why, step = part
+        outcome, reason, rule = "deny", f"denied by policy ({why}: {p.summary or p.category})", step
     if (denied := _part_hits(gates.get("deny") or [], eff)):
         outcome, reason, rule = "deny", f"denied by policy ({denied[0][1]})", "deny"
     d = Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
@@ -4693,6 +5826,17 @@ def approvers_for(category: str, approvals: Mapping | None) -> list[str]:
             if m not in out:
                 out.append(m)
     return out
+
+
+def strictest_approvers(category: str, pinned: Mapping | None, changed: Mapping | None = None) -> list[str]:
+    """Who may answer while a changed ``approvals.yaml`` waits for ``/gate accept`` (D-038, #211): the approvers
+    both the pinned and the changed table allow, in the pinned order. The principal is first in both, so the
+    list is never empty. With no change pending it is ``approvers_for(category, pinned)``."""
+    first = approvers_for(category, pinned)
+    if changed is None:
+        return first
+    second = set(approvers_for(category, changed))
+    return [a for a in first if a in second]
 
 
 def approver_identity(client: str) -> str:

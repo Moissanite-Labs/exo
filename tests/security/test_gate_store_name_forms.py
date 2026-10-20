@@ -219,12 +219,13 @@ JOBS = [
     ("cd {jobs} && cat *.log", "read"),
     ("cd {jobs} && ls", "read"),
     ("cd {jobs} && ls .", "read"),
-    ("cd {jobs} && cd .. && cat jobs/1.log", "read"),
-    ("cd {jobs} && cd .. && cd jobs && tail -f 3.log", "read"),
     ("tail -f 3.log", "read"),
     ("cd {top} && cd run/jobs && cat 1.log", "read"),
     ("cd {top} && cd run/jobs && tail -f 3.log", "read"),
-    ("cd {jobs} && cd .$(:). && cat jobs/1.log", "read"),
+    # main (#305) checks the run folder a `cd ..` reaches as its path, so these ask (fail closed)
+    ("cd {jobs} && cd .. && cat jobs/1.log", "credentials"),
+    ("cd {jobs} && cd .. && cd jobs && tail -f 3.log", "credentials"),
+    ("cd {jobs} && cd .$(:). && cat jobs/1.log", "credentials"),
 ]
 
 

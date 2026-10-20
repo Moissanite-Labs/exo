@@ -34,7 +34,7 @@ from exo.protocol import schema as s
 from exo import principal as pr
 from exo.server.engine import Closed, CommandFailed, Engine, Hub
 
-SERVER_CAPABILITIES = ["sse", "replay", "stdio", "heartbeat"]
+SERVER_CAPABILITIES = ["sse", "replay", "stdio"]  # hello adds "heartbeat" only on a transport that pings
 HEARTBEAT = 15.0
 MAX_BODY = 8 * 1024 * 1024
 
@@ -61,33 +61,40 @@ class Dispatcher:
         self.hub = hub or getattr(engine, "hub", None) or Hub()
         self.caller = caller  # D-039: who an in-process user of this dispatcher is; transports pass their own
 
-    async def dispatch(self, raw: str | bytes, caller: str | None = None) -> tuple[s.Command | None, s.Response]:
+    async def dispatch(self, raw: str | bytes, caller: str | None = None,
+                       heartbeat: float | None = None) -> tuple[s.Command | None, s.Response]:
         try:
             cmd = s.Command.from_json(raw)
         except s.ProtocolError as exc:
             return None, _fail(_raw_id(raw), exc.code, exc.message)
         except Exception as exc:  # a decoder bug must not kill the connection or the stdio transport
             return None, _fail(_raw_id(raw), "internal", f"{type(exc).__name__}: {exc}")
-        return cmd, await self.run(cmd, caller)
+        return cmd, await self.run(cmd, caller, heartbeat)
 
-    async def run(self, cmd: s.Command, caller: str | None = None) -> s.Response:
+    async def run(self, cmd: s.Command, caller: str | None = None, heartbeat: float | None = None) -> s.Response:
+        """``heartbeat``: seconds between the transport's ``: ping`` comments, for ``hello``; None where it sends
+        none (stdio, in process)."""
         who = pr.Caller(caller or self.caller)
         tok = pr.CALLER.set(who)
         try:
-            return await self._run(cmd)
+            return await self._run(cmd, heartbeat)
         finally:
             who.live = False  # a task the command started does not keep the caller's standing
             pr.CALLER.reset(tok)
 
-    async def _run(self, cmd: s.Command) -> s.Response:
+    async def _run(self, cmd: s.Command, heartbeat: float | None = None) -> s.Response:
         body = cmd.body
         try:
             if isinstance(body, s.Hello):
                 if body.protocol != s.PROTOCOL_VERSION:
                     return _fail(cmd.id, "protocol_mismatch", f"server speaks {s.PROTOCOL_VERSION}, client {body.protocol}")
-                result = {"protocol": s.PROTOCOL_VERSION, "server": "exod", "capabilities": SERVER_CAPABILITIES,
-                          "seq": self.hub.head(), "instance": self.hub.instance, "heartbeat": HEARTBEAT}
-                return s.Response(id=cmd.id, result=result)
+                # D-060: only a transport that pings names a heartbeat, with its own interval
+                hello: dict[str, Any] = {"protocol": s.PROTOCOL_VERSION, "server": "exod",
+                                         "capabilities": SERVER_CAPABILITIES + ["heartbeat"] * bool(heartbeat),
+                                         "seq": self.hub.head(), "instance": self.hub.instance}
+                if heartbeat:
+                    hello["heartbeat"] = heartbeat
+                return s.Response(id=cmd.id, result=hello)
             if isinstance(body, s.EventsSubscribe):
                 # Without a stream, subscribe is a one-shot replay; HTTP clients stream from GET /events.
                 events = self.hub.since(body.since, body.session)
@@ -102,6 +109,48 @@ class Dispatcher:
 
 # ---------------------------------------------------------------- HTTP + SSE
 
+
+class SocketBusy(ValueError):
+    """Another core owns, or is starting on, the socket. The only start failure `exo serve` reports as a plain line."""
+
+
+def _lock_path(sock: Path) -> Path:
+    return sock.with_name(sock.name + ".lock")
+
+
+def _take_start_lock(sock: Path) -> int:
+    """Exclusive, non-blocking ``flock`` on ``<sock>.lock`` (owner-only), with this pid written in it. A dead
+    holder's lock is gone with its fd, so a crash never blocks a start. The file is unlinked by its holder at
+    close, so a lock taken on an unlinked file is not the lock: re-open until the file we hold is the one named."""
+    import fcntl  # POSIX only: imported here so the module still loads where the lock is never taken
+
+    lock = _lock_path(sock)
+    while True:  # the folder is start_unix's; no private_dir here, which refuses a symlinked folder (macOS /tmp)
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            if os.fstat(fd).st_mode & 0o077:
+                os.fchmod(fd, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            try:
+                who = os.pread(fd, 32, 0).decode("ascii", "replace").strip()
+            finally:
+                os.close(fd)
+            raise SocketBusy(f"another exo core is starting or running on {sock}"
+                             f"{f' (pid {who})' if who.isdigit() else ''}; stop it, or give this one its own "
+                             "--socket") from None
+        except BaseException:
+            os.close(fd)
+            raise
+        try:
+            if os.fstat(fd).st_ino == os.stat(lock).st_ino:
+                os.ftruncate(fd, 0)
+                os.pwrite(fd, f"{os.getpid()}\n".encode(), 0)
+                return fd
+        except FileNotFoundError:
+            pass
+        os.close(fd)  # the holder unlinked it between our open and our lock: take the new file
+
 _REASONS = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found",
             405: "Method Not Allowed", 413: "Payload Too Large"}
 
@@ -115,35 +164,58 @@ class HttpServer:
         self.principal = principal  # D-039: issue a principal credential beside the Unix socket
         self._principal_token: str | None = None
         self._unix_path: Path | None = None
+        self._lock_fd: int | None = None  # the start lock, held from start_unix until close
         self._server: asyncio.base_events.Server | None = None
         self._streams: set[asyncio.Task] = set()
         self._writers: set[asyncio.StreamWriter] = set()
         self._closing = False
 
-    async def start_unix(self, path: str | os.PathLike) -> None:
+    async def start_unix(self, path: str | os.PathLike, claimed: Callable[[], None] | None = None) -> None:
+        """Bind the Unix socket as its one owner: probe, unlink and bind run under an exclusive ``flock`` on
+        ``<path>.lock``, which this server keeps until ``close``. ``claimed`` runs once the lock is held and the
+        socket is not another server's, before the socket is replaced (the pid file is written there)."""
         path = Path(path)
         if len(os.fsencode(str(path))) >= 104:  # macOS limit is 104 bytes, Linux 108; stay under both
             raise ValueError(f"socket path too long ({len(os.fsencode(str(path)))} bytes, max 103): {path}. "
                              "Use a shorter EXO_HOME.")
         from exo.ensure_core import probe  # never take a live server's socket; only a stale file is replaced
-        if probe(path) == "alive":
-            raise ValueError(f"another server is listening on {path}; stop it, or give this one its own --socket")
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if path.exists():
-            path.unlink()
+        self._lock_fd = _take_start_lock(path)
         self._unix_path = path
-        if self.principal:  # before the socket accepts: no client may read a missing or a crashed core's record
-            self._principal_token = pr.issue(path, self.dispatcher.hub.instance)
-        old = os.umask(0o177)
         try:
-            self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
+            if probe(path) == "alive":
+                raise SocketBusy(f"another server is listening on {path}; stop it, or give this one its own --socket")
+            if claimed is not None:
+                claimed()
+            if path.exists():
+                path.unlink()
+            if self.principal:  # before the socket accepts: no client may read a missing or a crashed core's record
+                self._principal_token = pr.issue(path, self.dispatcher.hub.instance)
+            old = os.umask(0o177)
+            try:
+                self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
+            except BaseException:
+                if self._principal_token:
+                    pr.revoke(path, self._principal_token)
+                    self._principal_token = None
+                raise
+            finally:
+                os.umask(old)
+            os.chmod(path, 0o600)
         except BaseException:
-            if self._principal_token:
-                pr.revoke(path, self._principal_token)
+            self._release_start_lock(unlink_socket=False)
             raise
+
+    def _release_start_lock(self, unlink_socket: bool) -> None:
+        fd, self._lock_fd = self._lock_fd, None
+        if fd is None or self._unix_path is None:
+            return
+        try:
+            if unlink_socket:  # while still locked, so a core that starts next is never unlinked by this one
+                self._unix_path.unlink(missing_ok=True)
+            _lock_path(self._unix_path).unlink(missing_ok=True)  # a waiter re-checks the inode it locked
         finally:
-            os.umask(old)
-        os.chmod(path, 0o600)
+            os.close(fd)  # closing the fd drops the flock, as does the process dying
 
     async def start_tcp(self, host: str, port: int) -> int:
         if not self.token:
@@ -179,6 +251,7 @@ class HttpServer:
         self._writers.difference_update(writers)
         if self._server is not None:
             await self._server.wait_closed()
+        self._release_start_lock(unlink_socket=True)
 
     def _accept_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         # Registration must happen in the connection callback, before scheduling the async handler.
@@ -227,7 +300,7 @@ class HttpServer:
             if n > MAX_BODY:
                 return await self._json(writer, 413, {"error": "body too large"})
             raw = await reader.readexactly(n)
-            _cmd, resp = await self.dispatcher.dispatch(raw, self._caller(headers, peer))
+            _cmd, resp = await self.dispatcher.dispatch(raw, self._caller(headers, peer), self.heartbeat)
             return await self._send(writer, 200, resp.to_json().encode())
         if url.path == "/events" and method == "GET":
             q = parse_qs(url.query)
@@ -394,7 +467,7 @@ class ChannelLink:
 
 async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tuple[str, int] | None = None,
                 token: str | None = None, stdio: bool = False, hub: Hub | None = None,
-                ready: Callable[[str], None] | None = None) -> None:
+                ready: Callable[[str], None] | None = None, claimed: Callable[[], None] | None = None) -> None:
     """Run exod until cancelled (or until stdin closes in stdio mode)."""
     dispatcher = Dispatcher(engine, hub)
     if stdio:
@@ -407,7 +480,7 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
     if socket:
         # The socket file is 0600, so only this user reaches it; the token guards TCP only.
         srv = HttpServer(dispatcher, principal=True)
-        await srv.start_unix(socket)
+        await srv.start_unix(socket, claimed)
         servers.append(srv)
         if (peers := getattr(engine, "peers", None)) is not None:
             await peers.start(socket)  # D-026: presence file so other daemons find this one
@@ -433,5 +506,3 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
             await close()
         for srv in servers:
             await srv.close()
-        if socket:
-            Path(socket).unlink(missing_ok=True)
