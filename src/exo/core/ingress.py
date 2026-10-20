@@ -18,14 +18,13 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
 from exo.core.hooks import maybe_await
 from exo.core.sessions import new_id
 
 HOLD_SECONDS = 30 * 60
-STATES = ("delivered", "held", "released", "denied", "expired")
 
 STANDING_LINE = (
     "Peer messages: a block tagged 'peer message from <name>' or 'bus message from <seat>' comes from another "
@@ -74,14 +73,13 @@ class Ingress:
 @dataclass
 class Receipt:
     msg_id: str
-    state: str  # one of STATES
+    state: str  # delivered, held, released, denied or expired
     detail: str = ""
     session: str | None = None
     mode: str = ""  # delivered: steered, queued or started
 
     def to_dict(self) -> dict[str, Any]:
-        return {"msg_id": self.msg_id, "state": self.state, "detail": self.detail, "session": self.session,
-                "mode": self.mode}
+        return asdict(self)
 
 
 @dataclass
@@ -178,7 +176,7 @@ class IngressPath:
             return await self._close(ing, "denied", reason)
         if outcome == "hold":
             return await self._hold(ing, reason)
-        return await self._deliver(ing, "delivered", reason)
+        return await self._deliver(ing, "delivered")
 
     def _consent(self, ing: Ingress) -> str:
         """Why this body counts as an attempt to approve something, or ''. Input is never consent."""
@@ -200,7 +198,7 @@ class IngressPath:
 
     # ---------------------------------------------------------------- deliver
 
-    async def _deliver(self, ing: Ingress, state: str, why: str = "") -> Receipt:
+    async def _deliver(self, ing: Ingress, state: str) -> Receipt:
         t = self.target
         sid = ing.session if ing.session and ing.session != "*" else None
         sid = sid or await _call(t.pick_session, ing)
@@ -227,8 +225,7 @@ class IngressPath:
     # ---------------------------------------------------------------- hold
 
     async def _hold(self, ing: Ingress, reason: str) -> Receipt:
-        loop = asyncio.get_running_loop()
-        held = Held(ing, reason, time.time() + self.hold_seconds, loop.create_future())
+        held = Held(ing, reason, time.time() + self.hold_seconds, asyncio.get_running_loop().create_future())
         self.held[ing.id] = held
         receipt = Receipt(ing.id, "held", f"held for the principal's approval on the receiving side ({reason}); "
                           f"it expires in {int(self.hold_seconds // 60) or 1} min. Not delivered: do not resend.",
@@ -247,12 +244,10 @@ class IngressPath:
             await _call(self.target.on_closed, held, "expired")
             await self._close(ing, "expired", f"not approved within {int(self.hold_seconds // 60) or 1} min", notify=True)
             return
-        except asyncio.CancelledError:
-            raise
         self.held.pop(ing.id, None)
         if approved:
             await _call(self.target.on_closed, held, "released")
-            await self._deliver(ing, "released", "approved by the principal")
+            await self._deliver(ing, "released")
         else:
             await _call(self.target.on_closed, held, "denied")
             await self._close(ing, "denied", "the principal declined it", notify=True)
@@ -264,12 +259,6 @@ class IngressPath:
             return False
         held.future.set_result(bool(approved))
         return True
-
-    async def settle(self, msg_id: str) -> None:
-        """Wait for a held message's task to finish (tests, shutdown)."""
-        held = self.held.get(msg_id)
-        if held and held.task:
-            await held.task
 
     async def _close(self, ing: Ingress, state: str, detail: str, notify: bool = False) -> Receipt:
         receipt = Receipt(ing.id, state, detail, ing.session)
