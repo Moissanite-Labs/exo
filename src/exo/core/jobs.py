@@ -100,8 +100,9 @@ def tail_text(path: Path, lines: int, chars: int, values: Sequence[str] = ()) ->
         return ""
     note, n, pre = ROTATED.format(path.name), max(map(len, values), default=0) - 1, ""
     if n > 0 and data.startswith(note):
-        with contextlib.suppress(OSError):
-            pre = path.with_suffix(".log.1").read_bytes()[-4 * n:].decode("utf-8", errors="replace")[-n:]
+        with contextlib.suppress(OSError), open(path.with_suffix(".log.1"), "rb") as f:
+            f.seek(max(0, f.seek(0, os.SEEK_END) - 4 * n))  # only its end: n characters take 4n bytes at most
+            pre = f.read().decode("utf-8", errors="replace")[-n:]
     text, at, parts, red = pre + data[len(note):] if pre else data, len(pre), [note] if pre else [], -1
     live = [(a + at, b + at) for a, b in keys.secret_spans(text[at:], values)[0]] if pre else []
     for a, b in sorted(keys.secret_spans(text, values)[0] + live):  # with live, never less than the log alone
