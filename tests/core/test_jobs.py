@@ -641,6 +641,46 @@ async def test_a_notice_cancelled_by_a_hard_stop_still_leaves_the_job_end_event(
     await eng.close()
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
+@aio
+async def test_close_shuts_the_notice_thread_down_once_its_last_build_ends(tmp_path, monkeypatch, cancelled):
+    """close() shuts the notice thread down after the notices are handed on, so no idle worker outlives the engine.
+    A hard stop that cancels a notice task leaves its build running in that thread, so close() waits for that build
+    to end too. After close() the thread is gone and the pool takes no more work."""
+    import threading
+
+    from exo.core import jobs
+    eng = engine(tmp_path)
+    sid = (await eng.loop.create_session(agent="tester")).id
+    plain, entered, release = jobs.tail_text, threading.Event(), threading.Event()
+
+    def tail(*args):
+        entered.set()
+        if cancelled:
+            release.wait(10)
+        return plain(*args)
+    monkeypatch.setattr(jobs, "tail_text", tail)
+    eng.jobs.live["j_done01"] = h = jobs.Handle("j_done01", None, sid, "make test", time.time())
+    eng.jobs._finish(h, 0)
+    await until(entered.is_set)
+    threads = set(eng.jobs._pool._threads)
+    assert threads and all(t.name.startswith("exo-notice") for t in threads)
+    if cancelled:
+        for t in list(eng.jobs._tasks):
+            t.cancel()
+        await until(lambda: not eng.jobs._tasks)
+    closing = asyncio.ensure_future(eng.close())
+    if cancelled:
+        await asyncio.sleep(0.3)
+        assert not closing.done() and any(t.is_alive() for t in threads)  # the cancelled task's build still runs
+        release.set()
+    await asyncio.wait_for(closing, 5)
+    assert eng.jobs._pool._shutdown and not any(t.is_alive() for t in threads)
+    with pytest.raises(RuntimeError):
+        eng.jobs._pool.submit(int)
+    await eng.jobs.close()  # a second close() finds the pool shut down and says nothing
+
+
 @pytest.mark.parametrize("lost", [False, True])
 @aio
 async def test_close_waits_for_a_notice_still_being_built(tmp_path, monkeypatch, lost):
