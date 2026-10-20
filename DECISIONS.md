@@ -1236,8 +1236,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   quoted or not (the line is spelt the way the level reads the delimiter) or the body lies inside it (the stand-in
   ends the body), so a command after the here-doc is still read. A run of stand-in lines, one written by hand too, is
   read in one step, and a command after it is still read. The cost: a command inside the unread part is not read, so
-  a deny on it asks, and a here-doc delimiter there longer than 1,024 characters ends no body. *git -c (#335).* #231
-  widened the keys `git -c` flags and kept the early return that made the whole line opaque for one, so
+  a deny on it asks, and a here-doc delimiter there longer than 1,024 characters ends no body. With a nested `${..}`
+  that holds a `$( )` (#143), a deny after the nest can ask too. *git -c (#335).* #231 widened the keys `git -c`
+  flags and kept the early return that made the whole line opaque for one, so
   `git -c include.path=/dev/null push --force origin main` asked where the gate before #231 denied it. A flagged
   key's part now stands beside the subcommand's own category (`_exec_options` already added it), and only an unknown
   subcommand, which the config may define, is opaque on its own. `git config` with a flagged key keeps its

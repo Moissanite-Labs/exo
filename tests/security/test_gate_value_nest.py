@@ -1,4 +1,4 @@
-"""#334: a $( ) nest in a value #231 reads is read in bounded time, and a deny after it still fires.
+"""#334: a $( ) nest in a value #231 reads is read in linear time, and a deny after it still fires.
 
 #231 reads the values bash runs later as code: PROMPT_COMMAND, PS4, BROWSER, the pagers and askpass programs,
 GIT_PROXY_COMMAND, `git -c core.sshCommand`, GIT_CONFIG_* and the rest of that family. Each $( ) in such a value was
