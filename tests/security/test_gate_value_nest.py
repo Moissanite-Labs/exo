@@ -10,7 +10,8 @@ denied.
 Now one classify call reads each line once per depth, and a lexer reads 16 levels of $( ), <( ) and $(( )) inside one
 another. Past them it finds the end of the nest in one pass (gate._nest_end), and the nest stands as an unread part
 that asks, also in an exported value. Each test here fails on main 5f434b15, by its time or lexer count, by
-RecursionError or by its outcome, except the two marked as guards for the per-call memo.
+RecursionError or by its outcome, except the two marked as guards for the per-call memo and the three arithmetic
+nests of 500 levels, which main still reads (it raises RecursionError for one of 1,000).
 
 Every command string here is data for exo.gate.classify/decide; none is run."""
 import random
@@ -108,6 +109,8 @@ def test_each_carrier_and_nest_at_1000_levels(classified, carrier, nest):
 @pytest.mark.parametrize("nest", NESTS)
 @pytest.mark.parametrize("carrier", ["PROMPT_COMMAND", "PS4", "git -c"])
 def test_no_recursion_error_at_500_and_5000_levels(classified, carrier, nest, n):
+    """Main raises RecursionError for each of these but the arithmetic nest of 500 levels, which it reads with one
+    lexer per level. That case guards against a regression."""
     _denied(classified(CARRIERS[carrier].format(NESTS[nest](n)) + "; " + PUSH))
 
 
