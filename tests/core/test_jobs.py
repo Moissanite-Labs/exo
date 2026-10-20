@@ -389,6 +389,75 @@ async def test_a_job_that_ends_while_channels_stop_starts_no_turn(tmp_path):
     assert not [e for e in eng.hub.since(0) if e.type == "turn.started"]
 
 
+@aio
+async def test_a_worker_thread_builds_the_notice_and_jobs_keep_their_order(tmp_path, monkeypatch):
+    """The notice reads and redacts the whole log (5 MB by default), so a worker thread builds it and the event loop
+    runs on. Notices are still handed on in the order the jobs ended, also when the first takes longer to build."""
+    import threading
+
+    from exo.core import jobs
+    eng = engine(tmp_path)
+    sid = (await eng.loop.create_session(agent="tester")).id
+    plain, threads = jobs.tail_text, []
+
+    def tail(path, *args):
+        threads.append(threading.get_ident())
+        time.sleep(0.3 if path.stem == "j_slow01" else 0)
+        return plain(path, *args)
+    monkeypatch.setattr(jobs, "tail_text", tail)
+    eng.jobs.dir.mkdir(parents=True)
+    for jid in ("j_slow01", "j_fast02"):  # the two watchers schedule _finish in this order
+        eng.jobs.log_path(jid).write_text(f"{jid} output\n")
+        eng.jobs.live[jid] = h = jobs.Handle(jid, None, sid, f"make {jid}", time.time())
+        eng.jobs._finish(h, 0)
+    await asyncio.gather(*eng.jobs._tasks)
+    assert len(threads) == 2 and threading.get_ident() not in threads
+    texts = [m.text() for m in eng.store.messages(sid) if m.meta.get("job")]
+    assert len(texts) == 2 and "j_slow01 output" in texts[0] and "j_fast02 output" in texts[1]
+    await eng.close()
+
+
+@pytest.mark.parametrize("lost", [False, True])
+@aio
+async def test_close_waits_for_a_notice_still_being_built(tmp_path, monkeypatch, lost):
+    """A notice a worker thread still builds when exod shuts down is kept for the next turn before close() returns,
+    a lost job's from recover() too. It starts no turn, and nothing is queued or published after close()."""
+    import threading
+
+    from exo.core import jobs
+    eng = engine(tmp_path, jobs={"wake": True})
+    sid = (await eng.loop.create_session(agent="tester")).id
+    plain, entered, release = jobs.tail_text, threading.Event(), threading.Event()
+
+    def tail(*args):
+        entered.set()
+        release.wait(10)
+        return plain(*args)
+    monkeypatch.setattr(jobs, "tail_text", tail)
+    if lost:
+        eng.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) VALUES "
+                     "('j_lost01','tester',?,'make all','/tmp','running',999999,?,'/tmp/none.log')", (sid, time.time()))
+        recovering = asyncio.ensure_future(eng.jobs.recover())
+    else:
+        eng.jobs.live["j_done01"] = h = jobs.Handle("j_done01", None, sid, "make test", time.time())
+        eng.jobs._finish(h, 0)
+    await until(entered.is_set)
+    closing = asyncio.ensure_future(eng.close())
+    await asyncio.sleep(0.3)
+    assert not closing.done()  # close waits for the notice rather than leave it to outlive the engine
+    release.set()
+    await closing
+    n, msgs = len(eng.hub.since(0)), [m.text() for m in eng.store.messages(sid) if m.meta.get("job")]
+    if lost:
+        assert recovering.result() == ["j_lost01"] and len(msgs) == 1 and "lost" in msgs[0] and "make all" in msgs[0]
+    else:
+        assert len(msgs) == 1 and "make test" in msgs[0]
+        assert [e.detail for e in events(eng) if e.state == "done"] == ["notice queued"]
+    assert not [e for e in eng.hub.since(0) if e.type == "turn.started"]  # wake = true, but exod is shutting down
+    await asyncio.sleep(0.3)
+    assert len(eng.hub.since(0)) == n and len([m for m in eng.store.messages(sid) if m.meta.get("job")]) == 1
+
+
 # ---------------------------------------------------------------- limits
 
 
