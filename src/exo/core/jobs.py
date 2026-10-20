@@ -144,6 +144,7 @@ class JobManager:
         self.path = IngressPath(self.target, lambda ing: ("auto", "a job the agent started"))
         self._lock = threading.Lock()
         self._tasks: set[asyncio.Task] = set()
+        self._order = asyncio.Lock()
         self.recovered = False
 
     # ---------------------------------------------------------------- start
@@ -275,15 +276,19 @@ class JobManager:
             state = "done" if code == 0 else "failed"
             detail = note if code == 0 else ""
         self.e.store._q("UPDATE jobs SET state=?, exit_code=?, ended=?, detail=? WHERE id=?", (state, code, ended, detail, h.id))
-        task = asyncio.ensure_future(self._announce(h, state, code, ended, detail))
-        self._tasks.add(task)
+        self._spawn(self._announce(h, state, code, ended, detail))
+
+    def _spawn(self, coro: Any) -> asyncio.Task:
+        task = asyncio.ensure_future(coro)
+        self._tasks.add(task)  # close() waits for these
         task.add_done_callback(self._tasks.discard)
+        return task
 
     async def _announce(self, h: Handle, state: str, code: int, ended: float, detail: str) -> None:
         if state != "killed" or h.kill_by != "job_kill":  # an agent that killed it knows: no notice for that
             try:
-                rec = await self.path.submit(self._notice(h.id, state, code, h.command, h.started, ended, h.session,
-                                                          detail))
+                rec = await self.path.submit(await self._built(h.id, state, code, h.command, h.started, ended,
+                                                               h.session, detail))
                 detail = (detail + "; " if detail else "") + f"notice {rec.mode or rec.state}"
             except Exception as exc:  # a delivery problem never loses the job's end
                 from exo.core import trace
@@ -291,6 +296,12 @@ class JobManager:
                 trace.report("jobs.notice", exc, h.session)
                 detail = (detail + "; " if detail else "") + f"notice failed: {exc}"
         self.e.hub.publish(self._body(h.id, state, h.command, code, h.started, ended, detail), h.session)
+
+    async def _built(self, *args: Any) -> Ingress:
+        """``_notice`` in a worker thread, as it reads and redacts the whole log. One at a time, in call order, so
+        each notice is handed on before the next one is built, in the order the jobs ended."""
+        async with self._order:
+            return await asyncio.to_thread(self._notice, *args)
 
     def _notice(self, job_id: str, state: str, code: int | None, command: str, started: float, ended: float | None,
                 session: str | None, detail: str = "") -> Ingress:
@@ -360,10 +371,13 @@ class JobManager:
 
     async def recover(self) -> list[str]:
         """After a restart: jobs the database says were running are ``lost``. Each owning thread gets a notice
-        (queued, never waking it). Old finished jobs and their logs are pruned."""
+        (queued, never waking it). Old finished jobs and their logs are pruned. close() waits for this."""
         if self.recovered:
             return []
         self.recovered = True
+        return await self._spawn(self._recover())
+
+    async def _recover(self) -> list[str]:
         lost = []
         for r in self.e.store._q("SELECT * FROM jobs WHERE agent=? AND state='running'", (self.e.agent,)):
             if r["id"] in self.live:
@@ -375,8 +389,8 @@ class JobManager:
             sid = r["session"]
             self.e.hub.publish(self._body(r["id"], "lost", r["command"], None, r["started"], now, detail, r["log"]), sid)
             if sid and self.e.store.get_session(sid) is not None:
-                ing = self._notice(r["id"], "lost", None, r["command"], r["started"], now, sid, detail)
-                await self.target.queue(sid, ing)
+                await self.target.queue(sid, await self._built(r["id"], "lost", None, r["command"], r["started"], now,
+                                                               sid, detail))
         cutoff = time.time() - KEEP_DAYS * 86400
         for r in self.e.store._q("SELECT id, log FROM jobs WHERE agent=? AND state!='running' AND ended<?",
                                  (self.e.agent, cutoff)):

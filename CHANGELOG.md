@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A background job's completion notice no longer stalls the core (follow-up to #321). The notice reads and redacts the
+  job's whole log (up to `output_cap`, 5 MB). That ran on the event loop, and one emoji in a log made it take about
+  300 ms. Four jobs that ended together froze streams, approval cards and other turns for about 2 seconds. A worker
+  thread now builds each notice, one at a time and in the order the jobs ended. The longest stall measured for those
+  four fell from 1.6 to 2.2 seconds to 48 to 124 ms. Shutting down still waits for a notice being built and keeps it
+  for the next turn (docs/JOBS.md "The completion notice").
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
