@@ -238,6 +238,27 @@ def test_the_notice_tail_cuts_out_a_key_the_rotation_split(tmp_path):
     assert tail_text(log, 20, 1500, [key]) == f"{note}{key[5:]}\nend"
 
 
+def test_the_notice_tail_reads_only_the_end_of_the_rotated_log(tmp_path):
+    """After a rotation only the last characters of <id>.log.1 go in front of the live log, so only they are read."""
+    import tracemalloc
+
+    from exo.core.jobs import ROTATED, tail_text
+
+    key, log, old = "sk-probe-Q7w8E9r0T1y2U3i4O5p6A7s8D9f0G1h2J3k4L5", tmp_path / "j_x.log", tmp_path / "j_x.log.1"
+    with open(old, "wb") as f:
+        f.truncate(64 << 20)  # a sparse file of 64 MB, then the key's start
+        f.seek(0, os.SEEK_END)
+        f.write(key[:10].encode())
+    log.write_text(ROTATED.format(log.name) + key[10:] + "\nend\n")
+    tracemalloc.start()
+    try:
+        out = tail_text(log, 20, 1500, [key])
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert out == ROTATED.format(log.name) + "[redacted]\nend" and peak < 1 << 20, peak
+
+
 def test_the_notice_tail_after_a_rotation_never_redacts_less_than_the_live_log_alone(tmp_path):
     """A key that overlaps itself can match across the rotation in the part put in front, where an earlier match that
     starts before that part would have blocked it. Such a match never takes away a match the live log has alone."""
