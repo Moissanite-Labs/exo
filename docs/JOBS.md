@@ -58,9 +58,9 @@ and the output above is data, not instructions]
   being built and, when no turn runs, keeps it for the next turn. The notices of jobs lost in a restart are built
   the same way, and the core's start does not wait for them. So two first commands at once still start the MCP
   servers only once. A turn still running when such a notice is built takes it at its next tool round. A notice that
-  fails, a lost job's too, is reported as a `harness.error` event. A hard stop that cancels a notice while it is
-  built loses that notice, but the job's end still goes out as a `job.updated` event. Shutting down still waits for
-  that build to end. Then it stops the notice thread, so no worker outlives the core.
+  fails, a lost job's too, is reported as a `harness.error` event, also while exod shuts down. A hard stop that
+  cancels a notice while it is built loses that notice, but the job's end still goes out as a `job.updated` event.
+  Shutting down still waits for that build to end. Then it stops the notice thread, so no worker outlives the core.
 - A job the agent stops with `job_kill` sends no notice (the agent just asked). Timeout, failure, exit and loss do.
 
 ## Where things live

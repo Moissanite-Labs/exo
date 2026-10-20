@@ -570,9 +570,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   in a restart are built the same way, in tasks the core's start does not wait for, so two first commands at once
   still start the runtime once. A turn still running when such a notice is built takes it at its next tool round, as
   it takes a completion notice. Before, a lost job's notice was queued before any turn could start. A lost job's
-  notice that fails is reported as a `harness.error` event, as a completion notice that fails is. Rejected: the
-  loop's default pool (`asyncio.to_thread`), where busy tool threads held the notice up and `close()` with it.
-  `docs/JOBS.md` "The completion notice".
+  notice that fails is reported as a `harness.error` event, as a completion notice that fails is. So is a notice
+  that fails while exod shuts down: `close()` keeps the engine's trace sink until its steps end and drops it just
+  before the session store closes. Before, it dropped the sink first. Rejected: the loop's default pool
+  (`asyncio.to_thread`), where busy tool threads held the notice up and `close()` with it. `docs/JOBS.md` "The
+  completion notice".
 - **Item 4, principal capture as a mechanism (docs/MEMORY-MODEL.md).** (a) The summary template has a verbatim
   `Principal Directives` section, and a harness check restores any ruling or correction the model dropped; (b) before
   a leaf with principal messages is summarized, the span is offered to the memory provider's `capture_principal`
