@@ -164,9 +164,9 @@ REDACTED = "[redacted]"
 def secret_spans(text: str, values: Sequence[str], end: int | None = None) -> tuple[list[tuple[int, int]], int]:
     """The ``(start, stop)`` spans of ``text`` that redaction replaces, in text order, and the cut point ``end``.
 
-    The values go in the order given. Each value's matches are found from the left without overlapping each other,
-    as ``str.replace`` finds them, and a match that overlaps a span taken before it is skipped. All matches are
-    found in ``text`` itself before any marker goes in, so no value can match across a ``[redacted]`` marker.
+    The values go in the order given. Each value's matches are found from the left, as ``str.replace`` finds them,
+    in ``text`` with the earlier values' spans blanked out, so no match overlaps a span taken before it. All matches
+    are found in ``text`` itself before any marker goes in, so no value can match across a ``[redacted]`` marker.
 
     With ``end``, a span must stop at or before it. A value's matches end at its first match that stops after
     ``end``, and ``end`` moves back to that match's start if it starts before ``end``. Each span that comes back

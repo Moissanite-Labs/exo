@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from exo.peerauth import FrameTooLarge, PrincipalTransport, sse_frames, stream_info
+from exo.peerauth import FrameTooLarge, PrincipalTransport, bounded_lines, sse_frames, stream_info
 from exo.protocol import schema as s
 
 log = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ class Client:
         async with self._http.stream("GET", "/events", params=params, timeout=timeout) as r:
             if r.status_code != 200:
                 raise ClientError(s.ErrorInfo(code=f"http_{r.status_code}", message=(await r.aread()).decode()))
-            async for comments, data in sse_frames(r.aiter_lines(), self.idle):
+            async for comments, data in sse_frames(bounded_lines(r.aiter_text()), self.idle):
                 if data:
                     try:
                         ev = s.Event.from_json("\n".join(data), strict=False)

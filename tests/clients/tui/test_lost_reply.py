@@ -102,3 +102,29 @@ def test_lost_unsteer_reply_leaves_the_steer_pending(tmp_path):
         assert "change course" in app.transcript_text()
 
     run(tmp_path, sc)
+
+
+def test_refused_principal_check_says_not_sent_and_why(tmp_path):
+    """A refused peer check (``PrincipalRefused``, a ConnectError) writes no byte, so the window says the command was
+    not sent and why, instead of "may not have been delivered" (#226). The text still goes back to the composer."""
+    from exo.peerauth import PrincipalRefused
+
+    async def sc(app, pilot, client, eng):
+        client.lose = ()
+        real = client.send
+
+        async def refuse(body):
+            if isinstance(body, s.TurnSend):
+                raise PrincipalRefused("principal connection refused: exod.sock is served by pid 4242, not the core "
+                                       "in the launch record (pid 4141)")
+            return await real(body)
+        client.send = refuse
+        await send(app, pilot, "pay the invoice")
+        await until(lambda: "not sent:" in app.transcript_text(), pilot)
+        text = app.transcript_text()
+        assert "served by pid 4242, not the core in the launch record" in text
+        assert "may not have been delivered" not in text
+        assert app.composer.text == "pay the invoice"
+        assert sum(isinstance(b, s.TurnSend) for b in app.sent) == 1
+
+    run(tmp_path, sc)
