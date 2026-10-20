@@ -33,7 +33,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   stderr any target from a variable, a glob or a relative name), because on Linux a later `> /dev/fd/3` or
   `> /dev/stdout` writes it back; `exec 3< grants; printf X > /dev/fd/3` rewrote the grants file with no ask. Writes
   to the writer's own stdout and stderr (`/dev/fd/1`, `/dev/stdout`) keep their class. A descriptor path used as an
-  input of a writing command asks too (`jq . /dev/stdin > out.json`, `patch -i /dev/stdin`).
+  input of a writing command asks too (`jq . /dev/stdin > out.json`, `patch -i /dev/stdin`, `gh ... --body-file
+  /dev/stdin`), as a principal-only store write whose card says the path is one the gate cannot resolve.
 - Gate policy (#191, #211, #208). A `categories: {X: deny}` line or a rule with `decision: deny` now denies a line
   when any part of it is X, as a `deny:` entry has since D-075: `echo $(git push origin main) > /tmp/f` was `log`
   under `categories: {local_write: deny}`, and a wrapped or fed-shell line asked under `categories: {opaque_exec:

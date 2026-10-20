@@ -1781,7 +1781,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
     hit = _store_touch(k, words, parts, ctx)
     if hit:
-        c = _make("store_write", summary=f"write to the Exo store: {hit}"[:120], target=hit, link=hit, command=cmd)
+        # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
+        # command is known to write there (`gh ... --body-file /dev/stdin` reads it), so the card says just that
+        what = (f"uses {hit}, a descriptor path or folder the gate cannot resolve (it may lead to an Exo store file)"
+                if _fd_path(hit) or _FD_DIR.fullmatch(os.path.normpath(hit)) else f"write to the Exo store: {hit}")
+        c = _make("store_write", summary=what[:120], target=hit, link=hit, command=cmd)
         c.signals.append("exo store")
         parts.append(c)
     if any(w.locale for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]):
@@ -1898,6 +1902,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         dest = target.text if target else ""
         if target and _in_store_dir_words(_shell_words(target, ctx.setdefault("store_braces", {}), "dir")):
             ctx["store_cwd"] = True
+            into = _expand_text(dest).strip()
+            if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
+                ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -2511,7 +2518,7 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                 _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")):
             return words[i + 1].text            # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
-        return "a path inside the store (after cd)"
+        return ctx.get("fd_cwd") or "a path inside the store (after cd)"
     return ""
 
 
@@ -2969,7 +2976,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     return _exo_relative(split, max(ups), candidates)
 
 
-_EXO_JOINS = 16384   # joins of a folder with a name, and levels up, one classify call may make in _exo_relative (#269)
+_EXO_PARTS = 65536   # path parts of the folders and paths _exo_relative may build in one classify call (#269)
 
 
 class _Spent(Exception):
@@ -2985,16 +2992,17 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     relative target joined to each of them, and every folder up to ``up`` levels above them (`cd ..`, counted once:
     a `..` target is not joined too); an absolute target is also resolved (a link into the store). From a folder above the store only a target or name with the
     store's folder name as a part (`.exo`, `exo-home`) is joined, so `cd /srv && tar cf -
-    exo-home/run` counts and a line that names no store folder joins nothing. Each join and each level up is charged
-    to one budget of _EXO_JOINS as it is made, shared by the whole classify call (each `$( )` is classified again,
-    nested ones too), so the work stays linear in the line; past it, or past 64 store folders, the line counts (fails
+    exo-home/run` counts and a line that names no store folder joins nothing. Each join and each level up is charged,
+    as it is made, the path parts of what it builds (its checks cost about that much: a deep glob name costs more than a
+    short one) to one budget of _EXO_PARTS shared by the whole classify call (each `$( )` is classified again, nested
+    ones too), so the work stays linear in the line; past it, or past 64 store folders, the line counts (fails
     closed). The name or folder, or ''."""
     home = os.path.normpath(_home())
     exo = os.path.normpath(_exo_home())
     roots = _path_forms(exo)
     marks = {".exo", os.path.basename(exo)} - {""}
     memo = _call_memo.get()
-    left = [_EXO_JOINS] if memo is None else memo.setdefault("exo_joins", [_EXO_JOINS])
+    left = [_EXO_PARTS] if memo is None else memo.setdefault("exo_parts", [_EXO_PARTS])
     if left[0] < 0:
         return "a path in the Exo store (too many to resolve)"
 
@@ -3005,14 +3013,15 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     def near(q: str) -> bool:                       # a relative path that can lead into the store from above it
         return not marks.isdisjoint(q.split("/"))
 
-    def charge() -> None:                           # one join or level up, as it is made
-        left[0] -= 1
+    def charge(path: str) -> None:                  # one join or level up, by the path parts it builds
+        left[0] -= path.count("/") + 1
         if left[0] < 0:
             raise _Spent
 
     def join(b: str, q: str) -> str:
-        charge()
-        return os.path.join(b, q)
+        w = os.path.join(b, q)
+        charge(w)
+        return w
 
     def grow(bases: set, more: str) -> None:
         bases.add(more)
@@ -3048,7 +3057,7 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
                     grow(bases, j)
         for b in list(bases):
             for _ in range(min(up, 64)):
-                charge()
+                charge(b)
                 b = os.path.dirname(b)
                 if not b or not inside(b):
                     break
