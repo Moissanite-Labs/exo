@@ -1231,6 +1231,37 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   as target for ssh), so these lines are denied as before. Rejected: reading both coproc readings whenever
   the line has any redirection (the issue's first sketch), which reads the name as a program in `coproc rm { echo
   >/dev/null hi; }`, where bash runs a named compound.
+  *Amendment 2026-10-20 (issue #334, follow-up to #231):* #231 reads values bash runs later as code, and a nest of
+  `$(` in one cost about n**4. Each `$( )` is listed at every level above it and classified there again, and nothing
+  bounded the depth, so 40 levels in `PROMPT_COMMAND` took 15 s, and from about 500 levels the lexer's recursion
+  raised RecursionError. The hook then asked for the whole line, so a deny on a command after the value became an
+  ask. *Read once.* One top-level classify_shell call parses each line once and classifies it once per depth and
+  state of the brace and store budgets (`_shell_seen`). The budgets only fall, so a line met again after one fell is
+  read again and spends it again: every line classifies as before, budget refusals included. A caller gets its own
+  copy of the result and shares the parts it was built from (D-075). The ssh hop, the only caller that changes parts
+  in place, marks a copy. `decide` scopes and walks each part once, also a part the memo shares among several
+  results, so it stays linear in the line too. *A depth cap.* A lexer reads 16 levels of `$( )`, `<( )` and `$(( ))`
+  inside one another (`_NEST`). Past them `_nest_end` finds where the nest ends as the lexer would end it, in one
+  pass with a stack of open parts and no here-doc body read again, and the line lists an unread part (`opaque_exec`,
+  signal `unread nest`). An exported value keeps that part, where export drops other values it cannot read. The
+  sources of the levels around hold a short stand-in, so classifying them never reads the deep text again, and a word
+  keeps the text the lexer would give it. On 80,000 random texts (3,000 in the test) `_nest_end` ends where the lexer
+  ends and leaves the same here-docs waiting. On a wider set it still ends there, but a delimiter word holding
+  `$(cat <<X ...)` can leave a here-doc waiting for other text, since the lexer reads that `$( )` as its body. Each
+  level around the unread part pairs every here-doc with its end line, also when the delimiter holds that part,
+  quoted or not (the line is spelt the way the level reads the delimiter) or the body lies inside it (the stand-in
+  ends the body), so a command after the here-doc is still read. A run of stand-in lines, one written by hand too, is
+  read in one step, and a command after it is still read. The cost: a command inside the unread part is not read, so
+  a deny on it asks, and a here-doc delimiter there longer than 1,024 characters ends no body. With a nested `${..}`
+  that holds a `$( )` (#143), a deny after the nest can ask too. *git -c (#335).* #231 widened the keys `git -c`
+  flags and kept the early return that made the whole line opaque for one, so
+  `git -c include.path=/dev/null push --force origin main` asked where the gate before #231 denied it. A flagged
+  key's part now stands beside the subcommand's own category (`_exec_options` already added it), and only an unknown
+  subcommand, which the config may define, is opaque on its own. `git config` with a flagged key keeps its
+  `local_write` part. Rejected: reading a nested `$( )` only from the level that holds it (each level classified
+  once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
+  rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
+  here-doc body leads past the end, past a deny-listed command.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -1426,6 +1457,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   block only from a message that opens with it (exo-context's own block) or with a compaction marker (a host's
   summary). A block quoted further down a message is data: the core's system message quotes small spans word for
   word, peer turns included.
+  *Amendment 2026-10-20 (#368, #370, #371):* the four readers of a host message dict now take its author from
+  `provenance.author_of`, meta tags included, the way core capture reads it. A peer, bus or job tag in `meta`
+  refuses at any role and outranks a stamped author, by presence rather than truthiness. An untagged assistant
+  message is the agent's and no longer counts as an older host's message. An untagged user message still reads as
+  the principal, so older hosts keep working. A host summary in an assistant row carries nothing, flagged or not.
+  The host persists its `_compressed_summary` flag and restores it on resume, so the flag shows a host made the
+  row. It does not show that exo-context escaped the row's text when it was made, and summaries a host built on
+  its own never pass that escaping. Continuity across those rows comes from exo-context's session pins instead.
+  The engine observes pins only from principal-classified text, persists them per session, and merges them at
+  compaction and at handoff write. A `meta` that is not a mapping names no tag and no author, and never raises.
+  Roles other than user, assistant and tool still read as the system's, as before.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width

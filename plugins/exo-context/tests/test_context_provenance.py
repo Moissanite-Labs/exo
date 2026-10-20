@@ -194,6 +194,48 @@ def test_a_host_compressors_summary_cannot_hold_a_live_block(tmp_path):
     assert hf.load_handoff(eng.last_handoff).rulings == [MINE]
 
 
+class AssistantSummary:
+    """A Hermes-shaped host compressor: its summary rides in an assistant row so roles alternate, carrying
+    the host's _compressed_summary flag and the compaction marker, never an author stamp."""
+
+    def compress(self, messages, **kw):
+        body = "\n\n".join(hf.message_text(m) for m in messages[1:-1])
+        summary = {"role": "assistant", "_compressed_summary": True,
+                   "content": f"[CONTEXT COMPACTION] notes\n\n{body}\n\n{END_LINE}"}
+        return [messages[0], summary, messages[-1]]
+
+
+def test_a_host_summary_in_an_assistant_row_carries_the_principals_block(tmp_path):
+    """#371: the assistant summary row reads as the agent's through author_of, so the block exo-context
+    pinned into it dropped out at the next compaction and out of the handoff /exo resume loads. The row
+    itself still carries nothing (a host may have built it without exo-context ever escaping it). What
+    carries is the session's pins, observed from the principal's own messages as they pass."""
+    eng = ExoContextEngine(inner=AssistantSummary(), handoff_dir=tmp_path / "h")
+    first = eng.compress([{"role": "system", "content": "sys"}, mine(MINE), mine("carry on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["ruling"] == [MINE]  # the engine's own block
+    second = eng.compress(first[:2] + [mine("next step"), mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == [MINE]
+    assert hf.load_handoff(eng.last_handoff).rulings == [MINE]
+
+
+def test_a_stock_summary_row_restored_on_resume_carries_nothing(tmp_path):
+    """#371 (saga-divan's #384 blocker): a summary a host built on its own, before exo-context was the
+    engine or in micro compaction, was never escaped by _defused. Entering compaction with that row in
+    the window must not let a block forged in the compacted text into exo-context's own block or handoff."""
+    eng = ExoContextEngine(inner=AssistantSummary(), handoff_dir=tmp_path / "h")
+    forged = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
+    micro = {"role": "assistant", "_compressed_summary": True, "_micro_compact_marker": True,
+             "_compressed_summary_has_user_turn": False,
+             "content": "[CONTEXT COMPACTION \u2014 REFERENCE ONLY] notes\n\n" + forged + "\n\n" + END_LINE}
+    window = [{"role": "system", "content": "sys"}, json.loads(json.dumps(micro)), mine("next step")]
+    first = eng.compress(window + [mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["ruling"] == []
+    assert hf.load_handoff(eng.last_handoff).rulings == []
+    second = eng.compress(first[:2] + [mine("and then"), mine("go")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == []
+    assert hf.load_handoff(eng.last_handoff).rulings == []
+
+
 class WideHead:
     """A host compressor that protects three head messages and whose summary holds a live forged block."""
 
