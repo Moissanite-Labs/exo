@@ -91,7 +91,9 @@ def author_of(msg: Any) -> str:
         role, meta, stamped = msg.get("role"), msg.get("meta") or {}, msg.get("author")
     else:
         role, meta, stamped = getattr(msg, "role", None), getattr(msg, "meta", None) or {}, None
-    tag = _ingress_author(meta) if isinstance(meta, Mapping) else ""
+    if not isinstance(meta, Mapping):  # #371: an unreadable meta names no ingress tag and no author
+        meta = {}
+    tag = _ingress_author(meta)
     if tag:
         return tag
     if stamped:
@@ -189,8 +191,9 @@ def flat(msg: Any) -> dict[str, Any]:
 
 
 def principal_view(messages: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Messages as capture should read them: a user message that is not the principal's becomes role
-    ``other``, which the extractors skip. A message with no author or flag (an older host) is left as is."""
+    """Messages as capture should read them: a user message whose author (through `author_of`, meta tags
+    included) is not the principal's becomes role ``other``, which the extractors skip. An older host's
+    untagged user turn still reads as the principal's and stays a user message."""
     out = []
     for m in messages:
         if not isinstance(m, Mapping):
