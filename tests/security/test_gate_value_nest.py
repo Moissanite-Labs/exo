@@ -11,7 +11,8 @@ Now one classify call reads each line once per depth, and a lexer reads 16 level
 another. Past them it finds the end of the nest in one pass (gate._nest_end), and the nest stands as an unread part
 that asks, also in an exported value. Each test here fails on main 5f434b15, by its time or lexer count, by
 RecursionError or by its outcome, except the guards: the two for the per-call memo, the three arithmetic nests of 500
-levels, which main still reads (it raises RecursionError for one of 1,000), and the three stand-ins written by hand.
+levels, which main still reads (it raises RecursionError for one of 1,000), and the six stand-ins written by hand
+(three single lines and three runs of 2,000 lines).
 
 Every command string here is data for exo.gate.classify/decide; none is run."""
 import random
@@ -243,6 +244,17 @@ def test_a_stand_in_written_on_the_line_hides_no_command(line):
     So the stand-in's name written on the line by hand hides nothing after it (guard: main reads these too)."""
     c = gate.classify({"tool": "bash", "args": {"command": line}})
     assert gate.decide(c, DELETE).outcome == "deny", c
+
+
+@pytest.mark.parametrize("line", [
+    (STAND_IN + "\n") * 2000 + "rm -rf /srv/data",
+    "echo $(" + (STAND_IN + "\n") * 2000 + "rm -rf /srv/data)",
+    "export PROMPT_COMMAND='" + (STAND_IN + "\n") * 2000 + "rm -rf /srv/data'",
+], ids=["top", "substitution", "PROMPT_COMMAND"])
+def test_a_run_of_stand_ins_written_by_hand_does_not_recurse(classified, line):
+    """Each stand-in line was read one recursion level deeper, so about 450 of them raised RecursionError and the
+    hook asked where main denied. A run of them is read in one step (guard: main reads these too)."""
+    assert gate.decide(classified(line), DELETE).outcome == "deny"
 
 
 def test_a_heredoc_body_read_in_the_unread_part_is_still_read(classified):

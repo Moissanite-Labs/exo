@@ -699,8 +699,9 @@ gate does not read:
   still pairs every here-document with the line that ends it: when the delimiter holds the
   unread part, quoted or not, that line is spelt the way the level reads the delimiter, and when
   the body lies inside the part, the stand-in ends the body. So a command after such a
-  here-document is still read. A here-document opened inside the unread part, with its body
-  after it, is not seen by the levels around, which read that body as commands. Inside the
+  here-document is still read. A run of stand-in lines written by hand is one unread part, and a
+  command after it is still read too. A here-document opened inside the unread part, with its
+  body after it, is not seen by the levels around, which read that body as commands. Inside the
   unread part, a delimiter word holding `$(cat <<X ...)` can make a here-document wait for other
   text than the lexer would, and a delimiter longer than 1,024 characters ends no body. Then
   lines after the part can be read as a body, so a deny on a command there can become an ask.
