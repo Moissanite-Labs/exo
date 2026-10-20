@@ -31,11 +31,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   so no result changes. A lexer reads 16 levels of `$( )`, `<( )` and `$(( ))` inside one another. Past them it finds
   where the nest ends in one pass, as the lexer would end it, and the nest stands as an unread `opaque_exec` part that
   asks, also in an exported value. So the deny after it fires at any depth, and 5,000 levels take under a second.
-  Nests of 16 levels or fewer classify as before. Also #335: a `git -c` or `--config-env` key that loads a file,
-  allows a transport or names a program no longer hides git's subcommand. `git -c include.path=/dev/null push
-  --force origin main` is a `force_push` again (it asks, and `deny: [force_push]` denies it), where #231 made it an
-  `opaque_exec` that only asked. `git config include.path FILE` keeps its `local_write` part, and an unknown
-  subcommand still names the config that may define it.
+  Nests of 16 levels or fewer classify as before. The levels around the unread part still pair a here-document with
+  the line that ends it when its delimiter or body holds that part, so a command after the here-document is still
+  read. Also #335: a `git -c` or `--config-env` key that loads a file, allows a transport or names a program no longer
+  hides git's subcommand. `git -c include.path=/dev/null push --force origin main` is a `force_push` again (it asks,
+  and `deny: [force_push]` denies it), where #231 made it an `opaque_exec` that only asked. `git config include.path
+  FILE` keeps its `local_write` part, and an unknown subcommand still names the config that may define it.
 - A forged `## Next steps` heading in a handoff can no longer beat the genuine one (#353, D-040). #349 kept the
   first section of each name, which is right for the principal's sections but wrong for Next steps, the one section
   written last: a multiline tool path or an old file's unquoted summary could put a forged copy first, and its

@@ -1229,15 +1229,19 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   value keeps that part, where export drops other values it cannot read. The sources of the levels around hold a
   short stand-in, so classifying them never reads the deep text again, and a word keeps the text the lexer would
   give it. On 80,000 random texts (3,000 in the test) `_nest_end` ends where the lexer ends and leaves the same
-  here-docs waiting. The cost: a command inside the unread part is not read, so a deny on it asks, and a here-doc
-  delimiter there longer than 1,024 characters ends no body. *git -c (#335).* #231 widened the keys `git -c` flags
-  and kept the early return that made the whole line opaque for one, so `git -c include.path=/dev/null push --force
-  origin main` asked where the gate before #231 denied it. A flagged key's part now stands beside the subcommand's
-  own category (`_exec_options` already added it), and only an unknown subcommand, which the config may define, is
-  opaque on its own. `git config` with a flagged key keeps its `local_write` part. Rejected: reading a nested `$( )`
-  only from the level that holds it (each level classified once), which would put a `$( )` five levels down past the
-  four-level cap and turn its deny into an ask. Also rejected: a scan that follows only quotes and parentheses to the
-  end of the nest, which a quote in a comment or a here-doc body leads past the end, past a deny-listed command.
+  here-docs waiting. On a wider set it still ends there, but a delimiter word holding `$(cat <<X ...)` can leave a
+  here-doc waiting for other text, since the lexer reads that `$( )` as its body. Each level around the unread part
+  pairs every here-doc with its end line, also when the delimiter holds that part (the line is spelt the way the
+  delimiter is) or the body lies inside it (the stand-in ends the body), so a command after the here-doc is still
+  read. The cost: a command inside the unread part is not read, so a deny on it asks, and a here-doc delimiter there
+  longer than 1,024 characters ends no body. *git -c (#335).* #231 widened the keys `git -c` flags and kept the early
+  return that made the whole line opaque for one, so `git -c include.path=/dev/null push --force origin main` asked
+  where the gate before #231 denied it. A flagged key's part now stands beside the subcommand's own category
+  (`_exec_options` already added it), and only an unknown subcommand, which the config may define, is opaque on its
+  own. `git config` with a flagged key keeps its `local_write` part. Rejected: reading a nested `$( )` only from the
+  level that holds it (each level classified once), which would put a `$( )` five levels down past the four-level cap
+  and turn its deny into an ask. Also rejected: a scan that follows only quotes and parentheses to the end of the
+  nest, which a quote in a comment or a here-doc body leads past the end, past a deny-listed command.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
