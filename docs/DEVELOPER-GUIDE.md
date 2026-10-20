@@ -174,6 +174,11 @@ gets its turn. Anything else goes to a command a plugin registered. To add one:
      `context`, `compact`, `trace` and `findings`. Commands for clients to call (`rename`, `subagent`) stay off it.
 2. **A plugin command.** Call `ctx.register_command(name, handler, description=..., args_hint=...)` (section 4).
    The handler gets the raw argument string.
+   A plugin handler may declare `session_id` to receive `command.run.session` after the engine verifies that
+   the session exists. Legacy handlers still receive only their argument string. An omitted session is an empty
+   string. Handlers requiring session scope must reject it rather than selecting a global default (D-065 draft).
+   A handler may also accept `request_approval`, the existing approval desk's `ask` callback. Session mode
+   selection uses principal-only approval with a binding and commits signed consent before changing mode.
 3. **A TUI command.** Add a row to the `COMMANDS` table in `clients/tui/exo_tui/app.py`, and a branch in
    `ExoApp.slash` if the client does the work. `/help` is built from the table. A test checks that every command in
    `/help` appears in `skills/exo-intro/SKILL.md`, so add its line to the skill too.

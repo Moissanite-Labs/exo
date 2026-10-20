@@ -505,3 +505,12 @@ Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` f
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.
+
+### Session bypass approvals (draft)
+
+In the terminal, `/permissions bypass` asks for permission to skip ordinary approval prompts in this thread.
+Approve its card to enable it, or deny to keep asking. The `permissions: bypass` banner shows the number of
+calls auto-approved. Protected actions, including secrets, Exo records, irreversible or public actions and
+calls affecting other people, still ask. `/permissions ask` restores ordinary prompts. A new thread starts in
+ask mode. `exo --skip-permissions` requests this same approval after connecting. It does not approve the card
+for you. Web controls are not included in this draft.

@@ -160,8 +160,11 @@ class ExoApp(App):
 
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
                  seat: str | None = None, title: str = "", home: str | None = None,
-                 auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False) -> None:
+                 auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False,
+                 skip_permissions: bool = False) -> None:
         super().__init__()
+        self.skip_permissions = skip_permissions  # exo --skip-permissions: request session bypass approval at boot (D-065)
+        self.perm: dict[str, Any] = {}  # the core's /permissions json; {} when it has no gate
         self.motion = not th.reduced_motion()
         self.boot_anim = boot_anim and self.motion  # only the real entry point asks; never under reduced motion
         self.boot_screen: BootScreen | None = None
@@ -284,6 +287,7 @@ class ExoApp(App):
         self.composer.focus()
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
         self.set_interval(1.0, self.reconcile_approvals)
+        self.set_interval(3.0, lambda: self.run_worker(self.load_permissions(), exit_on_error=False))  # another window may switch it
         if self.motion:
             self.set_interval(10.0, self.update_guidance)  # a pause, not an animation; events also call it
             self.set_interval(0.12, self.tick)  # spinners, the live dot and the packet on the wire
@@ -345,12 +349,44 @@ class ExoApp(App):
         return "\n".join(old + [w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
                                 for w in self.chrono() if isinstance(w, (Block, ToolBlock))])
 
+    @property
+    def bypass(self) -> bool:
+        return self.perm.get("mode") == "bypass" and self.perm.get("session") == self.session
+
+    async def request_permissions(self, args: str) -> None:
+        sid = self.session
+        try:
+            out = (await self.client.call(s.CommandRun(name="permissions", args=args, session=sid))).get("output")
+            if self.session == sid and isinstance(out, str):
+                self.note(out)
+        except Exception as exc:
+            self.note(f"permissions: {getattr(exc, 'message', None) or exc}", "error")
+        await self.load_permissions()
+
+    async def load_permissions(self) -> None:
+        """Read this thread's status. A response for a thread we left never updates its banner."""
+        sid = self.session
+        try:
+            out = (await self.client.call(s.CommandRun(name="permissions", args="json", session=sid))).get("output")
+        except Exception:
+            # A failed refresh must never erase a known active mode's warning.
+            if sid == self.session and self.perm.get("session") == sid and self.bypass:
+                return
+            out = None
+        if sid != self.session:
+            return
+        perm = out if isinstance(out, dict) else {}
+        if perm != self.perm:
+            self.perm = perm
+            self.refresh_status()
+
     def status_text(self) -> str:
         """The status strip as plain text (the strip itself draws instruments from the same numbers)."""
         pct = str(min(999, round(100 * self.ctx_tokens / self.window))) + "%" if self.window else "capacity unknown"
         bug = f" · {self.findings} findings" if self.findings else ""
         cache = "" if self.cache_share is None else f" · cache {round(100 * self.cache_share)}%"
-        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
+        perm = f"permissions: bypass ({self.perm.get('auto_approved', 0)} auto-approved) · " if self.bypass else ""
+        return f"{perm}{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
 
     def cost_label(self) -> str:
         """The D-032 rule, formatted by the same `money` /trace uses: "-" before any call, "unknown" when no call is
@@ -362,7 +398,8 @@ class ExoApp(App):
     def refresh_status(self) -> None:
         self.strip.set(model=self.model, requested=self.requested, ctx=self.ctx_tokens,
                                         window=self.window, cache=self.cache_share, cost=self.cost_label(),
-                                        findings=self.findings)
+                                        findings=self.findings, bypass=self.bypass,
+                                        auto=int(self.perm.get("auto_approved") or 0))
         self.brand.set(self.seat or "main", self.thread_label, self.busy)
         self.prompt.set_state(self.busy, bool(self.question))
         self.composer.placeholder = BUSY_HINT if self.busy else self.tip_line() or IDLE_HINT
@@ -477,6 +514,7 @@ class ExoApp(App):
                 await self.resume_or_new(self.session)
             else:
                 await self.new_session(announce=False)
+            await self.load_permissions()
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", MEMORY_WORDS.get(self.memory, ""), ok=self.memory not in MEMORY_SHORT)
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
@@ -497,6 +535,8 @@ class ExoApp(App):
         self.boot_end()
         self.refresh_status()
         self.ready.set()
+        if self.skip_permissions:
+            self.run_worker(self.request_permissions("bypass launch"), exit_on_error=False)
 
     async def pump(self, since: int) -> None:
         try:
@@ -877,6 +917,7 @@ class ExoApp(App):
         what = "private thread" if info.get("kind") == "private" else "thread"
         self.note(f"resumed {what} {title + ' ' if title else ''}({sid}, {n} messages)", "note")
         await self.restore_approvals()  # a request that waited before this window showed the thread (D-045)
+        await self.load_permissions()
         self.refresh_status()
 
     async def resume_or_new(self, sid: str) -> None:
@@ -908,6 +949,7 @@ class ExoApp(App):
                 self.transcript.mount(Hero(rows))
             self.transcript.mount(Welcome(self.seat or "main", self.model, MEMORY_WORDS.get(self.memory, "")))
         await self.restore_approvals()  # a request of no thread shows in a new thread too (D-026)
+        await self.load_permissions()
         self.refresh_status()
 
     # ------------------------------------------------------------ sending
@@ -1392,6 +1434,8 @@ class ExoApp(App):
                     self.add(Block(out if isinstance(out, str) else str(out), "report", head="context " + th.DOT + " next call"))
                 elif out:
                     self.note(out if isinstance(out, str) else str(out))
+            if name == "permissions":
+                await self.load_permissions()
 
     # ------------------------------------------------------------ onboarding (D-030)
     async def intro(self, kind: str) -> None:

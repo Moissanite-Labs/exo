@@ -5,6 +5,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Draft
+- Session bypass (#96, D-065) requests explicit principal approval before lowering ordinary asks. Protected
+  actions and model asks remain gated. The terminal shows a session banner, `/new` starts in ask, and the
+  launch flag requests consent. Mode and lowered decisions must commit to the signed audit before taking effect.
+
 ### Fixed
 - `Config.load()` read and parsed `config.json` on every call (#255, W1-3). It is called from engine setup, the CLI
   and plugin code, so one process read the same unchanged file many times. The parsed file is now cached on its
