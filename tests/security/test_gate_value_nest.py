@@ -218,6 +218,18 @@ def test_a_command_after_a_heredoc_whose_body_lies_in_the_unread_part(classified
     assert gate.decide(c, DELETE).outcome == "deny", c
 
 
+@pytest.mark.parametrize("opener,end", [('"{}"', "{}"), ('y"{}"', "y{}"), ("\\y{}", "y{}"), ('-"{}"', "\t{}")],
+                         ids=["quoted", "part-quoted", "escaped", "tab-quoted"])
+@pytest.mark.parametrize("carrier", ["top", "PROMPT_COMMAND", "GIT_PAGER"])
+def test_a_command_after_a_quoted_heredoc_delimiter_that_crosses_the_cap(classified, carrier, opener, end):
+    """A delimiter with quotes or a backslash in it has text that is not its source. The levels around still spell
+    its end line the way they read the delimiter, so the two pair and the `rm` after the here-doc is read."""
+    d = "$(" * 17 + "x" + ")" * 17
+    inner = "$(cat <<" + opener.format(d) + "\nb\n" + end.format(d) + "\n); rm -rf /srv/data"
+    c = classified(VALUE[carrier].format("$(echo $(echo " + inner + "))"))
+    assert gate.decide(c, DELETE).outcome == "deny", c
+
+
 STAND_IN = "__exo_gate_nested_too_deep__"     # gate._TOO_DEEP, spelt out so this module loads on main too
 
 
