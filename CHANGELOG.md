@@ -18,6 +18,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   raise. Dead job-notice overrides now inherit, a duplicate id helper now imports from the schema, two git
   helpers merged, and four exception clauses the next handler could never reach are gone. `CORE_HEADROOM`
   is back at 1,000 (D-077), and the counted core stands at 15,801 against a ceiling of 15,813.
+- A close's comment is checked by the posting rules (#326). `gh issue close --comment` and
+  `gh pr close -c` attach a comment to the close, but the gate filed the call as `github_close` and
+  read no text, so the footer, the forbidden words, the scrub and the exact-text binding never saw
+  it: text that asks as a comment post logged as a close. A close now reads its comment as the
+  call's text, a comment the gate cannot read as gh does asks as unseen, and the posting rules see
+  a close carrying a comment whether or not it is named in `applies_to`. A close with no comment,
+  or a comment that passes, still logs.
 - The principal's pinned block no longer drops out when a host summary rides in an assistant row (#371).
   Hosts that alternate roles put the summary there, and the row reads as the agent's, so it carries nothing
   itself. That stays so. A host can also build summary rows exo-context never escaped, and the host's
