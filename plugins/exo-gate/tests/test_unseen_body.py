@@ -190,6 +190,29 @@ def test_a_required_executor_refuses_every_unseen_body(store, work, line):
     assert row["phase"] == "decision" and row["outcome"] == "deny" and row["decision"]["rule"] == "required"
 
 
+# #399: when gh finds its subcommand past an option, or an expansion stands where it may be, the line is also read as
+# before (its floor). A body file in that reading is refused as on main, though the line as read has none.
+FLOOR_BODY_FILES = [
+    f'gh pr "$V" 5 {R} --body-file {{work}}/clean.md',                        # the subcommand is an expansion
+    f"gh pr view 5 {R} -F {{work}}/clean.md | gh issue -b x comment 8 {R}",   # the second subcommand moved
+    f"gh pr merge 7 {R} -F {{work}}/clean.md | gh issue -b x comment 8 {R}",
+]
+
+
+@pytest.mark.parametrize("line", FLOOR_BODY_FILES)
+def test_a_required_executor_refuses_a_body_file_in_the_line_as_read_before(store, work, line):
+    root, _ = store
+    g, ctx = make_gate(store)
+    g.required_getter = lambda: True
+    line = line.format(work=work)
+    c = gate.classify({"tool": "terminal", "args": {"command": line}})
+    assert c.floor is not None and c.floor.text_file and not c.text_file, c
+    r = call(ctx, line)
+    assert r["action"] == "block" and "required executor" in r["message"], r
+    row = events(root)[-1]
+    assert row["outcome"] == "deny" and row["decision"]["rule"] == "required", row
+
+
 def test_a_required_executor_still_asks_on_an_inline_body(store, work):
     g, ctx = make_gate(store)
     g.required_getter = lambda: True

@@ -24,10 +24,11 @@ Required mode refuses every post whose body the gate cannot read on the line
 even when body-file reading is disabled), and also stdin (`--body-file -` with a
 pipe or `<`), `gh api` fields read with `@` and `--input`, `$( )`, backticks or
 a variable in the text, and the HTTP clients' file and stdin bodies (see "What an
-approval covers"). The refusal is a recorded `deny` decision (rule `required`).
-The gate cannot approve unseen contents. Pass inline text for inspection; the
-executor then applies its own operation policy. Policy and grant files remain
-trusted configuration outside the worker's writable workspace.
+approval covers"). It counts both readings of a gh line whose subcommand moved
+("Where a gh command lands"). The refusal is a recorded `deny` decision (rule
+`required`). The gate cannot approve unseen contents. Pass inline text for
+inspection. The executor then applies its own operation policy. Policy and grant
+files remain trusted configuration outside the worker's writable workspace.
 
 Concurrent identical requests keep separate approval tokens and audit
 references. The reusable rule key still scopes a standing grant; it does not
@@ -151,7 +152,9 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   `private: [myorg/*]` lowers it. Such a line binds its approval to the exact command. It is an
   outward act when the earlier reading is one, as in
   `gh issue -R myorg/app close 5 && gh pr comment 3 -R myorg/app -b ok`. When the earlier reading
-  decides, the reason ends with "(for git push to origin)".
+  decides, the reason ends with "(for git push to origin)". A required executor refuses the line
+  when either reading has a body file or an unseen body. In `gh pr "$V" 5 -F notes.md` and in
+  `gh pr view 5 -F notes.md | gh issue -b x comment 8` only the earlier reading has one.
 
 The gate also keeps every other reading it cannot rule out, and decides the line on each. The
 strictest outcome stands, with the widest exposure, a third party if any reading has one, and every

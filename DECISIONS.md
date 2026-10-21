@@ -739,8 +739,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the command as well, and a word from an expansion where it or an option may stand makes the line `opaque_exec`. An
   alias from gh 2.89's help (`_GH_ALIASES`: `new`, `ls`, `co`, `remove`) reads as the subcommand it names, and gets
   the floor below too. The line as read before is decided too (`Classification.floor`), the stricter standing on each
-  axis. Without it a compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5` the edit
-  now outranks the push, as in the same line with the options after the subcommand, and a private scope lowers it. A
+  axis. The exo-gate hook reads it in its own checks too: a required executor refuses the line when either reading
+  has a body file or an unseen body, so `gh pr "$V" 5 -F notes.md` is refused as on main. Without the floor a
+  compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the
+  push, as in the same line with the options after the subcommand, and a private scope lowers it. A
   differential over 126,403 gh lines in five corpora under 39 policies, the two earlier harnesses' and eight more (a
   rule and a deny on an ssh host, a rule on the empty target, a read that is denied), found no line lower than on main
   on any axis: the outcome, the exposure, the third party, the violations, the reserved parts, `is_outward`,

@@ -68,6 +68,13 @@ _SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
 _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 
+def _readings(c: gate.Classification) -> tuple:
+    """The line as the gate reads it and, when gh finds a subcommand past an option or behind an expansion, as it read
+    it before #399 (``floor``). `decide` keeps the stricter of the two, and so does the required executor's body
+    check."""
+    return (c,) if c.floor is None else (c, c.floor)
+
+
 @dataclass
 class Settings:
     principal_store: Optional[Path]
@@ -385,7 +392,7 @@ class Gate:
         symlinks included, are never read before the worker, and `_rules` refuses the call. The copies of the post
         on its other targets get the text too (`gate.fill_body`), and the line as read before #399 (`floor`) has
         its own body file read the same way, as the hook read it before."""
-        for x in (c,) if c.floor is None else (c, c.floor):
+        for x in _readings(c):
             if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
                 continue
             try:
@@ -521,8 +528,10 @@ class Gate:
         if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
             d.reason += f" (registry risk is high and {tool} is not a known tool)"
             d.outcome = "ask"
-        if self.executor_required and d.outcome != "deny" and (c.text_file or gate.body_unseen(c)):
+        if self.executor_required and d.outcome != "deny" and any(x.text_file or gate.body_unseen(x)
+                                                                  for x in _readings(c)):
             # The gate cannot approve contents it has not seen (#208): a body file, stdin, @file, an expansion.
+            # In either reading of the line (#399): `gh pr "$V" 5 -F f` has its body file only as read before.
             d.outcome, d.rule = "deny", "required"
             d.reason = ("a required executor runs only a post whose body the gate read on the line; "
                         "pass the text inline")
