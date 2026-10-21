@@ -6,10 +6,31 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A reopen's comment and a merge's subject and body are checked by the posting rules (#397).
+  `gh issue reopen --comment` and `gh pr reopen -c` post a comment the gate filed as a post but
+  never read, and `gh pr merge --body` was read but never checked, with `--subject` not read at
+  all: text that asks as a comment post logged. A reopen now reads its comment as a close does
+  (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
+  text, an unread body file included. A reopen or merge carrying no text is unchanged.
+- A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
+  reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
+  with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
+  with the block itself carries one. The session pins take open decisions beside rulings and corrections, and
+  follow the session id across a compression child session and a resume, so everything a pinned block held
+  still survives compaction, now by the pins. One upgrade note: a session compacted before this change holds
+  its open decisions only inside an earlier summary's block, and those drop at its first compaction after the
+  upgrade. The handoff written at that earlier compaction still has them.
 - A no-behaviour-change reduction took 40 lines out of the counted core (#373), undoing the #346 headroom
   raise. Dead job-notice overrides now inherit, a duplicate id helper now imports from the schema, two git
   helpers merged, and four exception clauses the next handler could never reach are gone. `CORE_HEADROOM`
   is back at 1,000 (D-077), and the counted core stands at 15,801 against a ceiling of 15,813.
+- A close's comment is checked by the posting rules (#326). `gh issue close --comment` and
+  `gh pr close -c` attach a comment to the close, but the gate filed the call as `github_close` and
+  read no text, so the footer, the forbidden words, the scrub and the exact-text binding never saw
+  it: text that asks as a comment post logged as a close. A close now reads its comment as the
+  call's text, a comment the gate cannot read as gh does asks as unseen, and the posting rules see
+  a close carrying a comment whether or not it is named in `applies_to`. A close with no comment,
+  or a comment that passes, still logs.
 - The principal's pinned block no longer drops out when a host summary rides in an assistant row (#371).
   Hosts that alternate roles put the summary there, and the row reads as the agent's, so it carries nothing
   itself. That stays so. A host can also build summary rows exo-context never escaped, and the host's
