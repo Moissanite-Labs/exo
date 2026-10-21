@@ -8,9 +8,15 @@ it. Deny and reserved entries keep matching the whole line and its decoded views
 
 Two limits the first version missed, caught by a blocking review (#411): a per-part allow could
 still cancel the category deny on the part it names, and an allow naming the dominant part could
-decide the whole line past another part's matrix ask. A non-deny rule now decides the line only
-when it names every command on it, and a category deny is sticky against non-deny rules in the
-#191 pass. Classification and decision only; nothing is executed.
+decide the whole line past another part's matrix ask. A category deny is sticky against non-deny
+rules in the #191 pass, and a non-deny rule decides the line only when it names a command on it
+and every command it leaves unnamed decides no higher than the rule on its own. The first guard
+asked the pattern to name every command on the line and matched the line's first pass against a
+part's own text instead of the line as written; that stopped a log rule for the text an ssh
+carries (the ssh command can never carry the pattern) and let an anchored allow reach a
+subshell spelling of its command. The line's first pass sees the line as written again, and
+the guard asks the unnamed commands what they decide alone. Classification and decision only;
+nothing is executed.
 """
 import pytest
 
@@ -26,6 +32,9 @@ A11_PUSH3 = "git push --force origin main; kubectl delete ns prod"
 A11_PUSH4 = 'export GIT_SSH_COMMAND="$(cat /tmp/cmd)"; git push --force origin main'
 A11_ALLOW_RM = {"match": {"command": "^rm -rf build$"}, "decision": "allow"}
 A11_ALLOW_PUSH = {"match": {"command": "^git push --force origin main$"}, "decision": "allow"}
+LOG_RM = {"match": {"command": "rm -rf"}, "decision": "log"}
+LOG_DELETE = {"match": {"category": "delete"}, "decision": "log"}
+SSH_LOG = {"rules": [LOG_RM, LOG_DELETE]}
 
 
 
@@ -67,6 +76,22 @@ ASK = [
     (A11_PUSH2, {"rules": [A11_ALLOW_PUSH]}),
     (A11_PUSH3, {"rules": [A11_ALLOW_PUSH]}),
     (A11_PUSH4, {"rules": [A11_ALLOW_PUSH]}),
+    # a subshell spelling of the named command is not the command as written at line level,
+    # so the anchored allow does not reach it, as on main (#411)
+    ("( git push --force origin main )", {"rules": [A11_ALLOW_PUSH]}),
+    ("( rm -rf build )", {"rules": [A11_ALLOW_RM]}),
+]
+
+LOG = [
+    # a log rule names the text an ssh carries; the ssh command itself decides no higher on
+    # its own, so the rule decides the line, as on main (#411)
+    ("echo 'rm -rf /data' | ssh -N prod-db", SSH_LOG),
+    ("echo 'rm -rf /data' | ssh -T prod-db cat", SSH_LOG),
+    ("echo 'rm -rf /data' | ssh -f prod-db", SSH_LOG),
+    ("echo 'rm -rf /data' | ssh -n prod-db", SSH_LOG),
+    ("echo 'rm -rf /data' | ssh -nT prod-db", SSH_LOG),
+    ("echo 'rm -rf /data' | ssh prod-db cat", SSH_LOG),
+    ("ssh -n prod-db <<< 'rm -rf /data'", SSH_LOG),
 ]
 
 ALLOW = [
@@ -91,6 +116,12 @@ def test_an_allow_rule_for_another_command_does_not_decide_the_line(line, gates)
 def test_an_allow_rule_still_decides_the_command_it_names(line, gates):
     d = run(line, gates)
     assert d.outcome == "allow", (line, d)
+
+
+@pytest.mark.parametrize("line,gates", LOG)
+def test_a_log_rule_for_text_an_ssh_carries_decides_the_line(line, gates):
+    d = run(line, gates)
+    assert d.outcome == "log", (line, d)
 
 
 def test_each_part_carries_its_own_text_and_the_combined_its_dominant_part():

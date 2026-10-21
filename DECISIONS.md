@@ -2196,8 +2196,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   against `command` rules (rules keyed on anything else still lower the part as they would alone).
   Second, an allow naming the dominant part decided the whole line past another part's matrix ask
   (`export GIT_SSH_COMMAND="$(cat /tmp/cmd)"; git push --force origin main` allowed under
-  `^git push --force origin main$`); a non-deny rule now decides the line only when its `command`
-  pattern names every command on it.
+  `^git push --force origin main$`); a non-deny rule now decides the line only when it names a
+  command on the line and every command it leaves unnamed decides no higher than the rule on its
+  own. The first form of that guard asked the pattern to name every command, and the line's first
+  pass matched a part's own text instead of the line as written; a differential against main
+  caught both overshoots (a log rule for the text an ssh carries never decided, and an anchored
+  allow reached `( git push --force origin main )`), so the first pass matches the line as
+  written again and the guard asks the unnamed commands what they decide alone.
 
 ## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
 - **Status:** Accepted 2026-10-15. The principal's ruling: "important to be lean and optimized but not at the cost of
