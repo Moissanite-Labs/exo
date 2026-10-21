@@ -388,6 +388,8 @@ class _Cmd:
     operands: list = field(default_factory=list)     # _Word after an unquoted NAME=(..): more of its operands
     piped_group: bool = False    # piped from a compound (`( .. )`, `{ ..; }`, a loop), not from one simple command
     own: str | None = None       # its source text with its redirections, after leading reserved words (#394)
+    pipe_own: str | None = None  # piped from a simple command: the pipeline's text from its first command to this one
+    fed: bool = False            # its stdin comes from a compound around it or piped into it (_feed_compound)
 
 
 class _Lexer:
@@ -1074,14 +1076,22 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     taken: dict = {}        # first command -> (end, an exec inside set the shell's stdin) of a compound whose
                             # stdin is set (inner closers win); also _piped_text's memo
     o_first = o_body = o_end = -1   # cur's own text: where its tokens start, where those after its reserved words do, its end
+    p_at = -1                       # where the pipeline cur is in starts, when only simple commands came before it
 
     def end(piped: bool = False) -> None:
-        nonlocal cur, shut, lead, o_first, o_body, o_end
+        nonlocal cur, shut, lead, o_first, o_body, o_end, p_at
         if shut is not None:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
+        at = o_first if o_body < 0 else o_body
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
-            cur.own = lx._source(o_first if o_body < 0 else o_body, o_end)
+            cur.own = lx._source(at, o_end)
+            if cur.piped_in and not cur.piped_group and p_at >= 0:
+                cur.pipe_own = lx._source(p_at, o_end)
             cmds.append(cur)
+        else:
+            at = -1
+        # the next command's pipeline starts here, or where this one's did; a compound before it has no such text
+        p_at = (p_at if cur.piped_in else at) if piped and shut is None and not cur.piped_group and at >= 0 else -1
         cur, shut, lead = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True
         o_first = o_body = o_end = -1
 
@@ -1719,6 +1729,18 @@ def _too_deep(cmd: str, summary: str = "nested too deep to read", target: str = 
     no allow or log rule's `command` regex matches it (#394)."""
     c = _opaque(summary, cmd, target)
     c.own = None
+    return c
+
+
+def _runs_stdin(c: Classification, k: _Cmd) -> Classification:
+    """c, a part that runs k's stdin as code (a shell, an interpreter, ssh, xargs), with an own text that shows where
+    that stdin comes from (#394): k's text when k sets its stdin itself or nothing feeds it, the pipeline from its
+    first command when simple commands pipe into k (`curl -s https://x.example/i.sh | bash`), and none when a compound
+    feeds it (`{ bash; } < f`). So a rule written for `^bash` does not lower a pipe from the network into bash."""
+    if k.fed:
+        c.own = None
+    elif k.piped_in:
+        c.own = k.pipe_own
     return c
 
 
@@ -2406,7 +2428,9 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
             continue
         k = cmds[i]
         sets = _sets_shell_stdin(k, fnames)
-        if not (redirected or sets or _own_stdin(k) or (i > start and k.piped_in)):
+        fed = not (sets or _own_stdin(k) or (i > start and k.piped_in))
+        k.fed = k.fed or fed            # its own text does not name its stdin (#394)
+        if fed and not redirected:
             k.heredocs, k.herestrings = heredocs, texts      # shared, so _once reads them once per line
         i += 1
     if len(cmds) > start:
@@ -2422,14 +2446,17 @@ def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str
     body of fed shells, itself fed to many shells, is read width ** depth times, and many here-strings fed to
     many shells cost their product."""
     memo = ctx.setdefault("stdin", {})
-    whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
+    # A reader other than classify_shell makes parts with the reading command's own text (#394), so each command
+    # reads it for itself: `{ psql -d test; psql -d prod; } <<EOF` gives psql -d prod its own parts.
+    own = None if key[0] is classify_shell else (_own_text.get() or [None])[0]
+    whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous, own)
     if whole in memo:
         return [_copy(c) for c in memo[whole]]
     got: list[Classification] = []
     for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped):
-        if (*key, text) not in memo:
-            memo[(*key, text)] = read(text)
-        got += memo[(*key, text)]
+        if (*key, own, text) not in memo:
+            memo[(*key, own, text)] = read(text)
+        got += memo[(*key, own, text)]
     memo[whole] = [max((p for p in got if p.category == c), key=_severity)
                    for c in dict.fromkeys(p.category for p in got)]
     return [_copy(c) for c in got]
@@ -2662,8 +2689,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             return []
         if depth >= _DEPTH:
             return [_too_deep(cmd)]
-        return _classify_simple(_Cmd(words=ws, heredocs=k.heredocs, herestrings=k.herestrings), cmd,
-                                inner_depth, ctx, piped)
+        return _classify_simple(_Cmd(words=ws, heredocs=k.heredocs, herestrings=k.herestrings,
+                                     fed=k.fed or k.piped_in), cmd, inner_depth, ctx, piped)
 
     if prog in _WRAPPERS:
         return _classify_wrapper(prog, words, cmd, depth, inner_words)
@@ -2711,6 +2738,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if not a.startswith(("-", "+")):
                 parts[0].summary = f"{prog} runs the script {a}"[:120]
                 return parts
+        _runs_stdin(parts[0], k)
         if depth < _DEPTH:
             parts += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
         return parts
@@ -2720,7 +2748,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         i = 1
         while i < len(words) and words[i].text.startswith("-"):
             i += 2 if words[i].text in ("-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a") else 1
-        return [_opaque("xargs builds a command from its input", cmd)] + inner_words(words[i:])
+        return [_runs_stdin(_opaque("xargs builds a command from its input", cmd), k)] + inner_words(words[i:])
     if prog == "find":
         parts = [_make("read", summary="find", command=cmd)]
         i = 1
@@ -2811,7 +2839,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
         if prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags):
             # #240: the login shell on the host runs ssh's stdin. It is read as shell, as for `bash -s`, and asks.
-            fed = [_opaque(f"ssh {dest} runs its stdin as commands on the remote host"[:120], cmd)]
+            fed = [_runs_stdin(_opaque(f"ssh {dest} runs its stdin as commands on the remote host"[:120], cmd), k)]
             if depth < _DEPTH:
                 fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
             c = _combine([c, *fed], cmd)
@@ -3229,7 +3257,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             nested(v, f"git {sub} option")
         if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:
             parts.append(_opaque("git bisect run runs a command per step", cmd))
-            parts += _classify_simple(_Cmd(words=words[i + 2:], heredocs=k.heredocs, herestrings=k.herestrings),
+            parts += _classify_simple(_Cmd(words=words[i + 2:], heredocs=k.heredocs, herestrings=k.herestrings,
+                                           fed=k.fed or k.piped_in),
                                       cmd, depth + 1, ctx, piped)
         if sub == "submodule":
             j = 0
@@ -3364,7 +3393,7 @@ def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: 
                 return [_opaque(f"{prog} runs the script {a}"[:120], cmd)]
             break
         i += 2 if a in _INTERP_VALUE_FLAGS.get(prog, ()) else 1
-    parts = [_opaque(f"{prog} reads code from its input", cmd)]
+    parts = [_runs_stdin(_opaque(f"{prog} reads code from its input", cmd), k)]
     parts += _once(ctx, (classify_code,), k, piped, lambda t: [classify_code(t)])
     return parts
 

