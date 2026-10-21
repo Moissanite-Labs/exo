@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A thread's environment file is a secret store, like the process's own (#313).
+  `/proc/<pid>/task/<tid>/environ` holds the same environment as `/proc/<pid>/environ`, another
+  process's included, but the gate read it as an ordinary file, literal path and glob alike.
+  Both the sensitive-path list and the `/proc/<pid>/<glob>` check now cover the `task/<tid>/`
+  form; other files under `task/` keep their class.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

@@ -4132,7 +4132,7 @@ _SENSITIVE_PATH = re.compile(
     r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"
     r"\.config/gh/hosts\.yml|\.git-credentials|\.docker/config\.json|\.kube/config|"
     r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
-    r"proc/[^/]+/environ)(/|$)")
+    r"proc/[^/]+/(task/[^/]+/)?environ)(/|$)")
 
 # D-039: a run folder holds the principal credential and the TCP token beside each socket, so the folder itself
 # is a secret store; what is below it keeps its own class (job output in run/jobs/ stays readable). A relative
@@ -4663,13 +4663,13 @@ def _glob_words(words: list[str]) -> bool:
     return any(_glob_word(w, home, samples, secrets, runs) for w in words)
 
 
-_PROC_FILE = re.compile(r"/proc/[^/]+/([^/]+)")
+_PROC_FILE = re.compile(r"/proc/[^/]+/(?:task/[^/]+/)?([^/]+)")
 
 
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
-    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ of any process (#199)
+    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ of any process, direct or under task/ (#199, #313)
     if proc and _glob_names(proc[1], ("environ",)):
         return True
     d, _, base = tok.rpartition("/")
