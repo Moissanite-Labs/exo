@@ -1089,6 +1089,12 @@ _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_g
 # for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or ""), or None.
 _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_cd_into", default=None)
 
+# Whether the next line read is fed a stdin whose text the gate cannot read (a >( ) body, #316). The mark
+# travels here, not as a classify_shell argument: classify_shell is a seam other code wraps with a callable
+# of (cmd, depth), so its signature keeps the shape it had. classify_shell takes the mark for the one line
+# it names and clears it; the >( ) loop in _classify_shell sets it again for each body it hands over.
+_fed_stdin: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_fed_stdin", default=False)
+
 
 def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
     """(simple commands, substitution sources, defines a function). Within one classify_shell call a line is parsed
@@ -2700,9 +2706,9 @@ def _arith_scan(text: str, i: int, nested: bool = True, procsub: bool = False) -
 
 
 def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
-    """A compound value `(..)` that declare parses again as words: the $( ), ` ` and <( ) bodies in it, read in
-    any quoting, and whether it holds what bash evaluates again: an expansion or quoting in a `[key]=` subscript,
-    or with -i (`arith`) an expansion in an element."""
+    """A compound value `(..)` that declare parses again as words: the $( ), ` `, <( ) and >( ) bodies in it,
+    read in any quoting, and whether it holds what bash evaluates again: an expansion or quoting in a
+    `[key]=` subscript, or with -i (`arith`) an expansion in an element."""
     lx, q, start, other = _Lexer(value, scan=False), "", True, False
     lx.i = 1
     while lx.i < len(value):
@@ -2710,6 +2716,7 @@ def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
         if start and ch == "[":
             lx.i, subs, odd = _arith_scan(value, lx.i + 1, procsub=True)
             lx.subs += subs
+            lx.subs.out += getattr(subs, "out", [])   # a >( ) a subscript holds is a body of the value too
             other = other or odd
         elif ch == "`" or value.startswith(("$(", "<(", ">("), lx.i):
             _SCANS.get(ch, _Lexer._procsub)(lx, _Word())
@@ -2722,7 +2729,9 @@ def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
             other = other or (arith and ch == "$")
             lx.i += 1
         start = not q and ch in " \t\n"
-    return lx.subs, other
+    # The >( ) bodies are the caller's parts as much as the read ones are: declare runs them as it reads the
+    # value, so a body kept apart here and never returned would not be classified at all.
+    return [*lx.subs, *lx.subs.out], other
 
 
 def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: list[str],
@@ -2761,8 +2770,9 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
     parts: list[Classification] = []
     # a body the line ran loses its \newlines too in a value bash reads again, but one that holds a single quote or
     # a here-document marker is compared as written (bash may keep its \newline), so a copy of it is read again
-    done_set = set(done)
-    bare = done_set | {re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", d) for d in done
+    done_set = set(done) | set(getattr(done, "out", []))   # the >( ) bodies are the line's own reads too
+    bare = done_set | {re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", d)
+                       for d in list(done) + list(getattr(done, "out", []))
                        if "\\\n" in d and not re.search("'|<<", d)}
     for name, dynamic in names:
         m = re.match(r"[^=\[]*\[", name) if prog not in _DECLARES[3:] else None
@@ -4364,23 +4374,27 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     return next((q for q, w in words if _sensitive_words([w]) or _glob_words([w])), words[0][0])
 
 
-def classify_shell(cmd: str, depth: int = 0, stdin_unknown: bool = False) -> Classification:
+def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part. Within one top-level call a line is
-    classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy.
-    `stdin_unknown` marks the whole line as fed a stdin whose text the gate cannot read (a >( ) body, #316)."""
+    classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy. A line
+    read under the _fed_stdin mark (a >( ) body, #316) is a different read of the same text, so the mark is
+    part of the key; the mark names one line, and reading that line spends it."""
     seen = _shell_seen.get()
     if seen is None:
         token = _shell_seen.set({})
         try:
-            return classify_shell(cmd, depth, stdin_unknown)
+            return classify_shell(cmd, depth)
         finally:
             _shell_seen.reset(token)
+    fed = _fed_stdin.get()
+    if fed:
+        _fed_stdin.set(False)
     # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it.
-    key = ("shell", cmd, depth, _budgets(), _cd_into.get(), stdin_unknown)
+    key = ("shell", cmd, depth, _budgets(), _cd_into.get(), fed)
     if key not in seen:
         own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
-            seen[key] = _classify_shell(cmd, depth, stdin_unknown)
+            seen[key] = _classify_shell(cmd, depth, fed)
         finally:
             _own_text.reset(own)
     return _own_copy(seen[key])
@@ -4410,7 +4424,13 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # number of them recurses. The lines after it end here-doc bodies, and are read as any line.
     if m := _STAND_INS.match(cmd or ""):
         rest = cmd[m.end():]
-        return _combine([_unread_nest(), classify_shell(rest, depth, stdin_unknown)], cmd) if rest else _unread_nest()
+        if not rest:
+            return _unread_nest()
+        mark = _fed_stdin.set(stdin_unknown)   # the rest is the same line, read the same way
+        try:
+            return _combine([_unread_nest(), classify_shell(rest, depth)], cmd)
+        finally:
+            _fed_stdin.reset(mark)
     cmds, subs, func = _parse(cmd or "")
     ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown}
     if into := _cd_into.get():            # a $( ) on a line that entered the store runs in it (#465)
@@ -4460,7 +4480,14 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
                 _cd_into.reset(token)
         parts += _given_stdin(got, lambda: None, ctx) if given else got
     for sub in getattr(subs, "out", []):     # a >( ) body: its commands are fed the outer command's output (#316)
-        parts.append(classify_shell(sub, depth + 1, stdin_unknown=True) if depth < _DEPTH else _too_deep(cmd))
+        if depth >= _DEPTH:
+            parts.append(_too_deep(cmd))
+            continue
+        mark = _fed_stdin.set(True)
+        try:
+            parts.append(classify_shell(sub, depth + 1))
+        finally:
+            _fed_stdin.reset(mark)
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))

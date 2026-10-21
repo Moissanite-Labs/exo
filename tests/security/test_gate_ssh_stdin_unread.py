@@ -88,3 +88,51 @@ def test_ssh_that_still_does_not_run_a_stdin_keeps_its_reading(command, category
     assert c.category == category, c
     assert not any("runs its stdin" in p.summary for p in gate._each_part(c)), c
     assert gate.decide(c, DENY).outcome == "allow"
+
+
+STORE_DENY_FORMS = [
+    {"gates": {"deny": ["store_write"]}},
+    {"gates": {"categories": {"store_write": "deny"}}},
+]
+POST_DENY = {"gates": {"deny": ["github_post"]}}
+
+
+@pytest.mark.parametrize("command", [
+    "declare -a 'a=(>(rm -rf /data))'",
+    "local -a 'b=(>(rm -rf /data))'",
+    "declare -ai 'b=([>(rm -rf /data)]=1)'",   # a >( ) held in an element's subscript
+])
+def test_a_process_substitution_in_a_declare_value_is_classified(command):
+    """A >( ) declare runs as a value is read is a command of the line, as a $( ) there is: keeping
+    >( ) bodies apart for the fed-stdin reading must not drop them from the value's re-read."""
+    c = gate.classify_shell(command)
+    assert c.category == "delete", c
+    assert gate.decide(c).outcome == "ask"
+    for policy in DELETE_DENY_FORMS:
+        assert gate.decide(c, policy).outcome == "deny", policy
+
+
+def test_a_process_substitution_in_a_declare_value_can_write_the_store(monkeypatch, tmp_path):
+    store = tmp_path / "exo-home"
+    monkeypatch.setenv("EXO_HOME", str(store))
+    c = gate.classify_shell(f"declare -a 'a=(>(rm -rf {store}))'")
+    assert c.category == "store_write", c
+    assert gate.decide(c).outcome == "ask"
+    for policy in STORE_DENY_FORMS:
+        assert gate.decide(c, policy).outcome == "deny", policy
+
+
+def test_a_post_in_a_declare_value_is_classified():
+    c = gate.classify_shell("declare -a 'a=(>(gh pr comment 3 --body hi))'")
+    assert c.category == "github_post", c
+    assert gate.decide(c, POST_DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    "declare -a 'a=(rm -rf /data)'",   # element text, not a substitution: nothing runs
+    "declare -a 'a=(echo hi)'",
+])
+def test_a_declare_value_without_a_substitution_stays_a_read(command):
+    c = gate.classify_shell(command)
+    assert c.category == "read", c
+    assert gate.decide(c, DENY).outcome == "allow"
