@@ -5561,18 +5561,19 @@ def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classificatio
 
 def _override_deny(c: Classification, gates: Mapping) -> tuple[Classification, str, str] | None:
     """The first part of the line, below the combined result, that a category line or rule denies (#191): its
-    category's line, then the first rule that matches it, where an allow or log rule's `command` regex must match
-    the part's own text (#394) and an ask or deny rule's matches the line as before; or a deny rule whose `command`
-    regex matches only a decoded view of the line (#136). ``(part, why, step)`` or None."""
+    category's line, then the first rule that matches it; or a deny rule whose `command` regex matches only a decoded
+    view of the line (#136). ``(part, why, step)`` or None. Here any rule but a deny can only lower the part's line,
+    so an allow, log or ask rule's `command` regex must match the part's own text (#394): a rule written for another
+    command on the line does not lift the part's deny. A deny rule's matches the line as before."""
     cats, rules = gates.get("categories") or {}, gates.get("rules") or []
     if not (cats or rules):
         return None
     line = _line_matcher(c)
-    lowers = any(r["decision"] in _LOWERS and "command" in r["match"] for r in rules)
+    lowers = any(r["decision"] != "deny" and "command" in r["match"] for r in rules)
     for p in list(_each_part(c))[1:]:
         out, why, step = cats.get(p.category), f"category {p.category}", "category"
         own = _own_test([p.own]) if lowers else None
-        first = next((r for r in rules if _rule_matches(r["match"], p, own=own if r["decision"] in _LOWERS else None)),
+        first = next((r for r in rules if _rule_matches(r["match"], p, own=own if r["decision"] != "deny" else None)),
                      None)
         if first is not None:
             out, why, step = first["decision"], first["reason"], "rule"
