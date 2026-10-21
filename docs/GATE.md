@@ -673,10 +673,18 @@ gate does not read:
   together, so their order does not change the outcome. The opaque_exec reading of a line with a
   `$".."` word is the gate's, so it has no own text. The regex sees the text as written: an allow
   rule for `git push` does not match `g''it push --force origin main`, and a deny rule for
-  `git push` still denies it. A line of one part (one simple command, or a tool that is not a
-  shell) is matched on its command text as before. A rule that matched a whole compound line, such
-  as `'^make && make install$'`, now has to match each deciding command (`'^make( install)?$'`),
-  and until then the line gets its matrix or category outcome. The ledger view of a classification
+  `git push` still denies it. A line the gate reads as one part is matched on its command text as
+  before. A command the gate finds run inside another is a part of its own and must be named too:
+  the string of an `eval`, `bash -c` or `ssh` (`eval "$CMD"` runs `$CMD`, a program name from a
+  variable, so `{category: opaque_exec, command: '^eval', decision: allow}` alone no longer allows
+  it), an `-x` or `--exec` value, an environment value the gate reads as a command
+  (`GIT_SSH_COMMAND=...`), a heredoc a shell reads and a `$( )`. In code (`execute_code`,
+  `python -c`) the code part and a call the gate recognizes carry the code's text, or the command
+  that runs it (`python3 -c 'import shutil; shutil.rmtree("b")'` as written), and a string literal
+  read as a command (`os.system('rm -rf build')`) has none, so an allow or log `command` rule
+  never lowers it: use a category or tool key. A rule that matched a whole compound line, such as
+  `'^make && make install$'`, now has to match each deciding command (`'^make( install)?$'`), and
+  until then the line gets its matrix or category outcome. The ledger view of a classification
   leaves the own text out.
 - Bash evaluates an array subscript in a variable name as arithmetic, and that runs a `$( )` or
   backticks in it, even inside single quotes. So the name arguments of `printf -v`, `read` (and

@@ -35,6 +35,7 @@ import re
 import shlex
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from types import EllipsisType
 from typing import Any, Callable, Iterable, Iterator, Mapping, TypeVar, cast
 from urllib.parse import urlparse
 
@@ -543,7 +544,6 @@ class _Lexer:
                 flush()
                 if ch == ")" and closer and depth == 0:
                     self.i += 1
-                    self.marks = marks or []
                     return toks
                 op = next(o for o in _CTRL_OPS if s.startswith(o, self.i))
                 depth += {"(": 1, ")": -1}.get(op, 0)
@@ -3394,7 +3394,8 @@ def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: 
             break
         i += 2 if a in _INTERP_VALUE_FLAGS.get(prog, ()) else 1
     parts = [_runs_stdin(_opaque(f"{prog} reads code from its input", cmd), k)]
-    parts += _once(ctx, (classify_code,), k, piped, lambda t: [classify_code(t)])
+    src = parts[0].own               # the code comes from stdin: the text that shows where it comes from (#394)
+    parts += _once(ctx, (classify_code, src), k, piped, lambda t: [classify_code(t, src)])
     return parts
 
 
@@ -4184,15 +4185,16 @@ _CODE_LISTS = re.compile(r"\[\s*((?:(['\"])(?:(?!\2).)*\2\s*,\s*)+(['\"])(?:(?!\
 _BENIGN = ("read", "shell", "opaque_exec", "local_write", "code", "unknown", "web_read")
 
 
-def classify_code(code: str) -> Classification:
+def classify_code(code: str, own: str | None | EllipsisType = ...) -> Classification:
     """Code the gate cannot run: look for known calls, and read each string literal (and each list of
     string literals, as in subprocess.run([...])) as a shell command. Only results that matter count.
-    What it finds is a guess, so no part of the result has own text (#394)."""
-    token = _own_text.set(None)
-    try:
-        return _classify_code(code)
-    finally:
-        _own_text.reset(token)
+    The code part and each call found carry `own` as their own text (#394): by default the shell command that runs
+    the code (`python3 -c '..'`), or the code itself for execute_code. A literal read as a command is only a guess
+    at one, so no part of its result has own text, and no allow or log rule's `command` regex lowers it."""
+    if own is ...:
+        slot = _own_text.get()
+        own = slot[0] if slot is not None else code
+    return _classify_code(code or "", own)
 
 
 def _unowned(c: Classification, seen: dict[int, Classification]) -> Classification:
@@ -4202,13 +4204,12 @@ def _unowned(c: Classification, seen: dict[int, Classification]) -> Classificati
     return seen[id(c)]
 
 
-def _classify_code(code: str) -> Classification:
-    code = code or ""
-    parts = [_make("code", summary="run code")]
+def _classify_code(code: str, own: str | None) -> Classification:
+    parts = [_make("code", summary="run code", own=own)]
     for rx, cat in _CODE_PATTERNS:
         m = rx.search(code)
         if m:
-            parts.append(_make(cat, summary=f"code calls {m.group(0)[:40]}"))
+            parts.append(_make(cat, summary=f"code calls {m.group(0)[:40]}", own=own))
     texts = [m.group(2) for m in _CODE_STRINGS.finditer(code)]
     texts += [" ".join(shlex.quote(s) for _, s in re.findall(r"(['\"])((?:(?!\1).)*)\1", m.group(1)))
               for m in _CODE_LISTS.finditer(code)]

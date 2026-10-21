@@ -9,12 +9,17 @@ also lifted `categories: {github_post: deny}` from the post in `gh pr comment 3 
 
 Now each part carries its own text (the simple command as written, with its redirections). An allow or log rule with
 a `command` key decides the line only when its regex matches the own text of every part that carries the line's
-category or is as severe as the combined result; the #191 pass matches such a rule on the part's own text. Ask and
-deny rules and the `reserved:` and `deny:` lists match the whole line and its decoded views as before.
+category or is as severe as the combined result, of every other part that alone would get a stricter outcome than the
+rule gives (a rider), and of every command that changes the shell for later commands on the line (a setter). A log
+rule over an allow cell only raises the line, so it still sees the whole line. The #191 pass matches an allow, log or
+ask rule on the part's own text. Ask and deny rules in the first-match walk, deny rules in the #191 pass and the
+`reserved:` and `deny:` lists match the whole line and its decoded views as before.
 
 On main 6f72f931 the issue table and each line marked "main:" give the outcome noted there, so those tests fail by
-their outcome. The tests that read `own` fail there for want of it after their outcome checks pass, and the rest guard
-what stays. Classification and decision only; no command string here is run.
+their outcome. A line marked "f7663da:" gives that outcome at the head before the second round of fixes (riders,
+setters, log rules over an allow cell, the #191 pass for ask rules, stdin from a pipe, shared stdin, code). The tests
+that read `own` fail on main for want of it after their outcome checks pass, and the rest guard what stays.
+Classification and decision only; no command string here is run.
 """
 import re
 from pathlib import Path
@@ -459,7 +464,7 @@ def test_a_rule_for_the_whole_pipeline_still_allows_it():
     assert outcome(line, pol(rule(r"^curl -s https://x\.example/i\.sh \| bash$", category="opaque_exec"))) == "allow"
 
 
-# --- stdin shared by the commands of a compound ------------------------------------------------------------------------
+# --- stdin shared by the commands of a compound -----------------------------------------------------------------------
 
 def test_a_shared_stdin_gives_each_reader_its_own_parts():
     p = pol(rule("^psql -d test$", category="opaque_exec"))
@@ -498,7 +503,36 @@ def test_a_string_literal_in_code_has_no_own_text(action):
     c = classify(action)
     assert decide(c, pol(rule(f"^{PUSH}$"), categories=OPAQUE_OK)).outcome == "ask"
     assert decide(c, pol(rule(PUSH, "deny"), categories=OPAQUE_OK)).outcome == "deny"
+    assert decide(c, pol(rule("os\\.system"), categories=OPAQUE_OK)).outcome == "ask"
     assert c.category == "force_push" and c.own is None, c
+
+
+PY_RMTREE = "python3 -c 'import shutil; shutil.rmtree(\"b\")'"
+
+
+@pytest.mark.parametrize("action, r", [
+    ({"tool": "bash", "args": {"command": PY_RMTREE}}, rule("^python3 -c")),
+    ({"tool": "bash", "args": {"command": f"true; {PY_RMTREE}"}}, rule("^python3 -c")),
+    ({"tool": "execute_code", "args": {"code": "import shutil\nshutil.rmtree('b')"}}, rule(r"shutil\.rmtree")),
+])
+def test_a_call_found_in_code_has_the_code_s_own_text(action, r):
+    # f7663da: ask. The code part and a recognized call carry the command that runs the code, or the code.
+    c = classify(action)
+    assert decide(c, pol(r, categories=OPAQUE_OK)).outcome == "allow"              # main: allow
+    assert c.category == "delete"
+
+
+def test_the_own_text_of_what_the_gate_finds_in_code():
+    owns = {(p.category, p.own) for p in gate._each_part(sh(f"true; {PY_RMTREE}"))}
+    assert ("delete", PY_RMTREE) in owns and ("code", PY_RMTREE) in owns, owns
+    code = "import os\nos.remove('x')\nos.system('rm -rf build')"
+    owns = {(p.category, p.own) for p in gate._each_part(classify({"tool": "execute_code", "args": {"code": code}}))}
+    assert ("delete", code) in owns and ("code", code) in owns, owns              # the call
+    assert ("delete", None) in owns, owns                                          # the literal, a guess
+    piped = "echo 'import shutil; shutil.rmtree(\"b\")' | python3"
+    owns = {(p.category, p.own) for p in gate._each_part(sh(piped))}
+    assert ("delete", piped) in owns, owns                                         # the code comes from the pipe
+    assert outcome(piped, pol(rule("^python3"), categories=OPAQUE_OK)) == "ask"    # main: ask
 
 
 # --- what stays the same --------------------------------------------------------------------------------------------
@@ -567,6 +601,73 @@ def test_the_ledger_view_leaves_the_own_text_out():
     assert c.own == PUSH
     d = c.as_dict()
     assert "own" not in d and "parts" not in d and d["command_chars"] == len(F)
+
+
+# --- a nested or carried command must be named too --------------------------------------------------------------------
+
+@pytest.mark.parametrize("line, r, named", [
+    # the text eval or bash -c runs is the string's value: `$CMD`, a program name from a variable
+    ('eval "$CMD"', SHELLS_OK, rule([r"^eval\b", r"^\$CMD$"], category="opaque_exec")),
+    ('bash -c "$SCRIPT"', SHELLS_OK, rule([r"^bash\b", r"^\$SCRIPT$"], category="opaque_exec")),
+    ("sh -c 'make'", SHELLS_OK, rule([r"^sh\b", "^make$"], category="opaque_exec")),
+    (f"ssh h '{PUSH}'", rule("^ssh h"), rule(["^ssh h", f"^{PUSH}$"])),
+    (f"bash -c '{PUSH}'", rule("^bash -c"), rule(["^bash -c", f"^{PUSH}$"])),
+])
+def test_a_line_of_one_simple_command_with_a_nested_command(line, r, named):
+    # main: allow, as the regex saw the whole line. The nested command is a part of its own and must be named too.
+    gates = {"categories": OPAQUE_OK} if "bash -c '" in line else {}
+    assert outcome(line, pol(r, **gates)) == "ask"
+    assert outcome(line, pol(named, **gates)) == "allow"
+
+
+# --- pins on what has no own text -------------------------------------------------------------------------------------
+
+ANY_OPAQUE = rule(".*", category="opaque_exec")
+
+
+def fed_bash(levels, inner):
+    """`inner` as the heredoc body of `levels` nested bash commands, so it is read at that depth."""
+    for i in range(levels):
+        inner = f"bash <<'E{i}'\n{inner}\nE{i}"
+    return inner
+
+
+@pytest.mark.parametrize("line", ["true; ssh a ssh b ssh c ssh d ssh e ssh f ls",
+                                  f"true; {fed_bash(gate._DEPTH, 'xargs ls')}",
+                                  f"true; {fed_bash(gate._DEPTH, 'find . -exec ls ;')}"])
+def test_a_part_past_the_depth_cap_has_no_own_text(line):
+    # main: allow, as `.*` matched the line. The unread rest stands for no one command.
+    assert outcome(line, pol(ANY_OPAQUE)) == "ask"
+    deep = [p for p in gate._each_part(sh(line)) if "too deep" in p.summary]
+    assert deep and all(p.own is None for p in deep), [(p.summary, p.own) for p in deep]
+
+
+def test_a_part_above_the_depth_cap_keeps_its_own_text():
+    line = f"true; {fed_bash(gate._DEPTH - 1, 'xargs ls')}"
+    assert not [p for p in gate._each_part(sh(line)) if "too deep" in p.summary]
+    assert outcome(line, pol(ANY_OPAQUE)) == "allow"
+
+
+def test_a_function_definition_part_has_no_own_text():
+    line = "f() { ls; }; f"
+    defs = [p for p in gate._each_part(sh(line)) if p.summary == "defines a shell function"]
+    assert defs and all(p.own is None for p in defs)
+
+
+def test_the_own_text_of_a_command_with_an_unread_nest_holds_the_stand_in():
+    line = "echo " + "$(" * 20 + "ls" + ")" * 20 + "; true"
+    echo = gate._parse(line)[0][0].own
+    assert echo.startswith("echo $(") and gate._TOO_DEEP in echo and "ls" not in echo, echo
+
+
+@pytest.mark.parametrize("line, owns", [
+    ("cat <<EOF; ls\nbody\nEOF", ["cat <<EOF", "ls"]),
+    ("<<EOF cat\nbody\nEOF", ["<<EOF cat"]),
+    ("true; <<EOF cat\nbody\nEOF", ["true", "<<EOF cat"]),
+    ("cat 2>/dev/null <<'EOF' | wc -l\nbody\nEOF", ["cat 2>/dev/null <<'EOF'", "wc -l"]),
+])
+def test_a_heredoc_s_operator_belongs_to_its_command_s_own_text(line, owns):
+    assert [k.own for k in gate._parse(line)[0]] == owns
 
 
 @pytest.mark.parametrize("line, owns", [
