@@ -437,6 +437,39 @@ class ExoContextEngine(ContextEngine):
             self._x_pins[sid] = pins
         return pins
 
+    def _reconcile_pins(self, messages: list[dict[str, Any]]) -> None:
+        """Drop the pins whose source turn a host removed without telling this engine (#389).
+
+        A host's /undo is never reported here (Hermes tells its memory providers, not the context
+        engine), and compaction is where an undone ruling would otherwise be written into the
+        summary and the handoff for good. The test is the undo switch's (D-041), and it is only
+        sound while the input is the live transcript: once a summary (or a block carried in one)
+        enters it, a pin's absence proves nothing, since its source was folded into that summary,
+        and the pins ride on as before (#371, #385). The per-turn window proves nothing either —
+        a pin is meant to outlive it — so this runs at compaction only, which the core loop,
+        with its own undo notice, never calls."""
+        pins = self._load_pins()
+        if pins == {'ruling': [], 'correction': [], 'open_decision': []}:
+            return
+        if any(isinstance(m, dict) and (m.get(SUMMARY_FLAG)
+                                        or hf.message_text(m).lstrip().startswith(hf.PIN_OPEN)
+                                        or hf.is_summary_text(hf.message_text(m)))
+               for m in messages):
+            return
+        held = [hf.Signal('', hf.message_text(m)).key() for m in provenance.principal_view(messages)
+                if isinstance(m, dict) and m.get('role') == 'user']
+        try:  # a pin is the classified sentence, whitespace folded: classify what is left the same way
+            found = {f'{s.kind}:{s.key()}'
+                     for group in (*sg.classified(messages), sg.pinned_open_decisions(messages)) for s in group}
+        except Exception as e:
+            logger.warning('exo-context: signal extraction failed: %s', e)
+            return
+        kept = {k: [t for t in items if f'{k}:{hf.Signal(k, t).key()}' in found
+                    or any(hf.Signal(k, t).key() in u for u in held)] for k, items in pins.items()}
+        if kept != pins:
+            self._x_pins[self._x_session_id] = kept
+            self._save_pins(kept)
+
     def _observe(self, msgs: list[dict[str, Any]]) -> dict[str, list[str]]:
         """Add the rulings, corrections and open decisions visible in `msgs` to this session's pins."""
         pins = self._load_pins()
@@ -522,6 +555,7 @@ class ExoContextEngine(ContextEngine):
         if self.inner is None:  # the core never calls update_model: build the default inner now
             self._build_inner(model='', context_length=0)
         try:
+            self._reconcile_pins(messages)  # #389: an undone ruling must not be merged back in below
             pins = self._observe(messages)  # #371: pins observed from principal text carry across summaries
             signals = sg.extract(messages)
             signals = dataclasses.replace(
