@@ -381,6 +381,30 @@ def test_an_allow_rule_lifts_a_part_s_category_deny_only_when_it_names_that_part
     assert outcome(line, pol(rule("^gh pr comment"), categories={**deny_post, "delete": "allow"})) == "allow"
 
 
+@pytest.mark.parametrize("line, rules, gates", [
+    # the ordered style docs/GATE.md recommends: an allow rule for one push, then an ask rule for the rest
+    (f"gh pr comment 3 --body x && {PUSH}", [ANCHORED, rule("git push", "ask")], {"github_post": "deny"}),
+    (f"echo hi > /tmp/f && {PUSH}", [ANCHORED, rule("git push", "ask")], {"local_write": "deny"}),
+    ("gh pr comment 3 --body hi && rm -rf build", [rule("^rm -rf build$"), rule("rm -rf", "ask")],
+     {"github_post": "deny"}),
+    ("gh pr comment 3 --body hi && rm -rf build", [rule("^rm -rf build$"), rule("rm -rf", "log")],
+     {"github_post": "deny"}),
+])
+def test_an_ask_rule_for_another_command_does_not_lift_a_part_s_category_deny(line, rules, gates):
+    # f7663da: allow for the first three, deny for the last; main: ask, ask, ask, log. The post's or the write's own
+    # text matches neither rule, so neither lifts its category deny.
+    d = decide(sh(line), pol(*rules, categories=gates))
+    assert (d.outcome, d.rule) == ("deny", "category"), d
+
+
+def test_an_ask_rule_lifts_a_part_s_category_deny_only_when_it_names_that_part():
+    line = "gh pr comment 3 --body hi && rm -rf build"
+    deny_post = {"github_post": "deny"}
+    assert outcome(line, pol(rule("rm -rf build", "ask"), categories=deny_post)) == "deny"    # main: ask
+    assert outcome(line, pol(rule("^gh pr comment", "ask"), categories=deny_post)) == "ask"
+    assert outcome(line, pol(rule("gh pr comment", "deny"), categories={"github_post": "allow"})) == "deny"
+
+
 def test_a_part_with_no_own_text_keeps_its_category_deny():
     # An unread nest stands for no command: no allow rule lifts a deny on it.
     line = "rm -rf build; echo " + "$(" * 20 + "ls" + ")" * 20

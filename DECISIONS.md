@@ -2156,10 +2156,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   command) have none. An allow or log rule with a `command` key decides a compound line only when its regex matches
   the own text of every part that carries the line's category or is as severe as the combined result. A part with no
   own text matches no such rule. When the regex misses, the rule is skipped and the first-match walk goes on. In the
-  #191 pass such a rule overrides a part's category line only when it matches that part's own text. Ask and deny rules
-  and `reserved:` and `deny:` entries still match the whole line and its decoded views, so they catch at least what
-  they caught before: an ask rule on `gh pr comment` still asks for `gh pr comment 3 --body hi && rm -rf build` under
-  `categories: {delete: allow}`. A line of one part (one simple command, or a tool that is not a shell) is matched on
+  #191 pass any rule but a deny can only lower a part's category line, so an allow, log or ask rule overrides it only
+  when its regex matches that part's own text. Under `categories: {github_post: deny}` and the ordered rules
+  `[{command: '^git push --force origin main$', decision: allow}, {command: 'git push', decision: ask}]`, the ask rule
+  no longer lifts the deny from the post in `gh pr comment 3 --body x && git push --force origin main`, which is
+  denied. That is stricter than main for an ask rule written for another command on the line:
+  `gh pr comment 3 --body hi && rm -rf build` under `{command: 'rm -rf build', decision: ask}` and that category
+  line was asked about on main and is denied now. A deny rule and the #136 veto still match the whole line. Ask and
+  deny rules in the first-match walk and `reserved:` and `deny:` entries still match the whole line and its decoded
+  views, so they catch at least what they caught before: an ask rule on `gh pr comment` still asks for
+  `gh pr comment 3 --body hi && rm -rf build` under `categories: {delete: allow}`. A line of one part (one simple command, or a tool that is not a shell) is matched on
   its command text as before, and the ledger view (`as_dict`) leaves the own text out. Allow and log rules that
   matched a whole compound line, such as `'^make && make install$'`, now have to match each deciding command's own
   text (`'^make( install)?$'`). Until they do, such a line fails closed to its matrix or category outcome. Equally

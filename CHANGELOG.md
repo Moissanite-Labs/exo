@@ -129,8 +129,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `export GIT_SSH_COMMAND=$X; git push --force origin main` asks under that rule. `cd` is left out. A part with no own
   text (an unread nest, a string literal in code, the opaque_exec reading of a `$".."` line) matches no such rule. A
   log rule over an allow cell only raises the line, so it still sees the whole line unless it names `opaque_exec`.
-  In the #191 pass it overrides a part's category deny only when it names that part. Ask and deny rules and the
-  `reserved:` and `deny:` lists still match the whole line and its decoded views. A line
+  In the #191 pass an allow, log or ask rule overrides a part's category deny only when it names that part, so
+  `gh pr comment 3 --body x && git push --force origin main` is denied under `categories: {github_post: deny}` and an
+  allow rule for the push followed by an ask rule for `git push`. That is stricter than main for an ask rule written
+  for another command on the line (`{command: 'rm -rf build', decision: ask}` no longer lifts the post's deny in
+  `gh pr comment 3 --body hi && rm -rf build`). Ask and deny rules in the first-match walk, deny rules in the #191
+  pass and the `reserved:` and `deny:` lists still match the whole line and its decoded views. A line
   of one simple command, and a tool that is not a shell, match as before. An allow or log rule written for a whole
   compound line (`'^make && make install$'`) now has to match each deciding command, and until then the line gets
   its matrix or category outcome. The ledger view leaves the own text out.
