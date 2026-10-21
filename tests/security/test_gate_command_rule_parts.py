@@ -251,6 +251,12 @@ def test_a_rider_is_judged_by_the_rules_that_raise_it():
     assert outcome(f"rm -rf build && {PUSH}", pol(rule(f"^({PUSH}|rm -rf build)$"))) == "allow"
 
 
+@pytest.mark.parametrize("line", [f"echo hi; echo secret; {PUSH}", f"echo secret; echo hi; {PUSH}"])
+def test_two_riders_alike_but_for_their_text_are_judged_each_by_its_own(line):
+    # The outcome alone is remembered per part content, which includes the own text a rule matches.
+    assert outcome(line, pol(ANCHORED, rule("echo secret", "ask"))) == "ask"
+
+
 @pytest.mark.parametrize("line", [f"cd repo && {PUSH}", f"git status && {PUSH}", f"echo hi && {PUSH}",
                                   f"echo hi > /tmp/f && {PUSH}", f"set -e; {PUSH}"])
 def test_a_harmless_rider_still_rides(line):
