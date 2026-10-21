@@ -286,6 +286,49 @@ def test_a_grant_for_one_push_does_not_cover_a_second_push_with_other_credential
     assert "tokA" not in row and "tokB" not in row and "https://***@example.com/acme/app.git" in row
 
 
+MERGE_ELSEWHERE = "gh pr merge --auto https://github.com/pub/repo/pull/7 -R myorg/app"
+CLOSE_ELSEWHERE = "gh issue close 5 -R myorg/app --duplicate-of https://github.com/myorg/secret/issues/1"
+
+
+def test_a_grant_on_the_target_does_not_cover_a_gh_line_that_may_land_on_another(tmp_path):
+    # #399: gh merges the URL operand's PR, not one on the -R repo, and the gate decides the line on every target
+    # it cannot rule out. A grant on one of them must not run the line, and the "session" key must not cover it.
+    store = tmp_path / "st6"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(
+        "scopes: {internal: ['myorg/*']}\ncategories: {vcs_merge: ask, github_close: ask}\n")
+    key = tmp_path / "k6.key"
+    crypto.save_key(crypto.keygen(), key)
+    g, ctx = make_gate(store, key)
+    g.grants.add("vcs_merge", "myorg/app", "", 30, "principal:tui")      # what an "always" on a plain merge leaves
+    g.grants.add("github_close", "myorg/app#5", "", 30, "principal:tui")
+    assert call(ctx, "terminal", {"command": "gh pr merge -R myorg/app --squash"}) is None
+    assert call(ctx, "terminal", {"command": "gh issue close 5 -R myorg/app"}) is None
+    for line, category in ((MERGE_ELSEWHERE, "vcs_merge"), (CLOSE_ELSEWHERE, "github_close")):
+        c = gate.classify(("terminal", {"command": line}))
+        assert c.alt_targets, c
+        r = call(ctx, "terminal", {"command": line})
+        assert r and r["action"] == "approve", (line, r)
+        assert r["rule_key"] == f"exo-gate:{category}:{r['binding'][:16]}", r      # bound to the exact line
+        assert "grant" not in events(store)[-1], events(store)[-1]
+
+
+def test_always_on_a_gh_line_with_other_targets_covers_that_line_only(tmp_path):
+    store = tmp_path / "st7"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text("scopes: {internal: ['myorg/*']}\ncategories: {vcs_merge: ask}\n")
+    key = tmp_path / "k7.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": MERGE_ELSEWHERE})
+    answer(ctx, r, "always")
+    [g] = json.loads((store / "state" / "approval-grants.json").read_text())
+    assert g["rule"] == "vcs_merge" and g["target"] == "myorg/app" and g["binding"] == r["binding"], g
+    assert call(ctx, "terminal", {"command": MERGE_ELSEWHERE}) is None
+    assert call(ctx, "terminal", {"command": "gh pr merge -R myorg/app --squash"})["action"] == "approve"
+    assert call(ctx, "terminal", {"command": MERGE_ELSEWHERE.replace("/7", "/8")})["action"] == "approve"
+
+
 def test_a_reserved_entry_added_by_a_pending_policy_also_holds_off_a_grant(tmp_path):
     # D-038 + D-075: the reserved entry arrives after the grant and is not yet accepted. Both policies
     # ask about the line, so the pinned decision is kept; the pending policy's reserved hit must still
