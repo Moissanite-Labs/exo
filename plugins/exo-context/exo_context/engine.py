@@ -305,6 +305,7 @@ class ExoContextEngine(ContextEngine):
             for kind in ('ruling', 'correction', 'open_decision'):
                 have = {hf.Signal(kind, t).key() for t in old[kind]}
                 merged[kind] = list(old[kind]) + [t for t in new[kind] if hf.Signal(kind, t).key() not in have]
+            merged['open_decision'] = merged['open_decision'][-12:]  # the cap _observe keeps (#398)
             if merged != new:
                 self._x_pins[new_sid] = merged
                 self._save_pins(merged, new_sid)
@@ -454,6 +455,12 @@ class ExoContextEngine(ContextEngine):
                     pins[kind].append(s.text)
                     have.add(s.key())
                     changed = True
+        # Open decisions keep only the newest 12, the cap the compaction block and the handoff apply to
+        # the merged list: a deferral never expires on its own, so an uncapped list grows the pins file
+        # and the per-turn scan over it for the life of the session (#398).
+        if len(pins['open_decision']) > 12:
+            pins['open_decision'] = pins['open_decision'][-12:]
+            changed = True
         if changed:
             self._save_pins(pins)
         return pins
