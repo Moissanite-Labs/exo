@@ -2870,6 +2870,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
         c.target = dest if "unread hops" in c.signals else (c.target or dest)
+        # #399: the host stands for an empty other target too, as for an empty target, so a rule on it sees each.
+        c.alt_targets = [t for t in dict.fromkeys(t or dest for t in c.alt_targets) if t != c.target]
         if not here:
             c.signals.append("remote host")
         return [c]

@@ -147,7 +147,9 @@ part. The ledger row lists the other targets as `alt_targets`. The question the 
 names each of them, also when none decides the line:
 `merge PR on myorg/app (costly, internal). It may land on pub/repo#7 or myorg/app#7 instead.`
 When one of them decides the line, the reason ends with "(if it lands on owner/name#n)". An empty
-target is the repo gh picks with no `-R`, named "the current repo".
+target is the repo gh picks with no `-R`, named "the current repo". On an ssh or mosh hop the host
+stands for an empty target, as for any command run there, and for an empty other target too. So
+`ssh buildhost gh repo view --web myorg/app` still meets a rule on `buildhost`.
 
 A line with other targets binds its approval to the exact command, as an outward act does. Its
 rule key is the text hash, so a "session" answer covers that line only. A standing grant on one of
