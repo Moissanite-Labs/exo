@@ -525,7 +525,8 @@ def test_ordinary_lines_keep_their_class(cmd):
     ("cd /proc && cat cpuinfo > /tmp/c", "local_write"),
     ("cd /dev && ls -l > /tmp/devs", "local_write"),
     ("cd /proc && python3 x.py", "opaque_exec"),
-    ("cd /proc && printf x > fd/3", "local_write"),          # /proc has no fd folder of its own
+    ("cd /proc && printf x > fd/3", "store_write"),          # /proc/fd is /proc/self/fd under the kernel's other name
+    ("cd /proc && printf x > fd/1", "local_write"),          # the writer's own stdout, as under /dev
     ("cd /proc && echo x > version2", "local_write"),
     ("cd /dev && cat fd/3 > /tmp/out", "local_write"),       # reading a descriptor writes nothing through it
     ("cd /dev && printf x > fd/3", "store_write"),
@@ -542,6 +543,23 @@ def test_ordinary_lines_keep_their_class(cmd):
 ])
 def test_after_a_cd_into_a_descriptor_folder_only_a_descriptor_write_is_a_store_write(cmd, category):
     assert _bash(cmd).category == category, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    # the store was entered first: a later cd into /dev or /proc does not lift the blanket rule,
+    # because the parts after `(cd /dev)` still run in the store folder
+    "cd ~/.exo/state && (cd /dev) && cp /tmp/x gate-grants.json",
+    "cd ~/.exo/state && (cd /proc) && cp /tmp/x gate-grants.json",
+    "cd ~/.exo && (cd /dev) && cp /tmp/x policies/gates.yaml",
+    "cd ~/.exo/state && cd /dev && cp /tmp/x gate-grants.json",
+    "cd ~/.exo/state && (cd /dev) && rm gate-grants.json",
+    "cd ~/.exo/state && cd /dev && sed -n 1p version",
+])
+def test_a_cd_into_the_store_keeps_the_blanket_rule_after_a_descriptor_cd(cmd):
+    c = _bash(cmd)
+    assert c.category == "store_write", (cmd, c.summary)
+    assert gate.decide(c).outcome == "ask", cmd
+    assert gate.decide(c, {"gates": {"deny": ["store_write"]}}).outcome == "deny", cmd
 
 
 @pytest.mark.parametrize("cmd", [

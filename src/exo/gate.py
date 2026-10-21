@@ -3854,6 +3854,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
                 ctx["fd_cwd"] = into     # #217: the card names the descriptor folder, not "the store"
             else:
+                ctx["store_self_cwd"] = True
                 ctx.pop("fd_cwd", None)  # the store itself: every relative name below may be it (#338)
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
@@ -4886,11 +4887,13 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
         fd_dir = ctx.get("fd_cwd")
-        if not fd_dir:
+        if not fd_dir or ctx.get("store_self_cwd"):
             hits.append("a path inside the store (after cd)")
-        # #338: the cd entered a descriptor or process folder, not the store. Only a write that
+        # #338: the line's only store entry is a descriptor or process folder. Only a write that
         # could land on a descriptor path under it counts; a command that writes nothing, or
-        # writes to a path elsewhere, keeps its own class.
+        # writes to a path elsewhere, keeps its own class. Once a cd has entered the store itself
+        # the blanket rule above stands for the rest of the line: a later cd into /dev or /proc
+        # does not lift it, because the parts after `(cd /dev)` still run in the store folder.
         elif _fd_cwd_write(k, fd_dir, seen):
             hits.append(fd_dir)
     return list(dict.fromkeys(hits))
@@ -6854,9 +6857,10 @@ _BUS_FILES = (("REGISTRY", ("",)), ("DB", ("", "-wal", "-shm", "-journal")), ("K
 # a store write. It matches anywhere in a path as written, so a relative `dev/fd/3` after `cd /` counts; a
 # resolved spelling is not tested (the gate's own realpath of /dev/stdout runs through its own descriptors). The
 # writer's stdout and stderr (`/dev/fd/1`, `/proc/self/fd/2`) are left out: a store file opened on them is caught
-# where it is opened (_store_touch).
-_FD_PATH = re.compile(r"(^|/)(dev/(fd|stdin)|proc/(self|thread-self|\d+|\$[^/]*)(/task/[^/]+)?/(fd|cwd|root|map_files))(/|$)")
-_STD_FD = re.compile(r"(^|/)(dev/fd|proc/(self|thread-self)(/task/[^/]+)?/fd)/0*[12]$")
+# where it is opened (_store_touch). `/proc/fd` is the kernel's other name for `/proc/self/fd`, so it counts the
+# same way, stdout and stderr included.
+_FD_PATH = re.compile(r"(^|/)(dev/(fd|stdin)|proc/fd|proc/(self|thread-self|\d+|\$[^/]*)(/task/[^/]+)?/(fd|cwd|root|map_files))(/|$)")
+_STD_FD = re.compile(r"(^|/)(dev/fd|proc/fd|proc/(self|thread-self)(/task/[^/]+)?/fd)/0*[12]$")
 _FD_DIR = re.compile(r"/+(dev|proc(/[^/]+(/task(/[^/]+)?)?)?)")      # cd here, then `> fd/3` or `> self/fd/3`
 
 
