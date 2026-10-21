@@ -69,10 +69,13 @@ escalate:
 # Fill from their rulings.
 reserved: []
 
-# Actions refused outright instead of asked (deny). Same entry format as reserved. Like a
-# reserved entry, a deny entry is checked against every command the gate reads on a line,
-# nested ones included, while a category under categories: sees only the line's most severe
-# part. See docs/GATE.md "Known limits" for what the gate does not read yet.
+# Actions refused outright instead of asked (deny). Same entry format as reserved. A deny
+# entry, a reserved entry, a `categories:` deny and a category deny rule reach every command
+# the gate reads on a line, nested ones included. An allow, log or ask category line sees
+# only the line's most severe part. A rule's `command` regex is matched against the whole
+# line, so an allow rule on `^ls` also allows `ls; <anything>`, and it overrides a
+# `categories:` deny or a later deny rule (#394). See docs/GATE.md "Known limits" for what
+# the gate does not read yet.
 deny: []
 
 # What happens when the principal does not answer an ask. The host blocks on timeout, so
