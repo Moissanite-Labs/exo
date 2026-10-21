@@ -2796,8 +2796,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             return []
         if depth >= _DEPTH:
             return [_too_deep(cmd)]
-        return _classify_simple(_Cmd(words=ws, heredocs=k.heredocs, herestrings=k.herestrings,
-                                     fed=k.fed or k.piped_in), cmd, inner_depth, ctx, piped)
+        return _classify_simple(_Cmd(words=ws, heredocs=k.heredocs, herestrings=k.herestrings), cmd,
+                                inner_depth, ctx, piped)
 
     if prog in _WRAPPERS:
         return _classify_wrapper(prog, words, cmd, depth, inner_words)
@@ -3364,8 +3364,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             nested(v, f"git {sub} option")
         if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:
             parts.append(_opaque("git bisect run runs a command per step", cmd))
-            parts += _classify_simple(_Cmd(words=words[i + 2:], heredocs=k.heredocs, herestrings=k.herestrings,
-                                           fed=k.fed or k.piped_in),
+            parts += _classify_simple(_Cmd(words=words[i + 2:], heredocs=k.heredocs, herestrings=k.herestrings),
                                       cmd, depth + 1, ctx, piped)
         if sub == "submodule":
             j = 0
