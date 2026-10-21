@@ -3953,8 +3953,10 @@ def _cd_store_read(cmds: list, subs: list) -> str:
         if n < _DEPTH:
             queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
     scope = _scope.get()
-    if scope is not None and scope.tool_cwd:
-        targets.append(scope.tool_cwd)     # #311: a shell call's own `cwd` argument enters its folder, as a cd would
+    tool = scope.tool_cwd if scope is not None else None
+    own = list(targets)                    # the folders the line itself enters, before the tool's is added
+    if tool:
+        targets.append(tool)     # #311: a shell call's own `cwd` argument enters its folder, as a cd would
     if not targets:
         return ""
     singles, pairs, names = _store_hints()
@@ -4011,6 +4013,14 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 if name == "":
                     lo[""] = min(lo.get("", n), n)
 
+    # The tool's folder is where the call starts, not a folder the line enters, so its paths are kept apart:
+    # below, a sensitive store among them checks names one by one (as ~/.kube does) instead of counting every
+    # relative word, which would swallow a line that never reads from it (`kubectl apply -f -` run from ~/.ssh
+    # lost its category, and with it a matrix deny). A folder the line itself also names keeps the line's
+    # reading, so `cd ~/.ssh && ...` in the same call still counts every relative word.
+    tool_paths = {p for alt in _brace_alts(tool) for p, _ in [folders(alt)]} if tool else set()
+    own_paths = {p for t in dict.fromkeys(own) for alt in _brace_alts(t) for p, _ in [folders(alt)]}
+    tool_only = tool_paths - own_paths
     split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in _brace_alts(t)
              for p, parts in [folders(alt)]]
     for _, parts, _ in split:
@@ -4102,8 +4112,9 @@ def _cd_store_read(cmds: list, subs: list) -> str:
         return _exo_relative(split, max(ups), candidates)
     nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
     # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
-    roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
-    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered) or any(map(is_store, roots))
+    roots = dict.fromkeys("/".join(parts[:k + 1]) for p, parts, k in entered if p not in tool_only)
+    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered if p not in tool_only) or \
+        any(map(is_store, roots))
     hints = names | singles | nxt
     held = any(k == len(parts) - 1 for _, parts, k in entered)     # a target is itself a store folder (~/.kube)
     for q, parts, globbed in candidates():
