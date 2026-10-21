@@ -823,3 +823,21 @@ def test_a_file_tools_cwd_argument_is_not_a_shell_cwd():
     # Only a shell call runs in its `cwd` argument; a file tool still reads from the session's folder.
     c = gate.classify({"tool": "read_file", "args": {"path": "config", "cwd": "~/.kube"}})
     assert c.category == "read"
+
+
+MATRIX_DENY = {"gates": {"matrix": {"irreversible": {"private": "deny", "internal": "deny", "public": "deny"},
+                                    "costly": {"public": "deny"}}}}
+
+
+@pytest.mark.parametrize("cmd", [
+    "kubectl apply -f -",
+    "cd ~/.kube && echo '{\"kind\": \"Pod\", \"x\": 1}' | kubectl apply -f -",
+])
+def test_a_tool_cwd_in_a_store_costs_a_line_no_decision_of_its_own(cmd):
+    # The call starts in ~/.ssh but reads nothing from it: the line's words are kubectl's, not names in that
+    # folder. The tool's folder checks names one by one, so the line keeps its own category and the matrix
+    # deny it draws; counting every relative word reclassified it as credentials, below the deny's reach.
+    c = _bash_in(cmd, "~/.ssh")
+    assert c.category == "deploy_production", cmd
+    assert gate.decide(c, MATRIX_DENY).outcome == "deny"
+    assert gate.decide(c).outcome == "ask"
