@@ -1857,9 +1857,11 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
 
 
 def _gh_url(word: str) -> tuple[str, str] | None:
-    """(owner/name, number) of a GitHub URL as gh reads one (gh 2.89 `ParseURL` and `ghrepo.NewWithHost`, #399): http
-    or https in any case, the host in any case, without a user, `www.` or a port, and the path decoded. A repo URL
-    has no number. None for a word that is no such URL or names another host."""
+    """(owner/name, number) of a GitHub URL (#399): http or https in any case, the host in any case, without a user,
+    a port or a leading `www.`, and the path decoded, close to what Go's url.Parse and `ghrepo.NewWithHost` give gh
+    (gh 2.89). gh's own readers take a pull request URL (`ParseURL`) or an issue or pull request URL (the issue
+    lookup). This takes a discussion URL and a repo URL too, which has no number: a reading more, since `-R` and the
+    reading before #399 stay other targets. None for a word that is no such URL or names another host."""
     if not re.match(r"(?i)https?://", word):
         return None
     try:
@@ -1915,12 +1917,13 @@ def _gh_operands(argv: list[str], takes: str, longs: tuple) -> tuple[str, list[i
 
 def _gh_repo(value: str) -> tuple[str, bool]:
     """(owner/name, sure) of a repo as gh reads `-R` (ghrepo.FromFullName in gh 2.89): `owner/name`,
-    `HOST/owner/name`, or a URL (`https://HOST/owner/name`, `git@HOST:owner/name.git`). Sure when the host is
-    github.com, as a scope means. A value gh refuses comes back as written, and not sure (#399)."""
+    `HOST/owner/name`, or a URL (`https://HOST/owner/name`, `git@HOST:owner/name.git`), whose path reads decoded
+    as Go's url.Parse gives it. Sure when the host is github.com, as a scope means. A value gh refuses comes back
+    as written, and not sure (#399)."""
     rest, host = value, "github.com"
     m = re.fullmatch(r"(?:(?:ssh|git\+ssh|git|https?|git\+https)://(?:[^@/]*@)?|git@)([^/:]+)(?::\d*)?[/:](.*)", value)
     if m:
-        host, rest = m.group(1), m.group(2).strip("/")
+        host, rest = m.group(1), unquote(m.group(2)).strip("/")
         rest = rest[:-4] if rest.endswith(".git") else rest
     elif value.count("/") == 2:
         host, _, rest = value.partition("/")
@@ -2146,10 +2149,13 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
     if order is not None:
         return _classify_gh_words(words[:2] + [alias or words[2]] + words[3:], cmd, stdin,
                                   frozenset(n for n, i in enumerate(order) if i in dynamic))
-    as_written = _classify_gh_words(argv, cmd, stdin, dynamic)
+    # The line as written, past the empty words before the command, as gh passes over them (`gh "" secret "$V"`).
+    g = next((k for k in range(1, len(argv)) if argv[k] != "" or k in dynamic), len(argv))
+    lead = argv[:1] + argv[g:]
+    as_written = _classify_gh_words(lead, cmd, stdin, frozenset(k - g + 1 for k in dynamic if k >= g))
     if as_written.category in NO_GRANT:
         return as_written                    # gh auth and gh secret hold credentials whatever the subcommand
-    return _opaque(f"gh {argv[1]} with a word from an expansion where its subcommand may be", cmd)
+    return _opaque(f"gh {(lead + [''])[1]} with a word from an expansion where its subcommand may be", cmd)
 
 
 def _classify_gh_words(argv: list[str], cmd: str, stdin: str | None, dynamic: frozenset) -> Classification:

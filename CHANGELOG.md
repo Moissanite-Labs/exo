@@ -151,10 +151,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   A number in an option value (`-b 7`) became the target's number too. The target now comes from `-R` and the operands
   only, read with the table of options that take a value that the unseen check uses. gh keeps the last `-R`, and a URL
   operand still names the repo, as in gh. It reads as gh reads it, also with `www.`, a port, a user or a host in
-  capitals (`https://www.github.com/pub/repo/pull/5`), and `gh repo` drops a repo URL's `.git`. The gate also decides the line on every other repo it cannot rule out (`-R`
-  beside a URL operand for another repo, and the reading before this change) and keeps the strictest decision, so no
-  line decides lower than before. Such a line binds its approval to the exact command, so a standing grant on one of
-  its targets does not run it, and its question names every other target ("It may land on pub/repo#7 instead.").
+  capitals (`https://www.github.com/pub/repo/pull/5`), and `gh repo` drops a repo URL's `.git`. The gate also
+  decides the line on every other repo it cannot rule out (`-R` beside a URL operand for another repo, and the
+  reading before this change) and keeps the strictest decision, so no line decides lower than before. Such a line
+  binds its approval to the exact command, so a standing grant on one of its targets does not run it, and its
+  question names every other target ("It may land on pub/repo#7 instead.").
   `gh issue close --duplicate-of` and `-r` take a value in the gate's table now, and the table lists `gh pr ready`,
   `lock` and `unlock`, `gh issue develop`, `lock`, `unlock`, `delete` and `transfer`, and `gh release upload` and
   `delete`, beside the reopen and merge rows from #397. So `gh pr ready --undo <URL>` no longer asks about "the

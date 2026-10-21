@@ -255,3 +255,14 @@ def test_a_merge_subject_repeated_is_unseen_on_each_target():
     for t in [c.target] + c.alt_targets:
         assert body_unseen(replace(c, target=t, alt_targets=[])), t
     assert d.outcome == "ask" and UNSEEN_BODY in d.violations, d
+
+
+# Round 5, item 6: with an expansion where the subcommand may stand, the line as written is read past the empty
+# words before the command, as gh passes over them, and the card names the command.
+def test_an_empty_word_before_a_credentials_command_with_an_expansion():
+    c, _ = run('gh "" secret "$V"')
+    assert c.category == "credentials", c
+    c, _ = run('gh "" "" auth "$V" x')
+    assert c.category == "credentials", c
+    c, _ = run('gh "" pr "$V" 5')
+    assert c.category == "opaque_exec" and c.summary.startswith("gh pr with a word from an expansion"), c

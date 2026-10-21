@@ -121,14 +121,17 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
 - `-R` reads as gh reads it. A short option drops one `=` before its value, also at the end of a
   cluster, so `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`. `github.com/pub/repo`,
   `https://github.com/pub/repo.git` and an ssh remote URL for it name `pub/repo` too, and so do
-  those forms as the first word of `gh repo`. On another host (`-R ghe.corp/myorg/app`) the
+  those forms as the first word of `gh repo`. A URL's path reads decoded, as gh reads it
+  (`https://github.com/pub/re%70o`). On another host (`-R ghe.corp/myorg/app`) the
   gate cannot tell whether a scope means that repo, so the value as written is another target.
 - A URL operand names the repo, also beside `-R`, because gh posts there.
   `gh pr comment https://github.com/myorg/app/pull/9 -R pub/repo` lands on `myorg/app#9`. The
-  URL reads as gh reads it: the scheme and the host in any case, without a user, `www.` or a
-  port, and the path decoded. So `https://www.github.com/pub/repo/pull/5` and
-  `https://GitHub.com/pub/repo/pull/5` name `pub/repo#5`. For `gh repo` a repo URL drops its
-  `.git`, as `-R` does. A port that is not a number, or another host, names no repo here.
+  URL reads close to how gh reads it: the scheme and the host in any case, without a user, a
+  port or a leading `www.`, and the path decoded. So `https://www.github.com/pub/repo/pull/5` and
+  `https://GitHub.com/pub/repo/pull/5` name `pub/repo#5`. gh takes a pull request or issue URL
+  there. The gate takes a discussion URL and a repo URL too, which only adds a reading, since
+  `-R` stays another target. For `gh repo` a repo URL drops its `.git`, as `-R` does. A port that
+  is not a number, or another host, names no repo here.
 - `gh api` takes its target from its endpoint, its one operand, read with gh api's options that
   take a value. A path in a header, a jq query, a template or a host names nothing. So
   `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` is a post
@@ -149,7 +152,8 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   `gh rs`), a user alias and an extension stay code the gate cannot see, and ask. With no
   subcommand gh prints help, and the line stays a read. A word from an expansion where the
   subcommand or an option may stand (`gh pr "$V" 5`) counts as `opaque_exec`, since the gate
-  cannot tell what gh runs. `gh auth` and `gh secret` stay credentials. The line as the gate read
+  cannot tell what gh runs. `gh auth` and `gh secret` stay credentials, also past an empty word
+  (`gh "" secret "$V"`). The line as the gate read
   it before, with each gh command's third word as written for its subcommand, is decided too, and
   the stricter decision stands on each axis. Without that a compound line could decide lower: in
   `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the push, and
@@ -203,15 +207,17 @@ Limits. A body that links to another repo still counts that repo, as it did befo
 the unseen check found unseen with a row of the table as it was before #399 stays unseen, so
 `gh issue lock 5 -rb x` and a close whose `--duplicate-of` value is an option word
 (`--duplicate-of -c x`) stay unseen. gh refuses the second line. The gate does not read
-`GH_HOST` or `gh api --hostname`: `owner/name` counts as a repo on github.com. A differential over
+`GH_HOST` or `gh api --hostname`: `owner/name` counts as a repo on github.com. Nor does it read
+`GH_REPO`, which gh takes for `-R` when the line has none, so such a line counts as one on the
+current repo. A differential over
 168,403 gh lines in seven corpora found no line that decides lower than before #399, on the
 outcome, the exposure, the third party, the violations, the reserved parts, the outward and
 exact binding checks or the unseen check. It ran up to 93 policies, among them a deny map, a rule
 and a reserved entry that name an ssh host with a gh category. On 126,403 of the lines no signal
 was lost either. On 32 of the others the line loses the `secret store` signal and keeps its
-decision. gh now reads a credentials subcommand past an option there (`gh ssh-key -R x delete`),
+decision. gh now reads a credentials subcommand past an option there (`gh ssh-key -y 123 delete`),
 so the line is credentials already and gets no extra mark, as
-`cat .env && gh ssh-key delete -R x` gets none on main. Tests:
+`cat .env && gh ssh-key delete 123 -y` gets none on main. Tests:
 `tests/security/test_gate_gh_target_operands.py`, `tests/security/test_gate_gh_subcommand_position.py`.
 
 ## Who may approve
