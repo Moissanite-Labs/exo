@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import collections
 import gzip
 import itertools
 import json
@@ -42,7 +43,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import collections
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
