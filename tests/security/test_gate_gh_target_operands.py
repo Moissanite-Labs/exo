@@ -105,9 +105,11 @@ def test_the_reason_names_the_other_target_when_it_decides():
 def test_the_ask_names_the_other_targets():
     pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "categories": {"vcs_merge": "ask"}}})
     c, d = run("gh pr merge --auto https://github.com/pub/repo/pull/7 -R myorg/app", pol)
-    assert (c.target, d.outcome, d.exposure) == ("myorg/app", "ask", "internal"), (c, d)
-    assert "It may land on pub/repo#7 or myorg/app#7 instead." in summarize(c, d), summarize(c, d)
-    c, d = run(f"gh pr ready --foo {ORG}")
+    assert (c.target, d.outcome, d.exposure) == ("pub/repo#7", "ask", "internal"), (c, d)
+    assert "It may land on myorg/app#7 instead." in summarize(c, d), summarize(c, d)
+    c, d = run(f"gh pr checkout --branch {ORG} 5 -R pub/repo")
+    assert "It may land on myorg/app#9 or pub/repo#9 instead." in summarize(c, d), summarize(c, d)
+    c, d = run("gh repo delete --yes myorg/app")
     assert c.alt_targets == [""], c
     assert "It may land on the current repo instead." in summarize(c, d), summarize(c, d)
     assert d.reason.endswith("(if it lands on the current repo)"), d
@@ -135,7 +137,7 @@ def test_the_widest_exposure_and_any_third_party_stand_beside_a_deny_from_anothe
 def test_reserved_parts_come_from_every_reading():
     pol = normalize_policies({"gates": {"scopes": {"private": ["myorg/app"]}, "reserved": ["vcs_merge"]}})
     c, d = run(f"gh pr merge 5 -b {ORG}", pol)
-    assert (c.target, c.alt_targets) == ("myorg/app#9", ["#5"]), c
+    assert (c.target, c.alt_targets) == ("#5", ["myorg/app#9"]), c
     assert d.outcome == "ask" and set(d.reserved) == {("vcs_merge", "myorg/app#9"), ("vcs_merge", "#5")}, d
 
 
@@ -211,12 +213,16 @@ def test_a_duplicate_of_option_word_stays_unseen():
 # A command the table does not list: a URL the gate cannot tell from an option value never replaces `-R`, and
 # with no `-R` it names the target while the reading without it still counts.
 def test_a_command_outside_the_table():
-    c, _ = run(f"gh pr merge --subject {ORG} 5 -R pub/repo")
+    c, _ = run(f"gh pr checkout --branch {ORG} 5 -R pub/repo")
     assert c.target == "pub/repo#5" and "myorg/app#9" in c.alt_targets, c
-    c, d = run(f"gh pr ready {ORG}")
-    assert (c.target, c.alt_targets, d.outcome) == ("myorg/app#9", [], "log"), (c, d)
-    c, d = run(f"gh pr ready --foo {ORG}")
+    c, _ = run(f"gh pr checkout {ORG}")
+    assert (c.target, c.alt_targets) == ("myorg/app#9", []), c
+    c, _ = run(f"gh pr checkout --detach {ORG}")
     assert c.target == "myorg/app#9" and "" in c.alt_targets, c
+    c, d = run("gh repo delete myorg/app")
+    assert (c.target, c.alt_targets, d.exposure) == ("myorg/app", [], "internal"), (c, d)
+    c, d = run("gh repo delete --yes myorg/app")
+    assert c.target == "myorg/app" and "" in c.alt_targets, c
     assert (d.outcome, d.exposure) == ("ask", "public"), d
 
 
@@ -344,3 +350,47 @@ def test_r_on_another_host_keeps_the_value_as_written():
 def test_r_that_gh_refuses_stays_as_written(value):
     c, _ = run(f"gh pr comment 5 -R {value} -b x")
     assert c.target == f"{value}#5", c
+
+
+# The table lists more of gh's options that take a value (gh 2.89 --help), so everyday lines read one target and no
+# empty one: `gh pr ready --undo URL` asked as "the current repo" before (round 3, item 5).
+@pytest.mark.parametrize("line,target", [
+    (f"gh pr ready --undo {ORG}", "myorg/app#9"),
+    (f"gh pr reopen -c $'x\\nF' {ORG}", "myorg/app#9"),
+    (f"gh pr merge --squash --delete-branch {ORG}", "myorg/app#9"),
+    (f"gh pr merge -t subject -b body {ORG}", "myorg/app#9"),
+    (f"gh pr merge --author-email a@b.c --match-head-commit abc {ORG}", "myorg/app#9"),
+    (f"gh pr lock --reason spam {ORG}", "myorg/app#9"),
+    (f"gh pr unlock {ORG}", "myorg/app#9"),
+    (f"gh issue reopen --comment x {ORG_ISSUE}", "myorg/app#1"),
+    (f"gh issue develop --checkout --name b {ORG_ISSUE}", "myorg/app#1"),
+    (f"gh issue develop --branch-repo x/y -b main {ORG_ISSUE}", "myorg/app#1"),
+    (f"gh issue lock -r spam {ORG_ISSUE}", "myorg/app#1"),
+    (f"gh issue unlock {ORG_ISSUE}", "myorg/app#1"),
+    (f"gh issue delete --yes {ORG_ISSUE}", "myorg/app#1"),
+    (f"gh issue transfer {ORG_ISSUE} myorg/other", "myorg/app#1"),
+    ("gh release upload v1 f.tgz --clobber -R myorg/app", "myorg/app"),
+    ("gh release delete v1 -y --cleanup-tag -R myorg/app", "myorg/app"),
+])
+def test_everyday_lines_read_one_target(line, target):
+    c, _ = run(line)
+    assert (c.target, c.alt_targets) == (target, []), c
+
+
+@pytest.mark.parametrize("line", ["gh issue close -r 7 5 -R pub/repo", "gh pr lock -r 7 5 -R pub/repo",
+                                  "gh pr merge -A 7 5 -R pub/repo", "gh issue develop -n 7 5 -R pub/repo"])
+def test_a_number_in_a_new_rows_option_value_is_not_the_number(line):
+    c, _ = run(line)
+    assert c.target == "pub/repo#5", c
+
+
+# A line the unseen check found unseen without these rows stays unseen: the table read it so before #399, and a
+# line never decides lower than it did.
+@pytest.mark.parametrize("line", [
+    "gh pr reopen 5 -R myorg/app -cb x", "gh issue reopen 5 -R myorg/app -cb x", "gh issue lock 5 -R myorg/app -rb x",
+    "gh issue close 5 -R myorg/app -rc x", "gh issue develop 5 -R myorg/app -nt x",
+    "gh issue close 5 -R myorg/app -c a --duplicate-of -c b",
+])
+def test_a_line_unseen_before_the_new_rows_stays_unseen(line):
+    c, d = run(line)
+    assert body_unseen(c) and UNSEEN_BODY in d.violations, (line, d)

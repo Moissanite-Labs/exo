@@ -323,7 +323,8 @@ def test_always_on_a_gh_line_with_other_targets_covers_that_line_only(tmp_path):
     r = call(ctx, "terminal", {"command": MERGE_ELSEWHERE})
     answer(ctx, r, "always")
     [g] = json.loads((store / "state" / "approval-grants.json").read_text())
-    assert g["rule"] == "vcs_merge" and g["target"] == "myorg/app" and g["binding"] == r["binding"], g
+    # gh merges the URL operand's PR, so that is the target, and the grant binds the exact line.
+    assert g["rule"] == "vcs_merge" and g["target"] == "pub/repo#7" and g["binding"] == r["binding"], g
     assert call(ctx, "terminal", {"command": MERGE_ELSEWHERE}) is None
     assert call(ctx, "terminal", {"command": "gh pr merge -R myorg/app --squash"})["action"] == "approve"
     assert call(ctx, "terminal", {"command": MERGE_ELSEWHERE.replace("/7", "/8")})["action"] == "approve"

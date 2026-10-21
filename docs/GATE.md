@@ -110,7 +110,8 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   `pub/repo#5`, a public repo, even under `internal: [myorg/*]`.
 - Options are read with gh's own table of options that take a value, the same table the unseen
   check uses: `--opt=value`, short clusters (`-wb text`), `-Rowner/name`, and `--`, which ends the
-  options. gh keeps the last `-R`.
+  options. gh keeps the last `-R`. The table lists the commands that post, close, reopen, merge,
+  lock, unlock, transfer or delete, and release create, edit, upload and delete (gh 2.89 `--help`).
 - `-R` reads as gh reads it. A short option drops one `=` before its value, also at the end of a
   cluster, so `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`. `github.com/pub/repo`,
   `https://github.com/pub/repo.git` and `git@github.com:pub/repo.git` name `pub/repo` too, and so
@@ -172,9 +173,10 @@ grants"). So a grant from `gh pr merge -R myorg/app` never runs
 `gh pr merge https://github.com/pub/repo/pull/7 -R myorg/app`, which merges `pub/repo#7`.
 
 Limits. A body that links to another repo still counts that repo, as it did before #399. So
-`gh pr comment 5 -R myorg/app -b 'https://github.com/pub/repo/pull/3'` asks as public. A close
-whose `--duplicate-of` value is an option word (`--duplicate-of -c x`) stays unseen. gh refuses
-that line. Tests: `tests/security/test_gate_gh_target_operands.py`,
+`gh pr comment 5 -R myorg/app -b 'https://github.com/pub/repo/pull/3'` asks as public. A post
+the unseen check found unseen with a row of the table as it was before #399 stays unseen, so
+`gh pr reopen 5 -cb x` and a close whose `--duplicate-of` value is an option word
+(`--duplicate-of -c x`) stay unseen. gh refuses the second line. Tests: `tests/security/test_gate_gh_target_operands.py`,
 `tests/security/test_gate_gh_subcommand_position.py`.
 
 ## Who may approve
