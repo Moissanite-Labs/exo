@@ -1116,13 +1116,14 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
         at = o_first if o_body < 0 else o_body
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
             cur.own = lx._source(at, o_end)
-            if cur.piped_in and not cur.piped_group and p_at >= 0:
+            if cur.piped_in and p_at >= 0:
                 cur.pipe_src = functools.partial(pipes.text, p_at, o_end)   # read only by _stdin_own
             cmds.append(cur)
         else:
             at = -1
-        # the next command's pipeline starts here, or where this one's did; a compound before it has no such text
-        p_at = (p_at if cur.piped_in else at) if piped and shut is None and not cur.piped_group and at >= 0 else -1
+        # the next command's pipeline starts here, or where this one's did; a compound before it has no such text.
+        # A command piped from a compound (piped_group) finds p_at at -1, as the end before it had a compound shut.
+        p_at = (p_at if cur.piped_in else at) if piped and shut is None and at >= 0 else -1
         cur, shut, lead = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True
         o_first = o_body = o_end = -1
 
