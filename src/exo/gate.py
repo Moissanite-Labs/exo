@@ -382,6 +382,7 @@ _NEST = 16
 _TOO_DEEP = "__exo_gate_nested_too_deep__"
 _STAND_INS = re.compile(r"(?:__exo_gate_nested_too_deep__(?:\n|\Z))+")   # a run of stand-in lines (_classify_shell)
 _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
+_FD_NAME = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")     # a named descriptor (`{fd}< f`): bash fills it with a number
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
 _ASSIGN = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=.*", re.S)
@@ -4839,9 +4840,70 @@ def _gh_writes_store(words: list) -> bool:
     return (group, verb) in _GH_STORE_WRITES
 
 
+def _store_file_ids(ctx: dict) -> set[tuple[int, int]]:
+    """(device, inode) of the files the store protects, built once per line and kept on ctx (#324). A hardlink
+    names the same file under another path, which no spelling check can see; the inode is the file itself."""
+    ids = ctx.get("store_file_ids")
+    if ids is not None:
+        return ids
+    ids = set()
+
+    def add(path: str) -> None:
+        try:
+            st = os.stat(path)
+        except OSError:
+            return
+        ids.add((st.st_dev, st.st_ino))
+
+    def add_tree(folder: str) -> None:
+        add(folder)
+        for cur, _dirs, files in os.walk(folder):
+            for f in files:
+                add(os.path.join(cur, f))
+
+    for root, names, principals in _store_roots():
+        for n in names:
+            add_tree(os.path.join(root, n))
+        try:
+            top = os.listdir(root)
+        except OSError:
+            top = []
+        for entry in top:                   # ledger.sqlite and schedule.sqlite sit in the root itself
+            if entry.startswith(("ledger.sqlite", "schedule.sqlite")):
+                add(os.path.join(root, entry))
+        if principals:
+            try:
+                subs = os.listdir(os.path.join(root, "principals"))
+            except OSError:
+                subs = []
+            for s in subs:
+                for n in _STORE_PROTECTED:
+                    add_tree(os.path.join(root, "principals", s, n))
+    for folder, names in _bus_paths():
+        for n in names:
+            add_tree(os.path.join(folder, n))
+    ctx["store_file_ids"] = ids
+    return ids
+
+
+def _same_store_file(path: str, ids: set[tuple[int, int]]) -> bool:
+    """``path`` is a protected store file under another name: the same device and inode (#324)."""
+    p = _expand_text(path).strip()
+    if not p.startswith("/"):
+        return False
+    try:
+        st = os.stat(p)
+    except OSError:
+        return False
+    return (st.st_dev, st.st_ino) in ids
+
+
 def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> list[str]:
     """Each store path in a simple command that a write reaches, in the order the scan meets them (#514), or [].
     Reads of the store are fine."""
+
+
+
     seen = ctx.setdefault("store_braces", {})
     hits: list[str] = []
     for op, t in k.redirs:
@@ -4855,6 +4917,8 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             if _shell_hits(t, seen, "target", _store_word_hit) != [] or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 hits.append(t.text)
+            if targets and any(_same_store_file(x, _store_file_ids(ctx)) for x in targets):
+                hits.append(t.text)        # the target is a store file under another name (a hardlink, #324)
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
@@ -6897,6 +6961,35 @@ def _fd_path(p: str) -> bool:
         not _STD_FD.search(p.rstrip("/") or p)
 
 
+def _fd_link_path(p: str, depth: int = 0) -> bool:
+    """True when the links in ``p``, followed one component at a time, reach a descriptor path (#324). The walk
+    stops as soon as the resolved spelling is one, so it never resolves through the gate's own descriptors: a
+    link to /dev makes ``<link>/fd/3`` a write through descriptor 3, and a link straight to /proc/self/fd/3 is
+    that path under another name. A link loop resolves nowhere, as for the kernel, so it counts as no path."""
+    if _fd_path(p):
+        return True
+    if depth > 8:
+        return False
+    parts = [c for c in p.split("/") if c and c != "."]
+    cur = ""
+    for i, comp in enumerate(parts):
+        if comp == "..":
+            cur = cur.rsplit("/", 1)[0]
+            continue
+        cur += "/" + comp
+        # Links under /dev or /proc are not followed: they are the descriptor spellings themselves
+        # (/dev/stdout, /proc/self), which name the writer's descriptors, not the gate's.
+        if os.path.islink(cur) and cur not in ("/dev", "/proc") and not cur.startswith(("/dev/", "/proc/")):
+            try:
+                target = os.readlink(cur)
+            except OSError:
+                return False
+            if not target.startswith("/"):
+                target = os.path.dirname(cur) + "/" + target
+            return _fd_link_path(os.path.normpath(target) + "".join("/" + t for t in parts[i + 1:]), depth + 1)
+    return False
+
+
 def _protected_rel(parts: list[str], names: tuple) -> bool:
     p = _fold(parts[0]) if parts else ""
     return bool(parts) and (p in names or p.startswith(("ledger.sqlite", "schedule.sqlite")))
@@ -7019,6 +7112,8 @@ def _store_word(path: str, ancestors: bool = False, from_cwd: bool = False) -> b
     if not p.startswith("/"):            # relative: a name the store knows, or, for a file tool's write (#494),
         return bool(_CONFIG_NAME.search(_fold(os.path.normpath(p)))) and _config_on() or \
             from_cwd and _store_from_cwd(p, ancestors)      # one read from the session folder
+    if _fd_link_path(p):
+        return True                      # through a link the spelling hides: <link to /dev>/fd/3 (#324)
     return _store_forms(_path_forms(p), ancestors)
 
 
