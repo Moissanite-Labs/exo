@@ -726,8 +726,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   value is an option word stays unseen, as it was (gh refuses the line). gh also finds a subcommand past the
   options before it, and the subcommand reads every option on the line: `gh pr -R pub/repo comment 5` and
   `gh pr -b text comment 5` post (gh 2.89). The gate took the third word for the subcommand, so such a line was
-  a read and ran under any policy. `_gh_verb_order` now finds the subcommand as cobra does, and a word from an
-  expansion where it or an option may stand makes the line `opaque_exec`. The line as read before is decided too
+  a read and ran under any policy. `_gh_verb_order` now finds the subcommand as cobra does, past an empty word
+  too, and a word from an expansion where it or an option may stand makes the line `opaque_exec`. An alias from
+  gh 2.89's help (`_GH_ALIASES`: `new`, `ls`, `co`, `remove`) reads as the subcommand it names, and gets the
+  floor below too. The line as read before is decided too
   (`Classification.floor`), the stricter standing on each axis. Without it a compound line could decide lower: in
   `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the push, as in the same line with the
   options after the subcommand, and a private scope lowers it. A differential over 36,288 gh lines and 15

@@ -122,11 +122,15 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   `gh pr -b text comment 5 -R pub/repo` are comments on `pub/repo#5` (checked with gh 2.89).
   The gate finds it the same way: an option word without `=` that starts with `--` or has two
   characters takes the next word as its value, `--help` and any other option word stand alone,
-  and `--` ends the search. With no subcommand gh prints help, and the line stays a read. A word
+  an empty word is passed over (`gh pr "" comment`), and `--` ends the search. An alias reads as
+  the subcommand it names, from the aliases in gh 2.89's help: `new` is `create` (pr, issue,
+  repo, release, gist), `remove` is `delete` (variable, secret), `ls` is `list` and `co` is
+  `checkout`. So `gh pr new` is a new PR, not a read. With no subcommand gh prints help, and the
+  line stays a read. A word
   from an expansion where the subcommand or an option may stand (`gh pr "$V" 5`) counts as
   `opaque_exec`, since the gate cannot tell what gh runs. `gh auth` and `gh secret` stay
-  credentials. The line as the gate read it before, with each gh command's third word for its
-  subcommand, is decided too, and the stricter decision stands on each axis. Without that a
+  credentials. The line as the gate read it before, with each gh command's third word as written
+  for its subcommand, is decided too, and the stricter decision stands on each axis. Without that a
   compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5` the
   edit now outranks the push, and `private: [myorg/*]` lowers it. Such a line binds its approval
   to the exact command, and when the earlier reading decides, the reason ends with

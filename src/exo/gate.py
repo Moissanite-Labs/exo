@@ -1972,13 +1972,19 @@ def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
 
 # gh commands with subcommands. gh (cobra) finds the subcommand past the options before it.
 _GH_VERB_GROUPS = _GH_GROUPS - {"api", "browse", "status", "completion", "help", "version", "--version", "--help"}
+# gh's aliases for subcommands (gh 2.89, the ALIASES in each command's --help). Each reads as the one it names.
+_GH_ALIASES = {**{(g, "ls"): "list" for g in ("pr", "issue", "repo", "release", "gist", "workflow", "run", "label",
+                                              "secret", "variable", "ssh-key", "gpg-key", "project", "cache",
+                                              "ruleset", "org", "config")},
+               **{(g, "new"): "create" for g in ("pr", "issue", "repo", "release", "gist")},
+               ("pr", "co"): "checkout", ("secret", "remove"): "delete", ("variable", "remove"): "delete"}
 
 
 def _gh_verb_order(argv: list[str], dynamic: frozenset) -> list[int] | None:
     """argv's indexes in the order gh reads them, with the subcommand third (#399). gh (cobra) finds the subcommand
     past the options before it: an option word without `=` that starts with `--` or has two characters takes the
     next word as its value (`-R owner/name`, `-b text`, `-h comment`), `--help` and any other option word stand
-    alone (`-Rowner/name`, `--body=text`, `-`), and `--` ends the search. The subcommand then parses every option on
+    alone (`-Rowner/name`, `--body=text`, `-`), an empty word is passed over, and `--` ends the search. The subcommand then parses every option on
     the line, so `gh pr -b text comment 5` is `gh pr comment -b text 5`. None when a word from an expansion stands
     where the subcommand or an option may be: the gate cannot tell what gh runs."""
     order = list(range(len(argv)))
@@ -1988,6 +1994,9 @@ def _gh_verb_order(argv: list[str], dynamic: frozenset) -> list[int] | None:
             a = argv[i]
             if i in dynamic:
                 return None
+            if a == "":                      # cobra's stripFlags passes over an empty word
+                i += 1
+                continue
             if not a.startswith("-"):
                 return [0, 1, i] + order[2:i] + order[i + 1:]
             i += 2 if "=" not in a and a != "--help" and (a.startswith("--") or len(a) == 2) else 1
@@ -1996,23 +2005,28 @@ def _gh_verb_order(argv: list[str], dynamic: frozenset) -> list[int] | None:
 
 # Set while classify reads a call's floor: each gh command's third word is its subcommand, as before #399.
 _gh_third_word: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_gh_third_word", default=False)
-_GH_MOVED = ("gh", "subcommand past an option")      # the mark in _call_memo that the call needs a floor
+_GH_MOVED = ("gh", "subcommand moved")      # the mark in _call_memo that the call needs a floor
 
 
 def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
                  dynamic: frozenset = frozenset()) -> Classification:
     """A gh command. ``stdin`` is its stdin when the line spells it out (`_literal_stdin`), ``dynamic`` the
     indexes of words that come from an expansion. An outbound post whose text the gate cannot fully read
-    carries the ``unseen_body`` signal (#208). The subcommand is the word gh takes for it (_gh_verb_order). When
-    that is not the third word, the call also gets a floor (classify)."""
-    order = None if _gh_third_word.get() else _gh_verb_order(argv, dynamic)
-    if _gh_third_word.get() or order == list(range(len(argv))):
+    carries the ``unseen_body`` signal (#208). The subcommand is the word gh takes for it (_gh_verb_order), and
+    an alias reads as the subcommand it names (_GH_ALIASES). When that is not the third word as written, the call
+    also gets a floor (classify)."""
+    if _gh_third_word.get():
+        return _classify_gh_words(argv, cmd, stdin, dynamic)
+    order = _gh_verb_order(argv, dynamic)
+    words = argv if order is None else [argv[i] for i in order]
+    alias = _GH_ALIASES.get(tuple((words + ["", ""])[1:3]))
+    if order == list(range(len(argv))) and alias is None:
         return _classify_gh_words(argv, cmd, stdin, dynamic)
     memo = _call_memo.get()
     if memo is not None:
         memo[_GH_MOVED] = True
     if order is not None:
-        return _classify_gh_words([argv[i] for i in order], cmd, stdin,
+        return _classify_gh_words(words[:2] + [alias or words[2]] + words[3:], cmd, stdin,
                                   frozenset(n for n, i in enumerate(order) if i in dynamic))
     as_written = _classify_gh_words(argv, cmd, stdin, dynamic)
     if as_written.category in NO_GRANT:
