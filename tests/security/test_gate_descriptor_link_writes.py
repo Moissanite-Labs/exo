@@ -90,6 +90,12 @@ def test_links_that_lead_nowhere_near_the_store_keep_their_class(cmd, category, 
     assert gate.classify(_sh(cmd.replace("@L@", str(_rig)))).category == category, cmd
 
 
+@pytest.mark.parametrize("cmd", ["printf x > '/tmp/x\x00'", "printf x > '/tmp/x\ud800'"])
+def test_an_odd_byte_in_a_redirection_target_never_raises(cmd):
+    # The inode comparison stats the target: a NUL byte or a lone surrogate names no store file.
+    assert gate.classify(_sh(cmd)).category == "local_write", cmd
+
+
 def test_the_walk_never_resolves_through_the_gates_own_descriptors():
     # /dev/stdout and /proc/self name the writer's descriptors; resolving them here would read the gate's own.
     assert not gate._fd_link_path("/dev/stdout")

@@ -4851,7 +4851,7 @@ def _store_file_ids(ctx: dict) -> set[tuple[int, int]]:
     def add(path: str) -> None:
         try:
             st = os.stat(path)
-        except OSError:
+        except (OSError, ValueError):
             return
         ids.add((st.st_dev, st.st_ino))
 
@@ -4893,7 +4893,7 @@ def _same_store_file(path: str, ids: set[tuple[int, int]]) -> bool:
         return False
     try:
         st = os.stat(p)
-    except OSError:
+    except (OSError, ValueError):          # a NUL byte or a lone surrogate in the path (ValueError)
         return False
     return (st.st_dev, st.st_ino) in ids
 
