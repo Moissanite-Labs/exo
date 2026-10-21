@@ -6,6 +6,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- An expansion inside an Exo store path no longer hides the store from the write check (#309).
+  Bash drops an empty substitution and expands an unset variable to nothing, so
+  `cp x ~/.exo/polic$(:)ies/gates.yaml` wrote the policy file while the gate read the word
+  literally and let it through as a plain shell command. The store checks now also match each
+  word with an expansion read as empty, and as `*` where literal text stands on both sides,
+  the reading the secret-store checks already used. A read of the store is still fine, and an
+  expansion outside a store path is unchanged.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
