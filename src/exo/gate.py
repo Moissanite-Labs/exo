@@ -4136,8 +4136,8 @@ def _ln_targets(argv: list[str]) -> list[str]:
     if len(operands) > 1:
         last = _expand_text(operands[-1])
         dirs += [last, os.path.dirname(last)]
-    bases = [d for d in dict.fromkeys(map(_expand_text, dirs)) if d.startswith("/")]
-    return [os.path.join(b, t) for t in dict.fromkeys(operands + values) if not _expand_text(t).startswith("/")
+    bases = [d for d in dict.fromkeys(map(_expand_text, dirs)) if d]   # relative dirs too: the link may land
+    return [os.path.join(b, t) for t in dict.fromkeys(operands + values) if not _expand_text(t).startswith("/")  # in one
             for b in bases]
 # A store check on a spelling makes the checks it covers redundant: a word checked with its ancestors and pieces
 # ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check ("target").
@@ -5686,7 +5686,19 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
     if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
         return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
     if not p.startswith("/"):
-        return False                     # relative: names only; the tool's working folder is not known here
+        # relative: the name checks above already ran. Read it from the tool's folders (#340), as the
+        # secret-store checks do since #209 — but never from the gate's own folder: a bare word must
+        # not be judged by where the gate happens to run (test_a_bare_run_word_is_not_the_run_folder).
+        scope = _scope.get()
+        if scope is None:
+            return False
+        return any(_store_abs(os.path.normpath(os.path.join(base, p)), ancestors)
+                   for base in dict.fromkeys(scope.cwds) if base)
+    return _store_abs(p, ancestors)
+
+
+def _store_abs(p: str, ancestors: bool) -> bool:
+    """_store_word for an absolute path."""
     # Resolve the original spelling: normpath first would erase symlink/.. traversal.
     # Keep the lexical candidate too, including protected paths that link out of the store.
     candidates = _path_forms(p)
