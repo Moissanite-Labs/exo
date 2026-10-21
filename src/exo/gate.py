@@ -4312,9 +4312,10 @@ def classify_code(code: str, own: str | None | EllipsisType = ...) -> Classifica
 
 
 def _unowned(c: Classification, seen: dict[int, Classification]) -> Classification:
-    """``c`` and the parts it was built from, without own text (#394). Parts shared within ``c`` stay shared."""
+    """``c`` and the parts it was built from, without own text or setters (#394), so code with a literal stays one
+    text for _one_text however the literal reads. Parts shared within ``c`` stay shared."""
     if id(c) not in seen:
-        seen[id(c)] = replace(c, own=None, parts=[_unowned(p, seen) for p in c.parts])
+        seen[id(c)] = replace(c, own=None, setters=[], parts=[_unowned(p, seen) for p in c.parts])
     return seen[id(c)]
 
 

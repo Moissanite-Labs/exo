@@ -657,8 +657,9 @@ gate does not read:
   `alias`, `enable`, `unset` and `trap` with an operand, `source` and `.`, `pushd`, `popd`, `exec`
   with only redirections, a `for` or `select` loop, `coproc`, a function definition (which has no
   own text) and a program name the gate cannot read. The text of an `eval` is a nested line whose
-  own commands count. On a line of more than one command, a part with no own text matches no such
-  rule. A rule lowers the line when its
+  own commands count. A setter in a string literal in code does not count, since it runs in the
+  shell the code starts. On a line of more than one command, a part with no own text matches no
+  such rule. A rule lowers the line when its
   decision is below the line's matrix cell and category line (an allow or log rule over an ask
   cell, an ask rule under a category deny), or when it is an allow or log rule that names
   `opaque_exec` (it lowers the opaque floor). A rule that fails is passed over and the walk goes
