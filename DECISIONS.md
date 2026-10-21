@@ -731,7 +731,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (`Classification.floor`), the stricter standing on each axis. Without it a compound line could decide lower: in
   `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the push, as in the same line with the
   options after the subcommand, and a private scope lowers it. A differential over 36,288 gh lines and 15
-  policies found no line less exposed, less third-party or lower in outcome than on main. Rejected: letting `-R`
+  policies found no line less exposed, less third-party or lower in outcome than on main. `gh api` read its
+  endpoint from the first word with a `/` and no `=`, an option's value included (a header, a jq query). It now
+  reads its one operand with gh api's options that take a value (`_gh_api_endpoint`), and the old word is an
+  other target. Rejected: letting `-R`
   win over a URL operand, since gh posts on the URL's repo and lines that asked as public would log. Also rejected:
   dropping the earlier reading, since a deny or a rule naming the repo a body links to would stop firing on a line
   it caught before.

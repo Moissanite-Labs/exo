@@ -258,3 +258,47 @@ def test_an_ssh_host_is_not_an_other_target_of_itself():
     assert (c.target, c.alt_targets) == ("#5", []), c
     c, _ = run("ssh buildhost gh pr view")
     assert (c.target, c.alt_targets) == ("buildhost", []), c
+
+
+# gh api takes its endpoint from its one operand, never from an option's value: a header, a jq query, a template, a
+# host, a cache time, a preview name or an input file can hold a path that names another repo (round 3, item 2).
+API_POST = "repos/pub/repo/issues/5/comments -f body=x"
+
+
+@pytest.mark.parametrize("opts", [
+    '-H "X-Note: repos/myorg/app/"', "--header 'X-Note: repos/myorg/app/'", "--header=X:repos/myorg/app/x",
+    "-HX:repos/myorg/app/x", "-iH X:repos/myorg/app/x", "-q repos/myorg/app", "--jq repos/myorg/app",
+    "-t repos/myorg/app/x", "--template repos/myorg/app/x", "-p repos/myorg/app", "--preview repos/myorg/app",
+    "--cache repos/myorg/app", "--hostname repos/myorg/app", "-X POST -H X:repos/myorg/app/",
+    "--method POST --jq .x/repos/myorg/app",
+])
+def test_gh_api_takes_its_endpoint_from_its_operand(opts):
+    line = f"gh api {opts} {API_POST}"
+    c, d = run(line)
+    assert (c.category, c.target) == ("github_post", "pub/repo"), c
+    assert c.summary.endswith(" repos/pub/repo/issues/5/comments"), c
+    assert (d.outcome, d.exposure, d.third_party) == ("ask", "public", True), (line, d)
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "deny": ["target:pub/*"]}})
+    assert decide(c, pol).outcome == "deny", line
+
+
+def test_gh_api_keeps_the_word_it_took_before():
+    # The path in an option's value was the target before, and it still counts, so no line decides lower.
+    c, d = run("gh api -q repos/pub/repo repos/myorg/app/issues/1/comments -f body=x")
+    assert (c.target, c.alt_targets) == ("myorg/app", ["pub/repo"]), c
+    assert (d.exposure, d.third_party) == ("public", True), d
+    c, _ = run("gh api --input repos/myorg/app/f repos/pub/repo/issues/5/comments")
+    assert (c.target, c.alt_targets) == ("pub/repo", ["myorg/app"]), c
+
+
+@pytest.mark.parametrize("line,target", [
+    ("gh api repos/pub/repo/issues/5/comments -f body=x", "pub/repo"),
+    ("gh api -X POST -- repos/pub/repo/issues/5/comments", "pub/repo"),
+    ("gh api --paginate --slurp repos/myorg/app/issues", "myorg/app"),
+    ("gh api graphql -f query=x", ""),
+    ("gh api /user", "/user"),
+    ("gh api 'repos/pub/repo/issues?state=open'", "pub/repo"),
+])
+def test_gh_api_endpoints_as_before(line, target):
+    c, _ = run(line)
+    assert c.target == target, c
