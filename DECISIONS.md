@@ -1484,6 +1484,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the session id: a compression child session inherits its parent's pins, and a reset-only switch rebinds
   through `bind_session_state`, a branch child inheriting its parent's pins. With those, everything a pinned
   block held survives compaction by the pins instead, across session moves too.
+  *Amendment 2026-10-21 (#398):* the survival sentence above holds only where the session's pins were
+  observed. A session last compacted before pins were observed at compaction (any 0.2.0 Hermes session:
+  0.2.0's `compress` never observed pins) holds its rulings, corrections and open decisions only in the
+  summary's block, and all three drop at its first compaction after the upgrade. The handoff written at
+  that earlier compaction still has them, and `/exo resume` reads it back; a 0.2.0 handoff may quote a
+  forged block, so it is a record to read, not the principal's words. Open-decision pins are also capped
+  at the newest 12, in `_observe` and in `_carry_pins`: a deferral never expires on its own, and the
+  uncapped list grew the pins file and the per-turn scan over it for the life of the session. The cap is
+  the one the compaction block and the handoff already applied to the merged list.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width

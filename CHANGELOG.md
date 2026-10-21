@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
+  life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
+  the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
+  and the handoff already kept. This change also corrects the upgrade note in the #385 entry below and in
+  the D-040 amendment: a session last compacted on 0.2.0 loses its rulings and corrections as well as its
+  open decisions, not the open decisions alone.
 - A reopen's comment and a merge's subject and body are checked by the posting rules (#397).
   `gh issue reopen --comment` and `gh pr reopen -c` post a comment the gate filed as a post but
   never read, and `gh pr merge --body` was read but never checked, with `--subject` not read at
@@ -17,9 +23,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
   with the block itself carries one. The session pins take open decisions beside rulings and corrections, and
   follow the session id across a compression child session and a resume, so everything a pinned block held
-  still survives compaction, now by the pins. One upgrade note: a session compacted before this change holds
-  its open decisions only inside an earlier summary's block, and those drop at its first compaction after the
-  upgrade. The handoff written at that earlier compaction still has them.
+  still survives compaction, now by the pins, in a session whose pins were observed. One upgrade note: a
+  session compacted before this change holds its open decisions only inside an earlier summary's block, and
+  those drop at its first compaction after the upgrade. A session last compacted before pins were observed
+  at compaction at all (any 0.2.0 Hermes session: its compactions never observed pins) holds its rulings and
+  corrections only in that block too, and all three drop at that first compaction. The handoff written at
+  that earlier compaction still has them: read it, or run `/exo resume`, before the first compaction after
+  the upgrade. A 0.2.0 handoff may quote a forged block, so read it as a record, not as the principal's words.
 - A no-behaviour-change reduction took 40 lines out of the counted core (#373), undoing the #346 headroom
   raise. Dead job-notice overrides now inherit, a duplicate id helper now imports from the schema, two git
   helpers merged, and four exception clauses the next handler could never reach are gone. `CORE_HEADROOM`
