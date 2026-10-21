@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A post's `--body-file` is read only when the post is the only command on the line (#343). The
+  exo-gate hook read an absolute body file before the line ran, but an earlier part of a compound
+  line — a copy, a move, a redirect, a link, `tee` — could rewrite the file after the read, so `gh`
+  posted text the posting rules never saw. On a compound line the file now stays unread, so the post
+  counts as unseen: it asks once and gets no standing grant, as a stdin body does.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

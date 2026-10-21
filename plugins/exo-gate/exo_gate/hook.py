@@ -379,11 +379,14 @@ class Gate:
 
     def _load_body_file(self, c: gate.Classification) -> None:
         """Read a post's body file into its text when the hook can be sure it reads the file the command will:
-        an absolute path to a regular file of at most 256 KiB. A relative or `~` path names a file in the
-        command's folder or home, which the hook does not know. Anything not read stays unseen, so the post
-        asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
-        symlinks included, are never read before the worker, and `_rules` refuses the call."""
-        if not c.text_file or c.text or not self.settings.read_body_files or self.executor_required:
+        an absolute path to a regular file of at most 256 KiB, and the post the only command on the line —
+        on a compound line an earlier part (a copy, a redirect, a link, tee) can rewrite the file after this
+        read and before gh posts it, so the file stays unread and the post counts as unseen (#343). A
+        relative or `~` path names a file in the command's folder or home, which the hook does not know.
+        Anything not read stays unseen, so the post asks and gets no standing grant (#208). A required
+        executor reads none: tool-selected host paths, symlinks included, are never read before the worker,
+        and `_rules` refuses the call."""
+        if not c.text_file or c.text or c.parts or not self.settings.read_body_files or self.executor_required:
             return
         try:
             p = Path(c.text_file)

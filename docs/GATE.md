@@ -82,12 +82,18 @@ nobody read:
   `--config`, or an expansion outside `--header` and the login options. httpie: `k=@f`, `k:=@f`,
   `k@f`, a pipe or `<` into it, or an expansion outside `-a`.
 - The exo-gate hook reads a body file only by an absolute path, up to 256 KiB, with
-  `read_body_files` on. A relative or `~` path names a file in the command's folder or home, which
+  `read_body_files` on, and only when the post is the only command on the line: on a compound
+  line an earlier part (a copy, a move, a redirect, a link, `tee`) can rewrite the file after
+  the read and before `gh` posts it, so the file stays unread and the post counts as unseen
+  (#343). A relative or `~` path names a file in the command's folder or home, which
   the hook cannot pin down: it gets the session's folder (#209), but a `cd` or `pushd` on the line,
   or the call's `cwd` argument, moves it (`cd docs && gh ... --body-file notes.md` read `notes.md`
   from exod's own folder before). A path under `/dev` or `/proc`, as written or resolved
   (`/dev/stdin`, `/proc/self/fd/3`), names what the reading process holds, so the hook would read
-  exod's own; it is never read. A missing, larger or unreadable file stays unseen.
+  exod's own; it is never read. A missing, larger or unreadable file stays unseen. The hook reads
+  the file before the command runs, so a process started by an earlier tool call can still change
+  the file between the read and `gh`; closing that gap would need the post to run on a snapshot
+  of the text the hook read.
 
 Under the posting rules (`posting.applies_to`) an unseen body adds the violation "the gate cannot
 read the body ..." and asks. In any category it offers no "always" (`once`) and no standing grant

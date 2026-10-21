@@ -109,6 +109,24 @@ def test_an_absolute_body_file_is_read_and_checked(store, work):
     assert gate.UNSEEN_BODY not in r["message"] and not r.get("once")
 
 
+@pytest.mark.parametrize("line", [
+    f"cp {{work}}/notes.md {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
+    f"mv {{work}}/notes.md {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
+    f"cat {{work}}/notes.md > {{work}}/clean.md; gh pr comment 5 {R} --body-file {{work}}/clean.md",
+    f"echo Zork >> {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
+    f"ln -sf {{work}}/notes.md {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
+    f"echo Zork | tee {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
+    f"true && gh pr comment 5 {R} --body-file {{work}}/clean.md",   # any other part, writer or not (#343)
+])
+def test_a_body_file_on_a_compound_line_asks_once(store, work, line):
+    # The hook reads a body file before the line runs, but an earlier part can rewrite the file before gh
+    # posts it, so on a compound line the file stays unread and the post counts as unseen (#343).
+    _, ctx = make_gate(store)
+    r = call(ctx, line.format(work=work))
+    assert r["action"] == "approve" and gate.UNSEEN_BODY in r["message"], r
+    assert r.get("once") is True
+
+
 def test_with_reading_off_a_body_file_asks(store, work):
     _, ctx = make_gate(store, read_body_files=False)
     r = call(ctx, f"gh pr comment 5 {R} --body-file {work}/clean.md")
