@@ -5669,6 +5669,14 @@ UNSEEN_BODY = ("the gate cannot read the body (stdin, a file it did not read, $(
                "pass the text inline or as an absolute --body-file path")
 
 
+def fill_body(c: Classification, text: str) -> None:
+    """Give a post the ``text`` a caller read from its body file. Each copy of the post on another target among its
+    parts (#399, ``alt_copy``) gets it too, so a copy does not count as unseen (``body_unseen``)."""
+    c.text = text
+    c.parts = [replace(p, text=text) if p.alt_copy and p.text_file == c.text_file and not p.text else p
+               for p in c.parts]
+
+
 def body_unseen(c: Classification) -> bool:
     """Whether an outbound body, title or field on the line is out of the gate's sight (#208): a part with the
     ``unseen_body`` signal, or a post's body file nobody read into its text. Such a post asks under the posting

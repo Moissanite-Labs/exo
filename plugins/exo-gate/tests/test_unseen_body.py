@@ -109,6 +109,41 @@ def test_an_absolute_body_file_is_read_and_checked(store, work):
     assert gate.UNSEEN_BODY not in r["message"] and not r.get("once")
 
 
+# #399: a post the gate reads more than one way keeps a copy on each other target (alt_targets), and a line whose gh
+# subcommand moved keeps the line as read before (floor). The body file reaches every one of them, so a clean body
+# runs as on main, and an ask offers "always".
+OTHER_READINGS = [
+    "gh pr comment 5 -R github.com/myorg/app --body-file {work}/clean.md",
+    "gh pr comment https://github.com/pub/repo/pull/5 -R myorg/app --body-file {work}/clean.md",
+    "gh pr -R myorg/app view 5 && gh pr comment 5 -R myorg/app --body-file {work}/clean.md",
+]
+
+
+def _store_with(tmp_path, name, gates_yaml):
+    root = tmp_path / name
+    (root / "policies").mkdir(parents=True)
+    (root / "policies" / "gates.yaml").write_text(gates_yaml)
+    (root / "policies" / "posting.md").write_text(POSTING)
+    key = tmp_path / f"{name}.key"
+    crypto.save_key(crypto.keygen(), key)
+    return root, key
+
+
+@pytest.mark.parametrize("line", OTHER_READINGS)
+def test_a_body_file_reaches_every_reading_of_the_post(tmp_path, work, line):
+    line = line.format(work=work)
+    scopes = "scopes:\n  internal: ['myorg/*', 'pub/*']\nescalate: {third_party: false}\n"
+    _, ctx = make_gate(_store_with(tmp_path, "allow", scopes + "categories: {github_post: allow}\n"))
+    assert call(ctx, line) is None
+    _, ctx = make_gate(_store_with(tmp_path, "ask", scopes + "categories: {github_post: ask}\n"))
+    r = call(ctx, line)
+    assert r["action"] == "approve" and gate.UNSEEN_BODY not in r["message"] and not r.get("once"), r
+    # The body is checked in each reading: a forbidden word still asks, and the reason names it.
+    r = call(ctx, line.replace("clean.md", "notes.md"))
+    assert r["action"] == "approve" and "forbidden word: Zork" in r["message"], r
+    assert gate.UNSEEN_BODY not in r["message"] and not r.get("once"), r
+
+
 def test_with_reading_off_a_body_file_asks(store, work):
     _, ctx = make_gate(store, read_body_files=False)
     r = call(ctx, f"gh pr comment 5 {R} --body-file {work}/clean.md")
