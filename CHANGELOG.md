@@ -622,6 +622,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the new `exo keys pin --peer SEAT PUB`. Its messages are then checked against that key and held as `other`, and
   its key never signs a ledger. A seat of another home with the receiver's own name is denied until it is pinned
   that way (D-026 and D-040 amendments).
+- A `.env.<suffix>` read asks in every spelling (#310). The glob samples held only `.env`, so
+  `cat .env.*` matched no sample; a glob in a folder the samples do not live in (`cat proj/.env.*`)
+  matched none by its head; and an expansion ending the word (`.env.$(hostname)`, `.env.${STAGE}`,
+  a backtick command) was read as no glob at all. Each logged as a plain read. The samples now hold
+  `.env.local`, a glob in another folder is judged by its last component against the store names,
+  and an expansion that ends a word after literal text reads as `*` to the glob check. An expansion
+  in the middle of a word (`build-$(date +%s).log`) still reads.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
