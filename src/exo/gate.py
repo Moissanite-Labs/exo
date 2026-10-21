@@ -1692,11 +1692,14 @@ _GH_TAKES = {
     ("pr", "create"): ("aBbFHlmprTtR", "--assignee --attach --base --head --label --milestone --project --recover "
                                        "--reviewer --template --repo"),
     ("pr", "comment"): ("bFR", "--attach --repo"), ("pr", "review"): ("bFR", "--repo"),
+    ("pr", "close"): ("cR", "--comment --repo"), ("pr", "reopen"): ("cR", "--comment --repo"),
+    ("pr", "merge"): ("AbFtR", "--author-email --body --body-file --match-head-commit --subject --repo"),
     ("pr", "edit"): ("BbFmtR", "--add-assignee --add-label --add-project --add-reviewer --attach --base --milestone "
                                "--remove-assignee --remove-label --remove-project --remove-reviewer --repo"),
     ("issue", "create"): ("abFlmpTtR", "--assignee --attach --blocked-by --blocking --label --milestone --parent "
                                        "--project --recover --template --type --repo"),
     ("issue", "comment"): ("bFR", "--attach --repo"),
+    ("issue", "close"): ("cR", "--comment --reason --repo"), ("issue", "reopen"): ("cR", "--comment --repo"),
     ("issue", "edit"): ("bFmtR", "--add-assignee --add-blocked-by --add-blocking --add-label --add-project "
                                  "--add-sub-issue --attach --milestone --parent --remove-assignee --remove-blocked-by "
                                  "--remove-blocking --remove-label --remove-project --remove-sub-issue --type --repo"),
@@ -2012,6 +2015,24 @@ def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
     if group == "api":
         fields = _option_values(argv, _GH_API_FIELDS, takes=_GH_API_TAKES, least=99)
         return _opt(argv, "--input") is not None or any(f.partition("=")[2].startswith("@") for f in fields)
+    if verb in ("close", "reopen") and group in ("pr", "issue"):
+        # A close or reopen posts its --comment with it (#326, #397): unseen when the gate's read of it and gh's
+        # disagree (a repeat, a cluster, an attached form), as for a post's body (#208).
+        takes_c, longs_c = _GH_TAKES.get((group, verb), ("", ""))
+        values = _option_values(argv, ("--comment", "-c"), takes=takes_c,
+                                longs=tuple(longs_c.split()) + ("--comment",), least=99)
+        comment = _opt(argv, "--comment", "-c")
+        if not values and comment is None:
+            return False  # no comment: the close posts nothing but itself
+        return values != ([] if comment is None else [comment])
+    if verb == "merge" and group == "pr":
+        # A merge's subject is its title: -t is covered by the generic read below, --subject is not.
+        takes_m, longs_m = _GH_TAKES.get((group, verb), ("", ""))
+        subject = _opt(argv, "--subject", "-t")
+        values = _option_values(argv, ("--subject", "-t"), takes=takes_m,
+                                longs=tuple(longs_m.split()) + ("--subject",), least=99)
+        if values != ([] if subject is None else [subject]):
+            return True
     takes, longs = _GH_TAKES.get((group, verb), ("", ""))
     body, body_file, title = _gh_text_options(group)
     # The text options take a value too: in `--title --body --body x` the title is `--body` and the body `x`.
@@ -2033,7 +2054,8 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
     carries the ``unseen_body`` signal (#208)."""
     c = _gh_kind(argv, cmd, stdin)
     gist = c.category == "remote_write" and argv[1:2] == ["gist"]          # a secret gist's create or edit
-    if (c.category in OUTBOUND or gist) and _gh_unseen(argv, stdin, dynamic):
+    gh_close = c.category == "github_close" and (argv + ["", ""])[1:3] in (["pr", "close"], ["issue", "close"])
+    if (c.category in OUTBOUND or gist or gh_close or c.category == "vcs_merge") and _gh_unseen(argv, stdin, dynamic):
         c.signals.append("unseen_body")
     return c
 
@@ -2054,6 +2076,14 @@ def _gh_kind(argv: list[str], cmd: str, stdin: str | None) -> Classification:
             body = stdin
     kw = dict(target=target, link=link, text=body, title=title, text_file=body_file, command=cmd)
     where = f" on {target}" if target else ""
+    if verb in ("close", "reopen") and group in ("pr", "issue"):
+        comment = _opt(argv, "--comment", "-c")  # a close or reopen posts this text with it (#326, #397)
+        if comment is not None:
+            kw["text"] = comment
+    if verb == "merge" and group == "pr":
+        subject = _opt(argv, "--subject")  # the merge commit's subject; -t already lands in title
+        if subject is not None:
+            kw["title"] = subject
     if group == "auth" or group == "secret" or (group == "ssh-key" and verb in ("add", "delete")):
         return _make("credentials", summary=f"gh {group} {verb}", **kw)
     if group == "api":
@@ -5760,7 +5790,8 @@ def body_unseen(c: Classification) -> bool:
     """Whether an outbound body, title or field on the line is out of the gate's sight (#208): a part with the
     ``unseen_body`` signal, or a post's body file nobody read into its text. Such a post asks under the posting
     rules, never gets a standing grant, and a required executor refuses it."""
-    return any("unseen_body" in p.signals or (p.text_file and not p.text and p.category in OUTBOUND)
+    return any("unseen_body" in p.signals or (p.text_file and not p.text
+                                              and (p.category in OUTBOUND or p.category == "vcs_merge"))
                for p in _each_part(c))
 
 
@@ -5924,7 +5955,10 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
 
     violations: list[str] = []
     unseen = body_unseen(eff)
-    if eff.category in (posting.get("applies_to") or POSTING_DEFAULT) and (eff.text or eff.title or unseen):
+    applies = eff.category in (posting.get("applies_to") or POSTING_DEFAULT)
+    if not applies and eff.category in ("github_close", "vcs_merge"):
+        applies = bool(eff.text or eff.title or unseen)  # #326, #397: a close or merge carrying text publishes it
+    if applies and (eff.text or eff.title or unseen):
         violations = check_post(eff.text, posting, title=eff.title, agents=pol.get("agents") or [],
                                 exposure=eff.exposure)
         violations += check_scrub(eff.text, pol.get("scrub"), title=eff.title, exposure=eff.exposure)  # D-033
