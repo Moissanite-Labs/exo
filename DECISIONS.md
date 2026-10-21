@@ -158,6 +158,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a rewrite with no lifting (throws away Hermes's edge-case fixes and A's 2026 work).
 - **Revisit if:** the lean core misses its wave 1 exit test by more than two waves of effort, or Hermes
   splits out a small, dependency-free core library that Exo could depend on without inheriting the rest.
+- **Amendment 2026-10-21 (#264, W1-6):** exod's HTTP transport answers a bad number in a request with 400 and a
+  JSON `{"error": ...}` body. `Content-Length`, the `since` query value and `Last-Event-ID` must be ASCII digits
+  up to 2^63 - 1, SQLite's largest integer and so the durable event log's bound. Leading zeros are allowed. A
+  bare `int()` read them and the client handler swallowed its `ValueError`, so a word or a float in any of them
+  got no reply, and so did a negative length, which reached `readexactly`. A negative `since` replayed from the
+  start. A `since` past the bound sent the stream's 200 header, then failed in the replay and left its
+  subscription in the hub. A length over 8 MB is still 413 up to the bound, and a 400 past it. The
+  `events.subscribe` command keeps its typed `internal` reply for such a `since`: `GET /events` has no reply
+  envelope, so the bound is checked before the stream opens. A malformed request line still closes the
+  connection with no reply.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
