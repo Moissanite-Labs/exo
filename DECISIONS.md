@@ -744,8 +744,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   unless the line as written, past the empty words before the command, is credentials (`gh "" secret "$V"`). An
   alias from gh 2.89's help (`_GH_ALIASES`: `new`, `ls`, `co`, `remove`) reads as the subcommand it names, and gets
   the floor below too. The line as read before is decided too (`Classification.floor`), the stricter standing on each
-  axis. The exo-gate hook reads it in its own checks too: a required executor refuses the line when either reading
-  has a body file or an unseen body, so `gh pr "$V" 5 -F notes.md` is refused as on main. Only an approver both
+  axis. `body_unseen` counts it too, so a line unseen as read before stays unseen. The exo-gate hook reads it in its
+  own checks too: a required executor refuses the line when either reading has a body file or an unseen body, so
+  `gh pr "$V" 5 -F notes.md` is refused as on main. Only an approver both
   readings' categories allow may answer, and the line is answered once, with no grant and an ask in observe mode,
   when either reading is in `NO_GRANT` or has an unseen body. A seat that answers `github_post` does not answer
   `gh pr -b x comment 5`, which the principal alone answered as a read. Without the floor a

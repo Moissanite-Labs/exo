@@ -5745,10 +5745,11 @@ def fill_body(c: Classification, text: str) -> None:
 def body_unseen(c: Classification) -> bool:
     """Whether an outbound body, title or field on the line is out of the gate's sight (#208): a part with the
     ``unseen_body`` signal, or a post's body file nobody read into its text. Such a post asks under the posting
-    rules, never gets a standing grant, and a required executor refuses it."""
+    rules, never gets a standing grant, and a required executor refuses it. The line as read before #399
+    (``floor``) counts too, so a line unseen as the gate read it then stays unseen."""
     return any("unseen_body" in p.signals or (p.text_file and not p.text
                                               and (p.category in OUTBOUND or p.category == "vcs_merge"))
-               for p in _each_part(c))
+               for x in (c, c.floor) if x is not None for p in _each_part(x))
 
 
 def check_post(text: str, posting: Mapping, *, title: str = "", agents: Iterable[str] = (),
