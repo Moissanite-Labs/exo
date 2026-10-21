@@ -67,9 +67,10 @@ each re-run warns that Exo did not install it. Details: `docs/INSTALL.md` step 5
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
 
-A top-level turn can keep working beyond 24 tool rounds until the model finishes. Use `ctrl+c` or `/stop` to
+An interactive turn can keep working beyond 24 tool rounds until the model finishes. Use `ctrl+c` or `/stop` to
 stop it. Approvals and spend limits still apply. Subagents and callers that set an explicit round limit retain
-their finite limits; reaching one ends with a short progress report. Details: `docs/CORE.md`, "Turn limits".
+their finite limits; reaching one ends with a short progress report. Unattended scheduled runs stop after
+24 tool rounds and warn if the task is unfinished. Details: `docs/CORE.md`, "Turn limits".
 
 **Terminal (`exo tui`).** Type a message and press Enter. Options: `--resume` continues the newest thread
 with messages (each launch opens a thread, so it skips the empty ones), `--session ID` continues one, `--seat NAME`

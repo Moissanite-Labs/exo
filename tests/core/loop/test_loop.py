@@ -772,6 +772,32 @@ def test_steer_during_the_final_reply_gets_its_own_answer(tmp_path, stop_reason,
     assert roles[-2:] == [("user", "one more thing"), ("assistant", "answer to the steer")]
 
 
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "interrupted", "error"])
+def test_steer_during_a_terminal_reply_does_not_continue_the_turn(tmp_path, stop_reason):
+    terminal = reply("partial answer")
+    terminal[-1].stop_reason = stop_reason
+    prov = Script(["WAIT", *terminal], reply("must not run"))
+    prov.gate = asyncio.Event()
+    store, loop, seen = make(tmp_path, prov)
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "start"))
+        while not prov.calls:
+            await asyncio.sleep(0.005)
+        assert await loop.send(s.id, "one more thing", mode="steer") is None
+        prov.gate.set()
+        return s, await task
+
+    s, res = run(go())
+    assert res.stop_reason == stop_reason and res.message.text() == "partial answer"
+    assert len(prov.calls) == 1
+    assert [e.body.stop_reason for e in seen if e.type == "turn.completed"] == [stop_reason]
+    assert [(m.role, m.text()) for m in store.messages(s.id)][-2:] == [
+        ("assistant", "partial answer"), ("user", "one more thing")]
+    assert not loop.state(s.id).steer and not loop.state(s.id).running
+
+
 def test_steer_after_the_last_call_still_gets_an_answer(tmp_path):
     prov = Script(reply("first answer"), reply("late answer"))
     store, loop, seen = make(tmp_path, prov)

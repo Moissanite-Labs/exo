@@ -6,9 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
-- Top-level turns no longer stop after 24 tool rounds (#360). `Loop` defaults to `max_iterations=0` (unlimited);
-  explicit positive limits retain their cap and progress report, and delegated children retain `max_turns`
-  (24 by default). User stops, approvals, spend limits, bounded retries and child token/time limits still apply.
+- Interactive turns no longer stop after 24 tool rounds (#360). `Loop` defaults to `max_iterations=0` (unlimited);
+  unattended scheduled runs explicitly keep a 24-round cap and release the job for its next launch. Explicit
+  positive limits retain their cap and progress report, and delegated children retain `max_turns` (24 by default).
+  User stops, approvals, spend limits, bounded retries and child token/time limits still apply.
 - A no-behaviour-change reduction took 40 lines out of the counted core (#373), undoing the #346 headroom
   raise. Dead job-notice overrides now inherit, a duplicate id helper now imports from the schema, two git
   helpers merged, and four exception clauses the next handler could never reach are gone. `CORE_HEADROOM`
