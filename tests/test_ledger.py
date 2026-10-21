@@ -384,6 +384,31 @@ def test_opening_a_ledger_symlinked_to_another_exo_ledger_makes_no_wal_or_shm_fi
         assert sorted(p.name for p in other.parent.iterdir()) == beside
 
 
+def test_reads_through_a_symlink_are_a_snapshot_of_the_target_at_open(tmp_path, signer):
+    """A read-only open of a closed target (no `-wal` beside it) held an `immutable=1` connection to the target
+    itself: a writer that appended and checkpointed replaced the file under it, so the reader stayed stale and
+    reading raised `database disk image is malformed` (#317). The target is copied into memory at open now: reads
+    are the target as it stood at open, and a fresh open sees it as it stands then."""
+    target = tmp_path / "target.sqlite"
+    with Ledger(target, signer) as led:
+        for i in range(3):
+            led.append("note", {"i": i}, "agent")
+    path = tmp_path / "ledger.sqlite"
+    path.symlink_to(target)
+    reader = Ledger(path, signer)
+    assert len(reader) == 3
+    with Ledger(target, signer) as writer:
+        for i in range(3, 200):
+            writer.append("note", {"i": i}, "agent")
+        assert len(reader) == 3  # appends alone do not reach the snapshot either
+        writer.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    assert len(reader) == 3
+    assert [e["body"]["i"] for e in reader.iter()] == [0, 1, 2]  # raised DatabaseError before the copy
+    reader.close()
+    with Ledger(path, signer) as again:
+        assert len(again) == 200
+
+
 def test_an_append_does_not_fsync_its_anchors(tmp_path, signer, monkeypatch):
     """An append writes two anchors. They go through mkstemp now (#273) but skip the helper's fsync, as before, so
     an append costs what it did."""
