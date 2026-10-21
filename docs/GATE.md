@@ -1707,9 +1707,9 @@ resolution working. `cp -s` and `cp -l` (also spelled `--sym` or `--li`) count a
 they alias. A relative `ln` target is read against each folder the link can land in: `-t DIR`
 (also `-tDIR`, `-st DIR` and `--target-directory`; only the last, as `ln` rejects two), the last
 operand in case it is an existing folder, and that operand's parent. Options count anywhere on the
-line (`ln REL LINK -s`), because getopt permutes them. A folder given as a relative path is not a
-base: relative paths only use the distinctive-name checks, because the tool's working directory is
-unknown here.
+line (`ln REL LINK -s`), because getopt permutes them. A folder given as a relative path is a
+base too: relative paths are resolved from the tool's folders (#340), as the secret-store checks do
+(#209), but never from the gate's own folder, so a bare word is not judged by where the gate runs.
 
 Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
 expanded from its source text, so only unquoted braces expand. A file tool's path is expanded as written. The
@@ -1732,7 +1732,7 @@ command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
-followed, and the bash tool's `cwd` argument is not read here (the secret-store checks read it, #209).
+followed: a call is read against the filesystem as it stands at classification time.
 
 Descriptor paths (#217). `/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/fd/N`, `/proc/<pid>/cwd`,
 `/proc/<pid>/root` and `/proc/<pid>/map_files` (`<pid>` also `self`, `thread-self` or `$$`, with or

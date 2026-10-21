@@ -79,6 +79,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
   start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
   subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
+- A relative link to the Exo home is judged by where it leads (#340). The store-write check read a
+  relative path by its distinctive names only, so `rel -> ../.exo` turned `rel/policies/default.yaml`
+  into an ordinary local write, and making the link was allowed too: two allowed calls could rewrite
+  the policy file. A relative path is now resolved from the tool's folders and the gate's own folder,
+  as the secret-store checks do (#209), and a relative `ln` target is read against each folder the
+  link can land in. `store_write` stays a floor category: even allowed in policy, the write asks.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
