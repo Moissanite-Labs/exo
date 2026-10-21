@@ -113,6 +113,10 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   options. gh keeps the last `-R`.
 - A URL operand names the repo, also beside `-R`, because gh posts there.
   `gh pr comment https://github.com/myorg/app/pull/9 -R pub/repo` lands on `myorg/app#9`.
+- `gh api` takes its target from its endpoint, its one operand, read with gh api's options that
+  take a value. A path in a header, a jq query, a template or a host names nothing. So
+  `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` is a post
+  on `pub/repo`.
 - The subcommand is the word gh takes for it. gh finds it past the options before it, and the
   subcommand then reads every option on the line. So `gh pr -R pub/repo comment 5` and
   `gh pr -b text comment 5 -R pub/repo` are comments on `pub/repo#5` (checked with gh 2.89).
@@ -135,7 +139,7 @@ violation and reserved part. The other readings are:
 - `-R`, when a URL operand names another repo. The line above is decided as public.
 - The reading before #399: `-R`, then the first URL or number anywhere on the line. So no line
   decides lower than it did. A deny or reserved entry that named the repo a body links to still
-  fires.
+  fires. For `gh api` it is the first word after `api` with a `/` and no `=`.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,

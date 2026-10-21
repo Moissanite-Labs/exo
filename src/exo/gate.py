@@ -1625,6 +1625,9 @@ _GH_TAKES = {
 }
 _GH_API_FIELDS = ("-f", "--raw-field", "-F", "--field")
 _GH_API_TAKES = "FHqXpft"      # gh api's short options that take a value
+# and its long ones (gh 2.89 `gh api --help`): a header, a jq query or a template can hold a path (#399).
+_GH_API_LONGS = ("--cache", "--field", "--header", "--hostname", "--input", "--jq", "--method", "--preview",
+                 "--raw-field", "--template")
 # Option values that are not the request body, so a variable there (a token in a header) leaves it readable.
 _HTTP_META = {"curl": ("-H", "--header", "-u", "--user", "-A", "--user-agent", "--oauth2-bearer"),
               "wget": ("--header", "--user", "--password", "--http-user", "--http-password"),
@@ -1863,6 +1866,19 @@ def _gh_operands(argv: list[str], takes: str, longs: tuple) -> tuple[str, list[i
 _GH_ANY_SHORT = "".join(chr(n) for n in range(33, 127))   # every character a short option can be
 
 
+def _gh_api_endpoint(argv: list[str]) -> str:
+    """gh api's endpoint: its one operand, read with its options that take a value (#399)."""
+    ops: list[int] = []
+    _option_values(argv, (), start=2, takes=_GH_API_TAKES, longs=_GH_API_LONGS, least=99, rest=ops)
+    return argv[ops[0]] if ops else ""
+
+
+def _gh_api_target(endpoint: str) -> tuple[str, str]:
+    """(target, link) of a gh api endpoint: the repo of a `repos/owner/name` path, else a path itself."""
+    m = re.search(r"repos/([\w.-]+/[\w.-]+)", endpoint)
+    return (m.group(1), f"https://github.com/{m.group(1)}") if m else (endpoint if "/" in endpoint else "", "")
+
+
 def _gh_target(argv: list[str]) -> tuple[str, str, list[tuple[str, str]]]:
     """(target, link, the other readings) of a gh command (#399). The target comes from `-R` and the operands only,
     read with gh's table of options that take a value (_gh_options), so a URL or a number in a body, a title,
@@ -1872,8 +1888,15 @@ def _gh_target(argv: list[str]) -> tuple[str, str, list[tuple[str, str]]]:
     operand names another repo, and the reading before #399 (`-R`, then the first URL or number anywhere), so no
     decision drops below what it was. For a command not in the table the gate cannot tell an option's value from
     an operand, so it reads the line with every option a flag and with every option taking a value. The first
-    reading gives the target, but a URL operand the second does not find never replaces `-R`."""
+    reading gives the target, but a URL operand the second does not find never replaces `-R`.
+
+    gh api's target comes from its endpoint, its one operand. The word the gate took for it before #399, the first
+    word with a `/` and no `=` after `api`, an option's value too, is the other reading."""
     group, verb = (argv + ["", ""])[1:3]
+    if group == "api":
+        target, link = _gh_api_target(_gh_api_endpoint(argv))
+        old = _gh_api_target(next((a for a in argv[2:] if not a.startswith("-") and "/" in a and "=" not in a), ""))
+        return target, link, [old] if old[0] != target else []
     if (group, verb) in _GH_TAKES:
         parses = [_gh_operands(argv, *_gh_options(group, verb))]
         sure = set(parses[0][1])
@@ -2042,10 +2065,7 @@ def _gh_kind(argv: list[str], cmd: str, stdin: str | None, target: str, link: st
         fields = _option_values(argv, _GH_API_FIELDS, takes=_GH_API_TAKES, least=99)
         if not method:
             method = "POST" if fields or _opt(argv, "--input") else "GET"
-        endpoint = next((a for a in argv[2:] if not a.startswith("-") and "/" in a and "=" not in a), "")
-        m = re.search(r"repos/([\w.-]+/[\w.-]+)", endpoint)
-        api_target = m.group(1) if m else endpoint
-        kw.update(target=api_target, link=f"https://github.com/{m.group(1)}" if m else "")
+        endpoint = _gh_api_endpoint(argv)
         for f in fields:
             k, _, v = f.partition("=")
             if k in ("body", "text", "message") and not v.startswith("@"):

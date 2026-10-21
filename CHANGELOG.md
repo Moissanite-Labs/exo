@@ -139,7 +139,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   keeps the strictest decision, so no line decides lower than before. Such a line binds its approval to the
   exact command, so a standing grant on one of its targets does not run it, and its question names every
   other target ("It may land on pub/repo#7 instead."). `gh issue close --duplicate-of`
-  takes a value in the gate's table now.
+  takes a value in the gate's table now. `gh api` took its endpoint from the first word with a `/`, an option's
+  value too, so `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` was a post on
+  `myorg/app`. Its endpoint is its one operand now, and the word it took before is another target.
 - Gate (#399, D-033): an option before a gh subcommand no longer hides it. gh finds the subcommand past the
   options before it, so `gh pr -R pub/repo comment 5 -b text` and `gh pr -b text comment 5 -R pub/repo` post.
   The gate took the third word for the subcommand, so these lines were reads and ran under any policy, as did
