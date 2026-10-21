@@ -740,7 +740,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   reads its one operand with gh api's options that take a value (`_gh_api_endpoint`), and the old word is an
   other target. `-R` reads as pflag and gh read it: one `=` after a short option goes (`-R=x`, `-wR=x`), and
   `_gh_repo` reads `[HOST/]owner/name` and a repo URL as `ghrepo.FromFullName` does. On a host other than
-  github.com the value as written is an other target, since a scope names repos on github.com. Rejected: letting `-R`
+  github.com the value as written is an other target, since a scope names repos on github.com. An operand from
+  an expansion adds the empty target, a repo the line does not name, since `-R` does not rule out the repo of a
+  URL in it. Rejected: letting `-R`
   win over a URL operand, since gh posts on the URL's repo and lines that asked as public would log. Also rejected:
   dropping the earlier reading, since a deny or a rule naming the repo a body links to would stop firing on a line
   it caught before.

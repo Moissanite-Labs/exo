@@ -1900,10 +1900,17 @@ def _gh_repo(value: str) -> tuple[str, bool]:
 _GH_ANY_SHORT = "".join(chr(n) for n in range(33, 127))   # every character a short option can be
 
 
-def _gh_api_endpoint(argv: list[str]) -> str:
-    """gh api's endpoint: its one operand, read with its options that take a value (#399)."""
+def _gh_api_operands(argv: list[str]) -> list[int]:
+    """The indexes of gh api's operands, read with its options that take a value (#399). gh takes one, the
+    endpoint."""
     ops: list[int] = []
     _option_values(argv, (), start=2, takes=_GH_API_TAKES, longs=_GH_API_LONGS, least=99, rest=ops)
+    return ops
+
+
+def _gh_api_endpoint(argv: list[str]) -> str:
+    """gh api's endpoint: its one operand."""
+    ops = _gh_api_operands(argv)
     return argv[ops[0]] if ops else ""
 
 
@@ -1913,7 +1920,7 @@ def _gh_api_target(endpoint: str) -> tuple[str, str]:
     return (m.group(1), f"https://github.com/{m.group(1)}") if m else (endpoint if "/" in endpoint else "", "")
 
 
-def _gh_target(argv: list[str]) -> tuple[str, str, list[tuple[str, str]]]:
+def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, str, list[tuple[str, str]]]:
     """(target, link, the other readings) of a gh command (#399). The target comes from `-R` and the operands only,
     read with gh's table of options that take a value (_gh_options), so a URL or a number in a body, a title,
     `--duplicate-of` or `--head` is not the target. A URL operand names the repo even beside `-R`, as in gh.
@@ -1925,12 +1932,16 @@ def _gh_target(argv: list[str]) -> tuple[str, str, list[tuple[str, str]]]:
     reading gives the target, but a URL operand the second does not find never replaces `-R`.
 
     gh api's target comes from its endpoint, its one operand. The word the gate took for it before #399, the first
-    word with a `/` and no `=` after `api`, an option's value too, is the other reading."""
+    word with a `/` and no `=` after `api`, an option's value too, is the other reading.
+
+    An operand from an expansion (an index in ``dynamic``) may be a URL for any repo, so the empty target, a repo
+    the line does not name, is a reading too."""
     group, verb = (argv + ["", ""])[1:3]
     if group == "api":
-        target, link = _gh_api_target(_gh_api_endpoint(argv))
+        ops = _gh_api_operands(argv)
+        target, link = _gh_api_target(argv[ops[0]] if ops else "")
         old = _gh_api_target(next((a for a in argv[2:] if not a.startswith("-") and "/" in a and "=" not in a), ""))
-        return target, link, [old] if old[0] != target else []
+        return target, link, _gh_others(target, [old] + [("", "")] * any(i in dynamic for i in ops))
     if (group, verb) in _GH_TAKES:
         parses = [_gh_operands(argv, *_gh_options(group, _GH_TAKES[(group, verb)]))]
         sure = set(parses[0][1])
@@ -1944,14 +1955,19 @@ def _gh_target(argv: list[str]) -> tuple[str, str, list[tuple[str, str]]]:
     repo, ops = parses[0]
     target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _GH_URL.match(argv[i]))])
     readings = [_gh_read(group, r, [argv[i] for i in o], url) for r, o in parses for url in (True, False) if url or r]
-    readings += raw
+    readings += raw + [("", "")] * any(i in dynamic for _, o in parses for i in o)
     readings += [_gh_read(group, repo, [argv[i] for i in sorted(sure)]),
                  _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:], host=False)]      # as before #399
+    return target, link, _gh_others(target, readings)
+
+
+def _gh_others(target: str, readings: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The (target, link) readings whose target is not ``target``, each target once, in order."""
     alts: dict[str, str] = {}
     for t, url in readings:
         if t != target:
             alts.setdefault(t, url)
-    return target, link, list(alts.items())
+    return list(alts.items())
 
 
 def _gh_text_options(group: str) -> tuple:
@@ -2071,7 +2087,7 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
 
 def _classify_gh_words(argv: list[str], cmd: str, stdin: str | None, dynamic: frozenset) -> Classification:
     """A gh command whose subcommand is its third word."""
-    target, link, alts = _gh_target(argv)
+    target, link, alts = _gh_target(argv, dynamic)
     c = _gh_kind(argv, cmd, stdin, target, link)
     gist = c.category == "remote_write" and argv[1:2] == ["gist"]          # a secret gist's create or edit
     gh_close = c.category == "github_close" and (argv + ["", ""])[1:3] in (["pr", "close"], ["issue", "close"])

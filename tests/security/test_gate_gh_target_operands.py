@@ -394,3 +394,20 @@ def test_a_number_in_a_new_rows_option_value_is_not_the_number(line):
 def test_a_line_unseen_before_the_new_rows_stays_unseen(line):
     c, d = run(line)
     assert body_unseen(c) and UNSEEN_BODY in d.violations, (line, d)
+
+
+# A word from an expansion where an operand stands may be a URL for any repo, so `-R` does not rule one out: the
+# line is also decided on a repo it does not name, the empty target (round 3, item 6).
+@pytest.mark.parametrize("line", [
+    'gh pr merge "$U" -R myorg/app', "gh pr comment $U -R myorg/app -b x", 'gh issue close "${N}" -R myorg/app',
+    'gh pr merge -R myorg/app -- "$U"', 'gh pr view "$(cat u)" -R myorg/app', 'gh api "repos/$O/app/issues" -f body=x',
+])
+def test_a_dynamic_operand_may_name_any_repo(line):
+    c, d = run(line, normalize_policies({"gates": {"scopes": {"private": ["myorg/*"]}}}))
+    assert "" in c.alt_targets, c
+    assert d.exposure != "private" or c.category == "read", (line, d)
+
+
+def test_a_dynamic_option_value_names_no_other_repo():
+    c, _ = run('gh pr merge 5 -R myorg/app -t "$T" -b "$B"')
+    assert (c.target, c.alt_targets) == ("myorg/app#5", []), c
