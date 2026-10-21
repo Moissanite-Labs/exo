@@ -9,7 +9,7 @@ corpus under every policy of the set, once in each tree, in two child processes 
 tree's `src` first on `sys.path`. Each child checks that `gate.__file__` is inside its tree. This process never
 imports either gate. Both children get the same small environment (a shared temp HOME holding `~/.exo/state`,
 `~/.ssh`, `~/.kube` and `~/.config/gh`, no `EXO_*`, `DIVAN_*` or `CLAUDE_CONFIG_DIR`) and run in that HOME, so
-store and secret paths classify the same way in both.
+store and secret paths classify the same way in both. The HOME is kept out of /tmp (work_dir).
 
 A pair (action, policy) is lowered when the head's outcome ranks below the base's (allow < log < ask < deny), when
 the head keeps the outcome but has fewer reserved hits than the base (or loses a reserved category), or when the
@@ -807,6 +807,9 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
             out[key] = item
             counts[source] += 1
 
+    for f in files:                 # first: --json keeps the lowered rows in corpus order, up to its cap
+        for item in read_corpus_file(f):
+            put(item, "files")
     if builtin:
         commands: dict[str, None] = {}
         for k, tree in enumerate(dict.fromkeys(trees)):
@@ -820,9 +823,6 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
         if generate:
             for cmd in variants(list(dict.fromkeys(list(commands) + list(SEED_COMMANDS)))):
                 put(cmd, "generated")
-    for f in files:
-        for item in read_corpus_file(f):
-            put(item, "files")
     return list(out.values()), dict(counts)
 
 
@@ -941,6 +941,23 @@ def _tree_main(argv: list[str]) -> int:
         out.write(json.dumps({"footer": {"secs": round(time.monotonic() - t0, 1)}}) + "\n")
     print(f"gate_diff [{a.label}] done: {n} actions in {time.monotonic() - t0:.0f}s", file=sys.stderr, flush=True)
     return 0
+
+
+def work_dir() -> Path:
+    """A new folder for the corpus, the results and the shared HOME, kept out of /tmp. With the HOME under /tmp,
+    lines that name /tmp (rm -rf /tmp, chmod -R 777 /tmp) would touch the store in both trees, and the store's floor
+    would hide a head that loosens them. Corpus lines rarely name /var/tmp."""
+    tmp = os.path.realpath("/tmp")
+    for base in (Path("/var/tmp"), Path.home() / ".cache"):
+        real = os.path.realpath(base)
+        if real == tmp or real.startswith(tmp + os.sep):
+            continue
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            return Path(tempfile.mkdtemp(prefix="gate-diff-", dir=base))
+        except OSError:
+            continue
+    return Path(tempfile.mkdtemp(prefix="gate-diff-"))
 
 
 def make_home(root: Path) -> Path:
@@ -1066,6 +1083,7 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
         cb, tb, _, ub, pb, _ = rb
         ch, th, _, uh, ph, _ = rh
         cls_changed = (cb, tb) != (ch, th)
+        lb, lh = cb or "error", ch or "error"     # a classify that raised has no category
         if ub == uh and pb == ph:
             counts["pairs_same"] += len(names)
             if cls_changed:
@@ -1087,7 +1105,7 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
                 counts["lowered_pairs"] += 1
                 for k in kinds:
                     counts[f"lowered_{k}"] += 1
-                tag = f"{cb} {db[0]} -> {ch} {dh[0]}" + ("" if kinds == ["outcome"] else f" ({', '.join(kinds)} lost)")
+                tag = f"{lb} {db[0]} -> {lh} {dh[0]}" + ("" if kinds == ["outcome"] else f" ({', '.join(kinds)} lost)")
                 by_policy[name] += 1
                 by_transition[tag] += 1
                 item = {"action": actions[i], "policy": name, "kinds": kinds,
@@ -1111,7 +1129,7 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
             elif rkh > rkb:
                 tight_here += 1
                 counts["tightened_pairs"] += 1
-                tightened_by[f"{cb} {db[0]} -> {ch} {dh[0]}"] += 1
+                tightened_by[f"{lb} {db[0]} -> {lh} {dh[0]}"] += 1
             else:
                 counts["pairs_detail_changed"] += 1
         counts["lowered_actions"] += low_here > 0
@@ -1137,7 +1155,7 @@ def _decision(d: dict) -> str:
         extra += f", reserved {len(d['reserved'])}"
     if d["violations"]:
         extra += f", violations {len(d['violations'])}"
-    return f"{d['category']} {d['outcome']} ({d['rule']}{extra})"
+    return f"{d['category'] or 'error'} {d['outcome']} ({d['rule']}{extra})"
 
 
 def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
@@ -1183,7 +1201,7 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
             out.append(f"           {show_action(e['action'])}  {e['base']} -> {e['head']}")
     if rep.get("lowered_truncated"):
         out.append(f"  (--json keeps the first {len(rep['lowered_actions'])} lowered actions and "
-                   f"{len(rep['lowered'])} lowered pairs)")
+                   f"{len(rep['lowered'])} lowered pairs, in corpus order with the --corpus items first)")
     out.append("result: " + ("LOWERED (exit 1): fix each line or record it in the decision amendment"
                              if c.get("lowered_pairs") else "nothing lowered (exit 0)"))
     return "\n".join(out)
@@ -1223,11 +1241,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="worker processes in each tree (default: half the CPUs)")
     p.add_argument("--json", type=Path, help="write the counts and the lowered list here")
     p.add_argument("--json-limit", type=int, default=5000,
-                   help="most lowered actions, and most lowered pairs, kept in --json (default 5000 each)")
+                   help="most lowered actions, and most lowered pairs, kept in --json in corpus order, the --corpus "
+                        "items first (default 5000 each)")
     p.add_argument("--max-examples", type=int, default=3, help="examples per group in the summary (default 3)")
     p.add_argument("--timeout", type=float, default=3600,
                    help="seconds a tree may run before both are stopped and the run exits 2 (default 3600, 0: none)")
-    p.add_argument("--home", type=Path, help="HOME for both trees (default: a temp folder with the usual stores)")
+    p.add_argument("--home", type=Path,
+                   help="HOME for both trees (default: a temp folder under /var/tmp with the usual stores)")
     p.add_argument("--dump-corpus", type=Path, help="write the corpus as JSON here, then run as usual")
     return p.parse_args(argv)
 
@@ -1292,7 +1312,7 @@ def run(a: argparse.Namespace) -> int:
         dump_path.write_text(json.dumps(actions, indent=0) + "\n", encoding="utf-8")
     print(f"gate_diff: {len(actions)} actions ({', '.join(f'{k} {v}' for k, v in corpus_counts.items())}), "
           f"{len(policies)} policies, {a.jobs} jobs per tree", file=sys.stderr, flush=True)
-    work = Path(tempfile.mkdtemp(prefix="gate-diff-"))
+    work = work_dir()
     procs: dict[str, subprocess.Popen] = {}
     try:
         home = home or make_home(work)

@@ -1,6 +1,7 @@
 """scripts/gate_diff.py: the never-looser-than-main differential for gate changes (#423)."""
 import gzip
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -280,6 +281,29 @@ def test_compare_ranks_pairs_as_the_hook_would(tmp_path, base, head, kind):
     c = rep["counts"]
     got = "lowered" if c.get("lowered_pairs") else "tightened" if c.get("tightened_pairs") else "same"
     assert got == kind, c
+
+
+def test_a_classify_error_is_labelled_error(tmp_path):
+    _stream(tmp_path / "b.gz", [[None, None, "classify raised", [["ask", "error", "why", [], []]], [0], 0]], ["p"])
+    _stream(tmp_path / "h.gz", [["read", "x", None, [_d("allow")], [0], 0]], ["p"])
+    rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
+    assert list(rep["lowered_by_transition"]) == ["error ask -> read allow"]
+    assert gate_diff._decision(rep["lowered"][0]["base"]) == "error ask (error)"
+
+
+def test_corpus_files_come_first_and_the_work_folder_is_out_of_tmp(tmp_path):
+    # --json keeps the lowered rows in corpus order: the lines a reviewer adds must not fall past its cap.
+    lines = tmp_path / "mine.txt"
+    lines.write_text("echo mine\n", encoding="utf-8")
+    actions, counts = gate_diff.build_corpus((tmp_path,), [lines])
+    assert actions[0] == {"tool": "terminal", "args": {"command": "echo mine"}}
+    assert list(counts) == ["files", "generated"]
+    work = gate_diff.work_dir()
+    try:
+        tmp = os.path.realpath("/tmp")
+        assert not os.path.realpath(work).startswith(tmp + os.sep) or not os.access("/var/tmp", os.W_OK)
+    finally:
+        work.rmdir()
 
 
 def test_a_classification_change_with_the_same_decisions_is_counted_apart(tmp_path):
