@@ -695,3 +695,29 @@ def test_a_fork_keeps_the_copies_the_tree_cannot_hold():
     assert shown("4417") and shown("private chat 0")
     assert not any("4417" in t for t, k in zip(summ.prompts, summ.keys) if k == "agent:razi")
     assert "5521" in a_text and "early turn 0" not in a_text  # the tree holds the copies before it
+
+
+def test_a_fork_keeps_copies_of_entries_the_parent_undid_after_the_fork():
+    """#245: a copy counts at its original's position only while the original is visible. Once the fork's
+    own later entries are summarized, the tail starts after a copy whose original was undone, and no tree
+    holds it. The tail keeps those copies, in order, ahead of the fork's own entries."""
+    store, ctx, prov, loop, summ = setup()
+
+    async def go():
+        a = await loop.create_session(agent="razi")
+        for i in range(4):
+            await loop.send(a.id, f"early turn {i}")
+        await loop.send(a.id, "my pin is 5521")
+        child = await loop.fork(a.id)
+        assert store.undo(a.id) == 2
+        for i in range(10):
+            await loop.send(child.id, f"fork turn {i}")
+            await ctx.settle("agent:razi", 5, None)
+        return await ctx.build(child.id, "SYS")
+    built = run(go())
+    texts = [m.text() for m in built]
+    pin = texts.index("my pin is 5521")
+    assert texts.count("my pin is 5521") == 1
+    assert built[pin + 1].role == "assistant"  # the copy's reply comes with it
+    assert pin < texts.index("fork turn 9")  # ahead of the fork's own entries
+    assert "early turn 0" not in texts  # a visible original's copy stays the tree's, not the tail's
