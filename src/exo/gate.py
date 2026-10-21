@@ -128,12 +128,15 @@ class Classification:
     # The line read with the third word of each gh command for its subcommand, as the gate read it before #399, when
     # gh finds a subcommand past the options before it (_gh_verb_order). `decide` keeps the stricter of the two.
     floor: "Classification | None" = field(default=None, repr=False, compare=False)
+    # Set on such a copy among the parts (#399), so an ssh or mosh hop can give an empty one the host.
+    alt_copy: bool = field(default=False, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
         d.pop("parts", None)
         d.pop("floor")
+        d.pop("alt_copy")
         d.pop("_command_views")
         if not d["alt_targets"]:
             d.pop("alt_targets")
@@ -2107,6 +2110,7 @@ def _classify_gh_words(argv: list[str], cmd: str, stdin: str | None, dynamic: fr
     for t, url in alts:
         alt = _gh_kind(argv, cmd, stdin, t, url)
         if alt.target not in [c.target] + c.alt_targets:
+            alt.alt_copy = True
             c.parts.append(alt)
             c.alt_targets.append(alt.target)
     return c
@@ -2965,7 +2969,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c = _combine(local + [c], cmd)
         c.target = dest if "unread hops" in c.signals else (c.target or dest)
         # #399: the host stands for an empty other target too, as for an empty target, so a rule on it sees each.
+        # The copy of the action on it among the parts gets the host as well: a deny, reserved or rule entry on the
+        # host's category sees it also when another part of the line outranks this one.
         c.alt_targets = [t for t in dict.fromkeys(t or dest for t in c.alt_targets) if t != c.target]
+        c.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in c.parts]
         if not here:
             c.signals.append("remote host")
         return [c]

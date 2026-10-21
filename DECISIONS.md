@@ -717,7 +717,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `Classification.alt_targets`, each with a copy of the action as a part: `-R` when a URL operand names another repo,
   and the reading before #399. `decide` decides the line on each and keeps the strictest outcome, the widest exposure,
   any third party, and every violation and reserved part. So a line never decides lower than it did, and a deny or
-  reserved entry on either repo still fires, also when the gh call is not the line's most severe part. A line with
+  reserved entry on either repo still fires, also when the gh call is not the line's most severe part. Each copy is
+  marked (`Classification.alt_copy`), and an ssh or mosh hop gives an empty one the host, as it gives the action's
+  own empty target. So a rule on the host's category sees it, as on main, where the gh part's own target was the
+  host. Matching the copies by their fields instead could retarget another part of the line. A line with
   other targets binds its approval to the exact command, as an outward act does (`binds_exact`), so a standing grant
   on one of its targets does not run it, and its rule key and an "always" on it cover that exact line only. The
   question the principal sees names every other target ("It may land on pub/repo#7 instead."), since the target it

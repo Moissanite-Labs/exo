@@ -168,8 +168,11 @@ names each of them, also when none decides the line:
 `merge PR on pub/repo#7 (costly, internal). It may land on myorg/app#7 instead.`
 When one of them decides the line, the reason ends with "(if it lands on owner/name#n)". An empty
 target is the repo gh picks with no `-R`, named "the current repo". On an ssh or mosh hop the host
-stands for an empty target, as for any command run there, and for an empty other target too. So
-`ssh buildhost gh repo view --web myorg/app` still meets a rule on `buildhost`.
+stands for an empty target, as for any command run there, and for an empty other target too. Its
+copy among the parts gets the host as well. So `ssh buildhost gh repo view --web myorg/app` still
+meets a rule on `buildhost`, and a rule on reads on `buildhost` still denies
+`gh pr merge 9 -R myorg/app && ssh buildhost gh repo view --web myorg/app`, where the merge
+outranks the read.
 
 A line with other targets binds its approval to the exact command, as an outward act does. Its
 rule key is the text hash, so a "session" answer covers that line only. A standing grant on one of

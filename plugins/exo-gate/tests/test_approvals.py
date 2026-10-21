@@ -330,6 +330,24 @@ def test_always_on_a_gh_line_with_other_targets_covers_that_line_only(tmp_path):
     assert call(ctx, "terminal", {"command": MERGE_ELSEWHERE.replace("/7", "/8")})["action"] == "approve"
 
 
+def test_a_grant_on_the_top_part_does_not_run_a_hop_a_rule_on_its_host_denies(tmp_path):
+    # #399 round 4: `gh repo view --web myorg/app` may also read with no repo, and on the hop the host stands for
+    # that empty target. The rule on the host's reads denies the line, as on main, whatever grant the merge has.
+    store = tmp_path / "st8"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(
+        "categories: {vcs_merge: ask}\nrules:\n  - match: {category: read, target: buildhost}\n    decision: deny\n")
+    key = tmp_path / "k8.key"
+    crypto.save_key(crypto.keygen(), key)
+    g, ctx = make_gate(store, key)
+    g.grants.add("vcs_merge", "myorg/app#9", "", 30, "principal:tui")      # what an "always" on the merge leaves
+    assert call(ctx, "terminal", {"command": "gh pr merge 9 -R myorg/app"}) is None
+    for line in ("ssh buildhost gh repo view --web myorg/app",
+                 "gh pr merge 9 -R myorg/app && ssh buildhost gh repo view --web myorg/app"):
+        r = call(ctx, "terminal", {"command": line})
+        assert r and r["action"] == "block", (line, r)
+
+
 def test_a_reserved_entry_added_by_a_pending_policy_also_holds_off_a_grant(tmp_path):
     # D-038 + D-075: the reserved entry arrives after the grant and is not yet accepted. Both policies
     # ask about the line, so the pinned decision is kept; the pending policy's reserved hit must still
