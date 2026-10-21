@@ -141,7 +141,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   other target ("It may land on pub/repo#7 instead."). `gh issue close --duplicate-of`
   takes a value in the gate's table now. `gh api` took its endpoint from the first word with a `/`, an option's
   value too, so `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` was a post on
-  `myorg/app`. Its endpoint is its one operand now, and the word it took before is another target.
+  `myorg/app`. Its endpoint is its one operand now, and the word it took before is another target. `-R` reads as
+  gh reads it: `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`, not `=pub/repo`, and `github.com/pub/repo` or a
+  repo URL names `pub/repo`, so a `target:` deny on `pub/*` matches them. On another host the value as written
+  is another target.
 - Gate (#399, D-033): an option before a gh subcommand no longer hides it. gh finds the subcommand past the
   options before it, so `gh pr -R pub/repo comment 5 -b text` and `gh pr -b text comment 5 -R pub/repo` post.
   The gate took the third word for the subcommand, so these lines were reads and ran under any policy, as did

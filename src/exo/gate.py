@@ -1834,10 +1834,10 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
     return _make("local_write", summary=f"git {sub}".strip(), command=cmd)
 
 
-def _gh_read(group: str, repo: str, words: list[str], url: bool = True) -> tuple[str, str]:
+def _gh_read(group: str, repo: str, words: list[str], url: bool = True, host: bool = True) -> tuple[str, str]:
     """(target, link) from a `-R` value and the words that may name the target: the first GitHub URL, whose repo
     replaces the `-R` value when ``url`` (gh does that), else the first number, and for `gh repo` an `owner/name`
-    first word."""
+    first word, also `github.com/owner/name` or a repo URL with ``host`` (_gh_repo)."""
     number = link = ""
     for a in words:
         m = _GH_URL.match(a)
@@ -1848,19 +1848,38 @@ def _gh_read(group: str, repo: str, words: list[str], url: bool = True) -> tuple
             break
         if re.fullmatch(r"#?\d+", a) and not number:
             number = a.lstrip("#")
-    if not repo and group == "repo" and words and re.fullmatch(r"[\w.-]+/[\w.-]+", words[0]):
-        repo = words[0]
+    if not repo and group == "repo" and words:
+        named, sure = _gh_repo(words[0]) if host else (words[0], True)
+        if sure and re.fullmatch(r"[\w.-]+/[\w.-]+", named):
+            repo = named
     if not link and repo:
         link = f"https://github.com/{repo}" + (f"/issues/{number}" if number else "")
     return (f"{repo}#{number}" if repo and number else repo or (f"#{number}" if number else "")), link
 
 
 def _gh_operands(argv: list[str], takes: str, longs: tuple) -> tuple[str, list[int]]:
-    """gh's `-R` value (the last, which gh keeps) and the indexes of its operands after the subcommand, when the
-    options in ``takes`` and ``longs`` take a value."""
+    """gh's `-R` value (the last, which gh keeps, read as pflag reads it) and the indexes of its operands after the
+    subcommand, when the options in ``takes`` and ``longs`` take a value."""
     ops: list[int] = []
-    repos = _option_values(argv, ("-R", "--repo"), start=3, takes=takes, longs=longs, least=99, rest=ops)
+    repos = _option_values(argv, ("-R", "--repo"), start=3, takes=takes, longs=longs, least=99, rest=ops, pflag=True)
     return (repos[-1] if repos else ""), ops
+
+
+def _gh_repo(value: str) -> tuple[str, bool]:
+    """(owner/name, sure) of a repo as gh reads `-R` (ghrepo.FromFullName in gh 2.89): `owner/name`,
+    `HOST/owner/name`, or a URL (`https://HOST/owner/name`, `git@HOST:owner/name.git`). Sure when the host is
+    github.com, as a scope means. A value gh refuses comes back as written, and not sure (#399)."""
+    rest, host = value, "github.com"
+    m = re.fullmatch(r"(?:(?:ssh|git\+ssh|git|https?|git\+https)://(?:[^@/]*@)?|git@)([^/:]+)(?::\d*)?[/:](.*)", value)
+    if m:
+        host, rest = m.group(1), m.group(2).strip("/")
+        rest = rest[:-4] if rest.endswith(".git") else rest
+    elif value.count("/") == 2:
+        host, _, rest = value.partition("/")
+    parts = rest.split("/")
+    if len(parts) != 2 or not all(parts) or not host:
+        return value, False
+    return rest, (host[4:] if host.startswith("www.") else host).lower() == "github.com"
 
 
 _GH_ANY_SHORT = "".join(chr(n) for n in range(33, 127))   # every character a short option can be
@@ -1904,11 +1923,15 @@ def _gh_target(argv: list[str]) -> tuple[str, str, list[tuple[str, str]]]:
         longs = tuple(a for a in argv[3:] if a.startswith("--") and len(a) > 2 and "=" not in a)
         parses = [_gh_operands(argv, "", ()), _gh_operands(argv, _GH_ANY_SHORT, longs)]
         sure = set(parses[0][1]) & set(parses[1][1])
+    # A `-R` on another host names a repo the scopes may not mean: its value as written is a reading too.
+    raw = [_gh_read(group, r, [argv[i] for i in o]) for r, o in parses if r and not _gh_repo(r)[1]]
+    parses = [(_gh_repo(r)[0], o) for r, o in parses]
     repo, ops = parses[0]
     target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _GH_URL.match(argv[i]))])
     readings = [_gh_read(group, r, [argv[i] for i in o], url) for r, o in parses for url in (True, False) if url or r]
+    readings += raw
     readings += [_gh_read(group, repo, [argv[i] for i in sorted(sure)]),
-                 _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:])]      # as read before #399
+                 _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:], host=False)]      # as before #399
     alts: dict[str, str] = {}
     for t, url in readings:
         if t != target:
@@ -2979,7 +3002,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
 
 def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "", longs: tuple = (),
                    operands: int | None = None, least: int = 3, wild: frozenset = frozenset(),
-                   rest: list[int] | None = None) -> list[str]:
+                   rest: list[int] | None = None, pflag: bool = False) -> list[str]:
     """The values given to the options `names` in argv[start:], read as getopt reads them (#154). In a short
     option cluster the first letter that takes a value (one of `names`, or a letter in `takes`) ends the word:
     its value is the rest of the word or the next word (`-xIzstd`, `-avze ssh`, `-oProxyCommand=cmd`). A long
@@ -2988,7 +3011,8 @@ def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "
     is a whole word. Options end at `--`, and with `operands` at the operand after that many: ssh reads options
     before and after its destination, and the remote command follows. An operand at an index in `wild` may
     expand to no word or several (`$A`, `"$@"`, a glob), so the operands cannot be counted and every word is
-    read. With ``rest`` the index of each operand is added to it, every word after `--` too (#399)."""
+    read. With ``rest`` the index of each operand is added to it, every word after `--` too (#399). With ``pflag``
+    a short option's value in the same word drops one `=` before it, as Go's pflag reads it: `-R=x`, `-wR=x`."""
     shorts = "".join(n[1] for n in names if len(n) == 2)
     whole = [n for n in names if len(n) > 2 and not n.startswith("--")]
     long_names = [n for n in names if n.startswith("--")]
@@ -3027,6 +3051,8 @@ def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "
             for j, ch in enumerate(a[1:], 2):
                 if ch in shorts or ch in takes:
                     value = a[j:]
+                    if pflag and value[:1] == "=" and len(value) > 1:
+                        value = value[1:]
                     if not value and i < len(argv):
                         value, i = argv[i], i + 1
                     if ch in shorts:

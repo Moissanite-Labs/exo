@@ -302,3 +302,45 @@ def test_gh_api_keeps_the_word_it_took_before():
 def test_gh_api_endpoints_as_before(line, target):
     c, _ = run(line)
     assert c.target == target, c
+
+
+# pflag drops one `=` after a short option, also at the end of a cluster (`-R=owner/name`, `-wR=owner/name`), and
+# gh reads `-R` as `[HOST/]OWNER/REPO` or a repo URL (ghrepo.FromFullName in gh 2.89). Round 3, item 4.
+DENY_PUB = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "deny": ["target:pub/*"]}})
+
+
+@pytest.mark.parametrize("line,target", [
+    ("gh pr comment 5 -R=pub/repo -b x", "pub/repo#5"),
+    ("gh pr comment 5 -wR=pub/repo -b x", "pub/repo#5"),
+    ("gh issue close 5 -R=pub/repo", "pub/repo#5"),
+    ("gh pr -R=pub/repo comment 5 -b x", "pub/repo#5"),
+    ("gh pr comment 5 -R github.com/pub/repo -b x", "pub/repo#5"),
+    ("gh pr comment 5 -R=github.com/pub/repo -b x", "pub/repo#5"),
+    ("gh pr comment 5 --repo=github.com/pub/repo -b x", "pub/repo#5"),
+    ("gh pr comment 5 -R www.github.com/pub/repo -b x", "pub/repo#5"),
+    ("gh pr comment 5 -R https://github.com/pub/repo -b x", "pub/repo#5"),
+    ("gh pr comment 5 -R https://github.com/pub/repo.git -b x", "pub/repo#5"),
+    ("gh pr comment 5 -R git@github.com:pub/repo.git -b x", "pub/repo#5"),
+    ("gh pr comment 5 -R ssh://git@github.com/pub/repo.git -b x", "pub/repo#5"),
+    ("gh pr merge 5 -dR=github.com/pub/repo", "pub/repo#5"),
+    ("gh repo delete github.com/pub/repo --yes", "pub/repo"),
+])
+def test_r_as_gh_reads_it(line, target):
+    c, d = run(line, DENY_PUB)
+    assert c.target == target, c
+    assert d.outcome == "deny", (line, d)
+
+
+def test_r_on_another_host_keeps_the_value_as_written():
+    # A scope names repos on github.com. On another host the gate cannot tell, so the value as written counts too.
+    c, d = run("gh pr comment 5 -R ghe.corp/myorg/app -b $'x\\nF'")
+    assert c.target == "myorg/app#5" and "ghe.corp/myorg/app#5" in c.alt_targets, c
+    assert d.exposure == "public", d
+    c, _ = run("gh pr comment 5 -R https://ghe.corp/myorg/app -b x")
+    assert c.target == "myorg/app#5" and "https://ghe.corp/myorg/app#5" in c.alt_targets, c
+
+
+@pytest.mark.parametrize("value", ["a/b/c/d", "pub/repo/", "/pub/repo", "https://github.com/pub/repo/pull/5", "=x/y"])
+def test_r_that_gh_refuses_stays_as_written(value):
+    c, _ = run(f"gh pr comment 5 -R {value} -b x")
+    assert c.target == f"{value}#5", c
