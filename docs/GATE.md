@@ -110,8 +110,10 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   `pub/repo#5`, a public repo, even under `internal: [myorg/*]`.
 - Options are read with gh's own table of options that take a value, the same table the unseen
   check uses: `--opt=value`, short clusters (`-wb text`), `-Rowner/name`, and `--`, which ends the
-  options. gh keeps the last `-R`. The table lists the commands that post, close, reopen, merge,
-  lock, unlock, transfer or delete, and release create, edit, upload and delete (gh 2.89 `--help`).
+  options. gh keeps the last `-R`. The table lists pr and issue create, comment, edit, close,
+  reopen, lock and unlock, pr review, ready and merge, issue develop, delete and transfer, and
+  release create, edit, upload and delete (gh 2.89 `--help`). Other commands are read both ways
+  (below).
 - `-R` reads as gh reads it. A short option drops one `=` before its value, also at the end of a
   cluster, so `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`. `github.com/pub/repo`,
   `https://github.com/pub/repo.git` and `git@github.com:pub/repo.git` name `pub/repo` too, and so
@@ -125,21 +127,22 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   on `pub/repo`.
 - The subcommand is the word gh takes for it. gh finds it past the options before it, and the
   subcommand then reads every option on the line. So `gh pr -R pub/repo comment 5` and
-  `gh pr -b text comment 5 -R pub/repo` are comments on `pub/repo#5` (checked with gh 2.89).
-  The gate finds it the same way: an option word without `=` that starts with `--` or has two
-  characters takes the next word as its value, `--help` and any other option word stand alone,
-  an empty word is passed over (`gh pr "" comment`), and `--` ends the search. An alias reads as
-  the subcommand it names, from the aliases in gh 2.89's help: `new` is `create` (pr, issue,
-  repo, release, gist), `remove` is `delete` (variable, secret), `ls` is `list` and `co` is
-  `checkout`. So `gh pr new` is a new PR, not a read. With no subcommand gh prints help, and the
-  line stays a read. A word
-  from an expansion where the subcommand or an option may stand (`gh pr "$V" 5`) counts as
-  `opaque_exec`, since the gate cannot tell what gh runs. `gh auth` and `gh secret` stay
-  credentials. The line as the gate read it before, with each gh command's third word as written
-  for its subcommand, is decided too, and the stricter decision stands on each axis. Without that a
-  compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5` the
-  edit now outranks the push, and `private: [myorg/*]` lowers it. Such a line binds its approval
-  to the exact command. It is an outward act when the earlier reading is one, as in
+  `gh pr -b text comment 5 -R pub/repo` are comments on `pub/repo#5` (checked with gh 2.89). The
+  gate finds it the same way: an option word without `=` that starts with `--` or has two
+  characters takes the next word as its value, `--help` and any other option word stand alone, an
+  empty word is passed over (`gh pr "" comment`), and `--` ends the search. An alias reads as the
+  subcommand it names, from the aliases in gh 2.89's help: `new` is `create` (pr, issue, repo,
+  release, gist), `remove` is `delete` (variable, secret), `ls` is `list` and `co` is `checkout`.
+  So `gh pr new` is a new PR, not a read. A command alias (`gh co`, `gh rs`), a user alias and an
+  extension stay code the gate cannot see, and ask. With no subcommand gh prints help, and the
+  line stays a read. A word from an expansion where the subcommand or an option may stand
+  (`gh pr "$V" 5`) counts as `opaque_exec`, since the gate cannot tell what gh runs. `gh auth` and
+  `gh secret` stay credentials. The line as the gate read it before, with each gh command's third
+  word as written for its subcommand, is decided too, and the stricter decision stands on each
+  axis. Without that a compound line could decide lower: in
+  `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the push, and
+  `private: [myorg/*]` lowers it. Such a line binds its approval to the exact command. It is an
+  outward act when the earlier reading is one, as in
   `gh issue -R myorg/app close 5 && gh pr comment 3 -R myorg/app -b ok`. When the earlier reading
   decides, the reason ends with "(for git push to origin)".
 
@@ -162,7 +165,7 @@ Each other reading is a copy of the action among the line's parts, with its own 
 `target:` deny or reserved entry matches it also when the gh call is not the line's most severe
 part. The ledger row lists the other targets as `alt_targets`. The question the principal sees
 names each of them, also when none decides the line:
-`merge PR on myorg/app (costly, internal). It may land on pub/repo#7 or myorg/app#7 instead.`
+`merge PR on pub/repo#7 (costly, internal). It may land on myorg/app#7 instead.`
 When one of them decides the line, the reason ends with "(if it lands on owner/name#n)". An empty
 target is the repo gh picks with no `-R`, named "the current repo". On an ssh or mosh hop the host
 stands for an empty target, as for any command run there, and for an empty other target too. So
@@ -178,8 +181,12 @@ Limits. A body that links to another repo still counts that repo, as it did befo
 `gh pr comment 5 -R myorg/app -b 'https://github.com/pub/repo/pull/3'` asks as public. A post
 the unseen check found unseen with a row of the table as it was before #399 stays unseen, so
 `gh pr reopen 5 -cb x` and a close whose `--duplicate-of` value is an option word
-(`--duplicate-of -c x`) stay unseen. gh refuses the second line. Tests: `tests/security/test_gate_gh_target_operands.py`,
-`tests/security/test_gate_gh_subcommand_position.py`.
+(`--duplicate-of -c x`) stay unseen. gh refuses the second line. The gate does not read
+`GH_HOST` or `gh api --hostname`: `owner/name` counts as a repo on github.com. A differential over
+106,403 gh lines under 39 policies found no line that decides lower than before #399, on the
+outcome, the exposure, the third party, the violations, the reserved parts, the outward and
+exact binding checks, the unseen check or the signals. Tests:
+`tests/security/test_gate_gh_target_operands.py`, `tests/security/test_gate_gh_subcommand_position.py`.
 
 ## Who may approve
 
