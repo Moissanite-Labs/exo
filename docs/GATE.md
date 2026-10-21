@@ -927,6 +927,11 @@ gate does not read:
   That does not lower the ask of a command a declaration runs as it reads a value again
   (`reread`, above).
 
+A change to the classifier or to `decide` is checked against main with `scripts/gate_diff.py` (#423). It runs
+both gates over the suites' lines and a set of policies and lists every decision the change makes lower. A lowered
+line is fixed or named in the change's decision amendment (developer guide §7, "Checking a gate change against
+main").
+
 Known limits. Each one is true of main today; where a fix is open, its PR is named.
 
 - **Inspection depth (#137).** Nesting is read four levels deep (`_DEPTH = 4` in `exo.gate`).

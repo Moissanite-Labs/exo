@@ -402,6 +402,31 @@ Check your prose before you commit docs:
 
     python3 skills/clean-writing/scripts/check-prose.py docs/YOUR-FILE.md
 
+### Checking a gate change against main
+
+A change to `src/exo/gate.py` must not decide anything lower than main does, unless the change says so.
+`scripts/gate_diff.py` checks this (#423). Make a worktree of main next to your branch and compare the two:
+
+    git worktree add ../exo-main origin/main
+    .venv/bin/python scripts/gate_diff.py --base ../exo-main --head . --json /tmp/gate-diff.json
+
+The script compares two trees, not a diff. If main moved after your branch began, merge main into the branch
+first. Otherwise each line a later main change made stricter shows up as lowered.
+
+The script runs `gate.classify` and `gate.decide` of each tree in a process of its own, with the same HOME and
+no `EXO_*` variables. It never imports either gate itself. The actions are the lines and tool calls the gate
+suites test, read from the head's test files, plus compound forms of each simple line (about 24,000 in all). The
+policies are built into the script (more than 70). A full run takes a few minutes on four cores. `--jobs` sets the
+workers in each tree. Add actions with `--corpus lines.txt` (one command per line, or a JSON list) and policies
+with `--policies more.py` (a `POLICIES` mapping).
+
+Exit status 0 means nothing is lower. Exit 1 means at least one pair of action and policy is lower: an outcome below
+main's in the order allow, log, ask, deny, a reserved hit lost, or posting violations lost. A classify or decide that raises
+counts as the hook's answer to an error: ask, or allow for a read tool. The summary groups the lowered pairs by
+transition, such as `store_write ask -> read allow`, and by policy. `--json` writes the lowered actions and pairs,
+the first 5,000 of each. Fix each lowered line, or name it in the decision amendment the change records, with the
+reason it is safe. Exit 2 means a tree could not run. Tightenings are only counted.
+
 ### CI, lint, lockfile and the privacy deny-list (D-042)
 
 **CI.** `.github/workflows/ci.yml` runs on every push to main and every pull request. It runs the root suite and
