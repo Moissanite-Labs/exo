@@ -194,6 +194,103 @@ def test_a_quoted_command_inside_bash_c_fails_closed_too():
     assert outcome(line, pol(rule(PUSH, "deny"), categories=OPAQUE_OK)) == "deny"
 
 
+# --- riders: a command that would be stricter alone ----------------------------------------------------------------
+# Each line below was allowed at f7663da under an allow rule for the push alone, and asks on main.
+
+ANCHORED = rule(f"^{PUSH}$")
+RIDERS = [
+    f"rm -rf build && {PUSH}",
+    f"{PUSH}; rm -rf build",
+    f"gh pr comment 3 --body spam && {PUSH}",                  # a post to a third party
+    f"vercel deploy --prod && {PUSH}",
+    f"git reset --hard HEAD~3 && {PUSH}",
+    f"{PUSH}; kubectl delete ns prod",
+    f"{PUSH}; terraform destroy -auto-approve",
+    f"{PUSH}; aws s3 rm --recursive s3://b",
+    f"evilbin --x; {PUSH}",                                    # an unknown program asks alone
+    f"ssh -o ProxyCommand='rm -rf build' host '{PUSH}'",       # one simple command
+    # a part that never runs stands in for the allowed command, so the push need not happen
+    f"if false; then {PUSH}; fi; rm -rf build",
+    f"export GIT_SSH_COMMAND='{PUSH}'; rm -rf build",
+    f"PS4='$({PUSH})'; gh pr comment 3 --body hi",
+]
+
+
+@pytest.mark.parametrize("line", RIDERS)
+def test_a_command_that_asks_alone_does_not_ride_on_an_allow_rule(line):
+    assert outcome(line, pol(ANCHORED)) == "ask"                                   # f7663da: allow
+    assert outcome(line, pol(rule(f"^{PUSH}$", "log"))) == "ask"                   # f7663da: log
+
+
+@pytest.mark.parametrize("line", ["gh pr comment 3 --body hi && rm -rf build",
+                                  "gh issue close 9 -R acme-org/app && rm -rf build"])
+def test_a_command_that_asks_alone_does_not_ride_past_a_category_deny(line):
+    # The rule names the delete, but the post would ask alone, so the rule does not decide and the deny stands.
+    assert outcome(line, pol(rule("^rm -rf build$"), categories={"delete": "deny"})) == "deny"    # f7663da: allow
+
+
+def test_a_function_body_does_not_ride_on_the_name_it_shadows():
+    # The allowed text runs the function body.
+    line = f"git() {{ rm -rf build; }}; {PUSH}"
+    assert outcome(line, pol(ANCHORED, categories=OPAQUE_OK)) == "ask"             # f7663da: allow
+
+
+def test_a_rider_is_judged_by_the_rules_that_raise_it():
+    # curl alone is allowed by the matrix, but the ask rule after the allow rule would ask for it alone.
+    line = f"curl -s https://example.com/x && {PUSH}"
+    assert outcome(line, pol(ANCHORED)) == "allow"                                 # a harmless rider
+    assert outcome(line, pol(ANCHORED, rule("curl", "ask"))) == "ask"             # f7663da: allow
+    assert outcome(line, pol(ANCHORED, rule("^curl", "log"))) == "ask"            # main: log
+    # Another allow rule does not lower a rider: each command is named by the rule that decides the line.
+    assert outcome(f"rm -rf build && {PUSH}", pol(ANCHORED, rule("^rm -rf build$"))) == "ask"
+    assert outcome(f"rm -rf build && {PUSH}", pol(rule(f"^({PUSH}|rm -rf build)$"))) == "allow"
+
+
+@pytest.mark.parametrize("line", [f"cd repo && {PUSH}", f"git status && {PUSH}", f"echo hi && {PUSH}",
+                                  f"echo hi > /tmp/f && {PUSH}", f"set -e; {PUSH}"])
+def test_a_harmless_rider_still_rides(line):
+    assert outcome(line, pol(ANCHORED)) == "allow"                                 # main: ask
+
+
+def test_an_ask_rule_after_an_allow_rule_that_misses_still_sees_the_whole_line():
+    # Kills a mutation that matched ask rules on own text too: the allow rule makes decide() build the own test.
+    line = "gh pr comment 3 --body hi && rm -rf build"
+    p = pol(rule("^nothing$"), rule("gh pr comment", "ask"), categories={"delete": "allow"})
+    assert outcome(line, p) == "ask"
+
+
+# --- a log rule that only raises the line ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("line", ["ls && cat README.md", "ls -la $(pwd)/src", "ls | grep x", "ls -la; cat foo",
+                                  "ls>(cat)"])
+def test_a_log_rule_over_an_allow_cell_matches_the_whole_line(line):
+    assert outcome(line, pol(rule("^ls", "log"))) == "log"                         # f7663da: allow
+
+
+@pytest.mark.parametrize("line", ['echo "$(', "export PS4='$(", "{ exec < <("])
+def test_a_catch_all_log_rule_logs_a_line_with_parts_that_have_no_own_text(line):
+    assert outcome(line, pol(rule(".*", "log"))) == "log"                          # f7663da: allow
+
+
+def test_a_log_rule_that_lowers_or_names_opaque_exec_still_names_its_command():
+    assert outcome(f"ls && {PUSH}", pol(rule("^ls", "log"))) == "ask"              # main: log
+    lower = pol(rule("^make", "log", category="opaque_exec"))
+    assert outcome("ls && make", lower) == "log"                                   # main: ask
+    assert outcome("evilbin; make", lower) == "ask"
+
+
+# --- the $".." reading ------------------------------------------------------------------------------------------------
+
+def test_the_opaque_reading_of_a_locale_line_has_no_own_text():
+    # A $".." word may turn into any code, so the line is also decided as opaque_exec, a reading no command wrote.
+    p = pol(rule("git push --force origin", category=["force_push", "opaque_exec"]))
+    assert outcome('true; git push --force origin $"main"', p) == "ask"            # f7663da, main: allow
+    assert outcome('git push --force origin $"main"', p) == "allow"                # one part: its command text
+    named = pol(rule(f"^{PUSH}$", category=["force_push", "opaque_exec"]))
+    for line in (f'echo $"hi"; {PUSH}', f'echo $"hi" > /tmp/x; {PUSH}'):
+        assert outcome(line, named) == "ask", line                                 # f7663da: allow
+
+
 # --- the #191 pass: each part below the dominant one -----------------------------------------------------------------
 
 def test_an_allow_rule_lifts_a_part_s_category_deny_only_when_it_names_that_part():

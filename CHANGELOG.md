@@ -120,9 +120,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `gh pr comment 3 --body hi && rm -rf build`. Each simple command on a line now carries its own text, as written
   with its redirections, nested ones too (`$( )`, `bash -c`, `eval`, a heredoc a shell reads, `ssh`). Such a rule
   decides the line only when its regex matches the own text of every command that carries the line's category or
-  is as severe, and otherwise the next rule is tried. A part with no own text (an unread nest, a string literal in
-  code) matches no such rule. In the #191 pass it overrides a part's category deny only when it names that part.
-  Ask and deny rules and the `reserved:` and `deny:` lists still match the whole line and its decoded views. A line
+  is as severe, and of every other command that alone would get a stricter outcome than the rule gives (by its
+  category line and the matrix, or by a rule that raises it), and otherwise the next rule is tried. So
+  `rm -rf build && git push --force origin main` still asks under an allow rule for
+  `'^git push --force origin main$'`, while `cd repo && git push --force origin main` is allowed. A part with no own
+  text (an unread nest, a string literal in code, the opaque_exec reading of a `$".."` line) matches no such rule. A
+  log rule over an allow cell only raises the line, so it still sees the whole line unless it names `opaque_exec`.
+  In the #191 pass it overrides a part's category deny only when it names that part. Ask and deny rules and the
+  `reserved:` and `deny:` lists still match the whole line and its decoded views. A line
   of one simple command, and a tool that is not a shell, match as before. An allow or log rule written for a whole
   compound line (`'^make && make install$'`) now has to match each deciding command, and until then the line gets
   its matrix or category outcome. The ledger view leaves the own text out.
