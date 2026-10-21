@@ -2061,6 +2061,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   either the old view or the merged one, never a mix. Logic is in `src/exo/turn_settle.py`, outside the counted core.
 - **Validation:** `tests/core/test_turn_settle.py`, `tests/core/loop/test_loop.py`.
 - **Docs:** `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep".
+- *Amendment 2026-10-21 (issue #244):* a private thread's own tree has no summary to wait for until its first
+  one lands, and its tail is then the whole thread, so a slow summarizer left the first calls unbounded. Until
+  that first summary lands, the tail is cut to `view_budget` behind an "[earlier messages are being summarized]"
+  marker (`fit_tail` in `src/exo/turn_settle.py`). Validation: `tests/core/test_agent_context.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It

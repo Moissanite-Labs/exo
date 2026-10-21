@@ -6,6 +6,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A long private thread's first calls are cut to the budget until its first summary lands (#244). A private
+  thread keeps a summary tree of its own, and until the first summary lands its tail is the whole thread.
+  The turn waits up to `overflow_settle` for the leaves, as the agent tree's turns do, so a fast summarizer
+  bounds the call (120 stored messages drop to about 20). A slow one did not: at 30 s per leaf the first
+  calls carried most of the thread (300 stored messages, about 60k tokens), and a very long thread could
+  exceed the model's window and fail the turn. The tail is now cut to `view_budget`, newest messages kept,
+  behind an `[earlier messages are being summarized]` marker. Once a summary lands, the tree's view leads
+  the tail as before and nothing is cut.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
