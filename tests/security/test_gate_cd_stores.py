@@ -457,6 +457,13 @@ HEREDOC = "cd ~/.config/app && cat > settings.toml <<'EOF'\n" + "\n".join(
     "cd /proc && cat cpuinfo | tr '[:upper:]' '[:lower:]'",
     "cd /proc && grep -E '^[[:alnum:]_]+:' meminfo",
     "cd /proc && sed 's/[.]/_/g' version",
+    # #338: diagnostics and copies out of /proc and /dev are not store writes
+    "cd /proc && sed -n 1p version",
+    "cd /proc && sort meminfo",
+    "cd /proc && grep x meminfo > /tmp/m",
+    "cd /proc && cat cpuinfo > /tmp/c",
+    "cd /dev && ls -l > /tmp/devs",
+    "cd /proc && python3 x.py",
     "cd ~/.config/nvim && grep -rn '[[:space:]]$' lua/",
     "cd ~/.config/nvim && jq '.[:3]' lazy-lock.json",
     "cd ~/.kube && kubectl get pods -o jsonpath='{.items[:2].metadata.name}'",
@@ -505,6 +512,36 @@ def test_ordinary_lines_keep_their_class(cmd):
     c = _bash(cmd)
     assert c.category != "credentials", (cmd, c.summary)
     assert "secret store" not in c.signals
+    if "cd /proc" in cmd or "cd /dev" in cmd:
+        assert c.category != "store_write", (cmd, c.summary)   # #338
+
+
+@pytest.mark.parametrize("cmd, category", [
+    # #338: after a cd into /proc or /dev, only a write through a descriptor path is a store write
+    ("cd /proc && sed -n 1p version", "read"),
+    ("cd /proc && sed 's/[.]/_/g' version", "read"),
+    ("cd /proc && sort meminfo", "read"),
+    ("cd /proc && grep x meminfo > /tmp/m", "local_write"),
+    ("cd /proc && cat cpuinfo > /tmp/c", "local_write"),
+    ("cd /dev && ls -l > /tmp/devs", "local_write"),
+    ("cd /proc && python3 x.py", "opaque_exec"),
+    ("cd /proc && printf x > fd/3", "local_write"),          # /proc has no fd folder of its own
+    ("cd /proc && echo x > version2", "local_write"),
+    ("cd /dev && cat fd/3 > /tmp/out", "local_write"),       # reading a descriptor writes nothing through it
+    ("cd /dev && printf x > fd/3", "store_write"),
+    ("cd /dev && printf x >> fd/3", "store_write"),
+    ("cd /proc/self && printf x > fd/3", "store_write"),
+    ("cd /proc && printf x > self/fd/3", "store_write"),
+    ("cd /proc/self && printf x > stdin", "store_write"),
+    ("cd /proc/self && printf x > cwd/x", "store_write"),
+    ("cd /proc/12/task/34 && printf x > fd/3", "store_write"),
+    ("cd /dev && printf x > $F", "store_write"),             # a target the gate cannot pin to a path
+    ("cd /dev && printf x > fd/*", "store_write"),
+    ("cd /proc && cd /dev && printf x > fd/3", "store_write"),
+    ("cd /proc && cd ~/.exo && rm x", "store_write"),        # a cd into the store itself: the blanket rule
+])
+def test_after_a_cd_into_a_descriptor_folder_only_a_descriptor_write_is_a_store_write(cmd, category):
+    assert _bash(cmd).category == category, cmd
 
 
 @pytest.mark.parametrize("cmd", [

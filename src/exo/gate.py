@@ -3852,7 +3852,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             ctx["store_cwd"] = True
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
-                ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
+                ctx["fd_cwd"] = into     # #217: the card names the descriptor folder, not "the store"
+            else:
+                ctx.pop("fd_cwd", None)  # the store itself: every relative name below may be it (#338)
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -4883,7 +4885,14 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                 _unknown_store(words[i + 1], seen, inside=True)):
             hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
-        hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
+        fd_dir = ctx.get("fd_cwd")
+        if not fd_dir:
+            hits.append("a path inside the store (after cd)")
+        # #338: the cd entered a descriptor or process folder, not the store. Only a write that
+        # could land on a descriptor path under it counts; a command that writes nothing, or
+        # writes to a path elsewhere, keeps its own class.
+        elif _fd_cwd_write(k, fd_dir, seen):
+            hits.append(fd_dir)
     return list(dict.fromkeys(hits))
 
 
@@ -4968,6 +4977,38 @@ def _lead(parts: list[Classification]) -> Classification | None:
         if _severity(before)[3]:
             return before
     return c
+
+
+def _fd_cwd_write(k: _Cmd, fd_dir: str, seen: dict) -> bool:
+    """Whether a command after a `cd` into a descriptor or process folder writes through one (#338).
+
+    Only a write target counts, read against the folder the `cd` entered: `fd/3` under `/dev`,
+    `self/fd/3` or `cwd/x` under `/proc/self`. A target the gate cannot pin to a path counts too
+    (a variable, a glob, braces past the cap), as it does for a store file opened on a descriptor
+    (#217). `>&1` names a descriptor, not a path, and an absolute target stands on its own."""
+    for op, t in k.redirs:
+        if op not in _WRITE_REDIRS or (op == ">&" and re.fullmatch(r"\d+|-", t.text)):
+            continue
+        if t.dynamic or t.glob:
+            return True
+        targets = _shell_words(t, seen, "target")
+        if targets is None:
+            return True
+        if any(_fd_relative(fd_dir, x) for x in targets):
+            return True
+    return False
+
+
+def _fd_relative(fd_dir: str, target: str) -> bool:
+    """Whether a write target, read against a descriptor or process folder, names a descriptor path."""
+    t = _expand_text(target).strip().replace("\\", "/")
+    if not t:
+        return False
+    if t.startswith("/"):
+        return _fd_path(t)          # an absolute target stands on its own
+    if os.path.normpath(t) in ("stdin", "self/stdin", "thread-self/stdin"):
+        return True                 # /proc/self/stdin is descriptor 0 under another name
+    return _fd_path(os.path.join(fd_dir, t))
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
