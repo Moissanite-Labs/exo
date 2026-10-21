@@ -3952,6 +3952,9 @@ def _cd_store_read(cmds: list, subs: list) -> str:
         _cd_walk(c2, targets, pieces, more)
         if n < _DEPTH:
             queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
+    scope = _scope.get()
+    if scope is not None and scope.tool_cwd:
+        targets.append(scope.tool_cwd)     # #311: a shell call's own `cwd` argument enters its folder, as a cd would
     if not targets:
         return ""
     singles, pairs, names = _store_hints()
@@ -4598,6 +4601,7 @@ class _Scope:
     """What the secret-store checks of one classify call share: the folders the tool may read from (#209), the gate's
     own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot."""
     cwds: tuple[str, ...] = ()
+    tool_cwd: str | None = None                  # a shell call's own `cwd` argument, joined to the session folder (#311)
     here: str | None = None                      # the gate's own folder; "" when it cannot be read
     roots: set[str] | None = None
     real: dict[str, str] = field(default_factory=dict)
@@ -4620,6 +4624,7 @@ def _in_tool_folder(fn: _F) -> _F:
     @functools.wraps(fn)
     def run(action: Any, cwd: str | None = None) -> Any:
         folders: list[str] = []
+        tool_cwd = ""
         try:
             tool, args = _args_of(action)
             base = os.path.expanduser(cwd) if isinstance(cwd, str) and cwd else ""
@@ -4627,10 +4632,11 @@ def _in_tool_folder(fn: _F) -> _F:
                 folders.append(os.path.abspath(base))
             sub = args.get("cwd")
             if isinstance(sub, str) and sub and _runs_shell(tool, args):
-                folders.append(os.path.abspath(os.path.join(base, os.path.expanduser(sub))))
+                tool_cwd = os.path.join(base, os.path.expanduser(sub))
+                folders.append(os.path.abspath(tool_cwd))
         except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
             pass
-        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders))))
+        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders)), tool_cwd=tool_cwd or None))
         try:
             return fn(action, cwd)
         finally:
