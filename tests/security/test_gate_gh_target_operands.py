@@ -628,3 +628,11 @@ def test_r_as_a_url_reads_its_path_decoded(value):
     c, d = run(f"gh pr comment 5 -R {value} -b x", DENY_PUB)
     assert c.target == "pub/repo#5", c
     assert d.outcome == "deny", d
+
+
+def test_a_body_unseen_in_the_line_as_read_before_counts():
+    # gh sends a GET, but the gate read a PATCH with a field from a file before: the line stays unseen, as on main.
+    c, d = run("gh api --method PATCH repos/pub/repo/issues/5 -X GET -f body=@notes.md")
+    assert c.category == "read" and c.floor.category == "github_post", c
+    assert body_unseen(c) and body_unseen(c.floor), c
+    assert d.outcome == "ask" and UNSEEN_BODY in d.violations, d
