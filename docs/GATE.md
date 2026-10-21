@@ -123,7 +123,11 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   those forms as the first word of `gh repo`. On another host (`-R ghe.corp/myorg/app`) the
   gate cannot tell whether a scope means that repo, so the value as written is another target.
 - A URL operand names the repo, also beside `-R`, because gh posts there.
-  `gh pr comment https://github.com/myorg/app/pull/9 -R pub/repo` lands on `myorg/app#9`.
+  `gh pr comment https://github.com/myorg/app/pull/9 -R pub/repo` lands on `myorg/app#9`. The
+  URL reads as gh reads it: the scheme and the host in any case, without a user, `www.` or a
+  port, and the path decoded. So `https://www.github.com/pub/repo/pull/5` and
+  `https://GitHub.com/pub/repo/pull/5` name `pub/repo#5`. For `gh repo` a repo URL drops its
+  `.git`, as `-R` does. A port that is not a number, or another host, names no repo here.
 - `gh api` takes its target from its endpoint, its one operand, read with gh api's options that
   take a value. A path in a header, a jq query, a template or a host names nothing. So
   `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` is a post

@@ -468,3 +468,40 @@ def test_a_mix_of_the_two_readings_counts_too():
     line = "gh pr checkout -b 7 9 -f -R pub/repo"   # gh: -b takes 7 and -f is a flag, so this checks out pub/repo#9
     c, d = run(line, normalize_policies({"gates": {"deny": ["target:pub/repo#9"]}}))
     assert c.target == "pub/repo#7" and "pub/repo#9" in c.alt_targets and d.outcome == "deny", (c, d)
+
+
+# A URL operand reads as gh reads it (gh 2.89 `ParseURL`, `ghrepo.NewWithHost`): the scheme and the host in any case,
+# without a user, `www.` or a port, and the path decoded. gh repo drops a repo URL's `.git` (round 4, item 3).
+DENY_REPO = normalize_policies({"gates": {"categories": {"vcs_merge": "log", "github_close": "log", "read": "log"},
+                                          "deny": ["target:pub/repo", "target:pub/repo#5"]}})
+
+
+@pytest.mark.parametrize("line,target", [
+    ("gh pr merge https://www.github.com/pub/repo/pull/5 -R myorg/app", "pub/repo#5"),
+    ("gh pr merge https://GitHub.com/pub/repo/pull/5 -R myorg/app", "pub/repo#5"),
+    ("gh pr merge HTTPS://github.com/pub/repo/pull/5 -R myorg/app", "pub/repo#5"),
+    ("gh pr merge https://github.com:443/pub/repo/pull/5 -R myorg/app", "pub/repo#5"),
+    (f"gh pr merge https://tok{GIT_AT[3:]}/pub/repo/pull/5 -R myorg/app", "pub/repo#5"),
+    ("gh pr merge https://github.com/%70ub/repo/pull/5 -R myorg/app", "pub/repo#5"),
+    ("gh issue close https://WWW.GITHUB.COM/pub/repo/issues/5 -R myorg/app", "pub/repo#5"),
+    ("gh repo view https://github.com/pub/repo.git", "pub/repo"),
+    ("gh repo view https://www.github.com/pub/repo.git", "pub/repo"),
+])
+def test_a_url_operand_reads_as_gh_reads_it(line, target):
+    c, d = run(line, DENY_REPO)
+    assert c.target == target and "tok" not in c.link, c
+    assert d.outcome == "deny", (line, d)
+
+
+def test_a_url_operand_keeps_the_reading_before():
+    # The repo URL's name as written was the target before, so a deny on it still fires.
+    c, d = run("gh repo view https://github.com/pub/repo.git",
+               normalize_policies({"gates": {"deny": ["target:pub/repo.git"]}}))
+    assert (c.target, c.alt_targets, d.outcome) == ("pub/repo", ["pub/repo.git"], "deny"), (c, d)
+
+
+@pytest.mark.parametrize("url", ["https://github.com:x/pub/repo/pull/5", "https://ghe.corp/pub/repo/pull/5",
+                                 "ftp://github.com/pub/repo/pull/5", "https://github.com.evil.io/pub/repo/pull/5"])
+def test_a_url_gh_refuses_or_on_another_host_names_no_repo(url):
+    c, _ = run(f"gh pr merge {url} -R myorg/app")
+    assert (c.target, c.alt_targets) == ("myorg/app", []), c
