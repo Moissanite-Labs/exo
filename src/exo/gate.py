@@ -3353,8 +3353,10 @@ def _shell_words(w: _Word, seen: dict, check: str) -> list[str] | None:
         return [w.text]
     if src not in seen:
         words = _brace_words(src, pool=1)
-        seen[src] = (None if words is None else list(dict.fromkeys([w.text] + [d for e in words[1:] for d in _dequote(e)])),
-                     set())
+        seen[src] = (None if words is None else list(dict.fromkeys(
+            [w.text] + [d for e in words[1:] for d in _dequote(e)]
+            + [d for e in (words[1:] or words) for f in _unknown_forms(e) for d in _dequote(f)])),   # as #307 reads it
+            set())
     words, done = seen[src]
     if done & _COVERS[check]:
         return []
@@ -4928,29 +4930,60 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
 
 _PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
 _KNOWN_PARAM = re.compile(r"\$\{?(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?!\w)")
+_PARAM_WORD = re.compile(r"\$\{(?:[A-Za-z_]\w*|[0-9]+|[@*#?$!-])(:?[-=+])")   # ${name OP of ${name OP word}
 
 
-def _unknown_forms(src: str) -> list[str]:
+def _default_word(form: str, depth: int) -> str | None:
+    """The word of a ``${name OP word}`` form whose OP is ``-``, ``:-``, ``=``, ``:=``, ``+`` or ``:+``, spelt
+    out as _store_var_ops spells a store variable's word (quotes dropped, _expand_text, to 8 levels), or None
+    when the form has no such word (#341). The word is in the command text, so the gate can read it: with the
+    variable unset the ``-`` and ``=`` forms give it, with it set the ``+`` forms do, and the gate reads both
+    states, so the word counts as a spelling either way."""
+    m = _PARAM_WORD.match(form)
+    if not m:
+        return None
+    word = form[m.end():]
+    if word.endswith("}"):
+        word = word[:-1]
+    if not word or depth >= 8:
+        return None
+    return _expand_text(word.replace('"', "").replace("'", ""), depth=depth + 1)
+
+
+def _unknown_forms(src: str, depth: int = 0) -> list[str]:
     """Spellings of a shell word whose source text ``src`` (quotes kept) holds an expansion the gate cannot spell
     out (#225): a $( ) or ` `, or a ${..} or $name other than the store variables _expand_text spells out. Each is
     read as empty, which joins the text around it (`.e$(:)nv` is `.env`, `${x}.env` is `.env`), and, where literal
     text stands on both sides of it, as `*` for any output (`.e$(echo n)v` is the glob `.e*v`, which then asks where
-    that glob would). [] when the word holds none."""
+    that glob would). A `${name OP word}` of any variable is also read with the word in place (#341, see
+    _default_word), and a legacy `$[...]` counts as an expansion, with a plain number read as itself
+    (`id_ed$[25519]` is `id_ed25519`). [] when the word holds none."""
     if "$" not in src and "`" not in src:
         return []
     lx, q = _Lexer(src), ""
     parts: list[str | None] = []                      # literal source text, None for an expansion
+    marks: list[str | None] = []                      # an in-place spelling per expansion, where one is known
     lit: list[str] = []
     while lx.i < len(src):
         ch = src[lx.i]
         if q != "'" and (ch == "`" or src.startswith("$(", lx.i) and not src.startswith("$((", lx.i)):
             parts += ["".join(lit), None]
+            marks.append(None)
             lit = []
             _SCANS[ch](lx, _Word())                   # past the substitution, read as the lexer reads it
+            continue
+        if ch == "$" and q != "'" and src.startswith("$[", lx.i):
+            end, _, _ = _arith_scan(src, lx.i + 2)    # past the $[...], as bash reads it
+            body = src[lx.i + 2:end - 1].strip() if src[end - 1:end] == "]" else ""
+            parts += ["".join(lit), None]
+            marks.append(body if re.fullmatch(r"[+-]?\d+", body) else None)
+            lit = []
+            lx.i = end
             continue
         m = _PARAM.match(src, lx.i) if ch == "$" and q != "'" else None
         if m and not _KNOWN_PARAM.match(m[0]):
             parts += ["".join(lit), None]
+            marks.append(_default_word(m[0], depth))
             lit = []
             lx.i = m.end()
             continue
@@ -4964,7 +4997,26 @@ def _unknown_forms(src: str) -> list[str]:
         return []
     text = [k for k, p in enumerate(parts) if p and p.strip("'\"")]   # parts with literal text, not only quotes
     star = "".join(p if p is not None else "*" if text and text[0] < k < text[-1] else "" for k, p in enumerate(parts))
-    return list(dict.fromkeys(["".join(p or "" for p in parts), star]))
+    forms = ["".join(p or "" for p in parts), star]
+    if any(marks):                      # a default word (or a $[number]) in place: each alone, and all together
+        spots = [k for k, p in enumerate(parts) if p is None]
+        subs = []
+        for k, s in zip(spots, marks):
+            if s is not None:
+                one = list(parts)
+                one[k] = s
+                subs.append("".join(p or "" for p in one))
+        all_in = list(parts)
+        for k, s in zip(spots, marks):
+            if s is not None:
+                all_in[k] = s
+        subs.append("".join(p or "" for p in all_in))
+        for s in dict.fromkeys(subs):
+            if s not in forms:
+                forms.append(s)
+                if depth < 8 and ("$" in s or "`" in s):   # a word that itself holds a form: read it in turn
+                    forms += [f for f in _unknown_forms(s, depth + 1) if f not in forms]
+    return list(dict.fromkeys(forms))
 
 
 def _dequote(word: str) -> list[str]:

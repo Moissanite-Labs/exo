@@ -358,7 +358,13 @@ system or bash will.
   nothing, so `cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc` and `cat ${x}.env` read the store. A shell word
   that holds a `$( )`, a backtick pair, or a `${..}` or `$name` other than the four variables above is also
   matched with each of them removed. Where literal text stands on both sides of one, it is also read as `*`, for
-  any output: `cat .e$(echo n)v` is the glob `.e*v`, which asks as that glob would. Single quotes keep text
+  any output: `cat .e$(echo n)v` is the glob `.e*v`, which asks as that glob would. The default word of a
+  `${name OP word}` form is read in place too (#341): for OP `-`, `:-`, `=`, `:=`, `+` or `:+` the word is a
+  spelling of the word as well, quotes dropped and spelt out as a store variable's word is (see Defaults
+  above), to 8 levels, for the Exo-store write checks as for these — so `cat ${x:-.env}`,
+  `cat ${x:-~/.kube}/config` and `cp x ${x:-$HOME/.exo}/policies/a` ask. A legacy `$[...]` counts as an
+  expansion, and a plain number in it reads as itself: `cat id_ed$[25519]` asks as `cat id_ed25519` does.
+  Single quotes keep text
   literal (`cat '.e$(:)nv'` names a file spelt that way). Ordinary lines keep their class: `cat notes-$(date
   +%F).md`, `ls $(pwd)/src`, `cat ${OUT}/report-${N}.txt`.
 - **Bash glob syntax (#199).** A glob is matched as bash reads it (`_fn_glob`, which the `cd` checks already
