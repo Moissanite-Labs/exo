@@ -616,6 +616,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the new `exo keys pin --peer SEAT PUB`. Its messages are then checked against that key and held as `other`, and
   its key never signs a ledger. A seat of another home with the receiver's own name is denied until it is pinned
   that way (D-026 and D-040 amendments).
+- A write from a folder of the Exo home that is not itself part of the store no longer asks as a
+  store write when it cannot name anything outside that folder (#203). A `cd` into any folder of
+  the home (`~/.exo/plugins/<name>`, `venv/`, a principal's unprotected subfolder) made every
+  writing command on the line a `store_write`, so `cd ~/.exo/plugins/foo && cp x config.json`
+  asked the principal over the plugin's own file. The blanket rule now steps aside for one shape:
+  a program whose writes the gate can see (`cp`, `mv`, `install`, `tee`, `touch`, `mkdir`,
+  `sed -i`, `printf`, `echo`), with nothing spelt before it and every word and redirection target
+  a plain relative name — no `..` segment, expansion, glob or brace — standing in a folder every
+  spelling of which sits inside the home and outside the store. Every other write from such a
+  folder still asks, a word that itself names a store path still asks, and a read of a store
+  file name there still asks as it did (#192).
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

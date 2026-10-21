@@ -2775,6 +2775,14 @@ place in the line decides, not its text, and one in a here-doc body counts as af
 One in the redirections of a compound that holds the `cd` (`done < <(sort list)`) runs before it. A subshell
 `cd`, a later `cd` out and a `cd` in a function body fail closed. A loop that enters the store is not followed
 (#480).
+A folder of the
+`.exo` home that is not itself part of the store (a plugin's folder, `venv/`, a principal's
+unprotected subfolder) counts as the store for this rule too, with one narrowing: a program whose writes the
+gate can see (`cp`, `mv`, `install`, `tee`, `touch`, `mkdir`, `sed -i`, `printf`, `echo`), spelt
+with nothing before it and with every word and redirection target a plain relative name (no `..`,
+expansion, glob or brace), writes only inside the folder it stands in and is ordinary there
+(#203). Any other write from such a folder still asks, and a read of a store file name there
+still asks under the relative-name rule (#192).
 `rm -rf ~/.exo` counts (an ancestor). A `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret for a

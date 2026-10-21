@@ -458,6 +458,8 @@ class _Cmd:
     piped_in: bool = False
     operands: list = field(default_factory=list)     # _Word after an unquoted NAME=(..): more of its operands
     piped_group: bool = False    # piped from a compound (`( .. )`, `{ ..; }`, a loop), not from one simple command
+    plain_home_write: bool = False    # the store rule cleared this command as a plain write in a non-store
+                                      # folder of the home, so its words name files of that folder only (#203)
     own: str | None = None       # its source text with its redirections, after leading reserved words (#394)
     pipe_src: Callable[[], str | None] | None = None   # piped from simple commands: the pipeline text up to it
     fed: bool = False            # its stdin comes from a compound around it or piped into it (_feed_compound)
@@ -3844,6 +3846,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 parts.append(_make("local_write", summary=f"find {words[i].text}", command=cmd))
             i += 1
         return parts
+    if prog == "popd":
+        ctx.pop("home_cwd", None)      # #203: the line no longer stands in the folder pushd entered
     if prog in ("cd", "pushd"):
         target = next((w for w in words[1:] if not w.text.startswith("-")), None)
         dest = target.text if target else ""
@@ -3853,6 +3857,13 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
                 ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
+                ctx.pop("home_cwd", None)
+            elif _home_folder(dest):
+                ctx["home_cwd"] = True             # #203: a non-store folder of the home (plugins/, venv/, src/)
+            else:
+                ctx.pop("home_cwd", None)
+        else:
+            ctx.pop("home_cwd", None)              # #203: the line no longer stands in that folder
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -4839,6 +4850,55 @@ def _gh_writes_store(words: list) -> bool:
     return (group, verb) in _GH_STORE_WRITES
 
 
+_PLAIN_WRITE_PROGS = ("cp", "mv", "install", "tee", "touch", "mkdir")   # #203: writes the gate can see
+
+
+def _plain_word(w) -> bool:
+    """A word read as a literal relative path inside the folder the line stands in (#203): no expansion,
+    glob or brace in it, no `..` segment, not absolute and not a home spelling. An option word counts
+    only as a bare flag: a value attached to it, or carried by it, could name a path the word itself
+    does not show (`-o../../config.json`)."""
+    if w.dynamic or w.glob or w.brace:
+        return False
+    t = w.text
+    if not t or ".." in t.split("/"):
+        return False
+    if t in ("-", "--"):
+        return True
+    if t.startswith("-"):
+        return bool(re.fullmatch(r"-{1,2}[a-zA-Z-]+", t))
+    return not t.startswith(("/", "~"))
+
+
+def _plain_folder_write(k: _Cmd, words: list, parts: list[Classification]) -> bool:
+    """A write made standing in a non-store folder of the home counts as ordinary (#203) when the gate
+    can see every write it makes: the program is one whose writes are its operands or its redirections
+    (`cp`, `mv`, `install`, `tee`, `touch`, `mkdir`, `sed -i`, `printf`, `echo`, or a bare
+    redirection), nothing stood before the program but openers (an assignment or a prefix such as
+    `sudo` could carry a path of its own), and every operand and redirection target is a literal
+    relative path (see _plain_word). Anything else keeps the store rule."""
+    if any(p.category == "opaque_exec" for p in parts):
+        return False
+    rest = list(k.words)
+    while rest and not rest[0].quoted and rest[0].text in _OPENERS:
+        rest = rest[1:]
+    if words:
+        if not rest or rest[0].text != words[0].text:
+            return False                      # an assignment or a prefix stood before the program
+        prog = words[0].text.rsplit("/", 1)[-1]
+        argv = [w.text for w in words]
+        visible = prog in _PLAIN_WRITE_PROGS or prog in ("printf", "echo") or (
+            prog == "sed" and (_has(argv, "-i") or any(a.startswith("--in-place") for a in argv)))
+        if not visible:
+            return False
+        operands = rest[1:]
+    else:
+        operands = []                         # assignments only: the writes are the redirections
+    return all(_plain_word(w) for w in operands) and all(
+        _plain_word(t) for op, t in k.redirs
+        if not (op in (">&", "<&") and re.fullmatch(r"\d+|-", t.text)))
+
+
 def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> list[str]:
     """Each store path in a simple command that a write reaches, in the order the scan meets them (#514), or [].
     Reads of the store are fine."""
@@ -4883,6 +4943,13 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                 _unknown_store(words[i + 1], seen, inside=True)):
             hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
+        if ctx.get("home_cwd") and not ctx.get("fd_cwd") and _plain_folder_write(k, words, parts):
+            # #203: a plainly spelt write the gate can see, in a non-store folder of the home. Its
+            # words name files of that folder only, so _cd_store_read does not read them as store
+            # names either; the flag rides on the command to say so. Another command's word of the
+            # same spelling still counts there.
+            k.plain_home_write = True
+            return []
         hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
     return list(dict.fromkeys(hits))
 
@@ -4968,6 +5035,7 @@ def _lead(parts: list[Classification]) -> Classification | None:
         if _severity(before)[3]:
             return before
     return c
+
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
@@ -5261,9 +5329,12 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
             [t for _, t in k.redirs]
         # (text, has an unquoted {); a word with a space is prose (a commit message, an echo, awk's '{print $1}'),
         # not a path, unless bash expands a brace set in it ({config,"a b"})
-        # and a word with an expansion as _unknown_forms reads it (`c$(:)onfig` is `config` and `c*onfig`; #225)
-        pieces += [(t, w.brace, n > 0) for w in words for n, t in enumerate([w.text] + _unknown_words(w.raw))
-                   if w.brace or not re.search(r"\s", t)]
+        # and a word with an expansion as _unknown_forms reads it (`c$(:)onfig` is `config` and `c*onfig`; #225).
+        # A command the store rule cleared as a plain write in a non-store folder of the home leaves its
+        # words out (#203): they name files of that folder, never a store.
+        if not k.plain_home_write:
+            pieces += [(t, w.brace, n > 0) for w in words for n, t in enumerate([w.text] + _unknown_words(w.raw))
+                       if w.brace or not re.search(r"\s", t)]
 
 
 _ANY = object()                                     # any path, in _cd_store_read's index of levels up
@@ -5294,7 +5365,9 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
     a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd proc`). Then a relative name
     counts when its file name is a store file's (a glob or brace set: when it could match one) or it goes into a
     store folder (`gh/x` after ~/.config, `../.docker/x`); any relative name counts when the target is itself a
-    store. The targets' own words are not names. ``tools`` are the folders a shell call runs in by its own `cwd`
+    store. The targets' own words are not names. The words of a command the store rule cleared as a plain
+    write in a non-store folder of the home are not names either: every word of it is a plain name in the
+    folder it stands in (#203). ``tools`` are the folders a shell call runs in by its own `cwd`
     or `workdir` argument (#311): each counts as one more target, as a leading cd would. The name, or ''. One pass
     over the words; neither the order nor the success of the commands is followed, so this fails closed. Without
     ``forms``, only the words as written are read, with no `..` reading of a glob and no folder that holds a run
@@ -5323,6 +5396,7 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
     targets = [t for t, form in targets if forms or not form]
     pieces = [(t, brace) for t, brace, form in pieces if forms or not form]
     targets += tools                        # #311: the folder a shell call runs in, as a leading cd would enter it
+
     if not targets:
         return ""
     singles, pairs, names = _store_hints()
@@ -7070,6 +7144,28 @@ def _store_from_cwd(p: str, ancestors: bool) -> bool:
         if _store_forms(_path_forms(os.path.join(base, p)), ancestors):
             return True
     return False
+
+
+def _home_folder(dest: str) -> bool:
+    """A `cd` target the gate can pin to one folder of a store root that is not itself a store path
+    (#203): `~/.exo/plugins/foo` counts, `~/.exo` itself and `~/.exo/policies` do not. The spelling
+    must expand to a single absolute path with nothing left over — no glob, brace or unresolved
+    variable, which could name a different folder — and every form of it (as written and resolved)
+    must sit strictly below a `.exo` root without being a store path, so a link out of the home, or
+    into the store, keeps the store rule. The home is the `.exo` tree the store's own names
+    describe: a root spelled any other way (a custom EXO_HOME at a bare path) keeps the blanket
+    rule, as a subfolder of it cannot be told apart from the store's own folders there. A
+    descriptor folder is not one (see _fd_path)."""
+    p = _expand_text(dest).strip()
+    if not p.startswith("/") or re.search(r"[$`{}*?\[]", p):
+        return False
+    p = os.path.normpath(p)
+    if _fd_path(p) or _FD_DIR.fullmatch(p):
+        return False
+    roots = [r for root, _, _ in _store_roots() for r in _path_forms(root) if ".exo" in r.split("/")]
+    return bool(roots) and all(
+        not is_store_path(f) and any(f != r and f.startswith(r.rstrip("/") + "/") for r in roots)
+        for f in _path_forms(p))
 
 
 def _in_store_dir(path: str) -> bool:
