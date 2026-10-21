@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `unset PATH` is now read as the assignment it amounts to (#329). With PATH unset, bash looks a
+  command up in the working folder, so a later `ls` on the line can run a planted `./ls`. The gate
+  already asked on the assignment forms (`PATH= ls`); `unset` and `unset -v` of PATH now ask the
+  same way, as `opaque_exec`. `unset -f` names a function, not the variable, and stays read.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
