@@ -134,8 +134,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `'^git push --force origin main$'` still matches no compound line, as before. `cd` is not a setter, and that cannot
   loosen a decision, since the rule must still match the line. A part with no own text (an unread nest, a string literal
   in code, the opaque_exec reading of a `$".."` line) passes no such test. A shell or interpreter that runs a pipe has
-  the pipeline as its text. A command run inside another (an `eval`, `bash -c` or `ssh` string, an `-x` or `--exec`
-  value) must be named too, so `eval "$CMD"` now asks under
+  the pipeline as its text. Those texts hold at most four times the line's length plus 4 KB on one line, and a reader
+  past that has none, so a long pipeline into shells stays linear in memory. A command run inside another (an
+  `eval`, `bash -c` or `ssh` string, an `-x` or `--exec` value) must be named too, so `eval "$CMD"` now asks under
   `{category: opaque_exec, command: '^eval', decision: allow}`. A rule written for a whole compound line, such as
   `'^make && make install$'`, has to name each command too, for example as
   `['^make && make install$', '^make( install)?$']`. Rules that keep or raise the line, deny rules in the #191 pass and

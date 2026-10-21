@@ -401,7 +401,7 @@ class _Cmd:
     operands: list = field(default_factory=list)     # _Word after an unquoted NAME=(..): more of its operands
     piped_group: bool = False    # piped from a compound (`( .. )`, `{ ..; }`, a loop), not from one simple command
     own: str | None = None       # its source text with its redirections, after leading reserved words (#394)
-    pipe_src: Callable[[], str] | None = None   # piped from simple commands: the pipeline's text up to this one
+    pipe_src: Callable[[], str | None] | None = None   # piped from simple commands: the pipeline text up to it
     fed: bool = False            # its stdin comes from a compound around it or piped into it (_feed_compound)
 
 
@@ -1070,10 +1070,29 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
     return seen[("parse", src)]
 
 
+class _PipeTexts:
+    """The pipeline texts that a line's stdin readers carry as their own text (#394, _runs_stdin), each built once.
+    Each text holds every command before its reader, so a long pipeline of readers (`x|sh|sh|..`) would hold the
+    square of its length. So together they hold at most four times the line's length plus 4 KB, and a reader past
+    that has no own text."""
+
+    def __init__(self, lx: _Lexer) -> None:
+        self.lx, self.left = lx, 4 * len(lx.s) + 4096
+        self.built: dict[tuple[int, int], str | None] = {}
+
+    def text(self, a: int, b: int) -> str | None:
+        if (a, b) not in self.built:
+            fits = b - a <= self.left
+            self.built[(a, b)] = self.lx._source(a, b) if fits else None
+            self.left -= b - a if fits else 0
+        return self.built[(a, b)]
+
+
 def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     lx = _Lexer(src or "")
     toks = lx.run()
     marks = lx.marks
+    pipes = _PipeTexts(lx)
     fnames = {a or b for a, b in _FUNC_NAMES.findall(src or "")}   # a call to one may run `exec < f` (#161)
     cmds: list[_Cmd] = []
     cur = _Cmd()
@@ -1098,7 +1117,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
             cur.own = lx._source(at, o_end)
             if cur.piped_in and not cur.piped_group and p_at >= 0:
-                cur.pipe_src = functools.partial(lx._source, p_at, o_end)   # read only by _runs_stdin
+                cur.pipe_src = functools.partial(pipes.text, p_at, o_end)   # read only by _stdin_own
             cmds.append(cur)
         else:
             at = -1
