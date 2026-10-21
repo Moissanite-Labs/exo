@@ -151,6 +151,8 @@ violation and reserved part. The other readings are:
 - The reading before #399: `-R`, then the first URL or number anywhere on the line. So no line
   decides lower than it did. A deny or reserved entry that named the repo a body links to still
   fires. For `gh api` it is the first word after `api` with a `/` and no `=`.
+- The empty target, a repo the line does not name, when an operand comes from an expansion. In
+  `gh pr merge "$U" -R myorg/app` the URL in `$U` may name any repo, and gh merges there.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
