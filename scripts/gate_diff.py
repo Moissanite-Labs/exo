@@ -18,9 +18,10 @@ the hook gives on an error: ask, or allow for a read tool whose arguments name n
 only. Actions whose category or target changed while every decision stayed the same are counted with a few
 examples.
 
-The built-in corpus is harvested from the head tree's gate tests (tests/security/test_gate*.py and
-plugins/exo-gate/tests/*.py, read with `ast`, never run), plus compound variants of each simple command, plus
-the files given with --corpus. The built-in policies are below (BUILTIN_POLICIES).
+The built-in corpus is harvested from the gate tests of both trees (tests/security/test_gate*.py and
+plugins/exo-gate/tests/*.py, read with `ast`, never run), so a head that deletes a test row still runs its line.
+To that come compound variants of each simple command, and the files given with --corpus. The built-in policies
+are below (BUILTIN_POLICIES).
 
 Exit status: 0 when nothing is lowered, 1 when anything is lowered, 2 when a tree could not be run.
 """
@@ -739,9 +740,13 @@ def normal_action(item: Any) -> dict | None:
     return None
 
 
-def build_corpus(head: Path, files: Iterable[Path] = (), builtin: bool = True, generate: bool = True
+def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: bool = True, generate: bool = True
                  ) -> tuple[list[dict], dict[str, int]]:
-    """The deduplicated actions to run, and how many came from each source."""
+    """The deduplicated actions to run, and how many came from each source.
+
+    ``trees`` is (head, base). Both are harvested, so a row the head deletes from a test is still run: a change
+    cannot hide a lowered line by dropping its test. What only the base names is counted as harvested_base_only.
+    """
     out: dict[str, dict] = {}
     counts: Counter[str] = Counter()
 
@@ -755,13 +760,17 @@ def build_corpus(head: Path, files: Iterable[Path] = (), builtin: bool = True, g
             counts[source] += 1
 
     if builtin:
-        h = harvest(head)
-        for cmd in h.commands:
-            put(cmd, "harvested")
-        for a in h.actions.values():
-            put(a, "harvested")
+        commands: dict[str, None] = {}
+        for k, tree in enumerate(dict.fromkeys(trees)):
+            h = harvest(tree)
+            source = "harvested" if k == 0 else "harvested_base_only"
+            for cmd in h.commands:
+                commands.setdefault(cmd, None)
+                put(cmd, source)
+            for a in h.actions.values():
+                put(a, source)
         if generate:
-            for cmd in variants(list(dict.fromkeys(list(h.commands) + list(SEED_COMMANDS)))):
+            for cmd in variants(list(dict.fromkeys(list(commands) + list(SEED_COMMANDS)))):
                 put(cmd, "generated")
     for f in files:
         for item in read_corpus_file(f):
@@ -1128,7 +1137,8 @@ def main(argv: list[str] | None = None) -> int:
     a = parse_args(argv)
     t0 = time.monotonic()
     try:
-        actions, corpus_counts = build_corpus(a.head, a.corpus, builtin=not a.only_corpus, generate=not a.no_variants)
+        actions, corpus_counts = build_corpus((a.head, a.base), a.corpus, builtin=not a.only_corpus,
+                                              generate=not a.no_variants)
         policies = {} if a.only_policies else {k: _entry(v) for k, v in BUILTIN_POLICIES.items()}
         if a.pick:
             keep = [x.strip() for x in a.pick.split(",") if x.strip()]
