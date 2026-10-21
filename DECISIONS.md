@@ -2190,6 +2190,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   result carries its dominant part's, and a part is decided as it would be alone in this sense too.
   Before, every part carried the whole line, so an allow rule for `git status` allowed
   `git status; git push --force origin main` and cancelled a `categories:` deny on the push.
+- **Amendment (2026-10-21, #411):** the narrower reach had two holes, caught by a blocking review.
+  First, in the #191 pass a per-part `command` allow could still cancel the category deny on the part it
+  names (`^rm -rf build$` turned a `delete: deny` into an ask); a category deny is now sticky there
+  against `command` rules (rules keyed on anything else still lower the part as they would alone).
+  Second, an allow naming the dominant part decided the whole line past another part's matrix ask
+  (`export GIT_SSH_COMMAND="$(cat /tmp/cmd)"; git push --force origin main` allowed under
+  `^git push --force origin main$`); a non-deny rule now decides the line only when its `command`
+  pattern names every command on it.
 
 ## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
 - **Status:** Accepted 2026-10-15. The principal's ruling: "important to be lean and optimized but not at the cost of

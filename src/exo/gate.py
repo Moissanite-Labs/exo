@@ -5322,6 +5322,17 @@ def _command_matches(pattern: str, c: Classification, *, veto: bool = False,
     return any(regex.search(text) for text in texts)
 
 
+def _rule_names_every_part(match: Mapping, c: Classification) -> bool:
+    """Whether each `command` pattern in the rule's match names every part of the line (#411): a
+    non-deny rule decides the line only when it names each command on it, so an allow written for
+    the dominant part cannot cancel another part's matrix ask or category deny."""
+    pats = [str(p) for p in _as_list(match.get("command", []))]
+    return all(
+        any(_command_matches(pat, part) for pat in pats)
+        for part in _each_part(c)
+    )
+
+
 def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False,
                   line: Callable[[str], bool] | None = None) -> bool:
     for k, want in match.items():
@@ -5422,7 +5433,10 @@ def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classificatio
 def _override_deny(c: Classification, gates: Mapping) -> tuple[Classification, str, str] | None:
     """The first part of the line, below the combined result, that a category line or rule denies as it would
     deny that command alone (#191): its category's line, then the first rule that matches it; or a deny rule
-    whose `command` regex matches only a decoded view of the line (#136). ``(part, why, step)`` or None."""
+    whose `command` regex matches only a decoded view of the line (#136). A `command` rule that would lower
+    the part below its category line never applies here: a per-part allow names the command but cannot cancel
+    the category deny (#411). Rules keyed on anything else lower the part as they would alone. ``(part, why,
+    step)`` or None."""
     cats, rules = gates.get("categories") or {}, gates.get("rules") or []
     if not (cats or rules):
         return None
@@ -5430,7 +5444,11 @@ def _override_deny(c: Classification, gates: Mapping) -> tuple[Classification, s
     for p in list(_each_part(c))[1:]:
         out, why, step = cats.get(p.category), f"category {p.category}", "category"
         first = next((r for r in rules if _rule_matches(r["match"], p)), None)
-        if first is not None:
+        # A `command` rule that would lower the part below its category line must not: a per-part
+        # allow names the command but never cancels the category deny (#411). Rules keyed on
+        # anything else lower the part as they would for the command alone (#191).
+        if first is not None and not (out == "deny" and first["decision"] != "deny"
+                                      and "command" in first["match"]):
             out, why, step = first["decision"], first["reason"], "rule"
         if out != "deny":
             veto = next((r for r in rules if r["decision"] == "deny" and "command" in r["match"]
@@ -5526,6 +5544,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         outcome, reason, rule = gates["categories"][eff.category], f"category {eff.category}", "category"
     for r in gates.get("rules") or []:
         if _rule_matches(r["match"], eff):
+            if r["decision"] in ("allow", "log") and "command" in r["match"] \
+                    and not _rule_names_every_part(r["match"], eff):
+                continue  # names only some commands: it cannot decide the line (#411)
             outcome, reason, rule = r["decision"], r["reason"], "rule"
             opaque_named = opaque_named or (r["decision"] in below_ask and "opaque_exec" in
                                             [str(x) for x in _as_list(r["match"].get("category", []))])
