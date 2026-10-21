@@ -16,7 +16,9 @@ line (a setter). The #191 pass asks the same of an allow, log or ask rule for th
 fails is passed over. The line is then also decided as before, and the stricter decision stands, or the one from
 before when they are alike. So no decision is looser than before, and an anchored rule such as `^git push --force
 origin main$` still does not match a compound line. Rules that keep or raise the line, deny rules in the #191 pass
-and the `reserved:` and `deny:` lists match the whole line and its decoded views as before.
+and the `reserved:` and `deny:` lists match the whole line and its decoded views as before. A line whose parts have
+no two different own texts (one simple command beside parts the gate made for it, such as the secret path in `cat
+~/.kube/config`) is decided as before.
 
 Each line marked "main:" gives that outcome on main f6a8f25d, so those tests fail there by their outcome. The tests
 that read `own` fail on main for want of it after their outcome checks pass, and the rest guard what stays.
