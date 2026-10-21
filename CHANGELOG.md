@@ -91,6 +91,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   all: text that asks as a comment post logged. A reopen now reads its comment as a close does
   (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
   text, an unread body file included. A reopen or merge carrying no text is unchanged.
+- ssh reads its stdin as commands on the remote host through three more spellings (#316). A compound
+  redirected from a file (`{ ssh host; } < cmds.sh`), an output process substitution (`>(ssh host)`,
+  whose commands are fed what the outer command writes) and a remote hop (`ssh a ssh b`, which passes
+  its stdin on to `ssh b`) each left that stdin unseen, so the line read as plain `ssh` and was allowed.
+  A feed whose text the gate cannot read now marks the commands it reaches instead of filling in texts,
+  a >( ) body is classified as fed, and a hop to an ssh with no remote command of its own is read as
+  running the outer line's stdin on the inner host. `ssh -n`, an inner ssh with a command of its own,
+  and a compound fed only /dev/null are unchanged.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
