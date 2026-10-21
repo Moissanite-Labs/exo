@@ -411,3 +411,11 @@ def test_a_dynamic_operand_may_name_any_repo(line):
 def test_a_dynamic_option_value_names_no_other_repo():
     c, _ = run('gh pr merge 5 -R myorg/app -t "$T" -b "$B"')
     assert (c.target, c.alt_targets) == ("myorg/app#5", []), c
+
+
+# For a command outside the table gh may take some options' values and not others. The words both readings call
+# operands, with the first reading's repo, are one such mix, and it may be the one gh acts on (round 3, item 7).
+def test_a_mix_of_the_two_readings_counts_too():
+    line = "gh pr checkout -b 7 9 -f -R pub/repo"   # gh: -b takes 7 and -f is a flag, so this checks out pub/repo#9
+    c, d = run(line, normalize_policies({"gates": {"deny": ["target:pub/repo#9"]}}))
+    assert c.target == "pub/repo#7" and "pub/repo#9" in c.alt_targets and d.outcome == "deny", (c, d)

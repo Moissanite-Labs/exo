@@ -188,3 +188,19 @@ def test_a_line_whose_earlier_reading_is_outward_stays_outward():
     c, d = run("gh issue -R myorg/app close 5 && gh pr comment 3 -R myorg/app -b ok")
     assert (c.category, c.floor.category) == ("github_close", "github_post"), c
     assert is_outward(c, d) and binds_exact(c, d), (c, d)
+
+
+# `--` ends cobra's search for the subcommand: past it every word is an argument of the group, so gh finds no
+# subcommand and prints help. The gate keeps the line as written (round 3, item 7).
+@pytest.mark.parametrize("line", ["gh pr -- x comment 5", "gh pr -- x comment 5 -R pub/repo -b SECRETX"])
+def test_the_end_of_options_ends_the_search(line):
+    c, d = run(line)
+    assert (c.category, c.floor, d.outcome) == ("read", None, "allow"), (line, c, d)
+
+
+# A line with a floor binds its approval to the exact command, also when neither reading is an outward act and the
+# line has no other target: `gh pr -R myorg/app merge 5` under a private scope is a merge, and was a read.
+def test_a_line_with_a_floor_binds_exactly():
+    c, d = run("gh pr -R myorg/app merge 5", normalize_policies({"gates": {"scopes": {"private": ["myorg/*"]}}}))
+    assert (c.category, c.alt_targets, c.floor.category, d.exposure) == ("vcs_merge", [], "read", "private"), (c, d)
+    assert not is_outward(c, d) and binds_exact(c, d), (c, d)

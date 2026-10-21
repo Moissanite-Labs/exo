@@ -1956,6 +1956,9 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _GH_URL.match(argv[i]))])
     readings = [_gh_read(group, r, [argv[i] for i in o], url) for r, o in parses for url in (True, False) if url or r]
     readings += raw + [("", "")] * any(i in dynamic for _, o in parses for i in o)
+    # Outside the table gh may take some options' values and not others, a mix of the two readings. The words both
+    # call operands, with the first one's repo, are such a mix: in `gh pr checkout -b 7 9 -f -R pub/repo` gh checks
+    # out pub/repo#9, which neither reading names. In the table there is one reading, and this is it again.
     readings += [_gh_read(group, repo, [argv[i] for i in sorted(sure)]),
                  _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:], host=False)]      # as before #399
     return target, link, _gh_others(target, readings)
@@ -2097,7 +2100,6 @@ def _classify_gh_words(argv: list[str], cmd: str, stdin: str | None, dynamic: fr
     for t, url in alts:
         alt = _gh_kind(argv, cmd, stdin, t, url)
         if alt.target not in [c.target] + c.alt_targets:
-            alt.signals = list(c.signals)
             c.parts.append(alt)
             c.alt_targets.append(alt.target)
     return c
