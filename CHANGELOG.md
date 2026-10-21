@@ -6,6 +6,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A ruling a host removed with /undo no longer stays in the session pins (#389). Exo's own undo reaches
+  the engine as a session switch and the pins are pruned there, but a host like Hermes reports its undo to
+  its memory providers, not to the context engine, so nothing ever pruned them: the undone ruling rode
+  every later compaction into the summary block and the handoff file. Compaction now drops a pin whose
+  source turn is no longer in the transcript, by the same test the undo switch applies, before the pins
+  are merged back in. The test runs only while nothing in the transcript has been compacted yet: once a
+  summary enters it, a pin's absence proves nothing, since its source was folded into that summary, and
+  the pins carry on as before.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
