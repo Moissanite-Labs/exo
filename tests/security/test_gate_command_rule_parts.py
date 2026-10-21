@@ -595,6 +595,14 @@ def test_a_later_reader_gives_its_own_text_only_to_the_parts_it_makes():
     assert {q.own for q in parts if "program" in q.summary} == {"psql -d a", "psql -d b"}
 
 
+@pytest.mark.parametrize("line", [line for line, _ in ONE_READ] + [
+    "{ sqlite3 a.db; sqlite3 b.db; } <<'EOF'\n.shell bash\nEOF", "echo 'print(1)' | { python3; node; }",
+    "psql -d a <<'EOF'\n\\! psql -d b <<X\n\\! rm -rf build\nX\nEOF", f"bash -c \"python3 <<EOF\n{PY_W}\nEOF\"",
+])
+def test_no_part_keeps_the_stand_in_for_the_reader_s_own_text(line):
+    assert not any(q.own is gate._READER or q.own == str(gate._READER) for q in gate._each_part(sh(line)))
+
+
 # --- parts with no own text ------------------------------------------------------------------------------------------
 
 def test_parts_with_no_own_text_never_match():
