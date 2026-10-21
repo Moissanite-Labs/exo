@@ -12,7 +12,7 @@ executed.
 """
 import pytest
 
-from exo.gate import binds_exact, classify, decide, normalize_policies
+from exo.gate import binds_exact, classify, decide, is_outward, normalize_policies
 
 POST = {"footer": "F", "scrub": {"names": ["SECRETX"]}}
 POLICY = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "posting": POST})
@@ -180,3 +180,11 @@ def test_an_alias_is_the_subcommand_it_names(line, canonical):
 def test_an_alias_that_reads_or_holds_credentials(line, summary):
     c, d = run(line)
     assert c.summary == summary and c.category in ("read", "credentials"), c
+
+
+# In a compound line the earlier reading's most severe part may be a post where the line's is a close. The line stays
+# an outward act, as on main, so a caller that asks is_outward gets no lower answer.
+def test_a_line_whose_earlier_reading_is_outward_stays_outward():
+    c, d = run("gh issue -R myorg/app close 5 && gh pr comment 3 -R myorg/app -b ok")
+    assert (c.category, c.floor.category) == ("github_close", "github_post"), c
+    assert is_outward(c, d) and binds_exact(c, d), (c, d)

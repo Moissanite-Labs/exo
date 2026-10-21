@@ -6159,10 +6159,10 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval must bind to the exact text: posts, messages, money, and anything
-    public or irreversible."""
+    public or irreversible, also when only the line as read before #399 (``floor``) is one."""
     exposure = (d.exposure if d is not None and d.exposure else c.exposure)
     return (c.category in OUTBOUND or c.category in ("payment", "account") or exposure == "public"
-            or c.reversibility == "irreversible")
+            or c.reversibility == "irreversible" or (c.floor is not None and is_outward(c.floor, d)))
 
 
 def approval_binding(c: Classification, args: Mapping | None = None) -> str:
