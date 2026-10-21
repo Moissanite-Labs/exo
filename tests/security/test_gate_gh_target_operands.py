@@ -267,6 +267,43 @@ def test_an_ssh_host_is_not_an_other_target_of_itself():
     assert (c.target, c.alt_targets) == ("buildhost", []), c
 
 
+# The copy of the action on an empty other target is a part of the line, and it gets the host too. So a deny, a rule
+# or a reserved entry on the host's category sees it also when another part of the line outranks the gh part. On
+# main the gh part's own target was the host (round 4, item 1).
+def _host_rule(category, host):
+    return {"rules": [{"match": {"category": category, "target": host}, "decision": "deny"}]}
+
+
+HOST_POST = "ssh buildhost gh pr comment -wR myorg/app -b hi"
+
+
+@pytest.mark.parametrize("gates, line", [
+    ({"deny": [{"category": "github_post", "target": "buildhost"}]}, f"gh release delete v1 -y && {HOST_POST}"),
+    (_host_rule("github_post", "buildhost"), f"gh release delete v1 -y && {HOST_POST}"),
+    (_host_rule("read", "buildhost"), "bash -c 'ssh buildhost -- gh api repos/pub/repo/issues?per_page=1'"),
+    (_host_rule("read", "build"), "ssh -i ~/.ssh/k build gh repo view --web myorg/app"),
+    (_host_rule("read", "buildhost"), "gh release delete v1 -y && mosh buildhost -- gh repo view --web myorg/app"),
+    (_host_rule("read", "build"), "gh release delete v1 -y && ssh jump ssh build gh repo view --web myorg/app"),
+    (_host_rule("read", "build"), "ssh jump ssh -i ~/.ssh/k build gh repo view --web myorg/app"),
+])
+def test_an_ssh_host_stands_for_an_empty_other_target_below_the_top(gates, line):
+    c, d = run(line, normalize_policies({"gates": gates}))
+    assert d.outcome == "deny", (line, d)
+
+
+@pytest.mark.parametrize("reserved, line, hit", [
+    (["target:build*"], "ssh -i ~/.ssh/k build gh repo view --web myorg/app", ("read", "build")),
+    (["target:build"], "gh release delete v1 -y && ssh jump ssh build gh repo view --web myorg/app", ("read", "build")),
+    (["vcs_merge", "github_close"],
+     "gh secret set T -b x || ssh -F ~/.ssh/config buildhost gh repo archive -dR=pub/repo pub/repo",
+     ("github_close", "buildhost")),
+])
+def test_a_reserved_entry_records_the_host_of_an_empty_other_target(reserved, line, hit):
+    c, d = run(line, normalize_policies({"gates": {"reserved": reserved}}))
+    assert hit in d.reserved, (line, d)
+    assert not any(p.target == "" and p.category == hit[0] for p in c.parts if p.alt_copy), c
+
+
 # gh api takes its endpoint from its one operand, never from an option's value: a header, a jq query, a template, a
 # host, a cache time, a preview name or an input file can hold a path that names another repo (round 3, item 2).
 API_POST = "repos/pub/repo/issues/5/comments -f body=x"
