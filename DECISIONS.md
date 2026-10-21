@@ -710,8 +710,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (`-b 7`, `--milestone 3`) became the target's number the same way. Now `_gh_target` takes the repo and the number
   from `-R` and the operands only. It reads them with the table the unseen check uses (`_GH_TAKES` and the text
   options, through `_option_values`), so `--opt=value`, short clusters, `--` and options with no value read as in gh.
-  `gh issue close` lists `--duplicate-of` and `-r` now, and the table has rows for the other commands that post,
-  close, merge, lock, transfer or delete (gh 2.89 `--help`). gh keeps the last `-R`. A URL operand names the repo even beside `-R`,
+  `gh issue close` lists `--duplicate-of` and `-r` now, and the table has rows for pr ready, reopen, merge, lock
+  and unlock, issue reopen, develop, lock, unlock, delete and transfer, and release upload and delete (gh 2.89
+  `--help`). gh keeps the last `-R`. A URL operand names the repo even beside `-R`,
   because gh does that (`pr/shared/finder.go` and `issue/shared/lookup.go` in gh 2.89). The other readings the gate
   cannot rule out are kept as `Classification.alt_targets`, each with a copy of the action as a part: `-R` when a
   URL operand names another repo, and the reading before #399. `decide` decides the line on each and keeps the
@@ -734,8 +735,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   floor below too. The line as read before is decided too
   (`Classification.floor`), the stricter standing on each axis. Without it a compound line could decide lower: in
   `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the push, as in the same line with the
-  options after the subcommand, and a private scope lowers it. A differential over 36,288 gh lines and 15
-  policies found no line less exposed, less third-party or lower in outcome than on main. `gh api` read its
+  options after the subcommand, and a private scope lowers it. A differential over 106,403 gh lines in four corpora
+  under 39 policies, the two earlier harnesses' and eight more (a rule and a deny on an ssh host, a rule on the
+  empty target, a read that is denied), found no line lower than on main on any axis: the outcome, the exposure,
+  the third party, the violations, the reserved parts, `is_outward`, `binds_exact`, the unseen check and the
+  signals. Each earlier harness run on its own also found none. The gate does not read `GH_HOST` or
+  `gh api --hostname`, so `owner/name` counts as a repo on github.com. `gh api` read its
   endpoint from the first word with a `/` and no `=`, an option's value included (a header, a jq query). It now
   reads its one operand with gh api's options that take a value (`_gh_api_endpoint`), and the old word is an
   other target. `-R` reads as pflag and gh read it: one `=` after a short option goes (`-R=x`, `-wR=x`), and

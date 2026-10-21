@@ -130,33 +130,34 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Security
 - Gate (#399, D-033): a URL in a gh option's value no longer picks the post's repo. The first word after the
   subcommand that began with a GitHub URL was the target, a body or `--duplicate-of` value included, so
-  `gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 ...'` counted as a post on `myorg/app#9`.
-  Under `internal: [myorg/*]` it logged, and the scrub, the footer and the third-party check for the public repo
-  never ran. A number in an option value (`-b 7`) became the target's number too. The target now comes from `-R`
-  and the operands only, read with the table of options that take a value that the unseen check uses. gh keeps
-  the last `-R`, and a URL operand still names the repo, as in gh. The gate also decides the line on every other
-  repo it cannot rule out (`-R` beside a URL operand for another repo, and the reading before this change) and
-  keeps the strictest decision, so no line decides lower than before. Such a line binds its approval to the
-  exact command, so a standing grant on one of its targets does not run it, and its question names every
-  other target ("It may land on pub/repo#7 instead."). `gh issue close --duplicate-of` and `-r` take a value in
-  the gate's table now, and the table lists `gh pr ready`, `reopen`, `merge`, `lock` and `unlock`, `gh issue
-  reopen`, `develop`, `lock`, `unlock`, `delete` and `transfer`, and `gh release upload` and `delete`. So
-  `gh pr ready --undo <URL>` no longer asks about "the current repo". An operand from an expansion
-  (`gh pr merge "$U" -R myorg/app`) may name any repo, so the line is also decided on a repo it does not name. `gh api` took its endpoint from the first word with a `/`, an option's
-  value too, so `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` was a post on
-  `myorg/app`. Its endpoint is its one operand now, and the word it took before is another target. `-R` reads as
-  gh reads it: `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`, not `=pub/repo`, and `github.com/pub/repo` or a
-  repo URL names `pub/repo`, so a `target:` deny on `pub/*` matches them. On another host the value as written
-  is another target.
-- Gate (#399, D-033): an option before a gh subcommand no longer hides it. gh finds the subcommand past the
-  options before it, so `gh pr -R pub/repo comment 5 -b text` and `gh pr -b text comment 5 -R pub/repo` post.
-  The gate took the third word for the subcommand, so these lines were reads and ran under any policy, as did
-  `gh issue -R x/y close 5` and `gh pr -R x/y merge 5`. A public post with a scrub hit passed too. The gate now
-  finds the subcommand as gh does. It passes over an empty word (`gh pr "" comment`), and an alias reads as the
-  subcommand it names, so `gh pr new`, `gh issue new`, `gh repo new`, `gh release new`, `gh gist new` and
-  `gh variable remove` are no longer reads. A word from an expansion where the subcommand may stand (`gh pr "$V" 5`)
-  counts as code the gate cannot read. The line as read before is decided too, and the stricter decision stands,
-  so no line decides lower than it did.
+  `gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 ...'` counted as a post on `myorg/app#9`. Under
+  `internal: [myorg/*]` it logged, and the scrub, the footer and the third-party check for the public repo never ran.
+  A number in an option value (`-b 7`) became the target's number too. The target now comes from `-R` and the operands
+  only, read with the table of options that take a value that the unseen check uses. gh keeps the last `-R`, and a URL
+  operand still names the repo, as in gh. The gate also decides the line on every other repo it cannot rule out (`-R`
+  beside a URL operand for another repo, and the reading before this change) and keeps the strictest decision, so no
+  line decides lower than before. Such a line binds its approval to the exact command, so a standing grant on one of
+  its targets does not run it, and its question names every other target ("It may land on pub/repo#7 instead.").
+  `gh issue close --duplicate-of` and `-r` take a value in the gate's table now, and the table lists `gh pr ready`,
+  `reopen`, `merge`, `lock` and `unlock`, `gh issue reopen`, `develop`, `lock`, `unlock`, `delete` and `transfer`, and
+  `gh release upload` and `delete`. So `gh pr ready --undo <URL>` no longer asks about "the current repo". `gh api`
+  took its endpoint from the first word with a `/`, an option's value too, so
+  `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` was a post on `myorg/app`. Its
+  endpoint is its one operand now, and the word it took before is another target. `-R` reads as gh reads it:
+  `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`, not `=pub/repo`, and `github.com/pub/repo` or a repo URL names
+  `pub/repo`, so a `target:` deny on `pub/*` matches them. On another host the value as written is another target. An
+  operand from an expansion (`gh pr merge "$U" -R myorg/app`) may name any repo, so the line is also decided on a repo
+  it does not name. On an ssh or mosh hop the host stands for an empty other target too, as for an empty target. A
+  differential over 106,403 gh lines under 39 policies found no line that decides lower than before.
+- Gate (#399, D-033): an option before a gh subcommand no longer hides it. gh finds the subcommand past the options
+  before it, so `gh pr -R pub/repo comment 5 -b text` and `gh pr -b text comment 5 -R pub/repo` post. The gate took
+  the third word for the subcommand, so these lines were reads and ran under any policy, as did
+  `gh issue -R x/y close 5` and `gh pr -R x/y merge 5`. A public post with a scrub hit passed too. The gate now finds
+  the subcommand as gh does. It passes over an empty word (`gh pr "" comment`), and an alias reads as the subcommand
+  it names, so `gh pr new`, `gh issue new`, `gh repo new`, `gh release new`, `gh gist new` and `gh variable remove`
+  are no longer reads. A command alias (`gh co`), a user alias and an extension still ask. A word from an expansion
+  where the subcommand may stand (`gh pr "$V" 5`) counts as code the gate cannot read. The line as read before is
+  decided too, and the stricter decision stands, so no line decides lower than it did.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
