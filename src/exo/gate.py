@@ -412,6 +412,16 @@ class _Cmd:
     subs_met: int = 0            # how many of the line's subs lie in its text and before it, in the lexer's order (#465)
     opens: tuple | None = None   # on a compound's closer: (the compound's first command, the subs met before the
                                  # closer's redirections), which bash expands before the compound runs (#465)
+    stdin_unknown: bool = False  # fed a stdin whose text the gate cannot read (a compound's `< file`) (#316)
+
+
+class _Subs(list):
+    """One line's substitution sources ($( ), ` ` and <( )), with the >( ) sources kept apart in `out`:
+    the commands in a >( ) are fed what the outer command writes, a stdin the gate cannot read (#316)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.out: list[str] = []
 
 
 class _Lexer:
@@ -420,7 +430,7 @@ class _Lexer:
     def __init__(self, src: str, scan: bool = True, nest: int = 0):
         self.s = src
         self.i = 0
-        self.subs: list[str] = []          # sources of $( ), ` ` and <( ) met at this level
+        self.subs: _Subs = _Subs()         # sources of $( ), ` ` and <( ) met at this level; >( ) in .out
         self.pending: list[_Heredoc] = []
         self.scan = scan                   # record _Word.exps, which only _parse's words are read for (_hidden_sets)
         self.covered = 0                   # the source before here lies in a ${..} already recorded
@@ -442,6 +452,7 @@ class _Lexer:
                 sub = _Lexer(hd.body, scan=False, nest=_NEST)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
+                self.subs.out += sub.subs.out
         ends = "".join("\n" + (hd.cut or hd.delim) for hd in read) + "\n" if read else ""
         self.cuts.append((a, b, s[a] + "(" + _TOO_DEEP + ends + ")"))
         self.subs.append(_TOO_DEEP)
@@ -547,7 +558,10 @@ class _Lexer:
                 self.nest += 1
                 self.run(closer=True)
                 self.nest -= 1
-                self.subs.append(self._source(start, max(start, self.i - 1)))
+                if ch == ">":
+                    self.subs.out.append(self._source(start, max(start, self.i - 1)))
+                else:
+                    self.subs.append(self._source(start, max(start, self.i - 1)))
                 w.text += "<(..)"
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
@@ -595,6 +609,7 @@ class _Lexer:
                 sub = _Lexer(hd.body, scan=False, nest=self.nest)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
+                self.subs.out += sub.subs.out
                 if sub.cuts:                   # the levels around hold a stand-in for the body, as for a cut
                     self.cuts.append((first, last, "$(" + _TOO_DEEP + ")\n"))
             if hd.cut and last < len(self.s):  # and its end line as they spell the delimiter, so the two still pair
@@ -626,12 +641,13 @@ class _Lexer:
         if self.nest >= _NEST:
             self._cut(w, self.i)
             return
+        out = self.s[self.i:self.i + 1] == ">"
         self.i += 2
         start = self.i
         self.nest += 1
         self.run(closer=True)
         self.nest -= 1
-        self.subs.append(self._source(start, max(start, self.i - 1)))
+        (self.subs.out if out else self.subs).append(self._source(start, max(start, self.i - 1)))
         w.text += "<(..)"
         w.dynamic = w.started = True
 
@@ -669,6 +685,7 @@ class _Lexer:
                 sub = _Lexer(body[3:-2], scan=False, nest=self.nest + 1)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
+                self.subs.out += sub.subs.out
                 self.cuts += [(x + i + 3, y + i + 3, stand_in) for x, y, stand_in in sub.cuts]
             if self.scan and i >= self.covered:
                 w.exps.append((body, body, None))
@@ -2542,7 +2559,9 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
     already set keeps it: its own redirection, a pipe from a command inside, or a nested compound's closer
     or pipe (inner closers are fed first). After an `exec < file` inside, nothing more is fed. The closer's
     own redirection wins over a pipe in, and its `<` over its heredoc too (the lexer keeps no order between
-    them), so then nothing is fed. Every other inner command gets all of it, an over-approximation: only
+    them), so then nothing is fed. A feed whose text the gate cannot read — that `<`, or a pipe in whose
+    text is not known — marks the inner commands `stdin_unknown` instead (#316), so a reader of its stdin
+    still asks. Every other inner command gets all of it, an over-approximation: only
     shells, interpreters and gh read it."""
     if src is None and not _own_stdin(closer):
         return
@@ -2551,6 +2570,11 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
     piped = _piped_text(src, taken) if src is not None and not _own_stdin(closer) else None
     if piped is not None:
         texts.append(_Word(piped))
+    # A feed whose text the gate cannot read (#316): the closer's `<` (a file or a descriptor; a lone
+    # `< /dev/null` feeds nothing), or a pipe in whose text is not known. The inner commands are marked
+    # instead of fed, so a reader of its stdin (ssh) still asks.
+    unknown = (any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in closer.redirs)
+               or (src is not None and piped is None and not _own_stdin(closer)))
     i, sets = start, False
     while i < len(cmds) and not sets:
         if i in taken:                  # a nested compound with its own stdin, skipped whole (linear)
@@ -2560,7 +2584,9 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
         sets = _sets_shell_stdin(k, fnames)
         fed = not (sets or _own_stdin(k) or (i > start and k.piped_in))
         k.fed = k.fed or fed            # its own text does not name its stdin (#394)
-        if fed and not redirected:
+        if fed and unknown:
+            k.stdin_unknown = True
+        elif fed and not redirected:
             k.heredocs, k.herestrings = heredocs, texts      # shared, so _once reads them once per line
         i += 1
     if len(cmds) > start:
@@ -2683,7 +2709,8 @@ def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
         ch = value[lx.i]
         if start and ch == "[":
             lx.i, subs, odd = _arith_scan(value, lx.i + 1, procsub=True)
-            lx.subs, other = lx.subs + subs, other or odd
+            lx.subs += subs
+            other = other or odd
         elif ch == "`" or value.startswith(("$(", "<(", ">("), lx.i):
             _SCANS.get(ch, _Lexer._procsub)(lx, _Word())
             other = other or arith
@@ -3013,12 +3040,20 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c = classify_shell(inner, inner_depth)
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
-        if prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags):
+        fed_line = bool(ctx.get("stdin_unknown"))     # the whole line is a >( ) body (#316)
+        if prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags, fed_line):
             # #240: the login shell on the host runs ssh's stdin. It is read as shell, as for `bash -s`, and asks.
             fed = [_runs_stdin(_opaque(f"ssh {dest} runs its stdin as commands on the remote host"[:120], cmd), k)]
             if depth < _DEPTH:
                 fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
             c = _combine([c, *fed], cmd)
+        elif prog == "ssh" and inner:
+            hop = _ssh_hop(words, k, piped, i, flags, inner, fed_line)
+            if hop:               # the stdin runs one hop further in, on the inner host (#316)
+                fed = [_opaque(f"ssh {hop} runs its stdin as commands on the remote host"[:120], cmd)]
+                if depth < _DEPTH:
+                    fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
+                c = _combine([c, *fed], cmd)
         dests = [host, dest]
         if dest != old_dest:
             # The gate used to read another word as the host. The line asks and both readings' parts are
@@ -3198,15 +3233,24 @@ def _ssh_options(args: list[str], i: int, after: bool = False) -> tuple[int, str
     return i, letters
 
 
-def _ssh_stdin_runs(words: list, k: _Cmd, piped: str | None, i: int, flags: str) -> bool:
+def _stdin_given(k: _Cmd, piped: str | None) -> bool:
+    """Whether the line gives the command a stdin: a pipe in, a heredoc or here-string, a `<` from anything but
+    /dev/null, or a feed whose text the gate cannot read — a compound closer's `<` or a >( ) body (#316),
+    which is marked on the command (or, for a >( ) body, on its whole line) instead of filling in texts."""
+    return bool(k.piped_in or piped is not None or k.heredocs or k.herestrings or k.stdin_unknown
+                or any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs))
+
+
+def _ssh_stdin_runs(words: list, k: _Cmd, piped: str | None, i: int, flags: str, fed: bool = False) -> bool:
     """Whether the login shell on the remote host runs ssh's stdin as commands (#240). That takes a stdin the line
-    gives ssh (a pipe, a heredoc, a here-string, a `<` from anything but /dev/null), none of `-n`, `-N` and `-f`
-    (ssh then does not read it) and no remote command: ssh reads options after the host too (`ssh host -T`), up
-    to the command, and an empty word is no command. A word that may expand to no word or several (`$A`, a glob)
-    among the options and the host, or as every word of the command, leaves them uncountable, so the stdin is read
-    then too. `words` is ssh's argv as words; `i` is the host's index in words[1:], `flags` the letters before it."""
-    if not (k.piped_in or piped is not None or k.heredocs or k.herestrings
-            or any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs)):
+    gives ssh (a pipe, a heredoc, a here-string, a `<` from anything but /dev/null, or a feed the gate cannot
+    read, #316), none of `-n`, `-N` and `-f` (ssh then does not read it) and no remote command: ssh reads
+    options after the host too (`ssh host -T`), up to the command, and an empty word is no command. A word
+    that may expand to no word or several (`$A`, a glob) among the options and the host, or as every word of
+    the command, leaves them uncountable, so the stdin is read then too. `words` is ssh's argv as words; `i`
+    is the host's index in words[1:], `flags` the letters before it. `fed` is a whole line fed an unreadable
+    stdin (the commands in a >( ) body, #316)."""
+    if not (fed or _stdin_given(k, piped)):
         return False
     texts = [w.text for w in words[1:]]
     wild = [w.dynamic or (not w.quoted and (w.glob or bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
@@ -3215,6 +3259,45 @@ def _ssh_stdin_runs(words: list, k: _Cmd, piped: str | None, i: int, flags: str)
     if any(wild[:j]):
         return True
     return not set(flags + late) & set("nNf") and (" ".join(texts[j:]) == "" or all(wild[j:]))
+
+
+def _ssh_hop(words: list, k: _Cmd, piped: str | None, i: int, flags: str, inner: str, fed: bool = False) -> str:
+    """The host a remote ssh hop runs this line's stdin on, or "" (#316). `ssh a ssh b`, fed a stdin, passes it
+    to `ssh b` on a, and b has no remote command of its own, so b's login shell runs it, as it would for a
+    remote `bash`. The outer ssh must be fed and forward its stdin (none of `-n`, `-N` or `-f`, before the
+    host or after it), the words up to its remote command must be countable, and the remote command — read
+    from its own parse, as the gate reads it — must be one ssh whose own command is empty or only words that
+    may expand to none. Uncountable words among the inner ssh's options and host leave it read, as there."""
+    if not (fed or _stdin_given(k, piped)):
+        return ""
+    texts = [w.text for w in words[1:]]
+    wild = [w.dynamic or (not w.quoted and (w.glob or bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
+            for w in words[1:]]
+    j, late = (i + 1, "") if "--" in texts[:i] else _ssh_options(texts, i + 1, after=True)
+    if any(wild[:j]) or set(flags + late) & set("nNf"):
+        return ""
+    for k2 in _parse(inner)[0]:
+        words2 = list(k2.words)
+        while words2 and not words2[0].quoted and words2[0].text in _OPENERS:
+            words2 = words2[1:]
+        if not words2:
+            continue
+        words2, _, _ = _strip_prefix_words(words2)
+        if not words2 or words2[0].dynamic or words2[0].text.rsplit("/", 1)[-1] != "ssh":
+            return ""
+        rest = [w.text for w in words2[1:]]
+        wild2 = [w.dynamic or (not w.quoted and (w.glob or bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
+                 for w in words2[1:]]
+        i2, flags2 = _ssh_options(rest, 0)
+        if i2 >= len(rest):
+            return ""
+        j2, late2 = (i2 + 1, "") if "--" in rest[:i2] else _ssh_options(rest, i2 + 1, after=True)
+        if any(wild2[:j2]):
+            return rest[i2]
+        if set(flags2 + late2) & set("nNf"):
+            return ""
+        return rest[i2] if (" ".join(rest[j2:]) == "" or all(wild2[j2:])) else ""
+    return ""
 
 
 def _ssh_setting(text: str) -> tuple[str, str]:
@@ -4281,22 +4364,23 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     return next((q for q, w in words if _sensitive_words([w]) or _glob_words([w])), words[0][0])
 
 
-def classify_shell(cmd: str, depth: int = 0) -> Classification:
+def classify_shell(cmd: str, depth: int = 0, stdin_unknown: bool = False) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part. Within one top-level call a line is
-    classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy."""
+    classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy.
+    `stdin_unknown` marks the whole line as fed a stdin whose text the gate cannot read (a >( ) body, #316)."""
     seen = _shell_seen.get()
     if seen is None:
         token = _shell_seen.set({})
         try:
-            return classify_shell(cmd, depth)
+            return classify_shell(cmd, depth, stdin_unknown)
         finally:
             _shell_seen.reset(token)
     # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it.
-    key = ("shell", cmd, depth, _budgets(), _cd_into.get())
+    key = ("shell", cmd, depth, _budgets(), _cd_into.get(), stdin_unknown)
     if key not in seen:
         own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
-            seen[key] = _classify_shell(cmd, depth)
+            seen[key] = _classify_shell(cmd, depth, stdin_unknown)
         finally:
             _own_text.reset(own)
     return _own_copy(seen[key])
@@ -4321,14 +4405,14 @@ def _unread_nest() -> Classification:
     return c
 
 
-def _classify_shell(cmd: str, depth: int) -> Classification:
+def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classification:
     # A run of stand-in lines (_Lexer._cut), also one written by hand, is one unread part, taken in one step so that no
     # number of them recurses. The lines after it end here-doc bodies, and are read as any line.
     if m := _STAND_INS.match(cmd or ""):
         rest = cmd[m.end():]
-        return _combine([_unread_nest(), classify_shell(rest, depth)], cmd) if rest else _unread_nest()
+        return _combine([_unread_nest(), classify_shell(rest, depth, stdin_unknown)], cmd) if rest else _unread_nest()
     cmds, subs, func = _parse(cmd or "")
-    ctx: dict = {"subs": subs}
+    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown}
     if into := _cd_into.get():            # a $( ) on a line that entered the store runs in it (#465)
         ctx["store_cwd"] = True
         if into[1]:
@@ -4375,6 +4459,8 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
             if token is not None:
                 _cd_into.reset(token)
         parts += _given_stdin(got, lambda: None, ctx) if given else got
+    for sub in getattr(subs, "out", []):     # a >( ) body: its commands are fed the outer command's output (#316)
+        parts.append(classify_shell(sub, depth + 1, stdin_unknown=True) if depth < _DEPTH else _too_deep(cmd))
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
