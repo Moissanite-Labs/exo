@@ -36,7 +36,7 @@ from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.ingress import Ingress, IngressPath, PeerConfig, Receipt, Target
 from exo.core.private import atomic_write
-from exo.core.seats import ensure_key, key_path
+from exo.core.seats import ensure_key, key_path, load as _load_seat
 from exo.core.sessions import new_id
 from exo.core.tools.registry import ToolContext, ToolError
 from exo.core.types import ToolSpec
@@ -256,11 +256,13 @@ class PeerNode:
 
     def __init__(self, *, seat: str, signer: crypto.Signer, target: Target, sessions: Callable[[], list[dict[str, Any]]],
                  directory: Directory | None = None, socket: str = "", platform: str = "exo", principal: str = "",
-                 cwd: str = "", config: PeerConfig | None = None, bus: BusLink | None = None,
+                 cwd: str = "", home: str | os.PathLike | None = None, config: PeerConfig | None = None,
+                 bus: BusLink | None = None,
                  rpc: Rpc | None = None, emit_out: Callable[..., Any] | None = None) -> None:
         self.seat, self.signer, self.target, self.sessions = seat, signer, target, sessions
         self.directory = directory or Directory()
         self.socket, self.platform, self.principal, self.cwd = socket, platform, principal or "", cwd
+        self.home = Path(home) if home else None  # the principal-owned home: where seat keys are pinned
         self.config = config or PeerConfig()
         self.bus = bus
         self.rpc: Rpc = rpc or call_socket
@@ -290,9 +292,44 @@ class PeerNode:
     def _policy(self, ing: Ingress) -> tuple[str, str]:
         return gate.decide_peer(ing.trust, ing.sender, {"policy": self.config.policy, "rules": self.config.rules})
 
-    def _trust(self, meta: dict[str, Any], sender: Presence | None, ok: bool) -> str:
+    def _pinned_pubs(self, seat: str) -> list[str]:
+        """The seat's pinned verify keys, from this home's keys dir alone: the ``.pub`` beside the seat's key
+        file (``core/seats.py``) and the key registry's pins for the seat. The presence file's ``pub`` is
+        never one of these: the presence dir is a shared runtime dir any same-user process can write, so a
+        key read from it proves nothing (#132)."""
+        if self.home is None or not seat:
+            return []
+        if seat == self.seat:
+            return [self.signer.pub]
+        paths: list[Path] = []
+        try:
+            paths.append(_load_seat(self.home, seat).key_path(self.home))
+        except Exception:
+            pass
+        paths.append(key_path(self.home, seat))
+        out: list[str] = []
+        for p in paths:
+            try:
+                pub = crypto.load_pub(p.with_suffix(".pub"))
+            except OSError:
+                continue
+            if pub and pub not in out:
+                out.append(pub)
+        try:
+            from exo.keyring import KeyRegistry
+            out += [p for p in KeyRegistry.load(self.home, create=False).keys.get(seat, []) if p not in out]
+        except Exception:
+            pass  # a broken registry is not a key source; the .pub files above still are
+        return out
+
+    def _trust(self, meta: dict[str, Any], sender: Presence | None, ok: bool, pinned: bool = False) -> str:
         if not ok or sender is None:
             return "unverified"
+        if not pinned:
+            # The signature checked out against the presence file's own key, which any same-user process
+            # can write, and the sender's principal comes from the same file: presence data alone never
+            # earns trust, so the sender is an unknown principal whatever the file claims (#132).
+            return "other"
         same = (sender.principal or "") == (self.principal or "")
         if not same:
             return "other"
@@ -414,9 +451,19 @@ class PeerNode:
         sender = self.directory.get(str(meta.get("daemon") or ""))
         if sender is None and meta.get("daemon") == self.daemon:  # a message between two sessions of this daemon
             sender = self.presence()
-        pub = sender.pub if sender and sender.seat == env.get("from") else ""
-        why = verify_envelope(env, pub, self._seen)
-        trust = self._trust(meta, sender, not why)
+        seat = str(env.get("from") or "")
+        pinned = self._pinned_pubs(seat) if sender is not None and sender.seat == seat else []
+        if pinned:
+            why = "no public key for the sender"
+            for pub in pinned:  # the pin is the only key source; the presence key is not consulted (#132)
+                why = verify_envelope(env, pub, self._seen)
+                if not why:
+                    break
+        else:  # no pin for this seat: the presence key is a discovery hint, enough to check the
+            # signature for consistency, never enough to earn trust (see _trust)
+            pub = sender.pub if sender and sender.seat == seat else ""
+            why = verify_envelope(env, pub, self._seen)
+        trust = self._trust(meta, sender, not why, pinned=bool(pinned))
         sid = meta.get("session")
         name = f"{env.get('from')}/{short(sid)}" if sid else str(env.get("from"))
         ing = Ingress("peer", name, trust, str(env.get("body") or ""), session=meta.get("to_session"),
@@ -442,11 +489,15 @@ class PeerNode:
             trace.report("peers receipt to sender", exc)
 
     async def receipt(self, doc: dict[str, Any]) -> dict[str, Any]:
-        """A later receipt for a message this daemon sent. Verified against the receiver's presence key."""
+        """A later receipt for a message this daemon sent. Verified against the receiver seat's pinned key
+        when one is pinned in this home; the presence key only when none is (#132)."""
         mid = str(doc.get("msg_id") or "")
         who = self.directory.get(str(doc.get("daemon") or ""))
-        if mid not in self._sent or who is None or not crypto.verify_doc(doc, who.pub) or doc.get("state") not in (
-                "released", "denied", "expired", "delivered"):
+        pubs = self._pinned_pubs(str(doc.get("by") or ""))
+        if not pubs and who is not None:
+            pubs = [who.pub]
+        if mid not in self._sent or who is None or not any(crypto.verify_doc(doc, p) for p in pubs) \
+                or doc.get("state") not in ("released", "denied", "expired", "delivered"):
             return {"ok": False}
         session, peer = self._sent[mid]
         await self._publish_out(session, {"msg_id": mid, "state": doc["state"], "to": peer, "detail": doc.get("detail", "")})
@@ -505,7 +556,8 @@ class PeerService:
         self.node = tgt.node = PeerNode(
             seat=seat, signer=signer, target=tgt, sessions=tgt.live_sessions, socket=path, platform="exo",
             principal=(e.seat.principal if e.seat else None) or os.environ.get("EXO_PRINCIPAL", ""),
-            cwd=e.cwd, config=e.peer_cfg, bus=BusLink.from_env(), directory=Directory(e.peer_cfg_dir or peers_dir()),
+            cwd=e.cwd, home=e.home, config=e.peer_cfg, bus=BusLink.from_env(),
+            directory=Directory(e.peer_cfg_dir or peers_dir()),
             emit_out=lambda session, body: e.hub.publish(body, session))
         self.node.start()
 

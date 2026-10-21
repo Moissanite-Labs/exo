@@ -22,6 +22,7 @@ the other changes course at its next step. In Exo this works between Exo session
 | you, typing `/send` from a client of the same principal | auto |
 | another session of the same principal, same machine | auto |
 | a different or unknown principal | hold |
+| a local peer whose key is not pinned in this home's `keys/` | hold |
 | a bus seat (signed by its pinned key) | hold |
 | bad or missing signature, or a bus seat whose key changed | deny (cannot be changed) |
 
@@ -85,8 +86,12 @@ peer client is refused. The system prompt carries a standing line saying the sam
   `<tmp>/exo-<uid>/peers` (mode 0700) instead, and says nothing is lost but discovery by peers that use the default
   folder; set `EXO_PEERS_DIR` to a short path to share one.
 - A message is a bus-format envelope signed with the sender seat's key. Sender session, target session,
-  who wrote it and a nonce are inside the signed `attach`. The receiver checks id, signature (key from the
-  sender's presence file), age and replay.
+  who wrote it and a nonce are inside the signed `attach`. The receiver checks id, signature, age and
+  replay. The signature is checked against the seat's pinned key in this home's `keys/` (the `.pub` beside
+  the seat's key file, or the key registry's pin for the seat), never against the key in the sender's
+  presence file: the presence dir is a shared runtime dir any same-user process can write, so its key and
+  its principal claim are a discovery hint only. A sender with no pinned key is held as an unknown
+  principal, whatever its presence file says (#132). Receipts are checked the same way.
 - Local delivery goes over the target daemon's socket with the `peers` protocol command (actions `list`,
   `send`, `deliver`, `receipt`, and `bus` for the bus channel; one command because the protocol has no command slots
   left). Events:
