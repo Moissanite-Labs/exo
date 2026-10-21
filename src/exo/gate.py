@@ -187,6 +187,15 @@ def _make(category: str, tool: str = "", **kw) -> Classification:
 _own_text: contextvars.ContextVar[list[str | None] | None] = contextvars.ContextVar("exo_gate_own_text", default=None)
 
 
+class _StandIn(str):
+    """An own text that stands for another (#394). No text of a line is one, so it is told apart by identity."""
+
+
+# The own text that a stdin reader's parts carry while _once reads a text once for all the readers on a line (#394).
+# Each reader then gets copies with its own text in its place (_restamp).
+_READER = _StandIn("the reader's own text")
+
+
 def _severity(c: Classification) -> tuple:
     return (REVERSIBILITY.index(c.reversibility), EXPOSURE.index(c.exposure), c.third_party,
             c.category not in ("shell", "read", "code", "unknown"))
@@ -2473,33 +2482,63 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
 
 
 def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str], list[Classification]],
-          ambiguous: bool = False) -> list[Classification]:
+          ambiguous: bool = False, own: str | None | EllipsisType = ...) -> list[Classification]:
     """read(text) for each stdin text of k (each heredoc body after an ambiguous delimiter, if ambiguous), run
     once per command line and key. A compound's stdin reaches every command inside it (as the same lists), and
     each command still gets copies of the parts, since its own store check (_store_touch) reads them; the same
     lists again give the most severe part of each category, all that check and _combine look at. Without this a
     body of fed shells, itself fed to many shells, is read width ** depth times, and many here-strings fed to
-    many shells cost their product."""
+    many shells cost their product.
+    A reader whose parts carry its own text (#394) passes that text as ``own``. The text is then read with _READER
+    in its place, and each reader gets copies with its own text there (_restamp): `{ psql -d test; psql -d prod; }
+    <<EOF` gives psql -d prod parts with its own text. Each text is still read once per line, since every read
+    spends the call's budgets (_brace_budget) and a second read could find them spent."""
     memo = ctx.setdefault("stdin", {})
     whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
-    # _exec_options makes parts with the reading command's own text (#394), so each command reads it for itself:
-    # `{ psql -d test; psql -d prod; } <<EOF` gives psql -d prod its own parts. The first reader still gets every
-    # part and a later one the most severe of each category, as before. classify_shell and classify_code give
-    # the parts they make their own text, which the key holds.
-    own = (_own_text.get() or [None])[0] if key[0] is _exec_options else None
-    if (*whole, own) in memo:
-        return [_copy(c) for c in memo[(*whole, own)]]
+    if whole in memo:
+        return [_copy(_restamp(ctx, c, own)) for c in memo[whole]]
     got: list[Classification] = []
     for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped):
-        if (*key, own, text) not in memo:
-            memo[(*key, own, text)] = read(text)
-        got += memo[(*key, own, text)]
-    memo[(*whole, own)] = [max((p for p in got if p.category == c), key=_severity)
-                           for c in dict.fromkeys(p.category for p in got)]
-    if whole in memo:
-        return [_copy(c) for c in memo[(*whole, own)]]
-    memo[whole] = True
-    return [_copy(c) for c in got]
+        if (*key, text) not in memo:
+            memo[(*key, text)] = read(text) if own is ... else _read_as_reader(read, text)
+        got += memo[(*key, text)]
+    memo[whole] = [max((p for p in got if p.category == c), key=_severity)
+                   for c in dict.fromkeys(p.category for p in got)]
+    return [_copy(_restamp(ctx, c, own)) for c in got]
+
+
+def _read_as_reader(read: Callable[[str], list[Classification]], text: str) -> list[Classification]:
+    """read(text), with _READER as the own text of each part it makes for the reading command (#394)."""
+    slot = _own_text.get()
+    if slot is None:
+        return read(text)
+    was, slot[0] = slot[0], _READER
+    try:
+        return read(text)
+    finally:
+        slot[0] = was
+
+
+def _restamp(ctx: dict, c: Classification, own: str | None | EllipsisType) -> Classification:
+    """``c``, a part _once stored, with ``own`` as the own text of each part in it that has _READER (#394). Only those
+    parts and the parts built from them are copied, once per line for each part and own text: the many readers
+    of a compound's stdin get the same few parts, and one of them may be built from many."""
+    if own is ...:
+        return c
+    holds, done = ctx.setdefault("stand_in", {}), ctx.setdefault("restamped", {})
+
+    def held(p: Classification) -> bool:
+        if id(p) not in holds:
+            holds[id(p)] = p.own is _READER or any([held(q) for q in p.parts])
+        return holds[id(p)]
+
+    def walk(p: Classification) -> Classification:
+        if not held(p):
+            return p
+        if (id(p), own) not in done:
+            done[(id(p), own)] = replace(p, parts=[walk(q) for q in p.parts], own=own if p.own is _READER else p.own)
+        return done[(id(p), own)]
+    return walk(c)
 
 
 def _copy(c: Classification) -> Classification:
@@ -3396,7 +3435,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
 
         for text in texts:
             parts += read(text)
-        parts += _once(ctx, (_exec_options, prog, depth), k, piped, read)    # a compound's stdin is shared
+        own = (_own_text.get() or [None])[0]       # the parts read() makes carry this command's own text (#394)
+        parts += _once(ctx, (_exec_options, prog, depth), k, piped, read, own=own)   # a compound's stdin is shared
     return parts
 
 
@@ -3435,7 +3475,7 @@ def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: 
         i += 2 if a in _INTERP_VALUE_FLAGS.get(prog, ()) else 1
     parts = [_runs_stdin(_opaque(f"{prog} reads code from its input", cmd), k)]
     src = parts[0].own               # the code comes from stdin: the text that shows where it comes from (#394)
-    parts += _once(ctx, (classify_code, src), k, piped, lambda t: [classify_code(t, src)])
+    parts += _once(ctx, (classify_code,), k, piped, lambda t: [classify_code(t, _READER)], own=src)
     return parts
 
 
