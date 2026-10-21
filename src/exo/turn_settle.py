@@ -7,12 +7,35 @@ overflow the context's ``view_budget``, wait briefly (``overflow_settle``) for a
 Consistency does not depend on the wait. ``build`` reads the tree and the tail in one synchronous stretch, and a
 summary node turns ``done`` (text and status together) in a single step, so a turn sees each span either as its
 old verbatim or leaf summaries, or as the finished summary, never a half-applied one.
+
+One view has no summary to wait for: a private thread whose own tree has no finished summary yet. Its tail is
+the whole thread, so a slow summarizer would leave the first calls unbounded (issue #244). Until the first
+summary lands, ``fit_tail`` cuts that tail to ``view_budget`` and the caller marks the cut with
+``SUMMARIZING_MARKER``. Once a summary lands, the tree's view leads the tail as usual and nothing is cut.
 """
 from __future__ import annotations
 
 from typing import Any
 
 OVERFLOW_SETTLE = 5.0  # seconds a turn waits for summaries when the verbatim view overflows the budget
+SUMMARIZING_MARKER = "[earlier messages are being summarized]"  # leads a tail cut by fit_tail (issue #244)
+
+
+def fit_tail(tail: list, budget: int) -> tuple[list, int]:
+    """The newest messages of ``tail`` whose rendered size fits ``budget``, and how many older ones were left
+    out. The last message is always kept, however large: it is the turn being answered."""
+    from exo.core.context import estimate_tokens  # core imports this module
+
+    kept: list = []
+    used = 0
+    for m in reversed(tail):
+        cost = estimate_tokens(m)
+        if kept and used + cost > budget:
+            break
+        kept.append(m)
+        used += cost
+    kept.reverse()
+    return kept, len(tail) - len(kept)
 
 
 def verbatim_overflows(ctx: Any, key: str) -> bool:

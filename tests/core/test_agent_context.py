@@ -337,6 +337,60 @@ def test_a_long_private_thread_waits_for_its_first_summaries():
     assert sum(estimate_tokens(m) for m in call) < ctx.view_budget
 
 
+class SlowSumm(Summ):
+    """A summarizer that finishes nothing until the test opens its gate (the issue's 30 s per leaf)."""
+
+    def __init__(self):
+        super().__init__()
+        self.gate: asyncio.Event | None = None
+
+    async def summarize(self, content, previous=None, session=None, **kw):
+        if self.gate is not None:
+            await self.gate.wait()
+        return await super().summarize(content, previous, session)
+
+
+def test_a_long_private_thread_with_a_slow_summarizer_is_cut_to_the_budget():
+    """Issue #244: with a slow summarizer the overflow wait ends long before the first leaves land, so until the
+    private tree's first summary lands the tail is cut to view_budget behind a marker, newest messages kept.
+    Once a summary lands, the private view leads the tail again and nothing is cut."""
+    from exo.core.context import estimate_tokens
+
+    store = SessionStore()
+    summ = SlowSumm()
+    ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=0)
+    ctx.overflow_settle = 0.2  # the wait still happens; it just cannot outlast a summarizer this slow
+    prov = Echo()
+    loop = Loop(store, prov, context=ctx, system_prompt="SYS", retry_delay=0)
+
+    async def go():
+        summ.gate = asyncio.Event()
+        a = await loop.create_session(agent="razi", title="public")
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        for i in range(150):
+            store.append_message(p.id, Message.user(f"private note {i} " + "z" * 1500))
+            store.append_message(p.id, Message.assistant(f"noted {i} " + "z" * 1500))
+        for i in range(3):
+            await loop.send(a.id, f"public work {i} " + "y" * 3000)
+        assert store.summaries(p.id) == []
+        await loop.send(p.id, "what did I note first?")
+        first = prov.calls[-1]
+        summ.gate.set()
+        await settle_own(ctx, p.id)
+        await loop.send(p.id, "and the last one?")
+        return p, first, prov.calls[-1]
+    p, first, second = run(go())
+    marker = "[earlier messages are being summarized]"
+    assert any(m.text() == marker for m in first)
+    kept = [m for m in first if "private note" in m.text() or m.text().startswith("noted ")]
+    assert kept and "private note 149" in kept[-2].text() and kept[-1].text().startswith("noted 149")
+    assert not any(m.text().startswith("private note 0 ") for m in kept)
+    assert len(kept) <= 20 and sum(estimate_tokens(m) for m in kept) <= ctx.view_budget
+    assert not any(m.text() == marker for m in second)
+    assert second[1].text().startswith(PRIVATE_HEAD)
+    assert any(n.status == "done" for n in store.summaries(p.id))
+
+
 class Keep(Summ):
     """A faithful fake: its summary keeps every marker (mk<n>, ok <n>) it is shown."""
 
