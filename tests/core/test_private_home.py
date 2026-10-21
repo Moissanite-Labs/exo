@@ -127,6 +127,46 @@ def test_private_dir_rejects_symlink_parent(tmp_path):
     assert mode(target) == 0o755
 
 
+def test_atomic_write_mode_none_does_not_race_the_umask_probe(tmp_path, monkeypatch):
+    """Without /proc (macOS, which the README supports), `_umask()` probes by setting the mask to 077 and
+    restoring it. Unlocked, concurrent `atomic_write(..., mode=None)` calls interleaved set and restore: files
+    came out 0600 under a 022 mask, and a run could leave the whole process at 077 (#317). The probe is locked
+    now, so every file takes the mask the process started with and the mask is unchanged afterwards."""
+    import builtins
+    import sys
+    import threading
+
+    from exo.core.private import atomic_write
+
+    real_open = builtins.open
+
+    def no_proc(file, *args, **kwargs):
+        if str(file) == "/proc/self/status":
+            raise OSError("no /proc on this platform")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", no_proc)
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        def write(t):
+            for i in range(300):
+                atomic_write(tmp_path / f"f{t}-{i}", b"x", mode=None, sync=False)
+
+        threads = [threading.Thread(target=write, args=(t,)) for t in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+    finally:
+        sys.setswitchinterval(interval)
+    files = list(tmp_path.iterdir())
+    assert len(files) == 8 * 300 and all(mode(p) == 0o644 for p in files)
+    now = os.umask(0o022)
+    os.umask(now)
+    assert now == 0o022
+
+
 def test_private_dir_rejects_symlink_created_during_mkdir(tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir(mode=0o755)
