@@ -153,11 +153,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   before it, so `gh pr -R pub/repo comment 5 -b text` and `gh pr -b text comment 5 -R pub/repo` post. The gate took
   the third word for the subcommand, so these lines were reads and ran under any policy, as did
   `gh issue -R x/y close 5` and `gh pr -R x/y merge 5`. A public post with a scrub hit passed too. The gate now finds
-  the subcommand as gh does. It passes over an empty word (`gh pr "" comment`), and an alias reads as the subcommand
-  it names, so `gh pr new`, `gh issue new`, `gh repo new`, `gh release new`, `gh gist new` and `gh variable remove`
-  are no longer reads. A command alias (`gh co`), a user alias and an extension still ask. A word from an expansion
-  where the subcommand may stand (`gh pr "$V" 5`) counts as code the gate cannot read. The line as read before is
-  decided too, and the stricter decision stands, so no line decides lower than it did.
+  the subcommand as gh does. It passes over an empty word (`gh pr "" comment`, `gh "" pr comment`), and an alias reads
+  as the subcommand it names, so `gh pr new`, `gh issue new`, `gh repo new`, `gh release new`, `gh gist new` and
+  `gh variable remove` are no longer reads. A command alias (`gh co`), a user alias and an extension still ask. A word
+  from an expansion where the subcommand may stand (`gh pr "$V" 5`) counts as code the gate cannot read. The line as
+  read before is decided too, and the stricter decision stands, so no line decides lower than it did.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40

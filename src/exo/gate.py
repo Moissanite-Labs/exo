@@ -2041,20 +2041,24 @@ def _gh_verb_order(argv: list[str], dynamic: frozenset) -> list[int] | None:
     next word as its value (`-R owner/name`, `-b text`, `-h comment`), `--help` and any other option word stand
     alone (`-Rowner/name`, `--body=text`, `-`), an empty word is passed over, and `--` ends the search. The
     subcommand then parses every option on the line, so `gh pr -b text comment 5` is `gh pr comment -b text 5`.
-    None when a word from an expansion stands where the subcommand or an option may be: the gate cannot tell what
-    gh runs."""
+    An empty word before the command is passed over too, so the command comes second (`gh "" pr comment`). None
+    when a word from an expansion stands where the subcommand or an option may be: the gate cannot tell what gh
+    runs."""
     order = list(range(len(argv)))
-    if argv[1:2] and argv[1] in _GH_VERB_GROUPS:
+    g = next((k for k in order[1:] if argv[k] != "" or k in dynamic), len(argv))
+    if 1 < g < len(argv):                    # cobra's stripFlags passes over an empty word
+        order = [0, g] + order[1:g] + order[g + 1:]
+    if argv[g:g + 1] and argv[g] in _GH_VERB_GROUPS:
         i = 2
-        while i < len(argv) and argv[i] != "--":
-            a = argv[i]
-            if i in dynamic:
+        while i < len(order) and argv[order[i]] != "--":
+            a = argv[order[i]]
+            if order[i] in dynamic:
                 return None
-            if a == "":                      # cobra's stripFlags passes over an empty word
+            if a == "":
                 i += 1
                 continue
             if not a.startswith("-"):
-                return [0, 1, i] + order[2:i] + order[i + 1:]
+                return order[:2] + [order[i]] + order[2:i] + order[i + 1:]
             i += 2 if "=" not in a and a != "--help" and (a.startswith("--") or len(a) == 2) else 1
     return order
 

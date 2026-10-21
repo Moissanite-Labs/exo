@@ -204,3 +204,23 @@ def test_a_line_with_a_floor_binds_exactly():
     c, d = run("gh pr -R myorg/app merge 5", normalize_policies({"gates": {"scopes": {"private": ["myorg/*"]}}}))
     assert (c.category, c.alt_targets, c.floor.category, d.exposure) == ("vcs_merge", [], "read", "private"), (c, d)
     assert not is_outward(c, d) and binds_exact(c, d), (c, d)
+
+
+# cobra passes over an empty word before the command too: `gh '' pr comment --help` prints the help of pr comment
+# (gh 2.89). So `gh '' pr comment` comments, and the gate reads it so.
+@pytest.mark.parametrize("line,canonical", [
+    ("gh '' pr comment 5 -R pub/repo -b $'Note SECRETX\\nF'", "gh pr comment '' 5 -R pub/repo -b $'Note SECRETX\\nF'"),
+    ("gh '' '' issue '' close 5 -R pub/repo", "gh issue close '' '' '' 5 -R pub/repo"),
+    ("gh '' pr new -R pub/repo -t t -b x", "gh pr create '' -R pub/repo -t t -b x"),
+])
+def test_an_empty_word_before_the_command(line, canonical):
+    c, d = same(line, canonical)
+    assert c.category != "read" and c.target.startswith("pub/repo") and c.floor is not None, c
+
+
+def test_an_empty_word_before_a_command_without_subcommands():
+    # gh api then takes the empty word for an operand beside the endpoint, and refuses two. The path still counts.
+    c, _ = run("gh '' api -X POST repos/pub/repo/issues/5/comments -f body=x")
+    assert c.category == "github_post" and "pub/repo" in [c.target] + c.alt_targets, c
+    c, d = run("gh '' auth token")
+    assert c.category == "credentials" and d.outcome == "ask", (c, d)
