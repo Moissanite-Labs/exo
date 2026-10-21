@@ -136,8 +136,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   allow rule for the push followed by an ask rule for `git push`. That is stricter than main for an ask rule written
   for another command on the line (`{command: 'rm -rf build', decision: ask}` no longer lifts the post's deny in
   `gh pr comment 3 --body hi && rm -rf build`). Ask and deny rules in the first-match walk, deny rules in the #191
-  pass and the `reserved:` and `deny:` lists still match the whole line and its decoded views. A line
-  of one simple command, and a tool that is not a shell, match as before. An allow or log rule written for a whole
+  pass and the `reserved:` and `deny:` lists still match the whole line and its decoded views. A line the gate reads
+  as one part matches as before. A command run inside another (an `eval`, `bash -c` or `ssh` string, an `-x` or
+  `--exec` value, an environment value the gate reads as a command) is a part of its own and must be named too, so
+  `eval "$CMD"` now asks under `{category: opaque_exec, command: '^eval', decision: allow}`. In code
+  (`execute_code`, `python -c`) the code part and a recognized call carry the code's text or the command that runs
+  it, and a string literal read as a command has none, so no allow or log `command` rule lowers it. An allow or log
+  rule written for a whole
   compound line (`'^make && make install$'`) now has to match each deciding command, and until then the line gets
   its matrix or category outcome. The ledger view leaves the own text out.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
