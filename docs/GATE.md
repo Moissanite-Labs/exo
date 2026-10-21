@@ -133,8 +133,9 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   for its subcommand, is decided too, and the stricter decision stands on each axis. Without that a
   compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5` the
   edit now outranks the push, and `private: [myorg/*]` lowers it. Such a line binds its approval
-  to the exact command, and when the earlier reading decides, the reason ends with
-  "(for git push to origin)".
+  to the exact command. It is an outward act when the earlier reading is one, as in
+  `gh issue -R myorg/app close 5 && gh pr comment 3 -R myorg/app -b ok`. When the earlier reading
+  decides, the reason ends with "(for git push to origin)".
 
 The gate also keeps every other reading it cannot rule out, and decides the line on each. The
 strictest outcome stands, with the widest exposure, a third party if any reading has one, and every
