@@ -109,6 +109,32 @@ def test_an_error_in_the_script_exits_2_not_1(tmp_path, case):
     assert "nothing lowered" not in proc.stdout
 
 
+def test_a_worker_that_dies_fails_the_run_and_never_hangs(tmp_path):
+    # A pool that replaces a dead worker but never fails its task would wait forever.
+    base = _tree(tmp_path, "base")
+    doc_end = '(_in_tool_folder sets it)."""\n'
+    head = _tree(tmp_path, "head", (doc_end, doc_end + "    if 'zz-exit' in str(action):\n        os._exit(7)\n"))
+    corpus = tmp_path / "many.txt"
+    corpus.write_text("".join(f"echo {i}\n" for i in range(150)) + "echo zz-exit\n", encoding="utf-8")
+    proc, _ = _gate_diff(base, head, tmp_path, "--only-corpus", "--corpus", str(corpus), "--pick", "default",
+                         "--jobs", "2", timeout=60)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "a worker process died" in proc.stderr and "head exit 3" in proc.stderr, proc.stderr
+
+
+def test_a_tree_past_the_timeout_is_stopped(tmp_path):
+    base = _tree(tmp_path, "base")
+    doc_end = '(_in_tool_folder sets it)."""\n'
+    head = _tree(tmp_path, "head", (doc_end, doc_end + "    if 'zz-sleep' in str(action):\n"
+                                                       "        __import__('time').sleep(60)\n"))
+    corpus = tmp_path / "slow.txt"
+    corpus.write_text("echo zz-sleep\n", encoding="utf-8")
+    proc, _ = _gate_diff(base, head, tmp_path, "--only-corpus", "--corpus", str(corpus), "--pick", "default",
+                         "--jobs", "1", "--timeout", "2", timeout=30)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "longer than --timeout 2s" in proc.stderr, proc.stderr
+
+
 def test_the_harvester_finds_known_test_literals():
     h = gate_diff.harvest(ROOT)
     for cmd in ("true {PATH}>/dev/null; ls",            # a parametrize row fed through a helper
