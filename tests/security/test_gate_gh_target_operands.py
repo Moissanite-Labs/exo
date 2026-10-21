@@ -135,10 +135,11 @@ def test_the_widest_exposure_and_any_third_party_stand_beside_a_deny_from_anothe
 
 
 def test_reserved_parts_come_from_every_reading():
+    # The other target decides (internal beats private), and the reserved part on the main target joins it.
     pol = normalize_policies({"gates": {"scopes": {"private": ["myorg/app"]}, "reserved": ["vcs_merge"]}})
-    c, d = run(f"gh pr merge 5 -b {ORG}", pol)
-    assert (c.target, c.alt_targets) == ("#5", ["myorg/app#9"]), c
-    assert d.outcome == "ask" and set(d.reserved) == {("vcs_merge", "myorg/app#9"), ("vcs_merge", "#5")}, d
+    c, d = run("gh pr merge 5 -R myorg/app -b https://github.com/pub/repo/pull/3", pol)
+    assert (c.target, c.alt_targets) == ("myorg/app#5", ["pub/repo#3"]), c
+    assert d.outcome == "ask" and set(d.reserved) == {("vcs_merge", "myorg/app#5"), ("vcs_merge", "pub/repo#3")}, d
 
 
 def test_violations_come_from_every_reading():
@@ -344,6 +345,16 @@ def test_r_on_another_host_keeps_the_value_as_written():
     assert d.exposure == "public", d
     c, _ = run("gh pr comment 5 -R https://ghe.corp/myorg/app -b x")
     assert c.target == "myorg/app#5" and "https://ghe.corp/myorg/app#5" in c.alt_targets, c
+    # gh keeps the last -R, and the reading before #399 the first, so only this reading names the last as written.
+    c, _ = run("gh pr comment 5 -R pub/repo -R ghe.corp/myorg/app -b x")
+    assert c.target == "myorg/app#5" and "ghe.corp/myorg/app#5" in c.alt_targets, c
+
+
+def test_a_repo_operand_on_github_com_keeps_the_reading_before():
+    # The gate read no repo from `github.com/pub/repo` before, so the line was decided on the current repo. It
+    # still is, beside pub/repo, so a scope on pub/* does not lower it.
+    c, d = run("gh repo delete github.com/pub/repo --yes", normalize_policies({"gates": {"scopes": {"internal": ["pub/*"]}}}))
+    assert (c.target, c.alt_targets, d.exposure) == ("pub/repo", [""], "public"), (c, d)
 
 
 @pytest.mark.parametrize("value", ["a/b/c/d", "pub/repo/", "/pub/repo", "https://github.com/pub/repo/pull/5", "=x/y"])

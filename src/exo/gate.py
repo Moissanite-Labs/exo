@@ -1626,7 +1626,8 @@ _GH_TAKES = {
     ("pr", "ready"): ("R", "--repo"), ("pr", "reopen"): ("cR", "--comment --repo"),
     ("pr", "merge"): ("AbFtR", "--author-email --match-head-commit --subject --repo"),
     ("pr", "lock"): ("rR", "--reason --repo"), ("pr", "unlock"): ("R", "--repo"),
-    ("issue", "reopen"): ("cR", "--comment --repo"), ("issue", "develop"): ("bnR", "--base --branch-repo --name --repo"),
+    ("issue", "reopen"): ("cR", "--comment --repo"),
+    ("issue", "develop"): ("bnR", "--base --branch-repo --name --repo"),
     ("issue", "lock"): ("rR", "--reason --repo"), ("issue", "unlock"): ("R", "--repo"),
     ("issue", "delete"): ("R", "--repo"), ("issue", "transfer"): ("R", "--repo"),
     ("release", "upload"): ("R", "--repo"), ("release", "delete"): ("R", "--repo"),
@@ -2038,9 +2039,10 @@ def _gh_verb_order(argv: list[str], dynamic: frozenset) -> list[int] | None:
     """argv's indexes in the order gh reads them, with the subcommand third (#399). gh (cobra) finds the subcommand
     past the options before it: an option word without `=` that starts with `--` or has two characters takes the
     next word as its value (`-R owner/name`, `-b text`, `-h comment`), `--help` and any other option word stand
-    alone (`-Rowner/name`, `--body=text`, `-`), an empty word is passed over, and `--` ends the search. The subcommand then parses every option on
-    the line, so `gh pr -b text comment 5` is `gh pr comment -b text 5`. None when a word from an expansion stands
-    where the subcommand or an option may be: the gate cannot tell what gh runs."""
+    alone (`-Rowner/name`, `--body=text`, `-`), an empty word is passed over, and `--` ends the search. The
+    subcommand then parses every option on the line, so `gh pr -b text comment 5` is `gh pr comment -b text 5`.
+    None when a word from an expansion stands where the subcommand or an option may be: the gate cannot tell what
+    gh runs."""
     order = list(range(len(argv)))
     if argv[1:2] and argv[1] in _GH_VERB_GROUPS:
         i = 2
