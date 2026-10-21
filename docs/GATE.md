@@ -603,10 +603,13 @@ gate does not read:
   whose `command` regex matches a decoded view of the line), and a `deny` there denies the line,
   with a reason that names the part (`denied by policy (category local_write: write /tmp/f)`).
   A rule that is not a deny matches a part on the part's own text, the simple command as
-  written, and decides the line only when it names every command on it: an allow
+  written. It decides the line when it names a command on the line and every command it
+  leaves unnamed decides no higher than the rule on its own: an allow
   rule for `git status` does not allow `git status; git push --force origin main`, an allow
   naming the dominant part does not allow past another part's matrix ask, and no per-part
-  allow can cancel a part's `categories:` deny (#394, #411). Only
+  allow can cancel a part's `categories:` deny (#394, #411). The line's own first pass
+  still matches a rule against the line as written, so an anchored allow does not reach a
+  subshell spelling of the command it names. Only
   a deny reaches the parts: allow, log and ask lines and rules, the opaque bump, third-party
   escalation, posting checks and the floors see the dominant part (a `reserved:` entry gives an ask
   on any part). A part carries the tool of the call it came in on

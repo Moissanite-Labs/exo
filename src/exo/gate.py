@@ -5309,8 +5309,14 @@ def _policy_command_view(command: str) -> str:
 
 
 def _command_matches(pattern: str, c: Classification, *, veto: bool = False,
-                     line: Callable[[str], bool] | None = None) -> bool:
+                     line: Callable[[str], bool] | None = None, line_level: bool = False) -> bool:
     regex = re.compile(pattern)
+    if line_level and not veto:
+        # The line's own first-match pass sees the line as written, as it always did: a pattern
+        # anchored to one command does not match a line that wraps that command (`( rm -rf
+        # build )` is not `rm -rf build`). Whether a non-deny rule that matches the line may
+        # decide it is the guard's question in decide, not the matcher's (#411).
+        return bool(regex.search(c.command or ""))
     if not veto:
         # An allow, log or ask rule names one command, so it matches that command's own text, not
         # every command sharing its line (#394). Deny and reserved keep the whole line (D-075).
@@ -5322,19 +5328,42 @@ def _command_matches(pattern: str, c: Classification, *, veto: bool = False,
     return any(regex.search(text) for text in texts)
 
 
-def _rule_names_every_part(match: Mapping, c: Classification) -> bool:
-    """Whether each `command` pattern in the rule's match names every part of the line (#411): a
-    non-deny rule decides the line only when it names each command on it, so an allow written for
-    the dominant part cannot cancel another part's matrix ask or category deny."""
+def _stage_outcome(p: Classification, gates: Mapping) -> str:
+    """The outcome decide's first stage gives one command alone: its matrix cell, its category
+    line, then the first rule that matches it. A `command` rule that would lower the command
+    below its category deny does not count, as in the #191 pass (#411)."""
+    outcome = gates["matrix"][p.reversibility][p.exposure]
+    cats = gates.get("categories") or {}
+    if p.category in cats:
+        outcome = cats[p.category]
+    for r in gates.get("rules") or []:
+        if _rule_matches(r["match"], p):
+            if not (outcome == "deny" and r["decision"] != "deny" and "command" in r["match"]):
+                outcome = r["decision"]
+            break
+    return outcome
+
+
+def _rule_decides_line(match: Mapping, decision: str, c: Classification, gates: Mapping) -> bool:
+    """Whether a non-deny rule keyed on `command` may decide the line (#411): it must name a
+    command on the line, and every command it does not name must decide no higher than the rule
+    on its own, so the rule cannot carry the line past a part that is stricter alone. The first
+    guard asked the pattern to name every command, which a rule for carried text can never do:
+    the `rm -rf` log rule names the text an ssh carries, the ssh command itself decides no
+    higher on its own, so the rule decides that line; an allow for `git status` leaves the push
+    on the same line unnamed and deciding higher alone, so it cannot decide that one."""
     pats = [str(p) for p in _as_list(match.get("command", []))]
-    return all(
-        any(_command_matches(pat, part) for pat in pats)
-        for part in _each_part(c)
-    )
+    named = False
+    for part in _each_part(c):
+        if any(_command_matches(pat, part) for pat in pats):
+            named = True
+        elif OUTCOMES.index(_stage_outcome(part, gates)) > OUTCOMES.index(decision):
+            return False
+    return named
 
 
 def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False,
-                  line: Callable[[str], bool] | None = None) -> bool:
+                  line: Callable[[str], bool] | None = None, line_level: bool = False) -> bool:
     for k, want in match.items():
         if k == "category" and c.category not in [str(x) for x in _as_list(want)]:
             return False
@@ -5342,7 +5371,9 @@ def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False,
             return False
         if k == "target" and not _glob_any(c.target, _as_list(want)):
             return False
-        if k == "command" and not any(_command_matches(str(p), c, veto=veto, line=line) for p in _as_list(want)):
+        if k == "command" and not any(_command_matches(str(p), c, veto=veto, line=line,
+                                                       line_level=line_level)
+                                      for p in _as_list(want)):
             return False
         if k == "exposure" and c.exposure not in _as_list(want):
             return False
@@ -5543,10 +5574,11 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     if eff.category in gates.get("categories", {}):
         outcome, reason, rule = gates["categories"][eff.category], f"category {eff.category}", "category"
     for r in gates.get("rules") or []:
-        if _rule_matches(r["match"], eff):
+        if _rule_matches(r["match"], eff, line_level=True):
             if r["decision"] in ("allow", "log") and "command" in r["match"] \
-                    and not _rule_names_every_part(r["match"], eff):
-                continue  # names only some commands: it cannot decide the line (#411)
+                    and not _rule_decides_line(r["match"], r["decision"], eff, gates):
+                continue  # names one command, but a command it leaves unnamed decides higher
+                # alone: it cannot decide the line (#411)
             outcome, reason, rule = r["decision"], r["reason"], "rule"
             opaque_named = opaque_named or (r["decision"] in below_ask and "opaque_exec" in
                                             [str(x) for x in _as_list(r["match"].get("category", []))])
@@ -5568,7 +5600,8 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     # in the list, so this never changes an outcome the view did not add to.
     for r in gates.get("rules") or []:
         if r["decision"] in ("ask", "deny") and "command" in r["match"] \
-                and not _rule_matches(r["match"], eff) and _rule_matches(r["match"], eff, veto=True):
+                and not _rule_matches(r["match"], eff, line_level=True) \
+                and _rule_matches(r["match"], eff, veto=True):
             bump(r["decision"], r["reason"], "rule")
 
     # #188: a command bash runs only as it reads a value again may outrank a deny on the line; naming opaque_exec
