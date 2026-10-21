@@ -5637,6 +5637,15 @@ def _line_matcher(c: Classification) -> Callable[[str], bool]:
     return line
 
 
+def _one_text(c: Classification) -> bool:
+    """Whether no two parts of the line have different own texts (#394): a line of one simple command, beside the
+    parts the gate made for it with no own text (a secret path it names in `cat ~/.kube/config`, a string literal in
+    its code). A rule that matches such a line as before names its one command, so the line is decided as before,
+    as a line of one part is."""
+    texts = {t for p in _each_part(c) for t in (p.own, *p.setters) if t is not None}
+    return len(texts) < 2
+
+
 def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[str, list[str]], bool]:
     """The test a rule that would lower a compound line passes on top of matching the line (#394), as a test of (the
     rule's decision, its `command` patterns). They must match the own text of every simple command that carries the
@@ -5801,10 +5810,13 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     before. So that pass is never looser than deciding as before. When it passes a rule over, the line is also
     decided as before, and that decision stands unless the other is stricter, reason and all. That pass reads rules
     and patterns the decision before never reached (a regex past the first match, a rule after the one skipped), so
-    when it fails, the line is decided as before, which then fails only where it failed before.
+    when it fails, the line is decided as before, which then fails only where it failed before. A line of one simple
+    command, beside parts the gate made for it, is decided as before (_one_text).
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
     ctx = dict(context or {})
+    if _one_text(c):
+        return _decide(c, pol, ctx, None)
     passed: list[Mapping] = []
     try:
         d = _decide(c, pol, ctx, passed)
