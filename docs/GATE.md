@@ -636,8 +636,16 @@ gate does not read:
   other part that alone would get a stricter outcome than the rule gives (a rider). Alone means
   the part without the parts it was built from, on its own text, decided once with no rules and
   once with all of them, the stricter kept: its category line and the matrix count, and so does a
-  rule that raises it, while another allow rule does not lower it. A part with no own text matches
-  no such rule. When it does not match, the rule is skipped and the next one is tried. So
+  rule that raises it, while another allow rule does not lower it. The regex must also match every
+  command that changes the shell for the commands after it on the line, since a bash call starts a
+  fresh shell and only a later command on the same line sees the change: an assignment with no
+  command, `export` and the other declaring builtins with an operand, `set -a`, `set -k` and
+  `set -- args`, `shopt -s`, `printf -v`, `read`, `mapfile`, `getopts`, `let`, `hash`, `alias`,
+  `enable`, `unset` and `trap` with an operand, `source` and `.`, `pushd`, `popd`, `exec` with only
+  redirections, a `for` or `select` loop, `coproc`, a function definition (which has no own text)
+  and a program name the gate cannot read. `cd` is not on that list (Known limits), and the text of
+  an `eval` is a nested line whose own commands count. A part with no own text matches no such rule.
+  When it does not match, the rule is skipped and the next one is tried. So
   `{command: '^git status', decision: allow}` no longer allows
   `git status; git push --force origin main`: it asks, and under `categories: {force_push: deny}`
   it is denied. `{command: 'git push --force origin main', decision: allow}` still allows
@@ -649,7 +657,9 @@ gate does not read:
   unknown program, an `ssh -o ProxyCommand` or a function body that shadows `git`. It asks too when
   a copy of the push that never runs stands in for it (`if false; then ...; fi; rm -rf build`).
   With an ask rule for `curl` after that allow rule, it asks beside `curl -s https://example.com/x`
-  too. Equally severe commands are matched
+  too. It asks after `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"`, `export GIT_ASKPASS=/tmp/evil`,
+  `hash -p /tmp/evil git` or `export https_proxy=http://evil.example:8080`, each allowed alone, and
+  is allowed after `cd repo`, `set -e` or `git status`. Equally severe commands are matched
   together, so their order does not change the outcome. The opaque_exec reading of a line with a
   `$".."` word is the gate's, so it has no own text. The regex sees the text as written: an
   allow rule for `git push` does not match `g''it push --force origin main`, and a deny rule for
@@ -1008,8 +1018,9 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   rides on the outcome it gives: `cd /tmp/other && git push --force origin main` and
   `echo x > .git/hooks/pre-push && git push --force origin main` are allowed under an allow rule for
   `'^git push --force origin main$'`, and the push then runs the hooks there. A file outlives the
-  call, so on main two calls (the write, then the push) do the same. Use `reserved:` to ask on any
-  part. Under either deny form the four-wrapper example above is denied and the five-wrapper
+  call, so on main two calls (the write, then the push) do the same. `cd` changes the shell for the
+  commands after it but is left off the setter list, so that a rule for a command still covers
+  `cd repo && command`. Use `reserved:` to ask on any part. Under either deny form the four-wrapper example above is denied and the five-wrapper
   example asks as `opaque_exec`. So approving an opaque card or a compound line can run an action
   the gate did not show. Read the whole command before approving it: an approval does not vouch for
   what the gate did not classify.

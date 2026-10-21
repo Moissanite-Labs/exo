@@ -123,7 +123,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   is as severe, and of every other command that alone would get a stricter outcome than the rule gives (by its
   category line and the matrix, or by a rule that raises it), and otherwise the next rule is tried. So
   `rm -rf build && git push --force origin main` still asks under an allow rule for
-  `'^git push --force origin main$'`, while `cd repo && git push --force origin main` is allowed. A part with no own
+  `'^git push --force origin main$'`, while `cd repo && git push --force origin main` is allowed. The regex must
+  also match each command that changes the shell for later commands on the line (an assignment, `export`, `hash`,
+  `alias`, `set -a`, `source`, `read`, a function definition and the like), so
+  `export GIT_SSH_COMMAND=$X; git push --force origin main` asks under that rule. `cd` is left out. A part with no own
   text (an unread nest, a string literal in code, the opaque_exec reading of a `$".."` line) matches no such rule. A
   log rule over an allow cell only raises the line, so it still sees the whole line unless it names `opaque_exec`.
   In the #191 pass it overrides a part's category deny only when it names that part. Ask and deny rules and the
