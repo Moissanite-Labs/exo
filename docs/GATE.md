@@ -129,8 +129,11 @@ violation and reserved part. The other readings are:
 
 Each other reading is a copy of the action among the line's parts, with its own target, so a
 `target:` deny or reserved entry matches it also when the gh call is not the line's most severe
-part. The ledger row lists the other targets as `alt_targets`. When one of them decides the line,
-the reason ends with "(if it lands on owner/name#n)".
+part. The ledger row lists the other targets as `alt_targets`. The question the principal sees
+names each of them, also when none decides the line:
+`merge PR on myorg/app (costly, internal). It may land on pub/repo#7 or myorg/app#7 instead.`
+When one of them decides the line, the reason ends with "(if it lands on owner/name#n)". An empty
+target is the repo gh picks with no `-R`, named "the current repo".
 
 A line with other targets binds its approval to the exact command, as an outward act does. Its
 rule key is the text hash, so a "session" answer covers that line only. A standing grant on one of

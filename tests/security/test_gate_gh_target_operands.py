@@ -10,7 +10,7 @@ Classification and decision only; nothing is executed.
 """
 import pytest
 
-from exo.gate import UNSEEN_BODY, body_unseen, classify, decide, normalize_policies
+from exo.gate import UNSEEN_BODY, body_unseen, classify, decide, normalize_policies, summarize
 
 POST = {"footer": "F", "scrub": {"names": ["SECRETX"]}}
 POLICY = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "posting": POST})
@@ -97,6 +97,20 @@ def test_r_and_a_url_operand_that_disagree_take_the_more_exposed(line, target):
 def test_the_reason_names_the_other_target_when_it_decides():
     _, d = run(f"gh pr comment {ORG} -R pub/repo -b $'x\\nF'")
     assert "if it lands on pub/repo#9" in d.reason, d
+
+
+# The ask names every other target, also when none decides the line: the principal sees where gh may act.
+def test_the_ask_names_the_other_targets():
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "categories": {"vcs_merge": "ask"}}})
+    c, d = run("gh pr merge --auto https://github.com/pub/repo/pull/7 -R myorg/app", pol)
+    assert (c.target, d.outcome, d.exposure) == ("myorg/app", "ask", "internal"), (c, d)
+    assert "It may land on pub/repo#7 or myorg/app#7 instead." in summarize(c, d), summarize(c, d)
+    c, d = run(f"gh pr ready --foo {ORG}")
+    assert c.alt_targets == [""], c
+    assert "It may land on the current repo instead." in summarize(c, d), summarize(c, d)
+    assert d.reason.endswith("(if it lands on the current repo)"), d
+    c, d = run("gh pr comment 5 -R pub/repo -b x")
+    assert not c.alt_targets and "may land" not in summarize(c, d), summarize(c, d)
 
 
 def test_a_deny_on_either_repo_denies_the_disagreement():

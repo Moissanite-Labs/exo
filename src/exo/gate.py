@@ -5552,7 +5552,7 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         base = replace(c, alt_targets=[])
         ds = [decide(base, pol, ctx)] + [decide(replace(base, target=t), pol, ctx) for t in c.alt_targets]
         i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
-        where = f" (if it lands on {redact_userinfo(c.alt_targets[i - 1])})" if i else ""
+        where = f" (if it lands on {_target_names(c.alt_targets[i - 1:i])})" if i else ""
         return replace(ds[i], reason=ds[i].reason + where,
                        violations=list(dict.fromkeys(v for d in ds for v in d.violations)),
                        exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
@@ -5669,6 +5669,13 @@ def _strictness(d: Decision) -> tuple:
     return OUTCOMES.index(d.outcome), EXPOSURE.index(d.exposure), d.third_party
 
 
+def _target_names(targets: Iterable[str]) -> str:
+    """Targets as the principal reads them: `a`, `a or b`, `a, b or c`. An empty one is the repo gh picks with no
+    `-R`, the current one."""
+    names = list(dict.fromkeys(redact_userinfo(t) if t else "the current repo" for t in targets))
+    return ", ".join(names[:-1]) + " or " + names[-1] if len(names) > 1 else "".join(names)
+
+
 def summarize(c: Classification, d: Decision, default: str = "skip") -> str:
     """The one-line question the principal sees for an `ask`."""
     bits = [c.summary or c.tool or c.category]
@@ -5677,7 +5684,11 @@ def summarize(c: Classification, d: Decision, default: str = "skip") -> str:
         axes.append("third party")
     if c.cost:
         axes.append(f"cost {c.cost:g}")
-    line = f"{bits[0]} ({', '.join(axes)}). Why: {d.reason}."
+    line = f"{bits[0]} ({', '.join(axes)})."
+    if c.alt_targets:
+        # #399: the gate cannot tell which of these gh acts on. The decision covers each, and so does the question.
+        line += f" It may land on {_target_names(c.alt_targets)} instead."
+    line += f" Why: {d.reason}."
     if c.link:
         line += f" Link: {c.link}."
     line += f" Default if no reply: {default}."

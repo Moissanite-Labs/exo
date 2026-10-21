@@ -137,7 +137,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the last `-R`, and a URL operand still names the repo, as in gh. The gate also decides the line on every other
   repo it cannot rule out (`-R` beside a URL operand for another repo, and the reading before this change) and
   keeps the strictest decision, so no line decides lower than before. Such a line binds its approval to the
-  exact command, so a standing grant on one of its targets does not run it. `gh issue close --duplicate-of`
+  exact command, so a standing grant on one of its targets does not run it, and its question names every
+  other target ("It may land on pub/repo#7 instead."). `gh issue close --duplicate-of`
   takes a value in the gate's table now.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
