@@ -140,3 +140,43 @@ def test_commands_without_subcommands_are_untouched():
     assert (c.category, c.target) == ("github_post", "pub/repo"), c
     c, _ = run("gh browse -R pub/repo 5")
     assert c.category == "read", c
+
+
+# cobra skips an empty word where it looks for the subcommand (stripFlags), so `gh pr "" comment` comments
+# (checked with gh 2.89: `gh pr '' comment --help` prints the help of pr comment). Round 3, item 3.
+@pytest.mark.parametrize("line,canonical", [
+    ("gh pr \"\" comment -R pub/repo -b $'Note SECRETX\\nF'", "gh pr comment \"\" -R pub/repo -b $'Note SECRETX\\nF'"),
+    ("gh issue '' '' close 5 -R pub/repo", "gh issue close '' '' 5 -R pub/repo"),
+    ("gh pr -R pub/repo '' merge 5", "gh pr merge -R pub/repo '' 5"),
+])
+def test_an_empty_word_before_the_subcommand(line, canonical):
+    c, d = same(line, canonical)
+    assert c.category != "read" and c.target.startswith("pub/repo") and c.floor is not None, c
+
+
+# gh's aliases for its subcommands (gh 2.89, the ALIASES of each command's --help): each reads and decides as the
+# subcommand it names. Main read them as reads, so each also keeps that reading as its floor.
+@pytest.mark.parametrize("line,canonical", [
+    ("gh pr new -R pub/repo -t t -b $'x SECRETX\\nF'", "gh pr create -R pub/repo -t t -b $'x SECRETX\\nF'"),
+    ("gh issue new -R pub/repo -t t -b $'x\\nF'", "gh issue create -R pub/repo -t t -b $'x\\nF'"),
+    ("gh repo new myorg/app2 --public", "gh repo create myorg/app2 --public"),
+    ("gh repo new myorg/app2 --private", "gh repo create myorg/app2 --private"),
+    ("gh release new v1 -R pub/repo -n $'x\\nF'", "gh release create v1 -R pub/repo -n $'x\\nF'"),
+    ("gh gist new f.txt", "gh gist create f.txt"),
+    ("gh gist new --public f.txt", "gh gist create --public f.txt"),
+    ("gh variable remove X -R pub/repo", "gh variable delete X -R pub/repo"),
+    ("gh pr -R pub/repo new -t t -b x", "gh pr create -R pub/repo -t t -b x"),
+])
+def test_an_alias_is_the_subcommand_it_names(line, canonical):
+    c, d = same(line, canonical)
+    assert c.category != "read" and c.floor is not None and c.floor.category == "read", c
+    assert binds_exact(c, d), c
+
+
+@pytest.mark.parametrize("line,summary", [
+    ("gh pr ls", "gh pr list"), ("gh pr co 5", "gh pr checkout"), ("gh issue ls -R pub/repo", "gh issue list"),
+    ("gh secret remove X", "gh secret delete"), ("gh secret ls", "gh secret list"),
+])
+def test_an_alias_that_reads_or_holds_credentials(line, summary):
+    c, d = run(line)
+    assert c.summary == summary and c.category in ("read", "credentials"), c
