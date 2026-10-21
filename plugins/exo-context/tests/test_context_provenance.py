@@ -895,3 +895,47 @@ def test_a_tagged_dict_mints_no_pin(tmp_path):
     eng = ExoContextEngine(write_handoffs=False)
     eng.select_context([{"role": "system", "content": "sys"}, *_tagged(PEER), mine(MINE)], session_id="t370")
     assert pins(tmp_path, "t370") == {"ruling": [MINE], "correction": [], "open_decision": []}
+
+
+class HermesSummary:
+    """A Hermes-shaped host compressor with no on_session_switch: Hermes reports an undo to its
+    memory providers, not to the context engine, so no switch call ever carries it here. Its summary
+    carries the compacted text, as the real summarizer's notes do."""
+
+    def compress(self, messages, **kw):
+        body = "\n\n".join(hf.message_text(m) for m in messages[1:-1])
+        summary = {"role": "user", "_compressed_summary": True,
+                   "content": "[CONTEXT COMPACTION] notes\n\n" + body + "\n\n" + END_LINE}
+        return [messages[0], summary, messages[-1]]
+
+
+def test_a_host_undo_the_engine_never_hears_drops_the_pin(tmp_path):
+    """#389: pin a ruling, /undo the turn that held it the Hermes way — the turn leaves the transcript
+    and the engine hears nothing, since Hermes reports an undo to its memory providers, not to the
+    context engine — then compact twice more. The undone ruling is in neither the summary block nor
+    the handoff file, and it leaves the pin store."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.compress([{"role": "system", "content": "sys"}, mine(MINE), mine("carry on")], force=True)
+    assert pins(tmp_path, "default")["ruling"] == [MINE]
+    after = eng.compress([{"role": "system", "content": "sys"}, mine("carry on"), mine("after undo")],
+                         force=True)  # the undo: MINE's turn is simply gone before this compaction
+    assert hf.parse_pinned_blocks(hf.message_text(after[1]))["ruling"] == []
+    assert hf.load_handoff(eng.last_handoff).rulings == []
+    assert pins(tmp_path, "default")["ruling"] == []
+    later = eng.compress(after[:2] + [mine("next step"), mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(later[1]))["ruling"] == []
+    assert hf.load_handoff(eng.last_handoff).rulings == []
+
+
+def test_a_host_undo_drops_only_the_undone_turns_pins(tmp_path):
+    """#389: the reconcile is surgical — a ruling whose turn stays in the live transcript keeps its
+    pin when another turn is undone, and it still rides the compactions that follow."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    first = eng.compress([{"role": "system", "content": "sys"}, mine(MINE), mine(NOTE), mine("carry on")],
+                         force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(first[1]))["ruling"] == [MINE, NOTE]
+    second = eng.compress([{"role": "system", "content": "sys"}, mine(MINE), mine("carry on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(second[1]))["ruling"] == [MINE]
+    assert hf.load_handoff(eng.last_handoff).rulings == [MINE]
+    third = eng.compress(second[:2] + [mine("next step"), mine("go on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(third[1]))["ruling"] == [MINE]  # continuity holds
