@@ -470,8 +470,9 @@ def test_a_mix_of_the_two_readings_counts_too():
     assert c.target == "pub/repo#7" and "pub/repo#9" in c.alt_targets and d.outcome == "deny", (c, d)
 
 
-# A URL operand reads as gh reads it (gh 2.89 `ParseURL`, `ghrepo.NewWithHost`): the scheme and the host in any case,
-# without a user, `www.` or a port, and the path decoded. gh repo drops a repo URL's `.git` (round 4, item 3).
+# A URL operand reads close to how gh reads it (gh 2.89 url.Parse, `ghrepo.NewWithHost`): the scheme and the host in
+# any case, without a user, a port or a leading `www.`, and the path decoded. gh repo drops a repo URL's `.git`
+# (round 4, item 3).
 DENY_REPO = normalize_policies({"gates": {"categories": {"vcs_merge": "log", "github_close": "log", "read": "log"},
                                           "deny": ["target:pub/repo", "target:pub/repo#5"]}})
 
@@ -618,3 +619,12 @@ def test_gh_api_s_method_as_read_before_still_counts(line, before):
 def test_gh_api_s_method_read_one_way_has_no_floor(line):
     c, _ = run(line)
     assert c.floor is None, c
+
+
+# Round 5, item 6: `-R` as a URL reads its path decoded, as Go's url.Parse gives it to ghrepo.FromURL.
+@pytest.mark.parametrize("value", ["https://github.com/pub/re%70o", "https://github.com/pub%2Frepo",
+                                   f"ssh://{GIT_AT}/pub/re%70o.git"])
+def test_r_as_a_url_reads_its_path_decoded(value):
+    c, d = run(f"gh pr comment 5 -R {value} -b x", DENY_PUB)
+    assert c.target == "pub/repo#5", c
+    assert d.outcome == "deny", d

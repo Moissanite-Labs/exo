@@ -714,10 +714,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   unlock, delete and transfer, and release upload and delete (gh 2.89 `--help`), beside the pr reopen, pr merge and
   issue reopen rows from #397, which `_GH_TAKES_BEFORE_399` leaves out since they are main's rows. gh keeps the
   last `-R`. A URL operand names the repo even beside `-R`, because gh does that (`pr/shared/finder.go` and
-  `issue/shared/lookup.go` in gh 2.89). `_gh_url` reads it as `ParseURL` and `ghrepo.NewWithHost` do: the scheme
-  and the host in any case, without a user, `www.` or a port, and the path decoded. `gh repo` drops a repo URL's
-  `.git`. The reading before #399 keeps `_GH_URL` as it was, so the URL as written still counts. The other readings the gate cannot rule out are kept as
-  `Classification.alt_targets`, each with a copy of the action as a part: `-R` when a URL operand names another repo,
+  `issue/shared/lookup.go` in gh 2.89). `_gh_url` reads the scheme and the host in any case, without a user, a port
+  or a leading `www.`, and the path decoded, close to what Go's url.Parse and `ghrepo.NewWithHost` give gh. gh's
+  readers take a pull request URL (`ParseURL`) or an issue or pull request URL (the issue lookup). `_gh_url` takes a
+  discussion URL and a repo URL too, which only adds a reading, since `-R` stays an other target. `gh repo` drops a
+  repo URL's `.git`. The reading before #399 keeps `_GH_URL` as it was, so the URL as written still counts. The
+  other readings the gate cannot rule out are kept as `Classification.alt_targets`, each with a copy of the action as
+  a part: `-R` when a URL operand names another repo,
   and the reading before #399. `decide` decides the line on each and keeps the strictest outcome, the widest exposure,
   any third party, and every violation and reserved part. So a line never decides lower than it did, and a deny or
   reserved entry on either repo still fires, also when the gh call is not the line's most severe part. Each copy is
@@ -737,7 +740,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   options before it, and the subcommand reads every option on the line: `gh pr -R pub/repo comment 5` and
   `gh pr -b text comment 5` post (gh 2.89). The gate took the third word for the subcommand, so such a line was a read
   and ran under any policy. `_gh_verb_order` now finds the subcommand as cobra does, past an empty word too, before
-  the command as well, and a word from an expansion where it or an option may stand makes the line `opaque_exec`. An
+  the command as well, and a word from an expansion where it or an option may stand makes the line `opaque_exec`,
+  unless the line as written, past the empty words before the command, is credentials (`gh "" secret "$V"`). An
   alias from gh 2.89's help (`_GH_ALIASES`: `new`, `ls`, `co`, `remove`) reads as the subcommand it names, and gets
   the floor below too. The line as read before is decided too (`Classification.floor`), the stricter standing on each
   axis. The exo-gate hook reads it in its own checks too: a required executor refuses the line when either reading
@@ -754,9 +758,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   two corpora (42,000 lines) and the ssh lines of the five (21,884) under 93 policies, and all 168,403 lines under 8
   policies that name an ssh host with a gh category (a deny map, a rule, a reserved entry), found none lower on any
   of those axes but the signals. There 32 lines lose the `secret store` signal and keep their decision: gh now reads
-  a credentials subcommand past an option (`gh ssh-key -R x delete`), so the line is credentials already and gets no
-  extra mark, as `cat .env && gh ssh-key delete -R x` gets none on main. The gate does
-  not read `GH_HOST` or `gh api --hostname`, so `owner/name` counts as a repo on github.com. `gh api` read its
+  a credentials subcommand past an option (`gh ssh-key -y 123 delete`), so the line is credentials already and gets
+  no extra mark, as `cat .env && gh ssh-key delete 123 -y` gets none on main. The gate does not read `GH_HOST` or
+  `gh api --hostname`, so `owner/name` counts as a repo on github.com. Nor does it read `GH_REPO`, which gh takes for
+  `-R` when the line has none: such a line counts as one on the current repo. `gh api` read its
   endpoint from the first word with a `/` and no `=`, an option's value included (a header, a jq query). It now reads
   its one operand with gh api's options that take a value (`_gh_api_endpoint`), and the old word is an other target.
   Its method reads as pflag reads `-X` and `--method` (`_gh_api_method`): a cluster ends at `X`, one `=` goes, and the
@@ -764,7 +769,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   differ the line gets a floor, read with the first word as before, so `-X DELETE -X GET` still meets a deny on
   deletes.
   `-R` reads as pflag and gh read it: one `=` after a short option goes (`-R=x`, `-wR=x`), and `_gh_repo` reads
-  `[HOST/]owner/name` and a repo URL as `ghrepo.FromFullName` does. On a host other than github.com the value as
+  `[HOST/]owner/name` and a repo URL as `ghrepo.FromFullName` does, the URL's path decoded as Go's url.Parse
+  decodes it. On a host other than github.com the value as
   written is an other target, since a scope names repos on github.com. An operand from an expansion adds the empty
   target, a repo the line does not name, since `-R` does not rule out the repo of a URL in it. Rejected: letting `-R`
   win over a URL operand, since gh posts on the URL's repo and lines that asked as public would log. Also rejected:
