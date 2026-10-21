@@ -24,6 +24,7 @@ Classification and decision only; no command string here is run.
 """
 import re
 import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -553,7 +554,28 @@ def test_many_readers_of_a_shared_body_stay_linear():
     assert took[1] < 16 * took[0] + 0.2, took
 
 
-W = "w{a..z}{a..z} x{a..z}{a..z} y{a..z}{a..z} z{a..z}{a..z}"     # 2,704 words: two reads spend more than 4,096
+def test_a_long_pipeline_into_shells_holds_pipeline_texts_linear_in_its_length():
+    # Each reader's own text is the pipeline up to it, so `x|sh|sh|..` held the square of its length: 1.7 GB for
+    # 100 kB, and at 150 kB classify ran out of memory, and the hook turned main's deny into an ask. The texts now
+    # hold at most four times the line's length plus 4 KB, and a reader past that has none.
+    sh("x|sh")
+    peaks, held = [], 0
+    for n in (500, 4000):
+        line = "x" + "|sh" * n
+        tracemalloc.start()
+        try:
+            c = sh(line)
+            peaks.append(tracemalloc.get_traced_memory()[1])
+        finally:
+            tracemalloc.stop()
+        held = sum(len(p.own) for p in gate._each_part(c) if p.own)
+        assert held <= 5 * len(line) + 4096, (n, held)
+    assert peaks[1] < 12 * peaks[0], peaks        # 8 times the readers: about 8 times the memory, as on main
+    assert decide(c, pol(categories={"opaque_exec": "deny"})).outcome == "deny"
+    assert c.parts[-1].own is None and "runs shell commands" in c.parts[-1].summary, c.parts[-1]
+
+
+W ="w{a..z}{a..z} x{a..z}{a..z} y{a..z}{a..z} z{a..z}{a..z}"     # 2,704 words: two reads spend more than 4,096
 PY_W = f'import os; os.system("echo {W}")'
 DENY_IRREVERSIBLE = {"matrix": {"irreversible": {"private": "ask", "internal": "deny", "public": "deny"}}}
 KEYS = "{ psql -d a; psql -d b; } <<EOF\n\\! echo " + W + "\nEOF\ncat ~/.ssh/id_rsa"
