@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `store.find` tokenized every node and rebuilt its BM25 tables on each call (#254, W1-5). `ctx`, `exo find`, the
+  default retrieval ranker, the learner and the memory plugin all call it, so each query paid for the whole store.
+  The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
+  the node set they were built from. A `reload()`, or a `refresh()` that sees a node file change, makes a new set
+  and the next `find` builds them again. A repeat query tokenizes only itself. Scores and order are unchanged.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

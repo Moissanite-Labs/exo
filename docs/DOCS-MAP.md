@@ -82,7 +82,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Handoff | `docs/HANDOFF.md` | §3 (`/handoff`) | n/a | WP §24 |
 | Signed ledger, crypto and the principal store | `docs/CORE.md`, `docs/STORE-V2.md` | §11 | §9 "Write to the signed ledger" | WP §19, §20 |
 | #88 Opt-in independent witness transport (`exo-witness`, durable checkpoint journal, pinned mutual TLS) | `docs/WITNESS-TRANSPORT.md`, `docs/LEDGER-AUTHORITY.md` | n/a (disabled by default, administrator invocation only) | Setup and recovery in the technical doc | WP §20.2 (built, opt-in), §30 (running a witness is deployment work) |
-| Retrieval | `docs/STORE-V2.md` §3, `docs/CORE.md` "Python API" | §11 (`exo find`, `exo ctx`) | §9 "Use retrieval" | WP §21 |
+| Retrieval | `docs/STORE-V2.md` §3, `docs/CORE.md` "Python API", "Find" | §11 (`exo find`, `exo ctx`) | §9 "Use retrieval" | WP §21 |
 | Eval, ask queue, brief, consolidate | `docs/TOOLS-CLI.md` | §11 "Review what Exo learned" | §9 "Work on the learning loop" (consolidate and proposals) | WP §6, §22 |
 | D-035 Typing `exo` opens Exo: bare command, installer on PATH, `exo update` | `docs/INSTALL.md` "The `exo` command", `docs/COMMANDS.md` Part 2 "Running Exo" | §1 | n/a | n/a |
 | D-036 One shared core: `exo web` finds or starts it | `docs/ui/WEB.md` "Connecting to the core", `docs/USER-GUIDE.md` §2, `docs/COMMANDS.md` | §2 | n/a | n/a |
@@ -162,6 +162,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Optimization program of October 18, 2026: Hermes-style audit, 12 ranked findings, Waves 0-3 with per-unit ownership and acceptance commands (issues #252-#266) | `docs/OPTIMIZATION.md` | n/a (plan) | n/a | n/a |
 | #255 W1-4 the grep tool streams each file line by line (incremental decode, splitlines-exact) instead of reading, decoding and splitting it whole; output and refusals unchanged | `docs/OPTIMIZATION.md` (#255 status row, W1-4), `CHANGELOG.md`, `src/exo/core/tools/builtin/search.py` | n/a (no user commands changed) | n/a | n/a |
 | #255 W1-2 `list_sessions` reads its message counts in the list query itself (the limited page is a subquery, a correlated count per kept row outside it), one query at any limit instead of one COUNT per session, count work bound by the limit | `docs/OPTIMIZATION.md` (#255 status row, W1-2), `CHANGELOG.md`, `src/exo/core/sessions.py` | n/a (no user commands changed) | n/a | n/a |
+| #254 W1-5 `store.find` keeps its BM25 tables (word counts, lengths, document frequencies, average length) for the node set they were built from. A reload, or a refresh that sees a node file change, makes a new set. A repeat query tokenizes only itself. Scores and order unchanged (D-011 amendment) | `docs/CORE.md` "Find", `docs/OPTIMIZATION.md` (#254 status row, W1-5), `DECISIONS.md` D-011, `CHANGELOG.md`, `src/exo/store.py` | n/a (no user commands changed) | n/a | n/a |
 
 ## Whitepaper gaps
 

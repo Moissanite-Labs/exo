@@ -172,6 +172,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   local only until A rules on a private remote.
 - **Rejected:** keeping Arif in Postgres (cannot travel to a device); three separate stores per person
   (drift); remote embeddings (personal text leaves the machine).
+- **Amendment 2026-10-21 (#254):** until the FTS5 and embedding stages are built, retrieval is the in-memory BM25 of
+  `store.find`. It rebuilt its tables from every node on each call. It now keeps them with the node set they were
+  built from and builds them again when a reload makes a new set (a refresh that sees a change reloads). Holding the
+  set itself is the reload generation: a separate counter, read apart from the set, could pair an old set with a new
+  number when two threads share a store. Rejected: building the tables in `reload()`, which would tokenize stores that
+  are never searched. Also rejected: moving to FTS5 now, which is stage 3 of `docs/STORE-V2.md` and a larger change.
+  Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
