@@ -2714,7 +2714,12 @@ path or below it is a `store_write`, however it is spelt: a redirection, `tee`, 
 to it (`ln -s /proc/self/fd/3 x`), a file tool's path, `//dev/fd/3`, `/dev/fd/$fd`, or a relative
 `dev/fd/3` (after `cd /`). So is a writing command after a `cd` into one, or into `/dev`, `/proc`,
 `/proc/<pid>` or `/proc/<pid>/task/<tid>` (`cd /dev && printf x > fd/3`), also one in a `$( )`,
-backticks or `<( )` of a later command (#465: `cd /dev && echo $(cp /tmp/evil fd/3)`). The writer's own stdout and
+backticks or `<( )` of a later command (#465: `cd /dev && echo $(cp /tmp/evil fd/3)`). After such a
+`cd`, a write counts when its target, read against that folder, is a descriptor path
+(`cd /dev && printf x > fd/3`, `cd /proc && printf x > self/fd/3`), or when the target cannot be
+pinned to a path (a variable, a glob). A command after such a `cd` that writes somewhere else, or
+writes nothing, keeps its own class (`cd /proc && sort meminfo`,
+`cd /proc && grep x meminfo > /tmp/m`). The writer's own stdout and
 stderr stay ordinary (`> /dev/fd/1`, `> /proc/self/fd/2`, `> /dev/stdout`). A store path opened for
 reading on a descriptor other than stdin (`3< f`, `exec 2< f`, `{ ...; } 1< f`) is a `store_write`
 too, because `> /dev/fd/3` or `> /dev/stdout` later on the line, or in a later call of a persistent
