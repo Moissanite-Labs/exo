@@ -66,6 +66,20 @@ def test_build_uses_ready_summaries_only():
     asyncio.run(go(pathlib.Path(tempfile.mkdtemp())))
 
 
+def test_fit_tail_keeps_the_newest_that_fit_and_always_the_last():
+    from exo.core.context import estimate_tokens
+    from exo.turn_settle import fit_tail
+
+    msgs = [Message.user(f"m{i} " + "x" * 400) for i in range(10)]  # about 100 tokens each
+    kept, cut = fit_tail(msgs, 250)
+    assert kept == msgs[len(msgs) - len(kept):] and 0 < len(kept) < len(msgs) and cut == len(msgs) - len(kept)
+    assert sum(estimate_tokens(m) for m in kept) <= 250 < sum(estimate_tokens(m) for m in msgs[len(msgs) - len(kept) - 1:])
+    kept, cut = fit_tail(msgs, 10 ** 9)
+    assert kept == msgs and cut == 0
+    kept, cut = fit_tail(msgs, 1)  # even a budget under one message keeps the last: it is the turn being answered
+    assert kept == msgs[-1:] and cut == 9
+
+
 def test_overflow_settles_briefly_not_for_settle_timeout():
     async def go(tmp_path):
         summ = Summ()
