@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A post's `--body-file` is read only when the post is the only command on the line (#343). The
+  exo-gate hook read an absolute body file before the line ran, but an earlier part of a compound
+  line — a copy, a move, a redirect, a link, `tee` — could rewrite the file after the read, so `gh`
+  posted text the posting rules never saw. On a compound line the file now stays unread, so the post
+  counts as unseen: it asks once and gets no standing grant, as a stdin body does.
 - `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
   its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
   each tree's violation total with what `and N more on other posts` counts.
