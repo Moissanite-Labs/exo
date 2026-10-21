@@ -10,6 +10,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
   without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
+- exod answers a request with a bad number with 400 and a JSON `{"error": ...}` body (#264). `Content-Length`,
+  `since` and `Last-Event-ID` were read with a bare `int()` and the handler swallowed its error, so a word or a
+  float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
+  start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
+  subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
