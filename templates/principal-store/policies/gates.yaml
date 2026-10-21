@@ -73,7 +73,7 @@ reserved: []
 # entry, a reserved entry, a `categories:` deny and a category deny rule reach every command
 # the gate reads on a line, nested ones included. An allow, log or ask category line sees
 # only the line's most severe part. A rule's `command` regex is matched against the text
-# of the one command it names (for the line, the most severe part's own text), so an allow
+# of the one command it names (for the line, every command on it), so an allow
 # rule on `^ls` allows `ls`, not `ls; <anything>`; a deny or reserved `command` regex still
 # sees the whole line. See docs/GATE.md "Known limits" for what the gate does not read yet.
 deny: []
