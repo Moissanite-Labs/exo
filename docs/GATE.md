@@ -209,15 +209,23 @@ the unseen check found unseen with a row of the table as it was before #399 stay
 (`--duplicate-of -c x`) stay unseen. gh refuses the second line. The gate does not read
 `GH_HOST` or `gh api --hostname`: `owner/name` counts as a repo on github.com. Nor does it read
 `GH_REPO`, which gh takes for `-R` when the line has none, so such a line counts as one on the
-current repo. A differential over
-168,403 gh lines in seven corpora found no line that decides lower than before #399, on the
-outcome, the exposure, the third party, the violations, the reserved parts, the outward and
-exact binding checks or the unseen check. It ran up to 93 policies, among them a deny map, a rule
-and a reserved entry that name an ssh host with a gh category. On 126,403 of the lines no signal
-was lost either. On 32 of the others the line loses the `secret store` signal and keeps its
-decision. gh now reads a credentials subcommand past an option there (`gh ssh-key -y 123 delete`),
-so the line is credentials already and gets no extra mark, as
-`cat .env && gh ssh-key delete 123 -y` gets none on main. Tests:
+current repo.
+
+A differential against main with #397 read 270,394 distinct gh lines, every corpus of the #399
+rounds and reviews, in both trees, and found none lower than on main. The 183,611 lines that
+classify differently were decided under 119 policies, among them a deny map, a rule and a
+reserved entry that name an ssh host with a gh category. They were checked on the outcome, the
+exposure, the third party, the violations, the reserved parts and the outward and exact binding
+checks. They also ran through the exo-gate hook in 13 setups of 5 policies: with standing grants
+on 31 targets, with none, in observe mode and with a required executor. There they were checked
+on what the hook does (run, ask or block), who may answer, "once", the binding and the scope an
+"always" keeps. The unseen check and the required executor's body check read both readings, and
+none is lower. On 91 lines the line as read loses the `secret store` or `unseen_body` signal, and
+the line as read before keeps it, so the decision stands. For `secret store`, gh now reads a
+credentials subcommand past an option (`gh ssh-key -y 123 delete`), so the line is credentials
+already and gets no extra mark, as `cat .env && gh ssh-key delete 123 -y` gets none on main. The
+other 86,783 lines classify the same in both trees, so they decide the same, and 5,000 of them run
+both ways showed no difference. Tests:
 `tests/security/test_gate_gh_target_operands.py`, `tests/security/test_gate_gh_subcommand_position.py`.
 
 ## Who may approve

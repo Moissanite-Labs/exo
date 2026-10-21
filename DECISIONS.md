@@ -751,16 +751,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   when either reading is in `NO_GRANT` or has an unseen body. A seat that answers `github_post` does not answer
   `gh pr -b x comment 5`, which the principal alone answered as a read. Without the floor a
   compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the
-  push, as in the same line with the options after the subcommand, and a private scope lowers it. A
-  differential over 126,403 gh lines in five corpora under 39 policies, the two earlier harnesses' and eight more (a
-  rule and a deny on an ssh host, a rule on the empty target, a read that is denied), found no line lower than on main
-  on any axis: the outcome, the exposure, the third party, the violations, the reserved parts, `is_outward`,
-  `binds_exact`, the unseen check and the signals. Each earlier harness run on its own also found none. A review's
-  two corpora (42,000 lines) and the ssh lines of the five (21,884) under 93 policies, and all 168,403 lines under 8
-  policies that name an ssh host with a gh category (a deny map, a rule, a reserved entry), found none lower on any
-  of those axes but the signals. There 32 lines lose the `secret store` signal and keep their decision: gh now reads
-  a credentials subcommand past an option (`gh ssh-key -y 123 delete`), so the line is credentials already and gets
-  no extra mark, as `cat .env && gh ssh-key delete 123 -y` gets none on main. The gate does not read `GH_HOST` or
+  push, as in the same line with the options after the subcommand, and a private scope lowers it. A differential
+  against main with #397 (b419f91b) read 270,394 distinct gh lines, every corpus of the #399 rounds and reviews, in
+  both trees. The 183,611 that classify differently were decided under 119 policies, the earlier harnesses' and
+  the reviews' (a deny map, a rule and a reserved entry on an ssh host with a gh category among them), and none was
+  lower on the outcome, the exposure, the third party, the violations, the reserved parts, `is_outward` or
+  `binds_exact`. They also ran through the exo-gate hook in 13 setups of 5 policies, with standing grants on 31
+  targets, with none, in observe mode and with a required executor, and none was lower on what the hook does (run,
+  ask or block), who may answer (each category with its own seat), "once", the binding or the scope an "always"
+  keeps. The unseen check and the executor's body check read both readings there, as the hook does, and none is
+  lower. 91 lines lose the `secret store` or `unseen_body` signal on the line as read, and the line as read before
+  keeps it, so the decision stands. For `secret store`, gh now reads a credentials subcommand past an option
+  (`gh ssh-key -y 123 delete`), so that line is credentials already and gets no extra mark, as
+  `cat .env && gh ssh-key delete 123 -y` gets none on main. The other 86,783 lines classify the same in both trees,
+  so they decide the same, and 5,000 of them run both ways differed on no axis. The gate does not read `GH_HOST` or
   `gh api --hostname`, so `owner/name` counts as a repo on github.com. Nor does it read `GH_REPO`, which gh takes for
   `-R` when the line has none: such a line counts as one on the current repo. `gh api` read its
   endpoint from the first word with a `/` and no `=`, an option's value included (a header, a jq query). It now reads
