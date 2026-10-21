@@ -6,6 +6,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- The default word of an unknown variable no longer hides a store name (#341). A `${name OP word}` form of
+  a variable other than the four store variables was read as empty, so `cat ${x:-.env}`,
+  `cat ${x:-~/.kube}/config` and `cp x ${x:-$HOME/.exo}/policies/a` read and wrote stores without asking,
+  though the word stands in the command text. For OP `-`, `:-`, `=`, `:=`, `+` and `:+` the word is now
+  read in place too, quotes dropped and spelt out as a store variable's word is, for the secret-store
+  checks and the Exo-store write checks alike. A legacy `$[...]` counts as an expansion, and a plain
+  number in it reads as itself, so `cat id_ed$[25519]` asks as `cat id_ed25519` does.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
