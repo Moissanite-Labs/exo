@@ -2,7 +2,7 @@
 """Never looser than main: compare the gate of two checkouts over a corpus and a policy set (#423).
 
     python scripts/gate_diff.py --base ../main --head . [--corpus lines.txt ...] [--policies more.py ...]
-        [--jobs N] [--json out.json] [--max-examples N] [--home DIR]
+        [--jobs N] [--json out.json] [--max-examples N] [--home DIR] [--timeout SECS]
 
 Each tree is a checkout of this repo. The script runs `gate.classify` and `gate.decide` for every action of the
 corpus under every policy of the set, once in each tree, in two child processes started with `python -I` and the
@@ -37,11 +37,15 @@ import os
 import runpy
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
+import collections
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
@@ -889,6 +893,26 @@ def _chunk(span: tuple[int, int]) -> str:
     return "".join(json.dumps(_row(i)) + "\n" for i in range(*span))
 
 
+def _chunks(spans: list[tuple[int, int]], jobs: int, init: tuple) -> Iterator[tuple[tuple[int, int], str]]:
+    """The rows of each span, in order. With more than one job they come from a process pool that holds a few
+    spans per worker at a time, so memory stays bounded. A dead worker raises BrokenProcessPool."""
+    if jobs <= 1:
+        for span in spans:
+            yield span, _chunk(span)
+        return
+    import multiprocessing as mp
+    ctx = mp.get_context("fork" if "fork" in mp.get_all_start_methods() else "spawn")
+    with ProcessPoolExecutor(jobs, mp_context=ctx, initializer=_load_tree, initargs=init) as pool:
+        todo = iter(spans)
+        running = collections.deque((sp, pool.submit(_chunk, sp)) for sp in itertools.islice(todo, jobs * 4))
+        while running:
+            span, fut = running.popleft()
+            text = fut.result()
+            for sp in itertools.islice(todo, 1):
+                running.append((sp, pool.submit(_chunk, sp)))
+            yield span, text
+
+
 def _tree_main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="gate_diff.py _tree")
     for k in ("--tree", "--corpus", "--policies", "--out", "--label"):
@@ -902,25 +926,18 @@ def _tree_main(argv: list[str]) -> int:
     spans = [(i, min(i + step, n)) for i in range(0, n, step)]
     head = {"label": a.label, "tree": a.tree, "gate": _W["file"], "actions": n, "policies": _W["names"],
             "policy_errors": _W["errors"]}
-    done, last = 0, time.monotonic()
+    last = time.monotonic()
     with gzip.open(a.out, "wt", encoding="utf-8", compresslevel=1) as out:
         out.write(json.dumps({"header": head}) + "\n")
-        if a.jobs > 1 and n > step:
-            import multiprocessing as mp
-            ctx = mp.get_context("fork" if "fork" in mp.get_all_start_methods() else "spawn")
-            with ctx.Pool(a.jobs, initializer=_load_tree, initargs=(a.tree, a.corpus, a.policies)) as pool:
-                for idx, text in enumerate(pool.imap(_chunk, spans)):
-                    out.write(text)
-                    done = spans[idx][1]
-                    if time.monotonic() - last > 15:
-                        last = time.monotonic()
-                        print(f"gate_diff [{a.label}] {done}/{n} actions, {last - t0:.0f}s", file=sys.stderr, flush=True)
-        else:
-            for span in spans:
-                out.write(_chunk(span))
+        try:
+            for span, text in _chunks(spans, a.jobs if n > step else 1, (a.tree, a.corpus, a.policies)):
+                out.write(text)
                 if time.monotonic() - last > 15:
                     last = time.monotonic()
                     print(f"gate_diff [{a.label}] {span[1]}/{n} actions, {last - t0:.0f}s", file=sys.stderr, flush=True)
+        except BrokenProcessPool as exc:      # a worker died (a crash, os._exit, the OOM killer): fail, never hang
+            print(f"gate_diff [{a.label}]: a worker process died: {exc}", file=sys.stderr, flush=True)
+            return 3
         out.write(json.dumps({"footer": {"secs": round(time.monotonic() - t0, 1)}}) + "\n")
     print(f"gate_diff [{a.label}] done: {n} actions in {time.monotonic() - t0:.0f}s", file=sys.stderr, flush=True)
     return 0
@@ -942,7 +959,46 @@ def start_tree(label: str, tree: Path, corpus: Path, policies: Path, out: Path, 
                ) -> subprocess.Popen:
     cmd = [sys.executable, "-I", str(Path(__file__).resolve()), "_tree", "--tree", str(tree), "--corpus", str(corpus),
            "--policies", str(policies), "--out", str(out), "--label", label, "--jobs", str(jobs)]
-    return subprocess.Popen(cmd, env=tree_env(home), cwd=str(home))
+    # A session of its own, so a kill reaches the tree's pool workers too (stop_tree).
+    return subprocess.Popen(cmd, env=tree_env(home), cwd=str(home), start_new_session=os.name == "posix")
+
+
+def stop_tree(p: subprocess.Popen) -> None:
+    """Kill a tree's child and its workers, unless it ended well (its workers are gone then)."""
+    if p.poll() == 0:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(p.pid, signal.SIGKILL)
+        else:
+            p.kill()
+    except OSError:
+        pass
+    p.wait()
+
+
+def wait_trees(procs: dict[str, subprocess.Popen], timeout: float) -> tuple[dict[str, int], str]:
+    """Wait for both trees. Stop the other when one fails, and both after ``timeout`` seconds (0: no limit).
+    Returns the exit codes of those that ended and, when the run failed, why."""
+    deadline = time.monotonic() + timeout if timeout > 0 else None
+    codes: dict[str, int] = {}
+    while len(codes) < len(procs) and not any(codes.values()):
+        for k, p in procs.items():
+            if k not in codes:
+                try:
+                    codes[k] = p.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    pass
+        if deadline is not None and time.monotonic() > deadline and len(codes) < len(procs):
+            for p in procs.values():
+                stop_tree(p)
+            return codes, f"a tree ran longer than --timeout {timeout:g}s and was stopped"
+    for p in procs.values():
+        stop_tree(p)
+    if any(codes.values()):
+        return codes, "a tree failed to run (" + ", ".join(
+            f"{k} exit {codes[k]}" if k in codes else f"{k} stopped" for k in procs) + ")"
+    return codes, ""
 
 
 # --- compare -------------------------------------------------------------------------------------------------------
@@ -1169,6 +1225,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--json-limit", type=int, default=5000,
                    help="most lowered actions, and most lowered pairs, kept in --json (default 5000 each)")
     p.add_argument("--max-examples", type=int, default=3, help="examples per group in the summary (default 3)")
+    p.add_argument("--timeout", type=float, default=3600,
+                   help="seconds a tree may run before both are stopped and the run exits 2 (default 3600, 0: none)")
     p.add_argument("--home", type=Path, help="HOME for both trees (default: a temp folder with the usual stores)")
     p.add_argument("--dump-corpus", type=Path, help="write the corpus as JSON here, then run as usual")
     return p.parse_args(argv)
@@ -1235,23 +1293,26 @@ def run(a: argparse.Namespace) -> int:
     print(f"gate_diff: {len(actions)} actions ({', '.join(f'{k} {v}' for k, v in corpus_counts.items())}), "
           f"{len(policies)} policies, {a.jobs} jobs per tree", file=sys.stderr, flush=True)
     work = Path(tempfile.mkdtemp(prefix="gate-diff-"))
+    procs: dict[str, subprocess.Popen] = {}
     try:
         home = home or make_home(work)
         corpus_path, pol_path = work / "corpus.json", work / "policies.json"
         corpus_path.write_text(json.dumps(actions), encoding="utf-8")
         pol_path.write_text(json.dumps(policies), encoding="utf-8")
         outs = {"base": work / "base.jsonl.gz", "head": work / "head.jsonl.gz"}
-        procs = {k: start_tree(k, getattr(a, k), corpus_path, pol_path, outs[k], max(1, a.jobs), home)
-                 for k in ("base", "head")}
-        codes = {k: p.wait() for k, p in procs.items()}
-        if any(codes.values()):
-            raise Failed(f"a tree failed to run ({', '.join(f'{k} exit {v}' for k, v in codes.items())})")
+        for k in ("base", "head"):
+            procs[k] = start_tree(k, getattr(a, k), corpus_path, pol_path, outs[k], max(1, a.jobs), home)
+        _, why = wait_trees(procs, a.timeout)
+        if why:
+            raise Failed(why)
         print("gate_diff: comparing", file=sys.stderr, flush=True)
         try:
             rep = compare(outs["base"], outs["head"], actions, a.max_examples, a.json_limit)
         except (RuntimeError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
             raise Failed(f"could not compare the results: {exc}") from None
     finally:
+        for p in procs.values():     # an interrupt or an error here: no tree keeps running
+            stop_tree(p)
         shutil.rmtree(work, ignore_errors=True)
     rep.update(base=f"{a.base} {_commit(a.base)}".strip(), head=f"{a.head} {_commit(a.head)}".strip(),
                corpus_counts=corpus_counts, wall_secs=round(time.monotonic() - t0, 1))
