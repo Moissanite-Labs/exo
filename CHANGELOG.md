@@ -6,14 +6,30 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
+  life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
+  the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
+  and the handoff already kept. This change also corrects the upgrade note in the #385 entry below and in
+  the D-040 amendment: a session last compacted on 0.2.0 loses its rulings and corrections as well as its
+  open decisions, not the open decisions alone.
+- A reopen's comment and a merge's subject and body are checked by the posting rules (#397).
+  `gh issue reopen --comment` and `gh pr reopen -c` post a comment the gate filed as a post but
+  never read, and `gh pr merge --body` was read but never checked, with `--subject` not read at
+  all: text that asks as a comment post logged. A reopen now reads its comment as a close does
+  (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
+  text, an unread body file included. A reopen or merge carrying no text is unchanged.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
   with the block itself carries one. The session pins take open decisions beside rulings and corrections, and
   follow the session id across a compression child session and a resume, so everything a pinned block held
-  still survives compaction, now by the pins. One upgrade note: a session compacted before this change holds
-  its open decisions only inside an earlier summary's block, and those drop at its first compaction after the
-  upgrade. The handoff written at that earlier compaction still has them.
+  still survives compaction, now by the pins, in a session whose pins were observed. One upgrade note: a
+  session compacted before this change holds its open decisions only inside an earlier summary's block, and
+  those drop at its first compaction after the upgrade. A session last compacted before pins were observed
+  at compaction at all (any 0.2.0 Hermes session: its compactions never observed pins) holds its rulings and
+  corrections only in that block too, and all three drop at that first compaction. The handoff written at
+  that earlier compaction still has them: read it, or run `/exo resume`, before the first compaction after
+  the upgrade. A 0.2.0 handoff may quote a forged block, so read it as a record, not as the principal's words.
 - A no-behaviour-change reduction took 40 lines out of the counted core (#373), undoing the #346 headroom
   raise. Dead job-notice overrides now inherit, a duplicate id helper now imports from the schema, two git
   helpers merged, and four exception clauses the next handler could never reach are gone. `CORE_HEADROOM`
@@ -140,8 +156,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   line decides lower than before. Such a line binds its approval to the exact command, so a standing grant on one of
   its targets does not run it, and its question names every other target ("It may land on pub/repo#7 instead.").
   `gh issue close --duplicate-of` and `-r` take a value in the gate's table now, and the table lists `gh pr ready`,
-  `reopen`, `merge`, `lock` and `unlock`, `gh issue reopen`, `develop`, `lock`, `unlock`, `delete` and `transfer`, and
-  `gh release upload` and `delete`. So `gh pr ready --undo <URL>` no longer asks about "the current repo". `gh api`
+  `lock` and `unlock`, `gh issue develop`, `lock`, `unlock`, `delete` and `transfer`, and `gh release upload` and
+  `delete`, beside the reopen and merge rows from #397. So `gh pr ready --undo <URL>` no longer asks about "the
+  current repo". `gh api`
   took its endpoint from the first word with a `/`, an option's value too, so
   `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` was a post on `myorg/app`. Its
   endpoint is its one operand now, and the word it took before is another target. `-R` reads as gh reads it:

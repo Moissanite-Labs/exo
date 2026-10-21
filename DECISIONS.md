@@ -710,8 +710,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   became the target's number the same way. Now `_gh_target` takes the repo and the number from `-R` and the operands
   only. It reads them with the table the unseen check uses (`_GH_TAKES` and the text options, through
   `_option_values`), so `--opt=value`, short clusters, `--` and options with no value read as in gh. `gh issue close`
-  lists `--duplicate-of` and `-r` now, and the table has rows for pr ready, reopen, merge, lock and unlock, issue
-  reopen, develop, lock, unlock, delete and transfer, and release upload and delete (gh 2.89 `--help`). gh keeps the
+  lists `--duplicate-of` and `-r` now, and the table has rows for pr ready, lock and unlock, issue develop, lock,
+  unlock, delete and transfer, and release upload and delete (gh 2.89 `--help`), beside the pr reopen, pr merge and
+  issue reopen rows from #397, which `_GH_TAKES_BEFORE_399` leaves out since they are main's rows. gh keeps the
   last `-R`. A URL operand names the repo even beside `-R`, because gh does that (`pr/shared/finder.go` and
   `issue/shared/lookup.go` in gh 2.89). `_gh_url` reads it as `ParseURL` and `ghrepo.NewWithHost` do: the scheme
   and the host in any case, without a user, `www.` or a port, and the path decoded. `gh repo` drops a repo URL's
@@ -766,6 +767,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   dropping the earlier reading, since a deny or a rule naming the repo a body links to would stop firing on a line it
   caught before.
   Limits: `docs/GATE.md` "Where a gh command lands".
+
+- **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.
+  `gh pr merge --subject`/`--body` become the commit message in the repository, public on a public
+  repository, so the posting rules and the scrub see them when a merge carries them, as they have
+  seen a close's comment since #326. A merge carrying neither is unchanged. A reopen's comment is
+  posted text the same way: gh posts it on the thread.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
@@ -1541,6 +1548,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the session id: a compression child session inherits its parent's pins, and a reset-only switch rebinds
   through `bind_session_state`, a branch child inheriting its parent's pins. With those, everything a pinned
   block held survives compaction by the pins instead, across session moves too.
+  *Amendment 2026-10-21 (#398):* the survival sentence above holds only where the session's pins were
+  observed. A session last compacted before pins were observed at compaction (any 0.2.0 Hermes session:
+  0.2.0's `compress` never observed pins) holds its rulings, corrections and open decisions only in the
+  summary's block, and all three drop at its first compaction after the upgrade. The handoff written at
+  that earlier compaction still has them, and `/exo resume` reads it back; a 0.2.0 handoff may quote a
+  forged block, so it is a record to read, not the principal's words. Open-decision pins are also capped
+  at the newest 12, in `_observe` and in `_carry_pins`: a deferral never expires on its own, and the
+  uncapped list grew the pins file and the per-turn scan over it for the life of the session. The cap is
+  the one the compaction block and the handoff already applied to the merged list.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width

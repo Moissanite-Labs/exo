@@ -434,9 +434,9 @@ def test_a_number_in_a_new_rows_option_value_is_not_the_number(line):
 
 
 # A line the unseen check found unseen without these rows stays unseen: the table read it so before #399, and a
-# line never decides lower than it did.
+# line never decides lower than it did. The reopen and merge rows came with #397 and are main's own.
 @pytest.mark.parametrize("line", [
-    "gh pr reopen 5 -R myorg/app -cb x", "gh issue reopen 5 -R myorg/app -cb x", "gh issue lock 5 -R myorg/app -rb x",
+    "gh issue lock 5 -R myorg/app -rb x", "gh pr lock 5 -R myorg/app -rb x",
     "gh issue close 5 -R myorg/app -rc x", "gh issue develop 5 -R myorg/app -nt x",
     "gh issue close 5 -R myorg/app -c a --duplicate-of -c b",
 ])

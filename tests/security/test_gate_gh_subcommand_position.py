@@ -10,9 +10,11 @@ an option may stand is code the gate cannot read. The line as the gate read it b
 stricter decision stands, so no line decides lower than it did. Classification and decision only; nothing is
 executed.
 """
+from dataclasses import replace
+
 import pytest
 
-from exo.gate import binds_exact, classify, decide, is_outward, normalize_policies
+from exo.gate import UNSEEN_BODY, binds_exact, body_unseen, classify, decide, is_outward, normalize_policies
 
 POST = {"footer": "F", "scrub": {"names": ["SECRETX"]}}
 POLICY = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "posting": POST})
@@ -224,3 +226,32 @@ def test_an_empty_word_before_a_command_without_subcommands():
     assert c.category == "github_post" and "pub/repo" in [c.target] + c.alt_targets, c
     c, d = run("gh '' auth token")
     assert c.category == "credentials" and d.outcome == "ask", (c, d)
+
+
+
+# #397's checks of a reopen's comment and a merge's subject hold in each reading: with the subcommand past an option,
+# and on each other target. A repeated --subject is unseen there too.
+ZORK = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}},
+                           "posting": {"footer": "F", "forbid_words": ["Zork"]}})
+
+
+@pytest.mark.parametrize("line,canonical", [
+    ("gh issue -R pub/repo reopen 5 --comment 'Zork leaked'", "gh issue reopen -R pub/repo 5 --comment 'Zork leaked'"),
+    ("gh pr -c 'Zork leaked' reopen 5 -R pub/repo", "gh pr reopen -c 'Zork leaked' 5 -R pub/repo"),
+    ("gh pr -R myorg/app merge 5 --subject 'Zork leaked'", "gh pr merge -R myorg/app 5 --subject 'Zork leaked'"),
+    ("gh pr --subject 'Zork leaked' merge 5 -R myorg/app", "gh pr merge --subject 'Zork leaked' 5 -R myorg/app"),
+])
+def test_a_reopen_comment_and_a_merge_subject_are_checked_past_an_option(line, canonical):
+    c, d = run(line, ZORK)
+    k, e = run(canonical, ZORK)
+    assert c.floor is not None and (c.category, c.target, c.text, c.title) == (k.category, k.target, k.text, k.title)
+    assert "Zork leaked" in (c.text, c.title), c
+    assert d.outcome == e.outcome == "ask" and "forbidden word: Zork" in d.violations, (d, e)
+
+
+def test_a_merge_subject_repeated_is_unseen_on_each_target():
+    c, d = run("gh pr merge https://github.com/pub/repo/pull/5 -R myorg/app --subject ok --subject 'Zork leaked'", ZORK)
+    assert c.target == "pub/repo#5" and c.alt_targets == ["myorg/app#5"] and body_unseen(c), c
+    for t in [c.target] + c.alt_targets:
+        assert body_unseen(replace(c, target=t, alt_targets=[])), t
+    assert d.outcome == "ask" and UNSEEN_BODY in d.violations, d
