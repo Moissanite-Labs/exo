@@ -99,6 +99,44 @@ matches it, since its binding hashes only the line. A post the line spells out i
   the answer is refused as `stale`, so an approver who read an older draft cannot pass a newer
   one. A client that sends no binding keeps the old behaviour.
 
+## Where a gh command lands (#399)
+
+A gh command's target decides its scope (`gates.scopes`), and with it the exposure, the third
+party, the footer and the scrub. The gate takes the target from `-R` and the operands only:
+
+- An option's value is never the target. A URL or a number in `--body`, `--title`, `--comment`,
+  `--duplicate-of`, `--head`, `--base` or `--milestone` names nothing. So
+  `gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 ...'` is a post on
+  `pub/repo#5`, a public repo, even under `internal: [myorg/*]`.
+- Options are read with gh's own table of options that take a value, the same table the unseen
+  check uses: `--opt=value`, short clusters (`-wb text`), `-Rowner/name`, and `--`, which ends the
+  options. gh keeps the last `-R`.
+- A URL operand names the repo, also beside `-R`, because gh posts there.
+  `gh pr comment https://github.com/myorg/app/pull/9 -R pub/repo` lands on `myorg/app#9`.
+
+The gate also keeps every other reading it cannot rule out, and decides the line on each. The
+strictest outcome stands, with the widest exposure, a third party if any reading has one, and every
+violation and reserved part. The other readings are:
+
+- `-R`, when a URL operand names another repo. The line above is decided as public.
+- The reading before #399: `-R`, then the first URL or number anywhere on the line. So no line
+  decides lower than it did. A deny or reserved entry that named the repo a body links to still
+  fires.
+- For a gh command outside the table, whose options the gate cannot tell from their values: the
+  operands read with every option a flag, and with every option taking a value. A URL that only
+  the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
+  and the reading without it counts too.
+
+Each other reading is a copy of the action among the line's parts, with its own target, so a
+`target:` deny or reserved entry matches it also when the gh call is not the line's most severe
+part. The ledger row lists the other targets as `alt_targets`. When one of them decides the line,
+the reason ends with "(if it lands on owner/name#n)".
+
+Limits. A body that links to another repo still counts that repo, as it did before #399. So
+`gh pr comment 5 -R myorg/app -b 'https://github.com/pub/repo/pull/3'` asks as public. A close
+whose `--duplicate-of` value is an option word (`--duplicate-of -c x`) stays unseen. gh refuses
+that line. Tests: `tests/security/test_gate_gh_target_operands.py`.
+
 ## Who may approve
 
 `policies/approvals.yaml` maps a category to who may answer:

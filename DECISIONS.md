@@ -703,6 +703,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   resolving a relative path against the tool's `cwd` (the hook receives no cwd, and a `cd` on the line moves it);
   reading the stdin source file in the gate (the same folder problem, and a host read before a required worker).
   Limits: `docs/GATE.md` "What an approval covers".
+- **Amendment 2026-10-21 (issue #399):** the scope, the scrub, the footer and the third-party check all follow a
+  gh post's target, and the target was the first word after the subcommand that began with a GitHub URL, option
+  values included. `gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 ...'` was a post on
+  `myorg/app#9`, so under `internal: [myorg/*]` it logged and the scrub never ran. A number in an option value
+  (`-b 7`, `--milestone 3`) became the target's number the same way. Now `_gh_target` takes the repo and the number
+  from `-R` and the operands only. It reads them with the table the unseen check uses (`_GH_TAKES` and the text
+  options, through `_option_values`), so `--opt=value`, short clusters, `--` and options with no value read as in gh.
+  `gh issue close` lists `--duplicate-of` now. gh keeps the last `-R`. A URL operand names the repo even beside `-R`,
+  because gh does that (`pr/shared/finder.go` and `issue/shared/lookup.go` in gh 2.89). The other readings the gate
+  cannot rule out are kept as `Classification.alt_targets`, each with a copy of the action as a part: `-R` when a
+  URL operand names another repo, and the reading before #399. `decide` decides the line on each and keeps the
+  strictest outcome, the widest exposure, any third party, and every violation and reserved part. So a line never
+  decides lower than it did, and a deny or reserved entry on either repo still fires, also when the gh call is not
+  the line's most severe part. For a gh command outside the table the gate reads the operands twice, with every
+  option a flag and with every option taking a value. A URL operand that only the first reading finds never
+  replaces `-R`, and with no `-R` it names the target beside the reading without it. A close whose `--duplicate-of`
+  value is an option word stays unseen, as it was (gh refuses the line). A differential over 36,288 gh lines and 15
+  policies found no line less exposed, less third-party or lower in outcome than on main. Rejected: letting `-R`
+  win over a URL operand, since gh posts on the URL's repo and lines that asked as public would log. Also rejected:
+  dropping the earlier reading, since a deny or a rule naming the repo a body links to would stop firing on a line
+  it caught before.
+  Limits: `docs/GATE.md` "Where a gh command lands".
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows

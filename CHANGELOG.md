@@ -128,6 +128,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#399, D-033): a URL in a gh option's value no longer picks the post's repo. The first word after the
+  subcommand that began with a GitHub URL was the target, a body or `--duplicate-of` value included, so
+  `gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 ...'` counted as a post on `myorg/app#9`.
+  Under `internal: [myorg/*]` it logged, and the scrub, the footer and the third-party check for the public repo
+  never ran. A number in an option value (`-b 7`) became the target's number too. The target now comes from `-R`
+  and the operands only, read with the table of options that take a value that the unseen check uses. gh keeps
+  the last `-R`, and a URL operand still names the repo, as in gh. The gate also decides the line on every other
+  repo it cannot rule out (`-R` beside a URL operand for another repo, and the reading before this change) and
+  keeps the strictest decision, so no line decides lower than before. `gh issue close --duplicate-of` takes a
+  value in the gate's table now.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
