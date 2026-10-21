@@ -6027,8 +6027,10 @@ DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, 
 
 def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
-    and code the gate cannot see into (D-038), so one "always" never covers a different script."""
-    return is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
+    code the gate cannot see into (D-038), so one "always" never covers a different script, and a gh command
+    that may land on another target (``alt_targets``, #399), so a grant on one of its targets never covers it."""
+    return (is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
+            or bool(c.alt_targets))
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:

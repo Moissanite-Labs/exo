@@ -716,7 +716,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   URL operand names another repo, and the reading before #399. `decide` decides the line on each and keeps the
   strictest outcome, the widest exposure, any third party, and every violation and reserved part. So a line never
   decides lower than it did, and a deny or reserved entry on either repo still fires, also when the gh call is not
-  the line's most severe part. For a gh command outside the table the gate reads the operands twice, with every
+  the line's most severe part. A line with other targets binds its approval to the exact command, as an
+  outward act does (`binds_exact`), so a standing grant on one of its targets does not run it, and its rule key
+  and an "always" on it cover that exact line only. For a gh command outside the table the gate reads the operands twice, with every
   option a flag and with every option taking a value. A URL operand that only the first reading finds never
   replaces `-R`, and with no `-R` it names the target beside the reading without it. A close whose `--duplicate-of`
   value is an option word stays unseen, as it was (gh refuses the line). A differential over 36,288 gh lines and 15

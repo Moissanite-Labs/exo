@@ -132,6 +132,12 @@ Each other reading is a copy of the action among the line's parts, with its own 
 part. The ledger row lists the other targets as `alt_targets`. When one of them decides the line,
 the reason ends with "(if it lands on owner/name#n)".
 
+A line with other targets binds its approval to the exact command, as an outward act does. Its
+rule key is the text hash, so a "session" answer covers that line only. A standing grant on one of
+its targets does not run it, and an "always" on it covers that exact line only ("Standing
+grants"). So a grant from `gh pr merge -R myorg/app` never runs
+`gh pr merge https://github.com/pub/repo/pull/7 -R myorg/app`, which merges `pub/repo#7`.
+
 Limits. A body that links to another repo still counts that repo, as it did before #399. So
 `gh pr comment 5 -R myorg/app -b 'https://github.com/pub/repo/pull/3'` asks as public. A close
 whose `--duplicate-of` value is an option word (`--duplicate-of -c x`) stays unseen. gh refuses
@@ -495,6 +501,9 @@ logged with the grant id.
 - Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`).
 - Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
   granted for the exact command only, like an outward act.
+- A gh command that may land on more than one target (`alt_targets`, "Where a gh command
+  lands") is granted for the exact command only, like an outward act. A grant on one of its targets
+  does not cover it (#399).
 - A post whose body the gate did not read never gets a grant, and an older grant does not cover it
   (#208, "What an approval covers").
 - Only the principal can create a grant.
