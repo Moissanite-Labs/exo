@@ -271,6 +271,9 @@ def test_a_line_read_before_as_credentials_is_answered_once_and_kept_in_observe_
     assert r and r["action"] == "approve" and r.get("once") is True, r         # no grant runs it, no "always"
     answer(ctx, r, "always")
     assert [x["rule"] for x in g.grants.list()] == ["read"]                   # no new grant was kept
+    # The grant lookup reads the floor too, also where "once" would not stop it first.
+    d = gate.decide(c, g.policies())
+    assert g.grants.match("read", "myorg/app#5", binding, True) and g._grant_for(c, d, binding, True) is None
     g.settings = dataclasses.replace(g.settings, mode="observe")
     r = call(ctx, "terminal", {"command": line})
     assert r and r["action"] == "approve", r                                  # NO_GRANT holds in observe mode too
