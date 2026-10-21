@@ -2209,8 +2209,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   stays allowed under that rule. That cannot loosen a decision, since the rule must still match the whole line:
   `cd /tmp/evil && make test` asks under `'^make test$'`, as before. An anchored rule such as
   `'^git push --force origin main$'` still matches no compound line, as before. A rule written for a whole compound
-  line, such as `'^make && make install$'`, now also has to name each command, for example as
-  `['^make && make install$', '^make( install)?$']`, and until it does the line gets its matrix or category outcome.
+  line, such as `'^git push origin main && git push origin dev$'`, now also has to name each command, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`, and until it does the line gets
+  its matrix or category outcome (here log).
   Limits: a command that would be allowed alone still rides on the rule's outcome, as before and as a less severe
   command does under a category line. `cd /tmp/other && git push --force origin main` and
   `echo x > .git/hooks/pre-push && git push --force origin main` are allowed under the unanchored rule above. A

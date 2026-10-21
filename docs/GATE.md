@@ -709,9 +709,10 @@ gate does not read:
   call the gate recognizes carry the code's text, or the command that runs it
   (`python3 -c 'import shutil; shutil.rmtree("b")'` as written), and a string literal read as a
   command (`os.system('rm -rf build')`) has none, so beside another command no `command` rule
-  lowers it: use a category or tool key. A rule written for a whole compound line, such as `'^make && make install$'`, now has
-  to name each command on it too, for example as `['^make && make install$', '^make( install)?$']`.
-  Until it does, the line gets its matrix or category outcome. The ledger view of a classification
+  lowers it: use a category or tool key. A rule written for a whole compound line, such as
+  `'^git push origin main && git push origin dev$'`, now has to name each command on it too, for
+  example as `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`.
+  Until it does, the line gets its matrix or category outcome (here log). The ledger view of a classification
   leaves the own text out.
 - Bash evaluates an array subscript in a variable name as arithmetic, and that runs a `$( )` or
   backticks in it, even inside single quotes. So the name arguments of `printf -v`, `read` (and
