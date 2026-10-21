@@ -244,7 +244,14 @@ def _callee(call: ast.Call) -> str:
 
 
 def _names_in(node: ast.AST) -> set[str]:
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+    """The names a call uses, but not those only used as a key (``TABLE[name]``): such a name is a row label."""
+    out, todo = set(), [node]
+    while todo:
+        n = todo.pop()
+        if isinstance(n, ast.Name):
+            out.add(n.id)
+        todo.extend(ch for ch in ast.iter_child_nodes(n) if not (isinstance(n, ast.Subscript) and ch is n.slice))
+    return out
 
 
 def _own_nodes(body: Iterable[ast.AST]) -> Iterator[ast.AST]:
@@ -272,7 +279,8 @@ class _Func:
         self.feeds = False
 
     def scope(self, parent: _Scope) -> _Scope:
-        """A fresh scope for one evaluation of the body: locals, loop targets and parametrize rows."""
+        """A fresh scope for one evaluation of the body: locals, loop and comprehension targets, and parametrize
+        rows."""
         s = _Scope(parent)
         for n in _own_nodes(self.node.body):
             if isinstance(n, ast.Assign):
@@ -280,7 +288,7 @@ class _Func:
                     _bind_target(s, t, n.value)
             elif isinstance(n, ast.AnnAssign) and n.value is not None:
                 _bind_target(s, n.target, n.value)
-            elif isinstance(n, (ast.For, ast.AsyncFor)):
+            elif isinstance(n, (ast.For, ast.AsyncFor, ast.comprehension)):
                 _bind_target(s, n.target, n.iter, loop=True)
         for dec in self.node.decorator_list:
             if isinstance(dec, ast.Call) and _callee(dec) == "parametrize" and len(dec.args) >= 2:
@@ -383,16 +391,21 @@ class Harvest:
                     return []
             return ["".join(p) for p in _product(groups)]
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            for a, b in _product([V(node.left, scope, depth, active), V(node.right, scope, depth, active)]):
+            left, right = V(node.left, scope, depth, active), V(node.right, scope, depth, active)
+            for a, b in _product([left, right]):
                 if isinstance(a, str) and isinstance(b, str):
                     out.append(a + b)
                 elif isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
                     out.append(list(a) + list(b))
+            if not left or not right:       # a list plus a part not read: keep the rows that were read
+                out.extend(list(v) for v in left + right if isinstance(v, (list, tuple)))
             return out
         if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
             for e in node.elts:
                 if isinstance(e, ast.Starred):
-                    groups.append([("*", v) for v in V(e.value, scope, depth, active) if isinstance(v, (list, tuple))])
+                    star = [("*", list(v)) for v in V(e.value, scope, depth, active) if isinstance(v, (list, tuple, dict))]
+                    if star:                # a part not read is left out, the other elements kept
+                        groups.append(star)
                 else:
                     vals = V(e, scope, depth, active)
                     if vals or isinstance(node, ast.Tuple):
@@ -430,21 +443,44 @@ class Harvest:
             return out
         if isinstance(node, ast.IfExp):
             return V(node.body, scope, depth, active) + V(node.orelse, scope, depth, active)
-        if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)) and len(node.generators) == 1:
-            gen = node.generators[0]
-            for seq in V(gen.iter, scope, depth, active):
-                if not isinstance(seq, (list, tuple)):
-                    continue
-                for item in seq[:_CAP]:
-                    s = _Scope(scope)
-                    _bind_value(s, gen.target, item)
-                    out.extend(V(node.elt, s, depth, active))
-                    if len(out) >= _CAP:
-                        return out
-            return out
+        if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+            # One value: the list of every element (the elements of each alternative of the iterables together).
+            # Filters are not read, so the list may hold more than the code makes. That only adds lines.
+            if self._comp(node.elt, None, node.generators, scope, depth, active, out):
+                return [out]
+            return []
+        if isinstance(node, ast.DictComp):
+            pairs: list = []
+            if self._comp(node.key, node.value, node.generators, scope, depth, active, pairs):
+                return [{k: v for k, v in pairs if isinstance(k, (str, int, float, bool, type(None)))}]
+            return []
         if isinstance(node, ast.Call):
             return self._call_values(node, scope, depth, active)
         return []
+
+    def _comp(self, elt: ast.AST, val: ast.AST | None, gens: list[ast.comprehension], scope: _Scope, depth: int,
+              active: frozenset, out: list) -> bool:
+        """Add the elements of a comprehension to ``out`` (key, value pairs when ``val`` is given). False when no
+        iterable could be read."""
+        gen, rest = gens[0], gens[1:]
+        read = False
+        for seq in self.values(gen.iter, scope, depth, active):
+            if not isinstance(seq, (list, tuple, dict)):
+                continue
+            read = True
+            for item in list(seq)[:_CAP]:
+                s = _Scope(scope)
+                _bind_value(s, gen.target, item)
+                if rest:
+                    self._comp(elt, val, rest, s, depth, active, out)
+                elif val is None:
+                    out.extend(self.values(elt, s, depth, active))
+                else:
+                    out.extend(_product([self.values(elt, s, depth, active) or [UNKNOWN],
+                                         self.values(val, s, depth, active) or [UNKNOWN]]))
+                if len(out) >= _CAP:
+                    return True
+        return read
 
     def _name(self, name: str, scope: _Scope, depth: int, active: frozenset) -> list:
         binds = scope.lookup(name)
@@ -467,9 +503,9 @@ class Harvest:
             elif kind == "row":
                 i, n = extra
                 for rows in self.values(node, s, depth, act):
-                    if not isinstance(rows, (list, tuple)):
+                    if not isinstance(rows, (list, tuple, dict)):
                         continue
-                    for row in rows:
+                    for row in list(rows):
                         if isinstance(row, _Param):
                             row = row[0] if n == 1 and row else row
                         out.append(row if n == 1 else _pick(row, (i,)))
@@ -488,8 +524,12 @@ class Harvest:
             sep = node.func.value.value
             return [sep.join(seq) for seq in V(node.args[0], scope, depth, active)
                     if isinstance(seq, (list, tuple)) and all(isinstance(x, str) for x in seq)]
-        if name in ("list", "tuple", "sorted") and isinstance(node.func, ast.Name) and len(node.args) == 1:
-            return [list(v) for v in V(node.args[0], scope, depth, active) if isinstance(v, (list, tuple))]
+        if name in ("list", "tuple", "sorted", "set", "frozenset", "reversed") and isinstance(node.func, ast.Name) \
+                and len(node.args) == 1:
+            return [list(v) for v in V(node.args[0], scope, depth, active) if isinstance(v, (list, tuple, dict))]
+        if name in ("items", "keys", "values") and isinstance(node.func, ast.Attribute) and not node.args:
+            dicts = [d for d in V(node.func.value, scope, depth, active) if isinstance(d, dict)]
+            return [[tuple(kv) for kv in d.items()] if name == "items" else list(getattr(d, name)()) for d in dicts]
         if name == "dict" and isinstance(node.func, ast.Name) and not node.args:
             groups = [V(k.value, scope, depth, active) or [UNKNOWN] for k in node.keywords if k.arg]
             keys = [k.arg for k in node.keywords if k.arg]

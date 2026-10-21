@@ -97,7 +97,9 @@ def test_a_tree_that_cannot_run_exits_2(tmp_path):
 def test_the_harvester_finds_known_test_literals():
     h = gate_diff.harvest(ROOT)
     for cmd in ("true {PATH}>/dev/null; ls",            # a parametrize row fed through a helper
-                "cd /dev && printf x > fd/3"):          # a module-level list fed through a helper
+                "cd /dev && printf x > fd/3",           # a module-level list fed through a helper
+                "setsid rm -rf /tmp/x",                 # a row after a list comprehension in a sum
+                r"IFS=$'\n'"):                          # sorted() of a dict
         assert cmd in h.commands, cmd
     assert any(a["tool"] == "read_file" and a["args"] == {"path": "~/.exo/keys/seat.key"}
                for a in h.actions.values())             # an action handed to the hook
@@ -138,6 +140,66 @@ def test_loop_and_literals():
     actions = list(h.actions.values())
     assert {"tool": "write_file", "args": {"path": "/tmp/y"}} in actions
     assert {"tool": "terminal", "args": {"command": "make test", "cwd": "sub"}} in actions
+
+
+def test_the_harvester_reads_comprehensions_dicts_and_sums(tmp_path):
+    tests = tmp_path / "tests" / "security"
+    tests.mkdir(parents=True)
+    (tests / "test_gate_forms.py").write_text('''
+import pytest
+from exo import gate
+LINES = [f"rm const-{x}" for x in ("a", "b")]
+BASE = ["rm base-row"]
+ROWS = [("rm row-1", "ask"), ("rm row-2", "ask")]
+TABLE = {"rm table-1": "ask", "rm table-2": "ask"}
+LABELS = {"PS4": "export PS4='{}'"}
+
+def sh(c):
+    return gate.classify({"tool": "terminal", "args": {"command": c}})
+
+@pytest.mark.parametrize("line", [f"rm {x}" for x in ("a", "b")])
+def test_inline(line):
+    sh(line)
+
+@pytest.mark.parametrize("line", LINES)
+def test_const(line):
+    sh(line)
+
+def test_loop():
+    for line in [f"rm loop-{x}" for x in ("a", "b")]:
+        sh(line)
+
+@pytest.mark.parametrize("line", [*[f"rm star-{x}" for x in ("a",)], "rm star-plain"])
+def test_star(line):
+    sh(line)
+
+@pytest.mark.parametrize("line", BASE + [r for r, _ in ROWS] + ["setsid rm -rf /tmp/sum"])
+def test_sum(line):
+    sh(line)
+
+@pytest.mark.parametrize("line", sorted(TABLE))
+def test_sorted(line):
+    sh(line)
+
+@pytest.mark.parametrize("line, want", {"rm items-1": "ask"}.items())
+def test_items(line, want):
+    sh(line)
+
+def test_generator():
+    assert all(sh(c) for c in {k: v for k, v in [("rm genexp-1", 1)]})
+
+@pytest.mark.parametrize("line", [*unknown(), "rm after-unknown"] + unknown())
+def test_part_not_read(line):
+    sh(line)
+
+@pytest.mark.parametrize("carrier", LABELS)
+def test_label(carrier):
+    sh(LABELS[carrier].format(nest()))
+''', encoding="utf-8")
+    got = set(gate_diff.harvest(tmp_path).commands)
+    assert got == {"rm a", "rm b", "rm const-a", "rm const-b", "rm loop-a", "rm loop-b", "rm star-a", "rm star-plain",
+                   "rm base-row", "rm row-1", "rm row-2", "setsid rm -rf /tmp/sum", "rm table-1", "rm table-2",
+                   "rm items-1", "rm genexp-1", "rm after-unknown"}, got     # the row label PS4 is no command
 
 
 def test_variants_wrap_simple_commands_only():
