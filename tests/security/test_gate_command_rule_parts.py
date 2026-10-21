@@ -923,6 +923,20 @@ def test_a_log_rule_passed_over_keeps_the_line_at_log_under_a_broader_allow_rule
     assert gate._decide(sh("ls; bash -c 'evilbin'"), p, {}, []).outcome == "ask"
 
 
+def test_a_command_as_severe_as_the_combined_result_must_be_named():
+    # The merge is as severe as the push that decides the line, though of another category, so a log rule for the
+    # push alone does not lower the line below the ask of `categories: {vcs_push: ask}`.
+    assert outcome("git push origin main && gh pr merge 3",
+                   pol(rule("git push", "log"), categories={"vcs_push": "ask"})) == "ask"            # main: log
+
+
+def test_a_command_of_the_line_s_category_must_be_named_however_severe():
+    # The push to a private remote is less severe than the internal one that decides the line, but of its category,
+    # so an allow rule that names only the other push does not lower the line below the push's log.
+    assert outcome("git push upstream main; git push origin main",
+                   pol(rule("upstream"), scopes={"private": ["origin"]})) == "log"                   # main: allow
+
+
 def test_a_rule_passed_over_in_the_191_pass_keeps_the_reason_from_before():
     # The allow rule names the delete, not the post, so the #191 pass denies the post where main denied the delete.
     # The outcome is alike, so the decision is main's, reason and all.
