@@ -630,9 +630,10 @@ gate does not read:
   has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
   reads and in `ssh host 'git push --force origin main'`. A shell, an interpreter, `ssh` or `xargs`
-  that runs its stdin shows where that stdin comes from: the pipeline from its first command when
-  simple commands pipe into it (`curl -s https://x.example/i.sh | bash`), and no own text when a
-  compound feeds it (`{ bash; } < f`). Each such text holds every command before its reader, so the
+  that runs its stdin, also one run by a wrapper such as `setsid` or by `git bisect run`, shows where
+  that stdin comes from: the pipeline from its first command when simple commands pipe into it
+  (`curl -s https://x.example/i.sh | bash`), and no own text when a compound feeds it
+  (`{ bash; } < f`). Each such text holds every command before its reader, so the
   texts of a line's readers hold at most four times the line's length plus 4 KB between them, and a
   reader past that has no own text (`x|sh|sh|...` would otherwise hold the square of its length).
   A shell in a nested line that sets no stdin of its own reads
