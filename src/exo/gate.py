@@ -1607,7 +1607,7 @@ _GH_TAKES = {
     ("issue", "create"): ("abFlmpTtR", "--assignee --attach --blocked-by --blocking --label --milestone --parent "
                                        "--project --recover --template --type --repo"),
     ("issue", "comment"): ("bFR", "--attach --repo"),
-    ("issue", "close"): ("cR", "--comment --reason --repo"),
+    ("issue", "close"): ("crR", "--comment --duplicate-of --reason --repo"),
     ("issue", "edit"): ("bFmtR", "--add-assignee --add-blocked-by --add-blocking --add-label --add-project "
                                  "--add-sub-issue --attach --milestone --parent --remove-assignee --remove-blocked-by "
                                  "--remove-blocking --remove-label --remove-project --remove-sub-issue --type --repo"),
@@ -1822,16 +1822,62 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
     return _make("local_write", summary=f"git {sub}".strip(), command=cmd)
 
 
+def _gh_operands(argv: list[str]) -> list[str]:
+    """argv[3:]'s operands: the words gh reads as positional arguments, not options or their values.
+    Read with the command's `_GH_TAKES` row plus its text options, as `_gh_unseen` reads them (#208):
+    a value in the next word, in the same word (`-bx`, `--body=x`) or at the end of a cluster is
+    skipped with its option, so a URL inside a body or a `--duplicate-of` value is not an operand."""
+    group, verb = (argv + ["", ""])[1:3]
+    takes, longs = _GH_TAKES.get((group, verb), ("", ""))
+    text_opts = _gh_text_options(group)
+    shorts = set(takes) | {n[1] for names in text_opts for n in names if len(n) == 2}
+    long_names = set(longs.split()) | {n for names in text_opts for n in names if n.startswith("--")}
+    if verb == "close" and group in ("pr", "issue"):
+        shorts.add("c")
+        long_names.add("--comment")
+    out: list[str] = []
+    words = argv[3:]
+    i = 0
+    while i < len(words):
+        a = words[i]
+        i += 1
+        if a == "--":
+            out.extend(words[i:])
+            break
+        if a.startswith("--"):
+            key = a.partition("=")[0]
+            if "=" not in a and any(n == key or (len(key) >= 3 and n.startswith(key)) for n in long_names):
+                i += 1  # the value is the next word
+            continue
+        if a.startswith("-") and a != "-":
+            for j, ch in enumerate(a[1:], 1):
+                if ch in shorts:
+                    if j == len(a) - 1:
+                        i += 1  # the value is the next word
+                    break
+            continue
+        out.append(a)
+    return out
+
+
 def _gh_target(argv: list[str]) -> tuple[str, str]:
-    """(repo or url target, link) from `-R owner/repo`, a GitHub URL, or a number."""
+    """(repo or url target, link) from `-R owner/repo`, a GitHub URL operand, or a number operand.
+    Only operands name the target: a URL inside an option value (a body that starts with a link, a
+    `--duplicate-of` URL) is text, not the target (#399). `-R` wins over a URL operand that names
+    another repo: that URL then contributes nothing, not even its number."""
     repo = _opt(argv, "-R", "--repo") or ""
     number = ""
     link = ""
-    for a in argv[3:]:
+    for a in _gh_operands(argv):
         m = _GH_URL.match(a)
         if m:
-            repo, number, link = m.group(1), m.group(2) or "", a
-            break
+            if not repo:
+                repo, number, link = m.group(1), m.group(2) or "", a
+                break
+            if m.group(1) == repo:
+                number, link = m.group(2) or number, a
+                break
+            continue
         if re.fullmatch(r"#?\d+", a) and not number:
             number = a.lstrip("#")
     if not repo and len(argv) > 3 and argv[1] == "repo" and re.fullmatch(r"[\w.-]+/[\w.-]+", argv[3]):

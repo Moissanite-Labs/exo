@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A gh target now comes from operands only, never from an option value (#399). `_gh_target` took the
+  first word that starts with a GitHub URL, wherever it sat, so a comment body opening with a link, or
+  a `--duplicate-of` URL, replaced the `-R` repo: a public post whose body starts with a link to a repo
+  under `scopes.internal` was read as that repo and logged instead of asking, and the public-only checks
+  went with it. Operands are now read with the command's `_GH_TAKES` row, as the unseen check reads
+  them, and `-R` wins over a URL operand that names another repo.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
