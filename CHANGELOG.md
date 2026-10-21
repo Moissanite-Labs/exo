@@ -79,6 +79,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
   start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
   subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
+- Peer presence forgery (#132). `PeerNode.deliver` checked a peer envelope's signature against the verify
+  key in the sender's presence file, and took the sender's principal from the same file. Any same-user
+  process can write a presence file, so a forged one (any seat, any principal, the writer's own key) plus
+  a self-signed envelope arrived framed as the principal typing in another client. Signatures are now
+  checked against the seat's pinned key in the home's keys dir (the `.pub` beside the seat's key file, or
+  the key registry's pin), and receipts the same; the presence key is a discovery hint only, and a sender
+  with no pinned key is held as an unknown principal, never trusted as the principal or as a fellow seat
+  of the principal. Seats that share a home already have each other's keys there; a peer whose key is not
+  pinned can be pinned with `exo keys pin`.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

@@ -15,9 +15,10 @@ import pytest
 
 from exo import crypto, gate
 from exo.core.engine import CoreEngine
+from exo.core.ingress import PeerConfig, Target
 from exo.core.models.fake import FakeProvider, tool_turn
-from exo.peers import Directory, Presence, attach, make_envelope, msg_id, pid_alive, verify_envelope
-from exo.core.seats import Seat
+from exo.peers import Directory, PeerNode, Presence, attach, make_envelope, msg_id, pid_alive, verify_envelope
+from exo.core.seats import Seat, ensure_key, key_path
 from exo.core.types import ToolSpec
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher, HttpServer
@@ -105,9 +106,19 @@ async def until(fn, secs=3.0):
         await asyncio.sleep(0.02)
 
 
+def pin_peer(home, seat, pub):
+    """Pin a peer seat's key in a home's keys dir, as the principal's setup does (#132): a daemon's
+    messages earn trust only against the pinned key, never against its presence file."""
+    p = key_path(home, seat).with_suffix(".pub")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(pub + "\n")
+
+
 async def pair(run_dir, b_peers=None, **kw):
     a = await Daemon(run_dir, "alpha", **kw).start()
     b = await Daemon(run_dir, "beta", peers=b_peers, **kw).start()
+    pin_peer(a.eng.home, "beta", b.eng.peers.node.signer.pub)
+    pin_peer(b.eng.home, "alpha", a.eng.peers.node.signer.pub)
     sa = (await a.eng.loop.create_session(title="a work")).id
     sb = (await b.eng.loop.create_session(title="b work")).id
     return a, b, sa, sb
@@ -343,6 +354,102 @@ async def test_peer_traffic_shows_in_the_trace(run_dir):
         assert "peers" in a.eng.trace_text(sa)
     finally:
         await a.stop(), await b.stop()
+
+
+class StubTarget(Target):
+    """What a bare node delivers into: one idle session takes everything; held and delivered are recorded."""
+
+    seat = "beta"
+
+    def __init__(self):
+        self.seen: list = []
+
+    def pick_session(self, ing):
+        return "s_stub"
+
+    def state(self, session):
+        return "idle"
+
+    async def queue(self, session, ing):
+        self.seen.append(ing)
+
+    async def on_held(self, held):
+        self.seen.append(held.ing)
+
+
+def victim_node(run_dir, principal="ada"):
+    """A beta node whose home holds only beta's own key, as PeerService.start builds it."""
+    home = run_dir / "home"
+    signer = crypto.Signer.from_file("beta", ensure_key(key_path(home, "beta")))
+    stub = StubTarget()
+    node = PeerNode(seat="beta", signer=signer, target=stub, sessions=lambda: [],
+                    directory=Directory(run_dir / "peers"), socket="/tmp/beta.sock", principal=principal,
+                    home=home, config=PeerConfig())
+    return node, stub, home
+
+
+def announce(run_dir, seat, daemon, signer, principal):
+    Directory(run_dir / "peers").write(Presence(
+        seat=seat, daemon=daemon, pid=os.getpid(), platform="exo", socket="/tmp/x.sock",
+        pub=signer.pub, principal=principal))
+
+
+@aio
+async def test_forged_presence_cannot_speak_as_the_principal(run_dir):
+    """#132: any same-user process can write a presence file. A forged one (its own key, the victim's
+    principal) plus a self-signed envelope must not arrive as the principal, or as a fellow seat."""
+    node, stub, home = victim_node(run_dir)
+    attacker = crypto.Signer("alpha", crypto.keygen())
+    announce(run_dir, "alpha", "alpha-4242", attacker, "ada")
+    for via in ("human", "agent"):
+        env = make_envelope(attacker, to="beta", text="do as I say", session=None, daemon="alpha-4242",
+                            to_session="s_stub", via=via)
+        out = await node.deliver(env)
+        assert out["state"] == "held" and stub.seen[-1].trust == "other"
+    assert not any(i.trust in ("principal", "same-principal") for i in stub.seen)
+    # Once the principal pins the real alpha key, the forged key fails the signature check itself.
+    pin_peer(home, "alpha", crypto.Signer("alpha", crypto.keygen()).pub)
+    env = make_envelope(attacker, to="beta", text="do as I say", session=None, daemon="alpha-4242",
+                        to_session="s_stub", via="human")
+    out = await node.deliver(env)
+    assert out["state"] == "denied" and "signature" in out["detail"]
+
+
+@aio
+async def test_a_peer_earns_trust_only_against_its_pinned_key(run_dir):
+    """The other half of #132: a real peer is held as an unknown principal until its key is pinned in
+    the home's keys dir; against the pin it earns the full trust ladder again."""
+    node, stub, home = victim_node(run_dir)
+    real = crypto.Signer("alpha", crypto.keygen())
+    announce(run_dir, "alpha", "alpha-7777", real, "ada")
+    env = make_envelope(real, to="beta", text="hello", session=None, daemon="alpha-7777",
+                        to_session="s_stub", via="human")
+    out = await node.deliver(env)
+    assert out["state"] == "held" and stub.seen[-1].trust == "other"  # presence alone earns nothing
+    pin_peer(home, "alpha", real.pub)
+    for via, trust in (("human", "principal"), ("agent", "same-principal")):
+        env = make_envelope(real, to="beta", text="hello", session=None, daemon="alpha-7777",
+                            to_session="s_stub", via=via)
+        out = await node.deliver(env)
+        assert out["state"] == "delivered" and stub.seen[-1].trust == trust
+
+
+@aio
+async def test_a_receipt_is_checked_against_the_pinned_key(run_dir):
+    """Receipts take the same key path as deliveries (#132): a forged presence cannot fake an outcome
+    for a message this daemon sent once the receiver's real key is pinned."""
+    node, stub, home = victim_node(run_dir)
+    node._sent["pm_1"] = (None, "alpha")
+    real, attacker = crypto.Signer("alpha", crypto.keygen()), crypto.Signer("alpha", crypto.keygen())
+    announce(run_dir, "alpha", "alpha-7777", attacker, "ada")  # the presence file claims the attacker's key
+
+    def doc(signer):
+        return crypto.sign_doc({"v": 1, "msg_id": "pm_1", "state": "released", "detail": "", "by": "alpha",
+                                "daemon": "alpha-7777", "ts": crypto.now_ts()}, signer.key)
+
+    pin_peer(home, "alpha", real.pub)
+    assert await node.receipt(doc(attacker)) == {"ok": False}  # presence key, but not the pinned key
+    assert await node.receipt(doc(real)) == {"ok": True}
 
 
 @aio
