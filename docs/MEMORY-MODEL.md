@@ -102,10 +102,12 @@ thread therefore keeps a summary tree of its own over its own messages, as a sub
 session id, ranges: message numbers). Its tail starts at that tree's frontier, not the agent's, and the tree's
 view opens the tail as an unstored message headed "Earlier in this private thread". As in the agent view, that
 view ends at its last summarized node: spans too small to summarize, or a summary still running, stay whole in
-the tail. Until the first summary lands, the whole thread stays verbatim. A long private thread with no tree yet,
+the tail. Until the first summary lands, the tail is the thread's own words, newest first kept: if it would
+overflow `view_budget`, it is cut to the budget behind an "[earlier messages are being summarized]" marker, so
+a slow summarizer cannot leave the first calls unbounded. A long private thread with no tree yet,
 such as one from before it had one, gets its leaves on its next turn. That turn waits for them as the agent
-tree's turns do (see "A turn does not wait for memory upkeep"), so a fast summarizer bounds the call. A slow one
-does not: the first calls can then carry most of the thread. The system message is the same as in the agent's
+tree's turns do (see "A turn does not wait for memory upkeep"), so a fast summarizer bounds the call sooner.
+The system message is the same as in the agent's
 other threads, so the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its
 `checkpoint`), `capture_principal` or `on_compacted`. `/context` counts its view in the recent tail, and
 `/compact` folds only the agent tree.

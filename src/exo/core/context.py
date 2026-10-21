@@ -27,7 +27,7 @@ from exo import provenance
 from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.types import ContentPart, Message, Provider
-from exo.turn_settle import settle_for_turn
+from exo.turn_settle import SUMMARIZING_MARKER, fit_tail, settle_for_turn
 
 # ---------------------------------------------------------------- lifted prompt text
 
@@ -1014,7 +1014,8 @@ class AgentContext(TreeContext):
 
     def _thread_tail(self, session: str, frontier: int) -> list[Message]:
         """This thread after the frontier, at least its last ``tail_messages``, never opening on a tool result.
-        A private thread's frontier is its own tree's, whose view leads the tail."""
+        A private thread's frontier is its own tree's, whose view leads the tail; before its first summary
+        lands, the tail is instead cut to ``view_budget`` behind a marker (issue #244)."""
         own = self._top(session) if self._own(session) else None
         if own:  # as in _view, it ends at its last summary: small or pending spans after it stay whole in the tail
             own = own[:max((i for i, n in enumerate(own) if self._summarized(n)), default=-1) + 1]
@@ -1027,10 +1028,17 @@ class AgentContext(TreeContext):
         while tail and tail[0].role == "tool" and start > 0:  # widen back to the call these results answer
             start -= 1
             tail = self.store.messages(session, since=start)
+        cut = 0
+        if own is not None and not own:
+            # No summary of its own has landed, so the tail is the whole thread: cut it to the budget (issue #244)
+            tail, cut = fit_tail(tail, self.view_budget)
         while tail and tail[0].role == "tool":
             tail.pop(0)
         tail = (self.store.orphaned_copies(session, start) if own is None else []) + tail  # fork copies of logged entries undone after the fork are in no tree (#245)
         if own:
             view = PRIVATE_HEAD + "\n\n" + "\n\n".join(self._view_parts(own))
             tail.insert(0, Message("user", [ContentPart.of_text(view)], meta={"note": "private", "local": True}))
+        elif cut:
+            tail.insert(0, Message("user", [ContentPart.of_text(SUMMARIZING_MARKER)],
+                                   meta={"note": "private", "local": True}))
         return tail
