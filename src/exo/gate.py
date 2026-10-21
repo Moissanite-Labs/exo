@@ -36,7 +36,7 @@ import shlex
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, TypeVar, cast
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse, urlsplit
 
 REVERSIBILITY = ("reversible", "costly", "irreversible")
 EXPOSURE = ("private", "internal", "public")
@@ -1853,22 +1853,48 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
     return _make("local_write", summary=f"git {sub}".strip(), command=cmd)
 
 
-def _gh_read(group: str, repo: str, words: list[str], url: bool = True, host: bool = True) -> tuple[str, str]:
-    """(target, link) from a `-R` value and the words that may name the target: the first GitHub URL, whose repo
-    replaces the `-R` value when ``url`` (gh does that), else the first number, and for `gh repo` an `owner/name`
-    first word, also `github.com/owner/name` or a repo URL with ``host`` (_gh_repo)."""
+def _gh_url(word: str) -> tuple[str, str] | None:
+    """(owner/name, number) of a GitHub URL as gh reads one (gh 2.89 `ParseURL` and `ghrepo.NewWithHost`, #399): http
+    or https in any case, the host in any case, without a user, `www.` or a port, and the path decoded. A repo URL
+    has no number. None for a word that is no such URL or names another host."""
+    if not re.match(r"(?i)https?://", word):
+        return None
+    try:
+        u = urlsplit(word)
+        _ = u.port                           # gh refuses a port that is not a number
+    except ValueError:
+        return None
+    if (u.hostname or "").removeprefix("www.") != "github.com":
+        return None
+    m = re.match(r"/([\w.-]+/[\w.-]+)(?:/(?:pull|issues|discussions)/(\d+))?", unquote(u.path))
+    return (m.group(1), m.group(2) or "") if m else None
+
+
+def _gh_read(group: str, repo: str, words: list[str], url: bool = True, before: bool = False) -> tuple[str, str]:
+    """(target, link) from a `-R` value and the words that may name the target: the first GitHub URL (_gh_url), whose
+    repo replaces the `-R` value when ``url`` (gh does that), else the first number, and for `gh repo` an
+    `owner/name` first word, also `github.com/owner/name` or a repo URL (_gh_repo). gh repo drops a repo URL's
+    `.git`. With ``before`` the words read as before #399: a URL only as _GH_URL matches it, as written, and
+    gh repo's first word as written."""
     number = link = ""
     for a in words:
-        m = _GH_URL.match(a)
-        if m:
-            number = m.group(2) or ""
+        if before:
+            m = _GH_URL.match(a)
+            found = (m.group(1), m.group(2) or "") if m else None
+        else:
+            found = _gh_url(a)
+        if found:
+            number = found[1]
             if url:
-                repo, link = m.group(1), a
+                named = found[0]
+                if group == "repo" and not before and not number and named.endswith(".git"):
+                    named = named[:-4]
+                repo, link = named, redact_userinfo(a)
             break
         if re.fullmatch(r"#?\d+", a) and not number:
             number = a.lstrip("#")
     if not repo and group == "repo" and words:
-        named, sure = _gh_repo(words[0]) if host else (words[0], True)
+        named, sure = (words[0], True) if before else _gh_repo(words[0])
         if sure and re.fullmatch(r"[\w.-]+/[\w.-]+", named):
             repo = named
     if not link and repo:
@@ -1898,7 +1924,7 @@ def _gh_repo(value: str) -> tuple[str, bool]:
     parts = rest.split("/")
     if len(parts) != 2 or not all(parts) or not host:
         return value, False
-    return rest, (host[4:] if host.startswith("www.") else host).lower() == "github.com"
+    return rest, host.lower().removeprefix("www.") == "github.com"
 
 
 _GH_ANY_SHORT = "".join(chr(n) for n in range(33, 127))   # every character a short option can be
@@ -1957,14 +1983,14 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     raw = [_gh_read(group, r, [argv[i] for i in o]) for r, o in parses if r and not _gh_repo(r)[1]]
     parses = [(_gh_repo(r)[0], o) for r, o in parses]
     repo, ops = parses[0]
-    target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _GH_URL.match(argv[i]))])
+    target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _gh_url(argv[i]))])
     readings = [_gh_read(group, r, [argv[i] for i in o], url) for r, o in parses for url in (True, False) if url or r]
     readings += raw + [("", "")] * any(i in dynamic for _, o in parses for i in o)
     # Outside the table gh may take some options' values and not others, a mix of the two readings. The words both
     # call operands, with the first one's repo, are such a mix: in `gh pr checkout -b 7 9 -f -R pub/repo` gh checks
     # out pub/repo#9, which neither reading names. In the table there is one reading, and this is it again.
     readings += [_gh_read(group, repo, [argv[i] for i in sorted(sure)]),
-                 _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:], host=False)]      # as before #399
+                 _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:], before=True)]     # as before #399
     return target, link, _gh_others(target, readings)
 
 

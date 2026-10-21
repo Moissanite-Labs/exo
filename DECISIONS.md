@@ -713,7 +713,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   lists `--duplicate-of` and `-r` now, and the table has rows for pr ready, reopen, merge, lock and unlock, issue
   reopen, develop, lock, unlock, delete and transfer, and release upload and delete (gh 2.89 `--help`). gh keeps the
   last `-R`. A URL operand names the repo even beside `-R`, because gh does that (`pr/shared/finder.go` and
-  `issue/shared/lookup.go` in gh 2.89). The other readings the gate cannot rule out are kept as
+  `issue/shared/lookup.go` in gh 2.89). `_gh_url` reads it as `ParseURL` and `ghrepo.NewWithHost` do: the scheme
+  and the host in any case, without a user, `www.` or a port, and the path decoded. `gh repo` drops a repo URL's
+  `.git`. The reading before #399 keeps `_GH_URL` as it was, so the URL as written still counts. The other readings the gate cannot rule out are kept as
   `Classification.alt_targets`, each with a copy of the action as a part: `-R` when a URL operand names another repo,
   and the reading before #399. `decide` decides the line on each and keeps the strictest outcome, the widest exposure,
   any third party, and every violation and reserved part. So a line never decides lower than it did, and a deny or
