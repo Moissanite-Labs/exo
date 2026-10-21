@@ -3086,6 +3086,19 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     named = assigns + (argv[1:] if prog in (*_EXPORTERS, "unset") else []) + \
         [b for a, b in zip(argv, argv[1:]) if prog in ("test", "[") and a == "-v"]   # where NAME[..] is arithmetic
     sets += [(name, value, True, literal) for name, value, literal in _hidden_sets(k, named)]
+    if prog == "unset":
+        # `unset PATH` is `PATH=` for what follows it: with no PATH, bash looks a command up in the
+        # working folder, the empty-element hazard #231 reads in an assignment (#329). `-f` names
+        # functions, not variables, so it leaves PATH alone.
+        i, flags = 1, ""
+        while i < len(argv) and argv[i][:1] in "-+" and len(argv[i]) > 1:
+            if argv[i] == "--":
+                i += 1
+                break
+            flags += argv[i][1:] if argv[i][0] == "-" else ""
+            i += 1
+        if "f" not in flags:
+            sets += [("PATH", "", True, False) for a in argv[i:] if re.split(r"\[", a)[0] == "PATH"]
     git_env: dict[tuple[str, ...], str] = {}
     for name, value, runs_nothing, literal in sets:
         if name in _EXEC_ENV:
