@@ -187,6 +187,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   auto-promote under rule 4. The principal reviews that first batch, as `docs/ARCHITECTURE.md` section 5 says.
   Imported evidence is dated by its source time, and superseded rows (an edited ChatGPT prompt's older
   versions, inactive Hermes rows) do not count for the rule of three.
+  *Amendment 2026-10-21 (issue #263):* the chat capture after each turn no longer reads the whole ledger to find the
+  capture keys already written. The learner keeps them, with the last row it read, and reads only the rows after it.
+  The result is the same as a full read of any ledger `exo log verify` passes: the ledger is append-only and nothing
+  takes a key back. A ledger that no longer holds that row in its place is read again from the first row. With 10,000
+  captured rows in the ledger, each turn's capture took about 70 ms. Now the first turn after a start takes that once,
+  and each later turn under 1 ms.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code

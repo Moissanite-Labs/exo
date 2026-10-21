@@ -10,6 +10,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
   without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
+- The chat capture after each turn no longer reads the whole ledger (#263, the signals half of W2-7). To skip
+  corrections and rulings already written, it built the set of capture keys from every ruling, verdict and
+  question in the ledger on every turn: about 70 ms per turn with 10,000 such rows. The learner now keeps that set
+  with the last row it read and reads only the rows after it, so a turn after the first takes under 1 ms. What is
+  written is unchanged. A ledger that no longer holds that row in its place (another file, or one cut short) is
+  read again from the first row. The HTTP client half of W2-7 and the bus store half (W3-4) stay open.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
