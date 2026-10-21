@@ -8,6 +8,8 @@ number the same way. Now operands are read with gh's own table of options that t
 reading the gate cannot rule out is decided too, the strictest standing, so no line decides lower than before.
 Classification and decision only; nothing is executed.
 """
+from dataclasses import replace
+
 import pytest
 
 from exo.gate import UNSEEN_BODY, body_unseen, classify, decide, normalize_policies, summarize
@@ -118,6 +120,41 @@ def test_a_deny_on_either_repo_denies_the_disagreement():
         pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "deny": [entry]}, "posting": POST})
         _, d = run(f"gh pr comment {ORG} -R pub/repo -b $'x\\nF'", pol)
         assert d.outcome == "deny", (entry, d)
+
+
+# decide merges the readings axis by axis: the strictest outcome, the widest exposure, a third party if any reading
+# has one, and every violation and reserved part. Each axis may come from another reading.
+def test_the_widest_exposure_and_any_third_party_stand_beside_a_deny_from_another_reading():
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "deny": ["target:myorg/*"]}})
+    c, d = run("gh pr comment 5 -R myorg/app -F https://github.com/pub/repo/issues/3", pol)
+    assert (c.target, c.alt_targets) == ("myorg/app#5", ["pub/repo#3"]), c
+    # The deny comes from myorg/app#5, the public exposure and the third party from pub/repo#3.
+    assert (d.outcome, d.exposure, d.third_party) == ("deny", "public", True), d
+
+
+def test_reserved_parts_come_from_every_reading():
+    pol = normalize_policies({"gates": {"scopes": {"private": ["myorg/app"]}, "reserved": ["vcs_merge"]}})
+    c, d = run(f"gh pr merge 5 -b {ORG}", pol)
+    assert (c.target, c.alt_targets) == ("myorg/app#9", ["#5"]), c
+    assert d.outcome == "ask" and set(d.reserved) == {("vcs_merge", "myorg/app#9"), ("vcs_merge", "#5")}, d
+
+
+def test_violations_come_from_every_reading():
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}},
+                              "posting": {"footer": "F", "footer_exposures": ["internal"],
+                                          "scrub": {"names": ["SECRETX"], "exposures": ["public"]}}})
+    c, d = run(f"gh pr comment 5 -R pub/repo -b $'{ORG} Note SECRETX'", pol)
+    assert (c.target, c.alt_targets) == ("pub/repo#5", ["myorg/app#9"]), c
+    # The scrub hit is the public reading's, the missing footer the internal one's.
+    assert {"internal name: SECRETX", "missing footer: F"} <= set(d.violations), d
+
+
+def test_a_tie_in_outcome_goes_to_the_more_exposed_reading():
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "categories": {"github_post": "ask"}}})
+    c, d = run(f"gh pr comment {ORG} -R pub/repo -b x", pol)
+    assert (c.target, c.alt_targets) == ("myorg/app#9", ["pub/repo#9"]), c
+    assert (decide(replace(c, alt_targets=[]), pol).outcome, d.outcome, d.exposure) == ("ask", "ask", "public"), d
+    assert d.reason.startswith("category github_post") and d.reason.endswith("(if it lands on pub/repo#9)"), d
 
 
 def test_gh_keeps_the_last_repo_option():
