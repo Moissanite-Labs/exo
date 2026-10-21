@@ -23,7 +23,8 @@ plugins/exo-gate/tests/*.py, read with `ast`, never run), so a head that deletes
 To that come compound variants of each simple command, and the files given with --corpus. The built-in policies
 are below (BUILTIN_POLICIES).
 
-Exit status: 0 when nothing is lowered, 1 when anything is lowered, 2 when a tree could not be run.
+Exit status: 0 when nothing is lowered, 1 when anything is lowered, 2 when a tree could not be run or the script
+itself failed (a bad flag or path, a policy file that raises or holds no plain data).
 """
 from __future__ import annotations
 
@@ -190,7 +191,10 @@ def load_policy_file(path: Path) -> dict[str, dict]:
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: expected a mapping of name to policy")
     out = {str(k): _entry(v) for k, v in raw.items()}
-    json.dumps(out)       # must travel to the trees as JSON
+    try:
+        json.dumps(out)       # must travel to the trees as JSON
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{path}: a policy is not plain JSON data ({exc})") from None
     return out
 
 
@@ -1170,38 +1174,69 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+class Failed(Exception):
+    """An error in this script or its input: exit 2 with this message."""
+
+
+def _out_path(p: Path | None, flag: str) -> Path | None:
+    if p is None:
+        return None
+    p = p.expanduser().absolute()
+    if p.is_dir():
+        raise Failed(f"{flag} {p}: is a folder")
+    if not p.parent.is_dir():
+        raise Failed(f"{flag} {p}: the folder {p.parent} does not exist")
+    return p
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["_tree"]:
         return _tree_main(argv[1:])
     a = parse_args(argv)
+    try:
+        return run(a)
+    except Failed as exc:
+        print(f"gate_diff: {exc}", file=sys.stderr)
+    except Exception as exc:        # a fault of this script is never a lowered line: exit 2, not 1
+        print(f"gate_diff: internal error: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return 2
+
+
+def run(a: argparse.Namespace) -> int:
     t0 = time.monotonic()
+    json_path, dump_path = _out_path(a.json, "--json"), _out_path(a.dump_corpus, "--dump-corpus")
+    home = a.home.expanduser().resolve() if a.home else None
+    if home is not None and not home.is_dir():
+        raise Failed(f"--home {a.home}: no such folder")
     try:
         actions, corpus_counts = build_corpus((a.head, a.base), a.corpus, builtin=not a.only_corpus,
                                               generate=not a.no_variants)
-        policies = {} if a.only_policies else {k: _entry(v) for k, v in BUILTIN_POLICIES.items()}
-        if a.pick:
-            keep = [x.strip() for x in a.pick.split(",") if x.strip()]
-            missing = [k for k in keep if k not in policies]
-            if missing:
-                raise ValueError(f"unknown built-in policies: {', '.join(missing)}")
-            policies = {k: policies[k] for k in keep}
-        for f in a.policies:
-            for name, entry in load_policy_file(f).items():
-                policies[name if name not in policies else f"{name}@{f.name}"] = entry
     except (OSError, ValueError) as exc:
-        print(f"gate_diff: {exc}", file=sys.stderr)
-        return 2
+        raise Failed(f"could not build the corpus: {exc}") from None
+    policies = {} if a.only_policies else {k: _entry(v) for k, v in BUILTIN_POLICIES.items()}
+    if a.pick:
+        keep = [x.strip() for x in a.pick.split(",") if x.strip()]
+        missing = [k for k in keep if k not in policies]
+        if missing:
+            raise Failed(f"unknown built-in policies: {', '.join(missing)}")
+        policies = {k: policies[k] for k in keep}
+    for f in a.policies:
+        try:
+            loaded = load_policy_file(f)
+        except Exception as exc:    # a .py policy file may raise anything
+            raise Failed(f"could not load policies from {f}: {type(exc).__name__}: {exc}") from None
+        for name, entry in loaded.items():
+            policies[name if name not in policies else f"{name}@{f.name}"] = entry
     if not actions or not policies:
-        print("gate_diff: the corpus or the policy set is empty", file=sys.stderr)
-        return 2
-    if a.dump_corpus:
-        a.dump_corpus.write_text(json.dumps(actions, indent=0) + "\n", encoding="utf-8")
+        raise Failed("the corpus or the policy set is empty")
+    if dump_path:
+        dump_path.write_text(json.dumps(actions, indent=0) + "\n", encoding="utf-8")
     print(f"gate_diff: {len(actions)} actions ({', '.join(f'{k} {v}' for k, v in corpus_counts.items())}), "
           f"{len(policies)} policies, {a.jobs} jobs per tree", file=sys.stderr, flush=True)
     work = Path(tempfile.mkdtemp(prefix="gate-diff-"))
     try:
-        home = a.home.expanduser().resolve() if a.home else make_home(work)
+        home = home or make_home(work)
         corpus_path, pol_path = work / "corpus.json", work / "policies.json"
         corpus_path.write_text(json.dumps(actions), encoding="utf-8")
         pol_path.write_text(json.dumps(policies), encoding="utf-8")
@@ -1210,23 +1245,23 @@ def main(argv: list[str] | None = None) -> int:
                  for k in ("base", "head")}
         codes = {k: p.wait() for k, p in procs.items()}
         if any(codes.values()):
-            print(f"gate_diff: a tree failed to run ({', '.join(f'{k} exit {v}' for k, v in codes.items())})",
-                  file=sys.stderr)
-            return 2
+            raise Failed(f"a tree failed to run ({', '.join(f'{k} exit {v}' for k, v in codes.items())})")
         print("gate_diff: comparing", file=sys.stderr, flush=True)
         try:
             rep = compare(outs["base"], outs["head"], actions, a.max_examples, a.json_limit)
         except (RuntimeError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
-            print(f"gate_diff: could not compare the results: {exc}", file=sys.stderr)
-            return 2
+            raise Failed(f"could not compare the results: {exc}") from None
     finally:
         shutil.rmtree(work, ignore_errors=True)
     rep.update(base=f"{a.base} {_commit(a.base)}".strip(), head=f"{a.head} {_commit(a.head)}".strip(),
                corpus_counts=corpus_counts, wall_secs=round(time.monotonic() - t0, 1))
-    print(summary_text(rep, a.max_examples))
-    if a.json:
+    if json_path:                   # before the summary, so a failed write never follows a printed result
         full = {k: v for k, v in rep.items() if k not in ("examples_by_policy", "examples_by_transition")}
-        a.json.write_text(json.dumps(full, indent=1) + "\n", encoding="utf-8")
+        try:
+            json_path.write_text(json.dumps(full, indent=1) + "\n", encoding="utf-8")
+        except OSError as exc:
+            raise Failed(f"could not write --json {json_path}: {exc}") from None
+    print(summary_text(rep, a.max_examples))
     return 1 if rep["counts"].get("lowered_pairs") else 0
 
 

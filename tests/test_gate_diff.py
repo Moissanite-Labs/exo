@@ -94,6 +94,21 @@ def test_a_tree_that_cannot_run_exits_2(tmp_path):
     assert proc.returncode == 2, proc.stdout + proc.stderr
 
 
+@pytest.mark.parametrize("case", ["home", "json", "raises", "not_json"])
+def test_an_error_in_the_script_exits_2_not_1(tmp_path, case):
+    # Exit 1 means lowered: a fault of the tool or of its input must never read as one.
+    pol = tmp_path / "pols.py"
+    pol.write_text({"raises": "POLICIES = {'x': undefined_name}\n",
+                    "not_json": "POLICIES = {'x': {'gates': {'deny': {'delete'}}}}\n"}.get(case, "POLICIES = {}\n"),
+                   encoding="utf-8")
+    extra = {"home": ["--home", str(tmp_path / "missing")],
+             "json": ["--json", str(tmp_path / "missing" / "out.json")]}.get(case, ["--policies", str(pol)])
+    proc, _ = _run(ROOT, ROOT, tmp_path, *extra)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "gate_diff:" in proc.stderr and "Traceback" not in proc.stderr, proc.stderr
+    assert "nothing lowered" not in proc.stdout
+
+
 def test_the_harvester_finds_known_test_literals():
     h = gate_diff.harvest(ROOT)
     for cmd in ("true {PATH}>/dev/null; ls",            # a parametrize row fed through a helper
