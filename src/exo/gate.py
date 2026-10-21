@@ -475,6 +475,17 @@ class _OutSub(str):
     is told apart by its type: only _classify_sub reads it as fed."""
 
 
+def _target_follows(s: str, j: int) -> bool:
+    """Whether a word follows a redirection operator at `j` in `s`: its target, or a heredoc's
+    delimiter. Past any blanks a word must begin (a process substitution is one); the end of the
+    line, a control operator, another redirection or a comment means the operator has no target."""
+    while j < len(s) and s[j] in " \t":
+        j += 1
+    if j >= len(s) or s[j] in ";&|()>\n#":
+        return False
+    return s[j] != "<" or s[j + 1:j + 2] == "("
+
+
 class _Lexer:
     """Shell words, operators, redirections and heredocs. Never raises; odd input gives odd words."""
 
@@ -614,14 +625,17 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 op_at = self.i
-                # an fd number, or `{name}` (bash 4.1+ gives it a new descriptor, #328), belongs to the operator
+                op = next(o for o in _REDIR_OPS if s.startswith(o, self.i))
+                # an fd number, or `{name}` (bash 4.1+ gives it a new descriptor, #328), belongs to the operator;
+                # a named fd only when a target follows it: with none (`exec {fd}<` at the end of a command)
+                # the name stays a word, as it was before #324
                 if w.started and not w.quoted and (w.text.isdigit()
-                        or re.fullmatch(r"\{[A-Za-z_]\w*\}", cast(_Word, w).text)):
+                        or re.fullmatch(r"\{[A-Za-z_]\w*\}", cast(_Word, w).text) and
+                        _target_follows(s, self.i + len(op))):
                     state["w"], start, fd = _Word(), -1, cast(_Word, w).text
                     op_at = w_at
                 else:
                     flush()
-                op = next(o for o in _REDIR_OPS if s.startswith(o, self.i))
                 self.i += len(op)
                 if op in ("<<", "<<-"):
                     state["delim"], hd_at = op == "<<-", op_at
@@ -3651,6 +3665,20 @@ def _runs_prompt(k: "_Cmd", literals: dict) -> str:
         if n := next((p for p in hd.prompt if literals.get(p) is None), ""):
             return n
     return ""
+def _exec_alone(words: list) -> bool:
+    """`exec` with no command to run, only its own options (`-a` takes the next word as the name it
+    would set): the redirections are the whole command, and bash keeps them in the shell."""
+    if not words or words[0].quoted or words[0].dynamic or words[0].text != "exec":
+        return False
+    i = 1
+    while i < len(words):
+        if words[i].text == "-a":
+            i += 2
+        elif words[i].text.startswith(("-", "+")):
+            i += 1
+        else:
+            return False
+    return True
 
 
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
@@ -3723,6 +3751,13 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
             if sudo:
                 ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
+    if parts and (not words or _exec_alone(words)) and any(
+            _FD_VAR.fullmatch(t.fd) for t in (*(t for _, t in k.redirs), *k.heredocs, *k.herestrings)):
+        # A named descriptor where a program or exec's command stood: bash drops the fd number into the
+        # name and keeps it in the shell, and the gate cannot see the number or what a later line does
+        # with the descriptor. The part keeps its category (a named descriptor on an ordinary file
+        # still reads as one, #324); the indirection signal asks, as it does for a locale word.
+        parts[0].signals.append("indirection")
     hits = _store_touch(k, words, parts, ctx)
     # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
     # so a `target:/dev*` entry still matches it, as it matches any other write there
@@ -6880,6 +6915,7 @@ _BUS_FILES = (("REGISTRY", ("",)), ("DB", ("", "-wal", "-shm", "-journal")), ("K
 # where it is opened (_store_touch).
 _FD_PATH = re.compile(r"(^|/)(dev/(fd|stdin)|proc/(self|thread-self|\d+|\$[^/]*)(/task/[^/]+)?/(fd|cwd|root|map_files))(/|$)")
 _STD_FD = re.compile(r"(^|/)(dev/fd|proc/(self|thread-self)(/task/[^/]+)?/fd)/0*[12]$")
+_STDIN_PATH = re.compile(r"(^|/)(dev/stdin|dev/fd/0+|proc/(self|thread-self|\d+)(/task/[^/]+)?/fd/0+)$")
 _FD_DIR = re.compile(r"/+(dev|proc(/[^/]+(/task(/[^/]+)?)?)?)")      # cd here, then `> fd/3` or `> self/fd/3`
 
 
@@ -6986,7 +7022,12 @@ def _fd_link_path(p: str, depth: int = 0) -> bool:
                 return False
             if not target.startswith("/"):
                 target = os.path.dirname(cur) + "/" + target
-            return _fd_link_path(os.path.normpath(target) + "".join("/" + t for t in parts[i + 1:]), depth + 1)
+            resolved = os.path.normpath(target) + "".join("/" + t for t in parts[i + 1:])
+            if i == len(parts) - 1 and _STDIN_PATH.search(resolved):
+                return False        # a link straight to the caller's stdin names what a reader is fed,
+                                    # not a descriptor held on a store file: a body file there is the
+                                    # unseen case (#208), not a store write
+            return _fd_link_path(resolved, depth + 1)
     return False
 
 
