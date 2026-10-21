@@ -152,7 +152,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   stands for that target's copy among the line's parts as well, so a rule, deny or reserved entry on the host's
   category sees it also when another part of the line outranks the gh call. The exo-gate hook reads a post's
   absolute body file into each reading too, so such a post with a clean body runs or offers "always" as before. A
-  differential over 126,403 gh lines under 39 policies found no line that decides lower than before.
+  differential over 168,403 gh lines in seven corpora found no line that decides lower than before. It ran up to 93
+  policies, among them a deny map, a rule and a reserved entry that name an ssh host with a gh category.
 - Gate (#399, D-033): an option before a gh subcommand no longer hides it. gh finds the subcommand past the options
   before it, so `gh pr -R pub/repo comment 5 -b text` and `gh pr -b text comment 5 -R pub/repo` post. The gate took
   the third word for the subcommand, so these lines were reads and ran under any policy, as did
