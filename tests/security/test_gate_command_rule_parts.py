@@ -23,6 +23,7 @@ that read `own` fail on main for want of it after their outcome checks pass, and
 Classification and decision only; no command string here is run.
 """
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -531,6 +532,25 @@ def test_a_later_reader_of_a_shared_stdin_gets_the_parts_it_got_before(line, cou
     # The first reader gets every part and a later one the most severe of each category, so the line has the parts
     # it has on main, and deciding it without the own text test gives main's decision.
     assert len(list(gate._each_part(sh(line)))) == count
+
+
+def test_many_readers_of_a_shared_body_stay_linear():
+    # Each command a compound's stdin feeds looked through every part the body gave for a shell that reads the stdin
+    # it inherits, so n readers of a body of n commands cost n squared: 2.7 s for n = 1,600, where main takes 0.4 s.
+    # Linear work is about 8x from 200 to 1,600; that was 30x.
+    def line(n):
+        return "{ " + " ".join(f"psql -{i};" for i in range(n)) + " } <<EOF\n\\! " + "; ".join(
+            f"x{i}" for i in range(n)) + "\nEOF"
+    lines = [line(200), line(1600)]
+    for _ in range(3):      # CPU time; a retry only when over the bound, so load can't fail it but a quadratic step does
+        took = []
+        for text in lines:
+            start = time.process_time()
+            sh(text)
+            took.append(time.process_time() - start)
+        if took[1] < 16 * took[0] + 0.2:
+            break
+    assert took[1] < 16 * took[0] + 0.2, took
 
 
 W = "w{a..z}{a..z} x{a..z}{a..z} y{a..z}{a..z} z{a..z}{a..z}"     # 2,704 words: two reads spend more than 4,096

@@ -1767,17 +1767,26 @@ def _stdin_own(k: _Cmd) -> Callable[[], str | None]:
     return lambda: k.own
 
 
-def _given_stdin(parts: list[Classification], src: Callable[[], str | None]) -> list[Classification]:
+def _given_stdin(parts: list[Classification], src: Callable[[], str | None], ctx: dict) -> list[Classification]:
     """``parts``, made for a command whose stdin is a pipe, a compound's or its own redirection, with the own text
     ``src`` gives for each part in them that runs the stdin its line inherits (Classification.inherits):
     `curl .. | bash -c bash`, `printf .. | ssh host bash` (#394). Parts are copied where they change, as they may
-    be shared."""
+    be shared. The parts a compound's stdin gives reach each command in it, so whether a list of parts holds such
+    a part is found once per line (`ctx`): each command then walks only the parts that hold one."""
     seen: dict[int, Classification] = {}
     own: list[str | None] = []
+    held: dict[int, tuple[list[Classification], bool]] = ctx.setdefault("inherits", {})
+
+    def holds(ps: list[Classification]) -> bool:
+        if id(ps) not in held:       # the list is kept with the answer, so its id stays its own for the line
+            held[id(ps)] = (ps, any([p.inherits or holds(p.parts) for p in ps]))
+        return held[id(ps)][1]
 
     def walk(c: Classification) -> Classification:
         if id(c) not in seen:
             seen[id(c)] = c          # a part met again through a shared one is left as it is
+            if not (c.inherits or holds(c.parts)):
+                return c
             kids = [walk(p) for p in c.parts]
             if c.inherits and not own:
                 own.append(src())
@@ -4207,7 +4216,7 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         slot[0] = k.own
         got = _classify_simple(k, cmd, depth, ctx, piped)
         if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
-            got = _given_stdin(got, _stdin_own(k))
+            got = _given_stdin(got, _stdin_own(k), ctx)
         parts += got
         prev = k
     slot[0] = None
@@ -4216,7 +4225,7 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     given = bool(subs) and any(k.fed or k.piped_in or _own_stdin(k) for k in cmds)
     for sub in subs:
         got = [classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd)]
-        parts += _given_stdin(got, lambda: None) if given else got
+        parts += _given_stdin(got, lambda: None, ctx) if given else got
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
