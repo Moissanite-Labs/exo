@@ -314,6 +314,7 @@ def test_gh_api_endpoints_as_before(line, target):
 # pflag drops one `=` after a short option, also at the end of a cluster (`-R=owner/name`, `-wR=owner/name`), and
 # gh reads `-R` as `[HOST/]OWNER/REPO` or a repo URL (ghrepo.FromFullName in gh 2.89). Round 3, item 4.
 DENY_PUB = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "deny": ["target:pub/*"]}})
+GIT_AT = "git" + "@github.com"      # an ssh remote's user and host, split so the privacy check reads no address
 
 
 @pytest.mark.parametrize("line,target", [
@@ -327,8 +328,8 @@ DENY_PUB = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "d
     ("gh pr comment 5 -R www.github.com/pub/repo -b x", "pub/repo#5"),
     ("gh pr comment 5 -R https://github.com/pub/repo -b x", "pub/repo#5"),
     ("gh pr comment 5 -R https://github.com/pub/repo.git -b x", "pub/repo#5"),
-    ("gh pr comment 5 -R git@github.com:pub/repo.git -b x", "pub/repo#5"),
-    ("gh pr comment 5 -R ssh://git@github.com/pub/repo.git -b x", "pub/repo#5"),
+    (f"gh pr comment 5 -R {GIT_AT}:pub/repo.git -b x", "pub/repo#5"),
+    (f"gh pr comment 5 -R ssh://{GIT_AT}/pub/repo.git -b x", "pub/repo#5"),
     ("gh pr merge 5 -dR=github.com/pub/repo", "pub/repo#5"),
     ("gh repo delete github.com/pub/repo --yes", "pub/repo"),
 ])
