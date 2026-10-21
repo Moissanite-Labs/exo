@@ -338,12 +338,29 @@ def test_a_rule_that_names_the_setter_too_decides_the_line():
     ("mapfile -t a", True), ("printf -v X %s y", True), ("printf %s y", False), ("let x=1", True),
     ("getopts ab o", True), ("pushd /tmp", True), ("popd", True), ("exec 3>/tmp/f", True),
     ("exec git status", False), ("$CMD x", True), ("for x in a b", True), ("function f", True),
+    ("select x in a", True), ("readarray -t a", True), ("coproc cat", True),
+    ("env -S 'export X=1'", False), ("exec env -S 'export X=1'", False),
     ("cd repo", False), ("ls -la", False), ("git status", False), ("GIT_DIR=x git status", False),
     ("env X=1 git status", False), ("echo export X=1", False),
 ])
 def test_which_commands_change_the_shell_for_later_commands(line, sets):
     (k,) = gate._parse(line)[0]
     assert gate._sets_state(k) is sets
+
+
+def test_a_setter_after_a_reserved_word_is_a_setter():
+    line = "if x; then export X=1; fi"
+    assert [gate._sets_state(k) for k in gate._parse(line)[0]] == [False, True, False]
+    assert sh(line).setters == ["export X=1"]
+    assert outcome(f"if true; then export GIT_DIR=/tmp/x/.git; fi; {PUSH}", pol(PUSH_OK)) == "ask"   # main: allow
+
+
+def test_a_setter_in_a_nested_line_must_be_named_beside_one_outside_it():
+    # The nested line's setters stay on its result when the line around it adds its own.
+    line = f'export A=1; bash -c "export GIT_DIR=x; {PUSH}"'
+    assert outcome(line, pol(rule([PUSH, "^export A=1", "^bash -c"]), categories=OPAQUE_OK)) == "ask"   # main: allow
+    named = rule([PUSH, "^export A=1", "^bash -c", "^export GIT_DIR=x$"])
+    assert outcome(line, pol(named, categories=OPAQUE_OK)) == "allow"
 
 
 def test_eval_text_is_read_for_setters_as_a_nested_line():
@@ -830,6 +847,7 @@ def test_the_ledger_view_leaves_the_own_text_out():
     assert c.own == PUSH
     d = c.as_dict()
     assert "own" not in d and "parts" not in d and d["command_chars"] == len(F)
+    assert "setters" not in d and "inherits" not in d
 
 
 # --- a nested or carried command must be named too --------------------------------------------------------------------
@@ -863,7 +881,10 @@ def fed_bash(levels, inner):
 
 @pytest.mark.parametrize("line", ["true; ssh a ssh b ssh c ssh d ssh e ssh f ls",
                                   f"true; {fed_bash(gate._DEPTH, 'xargs ls')}",
-                                  f"true; {fed_bash(gate._DEPTH, 'find . -exec ls ;')}"])
+                                  f"true; {fed_bash(gate._DEPTH, 'find . -exec ls ;')}",
+                                  "true; " + fed_bash(gate._DEPTH, "flock /tmp/l -c 'ls'"),
+                                  "true; " + fed_bash(gate._DEPTH, "watch ls"),
+                                  "true; " + fed_bash(gate._DEPTH, "git -c core.pager='less' log")])
 def test_a_part_past_the_depth_cap_has_no_own_text(line):
     # main: allow, as `.*` matched the line. The unread rest stands for no one command.
     assert outcome(line, pol(ANY_OPAQUE)) == "ask"
