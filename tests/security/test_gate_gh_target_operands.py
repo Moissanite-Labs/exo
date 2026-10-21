@@ -12,7 +12,7 @@ from dataclasses import replace
 
 import pytest
 
-from exo.gate import UNSEEN_BODY, body_unseen, classify, decide, normalize_policies, summarize
+from exo.gate import UNSEEN_BODY, body_unseen, classify, decide, fill_body, normalize_policies, summarize
 
 POST = {"footer": "F", "scrub": {"names": ["SECRETX"]}}
 POLICY = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "posting": POST})
@@ -505,3 +505,73 @@ def test_a_url_operand_keeps_the_reading_before():
 def test_a_url_gh_refuses_or_on_another_host_names_no_repo(url):
     c, _ = run(f"gh pr merge {url} -R myorg/app")
     assert (c.target, c.alt_targets) == ("myorg/app", []), c
+
+
+# Round 5, item 4: one test for each safety mutant the review found alive.
+USERINFO = "u:p" + "@github.com"     # split, as GIT_AT is, so the privacy check reads no address
+
+
+@pytest.mark.parametrize("line", [
+    f"gh pr comment 5 -R https://{USERINFO}/pub/repo -b x",       # a user and a password before the host
+    f"gh pr comment 5 -R ssh://{GIT_AT}:22/pub/repo -b x",         # a port after it
+    "gh pr comment 5 -R https://github.com/pub/repo/ -b x",        # a slash after the name
+    "gh pr comment 5 -R git://github.com/pub/repo -b x",           # the git scheme
+])
+def test_r_as_a_url_gh_reads_names_its_repo(line):
+    c, d = run(line, DENY_PUB)
+    assert c.target == "pub/repo#5", c
+    assert d.outcome == "deny", (line, d)
+
+
+def test_the_reading_before_keeps_the_url_as_written():
+    # The URL reads as gh reads it, and the reading before #399 keeps _GH_URL as it was. _GH_URL stops at a `%`, so
+    # main read this line on `pub/re`, and a rule on that still fires.
+    c, d = run("gh pr comment https://github.com/pub/re%70o/pull/5 -b x",
+               normalize_policies({"gates": {"rules": [{"match": {"target": "pub/re"}, "decision": "deny"}]}}))
+    assert (c.target, c.alt_targets, d.outcome) == ("pub/repo#5", ["pub/re"], "deny"), (c, d)
+    # _GH_URL reads no capitals, so main read this one on the current repo, which no scope makes internal.
+    c, d = run("gh pr comment HTTPS://GitHub.com/pub/repo/pull/5 -b x",
+               normalize_policies({"gates": {"scopes": {"internal": ["pub/*"]}}}))
+    assert (c.target, c.alt_targets, d.exposure) == ("pub/repo#5", [""], "public"), (c, d)
+
+
+@pytest.mark.parametrize("field", ["-f body=x", "-F body=x", "--field body=x", "--raw-field body=x"])
+def test_gh_api_reads_a_field_before_its_endpoint(field):
+    # The field option takes the next word, so `body=x` is not the endpoint and the word after it is.
+    c, d = run(f"gh api {field} repos/pub/repo/issues/5/comments")
+    assert (c.category, c.target, c.alt_targets, c.text) == ("github_post", "pub/repo", [], "x"), c
+    assert d.exposure == "public", d
+
+
+@pytest.mark.parametrize("line", ["gh api -f body=see/x repos/pub/repo/issues/5/comments",
+                                  "gh api -HAccept:application/json repos/pub/repo/issues -f body=x"])
+def test_gh_api_s_word_from_before_skips_an_option_and_a_field(line):
+    # Before #399 the endpoint was the first word with a `/`, no `=` and no leading `-`: here the operand too.
+    c, _ = run(line)
+    assert (c.target, c.alt_targets) == ("pub/repo", []), c
+
+
+def test_an_ssh_hop_gives_its_host_to_the_copies_on_other_targets_only():
+    # `echo hi` has no target on the remote host, as on main. Only the copy of the gh read on its empty other target
+    # takes the host.
+    c, _ = run("ssh buildhost 'gh repo view --web myorg/app; echo hi'")
+    assert [(p.category, p.target) for p in c.parts if p.alt_copy] == [("read", "buildhost")], c
+    assert ("read", "") in [(p.category, p.target) for p in c.parts if not p.alt_copy], c
+
+
+def test_two_posts_that_share_a_body_file_keep_the_second_unseen():
+    # A caller reads the line's own post's body file (fill_body). The text reaches that post's copies on its other
+    # targets, never another post on the line, which stays unseen as on main.
+    c = classify(sh(f"gh pr comment {PUB} -R myorg/app -F /tmp/b.md && gh issue comment 6 -R myorg/app -F /tmp/b.md"))
+    assert c.alt_targets and c.text_file == "/tmp/b.md", c
+    fill_body(c, "A note.\nF")
+    assert all(p.text for p in c.parts if p.alt_copy), c
+    assert body_unseen(c), c
+
+
+def test_the_card_redacts_a_user_and_password_in_another_target():
+    secret = "u:tok" + "@ghe.example.com"
+    c, d = run(f"gh pr comment 5 -R https://{secret}/pub/repo -b x")
+    assert f"https://{secret}/pub/repo#5" in c.alt_targets, c
+    card = summarize(c, d)
+    assert "It may land on https://***@ghe.example.com/pub/repo#5 instead." in card and "tok" not in card, card
