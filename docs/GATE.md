@@ -197,7 +197,7 @@ grants"). So a grant from `gh pr merge -R myorg/app` never runs
 Limits. A body that links to another repo still counts that repo, as it did before #399. So
 `gh pr comment 5 -R myorg/app -b 'https://github.com/pub/repo/pull/3'` asks as public. A post
 the unseen check found unseen with a row of the table as it was before #399 stays unseen, so
-`gh pr reopen 5 -cb x` and a close whose `--duplicate-of` value is an option word
+`gh issue lock 5 -rb x` and a close whose `--duplicate-of` value is an option word
 (`--duplicate-of -c x`) stay unseen. gh refuses the second line. The gate does not read
 `GH_HOST` or `gh api --hostname`: `owner/name` counts as a repo on github.com. A differential over
 168,403 gh lines in seven corpora found no line that decides lower than before #399, on the
