@@ -251,10 +251,11 @@ class Runtime:
     """The listener thread: its own event loop, the socket server and the node."""
 
     def __init__(self, seat: str, host: Host, cfg: PeerConfig, directory: Directory, key_file: Path,
-                 principal: str = "", bus: BusLink | None = None) -> None:
+                 principal: str = "", bus: BusLink | None = None, home: Path | None = None) -> None:
         self.seat, self.cfg, self.directory = seat, cfg, directory
         self.target = HermesTarget(seat, host, cfg.wake)
         self.key_file, self.principal, self.bus = key_file, principal, bus
+        self.home = Path(home) if home else key_file.parent.parent  # key_file is <home>/keys/<seat>.key
         self.node: PeerNode | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self.server: HttpServer | None = None
@@ -287,8 +288,9 @@ class Runtime:
         await self.server.start_unix(sock)
         signer = crypto.Signer.from_file(self.seat, ensure_key(self.key_file))
         self.node = PeerNode(seat=self.seat, signer=signer, target=self.target, sessions=self.target.live, socket=sock,
-                             platform="hermes", principal=self.principal, cwd=os.getcwd(), config=self.cfg,
-                             bus=self.bus, directory=self.directory, emit_out=self.target.add_receipt)
+                             platform="hermes", principal=self.principal, cwd=os.getcwd(), home=self.home,
+                             config=self.cfg, bus=self.bus, directory=self.directory,
+                             emit_out=self.target.add_receipt)
         self.target.node = self.node
         self.node.start()
 
@@ -426,7 +428,7 @@ def register_peers(ctx: Any, host: Host | None = None) -> Runtime | None:
         host = host or CtxHost(ctx)
         exo_home = Path(os.path.expanduser(os.environ.get("EXO_HOME", "~/.exo")))
         rt = Runtime(seat, host, PeerConfig.of(raw), Directory(peers_dir()), key_path(exo_home, seat),
-                     principal=os.environ.get("EXO_PRINCIPAL", ""), bus=BusLink.from_env())
+                     principal=os.environ.get("EXO_PRINCIPAL", ""), bus=BusLink.from_env(), home=exo_home)
         if not rt.start():
             logger.warning("exo-peers: not running (%s)", rt.error)
             return None
