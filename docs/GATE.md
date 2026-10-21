@@ -546,7 +546,10 @@ system or bash will.
   `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE`. The path is checked with the variable's value (as `$EXO_HOME`
   reads: Exo's folder, set or not) and with the variable unset (the default word, spelt out in turn, quotes
   dropped). Both count. `-`, `:=` and `=` take the word when unset; `:+` and `+` give the word when set and
-  nothing when unset; `:?` and any other operator (`%/`, `#*/`, `:0`) read as the value. So
+  nothing when unset; `:?` and any other operator that only removes text (`%/`, `#*/`, `:0`) read as the value.
+  A `/` substitution can add text, so its replacement is read too: appended for a `%` pattern
+  (`${HOME/%//.kube}` reads as `$HOME/.kube`), prepended for a `#` pattern, and on its own for an unanchored
+  pattern, which may match the whole value. So
   `cat ${EXO_HOME:-$HOME/.exo}/keys/seat`, `tar czf - ${EXO_HOME:-$HOME/.exo}/keys` and
   `ls ${EXO_HOME:-$HOME/.exo}/run` ask with `EXO_HOME` set or not, and `write_file
   ${EXO_HOME:-$HOME/.exo}/policies/x.yaml` is a store write. A default is read to 8 levels of nesting; a deeper

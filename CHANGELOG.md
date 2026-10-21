@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A pattern substitution on a store variable no longer hides a store folder (#342). `${HOME/%//.kube}` is
+  `$HOME/.kube` in bash — the `%` pattern matches at the end of the value and the replacement is appended —
+  but the gate read the form as the plain value, so the path was matched as `$HOME/config` and allowed.
+  A `/` substitution's replacement is now read: appended for a `%` pattern, prepended for a `#` pattern,
+  and on its own for an unanchored pattern, which may match the whole value. Operators that only remove
+  text (`%`, `#`, `:0`) still read as the value.
 - `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
   its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
   each tree's violation total with what `and N more on other posts` counts.
