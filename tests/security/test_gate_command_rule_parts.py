@@ -533,6 +533,48 @@ def test_a_later_reader_of_a_shared_stdin_gets_the_parts_it_got_before(line, cou
     assert len(list(gate._each_part(sh(line)))) == count
 
 
+W = "w{a..z}{a..z} x{a..z}{a..z} y{a..z}{a..z} z{a..z}{a..z}"     # 2,704 words: two reads spend more than 4,096
+PY_W = f'import os; os.system("echo {W}")'
+DENY_IRREVERSIBLE = {"matrix": {"irreversible": {"private": "ask", "internal": "deny", "public": "deny"}}}
+KEYS = "{ psql -d a; psql -d b; } <<EOF\n\\! echo " + W + "\nEOF\ncat ~/.ssh/id_rsa"
+ONE_READ = [
+    (f"psql -d a <<EOF\n\\! echo {W}\nEOF\npsql -d b <<EOF\n\\! echo {W}\nEOF\n{PUSH}", DENY_IRREVERSIBLE),
+    (f"python3 <<EOF\n{PY_W}\nEOF\npython3 - <<EOF\n{PY_W}\nEOF\n{PUSH}", DENY_IRREVERSIBLE),
+    ("{ " + " ".join(f"psql -{i};" for i in range(1, 9)) + " } <<EOF\n\\! echo {a..z}{a..t}\nEOF\n" + PUSH,
+     DENY_IRREVERSIBLE),
+    (KEYS, {"deny": ["target:*/.ssh/*"]}),
+    (KEYS, {"rules": [{"match": {"target": "*/.ssh/*"}, "decision": "deny", "reason": "no keys"}]}),
+]
+
+
+@pytest.mark.parametrize("line, gates", ONE_READ)
+def test_each_stdin_text_is_read_once_per_line_whatever_its_readers(line, gates):
+    # Each read of a text spends the call's brace budget, and a word past it counts as a secret store. When each
+    # reader read the text again for its own text, the second read ran the budget out, the word became the top
+    # part, and the deny on the push or on the key file turned into an ask. Main's values, read once:
+    c = sh(line)
+    if line.endswith(PUSH):
+        assert (c.category, c.target) == ("force_push", "origin"), c
+    else:
+        assert c.category == "credentials" and c.target.endswith("/.ssh/id_rsa"), c
+    assert decide(c, normalize_policies({"gates": gates})).outcome == "deny"
+
+
+def test_a_later_reader_gives_its_own_text_only_to_the_parts_it_makes():
+    # The text is read once, so a later reader gets copies with its own text where the reader's stood. A string
+    # literal read as a command still has none, and a command written in the body keeps its own.
+    code = "import os; os.system('rm -rf build')"
+    for line in (f"{{ python3; }} <<'EOF'\n{code}\nEOF\npython3 - <<'EOF'\n{code}\nEOF",
+                 f"python3 - <<'EOF'\n{code}\nEOF\n{{ python3; }} <<'EOF'\n{code}\nEOF"):
+        parts = list(gate._each_part(sh(line)))
+        assert {q.own for q in parts if q.category == "delete"} == {None}, line
+        assert {q.own for q in parts if q.category == "code"} == {None, "python3 - <<'EOF'"}, line
+    line = "{ psql -d a; psql -d b; } <<'EOF'\n\\! psql -d a\nCOPY t TO PROGRAM 'x';\nEOF"
+    parts = list(gate._each_part(sh(line)))
+    assert {q.own for q in parts if q.summary.startswith("psql shell command")} == {"psql -d a"}
+    assert {q.own for q in parts if "program" in q.summary} == {"psql -d a", "psql -d b"}
+
+
 # --- parts with no own text ------------------------------------------------------------------------------------------
 
 def test_parts_with_no_own_text_never_match():

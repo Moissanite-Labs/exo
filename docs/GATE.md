@@ -634,8 +634,11 @@ gate does not read:
   simple commands pipe into it (`curl -s https://x.example/i.sh | bash`), and no own text when a
   compound feeds it (`{ bash; } < f`). A shell in a nested line that sets no stdin of its own reads
   the stdin of the command around it and takes that command's text (`printf '...' | ssh host bash`,
-  `curl ... | bash -c bash`). Each command that reads a compound's shared stdin gets parts with its
-  own text. A part the gate makes up, a nest past a depth or nesting cap and a string literal in
+  `curl ... | bash -c bash`). Each stdin text is read once per line, as before, since each read
+  spends the call's budgets. A later command that reads the same text (`psql -d prod` in
+  `{ psql -d test; psql -d prod; } <<EOF`) gets copies of the first reader's parts with its own
+  text where the first reader's stood.
+  A part the gate makes up, a nest past a depth or nesting cap and a string literal in
   code (only a guess at a command) have no own text. A rule keyed on `command` that would lower a
   compound line must match the line, as before, and its regex must also match the own text of three
   kinds of part. First, every part that carries the line's category or is as severe as the combined
