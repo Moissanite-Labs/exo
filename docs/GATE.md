@@ -601,12 +601,16 @@ gate does not read:
   denies a part denies the line too (#191): each part below the dominant one is decided as it
   would be alone, by its category's line and then the first rule that matches it (or a deny rule
   whose `command` regex matches a decoded view of the line), and a `deny` there denies the line,
-  with a reason that names the part (`denied by policy (category local_write: write /tmp/f)`). Only
+  with a reason that names the part (`denied by policy (category local_write: write /tmp/f)`).
+  A rule that is not a deny matches a part on the part's own text, the simple command as
+  written, and decides the line only when it matches the dominant part's own text: an allow
+  rule for `git status` does not allow `git status; git push --force origin main`, and it
+  cannot cancel a part's `categories:` deny (#394). Only
   a deny reaches the parts: allow, log and ask lines and rules, the opaque bump, third-party
   escalation, posting checks and the floors see the dominant part (a `reserved:` entry gives an ask
   on any part). A part carries the tool of the call it came in on
   (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash) and the
-  views of its line, so a `command` regex matches a part as it matches the line (`g''it push
+  views of its line, so a deny entry's `command` regex matches a part as it matches the line (`g''it push
   origin main && rm -rf build` is denied under `{category: vcs_push, command: 'git push'}`), the
   `ssh` hop is a part whose target is the bare host (`user@`, `ssh://` and a `:port` stripped) and
   the destination as written, and the inner commands of an `ssh` line are `internal`. A mapping entry

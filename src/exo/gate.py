@@ -122,12 +122,18 @@ class Classification:
     # entries against each of them, so a denied action cannot ride along with a more severe one.
     parts: list["Classification"] = field(default_factory=list, repr=False, compare=False)
     _command_views: list[str] = field(default_factory=list, repr=False, compare=False)
+    # The simple command this part was read from, as written (#394). A non-deny rule's `command`
+    # regex matches it, so an allow rule for one command on a compound line decides that command
+    # only; deny and reserved entries keep matching the whole line in `command` (D-075). Empty
+    # when the part was not read from a simple command: `command` then stands as it is.
+    _own_command: str = field(default="", repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
         d.pop("parts", None)
         d.pop("_command_views")
+        d.pop("_own_command")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -2495,9 +2501,19 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
     return parts
 
 
+def _segment_text(k: _Cmd) -> str:
+    """One simple command as written, from its words and redirections (#394): the text a non-deny
+    rule's `command` regex is matched against, so a rule names the one command it means. Heredoc
+    bodies and here-strings are the command's stdin, not its text, as in the policy views."""
+    bits = [w.raw or w.text for w in k.words]
+    bits += [f"{w.fd}{op}{w.raw or w.text}" for op, w in k.redirs]
+    return " ".join(bits)
+
+
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
     """One simple command into its parts: the program's own category, the redirections, anything run
     inside it, and a store write when it touches the store."""
+    late_from = len(ctx.get("late") or [])
     words = list(k.words)
     while words and not words[0].quoted and words[0].text in _OPENERS:
         words = words[1:]
@@ -2554,6 +2570,9 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         # catalog can replace them: the indirection signal asks unless opaque_exec is named.
         for p in parts:
             p.signals += ["indirection", "locale translation"]
+    own = _segment_text(k)
+    for part in parts + (ctx.get("late") or [])[late_from:]:
+        part._own_command = own
     return parts
 
 
@@ -5292,11 +5311,14 @@ def _policy_command_view(command: str) -> str:
 def _command_matches(pattern: str, c: Classification, *, veto: bool = False,
                      line: Callable[[str], bool] | None = None) -> bool:
     regex = re.compile(pattern)
+    if not veto:
+        # An allow, log or ask rule names one command, so it matches that command's own text, not
+        # every command sharing its line (#394). Deny and reserved keep the whole line (D-075).
+        return bool(regex.search(c._own_command or c.command or ""))
     texts = [c.command or ""]
-    if veto and line is not None:       # a part of a line: its own text, or any decoded view of the line (#136)
+    if line is not None:       # a part of a line: its own text, or any decoded view of the line (#136)
         return bool(regex.search(texts[0])) or line(pattern)
-    if veto:
-        texts.extend(c._command_views)
+    texts.extend(c._command_views)
     return any(regex.search(text) for text in texts)
 
 
