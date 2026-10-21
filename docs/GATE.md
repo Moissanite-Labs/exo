@@ -87,7 +87,10 @@ nobody read:
   or the call's `cwd` argument, moves it (`cd docs && gh ... --body-file notes.md` read `notes.md`
   from exod's own folder before). A path under `/dev` or `/proc`, as written or resolved
   (`/dev/stdin`, `/proc/self/fd/3`), names what the reading process holds, so the hook would read
-  exod's own; it is never read. A missing, larger or unreadable file stays unseen.
+  exod's own; it is never read. A missing, larger or unreadable file stays unseen. A gh post the
+  gate reads more than one way ("Where a gh command lands") gets the text in each reading: the
+  copy on each other target, and the line as read before #399, whose own body file is read the
+  same way.
 
 Under the posting rules (`posting.applies_to`) an unseen body adds the violation "the gate cannot
 read the body ..." and asks. In any category it offers no "always" (`once`) and no standing grant

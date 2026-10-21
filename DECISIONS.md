@@ -720,7 +720,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   reserved entry on either repo still fires, also when the gh call is not the line's most severe part. Each copy is
   marked (`Classification.alt_copy`), and an ssh or mosh hop gives an empty one the host, as it gives the action's
   own empty target. So a rule on the host's category sees it, as on main, where the gh part's own target was the
-  host. Matching the copies by their fields instead could retarget another part of the line. A line with
+  host. Matching the copies by their fields instead could retarget another part of the line. The exo-gate hook gives
+  the text it reads from a post's body file to each copy as well (`gate.fill_body`), and it reads the floor's body
+  file the same way, so a clean body counts as seen in every reading, as it did on main. A line with
   other targets binds its approval to the exact command, as an outward act does (`binds_exact`), so a standing grant
   on one of its targets does not run it, and its rule key and an "always" on it cover that exact line only. The
   question the principal sees names every other target ("It may land on pub/repo#7 instead."), since the target it

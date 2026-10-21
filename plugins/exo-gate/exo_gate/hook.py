@@ -382,22 +382,25 @@ class Gate:
         an absolute path to a regular file of at most 256 KiB. A relative or `~` path names a file in the
         command's folder or home, which the hook does not know. Anything not read stays unseen, so the post
         asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
-        symlinks included, are never read before the worker, and `_rules` refuses the call."""
-        if not c.text_file or c.text or not self.settings.read_body_files or self.executor_required:
-            return
-        try:
-            p = Path(c.text_file)
-            # /dev and /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here
-            # they give exod's own, not what gh will read, so they stay unseen (#208).
-            if any(str(x).startswith(("/dev/", "/proc/")) or str(x) in ("/dev", "/proc")
-                   for x in (p, Path(os.path.realpath(p)))):
-                return
-            if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
-                c.text = p.read_text(encoding="utf-8", errors="replace")
-                if not c.link:
-                    c.link = str(p)
-        except OSError:
-            pass
+        symlinks included, are never read before the worker, and `_rules` refuses the call. The copies of the post
+        on its other targets get the text too (`gate.fill_body`), and the line as read before #399 (`floor`) has
+        its own body file read the same way, as the hook read it before."""
+        for x in (c,) if c.floor is None else (c, c.floor):
+            if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
+                continue
+            try:
+                p = Path(x.text_file)
+                # /dev and /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read
+                # here they give exod's own, not what gh will read, so they stay unseen (#208).
+                if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
+                       for y in (p, Path(os.path.realpath(p)))):
+                    continue
+                if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
+                    gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
+                    if not x.link:
+                        x.link = str(p)
+            except OSError:
+                pass
 
     def _rule_key(self, tool: str, args: Mapping, c: gate.Classification, d: gate.Decision) -> str:
         # An "always" answer must not cover a different public or irreversible act, or different code the
