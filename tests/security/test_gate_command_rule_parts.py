@@ -766,7 +766,24 @@ def test_code_with_a_string_literal_is_decided_as_before():
     assert decide(c, pol(rule(PUSH, "deny"), categories=OPAQUE_OK)).outcome == "deny"
 
 
-WRITE = {"tool": "write_file", "args": {"path": "/tmp/x", "content": "y"}}
+SETTER_LITERALS = ["export X=1", "coproc cat", "for x in a; do true; done", "read x"]
+
+
+@pytest.mark.parametrize("setter", SETTER_LITERALS)
+def test_a_literal_that_sets_shell_state_leaves_code_decided_as_before(setter):
+    # A literal's setters run in the shell the code starts, not in the line around it, and the literal has no own
+    # text. So code whose literal sets shell state is still one text, decided as on main.
+    code = f'import os\nos.system("{setter}; {PUSH}")'
+    c = classify({"tool": "execute_code", "args": {"code": code}})
+    assert not [t for p in gate._each_part(c) for t in p.setters], c
+    assert decide(c, pol(rule("os\\.system"), categories=OPAQUE_OK)).outcome == "allow"       # main: allow
+    py = f"python3 -c 'import os; os.system(\"{setter}; {PUSH}\")'"
+    assert outcome(py, pol(rule("os\\.system"), categories=OPAQUE_OK)) == "allow"              # main: allow
+    # After a second command the own text test applies: the literal has no own text to name.
+    assert outcome(f"true; {py}", pol(rule("os\\.system"), categories=OPAQUE_OK)) == "ask"     # main: allow
+
+
+WRITE ={"tool": "write_file", "args": {"path": "/tmp/x", "content": "y"}}
 FETCH = {"tool": "web_extract", "args": {"url": "https://example.com/a"}}
 CODE = {"tool": "execute_code", "args": {"code": "print(1)"}}
 
