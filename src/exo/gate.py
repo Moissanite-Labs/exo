@@ -5540,17 +5540,44 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     violations: list[str] = []
     unseen = body_unseen(eff)
-    applies = eff.category in (posting.get("applies_to") or POSTING_DEFAULT)
-    if not applies and eff.category == "github_close":
-        applies = bool(eff.text or unseen)  # #326: a close carrying a comment posts that comment
-    if applies and (eff.text or eff.title or unseen):
-        violations = check_post(eff.text, posting, title=eff.title, agents=pol.get("agents") or [],
-                                exposure=eff.exposure)
-        violations += check_scrub(eff.text, pol.get("scrub"), title=eff.title, exposure=eff.exposure)  # D-033
-        if unseen:  # #208: the checks above saw only part of the post, so they cannot pass it
-            violations.append(UNSEEN_BODY)
-        if violations:
-            bump("ask", "posting rules: " + "; ".join(violations), "posting")
+    applies_to = posting.get("applies_to") or POSTING_DEFAULT
+    # Whether the combined classification alone would run the checks (kept for the line-wide
+    # unseen note below): its category is under applies_to, or it is a close carrying a comment.
+    line_applies = eff.category in applies_to or (eff.category == "github_close" and (eff.text or unseen))
+
+    def post_unseen(p: Classification) -> bool:
+        """One part's unseen body (#208): a body file nobody read into its text, or its own
+        unseen_body signal. A combined classification carries every part's signals, so a signal
+        a part below it also carries is that part's, not its own."""
+        if p.text_file and not p.text and p.category in OUTBOUND:
+            return True
+        return "unseen_body" in p.signals and not any(
+            "unseen_body" in q.signals for q in _each_part(p) if q is not p)
+
+    # #396: the checks run on every post on the line, not only on the dominant part's text, so a
+    # clean first post cannot carry a second one past the footer, the forbidden words and the
+    # scrub. A part counts when its category is under applies_to (a close carrying a comment
+    # counts, #326) and it carries text, a title or an unseen body. The combined classification's
+    # own violations stay bare; another part's are named after it.
+    checked, post_unseen_seen = False, False
+    for p in _each_part(eff):
+        p_unseen = post_unseen(p)
+        if p.category not in applies_to and not (p.category == "github_close" and (p.text or p_unseen)):
+            continue
+        if not (p.text or p.title or p_unseen):
+            continue
+        checked = True
+        found = check_post(p.text, posting, title=p.title, agents=pol.get("agents") or [],
+                           exposure=p.exposure)
+        found += check_scrub(p.text, pol.get("scrub"), title=p.title, exposure=p.exposure)  # D-033
+        if p_unseen:  # the checks above saw only part of this post, so they cannot pass it
+            found.append(UNSEEN_BODY)
+            post_unseen_seen = True
+        violations += found if p is eff else [f"{p.summary or p.category}: {v}" for v in found]
+    if unseen and not post_unseen_seen and (checked or line_applies):
+        violations.append(UNSEEN_BODY)  # a body on a part the posting rules do not cover is still unseen
+    if violations:
+        bump("ask", "posting rules: " + "; ".join(violations), "posting")
 
     # Operator floor (P11): outside the principal model, cannot be lowered by policy.
     if eff.reversibility == "irreversible" and eff.exposure == "public" and eff.third_party:

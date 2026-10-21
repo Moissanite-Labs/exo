@@ -6,6 +6,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
+  the footer, the forbidden words and the scrub on the combined classification's text, which a
+  compound line takes from its most severe part, so a post that passed, put first, carried a
+  second post on the same line past all three. The checks now run on every part whose category
+  is under `posting.applies_to` and that carries text or an unseen body, a close carrying a
+  comment included (#326); another part's violations are named after that part. A single post
+  is checked exactly as before, and the exact-text binding already hashed the whole command, so
+  a grant for one line never covered a changed second body.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
