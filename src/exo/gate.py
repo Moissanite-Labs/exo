@@ -123,12 +123,12 @@ class Classification:
     # entries against each of them, so a denied action cannot ride along with a more severe one.
     parts: list["Classification"] = field(default_factory=list, repr=False, compare=False)
     _command_views: list[str] = field(default_factory=list, repr=False, compare=False)
-    # The source text of the one simple command this part stands for, with its redirections (#394): an allow or log
-    # rule's `command` regex is matched against it on a compound line. None where no such text exists (a part the
-    # gate made up, an unread nest, a string literal in code), and then no allow or log rule's regex matches.
+    # The source text of the one simple command this part stands for, with its redirections (#394): a rule that
+    # would lower a compound line must match it too (_line_own_test). None where no such text exists (a part the
+    # gate made up, an unread nest, a string literal in code), and then no such rule matches.
     own: str | None = field(default=None, repr=False, compare=False)
-    # The own text of each command on this line that changes the shell for the commands after it (_sets_state): an
-    # allow or log rule's `command` regex must match each of them too (#394). None stands for a function definition.
+    # The own text of each command on this line that changes the shell for the commands after it (_sets_state): a
+    # rule that would lower the line must match each of them too (#394). None stands for a function definition.
     setters: list[str | None] = field(default_factory=list, repr=False, compare=False)
     # A part that runs the stdin of its line, which a command around that line may give (_runs_stdin, _given_stdin).
     inherits: bool = field(default=False, repr=False, compare=False)
@@ -1729,7 +1729,7 @@ def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection
 
 def _too_deep(cmd: str, summary: str = "nested too deep to read", target: str = "") -> Classification:
     """An opaque part for text past a depth or nesting cap. It stands for no one command, so it has no own text and
-    no allow or log rule's `command` regex matches it (#394)."""
+    no rule that would lower its line passes the own text test (#394)."""
     c = _opaque(summary, cmd, target)
     c.own = None
     return c
@@ -2390,7 +2390,8 @@ def _sets_shell_stdin(k: _Cmd, fnames: set) -> bool:
 # variable, an option, an alias, a function, a coprocess, the hash table, a trap or the folder stack, or run a file
 # in this shell. _STATE_ALWAYS do so whatever their arguments, _STATE_OPERANDS when given any (alone they print).
 # eval is not here: the gate reads its text as a nested line, whose own setters count. cd is left out on purpose,
-# so `cd repo && cmd` stays under an allow rule for cmd (docs/GATE.md, Known limits).
+# so `cd repo && cmd` stays under an allow rule whose regex finds cmd in the line. That cannot loosen a decision,
+# since the rule must still match the whole line (docs/GATE.md, Known limits).
 _STATE_ALWAYS = frozenset({"source", ".", "read", "mapfile", "readarray", "getopts", "let", "pushd", "popd",
                            "for", "select", "function", "coproc"})
 _STATE_OPERANDS = frozenset({"hash", "alias", "enable", "unset", "trap"})
@@ -2480,19 +2481,24 @@ def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str
     body of fed shells, itself fed to many shells, is read width ** depth times, and many here-strings fed to
     many shells cost their product."""
     memo = ctx.setdefault("stdin", {})
-    # A reader other than classify_shell makes parts with the reading command's own text (#394), so each command
-    # reads it for itself: `{ psql -d test; psql -d prod; } <<EOF` gives psql -d prod its own parts.
-    own = None if key[0] is classify_shell else (_own_text.get() or [None])[0]
-    whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous, own)
-    if whole in memo:
-        return [_copy(c) for c in memo[whole]]
+    whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
+    # _exec_options makes parts with the reading command's own text (#394), so each command reads it for itself:
+    # `{ psql -d test; psql -d prod; } <<EOF` gives psql -d prod its own parts. The first reader still gets every
+    # part and a later one the most severe of each category, as before. classify_shell and classify_code give
+    # the parts they make their own text, which the key holds.
+    own = (_own_text.get() or [None])[0] if key[0] is _exec_options else None
+    if (*whole, own) in memo:
+        return [_copy(c) for c in memo[(*whole, own)]]
     got: list[Classification] = []
     for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped):
         if (*key, own, text) not in memo:
             memo[(*key, own, text)] = read(text)
         got += memo[(*key, own, text)]
-    memo[whole] = [max((p for p in got if p.category == c), key=_severity)
-                   for c in dict.fromkeys(p.category for p in got)]
+    memo[(*whole, own)] = [max((p for p in got if p.category == c), key=_severity)
+                           for c in dict.fromkeys(p.category for p in got)]
+    if whole in memo:
+        return [_copy(c) for c in memo[(*whole, own)]]
+    memo[whole] = True
     return [_copy(c) for c in got]
 
 
@@ -4231,7 +4237,7 @@ def classify_code(code: str, own: str | None | EllipsisType = ...) -> Classifica
     string literals, as in subprocess.run([...])) as a shell command. Only results that matter count.
     The code part and each call found carry `own` as their own text (#394): by default the shell command that runs
     the code (`python3 -c '..'`), or the code itself for execute_code. A literal read as a command is only a guess
-    at one, so no part of its result has own text, and no allow or log rule's `command` regex lowers it."""
+    at one, so no part of its result has own text, and no rule keyed on `command` lowers it."""
     if own is ...:
         slot = _own_text.get()
         own = slot[0] if slot is not None else code
@@ -5478,10 +5484,7 @@ def _command_matches(pattern: str, c: Classification, *, veto: bool = False,
 
 
 def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False,
-                  line: Callable[[str], bool] | None = None,
-                  own: Callable[[list[str]], bool] | None = None) -> bool:
-    """Whether a rule's match keys all hold for ``c``. With ``own``, the `command` patterns are tested by it
-    instead of against the command text (an allow or log rule on a compound line, #394)."""
+                  line: Callable[[str], bool] | None = None) -> bool:
     for k, want in match.items():
         if k == "category" and c.category not in [str(x) for x in _as_list(want)]:
             return False
@@ -5489,8 +5492,7 @@ def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False,
             return False
         if k == "target" and not _glob_any(c.target, _as_list(want)):
             return False
-        if k == "command" and not (own([str(p) for p in _as_list(want)]) if own is not None else
-                                   any(_command_matches(str(p), c, veto=veto, line=line) for p in _as_list(want))):
+        if k == "command" and not any(_command_matches(str(p), c, veto=veto, line=line) for p in _as_list(want)):
             return False
         if k == "exposure" and c.exposure not in _as_list(want):
             return False
@@ -5568,30 +5570,16 @@ def _line_matcher(c: Classification) -> Callable[[str], bool]:
     return line
 
 
-def _own_test(texts: Iterable[str | None]) -> Callable[[list[str]], bool]:
-    """For an allow or log rule (#394): whether one of its `command` patterns matches each of these own texts. A
-    part with no own text (None) matches none, so the rule does not lower the line."""
-    texts = list(dict.fromkeys(texts))
-
-    def test(patterns: list[str]) -> bool:
-        regexes = [re.compile(p) for p in patterns]
-        return all(t is not None and any(rx.search(t) for rx in regexes) for t in texts)
-    return test
-
-
-def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[str, list[str]], bool] | None:
-    """How an allow or log rule's `command` patterns match a line (#394), as a test of (the rule's decision, its
-    patterns). They must match the own text of every simple command that carries the line's category or is as
-    severe as the combined result, so a regex written for one command cannot lower a line whose deciding command
-    it does not name, and the outcome does not depend on which of two equally severe commands comes first. The
-    combined result is one of these: the deciding command's part, or a part the gate made (a secret on the line,
-    the opaque_exec reading of a `$".."` line) with no own text, and then no such rule lowers the line. They must
-    also match every other part that alone would get a stricter outcome than the rule's decision, by its category
-    line and the matrix or by the rules (a rider: `rm -rf build && git push --force origin main` under an allow
-    rule for the push), and every command that changes the shell for the commands after it (Classification.setters:
-    `export GIT_SSH_COMMAND=$X; git push ..`). None for a line of one part, which keeps matching the command text."""
-    if not c.parts:
-        return None
+def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[str, list[str]], bool]:
+    """The test a rule that would lower a compound line passes on top of matching the line (#394), as a test of (the
+    rule's decision, its `command` patterns). They must match the own text of every simple command that carries the
+    line's category or is as severe as the combined result, so a regex written for one command cannot lower a line
+    whose deciding command it does not name. The combined result is one of these: the deciding command's part, or a
+    part the gate made (a secret on the line, the opaque_exec reading of a `$".."` line) with no own text, and then
+    no such rule lowers the line. They must also match every other part that alone would get a stricter outcome than
+    the rule's decision, by its category line and the matrix or by the rules (a rider: `rm -rf build && git push
+    --force origin main` under an allow rule for the push), and every command that changes the shell for the
+    commands after it (Classification.setters: `export GIT_SSH_COMMAND=$X; git push ..`)."""
     parts, top = list(_each_part(c)), _severity(c)
     core = {id(p) for p in parts if p.category == c.category or _severity(p) >= top}
     setters = list(dict.fromkeys(t for p in parts for t in p.setters))
@@ -5623,9 +5611,6 @@ def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[s
     return test
 
 
-_LOWERS = ("allow", "log")
-
-
 def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classification, str]]:
     """Each part of the classification (the combined result first, then every simple command it was built
     from) with the reserved or deny entry that matches it (D-075): a compound line is denied when any simple
@@ -5636,22 +5621,30 @@ def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classificatio
     return [(p, hit) for p in _each_part(c) if (hit := _list_matches(entries, p, line))]
 
 
-def _override_deny(c: Classification, gates: Mapping) -> tuple[Classification, str, str] | None:
-    """The first part of the line, below the combined result, that a category line or rule denies (#191): its
-    category's line, then the first rule that matches it; or a deny rule whose `command` regex matches only a decoded
-    view of the line (#136). ``(part, why, step)`` or None. Here any rule but a deny can only lower the part's line,
-    so an allow, log or ask rule's `command` regex must match the part's own text (#394): a rule written for another
-    command on the line does not lift the part's deny. A deny rule's matches the line as before."""
+def _override_deny(c: Classification, gates: Mapping,
+                   passed: list[Mapping] | None = None) -> tuple[Classification, str, str] | None:
+    """The first part of the line, below the combined result, that a category line or rule denies as it would
+    deny that command alone (#191): its category's line, then the first rule that matches it; or a deny rule
+    whose `command` regex matches only a decoded view of the line (#136). ``(part, why, step)`` or None.
+    With ``passed`` (#394), an allow, log or ask rule keyed on `command` that matches must also match the part's own
+    text, or it is passed over and added to ``passed``: a rule written for another command on the line does not lift
+    the part's deny. Deny rules match as before, so every part denied without this test is denied with it."""
     cats, rules = gates.get("categories") or {}, gates.get("rules") or []
     if not (cats or rules):
         return None
     line = _line_matcher(c)
-    lowers = any(r["decision"] != "deny" and "command" in r["match"] for r in rules)
     for p in list(_each_part(c))[1:]:
         out, why, step = cats.get(p.category), f"category {p.category}", "category"
-        own = _own_test([p.own]) if lowers else None
-        first = next((r for r in rules if _rule_matches(r["match"], p, own=own if r["decision"] != "deny" else None)),
-                     None)
+        first = None
+        for r in rules:
+            if not _rule_matches(r["match"], p):
+                continue
+            if passed is not None and r["decision"] != "deny" and "command" in r["match"] and not (
+                    p.own is not None and any(re.search(str(x), p.own) for x in _as_list(r["match"]["command"]))):
+                passed.append(r)
+                continue
+            first = r
+            break
         if first is not None:
             out, why, step = first["decision"], first["reason"], "rule"
         if out != "deny":
@@ -5731,34 +5724,74 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     over everything, and so does a category line or rule that denies any part of a compound line. A line
     with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
     `context` may carry `spent_today` for the daily budget.
+
+    On a compound line, a rule keyed on `command` that would lower the line (its decision is below the matrix cell
+    and category line, or it is an allow or log rule that names opaque_exec) must match the line as before and also
+    name each command that decides the line, each that would be stricter alone and each that changes the shell state
+    for the rest (#394, _line_own_test). A rule that fails is passed over, and the rule step keeps the stricter of
+    the first match, as before, and the rule found after it. A rule passed over never names opaque_exec for the
+    floor. The #191 pass asks the same of a rule that would lift a part's deny, so it denies each part it denied
+    before. So that pass is never looser than deciding as before. When it passes a rule over, the line is also
+    decided as before, and that decision stands unless the other is stricter, reason and all.
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
-    gates, budget, posting = pol["gates"], pol["budget"], pol["posting"]
     ctx = dict(context or {})
+    passed: list[Mapping] = []
+    d = _decide(c, pol, ctx, passed)
+    if passed:
+        before = _decide(c, pol, ctx, None)
+        if OUTCOMES.index(d.outcome) <= OUTCOMES.index(before.outcome):
+            return before
+    return d
+
+
+def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | None) -> Decision:
+    """decide() under normalized policies. With ``passed``, a rule that would lower a compound line must also pass
+    the own text test, and each rule that test passes over is added to ``passed`` (#394): each step keeps the
+    stricter outcome, so the decision is never looser than without. Without ``passed``, as before #394."""
+    gates, budget, posting = pol["gates"], pol["budget"], pol["posting"]
     eff = _scoped(c, gates.get("scopes") or {})
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
     reason, rule = f"{eff.reversibility} and {eff.exposure}", "matrix"
     # D-038: the principal may lower opaque code only by naming it below ask (a category line or a rule on
     # opaque_exec). Naming it at ask or deny keeps the indirection floor (#178).
-    below_ask = _LOWERS
+    below_ask = ("allow", "log")
     opaque_named = gates.get("categories", {}).get("opaque_exec") in below_ask
     if eff.category in gates.get("categories", {}):
         outcome, reason, rule = gates["categories"][eff.category], f"category {eff.category}", "category"
-    # An allow or log rule's `command` regex must match each simple command that decides the line, as written, and
-    # each that would be stricter alone (#394). An ask or deny rule's still matches the whole line, so it can only
-    # catch more, and so does a log rule's over an allow cell: it only raises the line, unless it names opaque_exec.
-    own = _line_own_test(eff, pol, ctx) if eff.parts and any(r["decision"] in below_ask and "command" in r["match"]
-                                                              for r in gates.get("rules") or []) else None
-    start = OUTCOMES.index(outcome)
+
+    def names_opaque(r: Mapping | None) -> bool:
+        return r is not None and r["decision"] in below_ask and \
+            "opaque_exec" in [str(x) for x in _as_list(r["match"].get("category", []))]
+
+    # The first rule that matches (`first`), and with ``passed`` the first that also passes the own text test when
+    # it would lower the line (`picked`, #394). Rules that keep or raise the outcome match as before.
+    first: Mapping | None = None
+    picked: Mapping | None = None
+    own: Callable[[str, list[str]], bool] | None = None
+    base = OUTCOMES.index(outcome)
     for r in gates.get("rules") or []:
-        dec = r["decision"]
-        names_opaque = dec in below_ask and "opaque_exec" in [str(x) for x in _as_list(r["match"].get("category", []))]
-        narrow = own is not None and dec in below_ask and (OUTCOMES.index(dec) <= start or names_opaque)
-        if _rule_matches(r["match"], eff, own=functools.partial(own, dec) if narrow and own is not None else None):
-            outcome, reason, rule = dec, r["reason"], "rule"
-            opaque_named = opaque_named or names_opaque
-            break
+        if not _rule_matches(r["match"], eff):
+            continue
+        first = first or r
+        if passed is not None and eff.parts and "command" in r["match"] and \
+                (OUTCOMES.index(r["decision"]) < base or names_opaque(r)):
+            own = own or _line_own_test(eff, pol, ctx)
+            if not own(r["decision"], [str(x) for x in _as_list(r["match"]["command"])]):
+                passed.append(r)
+                continue
+        picked = r
+        break
+    # The stricter of the two steps stands, the first rule's when they are alike. A rule passed over does not name
+    # opaque_exec for the floor, and a later rule does so only when the first one does too.
+    chosen = first
+    if first is not None and picked is not first and \
+            OUTCOMES.index(picked["decision"] if picked else outcome) > OUTCOMES.index(first["decision"]):
+        chosen = picked
+    if chosen is not None:
+        outcome, reason, rule = chosen["decision"], chosen["reason"], "rule"
+    opaque_named = opaque_named or (names_opaque(first) and names_opaque(picked))
 
     def bump(level: str, why: str, step: str):
         # A higher level takes over. An equal one adds its reason, and names itself as the
@@ -5827,7 +5860,7 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
 
     # #191: a category line or rule that would deny a part alone denies the line, as a deny entry does (D-075).
-    if outcome != "deny" and (part := _override_deny(eff, gates)):
+    if outcome != "deny" and (part := _override_deny(eff, gates, passed)):
         p, why, step = part
         outcome, reason, rule = "deny", f"denied by policy ({why}: {p.summary or p.category})", step
     if (denied := _part_hits(gates.get("deny") or [], eff)):
@@ -5838,11 +5871,11 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     if "locale translation" in c.signals and c.category != "opaque_exec":
         # A $".." word can turn into any code (#136): decide the line as opaque_exec too, and keep the stricter.
         # `replace` keeps the parts as classifications, so their deny and reserved entries still apply. That
-        # reading is the gate's, not a command's, so it has no own text: no allow or log rule's `command` regex
-        # lowers it on a compound line (#394), while a line of one part still matches its command text.
+        # reading is the gate's, not a command's, so it has no own text: no rule that would lower it passes the
+        # own text test on a compound line (#394), while a line of one part still matches its command text.
         rev, exp, third = CATEGORIES["opaque_exec"]
-        alt = decide(replace(c, category="opaque_exec", reversibility=rev, exposure=exp, third_party=third,
-                             signals=["indirection"], own=None), pol, ctx)
+        alt = _decide(replace(c, category="opaque_exec", reversibility=rev, exposure=exp, third_party=third,
+                              signals=["indirection"], own=None), pol, ctx, passed)
         if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
             return alt
     return d
