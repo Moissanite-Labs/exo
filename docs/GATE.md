@@ -113,6 +113,20 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   options. gh keeps the last `-R`.
 - A URL operand names the repo, also beside `-R`, because gh posts there.
   `gh pr comment https://github.com/myorg/app/pull/9 -R pub/repo` lands on `myorg/app#9`.
+- The subcommand is the word gh takes for it. gh finds it past the options before it, and the
+  subcommand then reads every option on the line. So `gh pr -R pub/repo comment 5` and
+  `gh pr -b text comment 5 -R pub/repo` are comments on `pub/repo#5` (checked with gh 2.89).
+  The gate finds it the same way: an option word without `=` that starts with `--` or has two
+  characters takes the next word as its value, `--help` and any other option word stand alone,
+  and `--` ends the search. With no subcommand gh prints help, and the line stays a read. A word
+  from an expansion where the subcommand or an option may stand (`gh pr "$V" 5`) counts as
+  `opaque_exec`, since the gate cannot tell what gh runs. `gh auth` and `gh secret` stay
+  credentials. The line as the gate read it before, with each gh command's third word for its
+  subcommand, is decided too, and the stricter decision stands on each axis. Without that a
+  compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5` the
+  edit now outranks the push, and `private: [myorg/*]` lowers it. Such a line binds its approval
+  to the exact command, and when the earlier reading decides, the reason ends with
+  "(for git push to origin)".
 
 The gate also keeps every other reading it cannot rule out, and decides the line on each. The
 strictest outcome stands, with the widest exposure, a third party if any reading has one, and every
@@ -144,7 +158,8 @@ grants"). So a grant from `gh pr merge -R myorg/app` never runs
 Limits. A body that links to another repo still counts that repo, as it did before #399. So
 `gh pr comment 5 -R myorg/app -b 'https://github.com/pub/repo/pull/3'` asks as public. A close
 whose `--duplicate-of` value is an option word (`--duplicate-of -c x`) stays unseen. gh refuses
-that line. Tests: `tests/security/test_gate_gh_target_operands.py`.
+that line. Tests: `tests/security/test_gate_gh_target_operands.py`,
+`tests/security/test_gate_gh_subcommand_position.py`.
 
 ## Who may approve
 
