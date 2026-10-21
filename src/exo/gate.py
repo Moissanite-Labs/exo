@@ -1661,6 +1661,31 @@ def _has(argv: list[str], *flags: str) -> bool:
     return False
 
 
+def _hash_rebind(argv: list[str]) -> tuple[str, str] | None:
+    """The (path, name) a `hash -p` binds, or None (#330). `hash -p PATH NAME` makes the shell run PATH
+    for every later NAME, so a file planted by an earlier write runs under a trusted program's name.
+    The option words come first (bash stops at the first operand); `-p` may sit in a cluster behind
+    the valueless flags (`-rp`) or carry its path attached (`-p/tmp/x`). A name must follow the path:
+    with none, bash binds nothing."""
+    args = argv[1:]
+    for i, a in enumerate(args):
+        if a == "--" or len(a) < 2 or not a.startswith("-"):
+            return None
+        hit = None
+        for j, ch in enumerate(a[1:], 1):
+            if ch == "p":
+                hit = j
+                break
+            if ch not in "dlnrt":
+                break
+        if hit is None:
+            continue
+        path = a[hit + 1:] or (args[i + 1] if i + 1 < len(args) else "")
+        rest = args[i + 1:] if a[hit + 1:] else args[i + 2:]
+        return (path, rest[0]) if path and rest else None
+    return None
+
+
 def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection") -> Classification:
     c = _make("opaque_exec", summary=summary[:120], target=target, command=cmd)
     c.signals.append(signal)
@@ -2820,6 +2845,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if (sub or "_") in TOOL_SUBCOMMANDS[prog] or (prog == "yarn" and not sub):
             return [_make("shell", summary=f"{prog} {sub}".strip(), command=cmd)]
         return [_opaque(f"{prog} {sub} runs project scripts or code the gate cannot see".strip(), cmd)]
+    if prog == "hash":
+        rebind = _hash_rebind(argv)     # `hash -p` rebinds a name to another file (#330)
+        if rebind is not None:
+            return [_opaque(f"hash -p makes {rebind[1]} run {rebind[0]}", cmd)]
     if prog in READ_PROGRAMS:
         return [_make("read", summary=prog, command=cmd)]
     if prog in SHELL_PROGRAMS:

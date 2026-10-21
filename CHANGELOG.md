@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `hash -p` is opaque, so a rebound program name no longer runs another file under a read's cover
+  (#330). `hash -p PATH NAME` makes the shell run PATH for every later NAME, and the gate filed the
+  line under NAME's own program, so `hash -p /tmp/x ls; ls` read as a plain `ls`. The call now
+  classifies as `opaque_exec`, naming the program it rebinds, also after `builtin` or `command`
+  and with the path attached or in a flag cluster. Plain `hash`, `hash -r` and `hash -d` stay read,
+  as do a `-p` after the first operand and one with no name to bind.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
