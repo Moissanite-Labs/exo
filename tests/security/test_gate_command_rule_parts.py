@@ -898,6 +898,14 @@ def test_own_text_is_each_simple_command_as_written(line, owns):
 # A rule that would lower the line must still match the line as before. When the own text test passes one over, the
 # line is also decided as before, and the stricter decision stands, or the one from before when they are alike.
 
+def test_a_rule_for_a_whole_compound_line_must_name_each_command():
+    # The docs' example. The rule matches the line as written, but names neither push on its own.
+    line = "git push origin main && git push origin dev"
+    assert outcome(line, pol(rule("^git push origin main && git push origin dev$"))) == "log"          # main: allow
+    named = rule(["^git push origin main && git push origin dev$", "^git push origin (main|dev)$"])
+    assert outcome(line, pol(named)) == "allow"                                                        # main: allow
+
+
 def test_cd_does_not_carry_an_anchored_rule_onto_another_command():
     # cd is no setter, but the anchors see the whole line, as on main: `make test` in another folder runs another
     # Makefile, so it asks.

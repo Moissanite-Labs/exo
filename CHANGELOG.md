@@ -140,8 +140,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   past that has none, so a long pipeline into shells stays linear in memory. A command run inside another (an
   `eval`, `bash -c` or `ssh` string, an `-x` or `--exec` value) must be named too, so `eval "$CMD"` now asks under
   `{category: opaque_exec, command: '^eval', decision: allow}`. A rule written for a whole compound line, such as
-  `'^make && make install$'`, has to name each command too, for example as
-  `['^make && make install$', '^make( install)?$']`. Rules that keep or raise the line, deny rules in the #191 pass and
+  `'^git push origin main && git push origin dev$'`, has to name each command too, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`. Until it does, that line logs, as
+  its matrix cell says. Rules that keep or raise the line, deny rules in the #191 pass and
   the `reserved:` and `deny:` lists match the whole line and its decoded views as before. The ledger view leaves the own
   text out.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
