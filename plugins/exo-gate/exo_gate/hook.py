@@ -70,9 +70,14 @@ _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 def _readings(c: gate.Classification) -> tuple:
     """The line as the gate reads it and, when gh finds a subcommand past an option or behind an expansion, as it read
-    it before #399 (``floor``). `decide` keeps the stricter of the two, and so does the required executor's body
-    check."""
+    it before #399 (``floor``). `decide` keeps the stricter of the two, and so does each check the hook makes past
+    it: the required executor's body check, who may answer, "once" and the categories that never get a grant."""
     return (c,) if c.floor is None else (c, c.floor)
+
+
+def _no_grant(c: gate.Classification) -> bool:
+    """Whether a reading of the line is a category that never gets a standing grant (``gate.NO_GRANT``)."""
+    return any(x.category in gate.NO_GRANT for x in _readings(c))
 
 
 @dataclass
@@ -548,8 +553,8 @@ class Gate:
         outward = gate.binds_exact(c, d)
         binding = gate.approval_binding(c, args) if outward else ""
         # No standing allow for credentials and store writes, nor for a post whose body the gate did not see:
-        # its binding hashes only the line, so a grant would cover any later body (#208).
-        once = c.category in gate.NO_GRANT or gate.body_unseen(c)
+        # its binding hashes only the line, so a grant would cover any later body (#208). Either reading counts.
+        once = _no_grant(c) or any(gate.body_unseen(x) for x in _readings(c))
         grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" and not once else None
         if grant:
             d.outcome, d.rule = "allow", "grant"
@@ -577,8 +582,12 @@ class Gate:
             key = self._rule_key(tool, args, c, d)
             # D-038 (#211): a changed approvals.yaml can narrow who answers at once; a wider one waits for /gate accept.
             changed = self.changed_policies()
-            approvers = gate.strictest_approvers(c.category, pol.get("approvals"),
-                                                 changed.get("approvals") if changed is not None else None)
+            changed_approvals = changed.get("approvals") if changed is not None else None
+            approvers = gate.strictest_approvers(c.category, pol.get("approvals"), changed_approvals)
+            for x in _readings(c)[1:]:
+                # #399: only who may answer the line as read before too. The principal is in every list.
+                allowed = set(gate.strictest_approvers(x.category, pol.get("approvals"), changed_approvals))
+                approvers = [a for a in approvers if a in allowed]
             # persist: this gate keeps "always" grants itself (scoped, expiring, in the store), so the
             # core must not also keep an unscoped one in memory.
             approval_key = "a_" + secrets.token_hex(16)
@@ -593,7 +602,7 @@ class Gate:
             body["approval_key"] = approval_key
             body["approvers"] = approvers
         # NO_GRANT is enforced in every mode; a required executor never runs an unanswered ask.
-        if self.settings.mode == "observe" and c.category not in gate.NO_GRANT and not self.executor_required:
+        if self.settings.mode == "observe" and not _no_grant(c) and not self.executor_required:
             body["would"] = result["action"] if result else "run"
             result = None
         if d.outcome in ("allow", "log") and c.cost:
@@ -642,7 +651,7 @@ class Gate:
     # --- standing grants (D-033) --------------------------------------------------------
 
     def _grant_for(self, c: gate.Classification, d: gate.Decision, binding: str, outward: bool) -> Optional[dict]:
-        if c.category in gate.NO_GRANT or (d.violations and not binding):
+        if _no_grant(c) or (d.violations and not binding):
             return None
         # D-075: a grant covers the act it was given for. A reserved entry that matched another part of
         # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.

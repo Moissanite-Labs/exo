@@ -1,5 +1,6 @@
 """D-033: approvals bound to the exact text, who may approve, standing grants, outbound scrub."""
 import asyncio
+import dataclasses
 import json
 
 import pytest
@@ -202,6 +203,90 @@ def test_store_approvals_reach_the_ask(keyed_store):
     r = call(ctx, *post("Suggest a fix."))
     assert r["approvers"] == ["principal", "seat:saga-divan"]
     assert events(store)[-1]["approvers"] == ["principal", "seat:saga-divan"]
+
+
+# #399: a line whose gh subcommand moved past an option, or stands behind an expansion, is also read as before (its
+# floor). Who may answer is who may answer both readings, so a seat never answers a line only the principal answered.
+SEATS = """
+approvers:
+  default: [principal]
+  categories:
+    github_post: [principal, "seat:saga-divan"]
+    opaque_exec: [principal, "seat:saga-divan"]
+"""
+ASK_ALL = "categories: {read: ask, github_post: ask, vcs_push: ask, opaque_exec: ask}\n"
+
+
+@pytest.mark.parametrize("line", ["gh pr -b x comment 5 -R myorg/app", 'gh pr "$V" 5 -R myorg/app',
+                                  "git push origin f && gh issue -R myorg/app edit 5 -b x"])
+def test_who_may_answer_a_line_read_two_ways_may_answer_both_readings(tmp_path, line):
+    store = tmp_path / "st9"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    (store / "policies" / "approvals.yaml").write_text(SEATS)
+    key = tmp_path / "k9.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.floor is not None and c.category in ("github_post", "opaque_exec"), c
+    assert gate.approvers_for(c.floor.category, gate.normalize_approvals(gate.parse_yaml(SEATS))) == ["principal"]
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+    assert events(store)[-1]["approvers"] == ["principal"]
+    # The line read one way keeps its table.
+    r = call(ctx, "terminal", {"command": "gh pr comment 5 -R myorg/app -b x"})
+    assert r["approvers"] == ["principal", "seat:saga-divan"], r
+
+
+@pytest.fixture
+def floor_is(monkeypatch):
+    """Give a line a floor read from another line: the hook's checks past `decide` must read it as well."""
+    real = gate.classify
+
+    def set_floor(line, before):
+        def classify(action, *a, **k):
+            c = real(action, *a, **k)
+            args = action[1] if isinstance(action, tuple) else action.get("args") or {}
+            if args.get("command") == line:
+                c.floor = real({"tool": "terminal", "args": {"command": before}})
+            return c
+        monkeypatch.setattr(gate, "classify", classify)
+    return set_floor
+
+
+def test_a_line_read_before_as_credentials_is_answered_once_and_kept_in_observe_mode(tmp_path, floor_is):
+    store = tmp_path / "st10"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    key = tmp_path / "k10.key"
+    crypto.save_key(crypto.keygen(), key)
+    line = "gh pr view 5 -R myorg/app"
+    floor_is(line, "gh secret set X -b v")
+    g, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.category == "read" and c.floor.category == "credentials", c
+    binding = gate.approval_binding(c, {"command": line})
+    g.grants.add("read", "myorg/app#5", binding, 30, "principal:tui")     # a grant on this exact line runs no part
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True, r         # no grant runs it, no "always"
+    answer(ctx, r, "always")
+    assert [x["rule"] for x in g.grants.list()] == ["read"]                   # no new grant was kept
+    g.settings = dataclasses.replace(g.settings, mode="observe")
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve", r                                  # NO_GRANT holds in observe mode too
+
+
+def test_a_line_read_before_with_an_unseen_body_is_answered_once(tmp_path, floor_is):
+    store = tmp_path / "st11"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    key = tmp_path / "k11.key"
+    crypto.save_key(crypto.keygen(), key)
+    line = "gh pr comment 5 -R myorg/app -b x"
+    floor_is(line, 'gh pr comment 5 -R myorg/app -b "$X"')
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True, r
 
 
 # --- standing grants ------------------------------------------------------------------------

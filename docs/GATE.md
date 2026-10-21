@@ -154,7 +154,11 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   `gh issue -R myorg/app close 5 && gh pr comment 3 -R myorg/app -b ok`. When the earlier reading
   decides, the reason ends with "(for git push to origin)". A required executor refuses the line
   when either reading has a body file or an unseen body. In `gh pr "$V" 5 -F notes.md` and in
-  `gh pr view 5 -F notes.md | gh issue -b x comment 8` only the earlier reading has one.
+  `gh pr view 5 -F notes.md | gh issue -b x comment 8` only the earlier reading has one. Only who
+  may answer both readings may answer the line ("Who may approve"): `gh pr -b x comment 5` was a
+  read, so a seat listed for `github_post` alone does not answer it. When either reading is
+  credentials, a store write or a post with an unseen body, the line is answered once, gets no
+  standing grant, and asks in observe mode too.
 
 The gate also keeps every other reading it cannot rule out, and decides the line on each. The
 strictest outcome stands, with the widest exposure, a third party if any reading has one, and every
@@ -224,6 +228,9 @@ ingress client never can (D-026). The allowed list is sent as `approvers` on
 `approval.requested` so a client can show who must answer; the engine refuses anyone else as
 `forbidden`. While a changed `approvals.yaml` waits for `/gate accept`, the list holds only those
 both files allow (`gate.strictest_approvers`); see "Policy changes during a session".
+
+A gh line the gate also reads as before #399 lists only those both readings' categories allow
+("Where a gh command lands").
 
 A client answers as a seat by setting `client` to `seat:<name>` and signing the answer with that
 seat's Ed25519 key: `sig = exo.core.approvals.sign_approval(key, request_id, decision, binding,
