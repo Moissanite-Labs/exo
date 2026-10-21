@@ -5,6 +5,7 @@ import contextlib
 import errno
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 
@@ -80,11 +81,16 @@ def atomic_write(path: str | os.PathLike, data: bytes | str, mode: int | None = 
     return p
 
 
+_UMASK_LOCK = threading.Lock()
+
+
 def _umask() -> int:
     """From /proc on Linux. Elsewhere a probe sets the strictest mask for a moment: a file made meanwhile comes out
-    tighter, never looser."""
+    tighter, never looser. The probe runs under a lock: unlocked, two threads can interleave set and restore, so a
+    file is made under the strict mask and the process can be left at 077 (#317)."""
     with contextlib.suppress(OSError, StopIteration, ValueError, IndexError), open("/proc/self/status") as fh:
         return next(int(ln.split()[1], 8) for ln in fh if ln.startswith("Umask:"))
-    old = os.umask(0o077)
-    os.umask(old)
-    return old
+    with _UMASK_LOCK:
+        old = os.umask(0o077)
+        os.umask(old)
+        return old

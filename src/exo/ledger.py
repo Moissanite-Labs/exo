@@ -597,17 +597,31 @@ def missing_ledger_problem(path: str | os.PathLike) -> str:
 
 def _open_symlinked(path: Path) -> sqlite3.Connection:
     """A ledger file that is a symlink, opened read-only (SQLite's `mode=ro`): no WAL switch, no schema, no file
-    made at a dangling target. Only a regular file is opened: opening a FIFO would block. `immutable=1` keeps SQLite
-    from making `-wal` and `-shm` files beside a WAL target. Without a `-wal` file there, all its data is in the main
-    file. A target that is gone, not a regular file, not a database or without an events table reads as an empty
-    ledger kept in memory. Reads see the target's events, verify reports the link, and append and anchor refuse."""
+    made at a dangling target. Only a regular file is opened: opening a FIFO would block. With a `-wal` file beside
+    the target, reads go through the writer's own files and stay current. Without one, all its data is in the main
+    file: it is opened with `immutable=1`, which keeps SQLite from making `-wal` and `-shm` files beside a WAL
+    target, and copied into memory at open. The copy is a snapshot of the target as it stands at open: a writer
+    that later appends and checkpoints replaces the file under a live immutable connection, which then reads stale
+    and can raise `database disk image is malformed` (#317); a snapshot can do neither. A target that is gone, not
+    a regular file, not a database or without an events table reads as an empty ledger kept in memory. Reads see
+    the target's events, verify reports the link, and append and anchor refuse."""
     target, db = Path(os.path.realpath(path)), None
     try:
         if target.is_file():
-            ro = "mode=ro" if Path(f"{target}-wal").exists() else "mode=ro&immutable=1"
-            db = sqlite3.connect(f"{target.as_uri()}?{ro}", uri=True, check_same_thread=False, isolation_level=None,
-                                 timeout=30)
-            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+            if Path(f"{target}-wal").exists():
+                db = sqlite3.connect(f"{target.as_uri()}?mode=ro", uri=True, check_same_thread=False,
+                                     isolation_level=None, timeout=30)
+            else:
+                src = sqlite3.connect(f"{target.as_uri()}?mode=ro&immutable=1", uri=True, check_same_thread=False,
+                                      isolation_level=None, timeout=30)
+                try:
+                    if src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+                        db = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
+                        src.backup(db)
+                finally:
+                    src.close()
+            if db is not None and db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
                 return db
     except sqlite3.DatabaseError:
         pass

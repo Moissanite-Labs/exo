@@ -6,6 +6,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Two follow-ups to #296 (#317). A ledger opened read-only through a symlink to a closed target held an
+  `immutable=1` connection to the target itself: a writer that appended and checkpointed replaced the file
+  under it, so the reader stayed stale and reading raised `database disk image is malformed`. The target is
+  copied into memory at open now, so reads are a snapshot of the target as it stood at open. And where there
+  is no `/proc` (macOS), the umask probe in `atomic_write` set the process mask to 077 and restored it with
+  no lock: concurrent writes with `mode=None` interleaved set and restore, so files came out 0600 under a
+  022 mask and a run could leave the process at 077. The probe runs under a module lock now.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
