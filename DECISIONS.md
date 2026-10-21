@@ -929,6 +929,31 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Not done: a write back through a link to a descriptor path, `/dev` or `/proc/self` made out of the gate's sight,
   after an open on descriptor 3 or above the gate cannot read; a hardlink to a store file opened on stdout; and a
   walk over a folder above the run folder.
+  *Amendment 2026-10-21 (issue #435):* the plugins folder `$EXO_HOME/plugins` joins the protected list, and
+  `.exo/plugins` counts as a name anywhere, as `.exo/bus` does. The core loads each plugin it finds there and runs its
+  code inside the harness with the harness's rights, so a write there installs or changes code the next session runs.
+  `cp evil.py ~/.exo/plugins/foo/__init__.py` was an allowed `shell`, and `write_file` on that path an allowed
+  `local_write`. Only a writing command after a `cd` or `git -C` into the home asked as a store write, and a delete
+  asked as a plain `delete`. Now any write into the folder is `store_write`, in every spelling the store check reads,
+  and reads stay reads. Because the folder is a store path, a narrowing of that `cd` rule to the home's other folders
+  (#203) leaves it out with no rule of its own. The gate differential (#423) finds two lowered groups. Both arise only
+  under a policy that denies or reserves the old category, and both still ask the principal alone, with no grant.
+  First, a tool call into the folder that is not a shell line (`write_file`, `edit_file`, `patch`, `apply_patch`,
+  `move_file`, `create_directory`, `delete_file`) is now one `store_write` with no part left for its old category. So
+  `deny: [local_write]`, `deny: [delete]` and the matching `categories:` deny lines no longer deny it, and
+  `reserved: [delete]` no longer counts it. A shell line keeps the command it was built from as a part (D-075), so a
+  deny on that still holds there. Second, a line that stands in a descriptor folder and names a path in the plugins
+  folder (`cd /dev && cp x ~/.exo/plugins/foo/y`) now takes that path as its store target in place of the folder, so
+  `deny: [target:/dev*]` no longer matches it. Both are how the store rule already reads for `policies/`, `state/` and
+  `bus/`: one class per call, a floor no policy lowers and only the principal answers (#169 made the same trade for
+  the run folder). `deny: [store_write]`, or a `target:` entry on the folder, still denies such a call. Left out, each
+  for a later change. The folders in `$EXO_PLUGIN_DIRS`: section 4 of the developer guide points that variable at a
+  checkout, so a principal-only floor there would ask on every edit. `$EXO_HOME/venv`: a floor on that folder would
+  also ask whenever its own Python runs a test. A copy that lands on the folder by a source's name, or an archive
+  unpacked into the home: #125's landing rule, in review, covers those for every protected folder. A relative path
+  written by a tool whose working folder is in the plugins folder, as for every protected folder: the store check
+  reads a relative path by its name alone. A per-name allowance for a plugin's own data, such as its `config.json`
+  (#203).
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
