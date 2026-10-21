@@ -107,3 +107,36 @@ def test_the_lexer_reads_a_named_descriptor():
     cmds = gate._parse("exec {fd}< a 3< b {out}> c")[0]
     assert [(op, t.text, t.fd) for op, t in cmds[0].redirs] == [
         ("<", "a", "{fd}"), ("<", "b", "3"), (">", "c", "{out}")]
+
+
+# --- the named-descriptor reading itself: what it must not hide --------------------------------
+
+
+@pytest.mark.parametrize("cmd", ["exec {fd}<", "exec {fd}< "])
+def test_a_named_descriptor_with_no_target_stays_a_word(cmd):
+    # No target follows, so there is no descriptor to read: the name stands as the command
+    # exec would run, as it did before the lexer learned the spelling.
+    assert _decided(_sh(cmd))[:2] == ("opaque_exec", "ask"), cmd
+
+
+@pytest.mark.parametrize("cmd", ["exec {fd}< @L@/plain.txt", "{fd}< @L@/plain.txt"])
+def test_a_named_descriptor_kept_in_the_shell_asks(cmd, _rig):
+    # The file is ordinary and the class stays read (above), but bash drops the fd number into
+    # the name and keeps it in the shell, where a later line can write through it unseen.
+    assert _decided(_sh(cmd.replace("@L@", str(_rig))))[:2] == ("read", "ask"), cmd
+
+
+@pytest.mark.parametrize("cmd", ["true {PATH}>/dev/null; ls", ": {CDPATH}>/dev/null; cd memory"])
+def test_a_named_descriptor_assigning_a_listed_variable_asks(cmd):
+    # The fd number lands in the variable. The name is read from the descriptor the lexer
+    # recorded, now that the word itself is no longer on the line.
+    assert _decided(_sh(cmd))[:2] == ("opaque_exec", "ask"), cmd
+
+
+def test_a_link_straight_to_stdin_is_not_a_store_word(tmp_path):
+    # A link to the caller's stdin names what a reader is fed, not a descriptor held on a store
+    # file: a post's body file there is the unseen case (#208), not a store write.
+    link = tmp_path / "body.md"
+    os.symlink("/dev/stdin", link)
+    assert not gate._store_word(str(link))
+    assert gate.classify(_sh(f"gh pr comment 5 --body-file {link}")).category == "github_post"
