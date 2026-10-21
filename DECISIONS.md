@@ -953,12 +953,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `find -exec`, `uv run` and `$( )` add at the cap reaches the card only when the outer part is benign; adding the
   same part at the `bash -c` cap would change nothing the principal sees. Showing the cap means letting an inner
   summary win ties in `_combine`, a classifier change for its own PR, so that remedy stays open. A category deny under
-  `categories:` fires only when the denied category is the line's most severe part: on a compound line a more severe
-  part takes over and the line asks, and approving it runs the denied action
-  (`gh pr comment 3 --body hi && rm -rf build` is `delete`; #191). An entry in the `deny:` list has matched every part
+  `categories:` then fired only when the denied category was the line's most severe part: on a compound line a more severe
+  part took over and the line asked, and approving it ran the denied action
+  (`gh pr comment 3 --body hi && rm -rf build` is `delete`; lifted by the D-075 amendment for #191, 2026-10-19). An entry in the `deny:` list has matched every part
   the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
-  at or below `opaque_exec` splits the same way (denied under `deny: [web_read]`, asked under
-  `categories: {web_read: deny}`). The known unread forms below are allowed outright on main, not asked, and no entry
+  at or below `opaque_exec` split the same way (denied under `deny: [web_read]`; asked under
+  `categories: {web_read: deny}`, lifted by the D-075 amendment for #191, 2026-10-19, to deny as well). The known unread forms below are allowed outright on main, not asked, and no entry
   for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158). Two forms left this list on
   2026-10-19: text piped or fed by heredoc to `ssh` with no remote command (#240), read since #303, and `git clone -c`
   with a command-running key, read as `git -c` is since #231. A `command:`
@@ -999,11 +999,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   For fed shells and interpreters, a line that was `opaque_exec` takes the inner category
   and carries the issue #178 floor. Only naming `opaque_exec` at `log` or `allow` turns that floor off.
   A `deny: [opaque_exec]` entry still denies these shell and interpreter lines (D-075). Under
-  `categories: {opaque_exec: deny}` or an ordinary rule they now ask where they were denied, as
-  `bash <<EOF` already does, until #191. Fed SQL clients follow their plain-input classification,
+  `categories: {opaque_exec: deny}` or an ordinary rule they then asked where they were denied, as
+  `bash <<EOF` already did (lifted by the D-075 amendment for #191, 2026-10-19). Fed SQL clients follow their plain-input classification,
   without that floor. A compound feeding `\! git push origin main` to `psql` can change from ask
   to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
-  Category overrides and ordinary rules use the combined classification. `coproc W { ...; }
+  A category line or rule that denies a part denies the line (#191); other category lines and rules use the combined classification. `coproc W { ...; }
   <<EOF` and `function NAME { ...; } <<EOF` are fed the same way, as #181 reads their bodies; the body of `time { ...;
   }` is not read at all, so it still asks as `opaque_exec`. A closer heredoc wins over a pipe in on stdin only; the
   lexer drops fd numbers, so one on another fd (`{ bash; } 3<<EOF`) is read as stdin: its body is fed, and text piped
@@ -1082,11 +1082,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (`declare -a "b=($(ls 'x' \<newline> -l))"`, only stricter: bash runs the same command). A command the
   line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
   `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
-  the line's own category, a deny on that category becomes ask, never allow or log
-  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`); D-075 (#126) keeps the deny
-  for the `deny:` list form (#191 tracks the `categories` form). That command also carries the `reread` signal,
+  the line's own category, a deny on that category became ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`); D-075 (#126) kept the deny
+  for the `deny:` list form, and the D-075 amendment for #191 (2026-10-19) lifted the `categories` form
+  too, so that line denies now. That command also carries the `reread` signal,
   and naming `opaque_exec` does not lower its ask, which stands in for the line's own deny:
-  `{local_write: deny, opaque_exec: allow}` asks too. Past the
+  `{local_write: deny, opaque_exec: allow}` asked too, lifted by the D-075 amendment for #191,
+  2026-10-19, to deny; the line denies now. Past the
   depth limit such a command, or one in a subscript, is an `opaque_exec` part, as on the line itself, with `reread`.
   A plain expansion in a compound element without `-i` (`'b=("$@")'`) is expanded once and asks nothing, and the
   unquoted compound form keeps the line parse's reading. readonly and export never evaluate a name's subscript, so
