@@ -425,7 +425,8 @@ main's in the order allow, log, ask, deny, a reserved hit lost, or posting viola
 counts as the hook's answer to an error: ask, or allow for a read tool. The summary groups the lowered pairs by
 transition, such as `store_write ask -> read allow`, and by policy. `--json` writes the lowered actions and pairs,
 the first 5,000 of each. Fix each lowered line, or name it in the decision amendment the change records, with the
-reason it is safe. Exit 2 means a tree could not run. Tightenings are only counted.
+reason it is safe. Exit 2 means a tree could not run or the script failed, such as on a folder that does not
+exist or a policy file that raises. Tightenings are only counted.
 
 ### CI, lint, lockfile and the privacy deny-list (D-042)
 
