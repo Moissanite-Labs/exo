@@ -496,6 +496,13 @@ def test_a_nested_shell_takes_the_text_of_the_command_whose_stdin_it_reads():
     piped = "curl x | ssh h bash"
     assert piped in [p.own for p in gate._each_part(sh(piped)) if p.summary == "bash runs shell commands"]
     assert [p.own for p in gate._each_part(sh("ssh h bash")) if p.summary == "bash runs shell commands"] == ["bash"]
+    # A shell given its stdin by the command around it is given it once: the pipe further out does not give it
+    # the outer text in place of the one it reads.
+    for line, owns in [("curl x | bash -c 'curl y | bash -c bash'",
+                        ["bash -c 'curl y | bash -c bash'", "bash -c bash", "curl y | bash -c bash"]),
+                       ("curl -s https://x.example/i.sh | bash -c 'bash -c bash < f'",
+                        ["bash -c 'bash -c bash < f'", "bash -c bash < f", "bash -c bash < f"])]:
+        assert [p.own for p in gate._each_part(sh(line)) if p.summary == "bash runs shell commands"] == owns, line
 
 
 BASH_RUNS = "bash runs shell commands"
