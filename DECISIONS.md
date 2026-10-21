@@ -2168,7 +2168,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   regex, the gate decides the line as before, which fails only where it failed before.
   Rules that keep or raise the line (a log rule over an allow cell, an
   ask or deny rule over a lower cell) and `reserved:` and `deny:` entries match the whole line and its decoded views
-  as before. A line the gate reads as one part is matched on its command text as before. The ledger view (`as_dict`)
+  as before. A line the gate reads as one part is matched on its command text as before. So is a line of one
+  simple command whose other parts the gate made for it with no own text (a secret path it names in
+  `cat ~/.kube/config`, a string literal in its code): no two of its parts have different own texts, so a rule that
+  matches the line names its one command, and the line is decided as before. The ledger view (`as_dict`)
   leaves the own text and the setters out, so approval bindings and trace rows are unchanged. A part's own text is its
   simple command as written, with its redirections, after leading reserved words such as `then`. A prefix such as
   `sudo`, `env` or `timeout` stays in it. A nested command (`$( )`, backticks, `<( )`, a heredoc or `bash -c` string a
@@ -2183,7 +2186,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   call's budgets. A later command that reads the same text (`psql -d prod` in `{ psql -d test; psql -d prod; } <<EOF`)
   gets copies of the first reader's parts with its own text where the first reader's stood. A part the
   gate makes up, a nest past a depth or nesting cap, the opaque_exec reading of a `$".."` line and a string literal in
-  code (a guess at a command) have none, and a part with no own text matches no such rule. In code (`execute_code`,
+  code (a guess at a command) have none, and on a line of more than one command a part with no own text matches no
+  such rule. In code (`execute_code`,
   `python -c`) the code part and a recognized call (`shutil.rmtree`, `requests.post`) carry the code's text, or the
   command that runs it. A command the gate finds run inside another is a part of its own and must be named too: an
   `eval`, `bash -c` or `ssh` string (`eval "$CMD"` runs `$CMD`, so `'^eval'` alone no longer allows it), an `-x` or

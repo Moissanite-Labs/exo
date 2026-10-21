@@ -133,7 +133,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   under `categories: {github_post: deny}` and `{command: 'rm -rf build', decision: ask}`. An anchored rule such as
   `'^git push --force origin main$'` still matches no compound line, as before. `cd` is not a setter, and that cannot
   loosen a decision, since the rule must still match the line. A part with no own text (an unread nest, a string literal
-  in code, the opaque_exec reading of a `$".."` line) passes no such test. A shell or interpreter that runs a pipe has
+  in code, the opaque_exec reading of a `$".."` line) passes no such test. A line of one simple command beside parts
+  the gate made for it with no own text (`cat ~/.kube/config`, where the secret path decides the line, or a string
+  literal in `node -e` code) is decided as before. A shell or interpreter that runs a pipe has
   the pipeline as its text. Those texts hold at most four times the line's length plus 4 KB on one line, and a reader
   past that has none, so a long pipeline into shells stays linear in memory. A command run inside another (an
   `eval`, `bash -c` or `ssh` string, an `-x` or `--exec` value) must be named too, so `eval "$CMD"` now asks under

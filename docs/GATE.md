@@ -657,7 +657,8 @@ gate does not read:
   `alias`, `enable`, `unset` and `trap` with an operand, `source` and `.`, `pushd`, `popd`, `exec`
   with only redirections, a `for` or `select` loop, `coproc`, a function definition (which has no
   own text) and a program name the gate cannot read. The text of an `eval` is a nested line whose
-  own commands count. A part with no own text matches no such rule. A rule lowers the line when its
+  own commands count. On a line of more than one command, a part with no own text matches no such
+  rule. A rule lowers the line when its
   decision is below the line's matrix cell and category line (an allow or log rule over an ask
   cell, an ask rule under a category deny), or when it is an allow or log rule that names
   `opaque_exec` (it lowers the opaque floor). A rule that fails is passed over and the walk goes
@@ -694,7 +695,12 @@ gate does not read:
   outcome. The opaque_exec reading of a line with a `$".."` word is the gate's, so it has no own
   text. The regex sees the text as written: an allow rule for `git push` does not match
   `g''it push --force origin main`, and a deny rule for `git push` still denies it. A line the gate
-  reads as one part is matched on its command text as before. A command the gate finds run inside
+  reads as one part is matched on its command text as before. So is a line of one simple command
+  whose other parts the gate made for it with no own text, a secret path it names
+  (`cat ~/.kube/config`) or a string literal in its code
+  (`node -e "require('child_process').execSync('gh pr comment 3')"`). No two of its parts have
+  different own texts, so a rule that matches the line names its one command, and the line is
+  decided as before. An `execute_code` call is one such action. A command the gate finds run inside
   another is a part of its own and must be named too: the string of an `eval`, `bash -c` or `ssh`
   (`eval "$CMD"` runs `$CMD`, a program name from a variable, so
   `{category: opaque_exec, command: '^eval', decision: allow}` alone no longer allows it), an `-x`
@@ -702,8 +708,8 @@ gate does not read:
   heredoc a shell reads and a `$( )`. In code (`execute_code`, `python -c`) the code part and a
   call the gate recognizes carry the code's text, or the command that runs it
   (`python3 -c 'import shutil; shutil.rmtree("b")'` as written), and a string literal read as a
-  command (`os.system('rm -rf build')`) has none, so no `command` rule lowers it: use a category or
-  tool key. A rule written for a whole compound line, such as `'^make && make install$'`, now has
+  command (`os.system('rm -rf build')`) has none, so beside another command no `command` rule
+  lowers it: use a category or tool key. A rule written for a whole compound line, such as `'^make && make install$'`, now has
   to name each command on it too, for example as `['^make && make install$', '^make( install)?$']`.
   Until it does, the line gets its matrix or category outcome. The ledger view of a classification
   leaves the own text out.

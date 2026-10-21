@@ -654,13 +654,10 @@ def test_parts_with_no_own_text_never_match():
     assert c.category == "opaque_exec" and any(p.own is None for p in gate._each_part(c))
 
 
-@pytest.mark.parametrize("action", [
-    {"tool": "bash", "args": {"command": f"true; python3 -c 'import os; os.system(\"{PUSH}\")'"}},
-    {"tool": "execute_code", "args": {"code": f"import os\nos.system('{PUSH}')"}},
-])
-def test_a_string_literal_in_code_has_no_own_text(action):
-    # The gate only guesses that a literal is a command, so no rule that would lower it passes the own text test.
-    c = classify(action)
+def test_a_string_literal_in_code_has_no_own_text():
+    # The gate only guesses that a literal is a command, so on a line of more than one command no rule that would
+    # lower it passes the own text test.
+    c = sh(f"true; python3 -c 'import os; os.system(\"{PUSH}\")'")
     assert decide(c, pol(PUSH_OK, categories=OPAQUE_OK)).outcome == "ask"                       # main: allow
     assert decide(c, pol(rule(PUSH, "deny"), categories=OPAQUE_OK)).outcome == "deny"
     assert decide(c, pol(rule("os\\.system"), categories=OPAQUE_OK)).outcome == "ask"                 # main: allow
@@ -718,6 +715,46 @@ SINGLE = [
 @pytest.mark.parametrize("line, r, expected", SINGLE)
 def test_a_single_simple_command_is_unchanged(line, r, expected):
     assert outcome(line, pol(r)) == expected
+
+
+CRED_DENY = {"credentials": "deny"}
+MANY_DENY = {"github_post": "deny", "delete": "deny", "force_push": "deny", "credentials": "deny"}
+ALL_DENY = {r: {e: "deny" for e in ("private", "internal", "public")} for r in ("reversible", "costly", "irreversible")}
+GH_IN_NODE = "node -e \"require('child_process').execSync('gh pr comment 3')\""
+ONE_COMMAND = [
+    ("cat ~/.config/exo/keys.env", rule("^cat"), {"categories": CRED_DENY}),
+    ("cat ~/.kube/config", rule("^cat"), {"categories": CRED_DENY}),
+    ("cat ~/.git-credentials", rule("^cat"), {"categories": CRED_DENY}),
+    ("~/.aws/credentials", rule("ls", "log"), {"matrix": ALL_DENY}),
+    (GH_IN_NODE, rule(".", "log"), {"categories": MANY_DENY}),
+    ("perl -e \"system('gh pr comment 3')\"", rule(".", "log"), {"categories": MANY_DENY}),
+    ("ruby -e \"system('gh pr comment 3')\"", rule(".", "log"), {"categories": MANY_DENY}),
+    ("osascript -e 'do shell script \"gh pr comment 3\"'", rule(".", "log"), {"categories": MANY_DENY}),
+]
+
+
+@pytest.mark.parametrize("line, r, gates", ONE_COMMAND)
+def test_a_line_of_one_command_beside_parts_the_gate_made_is_decided_as_before(line, r, gates):
+    # A secret path the command names and a string literal in its code are parts the gate makes, with no own text,
+    # and the secret or the literal decides the line. Every other part has the command's text, so a rule that matches
+    # the line names that one command: the line is decided as on main, reason and all. It was denied.
+    c, policies = sh(line), pol(r, **gates)
+    assert c.parts and c.own is None, c
+    d = decide(c, policies)
+    assert d.outcome == "ask" and d == gate._decide(c, policies, {}, None), d               # main: ask
+    # Beside a second command the own text test still applies: the rule does not name `true`.
+    wide = {**r, "match": {**r["match"], "command": r["match"]["command"].replace("^", "")}}
+    assert outcome(f"true; {line}", pol(wide, **gates)) == "deny"                             # main: ask
+
+
+def test_code_with_a_string_literal_is_decided_as_before():
+    # The code is one action: the code part has its text and the literal none, so a rule that matches the code
+    # decides it as on main.
+    c = classify({"tool": "execute_code", "args": {"code": f"import os\nos.system('{PUSH}')"}})
+    assert c.category == "force_push" and c.own is None, c
+    assert decide(c, pol(PUSH_OK, categories=OPAQUE_OK)).outcome == "allow"                    # main: allow
+    assert decide(c, pol(rule("os\\.system"), categories=OPAQUE_OK)).outcome == "allow"       # main: allow
+    assert decide(c, pol(rule(PUSH, "deny"), categories=OPAQUE_OK)).outcome == "deny"
 
 
 WRITE = {"tool": "write_file", "args": {"path": "/tmp/x", "content": "y"}}
