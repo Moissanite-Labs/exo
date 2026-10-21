@@ -413,12 +413,12 @@ A change to `src/exo/gate.py` must not decide anything lower than main does, unl
 The script compares two trees, not a diff. If main moved after your branch began, merge main into the branch
 first. Otherwise each line a later main change made stricter shows up as lowered.
 
-The script runs `gate.classify` and `gate.decide` of each tree in a process of its own, with the same HOME and
-no `EXO_*` variables. It never imports either gate itself. The actions are the lines and tool calls the gate
-suites test, read from the head's test files, plus compound forms of each simple line (about 24,000 in all). The
-policies are built into the script (more than 70). A full run takes a few minutes on four cores. `--jobs` sets the
-workers in each tree. Add actions with `--corpus lines.txt` (one command per line, or a JSON list) and policies
-with `--policies more.py` (a `POLICIES` mapping).
+The script runs `gate.classify` and `gate.decide` of each tree in a process of its own, with the same HOME and no
+`EXO_*` variables. It never imports either gate itself. The actions are the lines and tool calls the gate suites test,
+read from the test files of both trees, so a line still runs when the head deletes its test. To these come compound
+forms of each simple line (about 24,000 actions in all). The policies are built into the script (more than 70). A full
+run takes a few minutes on four cores. `--jobs` sets the workers in each tree. Add actions with `--corpus lines.txt`
+(one command per line, or a JSON list) and policies with `--policies more.py` (a `POLICIES` mapping).
 
 Exit status 0 means nothing is lower. Exit 1 means at least one pair of action and policy is lower: an outcome below
 main's in the order allow, log, ask, deny, a reserved hit lost, or posting violations lost. A classify or decide that raises

@@ -26,14 +26,20 @@ def _tree(tmp_path: Path, name: str, patch: tuple[str, str] | None = None) -> Pa
     return tree
 
 
+def _gate_diff(base: Path, head: Path, tmp_path: Path, *args: str, timeout: int = 120
+               ) -> tuple[subprocess.CompletedProcess, dict]:
+    out = tmp_path / "out.json"
+    out.unlink(missing_ok=True)
+    proc = subprocess.run([sys.executable, str(SCRIPT), "--base", str(base), "--head", str(head), "--json", str(out),
+                           *args], capture_output=True, text=True, timeout=timeout)
+    return proc, (json.loads(out.read_text(encoding="utf-8")) if out.exists() else {})
+
+
 def _run(base: Path, head: Path, tmp_path: Path, *extra: str) -> tuple[subprocess.CompletedProcess, dict]:
     corpus = tmp_path / "corpus.txt"
     corpus.write_text("ls\nrm notes.txt\ngit status\ncat ~/.ssh/id_rsa\n", encoding="utf-8")
-    out = tmp_path / "out.json"
-    proc = subprocess.run([sys.executable, str(SCRIPT), "--base", str(base), "--head", str(head), "--only-corpus",
-                           "--corpus", str(corpus), "--pick", "default,deny_delete,matrix_all_ask", "--jobs", "1",
-                           "--json", str(out), *extra], capture_output=True, text=True, timeout=120)
-    return proc, (json.loads(out.read_text(encoding="utf-8")) if out.exists() else {})
+    return _gate_diff(base, head, tmp_path, "--only-corpus", "--corpus", str(corpus),
+                      "--pick", "default,deny_delete,matrix_all_ask", "--jobs", "1", *extra)
 
 
 def test_a_loosened_category_exits_1_and_names_the_action(tmp_path):
@@ -48,6 +54,29 @@ def test_a_loosened_category_exits_1_and_names_the_action(tmp_path):
     assert [(x["action"]["args"]["command"], x["policies"]) for x in rep["lowered_actions"]] == [
         ("rm notes.txt", ["default"])]
     assert rep["gate_files"]["head"].startswith(str(head))
+
+
+ROWS_SUITE = """import pytest
+from exo import gate
+
+
+@pytest.mark.parametrize("line", [{rows}])
+def test_rows(line):
+    assert gate.classify_shell(line)
+"""
+
+
+def test_a_test_row_the_head_deletes_still_runs(tmp_path):
+    # The corpus comes from the tests of both trees: deleting the row of a loosened line must not hide it.
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head", (DELETE_LINE, DELETE_LINE.replace("irreversible", "reversible")))
+    for tree, rows in ((base, '"ls", "rm notes.txt"'), (head, '"ls"')):
+        (tree / "tests" / "security").mkdir(parents=True)
+        (tree / "tests" / "security" / "test_gate_rows.py").write_text(ROWS_SUITE.format(rows=rows), encoding="utf-8")
+    proc, rep = _gate_diff(base, head, tmp_path, "--no-variants", "--pick", "default", "--jobs", "1")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert rep["corpus_counts"] == {"harvested": 1, "harvested_base_only": 1}
+    assert [x["action"]["args"]["command"] for x in rep["lowered_actions"]] == ["rm notes.txt"]
 
 
 def test_identical_trees_exit_0(tmp_path):
