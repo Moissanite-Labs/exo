@@ -744,7 +744,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   differential over 126,403 gh lines in five corpora under 39 policies, the two earlier harnesses' and eight more (a
   rule and a deny on an ssh host, a rule on the empty target, a read that is denied), found no line lower than on main
   on any axis: the outcome, the exposure, the third party, the violations, the reserved parts, `is_outward`,
-  `binds_exact`, the unseen check and the signals. Each earlier harness run on its own also found none. The gate does
+  `binds_exact`, the unseen check and the signals. Each earlier harness run on its own also found none. A review's
+  two corpora (42,000 lines) and the ssh lines of the five (21,884) under 93 policies, and all 168,403 lines under 8
+  policies that name an ssh host with a gh category (a deny map, a rule, a reserved entry), found none lower on any
+  of those axes but the signals. There 32 lines lose the `secret store` signal and keep their decision: gh now reads
+  a credentials subcommand past an option (`gh ssh-key -R x delete`), so the line is credentials already and gets no
+  extra mark, as `cat .env && gh ssh-key delete -R x` gets none on main. The gate does
   not read `GH_HOST` or `gh api --hostname`, so `owner/name` counts as a repo on github.com. `gh api` read its
   endpoint from the first word with a `/` and no `=`, an option's value included (a header, a jq query). It now reads
   its one operand with gh api's options that take a value (`_gh_api_endpoint`), and the old word is an other target.

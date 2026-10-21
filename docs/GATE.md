@@ -87,7 +87,7 @@ nobody read:
   or the call's `cwd` argument, moves it (`cd docs && gh ... --body-file notes.md` read `notes.md`
   from exod's own folder before). A path under `/dev` or `/proc`, as written or resolved
   (`/dev/stdin`, `/proc/self/fd/3`), names what the reading process holds, so the hook would read
-  exod's own; it is never read. A missing, larger or unreadable file stays unseen. A gh post the
+  exod's own. It is never read. A missing, larger or unreadable file stays unseen. A gh post the
   gate reads more than one way ("Where a gh command lands") gets the text in each reading: the
   copy on each other target, and the line as read before #399, whose own body file is read the
   same way.
@@ -193,9 +193,14 @@ the unseen check found unseen with a row of the table as it was before #399 stay
 `gh pr reopen 5 -cb x` and a close whose `--duplicate-of` value is an option word
 (`--duplicate-of -c x`) stay unseen. gh refuses the second line. The gate does not read
 `GH_HOST` or `gh api --hostname`: `owner/name` counts as a repo on github.com. A differential over
-126,403 gh lines under 39 policies found no line that decides lower than before #399, on the
+168,403 gh lines in seven corpora found no line that decides lower than before #399, on the
 outcome, the exposure, the third party, the violations, the reserved parts, the outward and
-exact binding checks, the unseen check or the signals. Tests:
+exact binding checks or the unseen check. It ran up to 93 policies, among them a deny map, a rule
+and a reserved entry that name an ssh host with a gh category. On 126,403 of the lines no signal
+was lost either. On 32 of the others the line loses the `secret store` signal and keeps its
+decision. gh now reads a credentials subcommand past an option there (`gh ssh-key -R x delete`),
+so the line is credentials already and gets no extra mark, as
+`cat .env && gh ssh-key delete -R x` gets none on main. Tests:
 `tests/security/test_gate_gh_target_operands.py`, `tests/security/test_gate_gh_subcommand_position.py`.
 
 ## Who may approve

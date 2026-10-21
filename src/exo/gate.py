@@ -128,7 +128,8 @@ class Classification:
     # The line read with the third word of each gh command for its subcommand, as the gate read it before #399, when
     # gh finds a subcommand past the options before it (_gh_verb_order). `decide` keeps the stricter of the two.
     floor: "Classification | None" = field(default=None, repr=False, compare=False)
-    # Set on such a copy among the parts (#399), so an ssh or mosh hop can give an empty one the host.
+    # True on the copy of a gh action on one of its alt_targets among the parts (#399): an ssh or mosh hop gives an
+    # empty one the host, and `fill_body` gives each the body a caller read from the post's body file.
     alt_copy: bool = field(default=False, repr=False, compare=False)
 
     def as_dict(self) -> dict:
