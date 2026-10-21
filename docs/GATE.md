@@ -116,8 +116,8 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   (below).
 - `-R` reads as gh reads it. A short option drops one `=` before its value, also at the end of a
   cluster, so `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`. `github.com/pub/repo`,
-  `https://github.com/pub/repo.git` and `git@github.com:pub/repo.git` name `pub/repo` too, and so
-  does that form as the first word of `gh repo`. On another host (`-R ghe.corp/myorg/app`) the
+  `https://github.com/pub/repo.git` and an ssh remote URL for it name `pub/repo` too, and so do
+  those forms as the first word of `gh repo`. On another host (`-R ghe.corp/myorg/app`) the
   gate cannot tell whether a scope means that repo, so the value as written is another target.
 - A URL operand names the repo, also beside `-R`, because gh posts there.
   `gh pr comment https://github.com/myorg/app/pull/9 -R pub/repo` lands on `myorg/app#9`.
