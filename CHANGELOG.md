@@ -659,6 +659,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   to load the forged ruling. It also covers a copy in an open decision written before #353, or a copy
   next to a forged `## State` in a summary written before #349 or a list field written before #353,
   where it used to load the principal's. A file with the usual single Decisions section loads as before.
+- A write back through a link the gate did not see, or a hardlink on stdout, is a store write (#324).
+  #305 reads a descriptor path as written, so a link that already exists hid the spelling: with a link
+  to /dev in place, `printf X > <link>/fd/3` was an ordinary local write, and a link straight to
+  /proc/self/fd/3 was a plain path. A path's links are now followed one component at a time, stopping
+  as soon as the resolved spelling is a descriptor path, so the gate never resolves through its own
+  descriptors. A hardlink hid the store the other way: `exec 1< <hardlink to the grants>` read as an
+  unnamed file, so the write to /dev/stdout after it was a read. A redirection target that is a store
+  file under another name (the same device and inode) now counts, while reading through a hardlink
+  stays a read. A named descriptor (`{fd}<`) is read as a descriptor in the lexer, as a numbered one is.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
