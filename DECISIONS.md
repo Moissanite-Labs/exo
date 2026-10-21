@@ -759,6 +759,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   not read `GH_HOST` or `gh api --hostname`, so `owner/name` counts as a repo on github.com. `gh api` read its
   endpoint from the first word with a `/` and no `=`, an option's value included (a header, a jq query). It now reads
   its one operand with gh api's options that take a value (`_gh_api_endpoint`), and the old word is an other target.
+  Its method reads as pflag reads `-X` and `--method` (`_gh_api_method`): a cluster ends at `X`, one `=` goes, and the
+  last stands, so `gh api -iX DELETE` is a delete, which the first `-X` word as written read as a GET. When the two
+  differ the line gets a floor, read with the first word as before, so `-X DELETE -X GET` still meets a deny on
+  deletes.
   `-R` reads as pflag and gh read it: one `=` after a short option goes (`-R=x`, `-wR=x`), and `_gh_repo` reads
   `[HOST/]owner/name` and a repo URL as `ghrepo.FromFullName` does. On a host other than github.com the value as
   written is an other target, since a scope names repos on github.com. An operand from an expansion adds the empty
