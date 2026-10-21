@@ -346,12 +346,16 @@ What the gate asks about, and why:
   same way (#191).
 - **An allow rule names the command it allows (#394).** A rule with `decision: allow` or `log` and a `command:` regex
   lowers a line of several commands, or a command with another run inside it (`ssh host '...'`, `bash -c '...'`,
-  `eval`), only when the regex matches the command that decides the line, as you wrote it. So a rule for `^git status`
-  no longer allows `git status; git push --force origin main`, while a rule for `git push --force origin main` still
-  allows `cd repo && git push --force origin main`. The regex must also match any other command on the line that would
-  be asked about or stopped alone (`rm -rf build`), and any command that sets the shell up for the next one (`export`,
-  `alias`, `hash`, a function). A rule written for a whole line such as `make && make install` has to match each
-  command now (`^make( install)?$`). Ask and deny rules still see the whole line. `docs/GATE.md` has the details.
+  `eval`), only when the regex matches the line, as before, and also the command that decides the line, as you wrote
+  it. So a rule for `^git status` no longer allows `git status; git push --force origin main`, while a rule for
+  `git push --force origin main` still allows `cd repo && git push --force origin main`. The regex must also match any
+  other command on the line that would be asked about or stopped alone (`rm -rf build`), and any command that sets the
+  shell up for the next one (`export`, `alias`, `hash`, a function). This change never makes a decision looser than it
+  was: a rule that did not match a line before still does not. So a rule with anchors such as
+  `^git push --force origin main$` still covers only the push on its own. A rule written for a whole line such as
+  `^make && make install$` now has to name each command too, for example as
+  `['^make && make install$', '^make( install)?$']`. Ask and deny rules still see the whole line, but an ask rule
+  lifts a deny only from the commands it names. `docs/GATE.md` has the details.
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
   covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
