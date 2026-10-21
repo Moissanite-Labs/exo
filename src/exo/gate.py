@@ -2075,7 +2075,8 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
         return _classify_gh_words(argv, cmd, stdin, dynamic)
     order = _gh_verb_order(argv, dynamic)
     words = argv if order is None else [argv[i] for i in order]
-    alias = _GH_ALIASES.get(tuple((words + ["", ""])[1:3]))
+    group, verb = (words + ["", ""])[1:3]
+    alias = _GH_ALIASES.get((group, verb))
     if order == list(range(len(argv))) and alias is None:
         return _classify_gh_words(argv, cmd, stdin, dynamic)
     memo = _call_memo.get()
