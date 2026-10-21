@@ -1345,16 +1345,42 @@ the sandbox is the real fix.
 
 The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/`
 (including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
-`$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats` and `$EXO_HOME/bus`
+`$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus`
 (the bus registry that signed seat answers and the relay trust, the relay database and its
-`-wal`, `-shm` and `-journal` files, #210), any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store
-root recorded in config `principals` (`exo init --root`, `exo import-store --root`), for every id,
-not only the active one. When the environment moves a bus file, the gate protects where it points:
-the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with the database's sidecars) and the folder
-`EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_` name, and both spellings when both are
-set. Distinctive names match anywhere, so a relative `policies/gates.yaml`,
-`state/approval-grants.json`, `bus/registry.json` or `bus/relay.sqlite` counts too, and `.exo/bus`
-counts whatever `EXO_HOME` is.
+`-wal`, `-shm` and `-journal` files, #210) and `$EXO_HOME/plugins` (code the core loads, #435, below),
+any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals`
+(`exo init --root`, `exo import-store --root`), for every id, not only the active one. When the
+environment moves a bus file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and
+`EXO_BUS_DB` name (with the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also
+by its legacy `DIVAN_` name, and both spellings when both are set. Distinctive names match anywhere,
+so a relative `policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json` or
+`bus/relay.sqlite` counts too, and `.exo/bus` and `.exo/plugins` count whatever `EXO_HOME` is.
+
+The plugins folder (#435). The core loads each plugin it finds in `$EXO_PLUGIN_DIRS`, then in
+`$EXO_HOME/plugins` (`exo.core.plugins.default_dirs`), and runs its code inside the harness with the
+harness's own rights. A write into `$EXO_HOME/plugins` can install or change code the next session
+runs, so it is a `store_write` when made in any of these ways: a file tool, a redirection, `cp`,
+`cp -t`, `mv`, `install`, `tee`, `sed -i`, `ln`, `rsync`, `tar -C`, `unzip -d`, `curl -o`, `git clone`
+or `pip install --target` into it, a `mkdir`, `chmod` or `rm` there, a writing command after a `cd` into
+it, with the folder spelt with `~`, `$HOME` or `$EXO_HOME`, as its resolved path, through a link into
+it, or as a relative `.exo/plugins/...`. That covers a plugin's own files too, such as its
+`config.json`. Reads stay reads: `cat`, `ls`, `grep -r`, `find`, `diff`, `git -C <folder> log`,
+`read_file`. As for every protected folder, a file tool's write or delete there is one `store_write`
+with no part left for `local_write` or `delete`, so a `deny` or `categories:` line on those no longer
+denies it and the floor asks instead. A shell line keeps its own command as a part, so a deny on that
+still holds. To refuse such writes outright, deny `store_write` or name the folder in a `target:`
+entry. Known friction (fails closed, no grant): a writing command that names a path in the folder
+only as a source asks too (`cp ~/.exo/plugins/foo/x.py /tmp/`), as for the rest of the store, and
+running a plugin's own script by its path (`~/.exo/plugins/foo/tool.sh`) asks the principal alone,
+where before a seat could answer its `opaque_exec` ask. Not covered here: the folders in
+`$EXO_PLUGIN_DIRS`. Section 4 of the developer guide points that variable at a checkout's `plugins/`,
+so a principal-only floor there would ask on every edit, and protecting it is a separate change. The
+installer and `exo update`, which copy Exo's plugins into the folder, stay `opaque_exec`. A copy that
+lands on the folder by a source's name (`cp -r /tmp/x/plugins ~/.exo/`) or an archive unpacked into
+the home (`tar -xf x.tar -C ~/.exo`) is not seen as a write to it, as for every protected folder. Nor
+is a relative path written by a tool whose working folder is in the plugins folder or in `$EXO_HOME`
+(`cp evil.py __init__.py` or `write_file __init__.py` in a session started in `~/.exo/plugins/foo`):
+the store check reads a relative path by its name alone, as for every protected folder (below).
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and

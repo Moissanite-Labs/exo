@@ -4991,19 +4991,20 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 
 
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files,
-# the core sockets and the bus folder (the seat registry signed answers trust and the relay database, #210)
-# steer the gate itself, so a write to them always asks the principal. Names that are distinctive match
-# anywhere (a relative `policies/gates.yaml` may sit in the tool's working folder); absolute paths are also
-# checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
-# `principals` (`exo init --root`, `exo import-store --root`) and the bus folder and files (_bus_paths).
+# the core sockets, the bus folder (the seat registry signed answers trust and the relay database, #210) and
+# the plugins folder (code the next session loads and runs, #435) steer the gate itself, so a write to them
+# always asks the principal. Names that are distinctive match anywhere (a relative `policies/gates.yaml` may
+# sit in the tool's working folder); absolute paths are also checked against EXO_HOME, its principal stores,
+# EXO_PRINCIPAL_STORE, every store root recorded in config `principals` (`exo init --root`, `exo import-store
+# --root`) and the bus folder and files (_bus_paths).
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
-    r"\.exo/bus(/|$)|bus/registry\.json$|bus/relay\.sqlite(-wal|-shm|-journal)?$|"
+    r"\.exo/(bus|plugins)(/|$)|bus/registry\.json$|bus/relay\.sqlite(-wal|-shm|-journal)?$|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
     r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
     r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
-_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats")
+_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "plugins")
 _STORE_PROTECTED = ("policies", "state", "keys")
 # #210: $EXO_HOME/bus, and the bus settings that move a file the gate trusts out of it: the registry, the relay
 # database and its sidecars, and the seat keys folder. Each name is read as EXO_BUS_<NAME> and as the legacy
@@ -5023,7 +5024,7 @@ _FD_DIR = re.compile(r"/+(dev|proc(/[^/]+(/task(/[^/]+)?)?)?)")      # cd here, 
 
 def _store_roots() -> list[tuple[str, tuple, bool]]:
     """(root, protected top-level names, has principals/<name>/ stores below it)."""
-    roots = [(_exo_home(), _HOME_PROTECTED, True)]
+    roots: list[tuple[str, tuple, bool]] = [(_exo_home(), _HOME_PROTECTED, True)]
     if os.environ.get("EXO_PRINCIPAL_STORE"):
         roots.append((os.path.expanduser(os.environ["EXO_PRINCIPAL_STORE"]), _STORE_PROTECTED,
                       False))

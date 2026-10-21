@@ -357,13 +357,14 @@ What the gate asks about, and why:
   `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`. Ask and deny rules still see the
   whole line, but an ask rule lifts a deny only from the commands it names. `docs/GATE.md` has the details.
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
-  standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
-  covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
-  #125) adds it. The gate resolves symbolic links in an absolute path (#130), but otherwise goes by the path as the
-  command spells it, so some writes are not seen as store writes yet: a relative name such as `gates.yaml` written
-  by a tool whose working folder is `policies/`, a glob spelling, a hard link, and a store file opened on a numbered
-  file descriptor and written back through `/dev/fd/3` (#217). A brace spelling (`polic{i..i}es`) is seen (#224).
-  `docs/GATE.md` lists the rest.
+  standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always" covers
+  it. So does a write into `~/.exo/plugins` (#435), because Exo loads and runs the code it finds there. To work on a
+  plugin, point `EXO_PLUGIN_DIRS` at your copy instead. Reading your policies or plugins does not ask. `config.json`
+  is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves symbolic links in an absolute
+  path (#130), but otherwise goes by the path as the command spells it, so some writes are not seen as store writes
+  yet: a relative name such as `gates.yaml` written by a tool whose working folder is `policies/`, a glob spelling, a
+  hard link, and a store file opened on a numbered file descriptor and written back through `/dev/fd/3` (#217). A
+  brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md` lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
   This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length

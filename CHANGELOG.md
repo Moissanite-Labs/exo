@@ -144,6 +144,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#435, D-038 amendment): a write into `$EXO_HOME/plugins` asks the principal. The core loads each plugin it
+  finds there and runs its code with the harness's rights, so a write there installs or changes code the next session
+  runs. Most writes there were allowed: only a `cd` or `git -C` into the Exo home made one a store write, and a delete
+  asked as a plain `delete`. `cp evil.py ~/.exo/plugins/foo/__init__.py` was an allowed `shell`, and `write_file` on
+  the same path an allowed `local_write`. The folder is now a protected store folder, and `.exo/plugins` a name that
+  counts anywhere. A write there is `store_write` (the principal alone, no grant) when made by a file tool, a
+  redirection, `cp`, `cp -t`, `mv`, `install`, `tee`, `sed -i`, `ln`, `rsync`, `tar -C`, `unzip -d`, `curl -o`,
+  `git clone` or `pip install --target` into it, or `mkdir`, `chmod` or `rm` there, spelt with `~`, `$HOME`,
+  `$EXO_HOME`, the resolved path or a link into it. Reads stay reads. A writing command that names a file there only
+  as a source asks too, as for the rest of the store. Not covered: the folders in `$EXO_PLUGIN_DIRS`, which developers
+  point at a checkout, and, as for the rest of the store, a relative path written by a tool whose working folder is in
+  the plugins folder.
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under
