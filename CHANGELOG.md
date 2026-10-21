@@ -138,8 +138,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   repo it cannot rule out (`-R` beside a URL operand for another repo, and the reading before this change) and
   keeps the strictest decision, so no line decides lower than before. Such a line binds its approval to the
   exact command, so a standing grant on one of its targets does not run it, and its question names every
-  other target ("It may land on pub/repo#7 instead."). `gh issue close --duplicate-of`
-  takes a value in the gate's table now. `gh api` took its endpoint from the first word with a `/`, an option's
+  other target ("It may land on pub/repo#7 instead."). `gh issue close --duplicate-of` and `-r` take a value in
+  the gate's table now, and the table lists `gh pr ready`, `reopen`, `merge`, `lock` and `unlock`, `gh issue
+  reopen`, `develop`, `lock`, `unlock`, `delete` and `transfer`, and `gh release upload` and `delete`. So
+  `gh pr ready --undo <URL>` no longer asks about "the current repo". `gh api` took its endpoint from the first word with a `/`, an option's
   value too, so `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` was a post on
   `myorg/app`. Its endpoint is its one operand now, and the word it took before is another target. `-R` reads as
   gh reads it: `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`, not `=pub/repo`, and `github.com/pub/repo` or a

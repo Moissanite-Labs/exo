@@ -710,7 +710,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (`-b 7`, `--milestone 3`) became the target's number the same way. Now `_gh_target` takes the repo and the number
   from `-R` and the operands only. It reads them with the table the unseen check uses (`_GH_TAKES` and the text
   options, through `_option_values`), so `--opt=value`, short clusters, `--` and options with no value read as in gh.
-  `gh issue close` lists `--duplicate-of` now. gh keeps the last `-R`. A URL operand names the repo even beside `-R`,
+  `gh issue close` lists `--duplicate-of` and `-r` now, and the table has rows for the other commands that post,
+  close, merge, lock, transfer or delete (gh 2.89 `--help`). gh keeps the last `-R`. A URL operand names the repo even beside `-R`,
   because gh does that (`pr/shared/finder.go` and `issue/shared/lookup.go` in gh 2.89). The other readings the gate
   cannot rule out are kept as `Classification.alt_targets`, each with a copy of the action as a part: `-R` when a
   URL operand names another repo, and the reading before #399. `decide` decides the line on each and keeps the
@@ -722,8 +723,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   ("It may land on pub/repo#7 instead."), since the target it names first may not be the one gh acts on. For a
   gh command outside the table the gate reads the operands twice, with every
   option a flag and with every option taking a value. A URL operand that only the first reading finds never
-  replaces `-R`, and with no `-R` it names the target beside the reading without it. A close whose `--duplicate-of`
-  value is an option word stays unseen, as it was (gh refuses the line). gh also finds a subcommand past the
+  replaces `-R`, and with no `-R` it names the target beside the reading without it. The unseen check also reads
+  a post with each row as it was before #399 (`_GH_TAKES_BEFORE_399`), and a line unseen then stays unseen, a
+  close whose `--duplicate-of` value is an option word too (gh refuses that line). gh also finds a subcommand past the
   options before it, and the subcommand reads every option on the line: `gh pr -R pub/repo comment 5` and
   `gh pr -b text comment 5` post (gh 2.89). The gate took the third word for the subcommand, so such a line was
   a read and ran under any policy. `_gh_verb_order` now finds the subcommand as cobra does, past an empty word

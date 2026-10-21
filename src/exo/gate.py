@@ -1616,13 +1616,28 @@ _GH_TAKES = {
     ("issue", "create"): ("abFlmpTtR", "--assignee --attach --blocked-by --blocking --label --milestone --parent "
                                        "--project --recover --template --type --repo"),
     ("issue", "comment"): ("bFR", "--attach --repo"),
-    ("issue", "close"): ("cR", "--comment --duplicate-of --reason --repo"),
+    ("issue", "close"): ("crR", "--comment --duplicate-of --reason --repo"),
     ("issue", "edit"): ("bFmtR", "--add-assignee --add-blocked-by --add-blocking --add-label --add-project "
                                  "--add-sub-issue --attach --milestone --parent --remove-assignee --remove-blocked-by "
                                  "--remove-blocking --remove-label --remove-project --remove-sub-issue --type --repo"),
     ("release", "create"): ("nFtR", "--discussion-category --notes-start-tag --target --repo"),
     ("release", "edit"): ("nFtR", "--discussion-category --tag --target --repo"),
+    # #399, from gh 2.89 `--help`: so the operands of everyday lines read as gh reads them.
+    ("pr", "ready"): ("R", "--repo"), ("pr", "reopen"): ("cR", "--comment --repo"),
+    ("pr", "merge"): ("AbFtR", "--author-email --match-head-commit --subject --repo"),
+    ("pr", "lock"): ("rR", "--reason --repo"), ("pr", "unlock"): ("R", "--repo"),
+    ("issue", "reopen"): ("cR", "--comment --repo"), ("issue", "develop"): ("bnR", "--base --branch-repo --name --repo"),
+    ("issue", "lock"): ("rR", "--reason --repo"), ("issue", "unlock"): ("R", "--repo"),
+    ("issue", "delete"): ("R", "--repo"), ("issue", "transfer"): ("R", "--repo"),
+    ("release", "upload"): ("R", "--repo"), ("release", "delete"): ("R", "--repo"),
 }
+# The rows #399 added or changed, as they were before it. A post the unseen check found unseen with the old row
+# stays unseen (_gh_unseen), so no line decides lower than it did.
+_GH_TAKES_BEFORE_399 = {("issue", "close"): ("cR", "--comment --reason --repo"),
+                        **{k: ("", "") for k in (("pr", "ready"), ("pr", "reopen"), ("pr", "merge"), ("pr", "lock"),
+                                                 ("pr", "unlock"), ("issue", "reopen"), ("issue", "develop"),
+                                                 ("issue", "lock"), ("issue", "unlock"), ("issue", "delete"),
+                                                 ("issue", "transfer"), ("release", "upload"), ("release", "delete"))}}
 _GH_API_FIELDS = ("-f", "--raw-field", "-F", "--field")
 _GH_API_TAKES = "FHqXpft"      # gh api's short options that take a value
 # and its long ones (gh 2.89 `gh api --help`): a header, a jq query or a template can hold a path (#399).
@@ -1917,7 +1932,7 @@ def _gh_target(argv: list[str]) -> tuple[str, str, list[tuple[str, str]]]:
         old = _gh_api_target(next((a for a in argv[2:] if not a.startswith("-") and "/" in a and "=" not in a), ""))
         return target, link, [old] if old[0] != target else []
     if (group, verb) in _GH_TAKES:
-        parses = [_gh_operands(argv, *_gh_options(group, verb))]
+        parses = [_gh_operands(argv, *_gh_options(group, _GH_TAKES[(group, verb)]))]
         sure = set(parses[0][1])
     else:
         longs = tuple(a for a in argv[3:] if a.startswith("--") and len(a) > 2 and "=" not in a)
@@ -1946,11 +1961,10 @@ def _gh_text_options(group: str) -> tuple:
     return ("--body", "-b"), ("--body-file", "-F"), ("--title", "-t")
 
 
-def _gh_options(group: str, verb: str) -> tuple[str, tuple]:
-    """A gh command's options that take a value, as (short letters, long names): its _GH_TAKES row (none for a
-    command the table does not list) and the text options, which take a value too: in `--title --body --body x`
-    the title is `--body` and the body `x`."""
-    takes, longs = _GH_TAKES.get((group, verb), ("", ""))
+def _gh_options(group: str, row: tuple[str, str]) -> tuple[str, tuple]:
+    """A gh command's options that take a value, as (short letters, long names): its _GH_TAKES ``row`` and the
+    text options, which take a value too: in `--title --body --body x` the title is `--body` and the body `x`."""
+    takes, longs = row
     return takes, tuple(longs.split()) + tuple(n for names in _gh_text_options(group) for n in names if n[:2] == "--")
 
 
@@ -1966,27 +1980,25 @@ def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
     if group == "api":
         fields = _option_values(argv, _GH_API_FIELDS, takes=_GH_API_TAKES, least=99)
         return _opt(argv, "--input") is not None or any(f.partition("=")[2].startswith("@") for f in fields)
+    # Read with the command's row, and with its row before #399 when #399 changed it (_GH_TAKES_BEFORE_399).
+    rows = [_GH_TAKES.get((group, verb), ("", ""))] + [r for r in [_GH_TAKES_BEFORE_399.get((group, verb))] if r]
     if verb == "close" and group in ("pr", "issue"):
         # A close posts its --comment with it (#326): unseen when the gate's read of it and gh's
         # disagree (a repeat, a cluster, an attached form), as for a post's body (#208).
-        takes_c, row = _GH_TAKES.get((group, verb), ("", ""))
-        longs_c = tuple(row.split()) + ("--comment",)
-        values = _option_values(argv, ("--comment", "-c"), takes=takes_c, longs=longs_c, least=99)
         comment = _opt(argv, "--comment", "-c")
-        # gh takes the word after `--duplicate-of` even when it is an option, and refuses the line. Such a line
-        # stays unseen, as it was before the table listed `--duplicate-of` (#399).
-        if any(v.startswith("-") for v in _option_values(argv, ("--duplicate-of",), takes=takes_c, longs=longs_c,
-                                                           least=99)):
-            return True
-        if not values and comment is None:
-            return False  # no comment: the close posts nothing but itself
-        return values != ([] if comment is None else [comment])
-    takes, longs_all = _gh_options(group, verb)
+        for takes_c, row in rows:
+            values = _option_values(argv, ("--comment", "-c"), takes=takes_c, longs=tuple(row.split()) + ("--comment",),
+                                    least=99)
+            # No comment: the close posts nothing but itself.
+            if (values or comment is not None) and values != ([] if comment is None else [comment]):
+                return True
+        return False
     body, body_file, title = _gh_text_options(group)
-    for names in (body, body_file, title):
-        got = _opt(argv, *names)
-        if _option_values(argv, names, takes=takes, longs=longs_all, least=99) != ([] if got is None else [got]):
-            return True
+    for takes, longs_all in (_gh_options(group, r) for r in rows):
+        for names in (body, body_file, title):
+            got = _opt(argv, *names)
+            if _option_values(argv, names, takes=takes, longs=longs_all, least=99) != ([] if got is None else [got]):
+                return True
     if _opt(argv, *body_file) == "-" and stdin is None:
         return True
     flags = _GH_UNSEEN_FLAGS.get((group, verb), ())
