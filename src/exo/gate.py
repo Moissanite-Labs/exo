@@ -122,12 +122,17 @@ class Classification:
     # entries against each of them, so a denied action cannot ride along with a more severe one.
     parts: list["Classification"] = field(default_factory=list, repr=False, compare=False)
     _command_views: list[str] = field(default_factory=list, repr=False, compare=False)
+    # Other targets the gate cannot rule out for the same action (#399): `decide` decides the line on each and the
+    # strictest decision stands. A copy of the action on each is also a part, so a deny or reserved entry sees it.
+    alt_targets: list[str] = field(default_factory=list, repr=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
         d.pop("parts", None)
         d.pop("_command_views")
+        if not d["alt_targets"]:
+            d.pop("alt_targets")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -1607,7 +1612,7 @@ _GH_TAKES = {
     ("issue", "create"): ("abFlmpTtR", "--assignee --attach --blocked-by --blocking --label --milestone --parent "
                                        "--project --recover --template --type --repo"),
     ("issue", "comment"): ("bFR", "--attach --repo"),
-    ("issue", "close"): ("cR", "--comment --reason --repo"),
+    ("issue", "close"): ("cR", "--comment --duplicate-of --reason --repo"),
     ("issue", "edit"): ("bFmtR", "--add-assignee --add-blocked-by --add-blocking --add-label --add-project "
                                  "--add-sub-issue --attach --milestone --parent --remove-assignee --remove-blocked-by "
                                  "--remove-blocking --remove-label --remove-project --remove-sub-issue --type --repo"),
@@ -1822,26 +1827,66 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
     return _make("local_write", summary=f"git {sub}".strip(), command=cmd)
 
 
-def _gh_target(argv: list[str]) -> tuple[str, str]:
-    """(repo or url target, link) from `-R owner/repo`, a GitHub URL, or a number."""
-    repo = _opt(argv, "-R", "--repo") or ""
-    number = ""
-    link = ""
-    for a in argv[3:]:
+def _gh_read(group: str, repo: str, words: list[str], url: bool = True) -> tuple[str, str]:
+    """(target, link) from a `-R` value and the words that may name the target: the first GitHub URL, whose repo
+    replaces the `-R` value when ``url`` (gh does that), else the first number, and for `gh repo` an `owner/name`
+    first word."""
+    number = link = ""
+    for a in words:
         m = _GH_URL.match(a)
         if m:
-            repo, number, link = m.group(1), m.group(2) or "", a
+            number = m.group(2) or ""
+            if url:
+                repo, link = m.group(1), a
             break
         if re.fullmatch(r"#?\d+", a) and not number:
             number = a.lstrip("#")
-    if not repo and len(argv) > 3 and argv[1] == "repo" and re.fullmatch(r"[\w.-]+/[\w.-]+", argv[3]):
-        repo = argv[3]
-    if not link and repo and number:
-        link = f"https://github.com/{repo}/issues/{number}"
-    elif not link and repo:
-        link = f"https://github.com/{repo}"
-    target = f"{repo}#{number}" if repo and number else (repo or (f"#{number}" if number else ""))
-    return target, link
+    if not repo and group == "repo" and words and re.fullmatch(r"[\w.-]+/[\w.-]+", words[0]):
+        repo = words[0]
+    if not link and repo:
+        link = f"https://github.com/{repo}" + (f"/issues/{number}" if number else "")
+    return (f"{repo}#{number}" if repo and number else repo or (f"#{number}" if number else "")), link
+
+
+def _gh_operands(argv: list[str], takes: str, longs: tuple) -> tuple[str, list[int]]:
+    """gh's `-R` value (the last, which gh keeps) and the indexes of its operands after the subcommand, when the
+    options in ``takes`` and ``longs`` take a value."""
+    ops: list[int] = []
+    repos = _option_values(argv, ("-R", "--repo"), start=3, takes=takes, longs=longs, least=99, rest=ops)
+    return (repos[-1] if repos else ""), ops
+
+
+_GH_ANY_SHORT = "".join(chr(n) for n in range(33, 127))   # every character a short option can be
+
+
+def _gh_target(argv: list[str]) -> tuple[str, str, list[tuple[str, str]]]:
+    """(target, link, the other readings) of a gh command (#399). The target comes from `-R` and the operands only,
+    read with gh's table of options that take a value (_gh_options), so a URL or a number in a body, a title,
+    `--duplicate-of` or `--head` is not the target. A URL operand names the repo even beside `-R`, as in gh.
+
+    Each other reading the gate cannot rule out comes back too, and `decide` keeps the strictest: `-R` when a URL
+    operand names another repo, and the reading before #399 (`-R`, then the first URL or number anywhere), so no
+    decision drops below what it was. For a command not in the table the gate cannot tell an option's value from
+    an operand, so it reads the line with every option a flag and with every option taking a value. The first
+    reading gives the target, but a URL operand the second does not find never replaces `-R`."""
+    group, verb = (argv + ["", ""])[1:3]
+    if (group, verb) in _GH_TAKES:
+        parses = [_gh_operands(argv, *_gh_options(group, verb))]
+        sure = set(parses[0][1])
+    else:
+        longs = tuple(a for a in argv[3:] if a.startswith("--") and len(a) > 2 and "=" not in a)
+        parses = [_gh_operands(argv, "", ()), _gh_operands(argv, _GH_ANY_SHORT, longs)]
+        sure = set(parses[0][1]) & set(parses[1][1])
+    repo, ops = parses[0]
+    target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _GH_URL.match(argv[i]))])
+    readings = [_gh_read(group, r, [argv[i] for i in o], url) for r, o in parses for url in (True, False) if url or r]
+    readings += [_gh_read(group, repo, [argv[i] for i in sorted(sure)]),
+                 _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:])]      # as read before #399
+    alts: dict[str, str] = {}
+    for t, url in readings:
+        if t != target:
+            alts.setdefault(t, url)
+    return target, link, list(alts.items())
 
 
 def _gh_text_options(group: str) -> tuple:
@@ -1849,6 +1894,14 @@ def _gh_text_options(group: str) -> tuple:
     if group == "release":
         return ("--notes", "-n"), ("--notes-file", "-F"), ("--title", "-t")
     return ("--body", "-b"), ("--body-file", "-F"), ("--title", "-t")
+
+
+def _gh_options(group: str, verb: str) -> tuple[str, tuple]:
+    """A gh command's options that take a value, as (short letters, long names): its _GH_TAKES row (none for a
+    command the table does not list) and the text options, which take a value too: in `--title --body --body x`
+    the title is `--body` and the body `x`."""
+    takes, longs = _GH_TAKES.get((group, verb), ("", ""))
+    return takes, tuple(longs.split()) + tuple(n for names in _gh_text_options(group) for n in names if n[:2] == "--")
 
 
 def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
@@ -1866,17 +1919,20 @@ def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
     if verb == "close" and group in ("pr", "issue"):
         # A close posts its --comment with it (#326): unseen when the gate's read of it and gh's
         # disagree (a repeat, a cluster, an attached form), as for a post's body (#208).
-        takes_c, longs_c = _GH_TAKES.get((group, verb), ("", ""))
-        values = _option_values(argv, ("--comment", "-c"), takes=takes_c,
-                                longs=tuple(longs_c.split()) + ("--comment",), least=99)
+        takes_c, row = _GH_TAKES.get((group, verb), ("", ""))
+        longs_c = tuple(row.split()) + ("--comment",)
+        values = _option_values(argv, ("--comment", "-c"), takes=takes_c, longs=longs_c, least=99)
         comment = _opt(argv, "--comment", "-c")
+        # gh takes the word after `--duplicate-of` even when it is an option, and refuses the line. Such a line
+        # stays unseen, as it was before the table listed `--duplicate-of` (#399).
+        if any(v.startswith("-") for v in _option_values(argv, ("--duplicate-of",), takes=takes_c, longs=longs_c,
+                                                           least=99)):
+            return True
         if not values and comment is None:
             return False  # no comment: the close posts nothing but itself
         return values != ([] if comment is None else [comment])
-    takes, longs = _GH_TAKES.get((group, verb), ("", ""))
+    takes, longs_all = _gh_options(group, verb)
     body, body_file, title = _gh_text_options(group)
-    # The text options take a value too: in `--title --body --body x` the title is `--body` and the body `x`.
-    longs_all = tuple(longs.split()) + tuple(n for names in (body, body_file, title) for n in names if n[:2] == "--")
     for names in (body, body_file, title):
         got = _opt(argv, *names)
         if _option_values(argv, names, takes=takes, longs=longs_all, least=99) != ([] if got is None else [got]):
@@ -1892,20 +1948,27 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
     """A gh command. ``stdin`` is its stdin when the line spells it out (`_literal_stdin`), ``dynamic`` the
     indexes of words that come from an expansion. An outbound post whose text the gate cannot fully read
     carries the ``unseen_body`` signal (#208)."""
-    c = _gh_kind(argv, cmd, stdin)
+    target, link, alts = _gh_target(argv)
+    c = _gh_kind(argv, cmd, stdin, target, link)
     gist = c.category == "remote_write" and argv[1:2] == ["gist"]          # a secret gist's create or edit
     gh_close = c.category == "github_close" and (argv + ["", ""])[1:3] in (["pr", "close"], ["issue", "close"])
     if (c.category in OUTBOUND or gist or gh_close) and _gh_unseen(argv, stdin, dynamic):
         c.signals.append("unseen_body")
+    # #399: the same action on each other target the gate cannot rule out is a part, and decide keeps the strictest.
+    for t, url in alts:
+        alt = _gh_kind(argv, cmd, stdin, t, url)
+        if alt.target not in [c.target] + c.alt_targets:
+            alt.signals = list(c.signals)
+            c.parts.append(alt)
+            c.alt_targets.append(alt.target)
     return c
 
 
-def _gh_kind(argv: list[str], cmd: str, stdin: str | None) -> Classification:
+def _gh_kind(argv: list[str], cmd: str, stdin: str | None, target: str, link: str) -> Classification:
     group = argv[1] if len(argv) > 1 else ""
     verb = argv[2] if len(argv) > 2 else ""
     if group and group not in _GH_GROUPS:
         return _opaque(f"gh {group} (an alias or extension the gate cannot see)", cmd)
-    target, link = _gh_target(argv)
     body_opt, file_opt, title_opt = _gh_text_options(group)
     body = _opt(argv, *body_opt) or ""
     title = _opt(argv, *title_opt) or ""
@@ -2828,7 +2891,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
 
 
 def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "", longs: tuple = (),
-                   operands: int | None = None, least: int = 3, wild: frozenset = frozenset()) -> list[str]:
+                   operands: int | None = None, least: int = 3, wild: frozenset = frozenset(),
+                   rest: list[int] | None = None) -> list[str]:
     """The values given to the options `names` in argv[start:], read as getopt reads them (#154). In a short
     option cluster the first letter that takes a value (one of `names`, or a letter in `takes`) ends the word:
     its value is the rest of the word or the next word (`-xIzstd`, `-avze ssh`, `-oProxyCommand=cmd`). A long
@@ -2837,7 +2901,7 @@ def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "
     is a whole word. Options end at `--`, and with `operands` at the operand after that many: ssh reads options
     before and after its destination, and the remote command follows. An operand at an index in `wild` may
     expand to no word or several (`$A`, `"$@"`, a glob), so the operands cannot be counted and every word is
-    read."""
+    read. With ``rest`` the index of each operand is added to it, every word after `--` too (#399)."""
     shorts = "".join(n[1] for n in names if len(n) == 2)
     whole = [n for n in names if len(n) > 2 and not n.startswith("--")]
     long_names = [n for n in names if n.startswith("--")]
@@ -2848,6 +2912,8 @@ def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "
         i += 1
         key, eq, val = a.partition("=")
         if a == "--":
+            if rest is not None:
+                rest.extend(range(i, len(argv)))
             break
         if key in whole:
             if eq or i < len(argv):
@@ -2868,6 +2934,8 @@ def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "
                 if seen >= operands:
                     break
                 seen += 1
+            if rest is not None:
+                rest.append(i - 1)
         else:
             for j, ch in enumerate(a[1:], 2):
                 if ch in shorts or ch in takes:
@@ -5478,6 +5546,18 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
     gates, budget, posting = pol["gates"], pol["budget"], pol["posting"]
     ctx = dict(context or {})
+    if c.alt_targets:
+        # #399: decided on each target the gate cannot rule out. The strictest decision stands, with the widest
+        # exposure, a third party if any has one, and every violation and reserved part any of them met.
+        base = replace(c, alt_targets=[])
+        ds = [decide(base, pol, ctx)] + [decide(replace(base, target=t), pol, ctx) for t in c.alt_targets]
+        i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
+        where = f" (if it lands on {redact_userinfo(c.alt_targets[i - 1])})" if i else ""
+        return replace(ds[i], reason=ds[i].reason + where,
+                       violations=list(dict.fromkeys(v for d in ds for v in d.violations)),
+                       exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
+                       third_party=any(d.third_party for d in ds),
+                       reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)))
     eff = _scoped(c, gates.get("scopes") or {})
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
@@ -5582,6 +5662,11 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
             return alt
     return d
+
+
+def _strictness(d: Decision) -> tuple:
+    """How strict a decision is: its outcome, then its exposure, then whether it affects a third party."""
+    return OUTCOMES.index(d.outcome), EXPOSURE.index(d.exposure), d.third_party
 
 
 def summarize(c: Classification, d: Decision, default: str = "skip") -> str:
