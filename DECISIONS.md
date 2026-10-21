@@ -2163,13 +2163,26 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   its command text as before, and the ledger view (`as_dict`) leaves the own text out. Allow and log rules that
   matched a whole compound line, such as `'^make && make install$'`, now have to match each deciding command's own
   text (`'^make( install)?$'`). Until they do, such a line fails closed to its matrix or category outcome. Equally
-  severe commands are matched together, so the outcome does not depend on which comes first. Limits: a less severe
-  command on the line rides on the rule's outcome, as it does under a category line, so
-  `rm -rf build && git push --force origin main` is allowed under an allow rule for `'^git push --force origin main$'`
-  (before, that anchored rule matched no compound line). A `deny:` or `reserved:` entry, or a category line or rule
-  that denies that command, still stops it. Rejected: matching ask and deny rules and the lists on own text instead of
-  the whole line (that narrows a veto: the ask rule on `gh pr comment` above would no longer ask), and deciding every
-  part alone with the strictest outcome winning (rejected above for category lines).
+  severe commands are matched together, so the outcome does not depend on which comes first. The regex must also
+  match every other part that alone would get a stricter outcome than the rule gives (a rider). Alone means the part
+  without the parts it was built from, on its own text, decided once with no rules and once with all of them, the
+  stricter kept: its category line and the matrix count, and so does a rule that raises it, while another allow rule
+  does not lower it. So under an allow rule for `'^git push --force origin main$'` the push asks, as on main, beside
+  a delete (`rm -rf build`, `kubectl delete ns prod`, `terraform destroy`, `aws s3 rm --recursive`), a post to a
+  third party (`gh pr comment`), `vercel deploy --prod`, `git reset --hard`, an unknown program, an
+  `ssh -o ProxyCommand` or a function body that shadows `git`. So does a line where a copy of the push that never
+  runs stands in for it (`if false; then ...; fi`, an exported value, `PS4`). A log rule over an allow cell only
+  raises the line, so its regex still sees the whole line unless it names `opaque_exec` (which lowers the opaque
+  floor). The opaque_exec reading of a line with a `$".."` word is the gate's, so it has no own text. Limits: a
+  command that would be allowed alone still rides on the rule's outcome, as a less severe command does under a
+  category line: `cd /tmp/other && git push --force origin main` is allowed under that rule, and so is a write the
+  push reads (`echo x > .git/hooks/pre-push`). A file outlives the call, so two calls do the same on main. A
+  `deny:` or `reserved:` entry, or a category line or rule that denies that command, still stops it. Rejected:
+  matching ask and deny rules and the lists on own text instead of the whole line (that narrows a veto: the ask rule
+  on `gh pr comment` above would no longer ask), deciding every part alone with the strictest outcome winning
+  (rejected above for category lines), and judging a rider under every rule (a second allow rule would then lower
+  it, so `rm -rf build && git push --force origin main` would pass under two anchored allow rules, one per command,
+  where main asks).
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).

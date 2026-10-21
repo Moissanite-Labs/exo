@@ -5448,17 +5448,39 @@ def _own_test(texts: Iterable[str | None]) -> Callable[[list[str]], bool]:
     return test
 
 
-def _line_own_test(c: Classification) -> Callable[[list[str]], bool] | None:
-    """How an allow or log rule's `command` patterns match a line (#394): on the own text of every simple command
-    that carries the line's category (the combined result itself included) or is as severe as the combined
-    result, so a regex written for one command cannot lower a line whose deciding command it does not name, and
-    the outcome does not depend on which of two equally severe commands comes first. None for a line of one
-    part, which keeps matching the command text."""
+def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[str, list[str]], bool] | None:
+    """How an allow or log rule's `command` patterns match a line (#394), as a test of (the rule's decision, its
+    patterns). They must match the own text of every simple command that carries the line's category or is as
+    severe as the combined result, so a regex written for one command cannot lower a line whose deciding command
+    it does not name, and the outcome does not depend on which of two equally severe commands comes first. The
+    combined result is one of these: the deciding command's part, or a part the gate made (a secret on the line,
+    the opaque_exec reading of a `$".."` line) with no own text, and then no such rule lowers the line. They must
+    also match every other part that alone would get a stricter outcome than the rule's decision, by its category
+    line and the matrix or by the rules (a rider: `rm -rf build && git push --force origin main` under an allow
+    rule for the push). None for a line of one part, which keeps matching the command text."""
     if not c.parts:
         return None
     parts, top = list(_each_part(c)), _severity(c)
-    return _own_test(p.own for p in ([p for p in parts if p.category == c.category or _severity(p) >= top]
-                                     or parts))
+    core = {id(p) for p in parts if p.category == c.category or _severity(p) >= top}
+    bare = {**pol, "gates": {**pol["gates"], "rules": []}}
+    alone: dict[int, int] = {}
+
+    def stricter(p: Classification, level: int) -> bool:
+        # The part alone, without the parts it was built from (each is tested in turn): no rule lowers it here.
+        if id(p) not in alone:
+            q = replace(p, parts=[], command=p.own if p.own is not None else p.command, _command_views=[])
+            alone[id(p)] = max(OUTCOMES.index(decide(q, bare, ctx).outcome), OUTCOMES.index(decide(q, pol, ctx).outcome))
+        return alone[id(p)] > level
+
+    def test(decision: str, patterns: list[str]) -> bool:
+        regexes, seen, level = [re.compile(x) for x in patterns], {}, OUTCOMES.index(decision)
+
+        def named(t: str | None) -> bool:
+            if t not in seen:
+                seen[t] = t is not None and any(rx.search(t) for rx in regexes)
+            return seen[t]
+        return all(named(p.own) or (id(p) not in core and not stricter(p, level)) for p in parts)
+    return test
 
 
 _LOWERS = ("allow", "log")
@@ -5582,15 +5604,19 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     opaque_named = gates.get("categories", {}).get("opaque_exec") in below_ask
     if eff.category in gates.get("categories", {}):
         outcome, reason, rule = gates["categories"][eff.category], f"category {eff.category}", "category"
-    # An allow or log rule's `command` regex must match each simple command that carries the line's category, as
-    # written (#394); an ask or deny rule's still matches the whole line, so it can only catch more.
-    own = _line_own_test(eff) if any(r["decision"] in below_ask and "command" in r["match"]
-                                     for r in gates.get("rules") or []) else None
+    # An allow or log rule's `command` regex must match each simple command that decides the line, as written, and
+    # each that would be stricter alone (#394). An ask or deny rule's still matches the whole line, so it can only
+    # catch more, and so does a log rule's over an allow cell: it only raises the line, unless it names opaque_exec.
+    own = _line_own_test(eff, pol, ctx) if eff.parts and any(r["decision"] in below_ask and "command" in r["match"]
+                                                              for r in gates.get("rules") or []) else None
+    start = OUTCOMES.index(outcome)
     for r in gates.get("rules") or []:
-        if _rule_matches(r["match"], eff, own=own if r["decision"] in below_ask else None):
-            outcome, reason, rule = r["decision"], r["reason"], "rule"
-            opaque_named = opaque_named or (r["decision"] in below_ask and "opaque_exec" in
-                                            [str(x) for x in _as_list(r["match"].get("category", []))])
+        dec = r["decision"]
+        names_opaque = dec in below_ask and "opaque_exec" in [str(x) for x in _as_list(r["match"].get("category", []))]
+        narrow = own is not None and dec in below_ask and (OUTCOMES.index(dec) <= start or names_opaque)
+        if _rule_matches(r["match"], eff, own=functools.partial(own, dec) if narrow and own is not None else None):
+            outcome, reason, rule = dec, r["reason"], "rule"
+            opaque_named = opaque_named or names_opaque
             break
 
     def bump(level: str, why: str, step: str):
@@ -5670,10 +5696,12 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
                  reserved=list(dict.fromkeys((p.category, p.target) for p, _ in reserved)))
     if "locale translation" in c.signals and c.category != "opaque_exec":
         # A $".." word can turn into any code (#136): decide the line as opaque_exec too, and keep the stricter.
-        # `replace` keeps the parts as classifications, so their deny and reserved entries still apply.
+        # `replace` keeps the parts as classifications, so their deny and reserved entries still apply. That
+        # reading is the gate's, not a command's, so it has no own text: no allow or log rule's `command` regex
+        # lowers it on a compound line (#394), while a line of one part still matches its command text.
         rev, exp, third = CATEGORIES["opaque_exec"]
         alt = decide(replace(c, category="opaque_exec", reversibility=rev, exposure=exp, third_party=third,
-                             signals=["indirection"]), pol, ctx)
+                             signals=["indirection"], own=None), pol, ctx)
         if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
             return alt
     return d
