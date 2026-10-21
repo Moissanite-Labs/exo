@@ -4,6 +4,8 @@ With no remote command, `ssh host` starts the login shell there, and that shell 
 The gate reads a piped, heredoc or here-string text as shell, as it reads `bash -s`, and the line asks. The parts
 keep the remote-host exposure of D-075. The command strings are data for the classifier; nothing here runs them.
 """
+import time
+
 import pytest
 
 from exo import gate
@@ -78,6 +80,9 @@ def test_other_categories_fed_to_ssh_are_denied(command, category):
 @pytest.mark.parametrize("command", [
     "echo hi | ssh prod-db",                # a known text with nothing denied in it still runs remotely
     "ssh prod-db < script.sh",              # a file the gate does not read
+    "ssh prod-db <&3",                      # a descriptor the gate does not read (#327)
+    "ssh prod-db 0<&3",
+    "ssh prod-db <> cmds.txt",              # read-write on a file is still a stdin the gate does not read
     "generate | ssh prod-db",               # output the gate does not read
     "ssh prod-db <<< \"$CMDS\"",
 ])
@@ -131,3 +136,78 @@ def test_fed_remote_shell_still_asks():
     c = gate.classify_shell("printf 'gh pr comment 3 --body hi\\n' | ssh prod-db bash")
     assert gate.decide(c, DENY).outcome == "ask"
     assert gate.decide(c, HOST_DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("command, flag", [
+    ("echo 'rm -rf /data' | ssh -- prod-db -T", "-T"),     # a `--` before the host ends the options before it
+    ("echo 'rm -rf /data' | ssh prod-db -- -T", "-T"),     # and one right after the host ends ssh's options
+    ("echo 'rm -rf /data' | ssh prod-db -n", "-n"),        # a flag after the host is read as ssh reads it
+])
+def test_a_flag_word_after_the_host_is_the_remote_command(command, flag):
+    # #327: these rows had no test. ssh reads options after the host up to the remote command, so what is
+    # left after them is the command, and the piped text is that command's input, not commands the login
+    # shell runs: the gate does not read it (no deny on the `rm` in it), and the flag word itself is a
+    # program it does not know, so the line asks.
+    c = gate.classify_shell(command)
+    assert c.category == "opaque_exec", c
+    assert any(p.summary == f"runs {flag}, a program the gate does not know" for p in gate._each_part(c)), c
+    assert not any("runs its stdin" in p.summary for p in gate._each_part(c)), c
+    assert gate.decide(c).outcome == "ask"
+    assert gate.decide(c, DENY).outcome == "ask"
+    assert gate.decide(c, HOST_DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("command, category", [
+    ("{ ssh a; ssh b; } <<< 'rm -rf /data'", "delete"),
+    ("{ ssh a; ssh b; } <<< 'ls; pwd'", "opaque_exec"),
+    ("{ bash -s; ssh a; } <<< 'rm -rf /data'", "delete"),
+    ("{ ssh a; bash -s; } <<< 'rm -rf /data'", "delete"),
+    ("{ ssh a; ssh b; } <<'X' <<'Y'\nls\nX\npwd\nY", "opaque_exec"),
+])
+def test_one_text_fed_to_many_ssh_is_read_once_and_shared(command, category):
+    # #327: one text fed to several ssh in a compound is classified once and its parts are shared by
+    # every hop (marked once, as running on the remote host), not copied and marked per hop. The line's
+    # category and its decisions are the ones the per-hop copies gave.
+    c = gate.classify_shell(command)
+    assert c.category == category, c
+    assert gate.decide(c).outcome == "ask"
+    assert gate.decide(c, {"gates": {"deny": ["target:a"]}}).outcome == "deny"
+    if category == "delete":
+        assert gate.decide(c, DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    "echo hi | ssh prod-db",
+    "ssh prod-db <<< \"$CMDS\"",
+])
+def test_the_stdin_part_stays_the_card_for_a_text_that_reads_as_one_command(command):
+    # #327: a fed text that classifies as one opaque command of its own used to lose the card to that
+    # command when the parts were marked before _combine weighed them; the ssh stdin part is the card,
+    # as on main, because the hop weighs the parts as _once read them and marks them afterwards.
+    c = gate.classify_shell(command)
+    assert c.category == "opaque_exec", c
+    assert c.summary == "ssh prod-db runs its stdin as commands on the remote host", c
+    assert gate.decide(c).reason.startswith("runs code the gate cannot fully see (ssh prod-db runs its stdin"), c
+
+
+@pytest.mark.parametrize("size", [20_000, 80_000])
+def test_many_ssh_fed_one_text_stay_linear(size, monkeypatch):
+    # #327: the issue's shape. Marking the fed parts per ssh made decide quadratic (22 s at 25 KB on the
+    # review's machine): each ssh's result listed every fed part, so decide scoped and walked them all
+    # once per ssh. The parts are now marked once and shared, so each distinct part is scoped once:
+    # apply_scopes runs about 2.7 times per command on the line, fed or feeding.
+    line = "{ " + "ssh h; " * (size // 14) + "} <<< '" + "echo hi; " * (size // 18) + "'"
+    scopes = [0]
+    apply_scopes = gate.apply_scopes
+
+    def counting(*a, **kw):
+        scopes[0] += 1
+        return apply_scopes(*a, **kw)
+
+    monkeypatch.setattr(gate, "apply_scopes", counting)
+    start = time.process_time()
+    c = gate.classify_shell(line)
+    assert c.category == "opaque_exec", c
+    assert gate.decide(c, {"gates": {"deny": ["delete", "target:prod-db"]}}).outcome == "ask"
+    assert scopes[0] <= 4 * (size // 14 + size // 18), scopes
+    assert time.process_time() - start < 60      # the fixed code takes a few seconds; only a hang fails this
