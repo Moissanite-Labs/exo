@@ -434,6 +434,16 @@ class SessionStore:
                          " '$.meta.pos') AND o.hidden=0 AND s.kind!='private'))<=?", (sid, upto_pos))[0]
         return seq
 
+    def orphaned_copies(self, sid: str, upto_seq: int) -> list[Message]:
+        """This thread's fork copies at or before ``upto_seq`` whose original no longer counts at its log
+        position (undone after the fork, so hidden, or gone; or its thread is private): no tree holds them,
+        so the thread's tail keeps them (#245)."""
+        rows = self._q("SELECT c.data FROM messages c WHERE c.session=? AND c.seq<=? AND json_extract(c.data,"
+                       " '$.meta.local')='fork' AND (SELECT o.pos FROM messages o JOIN sessions s ON s.id=o.session"
+                       " WHERE o.agent=(SELECT agent FROM sessions WHERE id=c.session) AND o.pos=json_extract(c.data,"
+                       " '$.meta.pos') AND o.hidden=0 AND s.kind!='private') IS NULL ORDER BY c.seq", (sid, upto_seq))
+        return [from_dict(Message, json.loads(r["data"]), strict=False) for r in rows]
+
     def agents(self) -> list[str]:
         return [r[0] for r in self._q("SELECT DISTINCT agent FROM messages WHERE pos IS NOT NULL ORDER BY agent")]
 

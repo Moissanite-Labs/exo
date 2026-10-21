@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A fork no longer loses its copies of entries the parent undid after the fork (#245). A copy counts
+  at its original's log position only while that original is visible, so once the fork's own later
+  entries were summarized the tail started after the copy, and no tree held it either: the fork's
+  calls dropped it. The tail now keeps such copies, in order, ahead of the fork's own entries.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens

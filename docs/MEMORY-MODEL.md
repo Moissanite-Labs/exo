@@ -80,8 +80,8 @@ Each model call is built fresh, in this order:
    thread are part of it. A fork's copies count at their original's log position, so a fork opens with its
    parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too. A copy counts only
    while the tree can hold its original. A private thread's fork has a tree of its own (below), which summarizes
-   its copies. A copy of an entry the parent undid after the fork counts nowhere. It stays in the tail only until
-   the fork's own later entries are summarized, and then the fork's calls no longer carry it.
+   its copies. A copy of an entry the parent undid after the fork counts nowhere either, so no tree holds it:
+   the fork's tail keeps such copies, in order, ahead of the fork's own entries.
 3. **Context notes.** Before a model call, entries other threads committed since this thread last looked
    (and after the frontier) are written into this thread as one compact note: `In thread "tui 2", 4 min
    ago: user: ... / you: ...`. The note is stored (thread-local, not in the log), so the next call sees
