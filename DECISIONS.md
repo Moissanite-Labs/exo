@@ -929,6 +929,36 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Not done: a write back through a link to a descriptor path, `/dev` or `/proc/self` made out of the gate's sight,
   after an open on descriptor 3 or above the gate cannot read; a hardlink to a store file opened on stdout; and a
   walk over a folder above the run folder.
+  *Amendment 2026-10-21 (issue #133):* `$EXO_HOME/update` joins the protected list. It holds `allowed_signers`, the
+  signed-update trust pin of D-073: with `update.require_signed` on, `exo update` installs the upstream tip only when
+  it verifies against that file. A tool could rewrite it with no ask (`cp /tmp/evil ~/.exo/update/allowed_signers`
+  was an allowed `shell`, a `write_file` there an allowed `local_write`), and the principal's next approved
+  `exo update` would then install code signed by the tool's own key. Now a write to the folder or anything in it is
+  `store_write` in every form the store checks read: `~`, `$HOME`, `$EXO_HOME` or a full path, a brace set, a
+  relative name after a `cd`, a file tool, and a removal, move, link or mode change of the folder. `.exo/update`
+  counts whatever `EXO_HOME` is, and `update/allowed_signers` is a distinctive name, as `state/gate-grants.json` is,
+  so a relative write to it counts under the shell tool's own `cwd` argument too, which the store checks do not
+  read. `exo update --pin-trust` is `store_write` as well. Its old `opaque_exec` reading stays a part, so a policy
+  that denied it still does, and one that names `opaque_exec` at `allow` or `log` now asks. Reads stay `read`. A
+  project folder called `update`, `$EXO_HOME/updates` and `$EXO_HOME/update.json` keep their class. A project file
+  at `update/allowed_signers` asks. The pin lives in `$EXO_HOME` only, so the principal stores get no `update`
+  entry. This closes the gap the D-073 amendment of 2026-10-17 named for the pin. `config.json` stays an ordinary
+  local write until D-074 (#125). The gate differential against main (#423), with a corpus of these forms added,
+  lowers 37 pairs on 15 actions, of two kinds. In both the pin now decides as `state/` and `bus/` files already
+  decide on main, and the line still asks the principal alone, with no grant. (1) A file tool's write or delete
+  on the pin or the folder (any file tool, such as `write_file`, `edit_file`, `patch`, `apply_patch`,
+  `create_directory`, `move_file` or `delete_file`) was
+  `local_write` or `delete` and is now `store_write` alone, so `deny: [local_write]` or `deny: [delete]`, a
+  `categories:` deny or a rule on those categories no longer denies it, and a `reserved: [delete]` entry no longer
+  marks it (31 pairs on 9 actions). A shell write keeps its `local_write`, `shell` or `delete` part beside the store
+  part, so its deny holds (D-075). (2) After `cd /dev`, a write to a store name (`printf x > update/allowed_signers`,
+  or a path through `.exo/update`) takes that name as its target where it took `/dev`, so a `target:/dev*` deny no
+  longer matches it (6 pairs on 6 actions). Chosen over keeping a file tool's old category as a part, which would
+  change the decisions for every store path, not only the pin's. That is a follow-up for the whole store. Not done,
+  as for the other store folders (`docs/GATE.md` "Known limits"): a glob or hard-link spelling, a copy or archive
+  unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
+  `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
+  argument, and a path held in a variable or made by a command (`F=~/.exo/update/allowed_signers; cp x "$F"`).
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -2120,6 +2150,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the override. A list a pinned key signed earlier can still be pinned again (no rollback protection). The pin,
   `$EXO_HOME/update/allowed_signers`, and `config.json` are not yet store paths, so a plain `cp` or redirect to
   them is not asked about. D-074 (#125) adds them. A commit message need not be UTF-8: only the header is read.
+- **Amended 2026-10-21 (#133):** the pin is a store path now (the D-038 amendment of the same date). A tool call
+  that writes, moves or deletes anything in `$EXO_HOME/update`, or runs `exo update --pin-trust`, asks the principal
+  every time, and only the principal can answer. `config.json` is still an ordinary local write. D-074 (#125) adds
+  it.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
 
 ## D-075 (2026-10-13) A deny or reserved entry matches any simple command on a line
