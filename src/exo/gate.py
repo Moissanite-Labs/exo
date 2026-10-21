@@ -3332,15 +3332,19 @@ _COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"},
 
 def _shell_words(w: _Word, seen: dict, check: str) -> list[str] | None:
     """The words bash makes of shell word ``w`` for a store check (#224): its text, plus its source spelling
-    brace-expanded and then dequoted, as _shell_credential_hit reads it. A word the gate built (an `ln` target) has
-    no source spelling and keeps its text. ``seen`` keeps each spelling's words for the line, so a spelling is
-    expanded and charged once; [] when a check covering ``check`` already ran on it. None past the cap."""
+    brace-expanded and then dequoted, as _shell_credential_hit reads it, plus the spellings _unknown_forms
+    reads an expansion it cannot spell out as (#309: `polic$(:)ies` is also `policies`). A word the gate built
+    (an `ln` target) has no source spelling and keeps its text. ``seen`` keeps each spelling's words for the
+    line, so a spelling is expanded and charged once; [] when a check covering ``check`` already ran on it.
+    None past the cap."""
     src = w.raw.replace("\\\n", "")
-    if "{" not in src:
+    if "{" not in src and "$" not in src and "`" not in src:
         return [w.text]
     if src not in seen:
         words = _brace_words(src, pool=1)
-        seen[src] = (None if words is None else list(dict.fromkeys([w.text] + [d for e in words[1:] for d in _dequote(e)])),
+        seen[src] = (None if words is None else list(dict.fromkeys(
+            [w.text] + [d for e in words[1:] for d in _dequote(e)]
+            + [d for e in words for f in _unknown_forms(e) for d in _dequote(f)])),  # what an expansion may print
                      set())
     words, done = seen[src]
     if done & _COVERS[check]:
