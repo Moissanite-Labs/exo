@@ -69,9 +69,10 @@ _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 
 def _readings(c: gate.Classification) -> tuple:
-    """The line as the gate reads it and, when gh finds a subcommand past an option or behind an expansion, as it read
-    it before #399 (``floor``). `decide` keeps the stricter of the two, and so does each check the hook makes past
-    it: the required executor's body check, who may answer, "once" and the categories that never get a grant."""
+    """The line as the gate reads it and, when gh reads it otherwise than the gate did before #399 (a subcommand past
+    an option or behind an expansion, gh api's method), as it read it then (``floor``). `decide` keeps the stricter
+    of the two, and so does each check the hook makes past it: the required executor's body check, who may answer,
+    "once" and the categories that never get a grant."""
     return (c,) if c.floor is None else (c, c.floor)
 
 

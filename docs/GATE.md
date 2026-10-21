@@ -24,8 +24,8 @@ Required mode refuses every post whose body the gate cannot read on the line
 even when body-file reading is disabled), and also stdin (`--body-file -` with a
 pipe or `<`), `gh api` fields read with `@` and `--input`, `$( )`, backticks or
 a variable in the text, and the HTTP clients' file and stdin bodies (see "What an
-approval covers"). It counts both readings of a gh line whose subcommand moved
-("Where a gh command lands"). The refusal is a recorded `deny` decision (rule
+approval covers"). It counts both readings of a gh line the gate also reads as
+before #399 ("Where a gh command lands"). The refusal is a recorded `deny` decision (rule
 `required`). The gate cannot approve unseen contents. Pass inline text for
 inspection. The executor then applies its own operation policy. Policy and grant
 files remain trusted configuration outside the worker's writable workspace.
