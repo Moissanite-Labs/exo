@@ -2184,6 +2184,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Revisit if:** a principal wants a denied action to be allowed when it is part of a longer line. None asked;
   the entry format says "no agent may take" the action.
 
+- **Amendment (2026-10-21, #394):** the whole-line reach above is for deny and reserved entries
+  and deny rules. An allow, log or ask rule's `command` regex matches the text of the one simple
+  command it names: each part carries its own text (the command as written), the line's combined
+  result carries its dominant part's, and a part is decided as it would be alone in this sense too.
+  Before, every part carried the whole line, so an allow rule for `git status` allowed
+  `git status; git push --force origin main` and cancelled a `categories:` deny on the push.
+
 ## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
 - **Status:** Accepted 2026-10-15. The principal's ruling: "important to be lean and optimized but not at the cost of
   functionality and robustness and product-market fit". It replaces the budget part of D-067 (the hard 15,000-line

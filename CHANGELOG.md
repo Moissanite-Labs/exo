@@ -12,6 +12,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and the handoff already kept. This change also corrects the upgrade note in the #385 entry below and in
   the D-040 amendment: a session last compacted on 0.2.0 loses its rulings and corrections as well as its
   open decisions, not the open decisions alone.
+- A `command:` allow, log or ask rule no longer decides a whole compound line (#394). Every
+  part of a line carried the whole line as its command text, so an allow rule written for one
+  command (`^git status`) allowed every command sharing the line and cancelled a `categories:`
+  deny on another part. Each part now carries its own text, the simple command as written, and
+  a non-deny rule matches that; deny and reserved entries still match the whole line and its
+  decoded views (D-075). A per-part allow cannot weaken a deny: a category deny a part earned on
+  its own still denies, and an allow naming one part never decides the others (blocking review
+  on #411).
 - A reopen's comment and a merge's subject and body are checked by the posting rules (#397).
   `gh issue reopen --comment` and `gh pr reopen -c` post a comment the gate filed as a post but
   never read, and `gh pr merge --body` was read but never checked, with `--subject` not read at
