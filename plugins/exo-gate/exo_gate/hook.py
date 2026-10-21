@@ -392,14 +392,18 @@ class Gate:
 
     def _load_body_file(self, c: gate.Classification) -> None:
         """Read a post's body file into its text when the hook can be sure it reads the file the command will:
-        an absolute path to a regular file of at most 256 KiB. A relative or `~` path names a file in the
-        command's folder or home, which the hook does not know. Anything not read stays unseen, so the post
-        asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
-        symlinks included, are never read before the worker, and `_rules` refuses the call. The copies of the post
-        on its other targets get the text too (`gate.fill_body`), and the line as read before #399 (`floor`) has
-        its own body file read the same way, as the hook read it before."""
+        an absolute path to a regular file of at most 256 KiB, and the post the only command on the line —
+        on a compound line an earlier part (a copy, a redirect, a link, tee) can rewrite the file after this
+        read and before gh posts it, so the file stays unread and the post counts as unseen (#343). A
+        relative or `~` path names a file in the command's folder or home, which the hook does not know.
+        Anything not read stays unseen, so the post asks and gets no standing grant (#208). A required
+        executor reads none: tool-selected host paths, symlinks included, are never read before the worker,
+        and `_rules` refuses the call. The copies of the post on its other targets get the text too
+        (`gate.fill_body`), and the line as read before #399 (`floor`) has its own body file read the same way,
+        as the hook read it before."""
+        other = any(not p.alt_copy for p in c.parts)     # a copy of the post on another target is not another part
         for x in _readings(c):
-            if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
+            if not x.text_file or x.text or other or not self.settings.read_body_files or self.executor_required:
                 continue
             try:
                 p = Path(x.text_file)
