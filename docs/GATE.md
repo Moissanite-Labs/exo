@@ -2705,7 +2705,7 @@ every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,
 `tar cf - -C ~/.exo keys | ...`, `cat < ~/.exo/keys/seat.key > /tmp/k` and
 `cat ~/.exo/keys/seat.key | tee /tmp/k`.
 
-Descriptor paths (#217). `/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/fd/N`, `/proc/<pid>/cwd`,
+Descriptor paths (#217). `/dev/fd/N`, `/dev/stdin`, `/proc/fd/N`, `/proc/<pid>/fd/N`, `/proc/<pid>/cwd`,
 `/proc/<pid>/root` and `/proc/<pid>/map_files` (`<pid>` also `self`, `thread-self` or `$$`, with or
 without `task/<tid>/`) name whatever the writing process holds there, which the gate cannot resolve
 from its own process. On Linux a write through one reopens that file for writing, so
@@ -2719,8 +2719,10 @@ backticks or `<( )` of a later command (#465: `cd /dev && echo $(cp /tmp/evil fd
 (`cd /dev && printf x > fd/3`, `cd /proc && printf x > self/fd/3`), or when the target cannot be
 pinned to a path (a variable, a glob). A command after such a `cd` that writes somewhere else, or
 writes nothing, keeps its own class (`cd /proc && sort meminfo`,
-`cd /proc && grep x meminfo > /tmp/m`). The writer's own stdout and
-stderr stay ordinary (`> /dev/fd/1`, `> /proc/self/fd/2`, `> /dev/stdout`). A store path opened for
+`cd /proc && grep x meminfo > /tmp/m`). A line that has also entered the store itself keeps
+the blanket rule for its remaining parts: a later `cd` into `/dev` or `/proc` does not lift
+it (`cd ~/.exo/state && (cd /dev) && cp /tmp/x gate-grants.json`). The writer's own stdout and
+stderr stay ordinary (`> /dev/fd/1`, `> /proc/fd/2`, `> /proc/self/fd/2`, `> /dev/stdout`). A store path opened for
 reading on a descriptor other than stdin (`3< f`, `exec 2< f`, `{ ...; } 1< f`) is a `store_write`
 too, because `> /dev/fd/3` or `> /dev/stdout` later on the line, or in a later call of a persistent
 shell, writes it back. On stdout or stderr, where the write back is an ordinary write, any target the
