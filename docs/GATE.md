@@ -132,7 +132,11 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
 - `gh api` takes its target from its endpoint, its one operand, read with gh api's options that
   take a value. A path in a header, a jq query, a template or a host names nothing. So
   `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` is a post
-  on `pub/repo`.
+  on `pub/repo`. Its method reads as gh reads it too: a cluster ends at `X` (`-iX DELETE`,
+  `-iXPUT`), one `=` goes (`-X=PUT`), and the last `-X` or `--method` stands. The gate read the
+  first `-X` word as written before, so these lines were GETs. Where the two differ the line is
+  also read as before (below), so `gh api -X DELETE -X GET repos/pub/repo` still meets a deny on
+  deletes.
 - The subcommand is the word gh takes for it. gh finds it past the options before it, and the
   subcommand then reads every option on the line. So `gh pr -R pub/repo comment 5` and
   `gh pr -b text comment 5 -R pub/repo` are comments on `pub/repo#5` (checked with gh 2.89). The

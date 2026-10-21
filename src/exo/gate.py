@@ -126,7 +126,8 @@ class Classification:
     # strictest decision stands. A copy of the action on each is also a part, so a deny or reserved entry sees it.
     alt_targets: list[str] = field(default_factory=list, repr=False)
     # The line read with the third word of each gh command for its subcommand, as the gate read it before #399, when
-    # gh finds a subcommand past the options before it (_gh_verb_order). `decide` keeps the stricter of the two.
+    # gh finds a subcommand past the options before it (_gh_verb_order) or reads gh api's method otherwise
+    # (_gh_api_method). `decide` keeps the stricter of the two.
     floor: "Classification | None" = field(default=None, repr=False, compare=False)
     # True on the copy of a gh action on one of its alt_targets among the parts (#399): an ssh or mosh hop gives an
     # empty one the host, and `fill_body` gives each the body a caller read from the post's body file.
@@ -1946,6 +1947,22 @@ def _gh_api_endpoint(argv: list[str]) -> str:
     return argv[ops[0]] if ops else ""
 
 
+def _gh_api_method(argv: list[str]) -> str:
+    """gh api's `-X`/`--method` as pflag reads it: a cluster ends at `X` (`-iX DELETE`, `-iXPUT`), one `=` goes
+    (`-X=PUT`), and the last of several stands (round 5 of #399). The gate read the first `-X` word as written
+    before, and still does in the line as read before (``floor``), which the line gets when the two differ."""
+    before = (_opt(argv, "-X", "--method") or "").upper()
+    if _gh_third_word.get():
+        return before
+    methods = _option_values(argv, ("-X", "--method"), start=2, takes=_GH_API_TAKES, longs=_GH_API_LONGS, least=99,
+                             pflag=True)
+    method = methods[-1].upper() if methods else ""
+    memo = _call_memo.get()
+    if method != before and memo is not None:
+        memo[_GH_MOVED] = True
+    return method
+
+
 def _gh_api_target(endpoint: str) -> tuple[str, str]:
     """(target, link) of a gh api endpoint: the repo of a `repos/owner/name` path, else a path itself."""
     m = re.search(r"repos/([\w.-]+/[\w.-]+)", endpoint)
@@ -2102,7 +2119,8 @@ def _gh_verb_order(argv: list[str], dynamic: frozenset) -> list[int] | None:
     return order
 
 
-# Set while classify reads a call's floor: each gh command's third word is its subcommand, as before #399.
+# Set while classify reads a call's floor: each gh command's third word is its subcommand, and gh api's method its
+# first `-X` word as written, as before #399.
 _gh_third_word: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_gh_third_word", default=False)
 _GH_MOVED = ("gh", "subcommand moved")      # the mark in _call_memo that the call needs a floor
 
@@ -2178,7 +2196,7 @@ def _gh_kind(argv: list[str], cmd: str, stdin: str | None, target: str, link: st
     if group == "auth" or group == "secret" or (group == "ssh-key" and verb in ("add", "delete")):
         return _make("credentials", summary=f"gh {group} {verb}", **kw)
     if group == "api":
-        method = (_opt(argv, "-X", "--method") or "").upper()
+        method = _gh_api_method(argv)
         # Read as gh reads them, so an attached value (`-fbody=x`) makes it a POST too (#208).
         fields = _option_values(argv, _GH_API_FIELDS, takes=_GH_API_TAKES, least=99)
         if not method:
@@ -5335,8 +5353,9 @@ def _args_of(action: Any) -> tuple[str, dict]:
 def classify(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args. ``cwd`` is the folder the
     tool runs in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it).
-    When a gh command in it has its subcommand past an option (_gh_verb_order), the call is also read as before
-    #399, with each gh command's third word for its subcommand, and that reading is its ``floor``."""
+    When a gh command in it has its subcommand past an option (_gh_verb_order), or a gh api method gh reads
+    otherwise (_gh_api_method), the call is also read as before #399, with each gh command's third word for its
+    subcommand, and that reading is its ``floor``."""
     memo = _call_memo.get()
     if memo is not None:
         memo.pop(_GH_MOVED, None)

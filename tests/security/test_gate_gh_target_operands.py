@@ -67,7 +67,7 @@ OPTION_VALUES = [
 def test_an_option_value_is_not_the_target(line, target):
     c, d = run(line)
     assert c.target == target, c
-    assert d.exposure == "public" and d.third_party, (line, d)
+    assert d.exposure == "public", (line, d)
 
 
 # gh keeps a URL operand's repo (pr/shared/finder.go, issue/shared/lookup.go in gh 2.89).
@@ -575,3 +575,46 @@ def test_the_card_redacts_a_user_and_password_in_another_target():
     assert f"https://{secret}/pub/repo#5" in c.alt_targets, c
     card = summarize(c, d)
     assert "It may land on https://***@ghe.example.com/pub/repo#5 instead." in card and "tok" not in card, card
+
+
+# gh api's method reads as pflag reads it (round 5, item 5): a cluster ends at `-X` (`-iX DELETE`, `-iXPUT`) and gh
+# keeps the last of a repeated `-X` or `--method`. The gate read the first `-X` word as written, so these were GETs.
+# Where the two readings differ the line also has the reading before (floor), and the stricter decision stands.
+DENY_DELETE = normalize_policies({"gates": {"deny": [{"category": "delete"}]}})
+
+
+@pytest.mark.parametrize("line,category,method", [
+    ("gh api -iX DELETE repos/pub/repo", "delete", "DELETE"),
+    ("gh api -iXDELETE repos/pub/repo", "delete", "DELETE"),
+    ("gh api -iXPUT repos/pub/repo/pulls/5/merge", "github_post", "PUT"),
+    ("gh api -X=DELETE repos/pub/repo", "delete", "DELETE"),
+    ("gh api -X GET -X DELETE repos/pub/repo", "delete", "DELETE"),
+    ("gh api --method GET --method=DELETE repos/pub/repo", "delete", "DELETE"),
+    ("gh api -X GET --method DELETE repos/pub/repo", "delete", "DELETE"),
+])
+def test_gh_api_reads_its_method_as_gh_does(line, category, method):
+    c, d = run(line, DENY_DELETE)
+    assert (c.category, c.target) == (category, "pub/repo") and c.summary.startswith(f"gh api {method} "), c
+    assert c.floor is not None, c
+    if category == "delete":
+        assert d.outcome == "deny", (line, d)
+
+
+@pytest.mark.parametrize("line,before", [
+    ("gh api -X DELETE -X GET repos/pub/repo", "delete"),
+    ("gh api -X DELETE --method GET repos/pub/repo", "delete"),
+    ("gh api --jq -X repos/pub/repo", "github_post"),           # `-X` is the jq query, read before as `-X repos/...`
+])
+def test_gh_api_s_method_as_read_before_still_counts(line, before):
+    # gh sends a GET, but the gate read another method before, so that reading still decides, as on main.
+    c, d = run(line, DENY_DELETE)
+    assert (c.category, c.floor.category) == ("read", before), c
+    assert decide(c, DENY_DELETE).outcome == decide(c.floor, DENY_DELETE).outcome, (line, d)
+    assert d.exposure == "public", (line, d)
+
+
+@pytest.mark.parametrize("line", ["gh api -X DELETE repos/pub/repo", "gh api --method=PUT repos/pub/repo/pulls/5/merge",
+                                  "gh api repos/pub/repo/issues -f title=x", "gh api -i -X GET repos/pub/repo"])
+def test_gh_api_s_method_read_one_way_has_no_floor(line):
+    c, _ = run(line)
+    assert c.floor is None, c

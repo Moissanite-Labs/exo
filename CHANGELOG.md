@@ -158,10 +158,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `gh issue close --duplicate-of` and `-r` take a value in the gate's table now, and the table lists `gh pr ready`,
   `lock` and `unlock`, `gh issue develop`, `lock`, `unlock`, `delete` and `transfer`, and `gh release upload` and
   `delete`, beside the reopen and merge rows from #397. So `gh pr ready --undo <URL>` no longer asks about "the
-  current repo". `gh api`
-  took its endpoint from the first word with a `/`, an option's value too, so
+  current repo". `gh api` took its endpoint from the first word with a `/`, an option's value too, so
   `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` was a post on `myorg/app`. Its
-  endpoint is its one operand now, and the word it took before is another target. `-R` reads as gh reads it:
+  endpoint is its one operand now, and the word it took before is another target. Its method reads as gh reads it,
+  so `gh api -iX DELETE repos/pub/repo` and `gh api -X GET -X DELETE repos/pub/repo` are deletes, not reads. Where
+  that differs from the first `-X` word as written, the line as read before is decided too. `-R` reads as gh reads it:
   `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`, not `=pub/repo`, and `github.com/pub/repo` or a repo URL names
   `pub/repo`, so a `target:` deny on `pub/*` matches them. On another host the value as written is another target. An
   operand from an expansion (`gh pr merge "$U" -R myorg/app`) may name any repo, so the line is also decided on a repo
