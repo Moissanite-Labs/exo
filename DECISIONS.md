@@ -2163,7 +2163,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   for a part only when its regex also matches that part's own text. Deny rules and the #136 veto match there as
   before, so every part denied before is denied now. Each step keeps the stricter outcome, so this pass is never
   looser than before. When it passes a rule over, the gate also decides the line as before, and that decision stands,
-  reason and all, unless the new one is stricter. Rules that keep or raise the line (a log rule over an allow cell, an
+  reason and all, unless the new one is stricter. This pass reads rules and patterns that deciding as before never
+  reaches (the walk past a rule passed over, each regex of a matched list), so when it fails, for example on a bad
+  regex, the gate decides the line as before, which fails only where it failed before.
+  Rules that keep or raise the line (a log rule over an allow cell, an
   ask or deny rule over a lower cell) and `reserved:` and `deny:` entries match the whole line and its decoded views
   as before. A line the gate reads as one part is matched on its command text as before. The ledger view (`as_dict`)
   leaves the own text and the setters out, so approval bindings and trace rows are unchanged. A part's own text is its

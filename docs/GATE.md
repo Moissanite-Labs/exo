@@ -663,7 +663,10 @@ gate does not read:
   deny rules in the #191 pass above and the `command:` entries of `reserved:` and `deny:` match the
   whole line and its decoded views as before. So this change never makes a decision looser than
   before. When it passes a rule over, the gate also decides the line as before, and that decision
-  stands, reason and all, unless the new one is stricter. An anchored rule such as
+  stands, reason and all, unless the new one is stricter. This pass reads rules and patterns that
+  deciding as before never reaches (the walk past a rule passed over, each regex of a matched
+  list), so when it fails, for example on a bad regex, the gate decides the line as before.
+  An anchored rule such as
   `'^git push --force origin main$'` still matches no compound line, as before.
   `{command: '^git status', decision: allow}` no longer allows
   `git status; git push --force origin main`: it asks, and under `categories: {force_push: deny}`
