@@ -800,7 +800,7 @@ def test_a_literal_that_sets_shell_state_leaves_code_decided_as_before(setter):
     assert outcome(f"true; {py}", pol(rule("os\\.system"), categories=OPAQUE_OK)) == "ask"     # main: allow
 
 
-WRITE ={"tool": "write_file", "args": {"path": "/tmp/x", "content": "y"}}
+WRITE = {"tool": "write_file", "args": {"path": "/tmp/x", "content": "y"}}
 FETCH = {"tool": "web_extract", "args": {"url": "https://example.com/a"}}
 CODE = {"tool": "execute_code", "args": {"code": "print(1)"}}
 
