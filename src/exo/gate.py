@@ -5772,12 +5772,17 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     the first match, as before, and the rule found after it. A rule passed over never names opaque_exec for the
     floor. The #191 pass asks the same of a rule that would lift a part's deny, so it denies each part it denied
     before. So that pass is never looser than deciding as before. When it passes a rule over, the line is also
-    decided as before, and that decision stands unless the other is stricter, reason and all.
+    decided as before, and that decision stands unless the other is stricter, reason and all. That pass reads rules
+    and patterns the decision before never reached (a regex past the first match, a rule after the one skipped), so
+    when it fails, the line is decided as before, which then fails only where it failed before.
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
     ctx = dict(context or {})
     passed: list[Mapping] = []
-    d = _decide(c, pol, ctx, passed)
+    try:
+        d = _decide(c, pol, ctx, passed)
+    except Exception:
+        return _decide(c, pol, ctx, None)
     if passed:
         before = _decide(c, pol, ctx, None)
         if OUTCOMES.index(d.outcome) <= OUTCOMES.index(before.outcome):

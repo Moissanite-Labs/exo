@@ -830,6 +830,19 @@ def test_an_ask_rule_that_lowers_a_category_deny_must_name_the_command():
     assert outcome(F, pol(rule(["^git status", PUSH], "ask"), categories=deny_push)) == "ask"
 
 
+def test_a_failure_in_the_own_text_pass_gives_the_decision_from_before():
+    # The pass reads rules and patterns that deciding as before never reaches: the walk past a rule it passes over,
+    # every pattern of a matched list. A bad regex there raised, and the hook turned main's deny into an ask
+    # ("exo-gate could not classify"). Now the line is decided as before, with main's outcome and reason.
+    d = decide(sh(F), pol(ALLOW_STATUS, rule("("), deny=["force_push"]))
+    assert (d.outcome, d.rule, d.reason) == ("deny", "deny", "denied by policy (force_push)"), d
+    d = decide(sh("git status; ls"), pol(rule(["^git", "("])))
+    assert (d.outcome, d.rule) == ("allow", "rule"), d
+    # A pattern that deciding as before reaches still fails as it did.
+    with pytest.raises(re.error):
+        decide(sh(F), pol(rule("(")))
+
+
 NEVER_LINES = [
     F, f"{PUSH}; git status", f"cd repo && {PUSH}", f"rm -rf build && {PUSH}", "cd /tmp/evil && make test",
     "gh pr comment 3 --body hi && rm -rf build", f"export GIT_DIR=/tmp/x/.git; {PUSH}", "ls; bash -c 'evilbin'",
