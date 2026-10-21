@@ -3495,6 +3495,69 @@ def _copy(c: Classification) -> Classification:
     return replace(c, signals=list(c.signals), _command_views=list(c._command_views))
 
 
+def _remote_fed(ctx: dict, key: tuple, k: _Cmd, piped: str | None, depth: int) -> list[Classification]:
+    """_once's parts for ssh's stdin, marked as running on the remote host (D-075), built once per stdin
+    text of the line and shared by every ssh the text is fed to. The hop used to copy and mark the parts
+    per ssh, which cost (number of ssh) x (number of fed parts) in classify and again in decide (#327).
+    What is handed out carries the part's fields as _once's copies do, unmarked, so _combine weighs it
+    as it weighed the copy; under it sits the marked part itself, shared, which no caller changes in
+    place but the hop, and the hop keeps it as it is (_hop_copy). A first call hands out every part and
+    a repeat only the most severe of each category, as _once does."""
+    memo = ctx.setdefault("remote", {})
+    whole = (*key, id(k.heredocs), id(k.herestrings), piped, False)
+    if whole not in memo:
+        got = _once(ctx, key, k, piped, lambda t: [classify_shell(t, depth)])
+        ids = ctx.setdefault("remote_ids", {})
+        first = []
+        for c in copy.deepcopy(got):
+            marked = None
+            if c.parts:                       # a part with no parts is handed out as a plain copy
+                marked = copy.deepcopy(c)
+                for p in _each_part(marked):
+                    if EXPOSURE.index(p.exposure) < 1:
+                        p.exposure = "internal"
+                    ids[id(p)] = p
+                    ids[id(p.parts)] = p.parts
+                    ids[id(p.signals)] = p.signals
+                    ids[id(p._command_views)] = p._command_views
+            first.append((c, marked))
+        most = [max((p for p in got if p.category == c), key=_severity)
+                for c in dict.fromkeys(p.category for p in got)]
+        pos = {id(g): n for n, g in enumerate(got)}
+        memo[whole] = (first, [first[pos[id(m)]] for m in most], False)
+    first, rest, called = memo[whole]
+    memo[whole] = (first, rest, True)
+    return [_hand_out(pair) for pair in (rest if called else first)]
+
+
+def _hand_out(pair: tuple) -> Classification:
+    """One ssh's copy of a fed part: the part's own fields, as _once's copy carries them, with the marked
+    part as its only part when there is one, so every ssh the text is fed to shares the one marked
+    subtree instead of listing its parts again (the walks in decide key on the parts themselves). The
+    hop's marking raises this copy's exposure like any other part's, so it ends where the marked part
+    sits; the marked part's own exposure is never read at combine time."""
+    c, marked = pair
+    if marked is None:
+        return _copy(c)
+    out = _copy(c)
+    out.parts = [marked]
+    return out
+
+
+def _hop_copy(c: Classification, shared: dict, memo: dict | None = None) -> Classification:
+    """copy.deepcopy of an ssh hop's result, except the parts _remote_fed marked and shares for the line
+    (in `shared`, by id): those stay shared, so a text fed to many ssh is copied once, not once per ssh."""
+    memo = {} if memo is None else memo
+    if id(c) in shared:
+        return c
+    if id(c) in memo:
+        return memo[id(c)]
+    out = replace(c, signals=list(c.signals), _command_views=list(c._command_views), parts=[])
+    memo[id(c)] = out
+    out.parts = list(c.parts) if id(c.parts) in shared else [_hop_copy(p, shared, memo) for p in c.parts]
+    return out
+
+
 # Builtins that take a variable name and evaluate an array subscript in it as arithmetic, which runs any
 # $( ) or ` ` there (#179): program -> (options whose value is a name, options with another value, operands are names).
 _NAME_BUILTINS = {"printf": ("v", "", False), "read": ("a", "dinNptu", True), "declare": ("", "", True),
@@ -3967,7 +4030,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if fed_line:
                 fed[0].signals.append(_LINE_STDIN)
             if depth < _DEPTH:
-                fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
+                fed += _remote_fed(ctx, (classify_shell, inner_depth), k, piped, inner_depth)
             lead = direct and _lead([c, *fed]) is not c
             # A part beside ssh's own, not built into it (#316): sudo or a privileged wrapper around ssh still marks
             # ssh's own part costly, as when ssh reads no stdin, and the line takes the more severe part.
@@ -3998,10 +4061,21 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         # the bare host, and the destination as written when it carries a user, a scheme or a port.
         c.parts += [_make("shell", summary=f"ssh {dest}", target=t, command=cmd, signals=["remote host"])
                     for t in dict.fromkeys(dests) if t]
-        c = copy.deepcopy(c)                  # parts can be shared with a stored result (_own_copy): mark a copy
-        for p in _each_part(c) if not here else ():   # every part runs on the remote host (D-075)
-            if EXPOSURE.index(p.exposure) < 1:
-                p.exposure = "internal"
+        if not here:                          # parts can be shared with a stored result (_own_copy): mark a copy.
+            shared = ctx.get("remote_ids") or {}
+            c = _hop_copy(c, shared)          # the fed parts stay shared: _remote_fed marked them once (#327)
+            todo, seen = [c], set()
+            while todo:                       # every part runs on the remote host (D-075)
+                p = todo.pop()
+                if id(p) in seen or id(p) in shared:
+                    continue
+                seen.add(id(p))
+                if EXPOSURE.index(p.exposure) < 1:
+                    p.exposure = "internal"
+                if id(p.parts) not in shared:
+                    todo.extend(reversed(p.parts))
+        else:
+            c = copy.deepcopy(c)              # as main: the copy stays private for _hop_fill below
         _hop_fill(c, dest)
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)

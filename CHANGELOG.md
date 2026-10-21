@@ -6,6 +6,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Gate (#327): a line feeding one text to many `ssh` commands took quadratic time (decide 22 s at
+  25 KB in the #303 review). For each ssh, the hop copied the fed text's parts and marked them as
+  running on the remote host, so the result held a copy of every fed part per ssh, and decide
+  scoped and matched each copy. The fed parts are now marked once, when the text is first read
+  for the line, and shared by every ssh it is fed to; a hop still weighs the parts as _once read
+  them and marks its own copy, so the decisions are the ones the copies gave (a battery of fed
+  lines under ten policies decides exactly as on main). The shape joins the linear-work tests at
+  20 KB and 80 KB. Two #303 test gaps are closed: a stdin the gate cannot read on a descriptor
+  (`ssh host <&3`, `ssh host 0<&3`, `ssh host <> file`) and the flag words after the host
+  (`ssh -- host -T`, `ssh host -n`, `ssh host -- -T`) have rows now.
 
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
