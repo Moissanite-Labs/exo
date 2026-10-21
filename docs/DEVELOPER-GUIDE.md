@@ -414,20 +414,24 @@ The script compares two trees, not a diff. If main moved after your branch began
 first. Otherwise each line a later main change made stricter shows up as lowered.
 
 The script runs `gate.classify` and `gate.decide` of each tree in a process of its own, with the same HOME and no
-`EXO_*` variables. It never imports either gate itself. The actions are the lines and tool calls the gate suites test,
-read from the test files of both trees, so a line still runs when the head deletes its test. To these come compound
-forms of each simple line (about 24,000 actions in all). The policies are built into the script (more than 70). A full
-run takes a few minutes on four cores. `--jobs` sets the workers in each tree. Add actions with `--corpus lines.txt`
-(one command per line, or a JSON list) and policies with `--policies more.py` (a `POLICIES` mapping).
+`EXO_*` variables. That HOME is a temp folder under /var/tmp, outside /tmp, so a line that names /tmp does not touch the
+store. `--home` sets another. The script never imports either gate itself. The actions are the lines and tool calls the
+gate suites test, read from the test files of both trees, so a line still runs when the head deletes its test. To these
+come compound forms of each simple line (about 24,000 actions in all). The policies are built into the script (more than
+70). A full run takes a few minutes on four cores. `--jobs` sets the workers in each tree. Add actions with
+`--corpus lines.txt` (one command per line, or a JSON list) and policies with `--policies more.py` (a `POLICIES`
+mapping).
 
 Exit status 0 means nothing is lower. Exit 1 means at least one pair of action and policy is lower: an outcome below
-main's in the order allow, log, ask, deny, a reserved hit lost, or posting violations lost. A classify or decide that raises
-counts as the hook's answer to an error: ask, or allow for a read tool. The summary groups the lowered pairs by
-transition, such as `store_write ask -> read allow`, and by policy. `--json` writes the lowered actions and pairs,
-the first 5,000 of each. Fix each lowered line, or name it in the decision amendment the change records, with the
-reason it is safe. Exit 2 means a tree could not run or the script failed, such as on a folder that does not
-exist or a policy file that raises. A tree that dies or runs past `--timeout` (an hour by default) is stopped
-with exit 2 too. Tightenings are only counted.
+main's in the order allow, log, ask, deny, a reserved hit lost, or posting violations lost. A classify or decide that
+raises counts as the hook's answer to an error: ask, or allow for a read tool. The summary groups the lowered pairs by
+transition, such as `store_write ask -> read allow`, and by policy. Tightenings are only counted. `--json` writes the
+lowered actions and pairs, the first 5,000 of each in corpus order. The `--corpus` lines come first in that order, so
+the cap keeps them before the built-in lines. Fix each lowered line, or name it in the decision amendment the change
+records, with the reason it is safe.
+
+Exit 2 means a tree could not run or the script failed, such as on a folder that does not exist or a policy file
+that raises. A tree that dies or runs past `--timeout` (an hour by default) is stopped with exit 2 too.
 
 ### CI, lint, lockfile and the privacy deny-list (D-042)
 
