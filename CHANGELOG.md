@@ -164,7 +164,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   from an expansion where the subcommand may stand (`gh pr "$V" 5`) counts as code the gate cannot read. The line as
   read before is decided too, and the stricter decision stands, so no line decides lower than it did. A required
   executor refuses the line when either reading has a body file or an unseen body, so `gh pr "$V" 5 -F notes.md` is
-  refused as before.
+  refused as before. Only who may answer both readings may answer the line, so a seat listed for `github_post` does
+  not answer `gh pr -b x comment 5`, which only the principal answered as a read. A line either reading makes
+  credentials, a store write or an unseen post is answered once, gets no standing grant and asks in observe mode.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
