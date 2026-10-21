@@ -183,7 +183,7 @@ the unseen check found unseen with a row of the table as it was before #399 stay
 `gh pr reopen 5 -cb x` and a close whose `--duplicate-of` value is an option word
 (`--duplicate-of -c x`) stay unseen. gh refuses the second line. The gate does not read
 `GH_HOST` or `gh api --hostname`: `owner/name` counts as a repo on github.com. A differential over
-106,403 gh lines under 39 policies found no line that decides lower than before #399, on the
+126,403 gh lines under 39 policies found no line that decides lower than before #399, on the
 outcome, the exposure, the third party, the violations, the reserved parts, the outward and
 exact binding checks, the unseen check or the signals. Tests:
 `tests/security/test_gate_gh_target_operands.py`, `tests/security/test_gate_gh_subcommand_position.py`.

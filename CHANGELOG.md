@@ -148,7 +148,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `pub/repo`, so a `target:` deny on `pub/*` matches them. On another host the value as written is another target. An
   operand from an expansion (`gh pr merge "$U" -R myorg/app`) may name any repo, so the line is also decided on a repo
   it does not name. On an ssh or mosh hop the host stands for an empty other target too, as for an empty target. A
-  differential over 106,403 gh lines under 39 policies found no line that decides lower than before.
+  differential over 126,403 gh lines under 39 policies found no line that decides lower than before.
 - Gate (#399, D-033): an option before a gh subcommand no longer hides it. gh finds the subcommand past the options
   before it, so `gh pr -R pub/repo comment 5 -b text` and `gh pr -b text comment 5 -R pub/repo` post. The gate took
   the third word for the subcommand, so these lines were reads and ran under any policy, as did
