@@ -570,7 +570,9 @@ def launch_line(topic: str, path: str | os.PathLike) -> str:
 # --- write and load --------------------------------------------------------------
 
 def _attr(v: Any) -> str:
-    return str(v).replace('\\', '\\\\').replace('"', '\\"')
+    """One header attribute value: quotes and backslashes escaped, and line breaks folded to
+    spaces, so a value can never add a line of its own to the file (#395)."""
+    return ' '.join(str(v).replace('\\', '\\\\').replace('"', '\\"').splitlines())
 
 
 def _quoted_items(signals: list[Signal]) -> str:
@@ -602,7 +604,7 @@ def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, cr
          f'- In a fresh session: `/exo resume {slugify(topic)}`',
          f'- From a shell: `{launch_line(topic, path or "")}`']
     if path:
-        L.append(f'- This file: {path}')
+        L.append(f'- This file: {_one_line(path)}')
     L.append('- Treat the quoted rulings and corrections below as standing instructions.')
 
     if signals.brief:
@@ -681,13 +683,33 @@ def _numbered(body: str) -> list[str]:
     return [m.group(1).strip() for m in re.finditer(r'^\d+\.\s+(.+)$', body, re.M)]
 
 
+def _header_body(text: str) -> str | None:
+    """The exo-handoff header's attribute text, or None. The closing --> counts only outside a
+    quoted value: a --> inside topic="..." is data, not the end of the comment (#395)."""
+    m = re.search(r'<!--\s*exo-handoff\s+', text)
+    if not m:
+        return None
+    i, quoted = m.end(), False
+    while i < len(text):
+        ch = text[i]
+        if quoted and ch == '\\':
+            i += 2
+            continue
+        if ch == '"':
+            quoted = not quoted
+        elif not quoted and (text.startswith('-->', i) or text.startswith('--!>', i)):
+            return text[m.end():i]
+        i += 1
+    return None
+
+
 def load_handoff(path: str | os.PathLike) -> Handoff:
     p = Path(path).expanduser()
     text = p.read_text(encoding='utf-8')
     meta: dict[str, str] = {}
-    hm = HEADER_RE.search(text)
-    if hm:
-        meta = {k: v.replace('\\"', '"').replace('\\\\', '\\') for k, v in ATTR_RE.findall(hm.group(1))}
+    body = _header_body(text)
+    if body is not None:
+        meta = {k: v.replace('\\"', '"').replace('\\\\', '\\') for k, v in ATTR_RE.findall(body)}
     topic = meta.get('topic')
     if not topic:
         tm = re.search(r'^# (?:Handoff:\s*)?(.+)$', text, re.M)
@@ -697,7 +719,16 @@ def load_handoff(path: str | os.PathLike) -> Handoff:
     # is the last in the file; a forged earlier copy (an old file's unquoted summary) loses (#353).
     for m in re.finditer(r'^## Next steps\s*$(.*?)(?=^## |\Z)', text, re.S | re.M):
         secs['Next steps'] = m.group(1).strip('\n')
-    decided = secs.get("Decisions made (principal's words, verbatim)", '')
+    # Decisions counts only when exactly one such heading stands before ## State, where the
+    # writer puts it. A file an older writer left with a field spanning lines can hold a forged
+    # copy ahead of the real one; two copies mean neither can be taken as the principal's
+    # words, so the file reads as undecided rather than forged (#395).
+    state = re.search(r'^## State\s*$', text, re.M)
+    head = text[:state.start()] if state else text
+    if len(re.findall(r"^## Decisions made \(principal's words, verbatim\)\s*$", head, re.M)) == 1:
+        decided = secs.get("Decisions made (principal's words, verbatim)", '')
+    else:
+        decided = ''
     open_body = secs.get('Open decisions', '')
     return Handoff(
         path=p, topic=topic, created=meta.get('created', ''), meta=meta, text=text, sections=secs,
