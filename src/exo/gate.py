@@ -4970,6 +4970,130 @@ def _lead(parts: list[Classification]) -> Classification | None:
     return c
 
 
+_COPY_SRC = re.compile(r"(\d+)(-?)")     # a copy's source: a descriptor number, `-` when it closes after
+
+
+def _fd_num(fd: str, default: str) -> str | None:
+    """A redirection's descriptor as text: the number written before its operator, or ``default`` when none is
+    written. Compared as text, as in _store_touch, so a number of any length is safe. None when it is not
+    digits (a named `{fd}` descriptor); the caller skips that redirection."""
+    if not fd:
+        return default
+    return (fd.lstrip("0") or "0") if fd.isascii() and fd.isdigit() else None
+
+
+def _held_open(t: _Word, seen: dict) -> bool:
+    """Whether a `<` target leaves its descriptor holding a file a copy onto stdout or stderr would write
+    back (#336): one that pins to a store path, or one the gate cannot pin to a path (a variable, a
+    substitution, a glob or a relative name), as #305 already counts those on descriptors 1 and 2."""
+    targets = _shell_words(t, seen, "target")
+    if targets is None:
+        return True
+    loose = t.dynamic or t.glob or not _expand_text(t.text).startswith("/")
+    if targets:
+        return loose or any(_store_word(x) for x in targets)
+    return loose or _store_word(t.text)     # a covering check read this spelling already: read it as written
+
+
+def _fd_apply(redirs: list, held: dict, seen: dict) -> str:
+    """Follow one command's redirections over ``held`` (descriptor -> the open target it holds, as written),
+    in the order bash applies them. A copy (`N<&M`, `N>&M`, `>&M`, `N<&M-`) gives the destination what the
+    source holds. Returns the target a copy puts onto stdout or stderr, or ''."""
+    for op, t in redirs:
+        if op in ("<", "<>"):
+            d = _fd_num(t.fd, "0")
+            if d is None:
+                continue
+            if _held_open(t, seen):
+                held[d] = t.text
+            else:
+                held.pop(d, None)
+        elif op in ("<&", ">&"):
+            d = _fd_num(t.fd, "1" if op == ">&" else "0")
+            if d is None:
+                continue
+            m = _COPY_SRC.fullmatch(t.text)
+            if t.text == "-":                       # `N>&-`: the descriptor is closed
+                held.pop(d, None)
+            elif m:                                 # a copy: the destination holds what the source holds
+                s = m.group(1).lstrip("0") or "0"
+                if s in held:
+                    if d in ("1", "2"):
+                        return held[s]
+                    if d != s:
+                        held[d] = held[s]
+                        if m.group(2):              # `N<&M-`: the copy closes the source
+                            held.pop(s, None)
+                else:
+                    held.pop(d, None)
+            else:                                   # `>& file`: both streams go to a file
+                held.pop(d, None)
+                if not t.fd:
+                    held.pop("2" if d == "1" else "1", None)
+        elif op in _WRITE_REDIRS:
+            d = _fd_num(t.fd, "1")
+            if d is None:
+                continue
+            held.pop(d, None)                       # a plain write binds the descriptor to a file instead
+            if op in ("&>", "&>>") and not t.fd:
+                held.pop("2", None)
+    return ""
+
+
+def _exec_shaped(k: _Cmd) -> bool:
+    """Whether the command is `exec` reached as _sets_shell_stdin reaches it (past openers, `command`,
+    `time` and assignments). An exec's redirections bind the shell's own descriptors, so what they hold
+    persists to the line's later commands; any other command's bind only itself."""
+    w = next((w for w in k.words if not (w.text in _OPENERS or w.text in ("command", "time", "-p")
+                                          or _ASSIGN.fullmatch(w.text))), None)
+    return w is not None and w.text == "exec"
+
+
+def _fd_copy_store(cmds: list, seen: dict) -> str:
+    """#336, the copy route of #217: a store file opened for reading on a descriptor the open check in
+    _store_touch leaves alone -- stdin, or descriptor 3 and up through a spelling the gate cannot pin to a
+    path -- is written back when a copy puts what the descriptor holds onto stdout or stderr and the line
+    writes there (`printf F < G 1<&0 > /dev/stdout`). The descriptors a line holds are followed across its
+    commands: a compound's redirections bind every command inside it, so a closer's are applied where its
+    compound opens (a heredoc or here-string of the closer on stdin holds text there instead); an exec's
+    persist, as the shell's do. Returns the open target to blame, or ''. A closer the word scan cannot pair
+    with an opener (a subshell's, an empty command) seeds from the line's start: this fails closed."""
+    starts: dict = {}       # a compound's first command -> the closer whose redirections seed it
+    closers: set = set()    # commands whose redirections a seed already applied
+    stack: list = []
+    for i, k in enumerate(cmds):
+        head = k.words[0].text if k.words and not k.words[0].quoted else ""
+        if head in _COMPOUND_OPENERS:
+            stack.append(i)
+        closer = head in _COMPOUND_CLOSERS and all(
+            w.quoted or w.text in _OPENERS or w.text in _COMPOUND_CLOSERS for w in k.words)
+        if closer or not k.words and k.redirs:
+            start = stack.pop() if stack else 0
+            if start not in starts:
+                starts[start] = k
+                closers.add(i)
+    held: dict = {}
+    for i, k in enumerate(cmds):
+        seed = starts.get(i)
+        if seed is not None:
+            hit = _fd_apply(seed.redirs, held, seen)
+            if hit:
+                return hit
+            if not any(op in ("<", "<>") and _fd_num(t.fd, "0") == "0" for op, t in seed.redirs) and (
+                    any(not h.fd.lstrip("0") for h in seed.heredocs)
+                    or any(not w.fd.lstrip("0") for w in seed.herestrings)):
+                held.pop("0", None)         # the compound's stdin is text, not a file
+        if i in closers:
+            continue                        # its redirections were applied where its compound opened
+        local = dict(held)
+        hit = _fd_apply(k.redirs, local, seen)
+        if hit:
+            return hit
+        if _exec_shaped(k):
+            held = local
+    return ""
+
+
 def _combine(parts: list[Classification], cmd: str) -> Classification:
     """The most severe part, with every part's signals. A store write outranks everything but credentials."""
     signals = [s for p in parts for s in p.signals]
@@ -5909,6 +6033,18 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         c = secret(c, found, found, c.category in ("store_write", "credentials"))
     if more and more != found:
         c = secret(c, more, more, c.category in ("store_write", "credentials"))
+    # #336: a store file a descriptor holds reaches stdout or stderr by a copy (1<&0, >&0, N<&M-), and the
+    # next write there writes it back; the per-command open check never follows the copy.
+    if c.category not in ("credentials", "store_write"):
+        hit = _fd_copy_store(cmds, ctx.setdefault("store_braces", {}))
+        if hit:
+            signals = c.signals
+            what = (f"uses {hit}, a descriptor path or folder the gate cannot resolve (it may lead to an Exo store file)"
+                    if _fd_path(hit) else f"write to the Exo store: {hit}")
+            c = _make("store_write", summary=what[:120], target=hit, link=hit, command=cmd)
+            c.signals = signals + ["exo store"]
+            c.parts = list(parts)
+
     c.command = cmd
     c._command_views = list(dict.fromkeys([
         _policy_command_view(cmd),

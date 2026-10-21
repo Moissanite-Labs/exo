@@ -2720,8 +2720,14 @@ reading on a descriptor other than stdin (`3< f`, `exec 2< f`, `{ ...; } 1< f`) 
 too, because `> /dev/fd/3` or `> /dev/stdout` later on the line, or in a later call of a persistent
 shell, writes it back. On stdout or stderr, where the write back is an ordinary write, any target the
 gate cannot pin to a path counts as well: a variable (`1< "$f"`), a substitution, a glob
-(`2< ~/.exo/sta*/gate-grants.json`) or a relative name (`exec 1< gate-grants.json`). `cat < f`,
-`cat 0< f`, `exec 3< "$f"` and `exec 2< /dev/null` stay reads.
+(`2< ~/.exo/sta*/gate-grants.json`) or a relative name (`exec 1< gate-grants.json`). A store file
+also reaches stdout or stderr by a copy, with no descriptor path written at all: what each descriptor
+holds is followed across the line (a compound's redirections bind the commands inside it, an exec's
+persist), and a copy onto descriptor 1 or 2 (`1<&0`, `>&0`, `2>&0`, `N<&M`, `N>&M`, `N<&M-`) from a
+descriptor holding one -- a store file opened on stdin (`< f`, `{ ...; } < f`), or on descriptor 3
+and up through a spelling the gate cannot pin to a path -- is a `store_write` too, because the next
+write to stdout or stderr writes it back (#336). `cat < f`, `cat 0< f`, `exec 3< "$f"` and
+`exec 2< /dev/null` stay reads, as does a copy from a descriptor that holds nothing the gate tracks.
 
 Known limits. A descriptor path is matched as written, not resolved (the gate's own realpath would run
 through its own descriptors). A link to one, or to `/dev` or `/proc/self`, is a store write when a shell
