@@ -723,7 +723,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   gh command outside the table the gate reads the operands twice, with every
   option a flag and with every option taking a value. A URL operand that only the first reading finds never
   replaces `-R`, and with no `-R` it names the target beside the reading without it. A close whose `--duplicate-of`
-  value is an option word stays unseen, as it was (gh refuses the line). A differential over 36,288 gh lines and 15
+  value is an option word stays unseen, as it was (gh refuses the line). gh also finds a subcommand past the
+  options before it, and the subcommand reads every option on the line: `gh pr -R pub/repo comment 5` and
+  `gh pr -b text comment 5` post (gh 2.89). The gate took the third word for the subcommand, so such a line was
+  a read and ran under any policy. `_gh_verb_order` now finds the subcommand as cobra does, and a word from an
+  expansion where it or an option may stand makes the line `opaque_exec`. The line as read before is decided too
+  (`Classification.floor`), the stricter standing on each axis. Without it a compound line could decide lower: in
+  `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the push, as in the same line with the
+  options after the subcommand, and a private scope lowers it. A differential over 36,288 gh lines and 15
   policies found no line less exposed, less third-party or lower in outcome than on main. Rejected: letting `-R`
   win over a URL operand, since gh posts on the URL's repo and lines that asked as public would log. Also rejected:
   dropping the earlier reading, since a deny or a rule naming the repo a body links to would stop firing on a line

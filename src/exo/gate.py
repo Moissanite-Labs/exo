@@ -125,11 +125,15 @@ class Classification:
     # Other targets the gate cannot rule out for the same action (#399): `decide` decides the line on each and the
     # strictest decision stands. A copy of the action on each is also a part, so a deny or reserved entry sees it.
     alt_targets: list[str] = field(default_factory=list, repr=False)
+    # The line read with the third word of each gh command for its subcommand, as the gate read it before #399, when
+    # gh finds a subcommand past the options before it (_gh_verb_order). `decide` keeps the stricter of the two.
+    floor: "Classification | None" = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
         d.pop("parts", None)
+        d.pop("floor")
         d.pop("_command_views")
         if not d["alt_targets"]:
             d.pop("alt_targets")
@@ -1943,11 +1947,58 @@ def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
     return _has(argv, *flags) or any(a.startswith(f + "=") for a in argv for f in flags if f.startswith("--"))
 
 
+# gh commands with subcommands. gh (cobra) finds the subcommand past the options before it.
+_GH_VERB_GROUPS = _GH_GROUPS - {"api", "browse", "status", "completion", "help", "version", "--version", "--help"}
+
+
+def _gh_verb_order(argv: list[str], dynamic: frozenset) -> list[int] | None:
+    """argv's indexes in the order gh reads them, with the subcommand third (#399). gh (cobra) finds the subcommand
+    past the options before it: an option word without `=` that starts with `--` or has two characters takes the
+    next word as its value (`-R owner/name`, `-b text`, `-h comment`), `--help` and any other option word stand
+    alone (`-Rowner/name`, `--body=text`, `-`), and `--` ends the search. The subcommand then parses every option on
+    the line, so `gh pr -b text comment 5` is `gh pr comment -b text 5`. None when a word from an expansion stands
+    where the subcommand or an option may be: the gate cannot tell what gh runs."""
+    order = list(range(len(argv)))
+    if argv[1:2] and argv[1] in _GH_VERB_GROUPS:
+        i = 2
+        while i < len(argv) and argv[i] != "--":
+            a = argv[i]
+            if i in dynamic:
+                return None
+            if not a.startswith("-"):
+                return [0, 1, i] + order[2:i] + order[i + 1:]
+            i += 2 if "=" not in a and a != "--help" and (a.startswith("--") or len(a) == 2) else 1
+    return order
+
+
+# Set while classify reads a call's floor: each gh command's third word is its subcommand, as before #399.
+_gh_third_word: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_gh_third_word", default=False)
+_GH_MOVED = ("gh", "subcommand past an option")      # the mark in _call_memo that the call needs a floor
+
+
 def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
                  dynamic: frozenset = frozenset()) -> Classification:
     """A gh command. ``stdin`` is its stdin when the line spells it out (`_literal_stdin`), ``dynamic`` the
     indexes of words that come from an expansion. An outbound post whose text the gate cannot fully read
-    carries the ``unseen_body`` signal (#208)."""
+    carries the ``unseen_body`` signal (#208). The subcommand is the word gh takes for it (_gh_verb_order). When
+    that is not the third word, the call also gets a floor (classify)."""
+    order = None if _gh_third_word.get() else _gh_verb_order(argv, dynamic)
+    if _gh_third_word.get() or order == list(range(len(argv))):
+        return _classify_gh_words(argv, cmd, stdin, dynamic)
+    memo = _call_memo.get()
+    if memo is not None:
+        memo[_GH_MOVED] = True
+    if order is not None:
+        return _classify_gh_words([argv[i] for i in order], cmd, stdin,
+                                  frozenset(n for n, i in enumerate(order) if i in dynamic))
+    as_written = _classify_gh_words(argv, cmd, stdin, dynamic)
+    if as_written.category in NO_GRANT:
+        return as_written                    # gh auth and gh secret hold credentials whatever the subcommand
+    return _opaque(f"gh {argv[1]} with a word from an expansion where its subcommand may be", cmd)
+
+
+def _classify_gh_words(argv: list[str], cmd: str, stdin: str | None, dynamic: frozenset) -> Classification:
+    """A gh command whose subcommand is its third word."""
     target, link, alts = _gh_target(argv)
     c = _gh_kind(argv, cmd, stdin, target, link)
     gist = c.category == "remote_write" and argv[1:2] == ["gist"]          # a secret gist's create or edit
@@ -5137,7 +5188,23 @@ def _args_of(action: Any) -> tuple[str, dict]:
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args. ``cwd`` is the folder the
-    tool runs in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
+    tool runs in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it).
+    When a gh command in it has its subcommand past an option (_gh_verb_order), the call is also read as before
+    #399, with each gh command's third word for its subcommand, and that reading is its ``floor``."""
+    memo = _call_memo.get()
+    if memo is not None:
+        memo.pop(_GH_MOVED, None)
+    c = _classify_call(action)
+    if memo is not None and memo.pop(_GH_MOVED, False) and not _gh_third_word.get():
+        third = _gh_third_word.set(True)
+        try:
+            c.floor = _classify_call(action)
+        finally:
+            _gh_third_word.reset(third)
+    return c
+
+
+def _classify_call(action: Any) -> Classification:
     tool, args = _args_of(action)
     if _runs_shell(tool, args):
         c = classify_shell(str(args.get("command") or args.get("cmd") or ""))
@@ -5546,18 +5613,16 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
     gates, budget, posting = pol["gates"], pol["budget"], pol["posting"]
     ctx = dict(context or {})
+    if c.floor is not None:
+        # #399: the line as the gate read it before gh's subcommand search is decided too, so none decides lower.
+        floor = c.floor
+        return _strictest([decide(replace(c, floor=None), pol, ctx), decide(floor, pol, ctx)],
+                          ["", f" (for {redact_userinfo(floor.summary or floor.category)})"])
     if c.alt_targets:
-        # #399: decided on each target the gate cannot rule out. The strictest decision stands, with the widest
-        # exposure, a third party if any has one, and every violation and reserved part any of them met.
+        # #399: decided on each target the gate cannot rule out.
         base = replace(c, alt_targets=[])
-        ds = [decide(base, pol, ctx)] + [decide(replace(base, target=t), pol, ctx) for t in c.alt_targets]
-        i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
-        where = f" (if it lands on {_target_names(c.alt_targets[i - 1:i])})" if i else ""
-        return replace(ds[i], reason=ds[i].reason + where,
-                       violations=list(dict.fromkeys(v for d in ds for v in d.violations)),
-                       exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
-                       third_party=any(d.third_party for d in ds),
-                       reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)))
+        return _strictest([decide(base, pol, ctx)] + [decide(replace(base, target=t), pol, ctx) for t in c.alt_targets],
+                          [""] + [f" (if it lands on {_target_names([t])})" for t in c.alt_targets])
     eff = _scoped(c, gates.get("scopes") or {})
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
@@ -5667,6 +5732,17 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 def _strictness(d: Decision) -> tuple:
     """How strict a decision is: its outcome, then its exposure, then whether it affects a third party."""
     return OUTCOMES.index(d.outcome), EXPOSURE.index(d.exposure), d.third_party
+
+
+def _strictest(ds: list[Decision], why: list[str]) -> Decision:
+    """The strictest of several decisions of one line, with the widest exposure, a third party if any has one, and
+    every violation and reserved part any of them met (#399). ``why[i]`` ends the reason when ``ds[i]`` stands."""
+    i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
+    return replace(ds[i], reason=ds[i].reason + why[i],
+                   violations=list(dict.fromkeys(v for d in ds for v in d.violations)),
+                   exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
+                   third_party=any(d.third_party for d in ds),
+                   reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)))
 
 
 def _target_names(targets: Iterable[str]) -> str:
@@ -6038,10 +6114,11 @@ DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, 
 
 def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
-    code the gate cannot see into (D-038), so one "always" never covers a different script, and a gh command
-    that may land on another target (``alt_targets``, #399), so a grant on one of its targets never covers it."""
+    code the gate cannot see into (D-038), so one "always" never covers a different script, and a line the gate
+    reads more than one way (#399): a gh command that may land on another target (``alt_targets``), so a grant on
+    one of its targets never covers it, and a line with a ``floor``, whose stricter reading may be another act."""
     return (is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
-            or bool(c.alt_targets))
+            or bool(c.alt_targets) or c.floor is not None)
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:
