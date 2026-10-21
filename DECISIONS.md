@@ -2173,10 +2173,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `ssh -o ProxyCommand` or a function body that shadows `git`. So does a line where a copy of the push that never
   runs stands in for it (`if false; then ...; fi`, an exported value, `PS4`). A log rule over an allow cell only
   raises the line, so its regex still sees the whole line unless it names `opaque_exec` (which lowers the opaque
-  floor). The opaque_exec reading of a line with a `$".."` word is the gate's, so it has no own text. Limits: a
+  floor). The opaque_exec reading of a line with a `$".."` word is the gate's, so it has no own text. The regex
+  must also match each command that changes the shell for the commands after it on the line
+  (`Classification.setters`): an assignment with no command, `export` and the other declaring builtins with an
+  operand, `set -a`/`-k`/`--`, `shopt -s`, `printf -v`, `read`, `mapfile`, `getopts`, `let`, `hash`, `alias`,
+  `enable`, `unset` and `trap` with an operand, `source`, `.`, `pushd`, `popd`, `exec` with only redirections, a
+  `for` or `select` loop, `coproc`, a function definition (no own text) and a program name the gate cannot read. Each
+  is allowed alone, and a bash call starts a fresh shell, so only a later command on the same line sees the change:
+  `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"; git push --force origin main` runs whatever is in /tmp/cmd, and so does
+  `hash -p /tmp/evil git` before the push. Main asked for both under the anchored rule. `cd` is left off the list so
+  that `cd repo && git push --force origin main` stays allowed under it. Limits: a
   command that would be allowed alone still rides on the rule's outcome, as a less severe command does under a
   category line: `cd /tmp/other && git push --force origin main` is allowed under that rule, and so is a write the
-  push reads (`echo x > .git/hooks/pre-push`). A file outlives the call, so two calls do the same on main. A
+  push reads (`echo x > .git/hooks/pre-push`). A file outlives the call, so two calls do the same on main. The `cd`
+  is new: it moves the push into a folder whose hooks and config it then runs, where main asked. A
   `deny:` or `reserved:` entry, or a category line or rule that denies that command, still stops it. Rejected:
   matching ask and deny rules and the lists on own text instead of the whole line (that narrows a veto: the ask rule
   on `gh pr comment` above would no longer ask), deciding every part alone with the strictest outcome winning

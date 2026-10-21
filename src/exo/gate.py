@@ -126,6 +126,9 @@ class Classification:
     # rule's `command` regex is matched against it on a compound line. None where no such text exists (a part the
     # gate made up, an unread nest, a string literal in code), and then no allow or log rule's regex matches.
     own: str | None = field(default=None, repr=False, compare=False)
+    # The own text of each command on this line that changes the shell for the commands after it (_sets_state): an
+    # allow or log rule's `command` regex must match each of them too (#394). None stands for a function definition.
+    setters: list[str | None] = field(default_factory=list, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
@@ -133,6 +136,7 @@ class Classification:
         d.pop("parts", None)
         d.pop("_command_views")
         d.pop("own")
+        d.pop("setters")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -2326,6 +2330,59 @@ def _sets_shell_stdin(k: _Cmd, fnames: set) -> bool:
             or (w.text == "exec" and _own_stdin(k)))
 
 
+# Builtins and keywords after which the shell runs the rest of the line differently (#394): they set or export a
+# variable, an option, an alias, a function, a coprocess, the hash table, a trap or the folder stack, or run a file
+# in this shell. _STATE_ALWAYS do so whatever their arguments, _STATE_OPERANDS when given any (alone they print).
+# eval is not here: the gate reads its text as a nested line, whose own setters count. cd is left out on purpose,
+# so `cd repo && cmd` stays under an allow rule for cmd (docs/GATE.md, Known limits).
+_STATE_ALWAYS = frozenset({"source", ".", "read", "mapfile", "readarray", "getopts", "let", "pushd", "popd",
+                           "for", "select", "function", "coproc"})
+_STATE_OPERANDS = frozenset({"hash", "alias", "enable", "unset", "trap"})
+
+
+def _sets_state(k: _Cmd) -> bool:
+    """Whether the simple command changes the shell for the commands after it on the line (#394): an assignment with
+    no command, `export X`, `declare X=1` (any of _EXPORTERS with an operand), `set` with -a, -k or operands,
+    `shopt -s`/`-u`, `printf -v`, `exec` with only redirections, a program name the gate cannot read, or one of the
+    builtins above. Such a state lasts only as long as the shell, so it changes what a later command on the same
+    line runs (`export GIT_SSH_COMMAND=..; git push`) where a separate call would start afresh."""
+    words = list(k.words)
+    while words and not words[0].quoted and words[0].text in _OPENERS:
+        words = words[1:]
+    if not words:
+        return False
+    if all(_ASSIGN.fullmatch(w.text) for w in words):
+        return True
+    rest, _, split = _strip_prefix_words(words)
+    if split is not None:
+        return False                              # `env -S`: a command line, read as one
+    if not rest:                                  # prefixes only: `exec 3>f` sets the fds later commands get
+        return any(w.text.rsplit("/", 1)[-1] == "exec" for w in words)
+    prog, args = rest[0], rest[1:]
+    if prog.dynamic:
+        return True
+    name = prog.text
+    if name in _EXPORTERS:
+        return any(a.dynamic or not a.text.startswith(("-", "+")) for a in args)
+    if name == "set":
+        i = 0
+        while i < len(args):
+            t = args[i].text
+            if args[i].dynamic or not re.fullmatch(r"[-+][A-Za-z]+", t) or set(t[1:]) & {"a", "k"}:
+                return True                       # allexport, keyword, or new positional parameters (`set -- x`)
+            if "o" in t:                          # `set -o NAME`: the same two by name
+                i += 1
+                if i < len(args) and (args[i].dynamic or args[i].text in ("allexport", "keyword")):
+                    return True
+            i += 1
+        return False
+    if name == "shopt":
+        return any(a.dynamic or re.fullmatch(r"-[a-z]*[su][a-z]*", a.text) for a in args)
+    if name == "printf":
+        return bool(args) and (args[0].dynamic or args[0].text.startswith("-v"))
+    return name in _STATE_ALWAYS or (name in _STATE_OPERANDS and bool(args))
+
+
 def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None, taken: dict,
                    fnames: set) -> None:
     """A compound command's stdin reaches the commands inside it: a heredoc or here-string after its
@@ -4046,6 +4103,7 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
+    setters = [k.own for k in cmds if _sets_state(k)] + ([None] if func else [])
     c = _combine(parts, cmd)
     if c.category == "credentials":  # a secret beside an irreversible command keeps that command's weight
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
@@ -4077,6 +4135,8 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     body = next((h.body for k in cmds for h in k.heredocs), None)
     if not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
         c.text = body
+    if setters:
+        c.setters = [*c.setters, *setters]    # a new list: c may share its setters with a stored result
     return c
 
 
@@ -5457,11 +5517,13 @@ def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[s
     the opaque_exec reading of a `$".."` line) with no own text, and then no such rule lowers the line. They must
     also match every other part that alone would get a stricter outcome than the rule's decision, by its category
     line and the matrix or by the rules (a rider: `rm -rf build && git push --force origin main` under an allow
-    rule for the push). None for a line of one part, which keeps matching the command text."""
+    rule for the push), and every command that changes the shell for the commands after it (Classification.setters:
+    `export GIT_SSH_COMMAND=$X; git push ..`). None for a line of one part, which keeps matching the command text."""
     if not c.parts:
         return None
     parts, top = list(_each_part(c)), _severity(c)
     core = {id(p) for p in parts if p.category == c.category or _severity(p) >= top}
+    setters = list(dict.fromkeys(t for p in parts for t in p.setters))
     bare = {**pol, "gates": {**pol["gates"], "rules": []}}
     alone: dict[int, int] = {}
 
@@ -5479,7 +5541,8 @@ def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[s
             if t not in seen:
                 seen[t] = t is not None and any(rx.search(t) for rx in regexes)
             return seen[t]
-        return all(named(p.own) or (id(p) not in core and not stricter(p, level)) for p in parts)
+        return all(named(t) for t in setters) and \
+            all(named(p.own) or (id(p) not in core and not stricter(p, level)) for p in parts)
     return test
 
 

