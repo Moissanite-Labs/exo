@@ -237,3 +237,24 @@ def test_the_ledger_view_names_other_targets_only_when_there_are_some():
     assert "alt_targets" not in classify(sh("gh pr comment 5 -R pub/repo -b x")).as_dict()
     row = classify(sh(f"gh pr comment {ORG} -R pub/repo -b x")).as_dict()
     assert row["alt_targets"] == ["pub/repo#9"] and "parts" not in row, row
+
+
+# On an ssh or mosh hop the host stands for an empty target, as on main. An empty other target gets the host too,
+# so a rule on the host still sees the reading that had no repo (round 3, item 1).
+@pytest.mark.parametrize("line", [
+    "ssh buildhost gh repo view --web myorg/app",
+    "ssh buildhost 'gh repo fork --clone myorg/app'",
+    "mosh buildhost -- gh repo view --web myorg/app",
+])
+def test_an_ssh_host_stands_for_every_empty_target(line):
+    pol = normalize_policies({"gates": {"rules": [{"match": {"target": "buildhost"}, "decision": "ask"}]}})
+    c, d = run(line, pol)
+    assert "" not in c.alt_targets and "buildhost" in [c.target] + c.alt_targets, c
+    assert d.outcome == "ask", (line, d)
+
+
+def test_an_ssh_host_is_not_an_other_target_of_itself():
+    c, _ = run("ssh buildhost gh pr view 5")
+    assert (c.target, c.alt_targets) == ("#5", []), c
+    c, _ = run("ssh buildhost gh pr view")
+    assert (c.target, c.alt_targets) == ("buildhost", []), c
