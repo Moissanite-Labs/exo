@@ -704,6 +704,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   reading the stdin source file in the gate (the same folder problem, and a host read before a required worker).
   Limits: `docs/GATE.md` "What an approval covers".
 
+- **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.
+  `gh pr merge --subject`/`--body` become the commit message in the repository, public on a public
+  repository, so the posting rules and the scrub see them when a merge carries them, as they have
+  seen a close's comment since #326. A merge carrying neither is unchanged. A reopen's comment is
+  posted text the same way: gh posts it on the thread.
+
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without

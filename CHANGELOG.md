@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A reopen's comment and a merge's subject and body are checked by the posting rules (#397).
+  `gh issue reopen --comment` and `gh pr reopen -c` post a comment the gate filed as a post but
+  never read, and `gh pr merge --body` was read but never checked, with `--subject` not read at
+  all: text that asks as a comment post logged. A reopen now reads its comment as a close does
+  (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
+  text, an unread body file included. A reopen or merge carrying no text is unchanged.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
