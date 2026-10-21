@@ -6,6 +6,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A pattern substitution on a store variable no longer hides a store folder (#342). `${HOME/%//.kube}` is
+  `$HOME/.kube` in bash — the `%` pattern matches at the end of the value and the replacement is appended —
+  but the gate read the form as the plain value, so the path was matched as `$HOME/config` and allowed.
+  A `/` substitution's replacement is now read: appended for a `%` pattern, prepended for a `#` pattern,
+  and on its own for an unanchored pattern, which may match the whole value. Operators that only remove
+  text (`%`, `#`, `:0`) still read as the value.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

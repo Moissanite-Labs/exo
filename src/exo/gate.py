@@ -4173,11 +4173,33 @@ def _store_var(name: str) -> str | None:
     return os.path.expanduser(store) if store else None
 
 
-def _store_var_ops(text: str, unset: bool, depth: int) -> str:
+def _subst_value(word: str, value: str, unset: bool, depth: int, alt: bool) -> str | None:
+    """The reading of a `/` substitution on a store variable (#342): ``word`` is the text after the variable's
+    name, starting with `/` (a second `/` replaces every match). The replacement — the text after the pattern's
+    `/` — is spelt out in turn, its quotes dropped, to 8 levels; None when too deep. A pattern substitution can
+    add text to the value, so the replacement counts: a `%` pattern anchors at the end and the replacement is
+    read appended to the value, a `#` pattern anchors at the start and it is read prepended. An unanchored
+    pattern reads as the value, or, in the ``alt`` reading, as the replacement on its own: it may match the
+    whole value."""
+    body = word[2:] if word.startswith("//") else word[1:]
+    cut = next((k for k, ch in enumerate(body) if ch == "/" and (k == 0 or body[k - 1] != "\\")), None)
+    pat, raw = (body, "") if cut is None else (body[:cut], body[cut + 1:])
+    sub = _expand_text(raw.replace('"', "").replace("'", ""), unset, depth + 1, alt) if depth < 8 else None
+    if sub is None:
+        return None
+    if pat.startswith("%"):
+        return value + sub
+    if pat.startswith("#"):
+        return sub + value
+    return sub if alt else value
+
+
+def _store_var_ops(text: str, unset: bool, depth: int, alt: bool = False) -> str:
     """``text`` with each `${VAR<op>word}` of a store variable spelt out (#202). `:-`, `-`, `:=` and `=` give the
     value (_store_var), or the word when ``unset`` or the variable has none; `:+` and `+` give the word, or nothing
-    when ``unset``; `:?`, `?` and any other operator (`%/`, `#*/`, `:0`) give the value. The word is spelt out in turn,
-    its quotes dropped, to 8 levels. A form that does not close on its line, or with no value to give, stays as is."""
+    when ``unset``; `:?`, `?` and any other operator that only removes text (`%/`, `#*/`, `:0`) give the value. A
+    `/` substitution is read with its replacement (see _subst_value). The word is spelt out in turn, its quotes
+    dropped, to 8 levels. A form that does not close on its line, or with no value to give, stays as is."""
     m = _STORE_VAR.search(text)
     if not m:
         return text
@@ -4198,7 +4220,9 @@ def _store_var_ops(text: str, unset: bool, depth: int) -> str:
             if kind == "+" and unset:
                 rep = ""
             elif kind == "+" or kind in ("-", "=") and (unset or rep is None):
-                rep = _expand_text(word.replace('"', "").replace("'", ""), unset, depth + 1) if depth < 8 else None
+                rep = _expand_text(word.replace('"', "").replace("'", ""), unset, depth + 1, alt) if depth < 8 else None
+            elif not op and word.startswith("/") and rep is not None:
+                rep = _subst_value(word, rep, unset, depth, alt)
             if rep is not None:
                 out.append(text[i:m.start()] + rep)
                 i = j + 1
@@ -4206,10 +4230,11 @@ def _store_var_ops(text: str, unset: bool, depth: int) -> str:
     return "".join(out) + text[i:]
 
 
-def _expand_text(text: str, unset: bool = False, depth: int = 0) -> str:
+def _expand_text(text: str, unset: bool = False, depth: int = 0, alt: bool = False) -> str:
     """~, $HOME and $EXO_HOME (also ${...}, and ${EXO_HOME:-word} and the other operators, see _store_var_ops) spelled
-    out; nothing else is evaluated. With ``unset``, a `${VAR:-word}` form is read as bash reads it when VAR is unset."""
-    text = _store_var_ops(text, unset, depth)
+    out; nothing else is evaluated. With ``unset``, a `${VAR:-word}` form is read as bash reads it when VAR is unset.
+    With ``alt``, an unanchored `${VAR/pat/rep}` form is read as the replacement on its own (#342)."""
+    text = _store_var_ops(text, unset, depth, alt)
     home, exo = _home(), _exo_home()
     store = os.environ.get("EXO_PRINCIPAL_STORE")
     if store:
@@ -4492,13 +4517,15 @@ def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
 
 def _expand_words(words: list[str]) -> list[str]:
     """_expand_text of each word, in one pass when no word holds a newline. A word with a `${VAR:-word}` form of a
-    store variable is also read with VAR unset, so both its value and its default count (#202)."""
+    store variable is also read with VAR unset, so both its value and its default count (#202), and with an
+    unanchored `${VAR/pat/rep}` read as the replacement on its own, so a full match counts too (#342)."""
     if not any("~" in w or "$" in w for w in words):
         return words
     out = [] if any("\n" in w for w in words) else _expand_text("\n".join(words)).split("\n")
     out = out if len(out) == len(words) else [_expand_text(w) for w in words]
-    unset = [_expand_text(w, unset=True) for w in words if _STORE_VAR.search(w)]
-    return out + [w for w in dict.fromkeys(unset) if w not in out] if unset else out
+    extra = [_expand_text(w, unset=True) for w in words if _STORE_VAR.search(w)]
+    extra += [_expand_text(w, alt=True) for w in words if _STORE_VAR.search(w)]
+    return out + [w for w in dict.fromkeys(extra) if w not in out] if extra else out
 
 
 def _real(path: str, memo: dict[str, str]) -> str:
