@@ -38,6 +38,7 @@ RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
 Jobs: TypeAlias = list[dict[str, Any]]
 Strs: TypeAlias = list[str]
 PROMPT = "You are running a scheduled job unattended. Do the task, then reply with a short plain-English result."
+JOB_MAX_ROUNDS = 24  # unattended runs must finish and release the job for its next launch
 
 
 def _field(text: str, lo: int, hi: int) -> set[int]:
@@ -206,11 +207,11 @@ class Scheduler:
             names = sorted(n for n in e.registry.names() if n not in BLOCKED_TOOLS)
             # same turn path as every other turn (audit 2026-10-12): the engine's context tree and memory,
             # its soul refresh and system extras, and the turn hooks (through ``e.run_turn``). Only the model,
-            # the narrowed toolset and the unattended-job prompt differ.
+            # the narrowed toolset, unattended-job prompt and finite round limit differ.
             loop = Loop(e.store, provider, bus=e.loop.bus, context=e.loop.context, memory=e.loop.memory,
                         tool_specs=lambda: e.registry.specs(names=names), run_tool=e.run_tool,
                         system_prompt="\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p), model=model,
-                        max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
+                        max_iterations=JOB_MAX_ROUNDS, max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
             loop.approval_ms, loop.on_turn_end = e.loop.approval_ms, e.observe_turn
             # The engine's session table: one lock, steer queue and running flag per session, whichever loop runs
             # it, so turn.send, session.list, resume and job or peer notices see this run as the live turn it is.

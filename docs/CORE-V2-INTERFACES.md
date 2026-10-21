@@ -38,9 +38,10 @@ use off: Anthropic sends `{"type": "none"}`, OpenAI-compatible transports send `
 cannot say it, ignores it. `muse-cli` is text only and refuses any call that declares tools, so a wrap-up on that
 route falls through to the next route, as a tool round does.
 
-Round cap (issue #92): `Loop(max_iterations=0)` is the default and has no tool-round cap. Top-level turns can
-continue past 24 rounds; explicit positive limits remain finite, and delegated children retain their `max_turns`
-limit (24 by default). Interrupts, approvals, spend checks and retry limits still apply. A turn that reaches an
+Round cap (issue #92): `Loop(max_iterations=0)` is the default and has no tool-round cap. Interactive turns can
+continue past 24 rounds. Unattended scheduled runs explicitly pass `JOB_MAX_ROUNDS=24`; positive caller limits
+and delegated children's `max_turns` remain finite (24 by default for children). Interrupts, approvals, spend
+checks and retry limits still apply. A turn that reaches an
 explicit `max_iterations` limit emits the `stopped after N tool rounds`
 notice, then makes one more model call with `tool_choice="none"` and a transient `[harness]` prompt asking what was
 done, what is open and the next step. The prompt is never stored. The reply is stored with `meta.wrap_up` (and the
