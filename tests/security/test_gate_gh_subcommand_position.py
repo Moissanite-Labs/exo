@@ -266,3 +266,17 @@ def test_an_empty_word_before_a_credentials_command_with_an_expansion():
     assert c.category == "credentials", c
     c, _ = run('gh "" pr "$V" 5')
     assert c.category == "opaque_exec" and c.summary.startswith("gh pr with a word from an expansion"), c
+
+
+# #399 with #394: the line as read before goes through the own text pass too, so it decides as main does. The
+# `^git status` rule matches the line read as before, a read, but does not name the gh command in it, so it is
+# passed over there and the line asks, as on main. The post reading is allowed by a rule that names both commands.
+def test_the_line_as_read_before_gets_the_own_text_pass():
+    pol = normalize_policies({"gates": {"categories": {"read": "ask"}, "escalate": {"third_party": False}, "rules": [
+        {"match": {"command": "gh pr|git status", "category": "github_post"}, "decision": "allow"},
+        {"match": {"command": "^git status", "category": "read"}, "decision": "allow"}]}})
+    c, d = run("git status; gh pr -R myorg/app comment 5 -b hi", pol)
+    assert c.category == "github_post" and c.floor is not None and c.floor.category == "read", c
+    assert decide(replace(c, floor=None), pol).outcome == "allow"
+    assert decide(c.floor, pol).outcome == "ask"
+    assert d.outcome == "ask", d

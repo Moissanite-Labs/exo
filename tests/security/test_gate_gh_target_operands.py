@@ -636,3 +636,18 @@ def test_a_body_unseen_in_the_line_as_read_before_counts():
     assert c.category == "read" and c.floor.category == "github_post", c
     assert body_unseen(c) and body_unseen(c.floor), c
     assert d.outcome == "ask" and UNSEEN_BODY in d.violations, d
+
+
+# #399 with #394: the line is decided on each other target through the whole of decide, the own text pass too. On
+# myorg/app#5 the `^git status` rule matches the line but does not name the gh post, so it is passed over there,
+# and the line asks for that target. A rule there that names the post allows the line, as on pub/repo#5.
+@pytest.mark.parametrize("named,outcome", [("^git status", "ask"), ("gh pr comment", "allow")])
+def test_each_other_target_gets_the_own_text_pass(named, outcome):
+    pol = normalize_policies({"gates": {"escalate": {"third_party": False}, "rules": [
+        {"match": {"command": "gh pr comment", "target": "pub/*"}, "decision": "allow"},
+        {"match": {"command": named, "target": "myorg/*"}, "decision": "allow"}]}})
+    c, d = run(f"git status; gh pr comment {PUB} -R myorg/app -b hi", pol)
+    assert c.target == "pub/repo#5" and c.alt_targets == ["myorg/app#5"], c
+    assert decide(replace(c, alt_targets=[]), pol).outcome == "allow"
+    assert decide(replace(c, alt_targets=[], target="myorg/app#5"), pol).outcome == outcome
+    assert d.outcome == outcome, d
