@@ -2390,12 +2390,12 @@ def _gh_command_at(argv: list[str], dynamic: frozenset, split: frozenset) -> int
     `--version` stand alone, any other option word stands alone, an empty word is passed over and `--` ends the
     search. So in `gh -R pub/repo pr comment 5` the command is `pr`, which then reads `-R`. In gh 2.89 `-R` is a
     persistent flag of each group that calls cmdutil.EnableRepoOverride: pr, issue, release, secret, variable, label,
-    cache, run, workflow and ruleset, and the browse command. gh repo has none, only its deploy-key and autolink
-    groups. A word from an expansion where the command or an option may stand is the command word, and so is an
-    option's value that may split into several words (``split``, `gh -R $R pr view 5`): gh may run any command
-    there. One that starts with a `-` and has a `=` before any expansion (`--repo="$R"`) is an option that stands
-    alone, as it has a `=` whatever bash puts in it, unless bash may split it (round 9). len(argv) when there is
-    none."""
+    cache, run, workflow and ruleset, the browse command, gh repo rename, the deploy-key and autolink groups of gh
+    repo, and agent-task create and view. gh repo itself has none. A word from an expansion where the command or an
+    option may stand is the command word, and so is an option's value that may split into several words
+    (``split``, `gh -R $R pr view 5`): gh may run any command there. One that starts with a `-` and has a `=`
+    before any expansion (`--repo="$R"`) is an option that stands alone, as it has a `=` whatever bash puts in it,
+    unless bash may split it (round 9). len(argv) when there is none."""
     k = 1
     while k < len(argv):
         a = argv[k]

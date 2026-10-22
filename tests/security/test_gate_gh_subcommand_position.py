@@ -285,7 +285,8 @@ def test_the_line_as_read_before_gets_the_own_text_pass():
 # Round 6, should fix. cobra finds the command past the options before it too (stripFlags with gh's root flags,
 # where only `--help` and `--version` stand alone), and the subcommand then parses them. In gh 2.89 `-R` is a
 # persistent flag of each group that calls cmdutil.EnableRepoOverride: pr, issue, release, secret, variable and
-# others. gh repo does not call it, only some of its subgroups. So each of the review's lines posts on pub/repo#5.
+# others. gh repo itself does not, only gh repo rename and its deploy-key and autolink groups. So each of the
+# review's lines posts on pub/repo#5.
 # The gate read `-R` or `-b` as an alias or extension, so with `opaque_exec: allow` the post ran with no footer
 # check and no scrub.
 OPAQUE_OK = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "categories": {"opaque_exec": "allow"}},
