@@ -78,10 +78,15 @@ Each model call is built fresh, in this order:
 2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its last
    `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored in the
    thread are part of it. A fork's copies count at their original's log position, so a fork opens with its
-   parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too. A copy counts only
-   while the tree can hold its original. A private thread's fork has a tree of its own (below), which summarizes
-   its copies. A copy of an entry the parent undid after the fork counts nowhere. It stays in the tail only until
-   the fork's own later entries are summarized, and then the fork's calls no longer carry it.
+   parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too, except for the
+   kept copies below. A copy counts only while the tree can hold its original. A private thread's fork has a
+   tree of its own (below), which summarizes its copies. In any other fork, the parent may undo an entry after
+   the fork. The tree then drops the original, so no tree holds the fork's copy of it (#245). The fork's tail
+   keeps such copies verbatim, in order, ahead of the fork's own entries. They sit outside `tail_messages` and
+   `/compact`, so every call of the fork carries them: a fork whose parent undid 20 turns carries all 20. In a
+   fork of that fork, the kept copies come after the middle fork's own entries, which the tree holds, so they
+   read later than they happened. Copied context notes are not kept this way. A note was never in the log, so
+   it leaves a fork's tail as the tail moves on, as it does in the parent.
 3. **Context notes.** Before a model call, entries other threads committed since this thread last looked
    (and after the frontier) are written into this thread as one compact note: `In thread "tui 2", 4 min
    ago: user: ... / you: ...`. The note is stored (thread-local, not in the log), so the next call sees
@@ -191,8 +196,9 @@ content is the same once the summaries finish. Tests: `tests/core/test_turn_sett
   then. Context notes stored in the thread stay. They hold other threads' news, which the thread has already
   marked as seen, so dropping them would lose that news. Undo does not reach copies made before it: a note
   another thread stored keeps the undone text (that thread's model has seen it, and the note is replayed byte
-  for byte), and so does a fork. A summary of a deleted node that was already running when undo ran is not saved
-  afterwards. The next turn rebuilds the summary from the entries that are left.
+  for byte), and so does a fork, whose tail keeps such a copy for good ("Context assembly per turn"). A summary of
+  a deleted node that was already running when undo ran is not saved afterwards. The next turn rebuilds the summary
+  from the entries that are left.
 - **Failures.** A node whose summary fails is retried with backoff (30 s, then 60 s, ... up to five minutes, set by
   `retry_backoff`). During backoff the span stays verbatim and the turn does not wait for it. A temporary failure
   keeps its turn on later upkeep: an outage, or an error that says when its route reopens (`retry_after`), such as
