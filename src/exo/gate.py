@@ -3380,11 +3380,12 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         # reads it as an option. A word that may expand, a name or an option, may spell PATH or hide
         # the options (`unset $v`, `unset {PATH,}`, `unset -${f}v PATH`), and so may a `$` outside
         # double quotes anywhere in a word: x='1] PATH [' splits `unset a[$x]` into three names. An
-        # unquoted `[` that starts a word is a glob too, one the lexer does not mark (`unset [P]ATH`).
+        # unquoted `[` that starts a word is a glob too, one the lexer does not mark (`unset [P]ATH`),
+        # also after a `\<newline>` that bash drops first.
         i, flags = _builtin_options(words[1:], False)
         if "f" not in flags:
             sets += [("PATH", "", True, False) for a in argv[1 + i:] if re.split(r"\[", a)[0] == "PATH"]
-            if any(_unreadable_name(w) or w.brace or w.raw[:1] == "[" or
+            if any(_unreadable_name(w) or w.brace or w.raw.replace("\\\n", "")[:1] == "[" or
                    w.dynamic and not re.fullmatch(r'"(?:[^"\\]|\\.)*"', w.raw) for w in words[1:]):
                 parts.append(_opaque("unset takes a word the gate cannot read, which may unset PATH", cmd))
     git_env: dict[tuple[str, ...], str] = {}

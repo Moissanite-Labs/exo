@@ -11,10 +11,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   already asked on the assignment forms (`PATH= ls`). `unset` and `unset -v` of PATH now ask the
   same way, as `opaque_exec`. `unset -f` names a function, not the variable, and stays read. An
   `unset` word the gate cannot read asks too, as a name or as an option: `unset $v`, `unset PAT?`,
-  `unset {PATH,}`, `unset [P]ATH` and `unset -${f}v PATH`. The exporters read their options the
-  same way, so `export +x -f $V=` and `declare -${f}x $V=` ask as `export $V=` does. A
-  `readonly +x -n r=PATH` no longer asks: bash reads `+x` and `-n` there as names, so it makes no
-  nameref.
+  `unset {PATH,}`, `unset [P]ATH`, `unset \<newline>[P]ATH` and `unset -${f}v PATH`. The exporters
+  read their options the same way, so `export +x -f $V=` and `declare -${f}x $V=` ask as
+  `export $V=` does. A `readonly +x -n r=PATH` no longer asks: bash reads `+x` and `-n` there as
+  names, so it makes no nameref.
 - Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
   verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
   Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.

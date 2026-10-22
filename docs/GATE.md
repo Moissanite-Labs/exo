@@ -995,7 +995,8 @@ gate does not read:
   variable or a substitution (`unset "$v"`, `unset $(echo PATH)`), an option word with one
   (`unset -${f}v PATH`), a `$` outside double quotes, which bash may split into more names
   (`unset a[$i]`), a glob (`unset PAT?`, `unset [P]ATH`, and an unquoted subscript such as
-  `unset arr[1]`), or an unquoted brace (`unset {PATH,}`). A word wholly in double quotes is
+  `unset arr[1]`), or an unquoted brace (`unset {PATH,}`). bash drops a `\<newline>` before it
+  reads a word, so `unset \<newline>[P]ATH` asks too. A word wholly in double quotes is
   read as before (`unset "arr[$k]"`), and so is `unset 'arr[1]'`. `unset -n PATH` asks too, to
   be safe. bash leaves a plain `PATH` set under `-n`, but it unsets a `PATH` that an earlier
   command made a nameref. The
