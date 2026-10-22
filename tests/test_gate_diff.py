@@ -1,4 +1,5 @@
 """scripts/gate_diff.py: the never-looser-than-main differential for gate changes (#423)."""
+import ast
 import gzip
 import json
 import os
@@ -19,14 +20,16 @@ DELETE_LINE = '    "delete":            ("irreversible", "private", False),\n'
 CLASSIFY_DOC_END = '(_in_tool_folder sets it)."""\n'      # the first line of gate.classify's body comes after it
 
 
-def _tree(tmp_path: Path, name: str, patch: tuple[str, str] | None = None) -> Path:
+def _tree(tmp_path: Path, name: str, patch: tuple[str, str] | None = None,
+          more: tuple[tuple[str, str], ...] = ()) -> Path:
     tree = tmp_path / name
     shutil.copytree(ROOT / "src" / "exo", tree / "src" / "exo", ignore=shutil.ignore_patterns("__pycache__"))
-    if patch:
-        gate = tree / "src" / "exo" / "gate.py"
-        text = gate.read_text(encoding="utf-8")
-        assert text.count(patch[0]) == 1, patch[0]
-        gate.write_text(text.replace(patch[0], patch[1]), encoding="utf-8")
+    gate = tree / "src" / "exo" / "gate.py"
+    text = gate.read_text(encoding="utf-8")
+    for old, new in ((patch,) if patch else ()) + more:
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    gate.write_text(text, encoding="utf-8")
     return tree
 
 
@@ -333,10 +336,191 @@ def test_every_seed_runs_under_every_shell_form(tmp_path):
     seen = {json.dumps(a, sort_keys=True) for a in actions}
     forms = gate_diff.SHELL_FORMS
     assert {t for t, _ in forms} == set(gate_diff.SHELL_NAMES) and {k for _, k in forms} == {"command", "cmd"}
+    # A name that ends in terminal or shell is a shell call only with a string "command" (gate._runs_shell).
+    assert all(t in gate_diff.SHELL_TOOLS for t, k in forms if k == "cmd"), forms
+    assert {"powershell", "mcp__host__terminal"} <= {t for t, _ in forms}
     for seed in ("rm -rf build", "cat ~/.ssh/id_rsa", "sudo rm -rf build", "bash <<< 'cat ~/.ssh/id_rsa'"):
         for tool, key in forms:
             assert json.dumps({"tool": tool, "args": {key: seed}}, sort_keys=True) in seen, (tool, key, seed)
-    assert counts["cwd_forms"] > 0 and any(a.get("cwd") == "~/.ssh" for a in actions)
+    assert counts["cwd_forms"] == len(gate_diff.cwd_rows()) and any(a.get("cwd") == "~/.exo/keys" for a in actions)
+
+
+def test_the_shell_tool_names_are_the_gates():
+    # SHELL_TOOLS and SHELL_SUFFIXES mirror gate._runs_shell, and gate_tables reads the names it lists.
+    assert gate_diff.gate_tables(ROOT)["shell_tools"] == list(gate_diff.SHELL_TOOLS)
+    mod = ast.parse((ROOT / "src" / "exo" / "gate.py").read_text(encoding="utf-8"))
+    fn = next(n for n in mod.body if isinstance(n, ast.FunctionDef) and n.name == "_runs_shell")
+    ends = [ast.literal_eval(c.args[0]) for c in ast.walk(fn) if isinstance(c, ast.Call)
+            and isinstance(c.func, ast.Attribute) and c.func.attr == "endswith"]
+    assert ends == [gate_diff.SHELL_SUFFIXES]
+
+
+def test_shell_line_reads_a_call_as_the_gate_does():
+    line = gate_diff.shell_line
+    assert line({"tool": "bash", "args": {"cmd": "ls"}}) == "ls"
+    assert line({"tool": "powershell", "args": {"command": "ls"}}) == "ls"
+    assert line({"tool": "mcp__host__terminal", "args": {"command": "ls"}}) == "ls"
+    assert line({"tool": "remote_terminal", "args": {"cmd": "ls"}}) is None        # no string "command"
+    assert line({"tool": "read_terminal", "args": {"command": "ls"}}, known={"read_terminal"}) is None
+    assert line({"tool": "read_file", "args": {"command": "ls"}}) is None
+
+
+def _decisions(tmp_path: Path, actions: list, tree: Path = ROOT) -> list[tuple[str, str]]:
+    """(category, outcome under the default policy) of each action, as ``tree``'s gate decides it in gate_diff's own
+    child process, with its HOME and environment."""
+    actions = [a if isinstance(a, dict) else {"tool": "terminal", "args": {"command": a}} for a in actions]
+    work = tmp_path / "decide"
+    work.mkdir()
+    corpus, pols, out = work / "corpus.json", work / "policies.json", work / "out.jsonl.gz"
+    corpus.write_text(json.dumps(actions), encoding="utf-8")
+    pols.write_text(json.dumps({"default": gate_diff._entry({})}), encoding="utf-8")
+    proc = gate_diff.start_tree("base", tree, corpus, pols, out, 1, gate_diff.make_home(work))
+    assert proc.wait(timeout=120) == 0
+    rows = list(gate_diff._rows(out))[1:-1]
+    assert len(rows) == len(actions)
+    return [(r[0], r[3][r[4][0]][0]) for r in rows]
+
+
+def test_each_folder_row_decides_otherwise_without_its_folder(tmp_path):
+    # A row that main decides the same without its folder checks nothing (#209): a head that ignores the folder
+    # would pass. The joined row must also need the session folder, not only its own relative cwd.
+    rows = gate_diff.cwd_rows()
+    joined = [r for r in rows if r.get("cwd") and isinstance(r["args"].get("cwd"), str)]
+    assert joined and len(rows) > 100
+    twins = [gate_diff.without_cwd(r) for r in rows] + [{k: v for k, v in r.items() if k != "cwd"} for r in joined]
+    got = _decisions(tmp_path, rows + joined + twins)
+    with_folder, without = got[:len(rows) + len(joined)], got[len(rows) + len(joined):]
+    same = [(r, a) for r, a, b in zip(rows + joined, with_folder, without) if a == b]
+    assert not same, same[:3]
+    assert {a for a in with_folder} == {("credentials", "ask")}
+
+
+def test_each_table_entry_has_a_line_main_reads(tmp_path):
+    # A line for a prefix, wrapper, shell or interpreter must reach the `rm -rf build` inside it in main, and a
+    # PROGRAMS or SUBCOMMANDS line must get its table's category: then a head that drops the entry lowers the line.
+    t = gate_diff.gate_tables(ROOT)
+    lines = gate_diff.table_lines([t])
+    got = dict(zip(lines, _decisions(tmp_path, lines)))
+    for table in ("_PREFIXES", "_WRAPPERS", "_SHELLS", "_INTERPRETERS", "_TMUX_RUNS", "_TMUX_ALIASES"):
+        for name in t[table]:
+            mine = [x for x in lines if (x.startswith(f"tmux {name} ") if table.startswith("_TMUX")
+                                         else x.split()[0] == name or x.endswith(f"| {name}"))]
+            assert any(got[x][0] == "delete" for x in mine), (table, name, {x: got[x] for x in mine})
+    for name, cat in t["PROGRAMS"].items():
+        if name == "crontab":       # main's own crontab branch runs first: the entry decides no line
+            continue
+        assert got[f"{name} notes.md"][0] == cat, name
+    for (prog, sub), cat in t["SUBCOMMANDS"].items():
+        assert got[f"{prog} {sub}"][0] == cat, (prog, sub)
+
+
+# One loosening each, as a reviewer found them: a table entry dropped, a key or name no longer read, a posting shape
+# ignored. The built-in corpus must lower a call or line for each (the action and the policy that shows it).
+LOOSENINGS = {
+    "own cwd ignored": (('if isinstance(sub, str) and sub and _runs_shell(tool, args):',
+                         'if False and isinstance(sub, str) and sub and _runs_shell(tool, args):'),
+                        {"tool": "terminal", "args": {"command": "cat keys", "cwd": "~/.exo"}}, "default"),
+    "vault tool read": (('("browser_vault_fill", "browser_vault_unlock", "browser_vault_save_login",',
+                         '("browser_vault_fill", "browser_vault_save_login",'),
+                        {"tool": "browser_vault_unlock", "args": {}}, "default"),
+    "file_path unread": (('paths = [_first(args, ("path", "file_path"))]', 'paths = [_first(args, ("path",))]'),
+                         {"tool": "edit_file", "args": {"file_path": "~/.exo/state/gate-grants.json"}}, "default"),
+    "trash hint": (('"revoke", "trash"}, None, "delete")', '"revoke"}, None, "delete")'),
+                   {"tool": "mcp_acme_trash_item", "args": {}}, "default"),
+    "comment key": (('_TEXT_KEYS = ("body", "text", "message", "content", "comment", ',
+                     '_TEXT_KEYS = ("body", "text", "message", "content", '),
+                    {"tool": "mcp_gh_comment_item", "args": {"comment": "Secret plan"}}, "posting_forbid_words"),
+    "shred": (('"shred": "delete", ', ''), "shred notes.md", "deny_delete"),
+    "ssh-keygen": (('"ssh-keygen": "credentials", ', ''), "ssh-keygen notes.md", "categories_allow"),
+    "nohup": (('"nohup": set(), ', ''), "nohup rm -rf build", "deny_delete"),
+    "doas": (('"doas": {"-u", "-C"},', ''), "doas rm -rf build", "deny_delete"),
+    "dash": (('_SHELLS = {"bash", "sh", "zsh", "dash", ', '_SHELLS = {"bash", "sh", "zsh", '),
+             "dash -c 'rm -rf build'", "deny_delete"),
+    "powershell": (('tool.endswith(("terminal", "shell")))', 'tool.endswith(("_terminal", "_shell")))'),
+                   {"tool": "powershell", "args": {"command": "rm -rf build"}}, "default"),
+    "forbid ignore_case": (('re.I if f.get("ignore_case") else 0', '0'),
+                           {"tool": "mcp_gh_comment_item", "args": {"body": "Secret plan"}},
+                           "posting_forbid_ignore_case"),
+    "footer_exposures": (('footer_on = posting.get("footer_exposures") or ("internal", "public")',
+                          'footer_on = ("internal", "public")'), "gh pr comment 3 --body hi",
+                         "posting_footer_everywhere"),
+}
+
+
+def test_the_generated_calls_come_from_the_tables_of_both_trees(tmp_path):
+    # A head that drops a table entry still runs the base's line or call, and one that adds an entry runs its own.
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head", more=tuple(LOOSENINGS[k][0] for k in (
+        "vault tool read", "trash hint", "comment key", "shred", "ssh-keygen", "nohup", "doas", "dash")) + (
+        ('READ_PROGRAMS = frozenset("""\n', 'READ_PROGRAMS = frozenset("""\nzzshow\n'),))
+    actions, counts = gate_diff.build_corpus((head, base))
+    seen = {gate_diff.show_action(a) for a in actions}
+    for line in ("nohup rm -rf build", "doas rm -rf build", "shred notes.md", "sudo shred notes.md",
+                 "dash -c 'rm -rf build'", "ssh-keygen notes.md", "docker push", "zzshow notes.md",
+                 "tmux new-session 'rm -rf build'", "perl -E 'system(\"rm -rf build\")'", "browser_vault_unlock {}",
+                 "mcp_acme_trash_item {}", 'mcp_gh_comment_item {"comment": "Secret plan"}',
+                 'mcp_gh_comment_item {"chat_id": "pub/notes"}', 'edit_file {"file_path": "~/.exo/state/gate-grants.json"}',
+                 'grep {"destination": "~/.ssh/id_rsa"}', 'mcp_acme_buy_item {"price": "10"}'):
+        assert line in seen, line
+    assert counts["tables"] > 300 and counts["tool_forms"] > 2000
+
+
+def _as_action(item: dict | str) -> dict:
+    return item if isinstance(item, dict) else {"tool": "terminal", "args": {"command": item}}
+
+
+def test_a_head_that_ignores_the_session_folder_is_lowered(tmp_path):
+    # #209: the hook's cwd reaches classify. A head that drops it must lower a folder row of the built-in corpus.
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head", ('base = os.path.expanduser(cwd) if isinstance(cwd, str) and cwd else ""',
+                                    'base = ""'))
+    proc, rep = _gate_diff(base, head, tmp_path, "--pick", "default", "--jobs", "2", timeout=300)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    lowered = [x["action"] for x in rep["lowered"]]
+    assert {"tool": "terminal", "args": {"command": "cat keys"}, "cwd": "~/.exo"} in lowered
+    assert all(a.get("cwd") for a in lowered), [a for a in lowered if not a.get("cwd")][:3]
+
+
+def test_each_loosening_a_reviewer_found_is_lowered(tmp_path):
+    # One head with every LOOSENINGS change, built-in corpus only (the copied trees hold no tests): each change must
+    # lower its own call or line under its policy.
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head", more=tuple(p for p, _, _ in LOOSENINGS.values()))
+    pick = ",".join(dict.fromkeys(pol for _, _, pol in LOOSENINGS.values()))
+    proc, rep = _gate_diff(base, head, tmp_path, "--pick", pick, "--jobs", "2", "--json-limit", "1000000",
+                           timeout=400)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    pairs = {(json.dumps(x["action"], sort_keys=True), x["policy"]) for x in rep["lowered"]}
+    missed = [name for name, (_, item, pol) in LOOSENINGS.items()
+              if (json.dumps(_as_action(item), sort_keys=True), pol) not in pairs]
+    assert not missed, missed
+
+
+SLEEP3_PATCH = (CLASSIFY_DOC_END, CLASSIFY_DOC_END + "    if 'zz-sleep' in str(action):\n"
+                                                     "        __import__('time').sleep(3)\n")
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="needs SIGHUP")
+def test_a_run_under_nohup_ignores_sighup(tmp_path):
+    # nohup starts the script with SIGHUP ignored: a closed terminal must not stop a long run.
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head", SLEEP3_PATCH)
+    corpus = tmp_path / "slow.txt"
+    corpus.write_text("echo zz-sleep\nls\n", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(SCRIPT), "--base", str(base), "--head", str(head), "--only-corpus",
+                             "--no-variants", "--corpus", str(corpus), "--pick", "default", "--jobs", "1"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            preexec_fn=lambda: signal.signal(signal.SIGHUP, signal.SIG_IGN))
+    try:
+        deadline = time.monotonic() + 30
+        while not [p for p in _procs_naming(str(head)) if p != proc.pid] and time.monotonic() < deadline:
+            time.sleep(0.1)
+        proc.send_signal(signal.SIGHUP)
+        out, err = proc.communicate(timeout=60)
+    finally:
+        proc.kill()
+    assert proc.returncode == 0, out + err
+    assert "nothing lowered" in out and "stopped by" not in err
 
 
 @pytest.mark.parametrize("patch, example, only", [
@@ -471,6 +655,55 @@ def test_the_built_in_policies_cover_the_listed_kinds():
     for name in ("default", "deny_store_write", "categories_log", "reserved_store_write", "scope_internal_all",
                  "deny_target_ssh", "allow_ls_anchored", "allow_ls_unanchored", "deny_rule_rm",
                  "order_ask_under_category_deny", "matrix_deny_cells", "posting_close_and_merge",
-                 "escalate_off", "category_opaque_exec_allow"):
+                 "escalate_off", "category_opaque_exec_allow", "posting_forbid_ignore_case",
+                 "posting_footer_everywhere", "rules_flat_named"):
         assert name in pols, name
     json.dumps(pols)
+    from exo import gate
+    for name, raw in pols.items():      # a policy the gate rejects would run as the defaults
+        gate.normalize_policies(gate_diff._entry(raw)["policy"])
+
+
+POLICY_READERS = ("check_post", "decide", "_decide", "normalize_policies")
+NOT_POLICY_KEYS = {"_normalized"}       # marks a policy normalize_policies already filled in: never a written key
+
+
+def _keys_read(fn: ast.FunctionDef) -> set[str]:
+    """The string keys a function reads: x.get("k"), x["k"] and the keys of a `for k in ("a", "b")` loop."""
+    out = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get" and n.args \
+                and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str):
+            out.add(n.args[0].value)
+        elif isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and isinstance(n.slice.value, str):
+            out.add(n.slice.value)
+        elif isinstance(n, ast.For) and isinstance(n.iter, (ast.Tuple, ast.List)):
+            out.update(e.value for e in n.iter.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+    return out
+
+
+def _keys_of(v, out: set) -> set:
+    if isinstance(v, dict):
+        for k, x in v.items():
+            out.add(k)
+            _keys_of(x, out)
+    elif isinstance(v, (list, tuple)):
+        for x in v:
+            _keys_of(x, out)
+    return out
+
+
+def test_the_built_in_policies_use_every_key_the_gate_reads():
+    # A head that stops reading a policy key (footer_exposures, a forbid entry's ignore_case) shows only when a
+    # built-in policy sets that key.
+    mod = ast.parse((ROOT / "src" / "exo" / "gate.py").read_text(encoding="utf-8"))
+    fns = {n.name: n for n in mod.body if isinstance(n, ast.FunctionDef) and n.name in POLICY_READERS}
+    assert set(fns) == set(POLICY_READERS)
+    read = set().union(*(_keys_read(f) for f in fns.values()))
+    assert {"footer_exposures", "ignore_case", "spent_today", "applies_to"} <= read
+    used: set = set()
+    for raw in gate_diff.BUILTIN_POLICIES.values():
+        entry = gate_diff._entry(raw)
+        _keys_of(entry["policy"], used)
+        _keys_of(entry["context"], used)
+    assert not read - used - NOT_POLICY_KEYS, sorted(read - used - NOT_POLICY_KEYS)

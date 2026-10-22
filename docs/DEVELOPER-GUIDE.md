@@ -425,16 +425,32 @@ store. `--home` sets another. The script never imports either gate itself.
 
 The actions are the lines and tool calls the gate suites test, read from the test files of both trees, so a line still
 runs when the head deletes its test. Each call runs as written: a `bash` call stays a `bash` call, and a line under
-`cmd` stays there. To these come generated forms:
+`cmd` stays there. The script reads the gate's own tables from both trees the same way, with `ast`. So a head that
+drops a table entry still runs the base's line for it, and a head that adds one runs its own. To these come generated
+forms:
 
+- a line for each entry of the program, prefix and shell tables: each program of `PROGRAMS` with a file, each
+  `SUBCOMMANDS` pair, `rm -rf build` behind each prefix (`sudo`, `nohup`, `doas`), wrapper and tmux command, run by
+  each shell with `-c` and from its input, and code that runs it given to each interpreter with each of its flags.
+  Also a line for each program and subcommand of the allowlists.
 - compound forms of each simple line: in a list or a pipe, in `$( )`, after `bash -c`, `sudo`, `env`, `timeout` or
   `ssh`, fed to `bash` by a heredoc or a here-string, and after a `cd` into the store or `/dev`
-- each line under the other tool names and keys the gate reads as a shell line (`shell`, `bash`, `run_command`,
-  `exec_command`, a name that ends in `terminal` or `shell`, and the `cmd` key): every seed line under each of them,
-  every other line under one
-- the seed lines with the session folders `~/.exo/state` and `~/.ssh`
+- each line under the other tool names and keys the gate reads as a shell line: `shell`, `bash`, `run_command` and
+  `exec_command` with the line under `command` or `cmd`, and a name the tool table does not hold that ends in
+  `terminal` or `shell` (`powershell`, `remote_shell`) with the line under `command`. Every seed line runs under each
+  of them, every other line under one.
+- folder rows: calls that read a secret store only as resolved from a folder (#209), such as `cat keys` in `~/.exo`,
+  `ls` in `~/.exo/keys`, `cat settings.json` in `~/.claude`, and file tool calls like them. Each line runs under
+  every shell form, once with the folder as the session folder and once as the call's own `cwd`. Main decides each
+  row otherwise without its folder, and a test checks that, so a head that stops reading the folder shows.
+- calls of the other tools: each tool of the tool table and each tool name the classifier names, with no arguments,
+  and a tool name for each name hint word (`mcp_acme_trash_item`). A store path and a secret path under each path key
+  (`path`, `file_path`, `destination` and the rest), and for an outbound tool, a post with a forbidden word or a
+  `pub/` target under each text, title and target key.
 
-That is about 43,000 actions. The policies are built into the script (more than 70). A full run takes about two
+That is about 50,000 actions. The policies are built into the script (more than 70). Each posting shape the gate
+reads is used by one of them, `footer_exposures` and `ignore_case` among them, and a test checks that every policy
+key `check_post`, `decide` and `normalize_policies` read appears in a built-in policy. A full run takes about three
 minutes on four cores. `--jobs` sets the workers in each tree (half the cores by default).
 
 Add actions with `--corpus lines.txt`: one command per line, or a JSON list of commands and `{"tool", "args"}`
@@ -455,13 +471,18 @@ line, or name it in the decision amendment the change records, with the reason i
 Exit 2 means a tree could not run or the script failed, such as on a folder that does not exist or a policy file
 that raises. A tree that dies or runs past `--timeout` (an hour by default) is stopped with exit 2 too. So is a run
 stopped by SIGTERM or SIGHUP, such as a CI cancel. The script stops both trees and removes the temp folder first.
+A signal the script starts with ignored stays ignored, so a run under `nohup` goes on when the terminal closes.
 
 **What the check leaves out.** It runs `classify` and `decide` alone, so a change to any of these needs its own tests
 and a line in its decision amendment:
 
 - Session folders. The hook passes `classify` the session's folder (#209). Only the corpus's own `"cwd"` values and
-  the two seed folders run here. The harvest keeps a literal folder a test passes to `classify`, not one the test
-  builds as it runs, such as `cwd=str(tmp_path)`.
+  the folder rows run here. The rows cover what main reads from a folder today: a relative name that lands in a
+  secret root (`~/.exo/keys`, `~/.claude`) or on the run folder. The harvest keeps a literal folder a test passes to `classify`,
+  not one the test builds as it runs, such as `cwd=str(tmp_path)`.
+- Names and keys outside those tables. A tool name, argument key or program the script does not read from one of the
+  tables above runs only where a test or a seed names it: the `patch`, `urls` and `code` keys, the `action` of
+  `cronjob_manage`, and programs such as `find -exec`, `xargs` or the `git` and `gh` subcommands.
 - Stores the environment moves: `EXO_HOME`, `EXO_PRINCIPAL_STORE`, `EXO_KEYS_FILE` and `EXO_BUS_*` (and their
   `DIVAN_*` names). Both trees run without them.
 - The hook steps after `decide`: standing grants and `NO_GRANT`, `binds_exact`, the registry risk floor, the required
