@@ -23,6 +23,7 @@ under `policies/`. Stdlib only; the YAML reader is a small subset parser (see `p
 from __future__ import annotations
 
 import bisect
+from collections import Counter
 import contextvars
 import copy
 import fnmatch
@@ -159,7 +160,9 @@ class Classification:
         d.pop("setters")
         d.pop("inherits")
         d.pop("own_signals")
-        if not d["alt_targets"]:
+        if d["alt_targets"]:
+            d["alt_targets"] = [redact_userinfo(t) for t in d["alt_targets"]]
+        else:
             d.pop("alt_targets")
         for k in ("text", "title", "command"):
             v = d.pop(k)
@@ -6520,9 +6523,14 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     # counts, #326, #397) and it carries text, a title or an unseen body. The combined
     # classification's own violations and the line-wide unseen note stay bare and are all listed;
     # another part's are named after it, and only so many of those are listed (_LISTED_VIOLATIONS)
-    # that a line of many posts keeps its reason and its card short.
+    # that a line of many posts keeps its reason and its card short. A gh post's copy on another
+    # target it may land on (#399, alt_copy) lists, right after its post, only what neither the
+    # post nor another copy of it lists. A line with such copies lists every violation: the gate
+    # cannot tell which of a post's targets main read it on, so no cap may cut that one's.
     checked, post_unseen_seen = False, False
     named: list[str] = []
+    found_on: dict[int, list[str]] = {}
+    post_of = {id(k): id(q) for q in _each_part(eff) for k in q.parts if k.alt_copy}
     for p in _each_part(eff):
         p_unseen = post_unseen(p)
         if p.category not in applies_to and not (p.category in ("github_close", "vcs_merge")
@@ -6537,13 +6545,18 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
         if p_unseen:  # the checks above saw only part of this post, so they cannot pass it
             found.append(UNSEEN_BODY)
             post_unseen_seen = True
+        found_on[id(p)] = found
+        if p.alt_copy:
+            listed = found_on.setdefault(post_of.get(id(p), 0), [])
+            found = [v for v in found if v not in listed]
+            listed += found
         if p is eff:
             violations += found
         else:
             named += [f"{redact_userinfo(p.summary or p.category)}: {v}" for v in found]
     if unseen and not post_unseen_seen and (checked or line_applies):
         violations.append(UNSEEN_BODY)  # a body on a part the posting rules do not cover is still unseen
-    room = max(_LISTED_VIOLATIONS - len(violations), 0)
+    room = len(named) if post_of else max(_LISTED_VIOLATIONS - len(violations), 0)
     violations += named[:room] + ([f"and {len(named) - room} more on other posts"] if len(named) > room else [])
     if violations:
         bump("ask", "posting rules: " + "; ".join(violations), "posting")
@@ -6589,10 +6602,17 @@ def _strictness(d: Decision) -> tuple:
 
 def _strictest(ds: list[Decision], why: list[str]) -> Decision:
     """The strictest of several decisions of one line, with the widest exposure, a third party if any has one, and
-    every violation and reserved part any of them met (#399). ``why[i]`` ends the reason when ``ds[i]`` stands."""
+    every violation and reserved part any of them met (#399). ``why[i]`` ends the reason when ``ds[i]`` stands. A
+    violation two posts of one name both meet is listed as often as one decision lists it."""
     i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
-    return replace(ds[i], reason=ds[i].reason + why[i],
-                   violations=list(dict.fromkeys(v for d in ds for v in d.violations)),
+    violations: list[str] = []
+    for d in ds:
+        more = Counter(d.violations) - Counter(violations)
+        for v in d.violations:
+            if more[v] > 0:
+                violations.append(v)
+                more[v] -= 1
+    return replace(ds[i], reason=ds[i].reason + why[i], violations=violations,
                    exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
                    third_party=any(d.third_party for d in ds),
                    reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)))

@@ -215,7 +215,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   before this change) and keeps the strictest decision, so no line decides lower than before. Such a line binds its
   approval to the exact command, so a standing grant on one of its targets does not run it, and its question names
   every other target ("It may land on pub/repo#7 instead."). A user and password in such a URL read as `***@` there,
-  and in a reason that names a post or a denied part after it. `gh issue close --duplicate-of` and `-r` take a value in
+  in a reason that names a post or a denied part after it, and in the ledger's `alt_targets`. A line with such a post
+  lists every posting violation, with no cap. `gh issue close --duplicate-of` and `-r` take a value in
   the gate's table now, and the table lists `gh pr ready`, `lock` and `unlock`, `gh issue develop`, `lock`, `unlock`,
   `delete` and `transfer`, and `gh release upload` and `delete`, beside the reopen and merge rows from #397. So
   `gh pr ready --undo <URL>` no longer asks about "the current repo". `gh api` took its endpoint from the first word

@@ -236,7 +236,12 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
 
 Each other reading is a copy of the action among the line's parts, with its own target, so a
 `target:` deny or reserved entry matches it also when the gh call is not the line's most severe
-part. The ledger row lists the other targets as `alt_targets`. The question the principal sees
+part. The posting rules list a post's violations under the post's own name, and right after
+them what a copy finds that neither the post nor another copy of it does (under a scope a copy's
+target can be public where the post's is internal). A line with such copies lists every
+violation, with no cap of twenty. Its question merges the readings of the line, so a copy's
+finding can show both under the copy's name and under the post's. The ledger row lists the other targets as `alt_targets`, with a user and password in a
+URL as `***@`. The question the principal sees
 names each of them, also when none decides the line:
 `merge PR on pub/repo#7 (costly, internal). It may land on myorg/app#7 instead.`
 When one of them decides the line, the reason ends with "(if it lands on owner/name#n)". A user and
