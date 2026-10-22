@@ -210,6 +210,7 @@ class PrincipalStore:
         self.root = Path(root).expanduser().resolve()
         self._nodes: dict[str, dict] | None = None
         self._seen: tuple = ()  # the node files as the last reload saw them (`refresh`)
+        self._bm25: tuple | None = None  # (node set, tables) for `find`, rebuilt when a reload replaces the set
 
     def __repr__(self) -> str:
         return f'PrincipalStore({str(self.root)!r})'
@@ -302,31 +303,19 @@ class PrincipalStore:
     # --- search --------------------------------------------------------------
 
     def find(self, query: str | list[str], n: int | None = None) -> list[tuple[str, float]]:
-        """BM25 over nodes. Title counts three times, summary and load_when twice."""
+        """BM25 over nodes. Title counts three times, summary and load_when twice. The node tables are built once
+        per node set: every reload makes a new set, so only a reload (or a refresh that saw a change) rebuilds
+        them, and a repeat query tokenizes just itself."""
         q = tokens(query if isinstance(query, str) else ' '.join(query))
         if not q:
             return []
-        docs = {}
-        for i, node in self.nodes.items():
-            tags = node.get('tags') or []
-            weighted = ' '.join([
-                ' '.join([node.get('title') or ''] * 3),
-                ' '.join([node.get('summary') or ''] * 2),
-                ' '.join([node.get('load_when') or ''] * 2),
-                ' '.join(tags) if isinstance(tags, list) else str(tags),
-                i.replace('/', ' '),
-                node['_body'],
-            ])
-            docs[i] = Counter(tokens(weighted))
+        nodes, cached = self.nodes, self._bm25
+        if cached is None or cached[0] is not nodes:
+            cached = self._bm25 = (nodes, *self._bm25_tables(nodes))
+        _, docs, df, avg = cached
         N = len(docs)
-        df: Counter = Counter()
-        for c in docs.values():
-            for w in set(c):
-                df[w] += 1
-        avg = sum(sum(c.values()) for c in docs.values()) / max(N, 1)
         scores = {}
-        for i, c in docs.items():
-            L = sum(c.values())
+        for i, (c, L) in docs.items():
             s = 0.0
             for w in q:
                 if w not in c:
@@ -337,6 +326,27 @@ class PrincipalStore:
                 scores[i] = s
         ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
         return ranked[:n] if n else ranked
+
+    @staticmethod
+    def _bm25_tables(nodes: dict[str, dict]) -> tuple[dict[str, tuple[Counter, int]], Counter, float]:
+        """Each node's weighted token counts and length, each token's document frequency, the average length."""
+        docs = {}
+        for i, node in nodes.items():
+            tags = node.get('tags') or []
+            weighted = ' '.join([
+                ' '.join([node.get('title') or ''] * 3),
+                ' '.join([node.get('summary') or ''] * 2),
+                ' '.join([node.get('load_when') or ''] * 2),
+                ' '.join(tags) if isinstance(tags, list) else str(tags),
+                i.replace('/', ' '),
+                node['_body'],
+            ])
+            c = Counter(tokens(weighted))
+            docs[i] = (c, sum(c.values()))
+        df: Counter = Counter()
+        for c, _ in docs.values():
+            df.update(set(c))
+        return docs, df, sum(L for _, L in docs.values()) / max(len(docs), 1)
 
     def ctx(self, words: str | list[str], budget: int = 1500,
             ranked: list[tuple[str, float]] | None = None) -> Context:
