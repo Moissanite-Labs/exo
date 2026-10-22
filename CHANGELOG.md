@@ -211,9 +211,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   store, and so do other commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `xxd`). A call
   that sends a store file out (an `email_send`, post, upload or payment tool call with the file in `files:`,
   `curl -T`, `curl -F`, `mail -A`) keeps the call as a part, with its target and text. So a deny, reserved entry,
-  rule, matrix deny cell or posting rule on that call still applies, as on main. For `policies/` and `state/` that is
-  stricter than before. Not covered: the folders in `$EXO_PLUGIN_DIRS`, which developers point at a checkout, and,
-  as for the rest of the store, a relative path written by a tool whose working folder is in the plugins folder.
+  rule, matrix deny cell or posting rule on that call still applies, as on main, and a here-doc body on the line still
+  reaches the post, also inside `bash <<EOF`. For `policies/`, `state/` and `update/` that is stricter than before,
+  and so is a matrix deny on a delete part of a store line (`ssh host 'rm -rf ~/.exo/update'`). Not covered: the
+  folders in `$EXO_PLUGIN_DIRS`, which developers point at a checkout, and, as for the rest of the store, a relative
+  path written by a tool whose working folder is in the plugins folder.
 - Gate (#436, D-038 amendment): `for NAME do LIST; done` and `select NAME do LIST; done`, with no `in` list and no
   `;` before `do`, are read as `for NAME; do LIST; done`. Bash and POSIX accept that form and run the loop over the
   positional parameters, but the gate read the body as words of the `for` command and classified nothing in it, so
