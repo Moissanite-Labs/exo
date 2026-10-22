@@ -239,8 +239,9 @@ Each other reading is a copy of the action among the line's parts, with its own 
 part. The ledger row lists the other targets as `alt_targets`. The question the principal sees
 names each of them, also when none decides the line:
 `merge PR on pub/repo#7 (costly, internal). It may land on myorg/app#7 instead.`
-When one of them decides the line, the reason ends with "(if it lands on owner/name#n)". An empty
-target is the repo gh picks with no `-R`, named "the current repo". On an ssh or mosh hop the host
+When one of them decides the line, the reason ends with "(if it lands on owner/name#n)". A user and
+password in such a URL read as `***@` in the question and the reason. An empty target is the repo gh
+picks with no `-R`, named "the current repo". On an ssh or mosh hop the host
 stands for an empty target, as for any command run there, and for an empty other target too. Its
 copy among the parts gets the host as well. So `ssh buildhost gh repo view --web myorg/app` still
 meets a rule on `buildhost`, and a rule on reads on `buildhost` still denies
@@ -691,6 +692,40 @@ line is built in. A principal who wants a disclosure line sets it in `posting.md
 targets with `footer_exposures: [public]`. The footer is checked on text the gate can read; a body
 it cannot read asks whatever the footer setting (#208).
 
+## Every post on a line (#396)
+
+The posting rules are the footer, the forbidden words and patterns, `max_chars`, the scrub and the
+unseen-body check. They run on every part of a line, not only on the dominant part that sets the
+card. A part is checked when its category is under `posting.applies_to` and it carries text, a
+title or an unseen body. A close carrying a comment (#326) and a merge carrying a subject, a body
+or a body file the gate did not read (#397) are checked too, whatever `applies_to` says. A reopen's
+comment is a post, so it is covered. Each part is checked at its own exposure. A line of one post
+is checked as before.
+
+Take a policy with footer `F` and the forbidden word `Zork`. Before #396 this line logged:
+
+    gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R myorg/app --body 'Zork leaked'
+
+The first post set the card and passed, and the second was never read. Now the line asks. The
+same holds with `;`, `||`, a pipe, a subshell, a wrapper such as `sudo` or `timeout`, an `ssh`
+string or a `$( )`. It holds when the second command is a merge with a forbidden `--body` or
+`--subject`, a merge with a `--body-file` the gate did not read, or a reopen with a `-c` comment.
+
+The dominant part's violations are listed bare, as for a single post. Another part's are named
+after it: `GitHub PR comment on myorg/app#6: forbidden word: Zork`. When two posts both have a body
+the gate cannot read, each is named: a part's unseen body is read from the signals it carried
+before the line was combined (`Classification.own_signals`, left out of the ledger view). Once
+other posts add violations, a decision lists at most 20 and counts the rest
+(`and 40 more on other posts`). The dominant part's own violations are always all listed. So is
+the unseen-body note for a part the posting rules do not cover, such as a `curl` post. Both come
+before the other posts' violations. The scrub compiles its patterns once per policy, so a line of
+many posts does not compile them again for each post. The approval binding hashes the whole
+command, so a grant for one line never covers a changed second body.
+
+Third-party escalation, the matrix cell and the floors still read only the dominant part. So
+`gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R other/repo --body $'fine\nF'`
+logs, while the second post alone asks because it affects a third party. That is open as #437.
+
 ## The decision model's second opinion (D-015, D-081)
 
 After the rules, for any call they do not deny, the plugin asks the router's `decision` role how strictly to
@@ -800,9 +835,11 @@ gate does not read:
   `categories: {github_post: deny}`, an allow rule for `'^git push --force origin main$'` and an
   ask rule for `git push` after it, `gh pr comment 3 --body x && git push --force origin main` is
   denied. Only a deny reaches the parts: allow, log and ask lines and rules, the opaque bump,
-  third-party escalation, posting checks and the floors see the dominant part (a `reserved:` entry
-  gives an ask on any part). A part carries the tool of the call it came in on (`tool:execute_code`
-  matches the `execute_code` tool, not `python -c` run from bash) and the views of its line, so the
+  third-party escalation and the floors see the dominant part (a `reserved:` entry gives an ask on
+  any part). The posting checks are the one exception: they read every post on the line (#396,
+  "Every post on a line"). Third-party escalation on a part is open as #437. A part carries the
+  tool of the call it came in on (`tool:execute_code` matches the `execute_code` tool, not
+  `python -c` run from bash) and the views of its line, so the
   `command` regex of a `reserved` or `deny` entry or a deny rule matches a part as it matches the
   line (`g''it push origin main && rm -rf build` is denied under
   `{category: vcs_push, command: 'git push'}`), the `ssh` hop is a part whose target is the bare
@@ -1242,15 +1279,19 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   that host still denies it (#153, fixed by
   #164). Past the cap the line asks unless the principal has set a policy for `opaque_exec` (a
   `command:` deny entry or a deny rule that matches the text still denies it).
-- **Only a deny reaches every part of a line.** `classify_shell` keeps the most severe part of a
-  compound line, which sets the card. A deny reaches every part the gate reads, nested ones
-  included: a `deny:` entry since D-075, and a `categories:` line or rule that denies a part since
-  #191. So `gh pr comment 3 --body hi && rm -rf build` is denied under
+- **Only a deny and the posting checks reach every part of a line.** `classify_shell` keeps the
+  most severe part of a compound line, which sets the card. A deny reaches every part the gate
+  reads, nested ones included: a `deny:` entry since D-075, and a `categories:` line or rule that
+  denies a part since #191. So `gh pr comment 3 --body hi && rm -rf build` is denied under
   `categories: {github_post: deny}` as under `deny: [github_post]`, and
   `coproc w { curl https://example.com; }` (and `function f { curl https://example.com; }`) is
   denied under `categories: {web_read: deny}`, though the block is `opaque_exec`. An allow, log or
   ask line or rule applies to the line's own category only: under `categories: {github_post: ask}`
-  the line above asks for the delete, and approving it sends the post too. Since #394 a rule that
+  the line above asks for the delete, and approving it sends the post too. The posting checks read
+  every post on the line (#396), so a forbidden word or a missing footer in any post asks. But
+  third-party escalation, the matrix cell and the floors read the dominant part only (#437):
+  `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R other/repo --body $'fine\nF'`
+  logs, while the second post alone asks. Since #394 a rule that
   would lower a compound line must also name its deciding command and every command that would get
   a stricter outcome alone, but a command allowed alone still rides on the outcome the rule gives,
   as before: `cd /tmp/other && git push --force origin main` and

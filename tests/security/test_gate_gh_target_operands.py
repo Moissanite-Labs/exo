@@ -814,6 +814,21 @@ def test_the_card_redacts_a_user_and_password_in_another_target():
     assert "It may land on https://***@ghe.example.com/pub/repo#5 instead." in card and "tok" not in card, card
 
 
+# #406 names a post's violations, and #191 a denied part, after that post. A post on another target is named
+# after the URL as written, so its user and password are hidden there too, in the reason and the card.
+@pytest.mark.parametrize("policy", [
+    {"posting": POST},
+    {"gates": {"rules": [{"match": {"target": "*ghe.example.com*"}, "decision": "deny", "reason": "no ghe"}]}},
+])
+def test_a_post_on_another_target_is_named_without_its_user_and_password(policy):
+    secret = "u:tok" + "@ghe.example.com"
+    c, d = run(f"gh pr comment 5 -R https://{secret}/pub/repo -b x", normalize_policies(policy))
+    named = "GitHub PR comment on https://***@ghe.example.com/pub/repo#5"
+    assert named in d.reason + "; ".join(d.violations), d
+    for text in (d.reason, *d.violations, summarize(c, d), str(d.as_dict())):
+        assert "tok" not in text, text
+
+
 # gh api's method reads as pflag reads it (round 5, item 5): a cluster ends at `-X` (`-iX DELETE`, `-iXPUT`) and gh
 # keeps the last of a repeated `-X` or `--method`. The gate read the first `-X` word as written, so these were GETs.
 # Where the two readings differ the line also has the reading before (floor), and the stricter decision stands.
