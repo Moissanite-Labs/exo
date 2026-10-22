@@ -4012,10 +4012,10 @@ def _cd_store_read(cmds: list, subs: list, tools: tuple[str, ...] = ()) -> str:
                     lo[""] = min(lo.get("", n), n)
 
     # The tool's folder is where the call starts, not a folder the line enters, so its paths are kept apart. Below a
-    # store folder (a checkout in <repo>/.claude/worktrees/x) it checks names one by one, as ~/.kube does, instead
-    # of counting every relative word: a session that works there passes it on every call. The store folder itself
-    # (~/.ssh) still counts every relative word, as `cd ~/.ssh` does: a key there can have any name. A folder the
-    # line itself also names keeps the line's reading.
+    # .claude folder (a checkout in <repo>/.claude/worktrees/x) it checks names one by one, as ~/.kube does, instead
+    # of counting every relative word: a session that works there passes it on every call. Anywhere else it is read
+    # as a `cd` there is: ~/.ssh and the folders below it (~/.ssh/old, ~/.aws/cli/cache) count every relative word,
+    # since a key there can have any name. A folder the line itself also names keeps the line's reading.
     tool_paths = {p for t in dict.fromkeys(tools) for alt in _brace_alts(t) for p, _ in [folders(alt)]}
     own_paths = {p for t in dict.fromkeys(own) for alt in _brace_alts(t) for p, _ in [folders(alt)]}
     tool_only = tool_paths - own_paths
@@ -4109,8 +4109,10 @@ def _cd_store_read(cmds: list, subs: list, tools: tuple[str, ...] = ()) -> str:
                     return q
         return _exo_relative(split, max(ups), candidates)
     nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
-    # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
-    wide = [(p, parts, k) for p, parts, k in entered if p not in tool_only or k == len(parts) - 1]
+    # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one). The
+    # tool's folder below a .claude folder, and in no other store, is not (tool_only, above).
+    wide = [(p, parts, k) for p, parts, k in entered if p not in tool_only or k == len(parts) - 1
+            or parts[k] != ".claude" or StoreSkip._NO_CLAUDE.search(p)]
     roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in wide)
     every = any(_SENSITIVE_PATH.search(p) for p, _, _ in wide) or any(map(is_store, roots))
     hints = names | singles | nxt

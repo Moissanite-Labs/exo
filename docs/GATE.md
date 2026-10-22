@@ -1266,17 +1266,23 @@ ways:
   `git push --force origin main` with `~/.ssh` as `cwd` is still denied by a matrix that denies
   the push, and `gh pr comment 3 --body-file notes.md` there still reports the unseen body. A `cd`
   on the line still makes the whole line `credentials`, as before.
-- A folder below a store folder checks names one by one, as `~/.kube` does: a store file name, a
-  glob or brace set that could match one, or a path into a store folder. A session working in a
-  checkout at `<repo>/.claude/worktrees/x` passes that folder on every call, and `ls src` or
-  `pytest -q tests` there keep their class. The store folder itself still counts every relative
-  name when it is a store (`~/.ssh`, `~/.gnupg`, `~/.aws`, a `.claude` folder), as `cd ~/.ssh`
-  does, since a key there can have any name: `cat deploy_key` with `~/.ssh` as `cwd` asks.
+- A folder below a `.claude` folder checks names one by one, as `~/.kube` does: a store file
+  name, a glob or brace set that could match one, or a path into a store folder. A session working
+  in a checkout at `<repo>/.claude/worktrees/x` passes that folder on every call, and `ls src` or
+  `pytest -q tests` there keep their class. Any other folder is read as after a `cd` there. A store
+  (`~/.ssh`, `~/.gnupg`, `~/.aws`, a `.claude` folder itself) and a folder below one (`~/.ssh/old`,
+  `~/.aws/cli/cache`, `~/.gnupg/private-keys-v1.d`) count every relative name, since a key there
+  can have any name: `cat deploy_key` with `~/.ssh` or `~/.ssh/old` as `cwd` asks, and so does
+  `tar czf /tmp/o.tgz .` from `~/.gnupg/private-keys-v1.d`.
 
 A line that already reads a store, or writes the Exo store, keeps that reading. Limits: the
 session's own folder (the `cwd` the core passes with every call, #209) is not a target, so a
-session started inside a store folder reads it by relative names as before; and the file tools
-ignore a `cwd` or `workdir` argument, since they read from the session's folder. Tests:
+session started inside a store folder reads it by relative names as before; the file tools
+ignore a `cwd` or `workdir` argument, since they read from the session's folder; below a
+`.claude` folder a name that climbs back into it is not caught (`cat ../../settings.local.json`
+from `<repo>/.claude/worktrees/x`), where a `cd` there asks; and the store-write checks still do
+not read the folder argument, so `echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a
+`local_write` (see "The store is credentials", Known limits). Tests:
 `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
 
 Compound commands (#161). The stdin of a compound command reaches the commands inside it, nested
