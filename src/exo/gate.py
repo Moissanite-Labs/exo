@@ -5986,9 +5986,9 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     # clean first post cannot carry a second one past the footer, the forbidden words and the
     # scrub. A part counts when its category is under applies_to (a close or merge carrying text
     # counts, #326, #397) and it carries text, a title or an unseen body. The combined
-    # classification's own violations stay bare and are all listed; another part's are named after
-    # it, and only so many of those are listed (_LISTED_VIOLATIONS) that a line of many posts keeps
-    # its reason and its card short.
+    # classification's own violations and the line-wide unseen note stay bare and are all listed;
+    # another part's are named after it, and only so many of those are listed (_LISTED_VIOLATIONS)
+    # that a line of many posts keeps its reason and its card short.
     checked, post_unseen_seen = False, False
     named: list[str] = []
     for p in _each_part(eff):
@@ -6009,10 +6009,10 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
             violations += found
         else:
             named += [f"{p.summary or p.category}: {v}" for v in found]
-    room = max(_LISTED_VIOLATIONS - len(violations), 0)
-    violations += named[:room] + ([f"and {len(named) - room} more on other posts"] if len(named) > room else [])
     if unseen and not post_unseen_seen and (checked or line_applies):
         violations.append(UNSEEN_BODY)  # a body on a part the posting rules do not cover is still unseen
+    room = max(_LISTED_VIOLATIONS - len(violations), 0)
+    violations += named[:room] + ([f"and {len(named) - room} more on other posts"] if len(named) > room else [])
     if violations:
         bump("ask", "posting rules: " + "; ".join(violations), "posting")
 

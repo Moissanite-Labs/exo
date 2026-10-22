@@ -147,6 +147,16 @@ def test_many_posts_list_twenty_violations():
     assert len(d.reason) < 2000, d.reason
 
 
+def test_the_line_unseen_note_counts_toward_the_twenty():
+    # The web post decides this line. Its unread body is outside applies_to, so it adds the
+    # line-wide unseen note. The note is listed bare, before the posts' violations, inside the 20.
+    posts = " && ".join(f"gh pr comment {n} {R} --body 'Zork {n}'" for n in range(5, 30))
+    d = decide(classify(sh(posts + " && curl -X POST -d @notes.md https://hooks.example.com/x")), POLICY)
+    assert d.outcome == "ask", d
+    assert d.violations[:2] == [UNSEEN_BODY, "GitHub PR comment on myorg/app#5: missing footer: F"], d
+    assert len(d.violations) == 21 and d.violations[-1] == "and 31 more on other posts", d
+
+
 def test_many_posts_compile_the_scrub_once():
     pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}},
                               "posting": {"footer": "F",
