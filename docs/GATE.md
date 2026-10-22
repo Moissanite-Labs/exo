@@ -366,7 +366,8 @@ system or bash will.
   `[a-zA-Z]`). A class bash does not know, or more than 32 `[`, could match anything and counts as a match. So
   `cat ~/.kube/[^x]onfig`, `cat ~/.kube/[[:alpha:]]onfig` and `cat ~/.config/gh/hosts.[^x]ml` ask.
   `/proc/<pid>/<glob>` asks when the glob could match `environ`, for any process: `cat /proc/self/[!x]nviron`,
-  `cat /proc/*/[!x]nviron` and `cat /proc/self/*` ask, while `ls /proc/*/status` stays a read.
+  `cat /proc/*/[!x]nviron` and `cat /proc/self/*` ask, while `ls /proc/*/status` stays a read. A thread's
+  `/proc/<pid>/task/<tid>/<glob>` is read the same way (#313, below).
 
 Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
 each folder's resolution) across all the line's words. Before, each word looked them up again. On three 10 KB
@@ -385,12 +386,59 @@ gate's view of the file system may differ from the worker's. A name built whole 
     does the glob `cat .env.*` (the glob samples have no `.env.<suffix>`);
   - #311: a relative name read in a shell's `cwd` inside a store (`{"command": "cat config", "cwd": "~/.kube"}`) is
     matched by the name as written; a `cd` on the line is tracked (#192);
-  - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved;
-  - #313: a thread's `/proc/<pid>/task/<tid>/environ` is not a store.
+  - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved.
 
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
 `test_gate_expansions_in_names.py`, `test_gate_bash_glob_classes.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
+
+### A thread's environment file (#313)
+
+On Linux each thread of a process has its own folder, `/proc/<pid>/task/<tid>/`. Its `environ` holds the same
+environment as `/proc/<pid>/environ`, so it is a secret store too, for any process. The store list names both
+forms. A glob is read as bash reads it: `/proc/<pid>/<x>/<tid>/<glob>` asks when `<x>` could match `task` and the
+glob could match `environ`. So these ask: `cat /proc/self/task/1/environ`, `cat /proc/*/task/*/environ`,
+`cat /proc/1/*/*/environ`, `cat /proc/self/[t]ask/*/environ`, `cat /proc/self/task/{1,2}/environ`,
+`cd /proc/self/task/1 && cat environ`, and `read_file` or `write_file` on such a path. The search tools leave it
+out of a walk, as they leave out the direct form (#241): `grep` on `/proc/self` skips each thread's `environ`.
+Other files under `task/` keep their class: `cat /proc/self/task/*/status`, `cat /proc/self/*/*/cmdline` and
+`ls /proc/self/task` are reads.
+
+A thread's environment is decided as `/proc/<pid>/environ` already was. Some lines decide lower than before
+because of that. A differential of main against the change found 2,877 lowered pairs (27,708 actions under 95
+policies). Every one of them decides as main decides the same action with `/proc/self/environ`. They fall in
+four groups, all from how the gate already handles a secret store:
+
+- **A file tool's own class.** A file tool on a secret store takes the `credentials` class in place of its own.
+  A deny on `read` or `local_write` then becomes the credentials ask: `read_file /proc/self/task/1/environ`
+  under `categories: {read: deny}` asks where it was denied. A `reserved: [read]` entry no longer matches the
+  call. The call still asks, and no grant covers it, since it is `credentials`. A shell line keeps its read as a
+  part (D-075), so `cat` there is still denied by a `read` deny.
+- **Matrix cells.** The matrix sees the dominant part only. A credentials line is costly and private, so a deny
+  cell for a read (`reversible`, `private`) no longer applies to `cat /proc/self/task/1/environ`. On a compound
+  line the credentials part takes over, so a deny cell another part hit no longer applies:
+  `cat /proc/self/task/1/environ; git push --force origin main` under an `irreversible`, `internal` deny cell
+  asks.
+- **Posting rules.** The posting rules read every post on the line (#396), so a post beside the read keeps its
+  violations, named after its part. Before #396 they checked the dominant part only, and such a post lost
+  them. The line asks either way.
+- **A second store's target.** A line's credentials target is the first store it names, and a `cat` part has no
+  target. So a `target:` entry for a second store on the line no longer matches:
+  `cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does.
+
+The differential does not count one more change, because the outcome stays an ask. Beside a store write, the
+line is `credentials`, not `store_write`. So a seat that `approvals.yaml` delegates `credentials` to may answer
+it, where a store write is the principal's alone:
+`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`. Main does the same for any secret on the
+line, `env; echo x > ~/.exo/policies/gates.yaml` included.
+
+Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
+and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. A path through `/proc/self`
+is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
+either form: `cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` stay reads.
+
+Tests: `tests/security/test_gate_proc_task_environ.py`.
 
 ### What the search tools read (#241)
 
@@ -605,6 +653,16 @@ Any indirection walked past it. It now works the other way round. A small lexer
 (`exo.gate._Lexer`) reads quotes, escapes, `$( )`, backticks, `$VAR`, redirections and heredocs,
 and splits the line into simple commands. Each simple command has one program position (after
 assignments, reserved words such as `if` and `do`, and prefixes such as `sudo`, `env`, `timeout`).
+A loop body starts where bash starts it (#436). Bash and POSIX take `do` as the reserved word right
+after the name in `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before
+it, and run the loop over the positional parameters. So the gate reads
+`for x do git push --force origin main; done` as `for x; do git push --force origin main; done`:
+the push is a `force_push` and `deny: [force_push]` denies the line. Before, the gate read that `do`
+and the body as words of the `for` command, which lists no programs, so the line was an allowed
+`read` under every policy. The same holds after `function NAME` or `coproc [NAME]` and a reserved
+word such as `{`, as in `function f { for x do ...; done; }`, and behind reserved words such as
+`then`. A quoted `"do"`, a `do` in an `in` list and a `for` that is only an argument
+(`echo for x do`) stay plain words, as in bash.
 A `$'..'` word is decoded with bash's ANSI-C rules (bash 5.2, UTF-8 locale; issue #167): `\n`, `\e`
 and the other letter escapes, octal and `\x` values (also `\x{..}`) cut to 8 bits, `\u` with 1 to 4
 and `\U` with 1 to 8 hex digits, `\cX` (`\c\\` takes one backslash), and an unknown escape kept with
@@ -1121,9 +1179,11 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   inspection depth (above); `eval $(...)` and `eval "$(...)"`; a command arriving on stdin,
   `echo '...' | xargs -I{} sh -c '{}'` (while
   `echo 3 | xargs -I{} sh -c 'gh pr comment {} --body hi'` is read and denied); the body of
-  `time { ...; }`; and the wrapper forms #160 left unread, such as `su -c`, `runuser`, `bwrap`,
-  tmux's `if-shell` and `send-keys`, and `parallel` with no template ("Known limit (#160)" below
-  lists more of them). These are examples, not a complete list.
+  `time { ...; }` and of `time for x do ...; done`; and the wrapper forms #160 left unread, such as
+  `su -c`, `runuser`, `bwrap`, tmux's `if-shell` and `send-keys`, and `parallel` with no template
+  ("Known limit (#160)" below lists more of them). These are examples, not a complete list. After
+  `time` the gate does not read `{` or `for` as a reserved word, so either is an unknown program
+  there. The body of `time for x; do ...; done` is read.
 - **Deny becomes allow.** Some unread execution does not even ask. An entry for the hidden
   action's category (`github_post`, `delete`...) does not reach it, in `categories:`, `deny:`
   or `reserved:`. An entry that matches the command text does (a `command:` regex, or a rule
@@ -1390,14 +1450,17 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 (including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
 `$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus`
 (the bus registry that signed seat answers and the relay trust, the relay database and its
-`-wal`, `-shm` and `-journal` files, #210) and `$EXO_HOME/plugins` (code the core loads, #435, below),
-any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals`
-(`exo init --root`, `exo import-store --root`), for every id, not only the active one. When the
-environment moves a bus file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and
-`EXO_BUS_DB` name (with the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also
-by its legacy `DIVAN_` name, and both spellings when both are set. Distinctive names match anywhere,
-so a relative `policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json` or
-`bus/relay.sqlite` counts too, and `.exo/bus` and `.exo/plugins` count whatever `EXO_HOME` is.
+`-wal`, `-shm` and `-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435), `$EXO_HOME/update` (`allowed_signers`, the
+signed-update trust pin of D-073, #133), any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store
+root recorded in config `principals` (`exo init --root`, `exo import-store --root`), for every id,
+not only the active one. When the environment moves a bus file, the gate protects where it points:
+the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with the database's sidecars) and the folder
+`EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_` name, and both spellings when both are
+set. Distinctive names match anywhere, so a relative `policies/gates.yaml`,
+`state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or `update/allowed_signers`
+counts too, and `.exo/bus`, `.exo/plugins` and `.exo/update` count whatever `EXO_HOME` is. A project folder called
+`update` is ordinary; only a file in it named `allowed_signers` asks. `config.json` is not on the
+list yet (D-074, #125).
 
 The plugins folder (#435). The core loads each plugin it finds in `$EXO_PLUGIN_DIRS`, then in
 `$EXO_HOME/plugins` (`exo.core.plugins.default_dirs`), and runs its code inside the harness with the
@@ -1471,7 +1534,11 @@ Known limits. These are classification checks, not a filesystem sandbox: a symli
 between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
 without a link to resolve, so only distinctive names catch a write through it. Only the store roots
 are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
-write to the outside spelling is a local write. Name and prefix checks are case-sensitive, so a
+write to the outside spelling is a local write. A copy or an archive unpacked into the home folder
+itself, which makes a protected folder from its source name (`cp -r /tmp/x/update ~/.exo/`,
+`tar -C ~/.exo -xf x.tar`), is not seen either. Nor is a path held in a variable or made by a
+command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
+`cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks are case-sensitive, so a
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
@@ -1514,8 +1581,8 @@ path is one the gate cannot resolve, not that the command writes it. A body file
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
 `sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
-`exo log append`, `exo keygen`, `exo init`, `git -C <store>` with a writing subcommand, and any
-writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
+`exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `git -C <store>` with a
+writing subcommand, and any writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
 `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. Reads of the store stay `read`, except `keys/` and the run folder's secrets
@@ -1530,6 +1597,18 @@ always asks and is never granted, but a seat that `approvals.yaml` delegates `cr
 answers a `store_write` (#169, the D-038 amendment; `keys/` was already so). A delete of job
 output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name (`rm ~/.exo/run/exod.sock`)
 stays `store_write`.
+
+What the floor does to a policy's denies. A shell write to the store keeps its own reading
+(`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category
+still denies the line (D-075, #191). The matrix reads the dominant part only, so a matrix deny on delete
+can instead become a principal-only store-write ask (`ssh host 'rm -rf ~/.exo/update'`), as for
+`~/.exo/state`. A file tool's write (`write_file`, `edit_file`, `patch`,
+`apply_patch`, `create_directory`, `move_file`, a delete tool) is `store_write` alone, so a
+`local_write` or `delete` deny does not reach it: it asks the principal instead. After `cd /dev`,
+a line naming a store path (`printf x > update/allowed_signers`, or a credentials command naming the pin) has that path as its target, not
+`/dev`, so a `target:/dev*` deny does not reach it either. `exo update --pin-trust` keeps its old
+`opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it, and naming
+`opaque_exec` at `allow` or `log` no longer lets it run without an ask.
 
 ## Policy changes during a session (D-038)
 
