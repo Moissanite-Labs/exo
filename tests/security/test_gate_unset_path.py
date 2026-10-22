@@ -76,6 +76,7 @@ def test_unset_path_asks_as_the_empty_assignment_does(cmd):
     "unset `echo PATH`; ls",
     "unset ${!X}; ls",
     "unset ${!PA*}; ls",
+    'unset "${arr[@]}"; ls',  # arr=(PATH)
     "unset PAT?; ls",
     "unset FOO=$x; ls",       # unset takes no assignment: x=' PATH' splits into a second name
     'unset "a["$i]; ls',      # the $ is outside the quotes: i='1] PATH [' splits off PATH

@@ -1289,18 +1289,19 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   where `unset` cannot reach a later command: `(unset PATH); ls`, `echo x | unset PATH`, `sudo unset PATH`, and
   `cd /dev && unset PATH`, which is `store_write` for the `cd`. Main reads `(PATH=); ls`, `echo x | PATH=` and
   `cd /dev && PATH=` the same way. A loop over other names (`for v in A B; do unset $v; done`) asks, as
-  `export $v=` already does. An unquoted subscript (`unset arr[1]`) is a glob and asks, while `unset 'arr[1]'`
-  stays `read`. A brace with no comma (`unset {X}`) asks too. *Policies that allow `opaque_exec`.* The line decides
-  by its most severe part, which is now `opaque_exec`. A policy that allows or logs `opaque_exec` but asks on another
-  category loses that ask. Under `categories: {opaque_exec: allow, local_write: ask}`, `unset PATH; echo hi >
-  out.txt` goes from ask to allow. Main already allows `PATH=; echo hi > out.txt` under that policy, so this follows
-  the design. In the same way, an allow rule that names `opaque_exec` now allows `unset a[$i]`, which main asked on
-  for its subscript. Main allows `export a[$i]=1` and `read a[$i]` under that rule. A deny on any part still holds
-  (D-075, #191). Differential (#423), with 123 probe lines added to the corpus: 24,996 actions x 76 built-in
-  policies, 1,899,696 pairs, lowered 8 pairs on 4 probe actions, each an `a[$i]` line under an allow rule that names
-  `opaque_exec`. With 4 mixed category policies, 99,984 pairs, lowered 12 pairs on 7 probe actions, each the mixed
-  category case. Not done: an exporter name in a brace (`export {PATH,X}=`) is not read yet (#438). Rejected:
-  matching a brace set's words against `PATH`. The brace check the store paths use misses a quoted `}`
+  `export $v=` already does, and so does `unset "${arr[@]}"`, since the array may hold `PATH` (the #179 test that
+  pinned it as `read` now pins `unset -f "${arr[@]}"`). An unquoted subscript (`unset arr[1]`) is a glob and asks,
+  while `unset 'arr[1]'` stays `read`. A brace with no comma (`unset {X}`) asks too. *Policies that allow
+  `opaque_exec`.* The line decides by its most severe part, which is now `opaque_exec`. A policy that allows or logs
+  `opaque_exec` but asks on another category loses that ask. Under `categories: {opaque_exec: allow, local_write:
+  ask}`, `unset PATH; echo hi > out.txt` goes from ask to allow. Main already allows `PATH=; echo hi > out.txt` under
+  that policy, so this follows the design. In the same way, an allow rule that names `opaque_exec` now allows `unset
+  a[$i]`, which main asked on for its subscript. Main allows `export a[$i]=1` and `read a[$i]` under that rule. A deny
+  on any part still holds (D-075, #191). Differential (#423), with 123 probe lines added to the corpus: 24,996 actions
+  x 76 built-in policies, 1,899,696 pairs, lowered 8 pairs on 4 probe actions, each an `a[$i]` line under an allow
+  rule that names `opaque_exec`. With 4 mixed category policies, 99,984 pairs, lowered 12 pairs on 7 probe actions,
+  each the mixed category case. Not done: an exporter name in a brace (`export {PATH,X}=`) is not read yet (#438).
+  Rejected: matching a brace set's words against `PATH`. The brace check the store paths use misses a quoted `}`
   (`unset {"}",PATH}` unsets PATH), and an unquoted `{` is rare in an `unset` line.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
