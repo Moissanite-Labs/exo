@@ -11,8 +11,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   already asked on the assignment forms (`PATH= ls`). `unset` and `unset -v` of PATH now ask the
   same way, as `opaque_exec`. `unset -f` names a function, not the variable, and stays read. An
   `unset` word the gate cannot read asks too, as a name or as an option: `unset $v`, `unset PAT?`,
-  `unset {PATH,}` and `unset -${f}v PATH`. The exporters read their options the same way, so
-  `export +x -f $V=` and `declare -${f}x $V=` ask as `export $V=` does.
+  `unset {PATH,}`, `unset [P]ATH` and `unset -${f}v PATH`. The exporters read their options the
+  same way, so `export +x -f $V=` and `declare -${f}x $V=` ask as `export $V=` does. A
+  `readonly +x -n r=PATH` no longer asks: bash reads `+x` and `-n` there as names, so it makes no
+  nameref.
 - Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered

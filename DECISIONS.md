@@ -1271,39 +1271,50 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
   here-doc body leads past the end, past a deny-listed command.
   *Amendment 2026-10-21 (issue #329, follow-up to #231):* `unset PATH; ls` was `read` (allow). With no `PATH`, bash
-  looks a command up in the current folder, so the `ls` runs a `./ls` an earlier write can plant. That is the
-  hazard #231 reads in an empty `PATH` element. *unset.* `unset PATH` and `unset -v PATH` are read as `PATH=` and
-  ask, `opaque_exec` named in the summary. `-f` names functions, and with `-v` it is an error, so `unset -f PATH`
-  stays `read`. `-f` counts only from an option word the gate can read, before any word it cannot: in
-  `x=; unset -$x -f PATH` bash reads `-` as the end of the options and unsets the variable. A `+x` word ends
-  unset's options, as `--` and a name do (`unset +f -f PATH`). Any word the gate cannot read asks, as a name or as
-  an option: a name made by a variable or a substitution (`unset "$v"`, `unset -${f}v PATH`), a `$` outside double
-  quotes, which bash may split into more names (in `unset a[$i]`, `i='1] PATH ['` splits off `PATH`), a glob
-  (`unset PAT?`), or an unquoted brace (`unset {PATH,}`). A word wholly in double quotes is read as before, so
-  `unset "arr[$k]"` keeps its class. `unset -n PATH` asks, to be safe. bash leaves a plain `PATH` set under `-n`,
-  but it unsets a `PATH` that an earlier command made a nameref, and the gate does not track namerefs. *Exporters.*
-  One helper, `_builtin_options`, now reads the options of unset and of the exporters. export, readonly and unset take
-  no `+x`, and a word that may expand ends the options. So `V=PATH; export +x -f $V=; ls` and
-  `V=PATH; declare -${f}x $V=; ls`, which were `read` on main and run a planted `./ls`, ask. An option-like word
-  with a value the gate cannot read (`declare -x=$v -n r=PATH`) still asks. *Intended asks.* Some new asks fall
-  where `unset` cannot reach a later command: `(unset PATH); ls`, `echo x | unset PATH`, `sudo unset PATH`, and
-  `cd /dev && unset PATH`, which is `store_write` for the `cd`. Main reads `(PATH=); ls`, `echo x | PATH=` and
-  `cd /dev && PATH=` the same way. A loop over other names (`for v in A B; do unset $v; done`) asks, as
-  `export $v=` already does, and so does `unset "${arr[@]}"`, since the array may hold `PATH` (the #179 test that
-  pinned it as `read` now pins `unset -f "${arr[@]}"`). An unquoted subscript (`unset arr[1]`) is a glob and asks,
-  while `unset 'arr[1]'` stays `read`. A brace with no comma (`unset {X}`) asks too. *Policies that allow
-  `opaque_exec`.* The line decides by its most severe part, which is now `opaque_exec`. A policy that allows or logs
-  `opaque_exec` but asks on another category loses that ask. Under `categories: {opaque_exec: allow, local_write:
-  ask}`, `unset PATH; echo hi > out.txt` goes from ask to allow. Main already allows `PATH=; echo hi > out.txt` under
-  that policy, so this follows the design. In the same way, an allow rule that names `opaque_exec` now allows `unset
-  a[$i]`, which main asked on for its subscript. Main allows `export a[$i]=1` and `read a[$i]` under that rule. A deny
-  on any part still holds (D-075, #191). Differential (#423), with 123 probe lines added to the corpus: 25,042 actions
-  x 76 built-in policies, 1,903,192 pairs, lowered 28 pairs on 14 actions, each an unquoted `a[$i]` line under an
-  allow rule that names `opaque_exec` (probe lines, and the variants of `unset a[$i]` from the new test). With 4 mixed
-  category policies, 100,168 pairs, lowered 12 pairs on 7 probe actions, each the mixed category case. Not done: an
-  exporter name in a brace (`export {PATH,X}=`) is not read yet (#438). Rejected: matching a brace set's words against
-  `PATH`. The brace check the store paths use misses a quoted `}` (`unset {"}",PATH}` unsets PATH), and an unquoted
-  `{` is rare in an `unset` line.
+  looks a command up in the current folder, so the `ls` runs a `./ls` an earlier write can plant. That is the hazard
+  #231 reads in an empty `PATH` element. *unset.* `unset PATH` and `unset -v PATH` are read as `PATH=` and ask,
+  `opaque_exec` named in the summary. `-f` names functions, and with `-v` it is an error, so `unset -f PATH` stays
+  `read`. `-f` counts only from an option word the gate can read, before any word it cannot: in `x=; unset -$x -f
+  PATH` bash reads `-` as the end of the options and unsets the variable. A `+x` word ends unset's options, as `--`
+  and a name do (`unset +f -f PATH`). Any word the gate cannot read asks, as a name or as an option: a name made by a
+  variable or a substitution (`unset "$v"`, `unset -${f}v PATH`), a `$` outside double quotes, which bash may split
+  into more names (in `unset a[$i]`, `i='1] PATH ['` splits off `PATH`), a glob (`unset PAT?`, and `unset [P]ATH`,
+  whose leading `[` the lexer does not mark), or an unquoted brace (`unset {PATH,}`). A word wholly in double quotes
+  is read as before, so `unset "arr[$k]"` keeps its class. `unset -n PATH` asks, to be safe. bash leaves a plain
+  `PATH` set under `-n`, but it unsets a `PATH` that an earlier command made a nameref, and the gate does not track
+  namerefs. *Exporters.* One helper, `_builtin_options`, now reads the options of unset and of the exporters. export,
+  readonly and unset take no `+x`, and a word that may expand ends the options. So `V=PATH; export +x -f $V=; ls` and
+  `V=PATH; declare -${f}x $V=; ls`, which were `read` on main and run a planted `./ls`, ask. An option-like word with
+  a value the gate cannot read (`declare -x=$v -n r=PATH`) still asks. A `-n` after a `+x` word is a name too, so
+  `readonly +x -n r=PATH` makes `r` a plain variable in bash. Main took that `-n` as an option and asked on a nameref.
+  The line is `read` now. *Intended asks.* Some new asks fall where `unset` cannot reach a later command: `(unset
+  PATH); ls`, `echo x | unset PATH`, `sudo unset PATH`, and `cd /dev && unset PATH`, which is `store_write` for the
+  `cd`. Main reads `(PATH=); ls`, `echo x | PATH=` and `cd /dev && PATH=` the same way. A loop over other names (`for
+  v in A B; do unset $v; done`) asks, as `export $v=` already does, and so does `unset "${arr[@]}"`, since the array
+  may hold `PATH` (the #179 test that pinned it as `read` now pins `unset -f "${arr[@]}"`). An unquoted subscript
+  (`unset arr[1]`) is a glob and asks, while `unset 'arr[1]'` stays `read`. A brace with no comma (`unset {X}`) asks
+  too. *Policies that allow `opaque_exec`.* The line decides by its most severe part, which is now `opaque_exec`. A
+  policy that allows or logs `opaque_exec` but asks on another category loses that ask. Under `categories:
+  {opaque_exec: allow, local_write: ask}`, `unset PATH; echo hi > out.txt` goes from ask to allow. Main already allows
+  `PATH=; echo hi > out.txt` under that policy, so this follows the design. In the same way, an allow rule that names
+  `opaque_exec` now allows `unset a[$i]`, which main asked on for its subscript. Main allows `export a[$i]=1` and
+  `read a[$i]` under that rule. The rule also allows a line that asked on main only for another word's indirection,
+  once `unset` makes it `opaque_exec` (`unset "arr[$k]" PATH`, `unset $"PATH"`). Main allows `PATH=; unset "arr[$k]"`
+  there too. A line with a `$".."` word that is not `opaque_exec` is decided a second time as `opaque_exec` with no
+  own text (#136), so no allow rule lowers it. A line that is `opaque_exec` already is decided once. So under
+  `categories: {opaque_exec: deny}` with an allow rule for every command, `unset $"PATH"; ls` goes from deny to ask,
+  as `export $"PATH"=; ls` and `PATH=; echo $"x"; ls` ask on main. A `deny: [opaque_exec]` entry still denies it, and
+  a deny on any part still holds (D-075, #191). Differential (#423) on the final tree, with 3,860 probe lines of unset
+  and exporter forms added to the corpus: 28,801 actions x 76 built-in policies, 2,188,876 pairs, lowered 1,246 pairs
+  on 246 actions, each in a group above. 472 pairs on 236 actions are the two allow rules that name `opaque_exec`. 84
+  pairs, on 42 of those actions (each with a `$".."` word), are the two policies that deny `opaque_exec` by category
+  and allow every command by rule. 690 pairs are the 10 `readonly +x -n` actions, 10 of them a reserved entry for
+  `opaque_exec` that no longer applies. With 4 mixed category policies: 115,204 pairs, lowered 510 pairs on 343
+  actions, 500 of them the mixed category case and 10 the `readonly` lines. No posting violation was lost. Not done:
+  an exporter name in a brace (`export {PATH,X}=`) is not read yet (#438). Nor is a `read` or exporter name that
+  starts with a glob `[` or a brace (`read [P]ATH`, `read {PATH,}`), as on main. Rejected: matching a brace set's
+  words against `PATH`. The brace check the store paths use misses a quoted `}` (`unset {"}",PATH}` unsets PATH), and
+  an unquoted `{` is rare in an `unset` line.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
