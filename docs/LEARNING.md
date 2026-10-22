@@ -22,6 +22,14 @@ notice in the client. It names `exo init <id>`.
 
 Each signal becomes a ledger event. An edit also stores a preference pair: the answer, and your better version.
 
+A correction or ruling in chat is written once, by its capture key. exo-memory writes the same keys, so neither
+doubles the other. After each turn the learner checks the chat against the keys already in the ledger. It keeps
+those keys between turns, with the last row it read, and reads only the rows after that row (#263). The ledger is
+append-only and nothing takes a key back, so the kept keys are the ones a full read would find. If the ledger no
+longer holds that row in its place (another ledger, or a file swapped or cut short), the learner reads it again from
+the first row. One case waits for the next start: a row deleted or changed by hand before that row, past the
+ledger's triggers. `exo log verify` reports that ledger as broken, and exo-memory's own key set keeps such a key too.
+
 A private thread gives no signal (D-028), and neither does a session under it (its delegate children, at any depth).
 The loop captures no correction from them and starts no review for them. `feedback.send` on one of their answers
 returns `recorded: false` and files no finding. `ui.respond` on a panel a private thread opened or updated is not
