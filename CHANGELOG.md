@@ -9,6 +9,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
   verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
   Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.
+- A fork no longer loses its copies of entries the parent undid after the fork (#245). A copy counts
+  at its original's log position only while that original is visible, so once the fork's own later
+  entries were summarized the tail started after the copy, and no tree held it either: the fork's
+  calls dropped it. The tail now keeps such copies, in order, ahead of the fork's own entries. They stay
+  verbatim, outside `tail_messages` and `/compact`, in every call of the fork. Copied context notes are
+  not kept: they leave a fork's tail as before. The lookup reads only a fork's copies, so a thread that
+  is not a fork pays nothing for it (D-028 amendment).
 - `store.find` tokenized every node and rebuilt its BM25 tables on each call (#254, W1-5). `ctx`, `exo find`, the
   default retrieval ranker, the learner and the memory plugin all call it, so each query paid for the whole store.
   The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
