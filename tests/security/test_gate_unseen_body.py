@@ -163,7 +163,7 @@ def test_a_gist_s_files_are_unseen():
 
 
 @pytest.mark.parametrize("line", ["gh gist view abc", "gh gist list", "gh pr view $N",
-                                  "gh workflow run deploy.yml -F env=prod", "gh pr merge 5 --body-file m.md",
+                                  "gh workflow run deploy.yml -F env=prod",
                                   "curl -s \"https://api.example.com/$X\""])
 def test_reads_and_other_acts_are_not_posts_with_unseen_bodies(line):
     assert not body_unseen(classify(sh(line)))
