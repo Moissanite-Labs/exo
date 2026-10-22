@@ -34,9 +34,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   a line enters for the relative-name check (D-038), once per call. The line keeps its own
   classification and the store read is added as a credentials part, so the call asks every time with
   no grant, also in observe mode, and only those who may answer credentials answer it. Its deny
-  entries, rules, matrix cell, posting checks and reserved entries still apply. Below a store folder
-  (a worktree in `<repo>/.claude/worktrees/`) names are checked one by one. A folder outside a store
-  is unchanged, and a file tool's `cwd` argument still does not count: only a shell call runs in its
+  entries, rules, matrix cell, posting checks and reserved entries still apply. Below a `.claude`
+  folder (a worktree in `<repo>/.claude/worktrees/`) names are checked one by one; any other folder
+  is read as after a `cd` there, so a folder below `~/.ssh` or `~/.aws` counts every relative name,
+  as the store itself does. A folder outside a store is unchanged, and a file tool's `cwd` argument still does not count: only a shell call runs in its
   own. A line that reads a secret and writes the Exo store is now answered by the principal alone.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;

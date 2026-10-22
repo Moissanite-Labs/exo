@@ -64,6 +64,12 @@ MATRIX_DENY_ALL = _pol({"gates": {"matrix": {"irreversible": {"private": "deny",
     # a key in ~/.ssh can have any name: the store folder itself counts every relative name, as `cd ~/.ssh` does
     ("cat deploy_key", "~/.ssh"),
     ("base64 github", "~/.ssh"),
+    # and so does a folder below such a store, as after a `cd` there; below a .claude folder names count one by one
+    ("cat deploy_key", "~/.ssh/old"),
+    ("tar czf /tmp/o.tgz .", "~/.gnupg/private-keys-v1.d"),
+    ("cat 4f3e9a.json", "~/.aws/cli/cache"),
+    ("cat adc.json", "~/.config/gcloud/legacy_credentials/me"),
+    ("cat deploy_key", "~/.ssh/.claude/x"),
     # wrappers, nested lines, substitutions and redirections reach the folder, as after a leading cd
     ("bash -c 'cat config'", "~/.kube"),
     ("sudo cat config", "~/.kube"),
@@ -198,6 +204,8 @@ def test_a_line_that_already_reads_a_store_is_left_as_it_is():
     ("cat README.md", "~/repo/.claude/worktrees/x"),
     ("pytest -q tests", "~/repo/.claude/worktrees/x"),
     ("git status", "~/repo/.claude/worktrees/x"),
+    ("tar czf /tmp/src.tgz .", "~/repo/.claude/worktrees/x"),
+    ("cat notes.md", "~/.kube/cache"),        # below ~/.kube names count one by one, as after a `cd` there
 ])
 def test_a_tool_cwd_with_no_store_read_changes_nothing(cmd, folder):
     c = _bash_in(cmd, folder)

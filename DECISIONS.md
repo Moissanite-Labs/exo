@@ -1293,22 +1293,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   actions that went from deny to ask, 118 that lost posting violations and 173 that lost reserved entries. It also
   read the folder in every nested line, so `ssh host 'cat config'` run from `~/.kube` lost its reserved host, and a 12
   to 16 level `$( )` line with a folder in `$EXO_HOME` ran 6 to 18 times slower and then asked as `too many to
-  resolve`. *Names one by one below a store folder.* A folder below a store folder checks names one by one, as
-  `~/.kube` does, so a checkout at `<repo>/.claude/worktrees/x` keeps `ls src` and `pytest` as they were. The store
-  folder itself counts every relative name when it is a store (`~/.ssh`, `~/.gnupg`, `~/.aws`), as `cd ~/.ssh` does,
-  since a key there can have any name: `cat deploy_key` with `~/.ssh` as `cwd` asks. #415's repair checked names one
-  by one there too, so that the reclassification would not take the line's category. With the part the line keeps its
-  category anyway. *A side effect.* `call_approvers` reads every `NO_GRANT` part, so a line that reads a secret and
-  writes the store (`credentials` with a `store_write` part) now goes to the principal alone, as a store write does.
+  resolve`. *Names one by one below a `.claude` folder.* A folder below a `.claude` folder checks names one by one, as
+  `~/.kube` does, so a checkout at `<repo>/.claude/worktrees/x` keeps `ls src` and `pytest` as they were. Any other
+  folder is read as after a `cd` there. A store (`~/.ssh`, `~/.gnupg`, `~/.aws`) and a folder below one (`~/.ssh/old`,
+  `~/.aws/cli/cache`) count every relative name, since a key there can have any name: `cat deploy_key` with `~/.ssh` or
+  `~/.ssh/old` as `cwd` asks. #415's repair checked names one by one in all of these, so that the reclassification
+  would not take the line's category. With the part the line keeps its category anyway. *A side effect.*
+  `call_approvers` reads every `NO_GRANT` part, so a line that reads a secret and writes the store (`credentials` with
+  a `store_write` part) now goes to the principal alone, as a store write does.
   Rejected: making the call `credentials` and deciding the line's own reading beside it, which needs a second decision
   in `decide` and a way to find that reading among the parts; and reading the folder in each nested line, which reads
-  it into the text `ssh` runs on another host and spends the #269 budget at every level. A `cd` on the line still
+  it into the text `ssh` runs on another host and spends the #269 budget at every level. Also rejected: names one by
+  one below every store folder, which let `tar czf /tmp/o.tgz .` from `~/.gnupg/private-keys-v1.d` or
+  `cat deploy_key` from `~/.ssh/old` read a key without asking, where a `cd` there asks. A `cd` on the line still
   makes the whole line `credentials`, as before. Limits: the session's own folder (the `cwd` the core passes, #209) is
-  not a target, and the file tools ignore a folder argument. A differential against main (`gate_diff`, #423) over
-  28,042 actions under 76 policies, 2,540 of them focused (127 lines, each also run with 19 folder arguments), finds 0
-  lowered pairs and 83,511 tightened pairs on 1,426 actions, all of them calls with a folder argument. The 25,423
-  actions without one decide exactly as on main. On the focused actions #415 lowers 2,032 pairs (2,287 before its
-  repair). No lowering is intended.
+  not a target, the file tools ignore a folder argument, below a `.claude` folder a name that climbs back into it is
+  not caught (`cat ../../settings.local.json` from `<repo>/.claude/worktrees/x`), and the store-write checks still do
+  not read the folder argument (`echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`, as on
+  main). A differential against main (`gate_diff`, #423) over 31,631 actions under 76 policies finds 0 lowered pairs
+  and 175,982 tightened pairs on 3,062 actions, all of them calls with a folder argument. 6,042 of the actions pass
+  one: 127 lines, each run with 19 folder arguments, and everyday commands in work folders, folders below stores, store
+  writes and file tools. The 25,589 actions without one decide exactly as on main. On the 2,540 actions of the 127
+  lines, #415 lowers 2,032 pairs (2,287 before its repair). No lowering is intended.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
