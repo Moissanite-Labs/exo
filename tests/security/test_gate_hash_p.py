@@ -6,6 +6,8 @@ Plain `hash`, `hash -r` and `hash -d` only read or clear the table and stay `rea
 after the first operand (bash stops reading options there) and a `-p` with no name after its path
 (bash binds nothing). Classification and decision only; nothing is executed.
 """
+import os
+
 import pytest
 
 from exo.gate import classify, decide, normalize_policies
@@ -149,3 +151,24 @@ def test_a_rebind_beside_a_force_push_keeps_the_push_deny():
     pol = normalize_policies({"gates": {"categories": {"force_push": "deny"}}})
     c = classify(sh("hash -p /proc/self/fd/3 git; git push --force origin main"))
     assert decide(c, pol).outcome == "deny"
+
+
+# The first fix skipped the whole store check for any program named hash. A redirect after a cd into the store, a
+# redirect beside a store path in hash's words and a program named hash run by path (no builtin) then lost the
+# store write they make on main: `cd ~/.exo/state && hash > notes` was allowed. Only the builtin's own part counts
+# as the read it was, so these are store writes again.
+@pytest.mark.parametrize("line", [
+    "cd ~/.exo/state && hash > notes",
+    "cd ~/.exo/state && hash -p /tmp/x ls > out",
+    "hash -p ~/.exo/state/x ls > out",
+    "hash ~/.exo/state/x > out",
+    "./hash ~/.exo/state/x",
+    "/tmp/evil/hash ~/.exo/state/notes.md",
+    "cd ~/.exo/state && ./hash x",
+])
+def test_a_store_write_beside_hash_is_still_one(line, monkeypatch):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))     # so a cd into ~/.exo enters the store
+    c = classify(sh(line))
+    assert c.category == "store_write", c
+    assert decide(c, normalize_policies({"gates": {"categories": {"store_write": "deny"}}})).outcome == "deny"
+    assert decide(c, normalize_policies({"gates": {"categories": {"opaque_exec": "allow"}}})).outcome == "ask"
