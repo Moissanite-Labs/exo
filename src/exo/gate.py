@@ -3927,15 +3927,16 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
 _ANY = object()                                     # any path, in _cd_store_read's index of levels up
 
 
-def _cd_store_read(cmds: list, subs: list) -> str:
+def _cd_store_read(cmds: list, subs: list, tools: tuple[str, ...] = ()) -> str:
     """D-038 (#192): a line that enters a folder that can hold a secret store may read it by a relative name. It
     enters one when a working-folder target anywhere in it ($( ), <( ) and a shell's text included) has a store
     folder among its parts (~/.kube, ~/.config/nvim, /proc/self; see _store_hints), or goes by a relative name into
     a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd proc`). Then a relative name
     counts when its file name is a store file's (a glob or brace set: when it could match one) or it goes into a
     store folder (`gh/x` after ~/.config, `../.docker/x`); any relative name counts when the target is itself a
-    store. The targets' own words are not names. The name, or ''. One pass over the words; neither the order nor
-    the success of the commands is followed, so this fails closed."""
+    store. The targets' own words are not names. ``tools`` are the folders a shell call runs in by its own `cwd`
+    or `workdir` argument (#311): each counts as one more target, as a leading cd would. The name, or ''. One pass
+    over the words; neither the order nor the success of the commands is followed, so this fails closed."""
     targets: list = []
     pieces: list = []
     bodies: list = []
@@ -3952,11 +3953,8 @@ def _cd_store_read(cmds: list, subs: list) -> str:
         _cd_walk(c2, targets, pieces, more)
         if n < _DEPTH:
             queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
-    scope = _scope.get()
-    tool = scope.tool_cwd if scope is not None else None
-    own = list(targets)                    # the folders the line itself enters, before the tool's is added
-    if tool:
-        targets.append(tool)     # #311: a shell call's own `cwd` argument enters its folder, as a cd would
+    own = list(targets)                     # the folders the line itself enters
+    targets += tools                        # #311: the folder a shell call runs in, as a leading cd would enter it
     if not targets:
         return ""
     singles, pairs, names = _store_hints()
@@ -4013,12 +4011,12 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 if name == "":
                     lo[""] = min(lo.get("", n), n)
 
-    # The tool's folder is where the call starts, not a folder the line enters, so its paths are kept apart:
-    # below, a sensitive store among them checks names one by one (as ~/.kube does) instead of counting every
-    # relative word, which would swallow a line that never reads from it (`kubectl apply -f -` run from ~/.ssh
-    # lost its category, and with it a matrix deny). A folder the line itself also names keeps the line's
-    # reading, so `cd ~/.ssh && ...` in the same call still counts every relative word.
-    tool_paths = {p for alt in _brace_alts(tool) for p, _ in [folders(alt)]} if tool else set()
+    # The tool's folder is where the call starts, not a folder the line enters, so its paths are kept apart. Below a
+    # store folder (a checkout in <repo>/.claude/worktrees/x) it checks names one by one, as ~/.kube does, instead
+    # of counting every relative word: a session that works there passes it on every call. The store folder itself
+    # (~/.ssh) still counts every relative word, as `cd ~/.ssh` does: a key there can have any name. A folder the
+    # line itself also names keeps the line's reading.
+    tool_paths = {p for t in dict.fromkeys(tools) for alt in _brace_alts(t) for p, _ in [folders(alt)]}
     own_paths = {p for t in dict.fromkeys(own) for alt in _brace_alts(t) for p, _ in [folders(alt)]}
     tool_only = tool_paths - own_paths
     split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in _brace_alts(t)
@@ -4112,9 +4110,9 @@ def _cd_store_read(cmds: list, subs: list) -> str:
         return _exo_relative(split, max(ups), candidates)
     nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
     # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
-    roots = dict.fromkeys("/".join(parts[:k + 1]) for p, parts, k in entered if p not in tool_only)
-    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered if p not in tool_only) or \
-        any(map(is_store, roots))
+    wide = [(p, parts, k) for p, parts, k in entered if p not in tool_only or k == len(parts) - 1]
+    roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in wide)
+    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in wide) or any(map(is_store, roots))
     hints = names | singles | nxt
     held = any(k == len(parts) - 1 for _, parts, k in entered)     # a target is itself a store folder (~/.kube)
     for q, parts, globbed in candidates():
@@ -4612,7 +4610,7 @@ class _Scope:
     """What the secret-store checks of one classify call share: the folders the tool may read from (#209), the gate's
     own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot."""
     cwds: tuple[str, ...] = ()
-    tool_cwd: str | None = None                  # a shell call's own `cwd` argument, joined to the session folder (#311)
+    tool_cwds: tuple[str, ...] = ()              # a shell call's own `cwd` or `workdir`, joined to the session folder
     here: str | None = None                      # the gate's own folder; "" when it cannot be read
     roots: set[str] | None = None
     real: dict[str, str] = field(default_factory=dict)
@@ -4622,32 +4620,41 @@ _scope: contextvars.ContextVar[_Scope | None] = contextvars.ContextVar("exo_gate
 
 
 def _runs_shell(tool: str, args: Mapping) -> bool:
-    """A call classify reads as a shell command line. Only these run in their own `cwd` argument; the file tools
-    take unknown arguments and still read from the session's folder."""
+    """A call classify reads as a shell command line. Only these run in their own folder argument (_TOOL_FOLDERS);
+    the file tools take unknown arguments and still read from the session's folder."""
     return tool in ("terminal", "shell", "bash", "run_command", "exec_command") or (
         tool not in TOOLS and isinstance(args.get("command"), str) and tool.endswith(("terminal", "shell")))
+
+
+# The arguments a shell tool takes the folder it runs in from: Exo's bash tool `cwd`, Hermes' terminal and Codex's
+# exec_command `workdir` (#311). When a call gives both, each counts.
+_TOOL_FOLDERS = ("cwd", "workdir")
 
 
 def _in_tool_folder(fn: _F) -> _F:
     """Run ``fn(action, cwd)`` in one _Scope that holds the folders the tool may read from (#209): ``cwd``, the
     session's working folder as the core passes it, always; and for a shell tool, that folder joined with the
-    call's own `cwd` argument. A relative path is resolved from each of them and from the gate's own folder."""
+    call's own folder argument (`cwd`, `workdir`). A relative path is resolved from each of them and from the gate's
+    own folder. The shell tool's own folders are also kept apart (tool_cwds) for the store-folder check (#311)."""
     @functools.wraps(fn)
     def run(action: Any, cwd: str | None = None) -> Any:
         folders: list[str] = []
-        tool_cwd = ""
+        own: list[str] = []
         try:
             tool, args = _args_of(action)
             base = os.path.expanduser(cwd) if isinstance(cwd, str) and cwd else ""
             if base:
                 folders.append(os.path.abspath(base))
-            sub = args.get("cwd")
-            if isinstance(sub, str) and sub and _runs_shell(tool, args):
-                tool_cwd = os.path.join(base, os.path.expanduser(sub))
-                folders.append(os.path.abspath(tool_cwd))
+            if _runs_shell(tool, args):
+                for key in _TOOL_FOLDERS:
+                    sub = args.get(key)
+                    if isinstance(sub, str) and sub:
+                        folder = os.path.join(base, os.path.expanduser(sub))
+                        folders.append(os.path.abspath(folder))
+                        own.append(folder)
         except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
             pass
-        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders)), tool_cwd=tool_cwd or None))
+        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders)), tool_cwds=tuple(dict.fromkeys(own))))
         try:
             return fn(action, cwd)
         finally:
@@ -5385,6 +5392,34 @@ def _args_of(action: Any) -> tuple[str, dict]:
     return str(tool), dict(args or {})
 
 
+def _shell_call(cmd: str) -> Classification:
+    """A shell tool's line, as classify_shell reads it, run in the call's own folder (#311). The line keeps its own
+    classification: category, target, axes, text and parts. When it reads a secret store by a relative name from the
+    folder its `cwd` or `workdir` argument names, as `cd <folder> && <line>` would (_cd_store_read, D-038), a
+    credentials part is added for that read. decide's credentials floor then asks, and no_grant keeps a standing
+    grant off the call, while the line's own deny entries, rules, matrix cell, posting checks and reserved entries
+    still apply. One check per call, on the whole line: a nested line is read in its own folders only."""
+    scope = _scope.get()
+    folders = scope.tool_cwds if scope is not None else ()
+    token = _shell_seen.set({}) if folders and _shell_seen.get() is None else None
+    try:                        # one memo for both reads, so the line is parsed once
+        c = classify_shell(cmd)
+        if not folders or c.category in ("credentials", "store_write"):
+            return c
+        cmds, subs, _ = _parse(cmd or "")
+        found = _cd_store_read(cmds, subs, folders)
+    finally:
+        if token is not None:
+            _shell_seen.reset(token)
+    if found:
+        where = folders[0] if len(folders) == 1 else " or ".join(folders)
+        part = _make("credentials", summary=f"shell touching {found} in {where}"[:120], target=found, command=cmd,
+                     own=None, signals=["secret store"])
+        c.parts = [*c.parts, part]
+        c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
+    return c
+
+
 @_brace_budget
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
@@ -5392,7 +5427,7 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
     tool runs in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
     tool, args = _args_of(action)
     if _runs_shell(tool, args):
-        c = classify_shell(str(args.get("command") or args.get("cmd") or ""))
+        c = _shell_call(str(args.get("command") or args.get("cmd") or ""))
     elif tool == "execute_code":
         c = classify_code(str(args.get("code") or ""))
     elif tool in ("write_file", "patch", "edit_file", "apply_patch"):
@@ -6037,9 +6072,13 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     if eff.reversibility == "irreversible" and eff.exposure == "public" and eff.third_party:
         bump("ask", "irreversible, public and affects a third party", "floor")
 
-    # Credentials floor: no policy, rule, scope or escalate setting lowers this. The principal answers.
-    if eff.category == "credentials":
-        bump("ask", "credentials always ask the principal", "floor")
+    # Credentials floor: no policy, rule, scope or escalate setting lowers this. The principal answers. A line that
+    # keeps its own category but has a credentials part (a store read from a shell call's own folder, #311) asks so.
+    secret = eff if eff.category == "credentials" else next(
+        (p for p in _each_part(eff) if p.category == "credentials"), None)
+    if secret is not None:
+        bump("ask", "credentials always ask the principal" + (f" ({secret.summary})" if secret is not eff else ""),
+             "floor")
 
     # Store floor (D-038): the gate's own policies, grants, ledger, keys, seats and sockets. Same terms.
     if eff.category == "store_write":
@@ -6426,7 +6465,24 @@ DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, 
 def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
     and code the gate cannot see into (D-038), so one "always" never covers a different script."""
-    return is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
+    return is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
+
+
+def no_grant(c: Classification) -> bool:
+    """True when no standing grant may cover the call, and observe mode still enforces it (D-033, D-038): its
+    category is in NO_GRANT, or a part's is (a store read from a shell call's own folder, #311)."""
+    return any(p.category in NO_GRANT for p in _each_part(c))
+
+
+def call_approvers(c: Classification, pinned: Mapping | None, changed: Mapping | None = None) -> list[str]:
+    """Who may answer an ask on ``c``: the approvers strictest_approvers allows for its category and also for each
+    other NO_GRANT category among its parts, so a store read the line keeps as a part (#311) is answered by those
+    who may answer credentials. The principal is first in each, so the list is never empty."""
+    out = strictest_approvers(c.category, pinned, changed)
+    for cat in dict.fromkeys(p.category for p in _each_part(c) if p.category in NO_GRANT and p.category != c.category):
+        allowed = strictest_approvers(cat, pinned, changed)
+        out = [a for a in out if a in allowed]
+    return out
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:
