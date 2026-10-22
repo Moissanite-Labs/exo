@@ -1270,6 +1270,30 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
   rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
   here-doc body leads past the end, past a deny-listed command.
+  *Amendment 2026-10-21 (issue #330, PR #409):* `hash` is on the read list, but `hash -p PATH NAME` makes the shell
+  run PATH for every later NAME, so `hash -p /tmp/x ls; ls` read as a plain `ls` and ran the file. A `hash` call that
+  binds a name is now `opaque_exec`, with the path as its target and a card naming the rebound program. Its options
+  are read as bash reads them: a cluster (`-dp`), an attached path, options after the path, and the last of several
+  `-p`. A name with a slash binds nothing, since bash skips it. An option word the gate cannot read may hold `-p`, so
+  it is opaque too, except one double-quoted word at the end (`hash "$cmd"`), which has no name after it. Setting
+  `BASH_CMDS`, the table `hash -p` fills, or `BASH_ALIASES` is opaque, like the variables of #231. *No store write.*
+  `hash -p` records the path and opens nothing, so its words are not checked for store paths. The first draft checked
+  them, so a descriptor path made a `store_write` part. That outranks a post on the line, and the matrix cell and
+  posting rules see only the line's own part, so a matrix deny on the post became an ask and its posting violations
+  were dropped. A store or descriptor path a rebound name runs later is still behind the opaque ask. *Differential
+  (#423).* Against main, over 25,097 actions (the gate tests, their compound variants and 57 probe lines) and 76
+  policies, 49 pairs on 42 actions are lower. No posting violation is lost. They fall in two groups, both kept on
+  purpose. (1) Eight pairs on two lines: under a policy that lowers `opaque_exec` (a category line or an allow rule
+  naming it), `ssh host 'sudo hash -lp ./tool ls && ls'` and `ssh host 'sudo hash -p /tmp/x ls && ls'` go from log to
+  allow. On main the hash part was a costly `read` whose matrix cell logged. Now it is the line's own `opaque_exec`
+  part, and the category line replaces its matrix cell, as it does for `ssh host 'sudo eval x && ls'` on main. Under
+  the default policy both ask. (2) 41 pairs on 40 lines: under a reservation that matches the hash part
+  (`tool:terminal`, or `command:\brm\b` on a line with `rm`), that part's entry is named `opaque_exec` where it was
+  `read`. Each line still asks as reserved, with at least as many entries, and the grant check of D-075 refuses each
+  line it refused on main. *Rejected:* deciding the matrix cell and the posting rules on every part of a line. That
+  would also fix a post beside `eval /proc/self/fd/3` or a store redirect, which main decides as the store write
+  alone, but it changes how this decision decides a line. It is left to its own issue (`docs/GATE.md`, "Known
+  limits").
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

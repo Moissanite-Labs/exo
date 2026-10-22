@@ -9,9 +9,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `hash -p` is opaque, so a rebound program name no longer runs another file under a read's cover
   (#330). `hash -p PATH NAME` makes the shell run PATH for every later NAME, and the gate filed the
   line under NAME's own program, so `hash -p /tmp/x ls; ls` read as a plain `ls`. The call now
-  classifies as `opaque_exec`, naming the program it rebinds, also after `builtin` or `command`
-  and with the path attached or in a flag cluster. Plain `hash`, `hash -r` and `hash -d` stay read,
-  as do a `-p` after the first operand and one with no name to bind.
+  classifies as `opaque_exec`, with the path as its target and a card naming the program it
+  rebinds. Its options are read as bash reads them: after `builtin` or `command`, in a flag
+  cluster, with the path attached and after the path. An option word the gate cannot read
+  (`hash $O ls`) is opaque too, and so is setting `BASH_CMDS` or `BASH_ALIASES`. Plain `hash`,
+  `hash -r`, `hash -d` and `hash "$cmd"` stay read, as do a `-p` after the first operand and one
+  with no name to bind. The path is not read as a store write, so a post on the same line keeps
+  its matrix cell and posting rules: `hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi` is
+  denied under a matrix deny for the post, as before.
 - Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
