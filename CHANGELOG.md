@@ -9,7 +9,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A fork no longer loses its copies of entries the parent undid after the fork (#245). A copy counts
   at its original's log position only while that original is visible, so once the fork's own later
   entries were summarized the tail started after the copy, and no tree held it either: the fork's
-  calls dropped it. The tail now keeps such copies, in order, ahead of the fork's own entries.
+  calls dropped it. The tail now keeps such copies, in order, ahead of the fork's own entries. They stay
+  verbatim, outside `tail_messages` and `/compact`, in every call of the fork. Copied context notes are
+  not kept: they leave a fork's tail as before. The lookup reads only a fork's copies, so a thread that
+  is not a fork pays nothing for it (D-028 amendment).
 - Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered

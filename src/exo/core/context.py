@@ -1029,10 +1029,8 @@ class AgentContext(TreeContext):
             tail = self.store.messages(session, since=start)
         while tail and tail[0].role == "tool":
             tail.pop(0)
-        if own is None:  # a copy whose original no longer counts (undone after the fork) is in no tree:
-            lost = self.store.orphaned_copies(session, start)  # the tail keeps it, ahead of the tail (#245)
-            if lost:
-                tail = lost + tail
+        if own is None:  # copies whose original was undone after the fork are in no tree: the tail keeps them (#245)
+            tail = self.store.orphaned_copies(session, start) + tail
         if own:
             view = PRIVATE_HEAD + "\n\n" + "\n\n".join(self._view_parts(own))
             tail.insert(0, Message("user", [ContentPart.of_text(view)], meta={"note": "private", "local": True}))
