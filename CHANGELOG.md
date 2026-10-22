@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `store.find` tokenized every node and rebuilt its BM25 tables on each call (#254, W1-5). `ctx`, `exo find`, the
+  default retrieval ranker, the learner and the memory plugin all call it, so each query paid for the whole store.
+  The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
+  the node set they were built from. A `reload()`, or a `refresh()` that sees a node file change, makes a new set
+  and the next `find` builds them again. A repeat query tokenizes only itself. Scores and order are unchanged.
 - The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
   the footer, the forbidden words and the scrub on the combined classification's text. A compound
   line takes that text from its most severe part. So a post that passed, put first, carried a
