@@ -116,7 +116,10 @@ no file, only the principal can, which is the behaviour of a single-user install
 ingress client never can (D-026). The allowed list is sent as `approvers` on
 `approval.requested` so a client can show who must answer; the engine refuses anyone else as
 `forbidden`. While a changed `approvals.yaml` waits for `/gate accept`, the list holds only those
-both files allow (`gate.strictest_approvers`); see "Policy changes during a session".
+both files allow (`gate.strictest_approvers`); see "Policy changes during a session". A call with
+a credentials or store-write part goes to those allowed for its category and for each such part
+(`gate.call_approvers`, #311): a store read in a shell call's own folder is answered as credentials,
+and a line that reads a secret and writes the store is the principal's alone.
 
 A client answers as a seat by setting `client` to `seat:<name>` and signing the answer with that
 seat's Ed25519 key: `sig = exo.core.approvals.sign_approval(key, request_id, decision, binding,
@@ -273,14 +276,16 @@ class. Any wildcard that spells the folder's path still asks (`ls ~/.exo/run*`, 
 matches the core's file names or spells `agent-` asks in any folder, such as `ls *prin*`,
 `ls *xod*` or `git diff -- 'agent-*'`.
 
+A relative name read in the folder a shell call's own `cwd` or `workdir` argument names asks the
+same way since #311: `{"command": "cat *", "cwd": "~/.exo/run"}` and `cat id*` with `~/.ssh` as
+`cwd` ask, as `cd ~/.exo/run && cat age*`, `cd ~/.exo && cat run/*`, `cd ~/.exo/run/jobs && cat ../*`
+and `cat ../exod*` do (see "The working folder" below).
+
 Limits. No environment variable carries the credential, and `tool_env` drops `EXOD_*`,
 `EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
 (`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`, also through `..`:
-`cd ~/.exo/run/jobs && grep -r secret ../..`); a relative name when the folder is
-the bash tool's own `cwd` argument rather than a `cd` on the line (`{"command": "cat *", "cwd":
-"~/.exo/run"}` is `read`, as is `cat id*` with `~/.ssh` as `cwd`; `cd ~/.exo/run && cat age*`,
-`cd ~/.exo && cat run/*`, `cd ~/.exo/run/jobs && cat ../*` and `cat ../exod*` ask, see "The working folder"
-below); a `..` from a folder spelt with a wildcard (`cd ~/.e*o/run/jobs && ls ..`); a wildcard
+`cd ~/.exo/run/jobs && grep -r secret ../..`); a `..` from a folder spelt with a wildcard
+(`cd ~/.e*o/run/jobs && ls ..`); a wildcard
 in a folder name above a file (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for
 the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
 characters, the same as for `~/.ss?`; `~/.exo/r*` asks); an upper-case spelling on a
@@ -383,8 +388,6 @@ gate's view of the file system may differ from the worker's. A name built whole 
     write redirection to a path with `$` already asks as `opaque_exec`);
   - #310: an expansion at the end of a store name is read as empty only, so `cat .env.$(hostname)` stays a read, as
     does the glob `cat .env.*` (the glob samples have no `.env.<suffix>`);
-  - #311: a relative name read in a shell's `cwd` inside a store (`{"command": "cat config", "cwd": "~/.kube"}`) is
-    matched by the name as written; a `cd` on the line is tracked (#192);
   - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved;
   - #313: a thread's `/proc/<pid>/task/<tid>/environ` is not a store.
 
@@ -454,7 +457,9 @@ logged with the grant id.
   unscoped "always" for an outward category. Default expiry 7 days (`always.outward_days`).
 - Other acts: the scope is the category and the exact target. Default expiry 30 days
   (`always.days`).
-- Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`).
+- Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`). The same
+  holds for a call that keeps another category but has such a part (`gate.no_grant`), such as a
+  store read in a shell call's own folder (#311, "The working folder").
 - Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
   granted for the exact command only, like an outward act.
 - A post whose body the gate did not read never gets a grant, and an older grant does not cover it
@@ -1240,6 +1245,39 @@ folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`
 `${PWD...}` forms; the text `eval` runs (it asks as `opaque_exec`); `cd -` and `OLDPWD`,
 `CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
 link whose name does not say so.
+
+The tool's own folder (#311). A shell call runs in its own folder argument: `cwd` for Exo's `bash`
+tool, `workdir` for Hermes' `terminal` and Codex's `exec_command`. A relative one is joined to the
+session's folder. That folder counts as one more target, as a leading `cd` would, so
+`{"command": "cat config", "cwd": "~/.kube"}` asks as `cd ~/.kube && cat config` does. So do `cat *`
+or `tar czf /tmp/o.tgz .` with `~/.ssh` as `cwd`, `cat hosts.yml` in `~/.config/gh` and `cat *` in
+`~/.exo/run`. When a call gives both arguments, each counts. The check runs once per call, on the
+whole line, `$( )`, `<( )` and the text a shell runs included, as for a `cd` on the line. A quoted
+command for `ssh` to run on another host is a word with a space in it, so it is not read for names
+there (`ssh host 'cat config'` keeps its class), also as after a `cd`. It differs from a `cd` in two
+ways:
+
+- The line keeps its own classification (category, target, axes, posted text and parts). The store
+  read is added as one more part, a `credentials` one (`gate._shell_call`). The credentials floor
+  reads every part, so the call asks and no rule, category line, matrix cell or scope lowers it.
+  `gate.no_grant` keeps a standing grant off it and observe mode still enforces it, and
+  `gate.call_approvers` sends it to those who may answer credentials. The line's own deny entries,
+  target rules, matrix deny cells, posting checks and reserved entries still apply, so
+  `git push --force origin main` with `~/.ssh` as `cwd` is still denied by a matrix that denies
+  the push, and `gh pr comment 3 --body-file notes.md` there still reports the unseen body. A `cd`
+  on the line still makes the whole line `credentials`, as before.
+- A folder below a store folder checks names one by one, as `~/.kube` does: a store file name, a
+  glob or brace set that could match one, or a path into a store folder. A session working in a
+  checkout at `<repo>/.claude/worktrees/x` passes that folder on every call, and `ls src` or
+  `pytest -q tests` there keep their class. The store folder itself still counts every relative
+  name when it is a store (`~/.ssh`, `~/.gnupg`, `~/.aws`, a `.claude` folder), as `cd ~/.ssh`
+  does, since a key there can have any name: `cat deploy_key` with `~/.ssh` as `cwd` asks.
+
+A line that already reads a store, or writes the Exo store, keeps that reading. Limits: the
+session's own folder (the `cwd` the core passes with every call, #209) is not a target, so a
+session started inside a store folder reads it by relative names as before; and the file tools
+ignore a `cwd` or `workdir` argument, since they read from the session's folder. Tests:
+`tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
 
 Compound commands (#161). The stdin of a compound command reaches the commands inside it, nested
 compounds included: a heredoc or here-string after its closing `}`, `)`, `done`, `fi` or `esac`,

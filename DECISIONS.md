@@ -1280,6 +1280,35 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
   rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
   here-doc body leads past the end, past a deny-listed command.
+  *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
+  `workdir` for Hermes' terminal and Codex's exec_command), but the #192 check read only the folders a `cd` on the
+  line names. So `{"command": "cat config", "cwd": "~/.kube"}` was `read` and allowed where `cd ~/.kube && cat config`
+  asks. That folder now counts as one more target of the check, joined to the session's folder, once per call on the
+  whole line (`$( )`, `<( )` and shell text included, as for a `cd`). Both arguments count when a call gives both.
+  *The store read is a part.* The line keeps its own classification, and the read is added as a `credentials` part.
+  The credentials floor reads every part, so the call asks, and `no_grant` keeps a standing grant off it, observe mode
+  enforces it, and `call_approvers` sends it to those who may answer both its category and credentials. The line's
+  deny entries, target rules, matrix deny cells, posting checks and reserved entries still apply. The first version
+  (#415) made the whole call `credentials`, as a `cd` does. exo-36's differential of it against main found 1,770
+  actions that went from deny to ask, 118 that lost posting violations and 173 that lost reserved entries. It also
+  read the folder in every nested line, so `ssh host 'cat config'` run from `~/.kube` lost its reserved host, and a 12
+  to 16 level `$( )` line with a folder in `$EXO_HOME` ran 6 to 18 times slower and then asked as `too many to
+  resolve`. *Names one by one below a store folder.* A folder below a store folder checks names one by one, as
+  `~/.kube` does, so a checkout at `<repo>/.claude/worktrees/x` keeps `ls src` and `pytest` as they were. The store
+  folder itself counts every relative name when it is a store (`~/.ssh`, `~/.gnupg`, `~/.aws`), as `cd ~/.ssh` does,
+  since a key there can have any name: `cat deploy_key` with `~/.ssh` as `cwd` asks. #415's repair checked names one
+  by one there too, so that the reclassification would not take the line's category. With the part the line keeps its
+  category anyway. *A side effect.* `call_approvers` reads every `NO_GRANT` part, so a line that reads a secret and
+  writes the store (`credentials` with a `store_write` part) now goes to the principal alone, as a store write does.
+  Rejected: making the call `credentials` and deciding the line's own reading beside it, which needs a second decision
+  in `decide` and a way to find that reading among the parts; and reading the folder in each nested line, which reads
+  it into the text `ssh` runs on another host and spends the #269 budget at every level. A `cd` on the line still
+  makes the whole line `credentials`, as before. Limits: the session's own folder (the `cwd` the core passes, #209) is
+  not a target, and the file tools ignore a folder argument. A differential against main (`gate_diff`, #423) over
+  28,042 actions under 76 policies, 2,540 of them focused (127 lines, each also run with 19 folder arguments), finds 0
+  lowered pairs and 83,511 tightened pairs on 1,426 actions, all of them calls with a folder argument. The 25,423
+  actions without one decide exactly as on main. On the focused actions #415 lowers 2,032 pairs (2,287 before its
+  repair). No lowering is intended.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
