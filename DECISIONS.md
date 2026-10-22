@@ -817,6 +817,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   gains the name. Rejected: treating a marker with no name as Exo's, because that deletes copies made before this
   change. Rejected: comparing the folder with the checkout's plugin, because an older install of a plugin that has
   changed since differs from it as much as an edited copy does.
+  *Amendment 2026-10-21 (#260):* the subcommand parser imports a command's module only when that command runs.
+  `src/exo/cli.py` lists each command that lives in another module in a `LAZY` table, with its module, handler and
+  help line. `build_parser(cmd)` builds the full parser for `cmd` alone. Every other command keeps its name and
+  help line, so usage, errors and `exo --help` are byte-identical to the full parser, and a test compares the two
+  for every command. `exo --help`, `exo --version` and bare `exo` import no command module, and a module that fails
+  to import breaks only its own commands. The update self-check now builds the full parser, so it still imports
+  every command's module. Rejected: building the full parser for `exo --help`, because help would still pay for
+  every import. Rejected: a checked-in snapshot of the help text, because every help change would have to edit it
+  too. The cost is that each help line is written twice, in the module and in the table, and the test fails when
+  they differ.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
