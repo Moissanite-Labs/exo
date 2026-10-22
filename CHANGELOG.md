@@ -6,6 +6,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
+  the footer, the forbidden words and the scrub on the combined classification's text. A compound
+  line takes that text from its most severe part. So a post that passed, put first, carried a
+  second post on the same line past all three. The checks now run on every part whose category is
+  under `posting.applies_to` and that carries text, a title or an unseen body. They also run on a
+  close carrying a comment (#326), and on a merge carrying a subject, a body or a body file the gate
+  did not read (#397). A reopen's comment is a post, so it is checked too. Another part's violations
+  are named after that part, and when two posts both have an unseen body, both are named. Once other
+  posts add violations, a decision lists at most 20 and counts the rest. A single post is checked
+  exactly as before. The exact-text binding already hashed the whole command, so a grant for one
+  line never covered a changed second body. Third-party escalation, the matrix cell and the floors
+  still read the dominant part (#437).
 - Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
@@ -16,6 +28,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   with the last row it read and reads only the rows after it, so a turn after the first takes under 1 ms. What is
   written is unchanged. A ledger that no longer holds that row in its place (another file, or one cut short) is
   read again from the first row. The HTTP client half of W2-7 and the bus store half (W3-4) stay open.
+- exod answers a request with a bad number with 400 and a JSON `{"error": ...}` body (#264). `Content-Length`,
+  `since` and `Last-Event-ID` were read with a bare `int()` and the handler swallowed its error, so a word or a
+  float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
+  start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
+  subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

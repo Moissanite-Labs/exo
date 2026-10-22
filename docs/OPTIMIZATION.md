@@ -60,8 +60,8 @@ its run; measure it per wave here.
 Since the audit, `main` has moved by many merged PRs, mostly the sweep
 series. Measured on `6e4860af`: `gate.py` 4,700 LOC (was 2,756),
 `consolidate.py` 1,639, `core/context.py` 1,046, TUI `app.py` 2,097; mypy
-baseline 170 diagnostics (was 248). The core budget test reports its own
-headroom (D-077); read it before sizing any CORE unit.
+baseline 241 diagnostics in 170 entries (was 248 in 174). The core budget
+test reports its own headroom (D-077). Read it before sizing any CORE unit.
 
 | Issue | Finding | Status on main | Where |
 |-------|---------|----------------|-------|
@@ -76,7 +76,7 @@ headroom (D-077); read it before sizing any CORE unit.
 | #261 | Core coupling (rank 8) | Open, no PR. `core/engine.py` still imports `exo.server.engine` | none |
 | #262 | Context/loop repeated work (rank 9) | Open, no PR. `context.py` changed for privacy (#216 merged), not for these paths | none |
 | #263 | Learn/signals, HTTP clients, bus store (rank 10) | Partly done. W2-7's signals half: the chat capture keeps the known capture keys with the last ledger row read and reads only newer rows (10,000 captured rows: about 70 ms per turn before, under 1 ms after the first turn). Open: W2-7's HTTP client half (one client per transport and event loop adds 15 counted core lines, past the ceiling, so it waits for a core reduction or an owner call) and W3-4's bus store half (FTS5 changes what a search matches: needs an owner call) | #263 (W2-7 signals half) |
-| #264 | Types/errors ratchet (rank 11) | Open. Baseline fell 248 to 170 on main as a side effect of other work; `server/app.py` int parsing still bare (`app.py:224`, `:232`); #218 changes `server/app.py` | #218 (partly) |
+| #264 | Types/errors ratchet (rank 11) | Open. W1-6 done: `server/app.py` reads `Content-Length`, `since` and `Last-Event-ID` as ASCII digits up to 2^63 - 1 and answers anything else with 400 `{error}` (most of these got no reply before). Still open: the mypy burn-down (the baseline holds 234 diagnostics in 165 entries on main, down from 248 in 174 at the audit, seven of the drop pruned under #264), ruff `PERF`/`BLE`, typed settings for learn and eval, and the size gate | #218 (partly) |
 | #265 | CI and docs serialization (rank 12) | Open, no PR. `ci.yml` untouched since the audit; no `AGENTS.md` for the repo root, no `CODEOWNERS` | none |
 | #266 | Wave 0 guardrails | Open, not started. No `tests/arch`, no `tests/bench`, no baseline script (only `scripts/wire_bench.py`) | none |
 
