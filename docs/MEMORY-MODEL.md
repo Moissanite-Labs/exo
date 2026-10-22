@@ -195,8 +195,8 @@ content is the same once the summaries finish. Tests: `tests/core/test_turn_sett
   marked as seen, so dropping them would lose that news. Undo does not reach copies made before it: a note
   another thread stored keeps the undone text (that thread's model has seen it, and the note is replayed byte
   for byte), and so does a fork, whose tail keeps such a copy for good ("Context assembly per turn"). A summary of
-  a deleted node that was already running when undo ran is not saved
-  afterwards. The next turn rebuilds the summary from the entries that are left.
+  a deleted node that was already running when undo ran is not saved afterwards. The next turn rebuilds the summary
+  from the entries that are left.
 - **Failures.** A node whose summary fails is retried with backoff (30 s, then 60 s, ... up to five minutes, set by
   `retry_backoff`). During backoff the span stays verbatim and the turn does not wait for it. A temporary failure
   keeps its turn on later upkeep: an outage, or an error that says when its route reopens (`retry_after`), such as
