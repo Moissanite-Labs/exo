@@ -13,6 +13,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   verbatim, outside `tail_messages` and `/compact`, in every call of the fork. Copied context notes are
   not kept: they leave a fork's tail as before. The lookup reads only a fork's copies, so a thread that
   is not a fork pays nothing for it (D-028 amendment).
+- `store.find` tokenized every node and rebuilt its BM25 tables on each call (#254, W1-5). `ctx`, `exo find`, the
+  default retrieval ranker, the learner and the memory plugin all call it, so each query paid for the whole store.
+  The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
+  the node set they were built from. A `reload()`, or a `refresh()` that sees a node file change, makes a new set
+  and the next `find` builds them again. A repeat query tokenizes only itself. Scores and order are unchanged.
 - The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
   the footer, the forbidden words and the scrub on the combined classification's text. A compound
   line takes that text from its most severe part. So a post that passed, put first, carried a
@@ -29,6 +34,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
   without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
+- The chat capture after each turn no longer reads the whole ledger (#263, the signals half of W2-7). To skip
+  corrections and rulings already written, it built the set of capture keys from every ruling, verdict and
+  question in the ledger on every turn: about 70 ms per turn with 10,000 such rows. The learner now keeps that set
+  with the last row it read and reads only the rows after it, so a turn after the first takes under 1 ms. What is
+  written is unchanged. A ledger that no longer holds that row in its place (another file, or one cut short) is
+  read again from the first row. The HTTP client half of W2-7 and the bus store half (W3-4) stay open.
 - exod answers a request with a bad number with 400 and a JSON `{"error": ...}` body (#264). `Content-Length`,
   `since` and `Last-Event-ID` were read with a bare `int()` and the handler swallowed its error, so a word or a
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
@@ -564,6 +575,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   by `src`.
 
 ### Changed
+- `exo` imports a command's module only when that command runs (#260, D-035 amendment). Before, every call loaded
+  every command's module, with the ledger, signing, HTTP and model code behind them, and a module that failed to
+  import broke all of `exo`. Now `exo --help`, `exo --version` and bare `exo` load none of them, and a broken module
+  breaks only its own commands. Measured best of 5: `import exo.cli` 190 ms to 14 ms, `exo --version` 240 ms to
+  73 ms, `exo --help` 251 ms to 42 ms. Usage, errors and every `--help` are byte-identical. `exo update`'s
+  self-check still imports every command's module. Code that imported a name such as `cmd_ask` from `exo.cli`
+  still gets it.
 - Gate timing tests (#308): the linear-time checks in `tests/security` and `plugins/exo-gate/tests` measure process CPU time
   (`time.process_time`) instead of wall time, and the scaling checks retry up to three times before they fail, so a
   suite running beside other suites no longer trips them. A quadratic step still fails every attempt. Test-only.
