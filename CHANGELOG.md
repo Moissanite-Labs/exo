@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
+  verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
+  Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.
 - A fork no longer loses its copies of entries the parent undid after the fork (#245). A copy counts
   at its original's log position only while that original is visible, so once the fork's own later
   entries were summarized the tail started after the copy, and no tree held it either: the fork's
