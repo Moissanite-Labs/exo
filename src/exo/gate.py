@@ -1438,6 +1438,8 @@ _EXEC_ENV_OPAQUE = {
         GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE PERL5LIB PERLLIB
         RUBYLIB NODE_PATH PSQLRC""".split(), "changes which programs, modules or startup and config files are used"),
     "CDPATH": "moves cd, so the gate cannot tell whether writes land in the Exo store",
+    "BASH_CMDS": "rebinds a program name to another file, as hash -p does",
+    "BASH_ALIASES": "defines an alias",
     "GIT_ALLOW_PROTOCOL": "lets git use transports such as ext::, whose URL is a command git runs",
 }
 # git config from the environment, `git -c` by another name: GIT_CONFIG_KEY_<n> with GIT_CONFIG_VALUE_<n>
@@ -1753,29 +1755,35 @@ def _has(argv: list[str], *flags: str) -> bool:
     return False
 
 
-def _hash_rebind(argv: list[str]) -> tuple[str, str] | None:
-    """The (path, name) a `hash -p` binds, or None (#330). `hash -p PATH NAME` makes the shell run PATH
-    for every later NAME, so a file planted by an earlier write runs under a trusted program's name.
-    The option words come first (bash stops at the first operand); `-p` may sit in a cluster behind
-    the valueless flags (`-rp`) or carry its path attached (`-p/tmp/x`). A name must follow the path:
-    with none, bash binds nothing."""
-    args = argv[1:]
-    for i, a in enumerate(args):
-        if a == "--" or len(a) < 2 or not a.startswith("-"):
-            return None
-        hit = None
-        for j, ch in enumerate(a[1:], 1):
-            if ch == "p":
-                hit = j
-                break
-            if ch not in "dlnrt":
-                break
-        if hit is None:
-            continue
-        path = a[hit + 1:] or (args[i + 1] if i + 1 < len(args) else "")
-        rest = args[i + 1:] if a[hit + 1:] else args[i + 2:]
-        return (path, rest[0]) if path and rest else None
-    return None
+def _hash_rebind(words: list) -> tuple[str, str] | None:
+    """What a `hash` call rebinds, as (card text, target), or None when it binds nothing (#330). `hash -p PATH NAME`
+    makes the shell run PATH for every later NAME, so a file planted by an earlier write runs under a trusted
+    program's name. Options are read as bash reads them: up to the first operand or `--`, `-p` in a cluster (`-rp`,
+    `-dp`) or with its path attached (`-p/tmp/x`), and more options after the path (the last `-p` wins). Nothing is
+    bound with no path, an empty one, or no name but those with a slash, which bash skips. Before a `-p`, a word the
+    gate cannot read (an expansion, a brace set, a glob) may hold one, unless it is a lone double-quoted word at
+    the end (`hash "$cmd"`), which is one word with no name after it."""
+    args, path, i = words[1:], None, 0
+    while i < len(args):
+        w, a = args[i], args[i].text
+        if path is None and (w.dynamic or w.glob or w.brace) and not (
+                i + 1 == len(args) and re.fullmatch(r'"[^"@]*"', w.raw)):
+            return f"hash may rebind a program name: an option word the gate cannot read ({a[:40]})", a
+        if a == "--":
+            i += 1
+            break
+        if len(a) < 2 or not a.startswith("-"):
+            break
+        j = a.find("p")
+        if j > 0 and j + 1 == len(a):      # -p with its path in the next word
+            if i + 1 == len(args):
+                return None                # no path: bash stops with a usage error
+            i, path = i + 1, args[i + 1].text
+        elif j > 0:
+            path = a[j + 1:]
+        i += 1
+    names = [w.text for w in args[i:] if "/" not in w.text]
+    return (f"hash -p makes {', '.join(names)} run {path}", path) if path and names else None
 
 
 def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection") -> Classification:
@@ -3104,10 +3112,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if (sub or "_") in TOOL_SUBCOMMANDS[prog] or (prog == "yarn" and not sub):
             return [_make("shell", summary=f"{prog} {sub}".strip(), command=cmd)]
         return [_opaque(f"{prog} {sub} runs project scripts or code the gate cannot see".strip(), cmd)]
-    if prog == "hash":
-        rebind = _hash_rebind(argv)     # `hash -p` rebinds a name to another file (#330)
-        if rebind is not None:
-            return [_opaque(f"hash -p makes {rebind[1]} run {rebind[0]}", cmd)]
+    if prog == "hash" and (rebind := _hash_rebind(words)):     # `hash -p` rebinds a name to another file (#330)
+        return [_opaque(rebind[0], cmd, target=rebind[1])]
     if prog in READ_PROGRAMS:
         return [_make("read", summary=prog, command=cmd)]
     if prog in SHELL_PROGRAMS:
@@ -3659,9 +3665,11 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             if targets is None or any(_store_word(x) for x in targets) or held and n in ("1", "2") and (
                     t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 return t.text
-    if all(p.category == "read" for p in parts):
-        return ""
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
+    # `hash -p` only records a path for a later name to run (#330): it writes nothing, so a store path there is no
+    # store write, and its part never outranks a post on the line
+    if prog == "hash" or all(p.category == "read" for p in parts):
+        return ""
     argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
         p.category == "delete" for p in parts) or (prog == "cp" and (_has(argv, "-s", "-l") or any(
