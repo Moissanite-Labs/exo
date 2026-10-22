@@ -1386,6 +1386,41 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   one: 127 lines, each run with 19 folder arguments, and everyday commands in work folders, folders below stores, store
   writes and file tools. The 25,589 actions without one decide exactly as on main. On the 2,540 actions of the 127
   lines, #415 lowers 2,032 pairs (2,287 before its repair). No lowering is intended.
+  *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
+  `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
+  positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the
+  whole body as words of the `for` command, whose header names no program. So
+  `for x do git push --force origin main; done` was a `read`, allowed under every policy, `deny: [force_push]`
+  included, and so was a delete, a post or a store write in the body (`select` asked as `opaque_exec`). Now an
+  unquoted `do` right after the word that follows a `for` or `select` the parser reads as a reserved word ends the
+  loop's first command, as a `;` would. The line then reads as `for NAME; do ...` does wherever a line is parsed
+  (`$( )`, backticks, `bash -c`, `eval`, a compound, a function body). The parser takes `for` or `select` as that
+  reserved word also after `function NAME` or `coproc [NAME]` and a reserved word such as `{`, and behind reserved
+  words such as `then` (`function f { for x do ...; done; }`). Only this check reads command position that widely:
+  the compounds the parser follows for a heredoc or a pipe into them are found as before (#161). A quoted `"do"`, a
+  `do` in an `in` list and a `for` that is only an argument (`echo for x do`) stay words, as in bash. An arithmetic
+  loop (`for ((...)) do`) was read already. The gate differential (#423) lowers 9 pairs on one action of its corpus
+  (24,937 actions x 76 policies). On 84,601 loops built from the corpus's simple commands (in a `for` or `select`
+  body, a function or coproc body, `$( )`, `bash -c`, a `while` loop that ends in `break`, and beside a loop) it
+  lowers 21,293 pairs on 1,233 actions. Each lowered pair now gets the decision main gives the same loop written with
+  `;`, checked pair by pair (category, outcome, rule and reserved entries). Main read these lines as one command, and
+  that reading asked for a reason bash never meets. There are three groups.
+  An unknown command after the loop, such as `break` in
+  `while true; do for x do git push --force origin main; done; break; done`, was the one program main saw there, so
+  the line asked as `opaque_exec`. Under a policy that allows or logs the body's category (an allow-everything rule,
+  `categories: {delete: allow}`), the line now gets the body's outcome (19,565 pairs on 1,029 actions, and the 9
+  pairs of the corpus).
+  A store path read in a `select` body, or in a loop body after `function NAME` (with or without `{`) or `coproc`
+  (`select x do cat ~/.exo/keys/seat.key; done`), was an operand of an unknown program, so a `store_write`. It is
+  now the `opaque_exec` of the `select` or the definition beside a plain read or a `credentials` read. A policy that
+  allows `opaque_exec` allows it, `deny: [store_write]` or a `target:` deny on the store asks, and a `reserved:`
+  entry on `store_write` no longer names it (1,624 pairs on 168 actions).
+  A `sudo` or `doas` command that writes through a redirection in a loop body (`for x do sudo echo hi > /tmp/f; done`) took the
+  redirection's `local_write` and now takes the `read` main gives that command alone, so an ask or log line on
+  `local_write` no longer reaches it (104 pairs on 36 actions in the original corpus). The review's expanded
+  corpus also found 66 `doas` pairs on 22 actions. `deny: [local_write]` still denies it (D-075).
+  Left out: `time for NAME do ...`, since the parser does not read `for` after `time` as a reserved word. It asks as
+  `opaque_exec`, as `time { ...; }` does.
   *Amendment 2026-10-21 (issue #313, follow-up to #199):* on Linux each thread's `/proc/<pid>/task/<tid>/environ`
   holds the same environment as `/proc/<pid>/environ`, another process's included. The store list named only the
   direct form, so `cat /proc/self/task/1/environ` and `read_file` on it were plain reads. The store list now names
