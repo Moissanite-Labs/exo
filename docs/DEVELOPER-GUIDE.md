@@ -863,3 +863,21 @@ The design is `docs/TASTE-BASELINE.md`; its "Build status" says what is built. C
 - Policy files are product policy, not taste. Nothing in `baseline/` exports them.
 
 Run `tests/baseline` and the `exo-memory` plugin suite after a change.
+
+### Add an `exo` subcommand
+
+`src/exo/cli.py` imports a command's module only when that command runs (#260), so `exo --help`, `exo --version`
+and bare `exo` stay fast. A command that lives in its own module needs:
+
+1. In the module, a `register(sp, common)` that adds the parser (`sp.add_parser(NAME, parents=[common], help=...)`
+   when it works on a store), and a handler `cmd_<name>(a)`, or `cmd_<name>(a, store)` for a store command.
+2. A row in `LAZY` in `src/exo/cli.py`, at the place the command should appear in `exo --help`: the module, the
+   handler and the same help line `register` gives. `exo --help` prints the help line from the table, so it never
+   imports the module.
+3. For a store command, its name in `STORE_CMDS`, so `main` passes the resolved store.
+
+Keep the module's own top-level imports to what the command needs: they run only for that command. A command that
+belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs inside its function.
+`tests/test_cli_lazy.py` fails when the table and `register` disagree: it compares the help of every command, and of
+`exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
+`exo --help` loads no command module.
