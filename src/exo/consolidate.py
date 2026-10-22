@@ -51,10 +51,8 @@ Reflection is a seam. `RuleReflector` (default) is deterministic templates over 
 heuristics. `ModelReflector(complete)` wraps any `complete(prompt) -> str` model call, validates
 the JSON it returns and falls back to the rules on any failure. Nothing here calls an API.
 
-CLI hook (lead wires this into exo.cli; this module does not edit it):
-
-    from .consolidate import register as register_consolidate, cmd_consolidate, cmd_proposals
-    register_consolidate(sp, common)          # in build_parser()
+CLI hook: `exo.cli` lists both commands in its `LAZY` table. It imports this module, calls
+`register(sp, common)` and runs `cmd_consolidate` or `cmd_proposals` only when one of them runs.
 
     exo consolidate [--as SEAT] [--dry-run]
     exo proposals [list|show|accept|reject] [ID] [--reason R] [--all]

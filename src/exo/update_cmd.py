@@ -176,9 +176,10 @@ def _remote_version(py: str, root: str | None, read: Runner = _read) -> str:
 
 
 def self_check(py: str, run: Runner = _read) -> list[tuple[str, bool]]:
-    """Import, protocol export is current, `exo models` answers. No network, no key needed."""
+    """Import (every command's module, through the full parser), protocol export is current, `exo models` answers.
+    No network, no key needed."""
     checks = [
-        ('import exo', [py, '-I', '-c', 'import exo, exo.cli']),
+        ('import exo', [py, '-I', '-c', 'import exo, exo.cli; exo.cli.build_parser()']),
         ('protocol export is current', [py, '-I', '-m', 'exo.protocol.export', '--check']),
         ('exo models', [py, '-I', '-m', 'exo.cli', 'models']),
     ]
