@@ -104,7 +104,7 @@ def test_injected_runner_covers_metadata_and_selfchecks(checkout):
     assert update.cmd_update([], run=fake) == 0
     assert any('rev-parse' in cmd for cmd in fake.calls)
     assert any('import exo; print(exo.display_version())' in cmd for cmd in fake.calls)
-    assert any('import exo, exo.cli' in cmd for cmd in fake.calls)
+    assert any('import exo, exo.cli; exo.cli.build_parser()' in cmd for cmd in fake.calls)
     assert any('exo.protocol.export' in cmd for cmd in fake.calls)
     assert any('models' in cmd for cmd in fake.calls)
 
