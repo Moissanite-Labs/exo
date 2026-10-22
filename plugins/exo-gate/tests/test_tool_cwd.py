@@ -123,3 +123,47 @@ def test_a_secret_read_that_also_writes_the_store_is_answered_by_the_principal_a
     table = gate.normalize_approvals({"approvers": {"credentials": ["principal", "seat:builder"]}})
     assert gate.strictest_approvers("credentials", table) == ["principal", "seat:builder"]
     assert gate.call_approvers(c, table) == ["principal"]
+
+
+# --- the folder never takes the line's place (exo-36's review of #452) ---------------------------------------------
+
+FORCE_IN_KEYS = [
+    ("terminal", {"command": "git push --force origin main ; cat *", "workdir": "~/.exo/keys"}),
+    ("exec_command", {"cmd": "git push --force origin main ; cat *", "workdir": "~/.exo/keys"}),
+    ("bash", {"command": "git push --force origin main ; cat *", "workdir": "~/.exo/keys"}),
+    ("bash", {"command": "git push --force origin main ; cat *", "cwd": "~/.exo/keys"}),
+    ("terminal", {"command": "tar czf /tmp/o.tgz . ; git push --force origin main", "workdir": "~/.exo/run"}),
+]
+
+
+def _seat_answers_credentials(tmp_path, home, monkeypatch, gates: str = ""):
+    """Every relative word in ~/.exo/keys and ~/.exo/run is a store hit (#209). approvals.yaml delegates only
+    credentials to a seat."""
+    monkeypatch.setenv("EXO_HOME", str(home / ".exo"))
+    for d in (".exo/keys", ".exo/run"):
+        (home / d).mkdir(parents=True, exist_ok=True)
+    root = tmp_path / "store2"
+    (root / "policies").mkdir(parents=True)
+    (root / "policies" / "gates.yaml").write_text(gates)
+    (root / "policies" / "approvals.yaml").write_text(
+        "approvers:\n  default: [principal]\n  credentials: [principal, \"seat:builder\"]\n")
+    key = tmp_path / "gate2.key"
+    crypto.save_key(crypto.keygen(), key)
+    return root, key
+
+
+@pytest.mark.parametrize("tool, args", FORCE_IN_KEYS)
+def test_a_force_push_from_a_store_folder_keeps_the_principals_answer(tmp_path, home, monkeypatch, tool, args):
+    """A `workdir` made the whole call credentials, so a seat that answers credentials could answer the force push.
+    Main did so with `cwd` too. The line keeps force_push, and the approvers are those who may answer both."""
+    _, ctx = make_gate(_seat_answers_credentials(tmp_path, home, monkeypatch))
+    r = call(ctx, tool, args)
+    assert r["action"] == "approve" and r["once"] is True
+    assert r["approvers"] == ["principal"]
+
+
+@pytest.mark.parametrize("tool, args", FORCE_IN_KEYS)
+def test_a_force_push_from_a_store_folder_keeps_its_matrix_deny(tmp_path, home, monkeypatch, tool, args):
+    gates = "matrix:\n  irreversible: {public: deny, internal: deny}\n  costly: {public: deny}\n"
+    _, ctx = make_gate(_seat_answers_credentials(tmp_path, home, monkeypatch, gates))
+    assert call(ctx, tool, args)["action"] == "block"

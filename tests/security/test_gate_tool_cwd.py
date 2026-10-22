@@ -33,6 +33,14 @@ def _bash_in(cmd: str, folder: str, cwd: str | None = None, tool: str = "bash", 
     return gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
 
 
+def _repo(home) -> None:
+    """~/repo, a git checkout, with a worktree in its own .claude folder and that folder's settings."""
+    (home / "repo" / ".git").mkdir(parents=True)
+    (home / "repo" / ".claude" / "worktrees" / "x" / "src").mkdir(parents=True)
+    (home / "repo" / ".claude" / "worktrees" / "x" / ".git").write_text("gitdir: ../../../.git/worktrees/x\n")
+    (home / "repo" / ".claude" / "settings.local.json").write_text("{}\n")
+
+
 def _store_parts(c) -> list:
     return [p for p in gate._each_part(c) if p.category == "credentials" and p is not c]
 
@@ -64,7 +72,7 @@ MATRIX_DENY_ALL = _pol({"gates": {"matrix": {"irreversible": {"private": "deny",
     # a key in ~/.ssh can have any name: the store folder itself counts every relative name, as `cd ~/.ssh` does
     ("cat deploy_key", "~/.ssh"),
     ("base64 github", "~/.ssh"),
-    # and so does a folder below such a store, as after a `cd` there; below a .claude folder names count one by one
+    # and so does a folder below such a store, as after a `cd` there
     ("cat deploy_key", "~/.ssh/old"),
     ("tar czf /tmp/o.tgz .", "~/.gnupg/private-keys-v1.d"),
     ("cat 4f3e9a.json", "~/.aws/cli/cache"),
@@ -83,6 +91,9 @@ MATRIX_DENY_ALL = _pol({"gates": {"matrix": {"irreversible": {"private": "deny",
     ("wc -l < config > /tmp/n", "~/.kube"),
     ("cd gh && cat hosts.yml", "~/.config"),
     ("cat environ", "/proc/self"),
+    # the folder is itself a store, as a `cd` word is: `ls` there lists it, as `ls ~/.ssh` does
+    ("ls", "~/.ssh"),
+    ("git status", "~/.ssh"),
 ])
 def test_a_tool_cwd_in_a_store_asks_as_the_cd_form_does(cmd, folder):
     c = _bash_in(cmd, folder)
@@ -191,15 +202,138 @@ def test_a_line_that_already_reads_a_store_is_left_as_it_is():
     assert c.category == "credentials" and not _store_parts(c)
 
 
+# --- the folder never takes the line's place (exo-36's review of #452) -----------------------------------------
+
+FORCE = "git push --force origin main"
+SHELLS = [("terminal", "workdir"), ("exec_command", "workdir"), ("bash", "workdir"), ("bash", "cwd"),
+          ("terminal", "cwd")]
+HELD = ["~/.exo/run", "~/.exo/keys", "~/.claude/projects", "~/.claude"]    # every relative word there is a store hit
+
+
+def _held(home) -> None:
+    for d in (".exo/run", ".exo/keys", ".claude/projects/p"):
+        (home / d).mkdir(parents=True, exist_ok=True)
+    (home / ".exo" / "keys" / "seat.key").write_text("k\n")
+
+
+@pytest.mark.parametrize("tool, key", SHELLS)
+@pytest.mark.parametrize("folder", HELD)
+@pytest.mark.parametrize("cmd", [f"tar czf /tmp/o.tgz . ; {FORCE}", f"cat * && {FORCE}", f"{FORCE} ; cat *"])
+def test_a_folder_whose_every_word_is_a_store_keeps_the_lines_matrix_deny(cmd, folder, tool, key, _home):
+    """A `workdir` in _Scope.cwds made the whole call credentials (#209): force_push deny became credentials ask.
+    The folder now only adds a part, so the line's deny stands. Main did the same with `cwd`, which this ends."""
+    _held(_home)
+    c = _bash_in(cmd, folder, tool=tool, key=key)
+    assert c.category == "force_push" and _store_parts(c), (tool, key, folder)
+    assert gate.decide(c, MATRIX_DENY).outcome == "deny"
+    assert gate.decide(c).outcome == "ask"
+
+
+@pytest.mark.parametrize("tool, key", SHELLS)
+@pytest.mark.parametrize("folder", ["~/.exo/keys", "~/.exo/run"])
+def test_a_seat_that_answers_credentials_does_not_answer_the_force_push(folder, tool, key, _home):
+    """approvers: {default: [principal], credentials: [principal, seat:builder]}. The call was credentials, so the
+    seat could answer a force push only the principal answers."""
+    _held(_home)
+    table = gate.normalize_approvals({"approvers": {"default": ["principal"],
+                                                    "credentials": ["principal", "seat:builder"]}})
+    c = _bash_in(f"{FORCE} ; cat *", folder, tool=tool, key=key)
+    assert gate.call_approvers(c, table) == ["principal"]
+
+
+@pytest.mark.parametrize("raw", [
+    {"gates": {"matrix": {"costly": {"private": "deny"}}}},             # the credentials cell, not the read's
+    {"gates": {"categories": {"credentials": "deny"}}},
+    {"gates": {"deny": ["credentials"]}},
+])
+def test_the_reading_from_before_still_decides_when_it_is_stricter(raw, _home):
+    """`cat *` in ~/.exo/keys was credentials as a whole with `cwd` (#209), and a deny cell for that is still met.
+    The line alone is a read: its own cell would allow it, and the part alone would only ask."""
+    _held(_home)
+    for key in ("cwd", "workdir"):
+        c = _bash_in("cat *", "~/.exo/keys", key=key)
+        assert c.category == "read" and c.also is not None and c.also.category == "credentials"
+        assert gate.decide(c, _pol(raw)).outcome == "deny", (raw, key)
+
+
+def test_the_reading_from_before_keeps_its_reserved_hits(_home):
+    _held(_home)
+    c = _bash_in("cat *", "~/.exo/keys")
+    d = gate.decide(c, _pol({"gates": {"reserved": ["credentials", "read"]}}))
+    was = gate.decide(c.also, _pol({"gates": {"reserved": ["credentials", "read"]}}))
+    assert d.outcome == "ask" and set(was.reserved) <= set(d.reserved)
+
+
+EVERYDAY = ["ls *", "ls config", "wc -l *", "grep -r foo *", "du -sh *", "rg -n config src", "file *"]
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("cmd", EVERYDAY)
+def test_everyday_commands_in_a_repos_claude_worktree_change_nothing(cmd, tool, key, _home):
+    """A checkout at <repo>/.claude/worktrees/x holds the repo's files, as StoreSkip judges it (#241): `*` there
+    cannot reach .claude/settings.local.json, so these keep their class and outcome, as in ~/repo."""
+    _repo(_home)
+    c = _bash_in(cmd, "~/repo/.claude/worktrees/x", tool=tool, key=key)
+    plain = _bash(cmd)
+    assert not _store_parts(c), cmd
+    assert (c.category, gate.decide(c).outcome) == (plain.category, gate.decide(plain).outcome)
+
+
+@pytest.mark.parametrize("cmd, folder", [
+    ("cat settings.local.json", "~/repo/.claude"),       # the repo's .claude folder itself is a store
+    ("cat *", "~/repo/.claude"),
+    ("ls *", "~/norepo/.claude/worktrees/x"),            # no .git beside it: not a repo's
+    ("cat *", "~/.claude/projects"),                     # Claude's own config folder
+])
+def test_a_claude_folder_that_is_not_a_repos_worktree_still_asks(cmd, folder, _home):
+    _repo(_home)
+    (_home / "norepo" / ".claude" / "worktrees" / "x").mkdir(parents=True)
+    (_home / ".claude" / "projects").mkdir(parents=True)
+    c = _bash_in(cmd, folder)
+    assert _store_parts(c) and gate.decide(c).outcome == "ask", (cmd, folder)
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("link, to, cmd", [(link, to, cmd) for link, to in [("link-ssh", ".ssh"), ("sshabs", None)]
+                                           for cmd in ("cat deploy_key", "cat *", "cat config")]
+                         + [("kubelink", ".kube", "cat config"), ("kubelink", ".kube", "cat *")])
+def test_a_folder_that_is_a_link_into_a_store_asks(cmd, link, to, tool, key, _home):
+    """The folder goes through the checks a `cd` word gets, which resolve links (`sshabs` is an absolute link). `cd
+    ~/link-ssh && cat deploy_key` asks; the folder form was allowed. A link to ~/.kube, which is not a store itself,
+    is read where it leads, so its store names count (the #312 family, for the folder argument only)."""
+    (_home / ".ssh").mkdir()
+    (_home / ".kube").mkdir()
+    (_home / link).symlink_to(to or str(_home / ".ssh"))
+    c = _bash_in(cmd, f"~/{link}", tool=tool, key=key)
+    assert _store_parts(c) and gate.decide(c).outcome == "ask", (cmd, link)
+
+
+@pytest.mark.parametrize("cmd", ["cat deploy_key", "tar czf /tmp/o.tgz .", "ls"])
+def test_a_target_entry_on_the_folder_denies(cmd, _home):
+    """Under deny: [target:*/.ssh], `cd ~/.ssh && cat deploy_key` is denied. The part's target was the relative
+    name (`deploy_key`, or `czf` for the tar line), so the folder form only asked."""
+    c = _bash_in(cmd, "~/.ssh")
+    [part] = _store_parts(c)
+    assert part.target == str(_home / ".ssh") and "czf" not in part.summary
+    assert gate.decide(c, _pol({"gates": {"deny": ["target:*/.ssh"]}})).outcome == "deny"
+    assert gate.decide(_bash(f"cd ~/.ssh && {cmd}"), _pol({"gates": {"deny": ["target:*/.ssh"]}})).outcome == "deny"
+
+
+def test_a_name_read_in_the_folder_is_the_parts_target(_home):
+    [part] = _store_parts(_bash_in("cat config", "~/.kube"))
+    assert part.target == str(_home / ".kube" / "config")
+    assert gate.decide(_bash_in("cat config", "~/.kube"), _pol({"gates": {"deny": ["target:*/.kube/*"]}})).outcome \
+        == "deny"
+
+
 # --- what stays as it was --------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("cmd, folder", [
     ("git status", "~/project"),          # the issue's control: an ordinary repo stays a read
     ("cat config", "~/project"),
     ("cat readme.md", "~"),
-    ("ls", "~/.ssh"),
     ("cat README.md", "~/.exo/work"),
-    # a checkout below a store folder checks names one by one, so routine commands there stay as they are
+    # a checkout in a repo's own .claude folder holds the repo's files, as for the search tools (#241)
     ("ls src", "~/repo/.claude/worktrees/x"),
     ("cat README.md", "~/repo/.claude/worktrees/x"),
     ("pytest -q tests", "~/repo/.claude/worktrees/x"),
@@ -207,7 +341,8 @@ def test_a_line_that_already_reads_a_store_is_left_as_it_is():
     ("tar czf /tmp/src.tgz .", "~/repo/.claude/worktrees/x"),
     ("cat notes.md", "~/.kube/cache"),        # below ~/.kube names count one by one, as after a `cd` there
 ])
-def test_a_tool_cwd_with_no_store_read_changes_nothing(cmd, folder):
+def test_a_tool_cwd_with_no_store_read_changes_nothing(cmd, folder, _home):
+    _repo(_home)
     c = _bash_in(cmd, folder)
     assert not _store_parts(c), (cmd, folder)
     plain = _bash(cmd)
