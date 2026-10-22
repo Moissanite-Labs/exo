@@ -51,6 +51,12 @@ def _raw_id(raw: str | bytes) -> str:
         return ""
 
 
+def _count(raw: str) -> int | None:
+    """A number in a request: ASCII digits up to SQLite's largest integer, the event log's bound. Else None (400)."""
+    n = raw.lstrip("0") or "0"  # leading zeros are digits too: measure the rest before int() and its digit limit
+    return int(n) if raw.isascii() and raw.isdigit() and len(n) < 20 and int(n) < 2**63 else None
+
+
 class Dispatcher:
     """Decodes commands, answers ``hello`` and ``events.subscribe`` itself, and
     sends everything else to the engine. Never raises on bad input."""
@@ -267,9 +273,7 @@ class HttpServer:
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, peer: pr.Peer) -> None:
         try:
             await self._request(reader, writer, peer)
-        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError):
-            pass
-        except asyncio.CancelledError:
+        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError, asyncio.CancelledError):
             pass
         finally:
             try:
@@ -284,10 +288,7 @@ class HttpServer:
         line = (await reader.readuntil(b"\r\n")).decode("latin-1").strip()
         method, target, _version = line.split(" ", 2)
         headers: dict[str, str] = {}
-        while True:
-            h = (await reader.readuntil(b"\r\n")).decode("latin-1").strip()
-            if not h:
-                break
+        while h := (await reader.readuntil(b"\r\n")).decode("latin-1").strip():
             k, _, v = h.partition(":")
             headers[k.strip().lower()] = v.strip()
         url = urlsplit(target)
@@ -296,7 +297,8 @@ class HttpServer:
         if url.path == "/command":
             if method != "POST":
                 return await self._json(writer, 405, {"error": "POST only"})
-            n = int(headers.get("content-length", "0"))
+            if (n := _count(headers.get("content-length", "0"))) is None:  # before the size check, which -1 passes
+                return await self._json(writer, 400, {"error": "bad Content-Length"})
             if n > MAX_BODY:
                 return await self._json(writer, 413, {"error": "body too large"})
             raw = await reader.readexactly(n)
@@ -304,9 +306,10 @@ class HttpServer:
             return await self._send(writer, 200, resp.to_json().encode())
         if url.path == "/events" and method == "GET":
             q = parse_qs(url.query)
-            since = int(q.get("since", ["0"])[0])
-            since = max(since, int(headers.get("last-event-id") or 0))
-            return await self._sse(writer, since, q.get("session", [None])[0])
+            since, last = _count(q.get("since", ["0"])[0]), _count(headers.get("last-event-id") or "0")
+            if since is None or last is None:
+                return await self._json(writer, 400, {"error": "bad since or Last-Event-ID"})
+            return await self._sse(writer, max(since, last), q.get("session", [None])[0])
         if url.path == "/health":
             return await self._json(writer, 200, {"ok": True, "protocol": s.PROTOCOL_VERSION,
                                                   "seq": self.dispatcher.hub.head()})

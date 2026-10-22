@@ -35,6 +35,7 @@ import re
 import shlex
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from types import EllipsisType
 from typing import Any, Callable, Iterable, Iterator, Mapping, TypeVar, cast
 from urllib.parse import urlparse
 
@@ -94,6 +95,8 @@ OUTBOUND = ("github_post", "message_send", "email_send", "social_post", "web_pos
 # Categories the posting rules apply to unless the policy says otherwise (human-readable posts;
 # raw API payloads of web_post are left out because a footer check on JSON is noise).
 POSTING_DEFAULT = ("github_post", "message_send", "email_send", "social_post")
+# The most posting violations a decision lists when other posts on the line add theirs (#396). The rest are counted.
+_LISTED_VIOLATIONS = 20
 
 
 class PolicyError(ValueError):
@@ -122,12 +125,28 @@ class Classification:
     # entries against each of them, so a denied action cannot ride along with a more severe one.
     parts: list["Classification"] = field(default_factory=list, repr=False, compare=False)
     _command_views: list[str] = field(default_factory=list, repr=False, compare=False)
+    # The source text of the one simple command this part stands for, with its redirections (#394): a rule that
+    # would lower a compound line must match it too (_line_own_test). None where no such text exists (a part the
+    # gate made up, an unread nest, a string literal in code), and then no such rule matches.
+    own: str | None = field(default=None, repr=False, compare=False)
+    # The own text of each command on this line that changes the shell for the commands after it (_sets_state): a
+    # rule that would lower the line must match each of them too (#394). None stands for a function definition.
+    setters: list[str | None] = field(default_factory=list, repr=False, compare=False)
+    # A part that runs the stdin of its line, which a command around that line may give (_runs_stdin, _given_stdin).
+    inherits: bool = field(default=False, repr=False, compare=False)
+    # The signals this part carried before _combine gave it every part's (#396), so the posting checks can tell its
+    # own unseen body from another post's. None for a part never combined: its signals are then its own.
+    own_signals: list[str] | None = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
         d.pop("parts", None)
         d.pop("_command_views")
+        d.pop("own")
+        d.pop("setters")
+        d.pop("inherits")
+        d.pop("own_signals")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -162,7 +181,25 @@ def _make(category: str, tool: str = "", **kw) -> Classification:
     kw.setdefault("reversibility", rev)
     kw.setdefault("exposure", exp)
     kw.setdefault("third_party", third)
+    if "own" not in kw:
+        slot = _own_text.get()
+        kw["own"] = slot[0] if slot else None
     return Classification(category=category, tool=tool, **kw)
+
+
+# The text of the simple command being classified (#394), in a one-item list per line that classify_shell sets: every
+# part made for that command carries it (Classification.own), the parts of a nested line their own command's text.
+# _classify_shell fills the slot for each simple command and empties it for the rest. None outside a shell line.
+_own_text: contextvars.ContextVar[list[str | None] | None] = contextvars.ContextVar("exo_gate_own_text", default=None)
+
+
+class _StandIn(str):
+    """An own text that stands for another (#394). No text of a line is one, so it is told apart by identity."""
+
+
+# The own text that a stdin reader's parts carry while _once reads a text once for all the readers on a line (#394).
+# Each reader then gets copies with its own text in its place (_restamp).
+_READER = _StandIn("the reader's own text")
 
 
 def _severity(c: Classification) -> tuple:
@@ -369,6 +406,9 @@ class _Cmd:
     piped_in: bool = False
     operands: list = field(default_factory=list)     # _Word after an unquoted NAME=(..): more of its operands
     piped_group: bool = False    # piped from a compound (`( .. )`, `{ ..; }`, a loop), not from one simple command
+    own: str | None = None       # its source text with its redirections, after leading reserved words (#394)
+    pipe_src: Callable[[], str | None] | None = None   # piped from simple commands: the pipeline text up to it
+    fed: bool = False            # its stdin comes from a compound around it or piped into it (_feed_compound)
     stdin_unknown: bool = False  # fed a stdin whose text the gate cannot read (a compound's `< file`) (#316)
 
 
@@ -393,6 +433,7 @@ class _Lexer:
         self.covered = 0                   # the source before here lies in a ${..} already recorded
         self.nest = nest                   # $( ), <( ) and $(( )) levels open around here (_NEST)
         self.cuts: list[tuple[int, int, str]] = []   # (start, end, stand-in) of each part not read, in order
+        self.marks: list[tuple[int, int]] = []        # the last run's token spans, one per token, with scan (#394)
 
     def _cut(self, w: _Word, a: int) -> None:
         """The $( ) or <( ) at s[a] lies past _NEST levels and is not read. The line lists _TOO_DEEP for it, and the
@@ -417,6 +458,8 @@ class _Lexer:
 
     def _source(self, a: int, b: int) -> str:
         """s[a:b], with each part not read (_cut, a here-doc body holding one) spelt as its stand-in."""
+        if not self.cuts:
+            return self.s[a:b]
         k = bisect.bisect_left(self.cuts, (a,))
         if k == len(self.cuts) or self.cuts[k][0] >= b:
             return self.s[a:b]
@@ -430,8 +473,11 @@ class _Lexer:
 
     def run(self, closer: bool = False) -> list:
         s, toks = self.s, []
+        # where each token starts and ends in s, for a command's own text (#394); only _parse reads them
+        marks: list[tuple[int, int]] | None = [] if self.scan else None
         state = {"w": _Word(), "delim": None}
         depth, start = 0, -1              # start: where the current word's source text begins
+        w_at = hd_at = 0                  # where that word starts with its `<(`, and where a here-doc's `<<` does
         fd = ""                           # the fd number of the redirection whose target comes next (`3< f`)
 
         def flush():
@@ -451,15 +497,19 @@ class _Lexer:
                                       spelt)                # its end line is spelt so too (_read_heredocs)
                     self.pending.append(hd)
                     toks.append(("hd", hd))
+                    if marks is not None:
+                        marks.append((hd_at, self.i))
                     state["delim"] = None
                 else:
                     toks.append(("w", w))
+                    if marks is not None:
+                        marks.append((w_at, self.i))
             state["w"] = _Word()
 
         while self.i < len(s):
             w = state["w"]
             if start < 0:
-                start = self.i
+                start = w_at = self.i
             ch, nxt = s[self.i], s[self.i + 1:self.i + 2]
             if ch in " \t\r":
                 flush()
@@ -467,6 +517,8 @@ class _Lexer:
             elif ch == "\n":
                 flush()
                 toks.append(("op", ";"))
+                if marks is not None:
+                    marks.append((self.i, self.i + 1))
                 self.i += 1
                 self._read_heredocs()
             elif ch == "#" and not w.started:
@@ -506,16 +558,20 @@ class _Lexer:
                 w.text += "<(..)"
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
+                op_at = self.i
                 if w.started and w.text.isdigit() and not w.quoted:
                     state["w"], start, fd = _Word(), -1, cast(_Word, w).text    # an fd number belongs to the operator
+                    op_at = w_at
                 else:
                     flush()
                 op = next(o for o in _REDIR_OPS if s.startswith(o, self.i))
                 self.i += len(op)
                 if op in ("<<", "<<-"):
-                    state["delim"] = op == "<<-"
+                    state["delim"], hd_at = op == "<<-", op_at
                 else:
                     toks.append(("redir", op))
+                    if marks is not None:
+                        marks.append((op_at, self.i))
             elif ch in ";&|()":
                 flush()
                 if ch == ")" and closer and depth == 0:
@@ -524,6 +580,8 @@ class _Lexer:
                 op = next(o for o in _CTRL_OPS if s.startswith(o, self.i))
                 depth += {"(": 1, ")": -1}.get(op, 0)
                 toks.append(("op", op))
+                if marks is not None:
+                    marks.append((self.i, self.i + len(op)))
                 self.i += len(op)
             else:
                 if ch in "*?" or (ch in "[{" and w.started):
@@ -534,6 +592,7 @@ class _Lexer:
                 w.started = True
                 self.i += 1
         flush()
+        self.marks = marks or []
         return toks
 
     def _read_heredocs(self) -> None:
@@ -1040,9 +1099,29 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
     return seen[("parse", src)]
 
 
+class _PipeTexts:
+    """The pipeline texts that a line's stdin readers carry as their own text (#394, _runs_stdin), each built once.
+    Each text holds every command before its reader, so a long pipeline of readers (`x|sh|sh|..`) would hold the
+    square of its length. So together they hold at most four times the line's length plus 4 KB, and a reader past
+    that has no own text."""
+
+    def __init__(self, lx: _Lexer) -> None:
+        self.lx, self.left = lx, 4 * len(lx.s) + 4096
+        self.built: dict[tuple[int, int], str | None] = {}
+
+    def text(self, a: int, b: int) -> str | None:
+        if (a, b) not in self.built:
+            fits = b - a <= self.left
+            self.built[(a, b)] = self.lx._source(a, b) if fits else None
+            self.left -= b - a if fits else 0
+        return self.built[(a, b)]
+
+
 def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     lx = _Lexer(src or "")
     toks = lx.run()
+    marks = lx.marks
+    pipes = _PipeTexts(lx)
     fnames = {a or b for a, b in _FUNC_NAMES.findall(src or "")}   # a call to one may run `exec < f` (#161)
     cmds: list[_Cmd] = []
     cur = _Cmd()
@@ -1053,17 +1132,33 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     opened: list = []       # compounds still open: (opener, index of their first command, command piped in)
     tops: dict = {}         # opener -> its indexes in opened, so a closer finds its opener without a scan
     shut = None             # the open compound the current command closes
+    loop = None             # the reserved word `for` or `select` that opened the latest loop
     lead = True             # every word of cur so far is a reserved word
+    head, pre = True, 0     # the next word is in command position, as with lead and also after `coproc [NAME]`,
+                            # `function NAME` and reserved words after them. Only `do` uses it (#436). pre is where
+                            # cur's words after its latest leading reserved words start
     taken: dict = {}        # first command -> (end, an exec inside set the shell's stdin) of a compound whose
                             # stdin is set (inner closers win); also _piped_text's memo
+    o_first = o_body = o_end = -1   # cur's own text: where its tokens start, where those after its reserved words do, its end
+    p_at = -1                       # where the pipeline cur is in starts, when only simple commands came before it
 
     def end(piped: bool = False) -> None:
-        nonlocal cur, shut, lead
+        nonlocal cur, shut, lead, head, o_first, o_body, o_end, p_at
         if shut is not None:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
+        at = o_first if o_body < 0 else o_body
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
+            cur.own = lx._source(at, o_end)
+            if cur.piped_in and p_at >= 0:
+                cur.pipe_src = functools.partial(pipes.text, p_at, o_end)   # read only by _stdin_own
             cmds.append(cur)
-        cur, shut, lead = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True
+        else:
+            at = -1
+        # the next command's pipeline starts here, or where this one's did; a compound before it has no such text.
+        # A command piped from a compound (piped_group) finds p_at at -1, as the end before it had a compound shut.
+        p_at = (p_at if cur.piped_in else at) if piped and shut is None and at >= 0 else -1
+        cur, shut, lead, head = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True, True
+        o_first = o_body = o_end = -1
 
     def push(entry: tuple) -> None:
         tops.setdefault(entry[0], []).append(len(opened))
@@ -1105,12 +1200,20 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                     cur.herestrings.append(toks[i + 1][1])
                 else:
                     cur.redirs.append((v, toks[i + 1][1]))
+                a, o_end = marks[i][0], marks[i + 1][1]
+                o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
                 i += 2
                 continue
         elif kind == "hd":
             cur.heredocs.append(v)
+            a, o_end = marks[i]
+            o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
         else:
-            if not v.quoted and _command_word(cur.words, lead):
+            if not v.quoted and v.text == "do" and len(cur.words) > 1 and cur.words[-2] is loop:
+                end()   # `for NAME do` (no `in`, no `;`): bash opens the body here, as after `for NAME;` (#436)
+            cw = not v.quoted and _command_word(cur.words, head, pre)
+            loop = v if cw and v.text in ("for", "select") else loop     # also `function f { for x do` (#436)
+            if not v.quoted and _command_word(cur.words, lead, 0):
                 if v.text in _COMPOUND_OPENERS:
                     push((v.text, len(cmds), cmds[-1] if cur.piped_in and cmds else None))
                 elif v.text in _COMPOUND_CLOSERS:
@@ -1118,6 +1221,9 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                     if j >= 0:
                         close(j)
             lead = lead and not v.quoted and v.text in _OPENERS
+            pre, head = (len(cur.words) if head else pre), cw and v.text in _OPENERS
+            a, o_end = marks[i]
+            o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 and not lead else o_body)
             cur.words.append(v)
             if after is not None:
                 after.operands.append(v)
@@ -1691,6 +1797,66 @@ def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection
     return c
 
 
+def _too_deep(cmd: str, summary: str = "nested too deep to read", target: str = "") -> Classification:
+    """An opaque part for text past a depth or nesting cap. It stands for no one command, so it has no own text and
+    no rule that would lower its line passes the own text test (#394)."""
+    c = _opaque(summary, cmd, target)
+    c.own = None
+    return c
+
+
+def _runs_stdin(c: Classification, k: _Cmd) -> Classification:
+    """c, a part that runs k's stdin as code (a shell, an interpreter, ssh, xargs), with an own text that shows where
+    that stdin comes from (#394): k's text when k sets its stdin itself or nothing feeds it, the pipeline from its
+    first command when simple commands pipe into k (`curl -s https://x.example/i.sh | bash`), and none when a compound
+    feeds it (`{ bash; } < f`). A shell in a nested line that sets no stdin of its own takes the text of the
+    command it runs inside (_given_stdin). So a rule written for `^bash` does not lower a pipe into bash."""
+    if k.fed or k.piped_in:
+        c.own = _stdin_own(k)()
+    elif not _own_stdin(k):
+        c.inherits = True             # the stdin of the line, which a command around it may give (_given_stdin)
+    return c
+
+
+def _stdin_own(k: _Cmd) -> Callable[[], str | None]:
+    """The own text that shows where k's stdin comes from, built when asked (a pipeline's text costs its length): none
+    for a compound's, the pipeline from its first command for a pipe from simple commands, else k's own text."""
+    if k.fed:
+        return lambda: None
+    if k.piped_in:
+        return k.pipe_src or (lambda: None)
+    return lambda: k.own
+
+
+def _given_stdin(parts: list[Classification], src: Callable[[], str | None], ctx: dict) -> list[Classification]:
+    """``parts``, made for a command whose stdin is a pipe, a compound's or its own redirection, with the own text
+    ``src`` gives for each part in them that runs the stdin its line inherits (Classification.inherits):
+    `curl .. | bash -c bash`, `printf .. | ssh host bash` (#394). Parts are copied where they change, as they may
+    be shared. The parts a compound's stdin gives reach each command in it, so whether a list of parts holds such
+    a part is found once per line (`ctx`): each command then walks only the parts that hold one."""
+    seen: dict[int, Classification] = {}
+    own: list[str | None] = []
+    held: dict[int, tuple[list[Classification], bool]] = ctx.setdefault("inherits", {})
+
+    def holds(ps: list[Classification]) -> bool:
+        if id(ps) not in held:       # the list is kept with the answer, so its id stays its own for the line
+            held[id(ps)] = (ps, any([p.inherits or holds(p.parts) for p in ps]))
+        return held[id(ps)][1]
+
+    def walk(c: Classification) -> Classification:
+        if id(c) not in seen:
+            seen[id(c)] = c          # a part met again through a shared one is left as it is
+            if not (c.inherits or holds(c.parts)):
+                return c
+            kids = [walk(p) for p in c.parts]
+            if c.inherits and not own:
+                own.append(src())
+            if c.inherits or any(a is not b for a, b in zip(kids, c.parts)):
+                seen[id(c)] = replace(c, parts=kids, own=own[0] if c.inherits else c.own, inherits=False)
+        return seen[id(c)]
+    return [walk(p) for p in parts]
+
+
 def _git_config_kind(key: str, value: str) -> str:
     """What a git config pair makes git do: "exec" for an exec key (an alias, the pager, the editor,
     core.sshCommand, a hook path, a filter, any key whose last part ends in `command` or `cmd`...) or a
@@ -2219,7 +2385,7 @@ def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words)
         elif prog != "script":
             rest = words[i:]
     for text in texts:
-        parts.append(classify_shell(text, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
+        parts.append(classify_shell(text, depth + 1) if depth < _DEPTH else _too_deep(cmd))
     parts += inner_words(rest)
     if _env_dump(_strip_prefixes_keep_env([w.text for w in rest])[0]):   # as for coproc and the prefixes (#155)
         parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
@@ -2300,10 +2466,10 @@ _COMPOUND_OPENERS = frozenset(o for names in _COMPOUND_CLOSERS.values() for o in
 _READ_REDIRS = ("<", "<&", "<>")
 
 
-def _command_word(words: list, lead: bool) -> bool:
-    """Whether the next word is in command position: only reserved words (lead, which the parser keeps so this
-    is O(1)), `coproc [NAME]` or `function NAME` before it."""
-    return lead or (len(words) <= 2 and not words[0].quoted and words[0].text in ("coproc", "function"))
+def _command_word(words: list, lead: bool, pre: int) -> bool:
+    """Whether the next word is in command position: only reserved words before it (lead, which the parser keeps
+    so this is O(1)), or a `coproc [NAME]` or `function NAME` that starts at words[pre]."""
+    return lead or (len(words) - pre <= 2 and not words[pre].quoted and words[pre].text in ("coproc", "function"))
 
 
 def _own_stdin(k: _Cmd) -> bool:
@@ -2324,6 +2490,60 @@ def _sets_shell_stdin(k: _Cmd, fnames: set) -> bool:
         return False
     return (w.dynamic or w.text in ("eval", "source", ".") or w.text in fnames
             or (w.text == "exec" and _own_stdin(k)))
+
+
+# Builtins and keywords after which the shell runs the rest of the line differently (#394): they set or export a
+# variable, an option, an alias, a function, a coprocess, the hash table, a trap or the folder stack, or run a file
+# in this shell. _STATE_ALWAYS do so whatever their arguments, _STATE_OPERANDS when given any (alone they print).
+# eval is not here: the gate reads its text as a nested line, whose own setters count. cd is left out on purpose,
+# so `cd repo && cmd` stays under an allow rule whose regex finds cmd in the line. That cannot loosen a decision,
+# since the rule must still match the whole line (docs/GATE.md, Known limits).
+_STATE_ALWAYS = frozenset({"source", ".", "read", "mapfile", "readarray", "getopts", "let", "pushd", "popd",
+                           "for", "select", "function", "coproc"})
+_STATE_OPERANDS = frozenset({"hash", "alias", "enable", "unset", "trap"})
+
+
+def _sets_state(k: _Cmd) -> bool:
+    """Whether the simple command changes the shell for the commands after it on the line (#394): an assignment with
+    no command, `export X`, `declare X=1` (any of _EXPORTERS with an operand), `set` with -a, -k or operands,
+    `shopt -s`/`-u`, `printf -v`, `exec` with only redirections, a program name the gate cannot read, or one of the
+    builtins above. Such a state lasts only as long as the shell, so it changes what a later command on the same
+    line runs (`export GIT_SSH_COMMAND=..; git push`) where a separate call would start afresh."""
+    words = list(k.words)
+    while words and not words[0].quoted and words[0].text in _OPENERS:
+        words = words[1:]
+    if not words:
+        return False
+    if all(_ASSIGN.fullmatch(w.text) for w in words):
+        return True
+    rest, _, split = _strip_prefix_words(words)
+    if split is not None:
+        return False                              # `env -S`: a command line, read as one
+    if not rest:                                  # prefixes only: `exec 3>f` sets the fds later commands get
+        return any(w.text.rsplit("/", 1)[-1] == "exec" for w in words)
+    prog, args = rest[0], rest[1:]
+    if prog.dynamic:
+        return True
+    name = prog.text
+    if name in _EXPORTERS:
+        return any(a.dynamic or not a.text.startswith(("-", "+")) for a in args)
+    if name == "set":
+        i = 0
+        while i < len(args):
+            t = args[i].text
+            if args[i].dynamic or not re.fullmatch(r"[-+][A-Za-z]+", t) or set(t[1:]) & {"a", "k"}:
+                return True                       # allexport, keyword, or new positional parameters (`set -- x`)
+            if "o" in t:                          # `set -o NAME`: the same two by name
+                i += 1
+                if i < len(args) and (args[i].dynamic or args[i].text in ("allexport", "keyword")):
+                    return True
+            i += 1
+        return False
+    if name == "shopt":
+        return any(a.dynamic or re.fullmatch(r"-[a-z]*[su][a-z]*", a.text) for a in args)
+    if name == "printf":
+        return bool(args) and (args[0].dynamic or args[0].text.startswith("-v"))
+    return name in _STATE_ALWAYS or (name in _STATE_OPERANDS and bool(args))
 
 
 def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None, taken: dict,
@@ -2356,7 +2576,9 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
             continue
         k = cmds[i]
         sets = _sets_shell_stdin(k, fnames)
-        if not (sets or _own_stdin(k) or (i > start and k.piped_in)):
+        fed = not (sets or _own_stdin(k) or (i > start and k.piped_in))
+        k.fed = k.fed or fed            # its own text does not name its stdin (#394)
+        if fed:
             if unknown:
                 k.stdin_unknown = True
             elif not redirected:
@@ -2367,25 +2589,63 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
 
 
 def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str], list[Classification]],
-          ambiguous: bool = False) -> list[Classification]:
+          ambiguous: bool = False, own: str | None | EllipsisType = ...) -> list[Classification]:
     """read(text) for each stdin text of k (each heredoc body after an ambiguous delimiter, if ambiguous), run
     once per command line and key. A compound's stdin reaches every command inside it (as the same lists), and
     each command still gets copies of the parts, since its own store check (_store_touch) reads them; the same
     lists again give the most severe part of each category, all that check and _combine look at. Without this a
     body of fed shells, itself fed to many shells, is read width ** depth times, and many here-strings fed to
-    many shells cost their product."""
+    many shells cost their product.
+    A reader whose parts carry its own text (#394) passes that text as ``own``. The text is then read with _READER
+    in its place, and each reader gets copies with its own text there (_restamp): `{ psql -d test; psql -d prod; }
+    <<EOF` gives psql -d prod parts with its own text. Each text is still read once per line, since every read
+    spends the call's budgets (_brace_budget) and a second read could find them spent."""
     memo = ctx.setdefault("stdin", {})
     whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
     if whole in memo:
-        return [_copy(c) for c in memo[whole]]
+        return [_copy(_restamp(ctx, c, own)) for c in memo[whole]]
     got: list[Classification] = []
     for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped):
         if (*key, text) not in memo:
-            memo[(*key, text)] = read(text)
+            memo[(*key, text)] = read(text) if own is ... else _read_as_reader(read, text)
         got += memo[(*key, text)]
     memo[whole] = [max((p for p in got if p.category == c), key=_severity)
                    for c in dict.fromkeys(p.category for p in got)]
-    return [_copy(c) for c in got]
+    return [_copy(_restamp(ctx, c, own)) for c in got]
+
+
+def _read_as_reader(read: Callable[[str], list[Classification]], text: str) -> list[Classification]:
+    """read(text), with _READER as the own text of each part it makes for the reading command (#394)."""
+    slot = _own_text.get()
+    if slot is None:
+        return read(text)
+    was, slot[0] = slot[0], _READER
+    try:
+        return read(text)
+    finally:
+        slot[0] = was
+
+
+def _restamp(ctx: dict, c: Classification, own: str | None | EllipsisType) -> Classification:
+    """``c``, a part _once stored, with ``own`` as the own text of each part in it that has _READER (#394). Only those
+    parts and the parts built from them are copied, once per line for each part and own text: the many readers
+    of a compound's stdin get the same few parts, and one of them may be built from many."""
+    if own is ...:
+        return c
+    holds, done = ctx.setdefault("stand_in", {}), ctx.setdefault("restamped", {})
+
+    def held(p: Classification) -> bool:
+        if id(p) not in holds:
+            holds[id(p)] = p.own is _READER or any([held(q) for q in p.parts])
+        return holds[id(p)]
+
+    def walk(p: Classification) -> Classification:
+        if not held(p):
+            return p
+        if (id(p), own) not in done:
+            done[(id(p), own)] = replace(p, parts=[walk(q) for q in p.parts], own=own if p.own is _READER else p.own)
+        return done[(id(p), own)]
+    return walk(c)
 
 
 def _copy(c: Classification) -> Classification:
@@ -2522,7 +2782,7 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
         parts += [classify_shell(sub, depth + 1) for sub in subs if depth < _DEPTH and sub not in done_set]
         late += [classify_shell(sub, depth + 1) for sub in more if depth < _DEPTH]
         fresh = bool(more or set(subs) - done_set)   # commands the line's own parse did not see
-        parts += [_opaque("nested too deep to read", cmd)] if fresh and depth >= _DEPTH else []
+        parts += [_too_deep(cmd)] if fresh and depth >= _DEPTH else []
         if other or odd or more:   # a signal, not an opaque part, so a deny on another part of the line still wins
             what = ("evaluates an array subscript the gate cannot read" if other else
                     "evaluates a value the gate cannot read" if odd else "runs a command in a value again")
@@ -2567,7 +2827,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         # dash and ash may end the body early and run the rest: read it as commands too. Once per line, under
         # _once's key for a shell reading it: a compound's heredoc reaches every command inside it.
         parts += _once(ctx, (classify_shell, depth + 1), k, None, lambda t: [
-            classify_shell(t, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd)], True)
+            classify_shell(t, depth + 1) if depth < _DEPTH else _too_deep(cmd)], True)
     for op, t in k.redirs:
         if op not in _WRITE_REDIRS or (op == ">&" and re.fullmatch(r"\d+|-", t.text)):
             continue
@@ -2619,7 +2879,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if not ws:
             return []
         if depth >= _DEPTH:
-            return [_opaque("nested too deep to read", cmd)]
+            return [_too_deep(cmd)]
         return _classify_simple(_Cmd(words=ws, heredocs=k.heredocs, herestrings=k.herestrings), cmd,
                                 inner_depth, ctx, piped)
 
@@ -2669,6 +2929,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if not a.startswith(("-", "+")):
                 parts[0].summary = f"{prog} runs the script {a}"[:120]
                 return parts
+        _runs_stdin(parts[0], k)
         if depth < _DEPTH:
             parts += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
         return parts
@@ -2678,7 +2939,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         i = 1
         while i < len(words) and words[i].text.startswith("-"):
             i += 2 if words[i].text in ("-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a") else 1
-        return [_opaque("xargs builds a command from its input", cmd)] + inner_words(words[i:])
+        return [_runs_stdin(_opaque("xargs builds a command from its input", cmd), k)] + inner_words(words[i:])
     if prog == "find":
         parts = [_make("read", summary="find", command=cmd)]
         i = 1
@@ -2761,7 +3022,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if inner and depth >= _DEPTH:
             # A chain past the cap is not read, so it asks (#153). The hops that were read keep the
             # first host as target, so a `target:` deny on it still matches.
-            c = _opaque("ssh chain nested too deep to read", cmd, target=dest)
+            c = _too_deep(cmd, "ssh chain nested too deep to read", dest)
             c.signals.append("unread hops")
         elif inner:
             c = classify_shell(inner, inner_depth)
@@ -2770,7 +3031,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         fed_line = bool(ctx.get("stdin_unknown"))     # the whole line is a >( ) body (#316)
         if prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags, fed_line):
             # #240: the login shell on the host runs ssh's stdin. It is read as shell, as for `bash -s`, and asks.
-            fed = [_opaque(f"ssh {dest} runs its stdin as commands on the remote host"[:120], cmd)]
+            fed = [_runs_stdin(_opaque(f"ssh {dest} runs its stdin as commands on the remote host"[:120], cmd), k)]
             if depth < _DEPTH:
                 fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
             c = _combine([c, *fed], cmd)
@@ -3123,7 +3384,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         if not text:
             return None
         if depth >= _DEPTH:
-            c = _opaque("nested too deep to read", cmd)
+            c = _too_deep(cmd)
         else:
             c = classify_shell(text, depth + 1)
             c.summary = f"{what} {'' if c.summary.startswith('runs ') else 'runs '}{c.summary}"[:120]
@@ -3341,7 +3602,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
 
         for text in texts:
             parts += read(text)
-        parts += _once(ctx, (_exec_options, prog, depth), k, piped, read)    # a compound's stdin is shared
+        own = (_own_text.get() or [None])[0]       # the parts read() makes carry this command's own text (#394)
+        parts += _once(ctx, (_exec_options, prog, depth), k, piped, read, own=own)   # a compound's stdin is shared
     return parts
 
 
@@ -3378,8 +3640,9 @@ def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: 
                 return [_opaque(f"{prog} runs the script {a}"[:120], cmd)]
             break
         i += 2 if a in _INTERP_VALUE_FLAGS.get(prog, ()) else 1
-    parts = [_opaque(f"{prog} reads code from its input", cmd)]
-    parts += _once(ctx, (classify_code,), k, piped, lambda t: [classify_code(t)])
+    parts = [_runs_stdin(_opaque(f"{prog} reads code from its input", cmd), k)]
+    src = parts[0].own               # the code comes from stdin: the text that shows where it comes from (#394)
+    parts += _once(ctx, (classify_code,), k, piped, lambda t: [classify_code(t, _READER)], own=src)
     return parts
 
 
@@ -3391,6 +3654,11 @@ def _classify_exo(argv: list[str], cmd: str) -> Classification:
     if sub in ("keygen", "init") or (sub == "log" and verb == "append"):
         c = _make("store_write", summary=f"exo {sub} {verb}".strip(), command=cmd)
         c.signals.append("exo store")
+        return c
+    if sub == "update" and verb == "--pin-trust":   # writes the signed-update trust pin (D-073, #133)
+        c = _make("store_write", summary="exo update --pin-trust", command=cmd)
+        c.signals.append("exo store")
+        c.parts = [_opaque("exo update starts, stops or changes Exo itself", cmd)]   # a deny on that still holds
         return c
     if sub in ("find", "get", "ctx", "links", "lint", "graph", "wire", "providers", "--version", "--help", "") or \
             (sub == "log" and verb in ("tail", "verify")):
@@ -3506,6 +3774,8 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     credentials = [p for p in parts if p.category == "credentials"]
     store = [p for p in parts if p.category == "store_write"]
     c = credentials[0] if credentials else (store[0] if store else (_most_severe(parts) or _make("shell", command=cmd)))
+    if c.own_signals is None:
+        c.own_signals = list(c.signals)
     c.signals = list(dict.fromkeys(c.signals + signals))
     c.parts = c.parts + [p for p in parts if p is not c]    # keep what the chosen part was itself built from
     return c
@@ -4071,7 +4341,11 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         _fed_stdin.set(False)
     key = ("shell", cmd, depth, _budgets(), fed)   # the budgets only fall: a line met later is read again
     if key not in seen:
-        seen[key] = _classify_shell(cmd, depth, fed)
+        own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
+        try:
+            seen[key] = _classify_shell(cmd, depth, fed)
+        finally:
+            _own_text.reset(own)
     return _own_copy(seen[key])
 
 
@@ -4089,7 +4363,7 @@ def _own_copy(c: Classification) -> Classification:
 
 def _unread_nest() -> Classification:
     """What a $( ) nested past _NEST stands for: an opaque part, signed so that an exported value keeps it."""
-    c = _opaque(f"a $( ) nested more than {_NEST} levels deep, not read", "")
+    c = _too_deep("", f"a $( ) nested more than {_NEST} levels deep, not read")
     c.signals.append("unread nest")
     return c
 
@@ -4110,14 +4384,24 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown}
     parts: list[Classification] = []
     prev: _Cmd | None = None
+    slot = _own_text.get() or [None]      # classify_shell gives each line its own
     for k in cmds:
         piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
         # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
         ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
-        parts += _classify_simple(k, cmd, depth, ctx, piped)
+        slot[0] = k.own
+        got = _classify_simple(k, cmd, depth, ctx, piped)
+        if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
+            got = _given_stdin(got, _stdin_own(k), ctx)
+        parts += got
         prev = k
+    slot[0] = None
+    # A $( ) runs where the gate no longer knows which command it is in, so on a line where one has a stdin of its
+    # own, a shell inside a $( ) reads a stdin the gate cannot name (`curl .. | echo $(bash)`).
+    given = bool(subs) and any(k.fed or k.piped_in or _own_stdin(k) for k in cmds)
     for sub in subs:
-        parts.append(classify_shell(sub, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
+        got = [classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd)]
+        parts += _given_stdin(got, lambda: None, ctx) if given else got
     for sub in getattr(subs, "out", []):     # a >( ) body: its commands are fed the outer command's output (#316)
         if depth >= _DEPTH:
             parts.append(_opaque("nested too deep to read", cmd))
@@ -4130,6 +4414,7 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
+    setters = [k.own for k in cmds if _sets_state(k)] + ([None] if func else [])
     c = _combine(parts, cmd)
     if c.category == "credentials":  # a secret beside an irreversible command keeps that command's weight
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
@@ -4161,6 +4446,8 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     body = next((h.body for k in cmds for h in k.heredocs), None)
     if not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
         c.text = body
+    if setters:
+        c.setters = [*c.setters, *setters]    # a new list: c may share its setters with a stored result
     return c
 
 
@@ -4179,15 +4466,32 @@ _CODE_LISTS = re.compile(r"\[\s*((?:(['\"])(?:(?!\2).)*\2\s*,\s*)+(['\"])(?:(?!\
 _BENIGN = ("read", "shell", "opaque_exec", "local_write", "code", "unknown", "web_read")
 
 
-def classify_code(code: str) -> Classification:
+def classify_code(code: str, own: str | None | EllipsisType = ...) -> Classification:
     """Code the gate cannot run: look for known calls, and read each string literal (and each list of
-    string literals, as in subprocess.run([...])) as a shell command. Only results that matter count."""
-    code = code or ""
-    parts = [_make("code", summary="run code")]
+    string literals, as in subprocess.run([...])) as a shell command. Only results that matter count.
+    The code part and each call found carry `own` as their own text (#394): by default the shell command that runs
+    the code (`python3 -c '..'`), or the code itself for execute_code. A literal read as a command is only a guess
+    at one, so no part of its result has own text, and no rule keyed on `command` lowers it."""
+    if own is ...:
+        slot = _own_text.get()
+        own = slot[0] if slot is not None else code
+    return _classify_code(code or "", own)
+
+
+def _unowned(c: Classification, seen: dict[int, Classification]) -> Classification:
+    """``c`` and the parts it was built from, without own text or setters (#394), so code with a literal stays one
+    text for _one_text however the literal reads. Parts shared within ``c`` stay shared."""
+    if id(c) not in seen:
+        seen[id(c)] = replace(c, own=None, setters=[], parts=[_unowned(p, seen) for p in c.parts])
+    return seen[id(c)]
+
+
+def _classify_code(code: str, own: str | None) -> Classification:
+    parts = [_make("code", summary="run code", own=own)]
     for rx, cat in _CODE_PATTERNS:
         m = rx.search(code)
         if m:
-            parts.append(_make(cat, summary=f"code calls {m.group(0)[:40]}"))
+            parts.append(_make(cat, summary=f"code calls {m.group(0)[:40]}", own=own))
     texts = [m.group(2) for m in _CODE_STRINGS.finditer(code)]
     texts += [" ".join(shlex.quote(s) for _, s in re.findall(r"(['\"])((?:(?!\1).)*)\1", m.group(1)))
               for m in _CODE_LISTS.finditer(code)]
@@ -4201,7 +4505,7 @@ def classify_code(code: str) -> Classification:
         signals += [x for x in c.signals if x == "locale translation"]
         # Any part, not only the dominant one: `./build.sh; systemctl enable x` is opaque on top (D-075).
         if any(p.category not in _BENIGN for p in _each_part(c)):
-            parts.append(c)
+            parts.append(_unowned(c, {}))
     c = _combine(parts, code)      # `classify` stamps the tool; a nested result keeps the shell's (D-075)
     c.command = code
     c.signals = list(dict.fromkeys(c.signals + signals))
@@ -4246,7 +4550,7 @@ _SENSITIVE_PATH = re.compile(
     r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"
     r"\.config/gh/hosts\.yml|\.git-credentials|\.docker/config\.json|\.kube/config|"
     r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
-    r"proc/[^/]+/environ)(/|$)")
+    r"proc/[^/]+/(task/[^/]+/)?environ)(/|$)")
 
 # D-039: a run folder holds the principal credential and the TCP token beside each socket, so the folder itself
 # is a secret store; what is below it keeps its own class (job output in run/jobs/ stays readable). A relative
@@ -4777,14 +5081,14 @@ def _glob_words(words: list[str]) -> bool:
     return any(_glob_word(w, home, samples, secrets, runs) for w in words)
 
 
-_PROC_FILE = re.compile(r"/proc/[^/]+/([^/]+)")
+_PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
 
 
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
-    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ of any process (#199)
-    if proc and _glob_names(proc[1], ("environ",)):
+    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ, or a thread's (#199, #313)
+    if proc and (proc[1] is None or _glob_names(proc[1], ("task",))) and _glob_names(proc[2], ("environ",)):
         return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
@@ -4828,14 +5132,16 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # anywhere (a relative `policies/gates.yaml` may sit in the tool's working folder); absolute paths are also
 # checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
 # `principals` (`exo init --root`, `exo import-store --root`) and the bus folder and files (_bus_paths).
+# $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
     r"\.exo/bus(/|$)|bus/registry\.json$|bus/relay\.sqlite(-wal|-shm|-journal)?$|"
+    r"\.exo/update(/|$)|update/allowed_signers$|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
     r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
     r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
-_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats")
+_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "update")
 _STORE_PROTECTED = ("policies", "state", "keys")
 # #210: $EXO_HOME/bus, and the bus settings that move a file the gate trusts out of it: the registry, the relay
 # database and its sidecars, and the seat keys folder. Each name is read as EXO_BUS_<NAME> and as the legacy
@@ -4855,7 +5161,7 @@ _FD_DIR = re.compile(r"/+(dev|proc(/[^/]+(/task(/[^/]+)?)?)?)")      # cd here, 
 
 def _store_roots() -> list[tuple[str, tuple, bool]]:
     """(root, protected top-level names, has principals/<name>/ stores below it)."""
-    roots = [(_exo_home(), _HOME_PROTECTED, True)]
+    roots: list[tuple[str, tuple, bool]] = [(_exo_home(), _HOME_PROTECTED, True)]
     if os.environ.get("EXO_PRINCIPAL_STORE"):
         roots.append((os.path.expanduser(os.environ["EXO_PRINCIPAL_STORE"]), _STORE_PROTECTED,
                       False))
@@ -5501,6 +5807,56 @@ def _line_matcher(c: Classification) -> Callable[[str], bool]:
     return line
 
 
+def _one_text(c: Classification) -> bool:
+    """Whether no two parts of the line have different own texts (#394): a line of one simple command, beside the
+    parts the gate made for it with no own text (a secret path it names in `cat ~/.kube/config`, a string literal in
+    its code). A rule that matches such a line as before names its one command, so the line is decided as before,
+    as a line of one part is."""
+    texts = {t for p in _each_part(c) for t in (p.own, *p.setters) if t is not None}
+    return len(texts) < 2
+
+
+def _line_own_test(c: Classification, pol: Mapping, ctx: Mapping) -> Callable[[str, list[str]], bool]:
+    """The test a rule that would lower a compound line passes on top of matching the line (#394), as a test of (the
+    rule's decision, its `command` patterns). They must match the own text of every simple command that carries the
+    line's category or is as severe as the combined result, so a regex written for one command cannot lower a line
+    whose deciding command it does not name. The combined result is one of these: the deciding command's part, or a
+    part the gate made (a secret on the line, the opaque_exec reading of a `$".."` line) with no own text, and then
+    no such rule lowers the line. They must also match every other part that alone would get a stricter outcome than
+    the rule's decision, by its category line and the matrix or by the rules (a rider: `rm -rf build && git push
+    --force origin main` under an allow rule for the push), and every command that changes the shell for the
+    commands after it (Classification.setters: `export GIT_SSH_COMMAND=$X; git push ..`)."""
+    parts, top = list(_each_part(c)), _severity(c)
+    core = {id(p) for p in parts if p.category == c.category or _severity(p) >= top}
+    setters = list(dict.fromkeys(t for p in parts for t in p.setters))
+    bare = {**pol, "gates": {**pol["gates"], "rules": []}}
+    raises = any(r["decision"] != "allow" for r in pol["gates"].get("rules") or [])   # an allow rule only lowers
+    alone: dict[tuple, int] = {}
+
+    def stricter(p: Classification, level: int) -> bool:
+        # The part alone, without the parts it was built from (each is tested in turn): no rule lowers it here.
+        # Parts alike decide alike, so a long line of the same few commands is decided a few times.
+        text = p.own if p.own is not None else p.command
+        key = (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.tool, p.summary, p.target, p.text,
+               p.title, p.text_file, text, tuple(p.signals))
+        if key not in alone:
+            q = replace(p, parts=[], command=text, _command_views=[])
+            out = OUTCOMES.index(decide(q, bare, ctx).outcome)
+            alone[key] = max(out, OUTCOMES.index(decide(q, pol, ctx).outcome)) if raises else out
+        return alone[key] > level
+
+    def test(decision: str, patterns: list[str]) -> bool:
+        regexes, seen, level = [re.compile(x) for x in patterns], {}, OUTCOMES.index(decision)
+
+        def named(t: str | None) -> bool:
+            if t not in seen:
+                seen[t] = t is not None and any(rx.search(t) for rx in regexes)
+            return seen[t]
+        return all(named(t) for t in setters) and \
+            all(named(p.own) or (id(p) not in core and not stricter(p, level)) for p in parts)
+    return test
+
+
 def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classification, str]]:
     """Each part of the classification (the combined result first, then every simple command it was built
     from) with the reserved or deny entry that matches it (D-075): a compound line is denied when any simple
@@ -5511,17 +5867,30 @@ def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classificatio
     return [(p, hit) for p in _each_part(c) if (hit := _list_matches(entries, p, line))]
 
 
-def _override_deny(c: Classification, gates: Mapping) -> tuple[Classification, str, str] | None:
+def _override_deny(c: Classification, gates: Mapping,
+                   passed: list[Mapping] | None = None) -> tuple[Classification, str, str] | None:
     """The first part of the line, below the combined result, that a category line or rule denies as it would
     deny that command alone (#191): its category's line, then the first rule that matches it; or a deny rule
-    whose `command` regex matches only a decoded view of the line (#136). ``(part, why, step)`` or None."""
+    whose `command` regex matches only a decoded view of the line (#136). ``(part, why, step)`` or None.
+    With ``passed`` (#394), an allow, log or ask rule keyed on `command` that matches must also match the part's own
+    text, or it is passed over and added to ``passed``: a rule written for another command on the line does not lift
+    the part's deny. Deny rules match as before, so every part denied without this test is denied with it."""
     cats, rules = gates.get("categories") or {}, gates.get("rules") or []
     if not (cats or rules):
         return None
     line = _line_matcher(c)
     for p in list(_each_part(c))[1:]:
         out, why, step = cats.get(p.category), f"category {p.category}", "category"
-        first = next((r for r in rules if _rule_matches(r["match"], p)), None)
+        first = None
+        for r in rules:
+            if not _rule_matches(r["match"], p):
+                continue
+            if passed is not None and r["decision"] != "deny" and "command" in r["match"] and not (
+                    p.own is not None and any(re.search(str(x), p.own) for x in _as_list(r["match"]["command"]))):
+                passed.append(r)
+                continue
+            first = r
+            break
         if first is not None:
             out, why, step = first["decision"], first["reason"], "rule"
         if out != "deny":
@@ -5602,10 +5971,40 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     over everything, and so does a category line or rule that denies any part of a compound line. A line
     with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
     `context` may carry `spent_today` for the daily budget.
+
+    On a compound line, a rule keyed on `command` that would lower the line (its decision is below the matrix cell
+    and category line, or it is an allow or log rule that names opaque_exec) must match the line as before and also
+    name each command that decides the line, each that would be stricter alone and each that changes the shell state
+    for the rest (#394, _line_own_test). A rule that fails is passed over, and the rule step keeps the stricter of
+    the first match, as before, and the rule found after it. A rule passed over never names opaque_exec for the
+    floor. The #191 pass asks the same of a rule that would lift a part's deny, so it denies each part it denied
+    before. So that pass is never looser than deciding as before. When it passes a rule over, the line is also
+    decided as before, and that decision stands unless the other is stricter, reason and all. That pass reads rules
+    and patterns the decision before never reached (a regex past the first match, a rule after the one skipped), so
+    when it fails, the line is decided as before, which then fails only where it failed before. A line of one simple
+    command, beside parts the gate made for it, is decided as before (_one_text).
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
-    gates, budget, posting = pol["gates"], pol["budget"], pol["posting"]
     ctx = dict(context or {})
+    if _one_text(c):
+        return _decide(c, pol, ctx, None)
+    passed: list[Mapping] = []
+    try:
+        d = _decide(c, pol, ctx, passed)
+    except Exception:
+        return _decide(c, pol, ctx, None)
+    if passed:
+        before = _decide(c, pol, ctx, None)
+        if OUTCOMES.index(d.outcome) <= OUTCOMES.index(before.outcome):
+            return before
+    return d
+
+
+def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | None) -> Decision:
+    """decide() under normalized policies. With ``passed``, a rule that would lower a compound line must also pass
+    the own text test, and each rule that test passes over is added to ``passed`` (#394): each step keeps the
+    stricter outcome, so the decision is never looser than without. Without ``passed``, as before #394."""
+    gates, budget, posting = pol["gates"], pol["budget"], pol["posting"]
     eff = _scoped(c, gates.get("scopes") or {})
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
@@ -5616,12 +6015,38 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     opaque_named = gates.get("categories", {}).get("opaque_exec") in below_ask
     if eff.category in gates.get("categories", {}):
         outcome, reason, rule = gates["categories"][eff.category], f"category {eff.category}", "category"
+
+    def names_opaque(r: Mapping | None) -> bool:
+        return r is not None and r["decision"] in below_ask and \
+            "opaque_exec" in [str(x) for x in _as_list(r["match"].get("category", []))]
+
+    # The first rule that matches (`first`), and with ``passed`` the first that also passes the own text test when
+    # it would lower the line (`picked`, #394). Rules that keep or raise the outcome match as before.
+    first: Mapping | None = None
+    picked: Mapping | None = None
+    own: Callable[[str, list[str]], bool] | None = None
+    base = OUTCOMES.index(outcome)
     for r in gates.get("rules") or []:
-        if _rule_matches(r["match"], eff):
-            outcome, reason, rule = r["decision"], r["reason"], "rule"
-            opaque_named = opaque_named or (r["decision"] in below_ask and "opaque_exec" in
-                                            [str(x) for x in _as_list(r["match"].get("category", []))])
-            break
+        if not _rule_matches(r["match"], eff):
+            continue
+        first = first or r
+        if passed is not None and eff.parts and "command" in r["match"] and \
+                (OUTCOMES.index(r["decision"]) < base or names_opaque(r)):
+            own = own or _line_own_test(eff, pol, ctx)
+            if not own(r["decision"], [str(x) for x in _as_list(r["match"]["command"])]):
+                passed.append(r)
+                continue
+        picked = r
+        break
+    # The stricter of the two steps stands, the first rule's when they are alike. A rule passed over does not name
+    # opaque_exec for the floor, and a later rule does so only when the first one does too.
+    chosen = first
+    if first is not None and picked is not first and \
+            OUTCOMES.index(picked["decision"] if picked else outcome) > OUTCOMES.index(first["decision"]):
+        chosen = picked
+    if chosen is not None:
+        outcome, reason, rule = chosen["decision"], chosen["reason"], "rule"
+    opaque_named = opaque_named or (names_opaque(first) and names_opaque(picked))
 
     def bump(level: str, why: str, step: str):
         # A higher level takes over. An equal one adds its reason, and names itself as the
@@ -5668,17 +6093,58 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     violations: list[str] = []
     unseen = body_unseen(eff)
-    applies = eff.category in (posting.get("applies_to") or POSTING_DEFAULT)
-    if not applies and eff.category in ("github_close", "vcs_merge"):
-        applies = bool(eff.text or eff.title or unseen)  # #326, #397: a close or merge carrying text publishes it
-    if applies and (eff.text or eff.title or unseen):
-        violations = check_post(eff.text, posting, title=eff.title, agents=pol.get("agents") or [],
-                                exposure=eff.exposure)
-        violations += check_scrub(eff.text, pol.get("scrub"), title=eff.title, exposure=eff.exposure)  # D-033
-        if unseen:  # #208: the checks above saw only part of the post, so they cannot pass it
-            violations.append(UNSEEN_BODY)
-        if violations:
-            bump("ask", "posting rules: " + "; ".join(violations), "posting")
+    applies_to = posting.get("applies_to") or POSTING_DEFAULT
+    # Whether the combined classification alone would run the checks (kept for the line-wide
+    # unseen note below): its category is under applies_to, or it is a close or merge carrying
+    # text (#326, #397).
+    line_applies = eff.category in applies_to or (eff.category in ("github_close", "vcs_merge")
+                                                  and (eff.text or eff.title or unseen))
+
+    def post_unseen(p: Classification) -> bool:
+        """One part's unseen body (#208): a body file nobody read into its text, or its own
+        unseen_body signal. _combine gives the part it picks every part's signals, so this reads
+        the ones it carried before (own_signals). A part given them some other way counts a
+        signal a part below it also carries as that part's, not its own."""
+        if p.text_file and not p.text and (p.category in OUTBOUND or p.category == "vcs_merge"):
+            return True
+        if p.own_signals is not None:
+            return "unseen_body" in p.own_signals
+        return "unseen_body" in p.signals and not any(
+            "unseen_body" in q.signals for q in _each_part(p) if q is not p)
+
+    # #396: the checks run on every post on the line, not only on the dominant part's text, so a
+    # clean first post cannot carry a second one past the footer, the forbidden words and the
+    # scrub. A part counts when its category is under applies_to (a close or merge carrying text
+    # counts, #326, #397) and it carries text, a title or an unseen body. The combined
+    # classification's own violations and the line-wide unseen note stay bare and are all listed;
+    # another part's are named after it, and only so many of those are listed (_LISTED_VIOLATIONS)
+    # that a line of many posts keeps its reason and its card short.
+    checked, post_unseen_seen = False, False
+    named: list[str] = []
+    for p in _each_part(eff):
+        p_unseen = post_unseen(p)
+        if p.category not in applies_to and not (p.category in ("github_close", "vcs_merge")
+                                                 and (p.text or p.title or p_unseen)):
+            continue
+        if not (p.text or p.title or p_unseen):
+            continue
+        checked = True
+        found = check_post(p.text, posting, title=p.title, agents=pol.get("agents") or [],
+                           exposure=p.exposure)
+        found += check_scrub(p.text, pol.get("scrub"), title=p.title, exposure=p.exposure)  # D-033
+        if p_unseen:  # the checks above saw only part of this post, so they cannot pass it
+            found.append(UNSEEN_BODY)
+            post_unseen_seen = True
+        if p is eff:
+            violations += found
+        else:
+            named += [f"{p.summary or p.category}: {v}" for v in found]
+    if unseen and not post_unseen_seen and (checked or line_applies):
+        violations.append(UNSEEN_BODY)  # a body on a part the posting rules do not cover is still unseen
+    room = max(_LISTED_VIOLATIONS - len(violations), 0)
+    violations += named[:room] + ([f"and {len(named) - room} more on other posts"] if len(named) > room else [])
+    if violations:
+        bump("ask", "posting rules: " + "; ".join(violations), "posting")
 
     # Operator floor (P11): outside the principal model, cannot be lowered by policy.
     if eff.reversibility == "irreversible" and eff.exposure == "public" and eff.third_party:
@@ -5693,7 +6159,7 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
 
     # #191: a category line or rule that would deny a part alone denies the line, as a deny entry does (D-075).
-    if outcome != "deny" and (part := _override_deny(eff, gates)):
+    if outcome != "deny" and (part := _override_deny(eff, gates, passed)):
         p, why, step = part
         outcome, reason, rule = "deny", f"denied by policy ({why}: {p.summary or p.category})", step
     if (denied := _part_hits(gates.get("deny") or [], eff)):
@@ -5703,10 +6169,12 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
                  reserved=list(dict.fromkeys((p.category, p.target) for p, _ in reserved)))
     if "locale translation" in c.signals and c.category != "opaque_exec":
         # A $".." word can turn into any code (#136): decide the line as opaque_exec too, and keep the stricter.
-        # `replace` keeps the parts as classifications, so their deny and reserved entries still apply.
+        # `replace` keeps the parts as classifications, so their deny and reserved entries still apply. That
+        # reading is the gate's, not a command's, so it has no own text: no rule that would lower it passes the
+        # own text test on a compound line (#394), while a line of one part still matches its command text.
         rev, exp, third = CATEGORIES["opaque_exec"]
-        alt = decide(replace(c, category="opaque_exec", reversibility=rev, exposure=exp, third_party=third,
-                             signals=["indirection"]), pol, ctx)
+        alt = _decide(replace(c, category="opaque_exec", reversibility=rev, exposure=exp, third_party=third,
+                              signals=["indirection"], own=None), pol, ctx, passed)
         if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
             return alt
     return d
@@ -6315,6 +6783,13 @@ def normalize_scrub(raw: Mapping | None, names: Iterable[str] = ()) -> dict:
             "rules": rules, "allow": [str(a).lower() for a in cfg.get("allow") or []]}
 
 
+@functools.lru_cache(maxsize=16)
+def _scrub_compiled(patterns: tuple[str, ...]) -> tuple[re.Pattern, ...]:
+    """The scrub patterns, compiled once (#396). A line is scrubbed once per post on it, and a policy with more
+    patterns than the `re` module's cache keeps would compile every one of them again for each post."""
+    return tuple(re.compile(p, re.I) for p in patterns)
+
+
 def check_scrub(text: str, scrub: Mapping | None, *, title: str = "", exposure: str = "public") -> list[str]:
     """Internal identifiers found in outbound text, as ``"<label>: <match>"``. Empty = clean."""
     if not scrub or not scrub.get("enabled") or exposure not in (scrub.get("exposures") or []):
@@ -6324,8 +6799,9 @@ def check_scrub(text: str, scrub: Mapping | None, *, title: str = "", exposure: 
         return []
     allow = set(scrub.get("allow") or [])
     out: list[str] = []
-    for r in scrub.get("rules") or []:
-        for m in re.finditer(r["pattern"], both, re.I):
+    rules = scrub.get("rules") or []
+    for r, rx in zip(rules, _scrub_compiled(tuple(str(r["pattern"]) for r in rules))):
+        for m in rx.finditer(both):
             hit = m.group(0)
             if hit.lower() in allow:
                 continue
