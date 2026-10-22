@@ -1523,6 +1523,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   it changes), frames it as a bus message with author `bus:<seat>`, and runs the peer policy: `remote` is held by
   default. The channel posts a reply only for a turn that an auto-delivered message started. The relay signs with its
   own key only on a post it marks `{"relay": {"composed_for": seat}}`, and readers never count that as the seat.
+  *Amendment 2026-10-22 (#455):* the relay validates numeric HTTP query parameters before SQLite sees them.
+  Message and inbox `since` and verification `to` range from 0 to 2^63 - 1; verification `from` starts at 1.
+  Message and inbox page limits range from 1 to 1,000. Invalid values answer 422 through FastAPI's query
+  validation, as malformed integers already did. This prevents SQLite overflow errors from answering 500 and
+  negative limits from lifting the page cap. Rejected: clamping invalid values, which silently changes the
+  requested range, or catching database overflow after dispatch, which leaves negative limits unbounded.
 - **Keys:** `$EXO_HOME/keys/registry.json` (0600) pins local signing keys (on creation in `keys/`), bus seat keys,
   and principal ids. `exo log verify` and `exo memory verify` pass it as `trusted`: an unpinned key fails, and so
   does a seat signing as another pinned name. `exo keys` lists and pins.
