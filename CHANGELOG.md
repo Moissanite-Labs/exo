@@ -18,6 +18,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
   the node set they were built from. A `reload()`, or a `refresh()` that sees a node file change, makes a new set
   and the next `find` builds them again. A repeat query tokenizes only itself. Scores and order are unchanged.
+- A thread's environment file is a secret store, like the process's own (#313).
+  `/proc/<pid>/task/<tid>/environ` holds the same environment as `/proc/<pid>/environ`, another
+  process's included, but the gate read it as an ordinary file, literal path and glob alike.
+  Both the sensitive-path list and the `/proc/<pid>/<glob>` check now cover the `task/<tid>/`
+  form, also with a glob in the `task` folder itself (`cat /proc/1/*/*/environ`). The search
+  tools leave it out of a walk. Other files under `task/` keep their class. Such a path is
+  decided as `/proc/<pid>/environ` already was, so some lines decide lower than before. A file
+  tool on it asks under a `read` or `local_write` deny, a matrix deny cell for a read no longer
+  applies, and on a compound line the credentials part can hide another part's matrix deny or
+  a second store's `target:` entry (a post beside it keeps its violations, since #396). Beside a store write the line is
+  `credentials`, so a seat delegated `credentials` may answer it, where only the principal
+  answered. The D-038 amendment and `docs/GATE.md` "A thread's environment file" list them.
 - The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
   the footer, the forbidden words and the scrub on the combined classification's text. A compound
   line takes that text from its most severe part. So a post that passed, put first, carried a
