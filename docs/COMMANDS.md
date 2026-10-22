@@ -169,7 +169,12 @@ are different things: the first asks the agent to write a note, the second write
 ## Part 2. The `exo` CLI
 
 Entry point: `exo = "exo.cli:main"` in `pyproject.toml`. The parser is built in `build_parser` in
-`src/exo/cli.py`, which also calls the `register` function of each module below. `exo --version` prints the version.
+`src/exo/cli.py`. A command that lives in another module has a row in its `LAZY` table: the module, the handler and
+the help line. `exo` imports that module, and calls its `register` function, only when the command runs (#260). The
+other commands keep their name and help line, so usage, errors and `exo --help` read the same. `exo --help`,
+`exo --version` and bare `exo` import none of these modules, and a module that fails to import breaks only its own
+commands. `build_parser()` with no command builds every command and imports every module.
+`exo --version` prints the version.
 
 ### Choosing a store
 
@@ -236,7 +241,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the newest thread with messages in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |
 | `exo --version` | Package version, plus the git sha for a checkout install. | none | `version_string` in `src/exo/update_cmd.py` |
-| `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`), prints `old -> new`, then a quick self-check (import, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing | `cmd_update` in `src/exo/update_cmd.py` |
+| `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`), prints `old -> new`, then a quick self-check (import of every command's module, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing | `cmd_update` in `src/exo/update_cmd.py` |
 | `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
 | `exo stop` | Stops the background core (exod) that `exo web` or `exo serve` started. Reads `$EXO_HOME/run/exod.pid`. When no core answers it clears the stale socket and pid file, unless a core holds the socket's start lock: it then says the core is starting and removes nothing. | none (`-h` prints help and any other word is an error: neither stops the core) | `stop_core` in `src/exo/ensure_core.py` |
 | `exo web` | The command centre web client. Joins a running core (exod, or a terminal window's) or starts `exo serve` in the background (D-036). | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342), `--no-open` (do not open a browser tab) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |

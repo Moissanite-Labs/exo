@@ -329,6 +329,97 @@ def test_a_replay_fault_over_http_is_a_typed_reply(sock_dir):
     assert hello["protocol"] == s.PROTOCOL_VERSION
 
 
+async def _raw_http(path, request: bytes) -> tuple[bytes, bytes]:
+    """One raw request on its own connection: the reply's head, then its body or an event stream's first two frames."""
+    r, w = await asyncio.open_unix_connection(str(path))
+    try:
+        w.write(request)
+        await w.drain()
+        head = await asyncio.wait_for(r.readuntil(b"\r\n\r\n"), 5)  # a dropped connection fails here
+        if b"text/event-stream" not in head:
+            return head, await asyncio.wait_for(r.read(), 5)
+        return head, b"".join([await asyncio.wait_for(r.readuntil(b"\n\n"), 5) for _ in range(2)])
+    finally:
+        w.close()
+
+
+# Numbers in a request are ASCII digits up to 2^63 - 1, SQLite's largest integer (#264). Before, a word or a float
+# got no reply (the handler swallowed int()'s ValueError), and nor did a length of -1 (readexactly refused it). A
+# negative since replayed from the start, and 2^63 opened the stream, failed in the durable replay and left its
+# subscription in the hub.
+BAD_NUMBERS = {
+    "length-word": (b"POST /command HTTP/1.1\r\nContent-Length: abc\r\n\r\n", "bad Content-Length"),
+    "length-negative": (b"POST /command HTTP/1.1\r\nContent-Length: -1\r\n\r\n", "bad Content-Length"),
+    "length-float": (b"POST /command HTTP/1.1\r\nContent-Length: 1e3\r\n\r\n", "bad Content-Length"),
+    "length-64-bit": (b"POST /command HTTP/1.1\r\nContent-Length: 9223372036854775808\r\n\r\n", "bad Content-Length"),
+    "length-5000-digits": (b"POST /command HTTP/1.1\r\nContent-Length: " + b"9" * 5000 + b"\r\n\r\n",
+                           "bad Content-Length"),  # past int()'s 4,300-digit limit
+    "since-word": (b"GET /events?since=abc HTTP/1.1\r\n\r\n", "bad since or Last-Event-ID"),
+    "since-negative": (b"GET /events?since=-5 HTTP/1.1\r\n\r\n", "bad since or Last-Event-ID"),
+    "since-superscript": (b"GET /events?since=%C2%B2 HTTP/1.1\r\n\r\n", "bad since or Last-Event-ID"),  # isdigit, not int
+    "since-64-bit": (b"GET /events?since=9223372036854775808 HTTP/1.1\r\n\r\n", "bad since or Last-Event-ID"),
+    "since-padded-64-bit": (b"GET /events?since=" + b"0" * 5000 + b"9223372036854775808 HTTP/1.1\r\n\r\n",
+                            "bad since or Last-Event-ID"),  # leading zeros do not hide the value
+    "last-id-word": (b"GET /events HTTP/1.1\r\nLast-Event-ID: nope\r\n\r\n", "bad since or Last-Event-ID"),
+    "last-id-negative": (b"GET /events?since=3 HTTP/1.1\r\nLast-Event-ID: -1\r\n\r\n", "bad since or Last-Event-ID"),
+}
+
+
+@pytest.mark.parametrize("case", BAD_NUMBERS)
+def test_a_bad_number_in_a_request_gets_400(sock_dir, case):
+    request, error = BAD_NUMBERS[case]
+
+    async def main():
+        srv = HttpServer(Dispatcher(EchoEngine(), hub=_durable_hub()), heartbeat=0.2)
+        await srv.start_unix(sock_dir / "exod.sock")
+        try:
+            return await _raw_http(sock_dir / "exod.sock", request), len(srv.dispatcher.hub._subs)
+        finally:
+            await srv.close()
+
+    (head, body), subs = _run(main())
+    assert head.startswith(b"HTTP/1.1 400 Bad Request\r\n") and b"application/json" in head
+    assert json.loads(body) == {"error": error}
+    assert subs == 0
+
+
+def test_good_numbers_in_a_request_still_work(sock_dir):
+    path = sock_dir / "exod.sock"
+    hello = s.Command.of(s.Hello(client="t"), id="h1").to_json().encode()
+
+    async def main():
+        srv = HttpServer(Dispatcher(EchoEngine(), hub=_durable_hub()), heartbeat=0.2)
+        await srv.start_unix(path)
+        try:
+            async with Client(socket=str(path)) as c:
+                for _ in range(3):
+                    await c.call(s.SessionCreate())  # seq 1, 2, 3
+            return [await _raw_http(path, req) for req in (
+                b"POST /command HTTP/1.1\r\nContent-Length: %d\r\n\r\n%s" % (len(hello), hello),
+                b"POST /command HTTP/1.1\r\nContent-Length: %025d\r\n\r\n%s" % (len(hello), hello),  # 1*DIGIT
+                b"POST /command HTTP/1.1\r\nContent-Length: %d\r\n\r\n" % (8 * 1024 * 1024 + 1),
+                b"GET /events?since=1 HTTP/1.1\r\n\r\n",
+                b"GET /events?since=%025d HTTP/1.1\r\n\r\n" % 1,  # leading zeros are digits too
+                b"GET /events?since=1 HTTP/1.1\r\nLast-Event-ID: 2\r\n\r\n",  # the later of the two wins
+                b"GET /events?since=2 HTTP/1.1\r\nLast-Event-ID: 0\r\n\r\n",
+                b"GET /events?since=2 HTTP/1.1\r\nLast-Event-ID:\r\n\r\n",  # empty is no header
+                b"GET /events?since=9223372036854775807 HTTP/1.1\r\n\r\n",  # the largest is a quiet stream
+            )]
+        finally:
+            await srv.close()
+
+    replies = _run(main())
+    for head, body in replies[:2]:  # the plain and the zero-padded Content-Length
+        assert head.startswith(b"HTTP/1.1 200") and s.Response.from_json(body).ok
+    big_head, big_body = replies[2]
+    assert big_head.startswith(b"HTTP/1.1 413") and json.loads(big_body) == {"error": "body too large"}
+    firsts = [b"id: 2\n", b"id: 2\n", b"id: 3\n", b"id: 3\n", b"id: 3\n", b": ping\n"]
+    for (head, frames), first in zip(replies[3:], firsts, strict=True):
+        assert head.startswith(b"HTTP/1.1 200") and b"text/event-stream" in head
+        comment, _, frame = frames.partition(b"\n\n")
+        assert comment.startswith(b": exod instance=") and frame.startswith(first)
+
+
 def test_hello_names_a_heartbeat_only_where_the_transport_pings(sock_dir):
     """D-060: ``GET /events`` pings at the server's own interval, and hello says that interval. Stdio and an
     in-process caller get no pings, so their hello claims no heartbeat (#226)."""

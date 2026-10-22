@@ -75,7 +75,7 @@ picks the seat, `--title TEXT` names a new thread. Keys:
 |---|---|
 | `ctrl+c` | Stops the running turn. Your draft stays. With nothing running it only shows a hint that `ctrl+q` quits; a single press never quits. `/stop` does the same. |
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
-| typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
+| typing while a turn runs | Steers it: the text lands at the next tool step. The line shows `steer sending`, then `steer queued` while waiting and `steer delivered` when it reaches the conversation. The queued count stays beside the composer while you type. Delivered means received, not yet acted on. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
 | `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>` | List the subagents your session handed work to, watch one's session, send a running one a note (it lands at its next tool step) or stop it. A finished subagent answers with a clear error and nothing changes. The parent's receipt says it was steered or stopped. On the web page the Tasks cards have Open, Steer and Stop. |
 | `F6` | Loads 60 earlier messages when the top of the transcript says "N earlier messages" (with `/layout inverse` it is the bottom). Scrolling to that end does the same. |
@@ -298,7 +298,8 @@ Both clients use `o` to allow once, `a` to choose always, and `d` to deny with a
 including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
 it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
 even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
-`ctrl+f` to move to it. A card goes away the moment the request is closed, whoever closed it, and also when you stop
+`ctrl+f` to move to it. In the terminal, the card leads with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`:
+press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
@@ -344,14 +345,27 @@ What the gate asks about, and why:
   against each command the gate reads on a line, so with pushes denied `git push origin main && rm -rf build` is
   denied, not asked about the delete. A `categories: {X: deny}` setting or a rule with `decision: deny` holds the
   same way (#191).
+- **An allow rule names the command it allows (#394).** A rule with `decision: allow` or `log` and a `command:` regex
+  lowers a line of several commands, or a command with another run inside it (`ssh host '...'`, `bash -c '...'`,
+  `eval`), only when the regex matches the line, as before, and also the command that decides the line, as you wrote
+  it. So a rule for `^git status` no longer allows `git status; git push --force origin main`, while a rule for
+  `git push --force origin main` still allows `cd repo && git push --force origin main`. The regex must also match any
+  other command on the line that would be asked about or stopped alone (`rm -rf build`), and any command that sets the
+  shell up for the next one (`export`, `alias`, `hash`, a function). This change never makes a decision looser than it
+  was: a rule that did not match a line before still does not. So a rule with anchors such as
+  `^git push --force origin main$` still covers only the push on its own. A rule written for a whole line such as
+  `^git push origin main && git push origin dev$` now has to name each command too, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`. Ask and deny rules still see the
+  whole line, but an ask rule lifts a deny only from the commands it names. `docs/GATE.md` has the details.
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
-  standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
-  covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
-  #125) adds it. The gate resolves symbolic links in an absolute path (#130), but otherwise goes by the path as the
-  command spells it, so some writes are not seen as store writes yet: a relative name such as `gates.yaml` written
-  by a tool whose working folder is `policies/`, a glob spelling, a hard link, and a store file opened on a numbered
-  file descriptor and written back through `/dev/fd/3` (#217). A brace spelling (`polic{i..i}es`) is seen (#224).
-  `docs/GATE.md` lists the rest.
+  standing grants), the ledger, `keys/`, seat files, the core's socket, or the signed-update trust pin in `update/`
+  (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. Reading your policies does
+  not ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves
+  symbolic links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some
+  writes are not seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working
+  folder is `policies/`, a glob spelling, a hard link, and a store file opened on a numbered file descriptor and
+  written back through `/dev/fd/3` (#217). A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md` lists
+  the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
   This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length
