@@ -1063,6 +1063,9 @@ def _literal_heredoc(toks: list) -> str | None:
 # one fell is read again and spends it again. Every $( ) is listed at each level above it, so a nest of n levels was
 # classified about n**4 / 24 times without this.
 _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_shell_seen", default=None)
+# The folder a line entered by `cd` into the store or a descriptor folder (_classify_simple's store_cwd and fd_cwd),
+# for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or ""), or None.
+_cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_cd_into", default=None)
 
 
 def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
@@ -4240,7 +4243,8 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
             return classify_shell(cmd, depth)
         finally:
             _shell_seen.reset(token)
-    key = ("shell", cmd, depth, _budgets())   # the budgets only fall: a line met after one fell is read again
+    # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it.
+    key = ("shell", cmd, depth, _budgets(), _cd_into.get())
     if key not in seen:
         own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
@@ -4277,6 +4281,10 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         return _combine([_unread_nest(), classify_shell(rest, depth)], cmd) if rest else _unread_nest()
     cmds, subs, func = _parse(cmd or "")
     ctx: dict = {"subs": subs}
+    if into := _cd_into.get():            # a $( ) on a line that entered the store runs in it (#465)
+        ctx["store_cwd"] = True
+        if into[1]:
+            ctx["fd_cwd"] = into[1]
     parts: list[Classification] = []
     prev: _Cmd | None = None
     slot = _own_text.get() or [None]      # classify_shell gives each line its own
@@ -4294,9 +4302,16 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     # A $( ) runs where the gate no longer knows which command it is in, so on a line where one has a stdin of its
     # own, a shell inside a $( ) reads a stdin the gate cannot name (`curl .. | echo $(bash)`).
     given = bool(subs) and any(k.fed or k.piped_in or _own_stdin(k) for k in cmds)
-    for sub in subs:
-        got = [classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd)]
-        parts += _given_stdin(got, lambda: None, ctx) if given else got
+    # #465: a $( ), backticks or <( ) runs in the folder a `cd` on the line entered, so a write there is a store write
+    # as it is unwrapped. As for the line's own commands, neither the order nor a subshell is followed: fails closed.
+    token = _cd_into.set((True, ctx.get("fd_cwd") or "")) if subs and ctx.get("store_cwd") else None
+    try:
+        for sub in subs:
+            got = [classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd)]
+            parts += _given_stdin(got, lambda: None, ctx) if given else got
+    finally:
+        if token is not None:
+            _cd_into.reset(token)
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))

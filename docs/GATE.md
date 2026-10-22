@@ -1544,7 +1544,9 @@ Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
 `sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `git -C <store>` with a
-writing subcommand, and any writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
+writing subcommand, and any writing command after `cd` into the store, also one inside a `$( )`, backticks or
+`<( )` on that line (#465: `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`). `rm -rf ~/.exo` counts (an
+ancestor). A
 `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. Reads of the store stay `read`, except `keys/` and the run folder's secrets

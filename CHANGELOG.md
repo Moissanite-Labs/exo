@@ -198,6 +198,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate store protection (#465, D-038 amendment): after `cd` into the store or a descriptor folder, a write inside
+  a `$( )`, backticks or `<( )` on the line is a store write, as it is unwrapped. Each substitution was classified
+  as a fresh line, so `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the `x=$( )`, `cat <( )` and
+  backtick forms, `cd ~/.exo/state && echo "$(cp /tmp/g.json approval-grants.json)"` and
+  `cd /dev && echo $(cp /tmp/evil fd/3)` were allowed with no ask under the default policy, and rewrote the gate's
+  own policy or grant file. They now ask the principal alone. Reads in such a substitution stay reads.
 - Gate (#436, D-038 amendment): `for NAME do LIST; done` and `select NAME do LIST; done`, with no `in` list and no
   `;` before `do`, are read as `for NAME; do LIST; done`. Bash and POSIX accept that form and run the loop over the
   positional parameters, but the gate read the body as words of the `for` command and classified nothing in it, so

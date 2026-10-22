@@ -1009,6 +1009,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
   `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
   argument, and a path held in a variable or made by a command (`F=~/.exo/update/allowed_signers; cp x "$F"`).
+  *Amendment 2026-10-22 (issue #465):* a writing command after `cd` into the store is a store write, but the `cd`
+  reached only the line's own commands. Each `$( )`, backticks and `<( )` body was classified as a fresh line, so
+  `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the `x=$( )`, `cat <( )`, backtick and nested forms,
+  `cd ~/.exo/state && echo "$(cp /tmp/g.json approval-grants.json)"` and `cd /dev && echo $(cp /tmp/evil fd/3)`
+  were allowed with no ask, under the default policy too, while the unwrapped `cp` asked the principal. Bash runs
+  the substitution in the folder the `cd` entered. Now a substitution on a line that entered the store or a
+  descriptor folder is classified in that folder, so its writes are store writes as they are unwrapped, with the
+  descriptor folder as the target after `cd /dev`. Its reads stay reads (`echo $(cat gates.yaml)`). As for the
+  line's own commands, neither the order of the commands nor a subshell is followed, so this fails closed: a
+  `$( )` before the `cd` (`echo $(cp x gates.yaml); cd ~/.exo/policies`) counts too. Each text is still classified
+  once per depth in a call (#334), now once for each folder context as well, so the same `$( )` read outside the
+  store and in it on one line is read in both. A `bash -c` string, `eval` or a heredoc fed to a shell after the
+  `cd` already asked, since that command is itself a non-read command in the store. Every change makes a line
+  stricter or leaves it alone. GDNUMBERS465
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
