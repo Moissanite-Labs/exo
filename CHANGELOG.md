@@ -13,6 +13,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `unset` word the gate cannot read asks too, as a name or as an option: `unset $v`, `unset PAT?`,
   `unset {PATH,}` and `unset -${f}v PATH`. The exporters read their options the same way, so
   `export +x -f $V=` and `declare -${f}x $V=` ask as `export $V=` does.
+- Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
+  while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
+  acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
+  without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
