@@ -11,6 +11,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   process's included, but the gate read it as an ordinary file, literal path and glob alike.
   Both the sensitive-path list and the `/proc/<pid>/<glob>` check now cover the `task/<tid>/`
   form; other files under `task/` keep their class.
+- Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
+  while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
+  acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
+  without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
@@ -149,6 +153,38 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
+  name, and the change never makes a decision looser than before. The regex saw the whole line, so
+  `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under
+  `categories: {force_push: deny}`, and `{command: 'rm -rf build', decision: allow}` lifted
+  `categories: {github_post: deny}` from the post in `gh pr comment 3 --body hi && rm -rf build`. Each simple command on
+  a line now carries its own text, as written with its redirections, nested ones too (`$( )`, `bash -c`, `eval`, a
+  heredoc a shell reads, `ssh`). A rule that would lower a compound line (an allow or log rule below the line's matrix
+  cell and category line, an ask rule under a category deny, an allow or log rule that names `opaque_exec`) must still
+  match the line as before. Its regex must also cover every command that decides the line, every other command on the
+  line that would be stricter alone, and every command that changes shell state for later commands (an assignment,
+  `export`, `hash`, `alias`, `set -a`, `source`, `read`, a function definition and the like). Otherwise the rule is
+  passed over and the walk goes on, but the rule step keeps the stricter of the first match and the rule found after it,
+  and a rule passed over does not name `opaque_exec` for the floor. In the #191 pass an allow, log or ask rule lifts a
+  part's category deny only when it also names that part. When a rule is passed over, the line is also decided as
+  before, and that decision stands, reason and all, unless the new one is stricter. So under
+  `{command: 'git push --force origin main', decision: allow}` the push is still allowed after `cd repo`, but asks
+  beside `rm -rf build` or after `export GIT_SSH_COMMAND=$X`, and `gh pr comment 3 --body hi && rm -rf build` is denied
+  under `categories: {github_post: deny}` and `{command: 'rm -rf build', decision: ask}`. An anchored rule such as
+  `'^git push --force origin main$'` still matches no compound line, as before. `cd` is not a setter, and that cannot
+  loosen a decision, since the rule must still match the line. A part with no own text (an unread nest, a string literal
+  in code, the opaque_exec reading of a `$".."` line) passes no such test. A line of one simple command beside parts
+  the gate made for it with no own text (`cat ~/.kube/config`, where the secret path decides the line, or a string
+  literal in `node -e` code) is decided as before. A shell or interpreter that runs a pipe has
+  the pipeline as its text. Those texts hold at most four times the line's length plus 4 KB on one line, and a reader
+  past that has none, so a long pipeline into shells stays linear in memory. A command run inside another (an
+  `eval`, `bash -c` or `ssh` string, an `-x` or `--exec` value) must be named too, so `eval "$CMD"` now asks under
+  `{category: opaque_exec, command: '^eval', decision: allow}`. A rule written for a whole compound line, such as
+  `'^git push origin main && git push origin dev$'`, has to name each command too, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`. Until it does, that line logs, as
+  its matrix cell says. Rules that keep or raise the line, deny rules in the #191 pass and
+  the `reserved:` and `deny:` lists match the whole line and its decoded views as before. The ledger view leaves the own
+  text out.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
