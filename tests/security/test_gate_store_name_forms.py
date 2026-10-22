@@ -1,5 +1,5 @@
 """Store names split by an expansion (#225, #309, #341) or reached through `..` from run/jobs (#269), in the forms
-main dc341140 still allowed after #305 and #307.
+main 39cafcba still allowed after #305 and #307.
 
 #225: bash runs `cat .e$(:)nv` as `cat .env`. #307 reads each expansion in a secret-store name as empty and, between
 literal text, as `*` (_unknown_forms). Here that reading also takes a substitution at either end of a word as `*`,
@@ -55,7 +55,7 @@ def _asks(action):
     assert gate.decide(c, {"gates": {"categories": {"credentials": "allow", "read": "allow"}}}).outcome == "ask"
 
 
-# #225: each was read/allow (the tar lines shell/allow) on main dc341140.
+# #225: each was read/allow (the tar lines shell/allow) on main 39cafcba.
 SPLIT = [
     # a substitution at the end of a name, its output any text
     "cat ~/.config/gh/$(printf hosts.yml)",
@@ -91,7 +91,7 @@ SPLIT = [
     "cd ~/.e$(printf x)o/r$(printf u)n/jobs && grep -r x ..",
 ]
 
-# #341: the default word of an unknown variable may be the value. Each was read/allow on main dc341140.
+# #341: the default word of an unknown variable may be the value. Each was read/allow on main 39cafcba.
 DEFAULTS = [
     "cat ${x-.env}",
     "cat ${x:-.env}",
@@ -110,9 +110,13 @@ DEFAULTS = [
     "cat ${x:-$HOME/.e}xo/keys/seat",
     "cat ${x:-$HOME/.kube}/config",
     "cd ${x:-~/.kube} && cat config",
+    # on an array element
+    "cat ${x[0]:-.env}",
+    "cat ${x[@]:-~/.kube}/config",
+    "cat ${x[i+1]-~/.netrc}",
 ]
 
-# Asked already on main dc341140 (#307); kept beside the rows above, which read the same words more ways.
+# Asked already on main 39cafcba (#307); kept beside the rows above, which read the same words more ways.
 KEPT = [
     "cat .e$(:)nv",
     "cat ~/.n$(:)etrc",
@@ -156,7 +160,7 @@ def test_a_substitution_inside_a_store_name_in_code_asks(line):
     _asks({"tool": "execute_code", "args": {"code": f"import os\nos.system('{line}')"}})
 
 
-# Everyday expansions in words that cannot spell a store name keep main dc341140's class.
+# Everyday expansions in words that cannot spell a store name keep main 39cafcba's class.
 EVERYDAY = [
     ("cat notes$(date +%F).txt", "read"),
     ("cat notes-$(date +%F).log", "read"),
@@ -193,6 +197,10 @@ EVERYDAY = [
     ("cat ${OUT:-/tmp/out}/report.txt", "read"),
     ("cat ${1:-README.md}", "read"),
     ("cd ${DIR:-.} && cat config", "read"),
+    ("cat ${x[0]:-README.md}", "read"),
+    # a name that could be `..` outside the store
+    ("grep -r x ./.?", "read"),
+    ("cd ~/project && ls .?/..", "read"),
 ]
 
 
@@ -201,7 +209,7 @@ def test_an_everyday_expansion_keeps_mains_class(cmd, main):
     assert gate.classify(sh(cmd)).category == main
 
 
-# #269: read/allow (the tar lines shell/allow) on main dc341140, in every layout.
+# #269: read/allow (the tar lines shell/allow) on main 39cafcba, in every layout.
 DOTDOT = [
     # a name split by a substitution (#225) or a glob that could be the run folder
     "tar -C {top} -czf - r$(:)un",
@@ -213,12 +221,17 @@ DOTDOT = [
     "cd {jobs} && grep -r . .`:`.",
     "cd {jobs} && grep -r . .?",
     "cd {jobs} && grep -r x $(echo .).",
+    "cd {jobs} && grep -r x ./.?",                 # after a `./`
+    "cd {jobs} && ls ./.?/",
+    "cd {jobs} && grep -r x .?/..",                # `.?/..` is `.`, or `../..` when `.?` is `..`
+    "cd {jobs} && grep -r x ./.?/..",
     # a `cd ..` written as a glob or split by a substitution
     "cd {jobs} && cd .$(:). && grep -r .",
     "cd {jobs} && cd ..$(:) && grep -r .",
     "cd {jobs} && cd $(:).. && grep -r .",
     "cd {jobs} && cd .? && grep -r .",
     "cd {jobs} && cd .[.] && grep -r .",
+    "cd {jobs} && cd .$(:). && cat jobs/1.log",      # as `cd {jobs} && cd .. && cat jobs/1.log` (JOBS below)
     # run/jobs reached by a split relative target below the folder that holds `run`
     "cd {top} && cd r$(:)un/jobs && grep -r x ..",
     # run/jobs, or a folder in it, spelt with a glob or a printing substitution below the store's own folder
@@ -242,7 +255,7 @@ DOTDOT = [
     "cd {jobs} && ls ../..",
 ]
 
-# Asked already on main dc341140 (#305); kept beside the rows above.
+# Asked already on main 39cafcba (#305); kept beside the rows above.
 DOTDOT_KEPT = [
     "cd {jobs} && cat ../exod.principal.k*",
     "cd {jobs} && cat ../exod*",
@@ -296,7 +309,6 @@ JOBS = [
     # main (#305) checks the run folder a `cd ..` reaches as its path, so these ask (fail closed)
     ("cd {jobs} && cd .. && cat jobs/1.log", "credentials"),
     ("cd {jobs} && cd .. && cd jobs && tail -f 3.log", "credentials"),
-    ("cd {jobs} && cd .$(:). && cat jobs/1.log", "credentials"),
 ]
 
 
@@ -307,8 +319,25 @@ def test_job_output_after_a_cd_into_jobs_keeps_mains_class(shape, main, store):
     assert gate.classify(sh(shape.format(top="~/.exo", jobs="~/.exo/run/jobs"))).category == main
 
 
+# Everyday lines that now ask, failing closed: read/allow (the cp line shell/allow) on main 39cafcba. GATE.md lists
+# them with the cost.
+FAIL_CLOSED = [
+    "cd ~/.exo/run/jobs && tail -f $(ls -t | head -1)",
+    "cd ~/.kube && echo $(date)",
+    "cd ~/.kube && kubectl get pods -n $(cat ns.txt)",
+    "cd ~/.exo && ls principals",
+    "cat ${x}rc",                                     # `.*rc` could be .netrc
+    "cp x state/$(date +%F).json",                   # could be state/approval-grants.json
+]
+
+
+@pytest.mark.parametrize("cmd", FAIL_CLOSED)
+def test_an_everyday_line_that_could_reach_a_store_asks(cmd):
+    _asks(sh(cmd))
+
+
 # A principal's store, which holds its run folder, by a relative name or target: read/allow (the tar line
-# shell/allow) on dc341140.
+# shell/allow) on main 39cafcba.
 PRINCIPALS = [
     "cd {home}/principals && grep -r x m$(:)e/r$(:)un",
     "cd {home} && grep -r x principals/me",
@@ -322,7 +351,7 @@ PRINCIPALS = [
     "cd {home}/principals && cd m?/r?n/jobs && grep -r x ..",
 ]
 
-# Asked already on main dc341140 (#305); kept beside the rows above.
+# Asked already on main 39cafcba (#305); kept beside the rows above.
 PRINCIPALS_KEPT = [
     "cd {home}/principals && grep -r x me/run",
     "cd {home} && cd principals && grep -r x me/run",
@@ -345,8 +374,8 @@ def test_a_principals_run_folder_by_a_relative_name_asks(shape, custom, tmp_path
     _asks(sh(shape.format(home=exo_home)))
 
 
-# #309: a store write split by an expansion. Each was shell/allow on main dc341140, or asked as delete,
-# opaque_exec (the redirection) or history_rewrite, which a policy may allow.
+# #309: a store write split by an expansion. Each was shell/allow on main 39cafcba (the `cd` lines read/allow), or
+# asked as delete, opaque_exec (the redirection) or history_rewrite, which a policy may allow.
 STORE_WRITES = [
     "cp x ~/.exo/polic$(:)ies/gates.yaml",
     "cp x ~/.exo/polic``ies/gates.yaml",
@@ -379,6 +408,7 @@ STORE_WRITES = [
     # the default word of an unknown variable (#341)
     "cp x ${x:-$HOME/.exo}/policies/a",
     'cp x "${x:-$HOME/.exo}/policies/a"',
+    "cp x ${x[0]:-$HOME/.exo}/policies/a",
 ]
 
 
@@ -392,12 +422,16 @@ def test_an_expansion_inside_a_store_write_asks(cmd):
     assert gate.decide(c, loose).outcome == "ask"
 
 
-@pytest.mark.parametrize("cmd", ["tee ~/.exo/key$(:)s/a", "cp x ~/.exo/ke$(:)ys/a", "cp x ~/.exo/$(printf keys)/a"])
-def test_a_substitution_inside_a_write_to_the_keys_folder_asks(cmd):
-    """keys/ is a secret store as well as protected, so a write there is credentials, as unsplit; the last was
-    shell/allow on dc341140."""
+@pytest.mark.parametrize("cmd,cat", [("tee ~/.exo/key$(:)s/a", "credentials"), ("cp x ~/.exo/ke$(:)ys/a", "credentials"),
+                                     ("cp x ~/.exo/$(printf keys)/a", "store_write"),
+                                     ("tee ~/.exo/k$(printf e)ys/a", "store_write")])
+def test_a_substitution_inside_a_write_to_the_keys_folder_asks(cmd, cat):
+    """keys/ is a secret store as well as protected: a write there that the empty reading names is credentials, as
+    unsplit (`cp x ~/.exo/keys/a`); one only the `*` reading reaches is store_write, the principal's alone. The
+    last two were shell/allow on main 39cafcba."""
     _asks(sh(cmd))
-    assert gate.classify(sh(cmd.replace("$(:)", ""))).category == gate.classify(sh(cmd)).category
+    assert gate.classify(sh(cmd)).category == cat
+    assert gate.classify(sh("cp x ~/.exo/keys/a")).category == "credentials"
 
 
 def test_the_seats_folder_is_read_once_per_call(home, monkeypatch):
@@ -419,6 +453,7 @@ def test_the_seats_folder_is_read_once_per_call(home, monkeypatch):
     calls.clear()
     gate.classify(sh("ls a*"))
     assert sum(p.endswith("seats") for p in calls) == 1        # a new call reads them again
+
 
 def _line(n: int) -> str:
     return ("cd ~/.kube && cat " + " ".join(f"d{i}/n$(:)o{i}.t`:`xt f{i}$((i+1)).log" for i in range(n)) +

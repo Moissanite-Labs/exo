@@ -1357,20 +1357,25 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   substitution as `*` at either end of a word too, except at its start with text after it (`$(pwd)/config` is not
   `*/config`), while a variable stays `*` only between literal text, as #307 had it (`cat $f` stays a read); one that
   starts a name part as `.*`, since output may start with the dot a glob's `*` does not match; and the default word
-  of an unknown variable (`${x:-word}`, `-`, `=`, `:=`, `+`, `:+`) as its value (#341). Its forms (`_unknown_words`,
-  once per spelling per call) feed the secret-store checks as before, the #192 working-folder targets and names, and
+  of an unknown variable (`${x:-word}`, `-`, `=`, `:=`, `+`, `:+`, on an array element too) as its value (#341).
+  Its forms (`_unknown_words`, once per spelling per call) feed the secret-store checks as before, the #192 working-folder targets and names, and
   the Exo-store write checks (#309: `_unknown_store`, each form as a path and, with a `*`, as a glob matched one part
   at a time against the protected folders and names, `_store_glob`, which needs three characters of a part's own as
   a glob read does). *Relative names from `$EXO_HOME`.* `_exo_relative` (#305) now reads a target spelt with a glob
   or an expansion as the store folders it could be, below the store's own folder too, along each tail of a
   principal's `principals/<name>/run/jobs` path it fits (`~/.exo/r?n/jobs`, `~/.exo/r$(printf u)n/jobs`, `cd r?n/jobs`
-  from the store; a target that fits none is left out), a part that could be `..` as `..` (`.?`, `.$(:).`), and a name
+  from the store; a target that fits none is left out), a part that could be `..` as `..` (`.?`, `.$(:).`, after a
+  `./` too, and `.?/..` both as `.` and as `../..`), and a name
   that could be the run folder by a glob (`ru?`) or a folder that holds one (`$EXO_HOME` or a `.exo` folder, its
   `principals`, a principal's store), as `.` in `$EXO_HOME` already asked. Rejected: keeping the first draft's second
   reading of substitutions (a `cuts` list on each lexed word, and a run-folder state machine in `_cd_store_read`)
   beside #307's and #305's, which would have been two mechanisms for each thing; and asking for any expansion in a
   path-like word, which would ask on `cat notes$(date +%F).txt`. The cost, failing closed:
-  `cd ~/.kube && echo $(date)`, `cd ~/.exo && ls principals` and, in `run/jobs`, `ls ../..` and `cat $(ls)` ask.
+  `cd ~/.kube && echo $(date)` (a word that is a substitution alone in a store folder), `cd ~/.exo && ls
+  principals`, in `run/jobs` `ls ../..` and `cat $(ls)`, `cat ${x}rc` (`.*rc`) and `cp x state/$(date +%F).json`
+  (a store file's folder and stem) ask, and a write to `keys/` that only the `*` reading reaches is `store_write`
+  rather than `credentials`. A long write line full of expansions costs 2 to 2.5 times the CPU time it did; the
+  work stays linear.
   Limits in `docs/GATE.md` "Other spellings of a store path", "In `$EXO_HOME`" and "The store is credentials".
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the

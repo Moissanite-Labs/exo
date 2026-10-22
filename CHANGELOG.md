@@ -203,7 +203,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,
   `cd ~/.kube && cat $(ls)`), `$(( ))` and `$[ ]` as substitutions (`cat id_ed$((25519))`, `cat id_ed$[25519]`),
   one that starts a name as `.*` (`cat $(printf .e)nv`), and the default word of an unknown variable as its value
-  (`cat ${x-.env}`, `cat ${x:-~/.kube}/config`, `cat ${x:-$HOME/.exo}/keys/seat`). These were allowed reads. The
+  (`cat ${x-.env}`, `cat ${x:-~/.kube}/config`, `cat ${x[0]:-.env}`, `cat ${x:-$HOME/.exo}/keys/seat`). These were
+  allowed reads. The
   same reading reaches working-folder targets (`cd ~/.k$(:)ube && cat config`, `tar -C ~/.k$(:)ube -czf - .`,
   `cd ~/.k${u}ube && cat config`) and the Exo-store write checks (#309), so `cp x ~/.exo/polic$(:)ies/gates.yaml`,
   `mv x ~/.exo/polic${u}ies/gates.yaml`, `tee ~/.exo/polic$(:)ies/gates.yaml < x`,
@@ -212,17 +213,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   with a glob or an expansion, in the store's own folder or below it (`cd ~/.e*o/run/jobs && grep -r x ..`,
   `cd ~/.exo/r?n/jobs && grep -r x ..`, `cd ~/.exo/r$(printf u)n/jobs && ls ..`, `cd ~/.exo && cd r$(:)un/jobs`,
   `cd ~/.exo/principals/m?/run/jobs && ls ..`), a part that
-  could be `..` (`cd .? && grep -r .`, `grep -r . .$(:).`), a glob that could be the run folder
+  could be `..` (`cd .? && grep -r .`, `grep -r . .$(:).`, `grep -r . ./.?`, `grep -r . .?/..`), a glob that could
+  be the run folder
   (`tar -C ~/.exo -czf - ru?`), and a folder that holds a run folder (`cd ~/.exo/run/jobs && grep -r x ../..`,
   `cd ~/.exo && grep -r x principals/me`, `tar -C ~/.exo/principals/me -czf - .`). Each spelling is read once per
   tool call, so the work stays linear. Words that cannot spell a store name keep their class
   (`cat notes$(date +%F).txt`, `cat $f`, `cat ${OUT:-/tmp/out}/report.txt`, `cp x out/$(date +%F).json`). This
-  fails closed on a few lines: `cd ~/.kube && echo $(date)`, `cd ~/.exo && ls principals`, and in `run/jobs`
-  `ls ../..`, `cat $(ls)` and `tail -f $(ls -t | head -1)` ask. Not covered: a name left with fewer than three
+  fails closed on a few lines: a word that is a substitution alone after a `cd` into a store folder
+  (`cd ~/.kube && echo $(date)`, `kubectl get pods -n $(cat ns.txt)`), `cd ~/.exo && ls principals`, in `run/jobs`
+  `ls ../..`, `cat $(ls)` and `tail -f $(ls -t | head -1)`, a variable that starts a name (`cat ${x}rc`, read as
+  `.*rc`), and a relative store file name split by output (`cp x state/$(date +%F).json` is `store_write`). A write
+  to `keys/` only the `*` reading reaches (`cp x ~/.exo/$(printf keys)/a`) is `store_write`, not `credentials`;
+  both ask. A long write line full of expansions costs 2 to 2.5 times the CPU time it did (2,000 `cp` words: 2.6 s
+  against 1.3 s); the work stays linear. Not covered: a name left with fewer than three
   characters of its own (`cat .$(printf env)`), a pattern-matched name split by output (`cat server.k$(printf e)y`),
   output with a `/` in it (`cp x ~/$(printf .exo/policies)/x`), an expansion that ends a store write's word
-  (`cp x ~/.exo/$name`), a default word with a `}` in it (`${x:-${HOME}/.kube}`), and a folder by its full path
-  (`tar czf - ${x:-$HOME/.kube}`, as `tar czf - ~/.kube`; `grep -r x ~/.exo`).
+  (`cp x ~/.exo/$name`), a literal glob in a store write (`cp x ~/.exo/polic?es/gates.yaml`), a default word with
+  a `}` in it (`${x:-${HOME}/.kube}`), and a folder by its full path (`tar czf - ${x:-$HOME/.kube}`, as
+  `tar czf - ~/.kube`; `grep -r x ~/.exo/principals/me`).
 - Gate (#436, D-038 amendment): `for NAME do LIST; done` and `select NAME do LIST; done`, with no `in` list and no
   `;` before `do`, are read as `for NAME; do LIST; done`. Bash and POSIX accept that form and run the loop over the
   positional parameters, but the gate read the body as words of the `for` command and classified nothing in it, so

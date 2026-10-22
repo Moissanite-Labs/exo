@@ -3985,6 +3985,14 @@ def _could_be(s: str, name: str) -> bool:
     return pat is None or fnmatch.fnmatchcase(name, pat)
 
 
+def _dotdot(q: str) -> str:
+    """The relative name ``q`` with its leading parts that could be `..` (`.?`, `.*.`, also after a `./`) read as
+    `..`, or '' when it has none."""
+    qs = [s for s in q.split("/") if s != "."]
+    n = next((j for j, s in enumerate(qs) if not _could_be(s, "..")), len(qs))
+    return "/".join([".."] * n + qs[n:]) if n else ""
+
+
 def _cd_store_read(cmds: list, subs: list) -> str:
     """D-038 (#192): a line that enters a folder that can hold a secret store may read it by a relative name. It
     enters one when a working-folder target anywhere in it ($( ), <( ) and a shell's text included) has a store
@@ -4143,8 +4151,11 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                     q = _expand_text(q) if q[:1] in ("$", "~") else q
                     if not q or q.startswith(("/", "-")) or q.startswith("~") and q[1:2] not in ("+", "-"):
                         continue
+                    # `.?/..` is `.` and, when `.?` is `..`, `../..` (#269)
+                    up = _dotdot(q) if "/.." in "/" + q and _GLOBBY.search(q) else ""
                     q = os.path.normpath(q) if "/.." in "/" + q else q         # lua/../../gcloud is ../gcloud
-                    yield q, [s for s in q.split("/") if s not in ("", ".")], bool(_GLOBBY.search(q))
+                    for r in dict.fromkeys([q, os.path.normpath(up)] if up else [q]):
+                        yield r, [s for s in r.split("/") if s not in ("", ".")], bool(_GLOBBY.search(r))
 
     if not entered:
         # A name can still go into a plain store folder below a target: it counts when it names a store file or
@@ -4272,7 +4283,7 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
                 return True
         return False
 
-    folders = []
+    folders: list[str] = []
     for p, _, _ in split:
         f = os.path.join(home, p[2:]) if p.startswith("~/") else home if p == "~" else p
         if f:
@@ -4311,9 +4322,8 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
         if hit:
             return hit
         names = list(dict.fromkeys(q for q, _, _ in candidates()))
-        # a name whose leading parts could be `..` (`.?`, `.*.`) is read with them as `..` too
-        ups = [(q, "/".join([".."] * n + qs[n:])) for q in names if _GLOBBY.search(q) for qs in [q.split("/")]
-               for n in [next((j for j, x in enumerate(qs) if not _could_be(x, "..")), len(qs))] if n]
+        # a name whose leading parts could be `..` (`.?`, `.*.`, `./.?`) is read with them as `..` too
+        ups = [(q, u) for q in names if _GLOBBY.search(q) for u in [_dotdot(q)] if u]
         read = [(q, q) for q in names] + ups          # (the name, how it is read)
         words = [(q, join(b, r)) for b in sorted(bases) for q, r in read]
         words += [(q, w) for b in outer for q, r in read if near(r) for w in [join(b, r)] if inside(w)]
@@ -5387,7 +5397,7 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
 
 _PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
 _KNOWN_PARAM = re.compile(r"\$\{?(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?!\w)")
-_DEFAULT_WORD = re.compile(r"\$\{(?:[A-Za-z_]\w*|\d+|[@*]):?[-=+]([^{}]*)\}")   # ${x:-word}, ${x+word}...: the word
+_DEFAULT_WORD = re.compile(r"\$\{(?:[A-Za-z_]\w*(?:\[[^\]{}]*\])?|\d+|[@*]):?[-=+]([^{}]*)\}")   # ${x:-w}, ${x[0]+w}
 
 
 def _unknown_forms(src: str) -> list[str]:
@@ -5400,8 +5410,9 @@ def _unknown_forms(src: str) -> list[str]:
     (`$OUT/config`, `~/.config/$f`). One that starts a name part with text after it in the part is also read as `.*`,
     as its output may start the name with the dot a `*` does not match (`$(printf .e)nv` is `.*nv`); in that form a
     part that is only an expansion is empty (`~/$(printf .k)ube/$(:)` is `~/.*ube/`). The word of `${x:-word}`,
-    `${x-word}`, `${x:=word}`, `${x=word}`, `${x:+word}` or `${x+word}` may be the value: one form has each such word
-    in place (#341). [] when the word holds none. One pass over the word."""
+    `${x-word}`, `${x:=word}`, `${x=word}`, `${x:+word}` or `${x+word}`, also on an array element (`${x[0]:-word}`),
+    may be the value: one form has each such word in place (#341). [] when the word holds none. One pass over the
+    word."""
     if "$" not in src and "`" not in src:
         return []
     lx, q, close = _Lexer(src), "", 0
