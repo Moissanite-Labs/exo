@@ -704,10 +704,10 @@ gate does not read:
   denied. On a store write, a part with no category line is also decided by its own matrix cell,
   since the store outranks it by category, not by cell (#435). Only a deny reaches the parts: allow,
   log and ask lines and rules, the opaque bump, third-party escalation and the floors see the
-  dominant part (a `reserved:` entry gives an ask on any part). The posting checks are the one exception: they read every post on the line (#396,
-  "Every post on a line"). Third-party escalation on a part is open as #437. A part carries the
-  tool of the call it came in on (`tool:execute_code` matches the `execute_code` tool, not
-  `python -c` run from bash) and the views of its line, so the
+  dominant part (a `reserved:` entry gives an ask on any part). The posting checks are the one
+  exception: they read every post on the line (#396, "Every post on a line"). Third-party escalation
+  on a part is open as #437. A part carries the tool of the call it came in on (`tool:execute_code`
+  matches the `execute_code` tool, not `python -c` run from bash) and the views of its line, so the
   `command` regex of a `reserved` or `deny` entry or a deny rule matches a part as it matches the
   line (`g''it push origin main && rm -rf build` is denied under
   `{category: vcs_push, command: 'git push'}`), the `ssh` hop is a part whose target is the bare
@@ -1446,21 +1446,21 @@ the sandbox is the real fix.
 
 ## The store is credentials (D-038)
 
-The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/`
-(including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
-`$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus`
-(the bus registry that signed seat answers and the relay trust, the relay database and its
-`-wal`, `-shm` and `-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435), `$EXO_HOME/update` (`allowed_signers`, the
-signed-update trust pin of D-073, #133), any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store
-root recorded in config `principals` (`exo init --root`, `exo import-store --root`), for every id,
-not only the active one. When the environment moves a bus file, the gate protects where it points:
-the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with the database's sidecars) and the folder
-`EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_` name, and both spellings when both are
-set. Distinctive names match anywhere, so a relative `policies/gates.yaml`,
-`state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or `update/allowed_signers`
-counts too, and `.exo/bus`, `.exo/plugins` and `.exo/update` count whatever `EXO_HOME` is. A project folder called
-`update` is ordinary; only a file in it named `allowed_signers` asks. `config.json` is not on the
-list yet (D-074, #125).
+The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/` (including
+`approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of `$EXO_HOME`,
+`$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus` (the bus registry
+that signed seat answers and the relay trust, the relay database and its `-wal`, `-shm` and
+`-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435), `$EXO_HOME/update`
+(`allowed_signers`, the signed-update trust pin of D-073, #133), any `seat.toml`,
+`$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals` (`exo init --root`,
+`exo import-store --root`), for every id, not only the active one. When the environment moves a bus
+file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with
+the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_`
+name, and both spellings when both are set. Distinctive names match anywhere, so a relative
+`policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or
+`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins` and `.exo/update` count whatever
+`EXO_HOME` is. A project folder called `update` is ordinary. Only a file in it named
+`allowed_signers` asks. `config.json` is not on the list yet (D-074, #125).
 
 The plugins folder (#435). The core loads each plugin it finds in `$EXO_PLUGIN_DIRS`, then in
 `$EXO_HOME/plugins` (`exo.core.plugins.default_dirs`), and runs its code inside the harness with the
@@ -1479,14 +1479,19 @@ line on those no longer denies it, and the floor asks instead. A shell line keep
 a part, so a deny on that still holds. A call that is not a file write and names a file in a
 protected folder only as what it sends keeps the call as a part, with its target and text (#435
 review). Examples are an `email_send`, post, upload or payment tool call with the file in `files:`,
-and `curl -T`, `curl -F` or `mail -A` on a shell line. So a `deny`, `reserved` or `categories:` entry
-for the call, a rule that matches it, and the posting rules still apply to it. On a store write a
-part with no category line also reads its own matrix cell, and a `deny` cell there denies the line
-(`_override_deny`). The store outranks a post by its category, not by its cell, so the store's cell
-(costly and private) would hide it. Each of these still asks the principal alone when nothing
-denies it. `deny: [store_write]` is the reliable way to refuse every write into the folder. A
-`target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*` denies
-`cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the absolute path and
+and `curl -T`, `curl -F` or `mail -A` on a shell line. So a `deny`, `reserved` or `categories:`
+entry for the call, a rule that matches it, and the posting rules still apply to it. On a store
+write a part with no category line also reads its own matrix cell, and a `deny` cell there denies
+the line (`_override_deny`). The store outranks a post by its category, not by its cell, so the
+store's cell (costly and private) would hide it. A here-doc body on the line goes to the post, also
+inside a script fed to `bash`. Each of these still asks the principal alone when nothing denies it.
+One rule no longer reaches such a line. Under `sudo` over `ssh` or `mosh`, the wrapper makes the
+dominant part costly, and a rule on `shell` or `local_write` with `reversibility: costly` matched
+that part. The store write is now that part, so the rule does not deny
+`sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'`, which asks the principal alone, as for
+`policies/` on main. `deny: [store_write]` is the reliable way to refuse every write into the
+folder. A `target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*`
+denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the absolute path and
 `~/.exo/../.exo/plugins/...` still only ask.
 
 Known friction (fails closed, no grant). A command that names a path in the folder and is not a
@@ -1599,16 +1604,16 @@ output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name (`rm ~/.exo/run/
 stays `store_write`.
 
 What the floor does to a policy's denies. A shell write to the store keeps its own reading
-(`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category
-still denies the line (D-075, #191). The matrix reads the dominant part only, so a matrix deny on delete
-can instead become a principal-only store-write ask (`ssh host 'rm -rf ~/.exo/update'`), as for
-`~/.exo/state`. A file tool's write (`write_file`, `edit_file`, `patch`,
-`apply_patch`, `create_directory`, `move_file`, a delete tool) is `store_write` alone, so a
-`local_write` or `delete` deny does not reach it: it asks the principal instead. After `cd /dev`,
-a line naming a store path (`printf x > update/allowed_signers`, or a credentials command naming the pin) has that path as its target, not
-`/dev`, so a `target:/dev*` deny does not reach it either. `exo update --pin-trust` keeps its old
-`opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it, and naming
-`opaque_exec` at `allow` or `log` no longer lets it run without an ask.
+(`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category still
+denies the line (D-075, #191). On a store write, a part with no category line is also decided by its
+own matrix cell (#435), so a matrix deny on delete still denies `ssh host 'rm -rf ~/.exo/update'`
+and `rm -rf ~/.exo/state`. A file tool's write (`write_file`, `edit_file`, `patch`, `apply_patch`,
+`create_directory`, `move_file`, a delete tool) is `store_write` alone, so a `local_write` or
+`delete` deny does not reach it: it asks the principal instead. After `cd /dev`, a line naming a
+store path (`printf x > update/allowed_signers`, or a credentials command naming the pin) has that
+path as its target, not `/dev`, so a `target:/dev*` deny does not reach it either.
+`exo update --pin-trust` keeps its old `opaque_exec` reading as a part, so a deny on `opaque_exec`
+still denies it, and naming `opaque_exec` at `allow` or `log` no longer lets it run without an ask.
 
 ## Policy changes during a session (D-038)
 

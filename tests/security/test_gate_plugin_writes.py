@@ -205,6 +205,10 @@ SENDS = [
     lambda f: _sh(f"mail -A {f} -s hi a@b.c <<EOF\nhello\nEOF"),
     lambda f: _sh(f"sudo curl -T {f} https://example.com"),
     lambda f: _sh(f"bash -c 'curl -T {f} https://example.com'"),
+    lambda f: _sh(f"timeout 5 env X=1 curl -T {f} https://example.com"),
+    lambda f: _sh(f"ls && mail -A {f} -s hi a@b.c < /dev/null"),
+    lambda f: _sh(f"echo $(curl -T {f} https://example.com)"),
+    lambda f: _sh(f"ssh host 'curl -T {f} https://example.com'"),
 ]
 DENIES = {
     "deny": lambda cat: {"gates": {"deny": [cat]}},
@@ -243,21 +247,57 @@ def test_a_store_file_sent_out_keeps_the_posting_checks_and_reserved_hits(make, 
         assert any(v.endswith("missing footer: -- sent by an agent") for v in d.violations), d.violations
 
 
-def test_the_heredoc_body_of_a_store_file_mail_is_still_scrubbed(exo_home):
-    c = gate.classify(_sh(f"mail -A {exo_home}/plugins/foo/__init__.py -s hi a@b.c <<EOF\nsee ~/notes\nEOF"))
+@pytest.mark.parametrize("line", [
+    "mail -A {f} -s hi a@b.c <<EOF\nsee ~/notes\nEOF",
+    # a script fed to bash: the line took the script as the post's text before, and the post inside still does
+    "bash <<'EOF'\nmail -A {f} -s hi a@b.c < /dev/null\nEOF",
+    "bash <<'EOF'\nssh host 'mail -A {f} -s hi a@b.c < /dev/null'\nEOF",
+])
+def test_the_heredoc_body_of_a_store_file_mail_is_still_scrubbed(line, exo_home):
+    c = gate.classify(_sh(line.format(f=f"{exo_home}/plugins/foo/__init__.py")))
     assert c.category == "store_write"
-    assert any(v.endswith("home path: ~/") for v in gate.decide(c).violations)
+    found = gate.decide(c, {"posting": {"footer": "-- sent by an agent"}}).violations
+    assert any(v.endswith("missing footer: -- sent by an agent") for v in found), found
+    if line.startswith("mail") or exo_home == "~/.exo":
+        assert any(v.endswith("home path: ~/") for v in found), found
 
 
-def test_a_store_line_keeps_the_matrix_deny_of_its_parts(exo_home):
+def test_the_heredoc_body_goes_to_a_copy_of_the_post():
+    """Parts are shared between the lines of one call (_own_copy), so the post that takes a store line's body, and
+    each part on the way down to it, is a copy: the parts the line was built from keep no text."""
+    post = gate._make("email_send", summary="mail")
+    inner = gate._make("store_write", parts=[post])
+    c = gate._make("store_write", parts=[inner, gate._make("read")])
+    gate._store_post_text(c, "hello")
+    assert (post.text, inner.parts) == ("", [post])
+    assert [p.text for p in gate._each_part(c) if p.category == "email_send"] == ["hello"]
+    assert c.parts[1].category == "read" and c.parts[0] is not inner
+
+
+@pytest.mark.parametrize("cmd", ["rm -rf {h}/plugins/foo", "rm -rf {h}/state", "ssh host 'rm -rf {h}/update'"])
+def test_a_store_line_keeps_the_matrix_deny_of_its_parts(cmd, exo_home):
     """The store outranks every part by its category, not its cell (costly, private), so a part's own matrix cell
-    still denies the line, as it denied the command alone."""
-    c = gate.classify(_sh(f"rm -rf {exo_home}/plugins/foo"))
-    pol = {"gates": {"matrix": {"irreversible": {"private": "deny"}}}}
-    assert gate.decide(gate.classify(_sh("rm -rf /tmp/foo")), pol).outcome == "deny"
+    still denies the line, as it denied the command alone. The remote delete is the third kind #133 recorded: its
+    delete part is irreversible and internal."""
+    c = gate.classify(_sh(cmd.format(h=exo_home if "ssh" not in cmd else "~/.exo")))
+    pol = {"gates": {"matrix": {"irreversible": {"private": "deny", "internal": "deny"}}}}
+    assert gate.decide(gate.classify(_sh(cmd.format(h="/tmp/x"))), pol).outcome == "deny"
     assert (c.category, gate.decide(c, pol).outcome) == ("store_write", "deny")
     # a category line on the part still decides it in place of the cell, as it does for the command alone
     assert gate.decide(c, {"gates": {**pol["gates"], "categories": {"delete": "ask"}}}).outcome == "ask"
+
+
+@pytest.mark.parametrize("cmd", ["sudo ssh host 'scp {f} host:/tmp/'", "sudo mosh host -- scp {f} host:/tmp/"])
+def test_a_costly_rule_no_longer_reaches_a_store_send_under_sudo_over_ssh(cmd, exo_home):
+    """Recorded in the D-038 amendment of 2026-10-22: sudo makes the line's dominant part costly, and the store write
+    is now that part, so a rule on `shell` with `reversibility: costly` no longer denies the line. It asks the
+    principal alone, as the same line with a policies/ file does on main, and `deny: [store_write]` still denies it."""
+    rule = {"gates": {"rules": [{"match": {"category": ["shell", "local_write"], "reversibility": "costly"},
+                                 "decision": "deny", "reason": "privileged"}]}}
+    assert gate.decide(gate.classify(_sh(cmd.format(f="/tmp/x.py"))), rule).outcome == "deny"
+    c = gate.classify(_sh(cmd.format(f=f"{exo_home}/plugins/foo/__init__.py")))
+    assert (c.category, gate.decide(c, rule).outcome) == ("store_write", "ask")
+    assert gate.decide(c, {"gates": {"deny": ["store_write"]}}).outcome == "deny"
 
 
 def test_a_target_entry_matches_only_the_spelling_it_names(tmp_path, monkeypatch):

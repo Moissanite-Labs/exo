@@ -4262,6 +4262,25 @@ def _own_copy(c: Classification) -> Classification:
     return replace(c, signals=list(c.signals), parts=list(c.parts), _command_views=list(c._command_views))
 
 
+def _store_post_text(c: Classification, body: str) -> None:
+    """Give a store line's here-doc body to the most severe post the store write outranks, as the line itself took
+    it when the post was the line (#435): also a post inside a nested line (`bash <<EOF` feeding `mail -A ..`).
+    Parts are shared (_own_copy), so the post and each part on the way down to it are copied, never changed."""
+    post = _most_severe(p for p in _each_part(c) if p.category != "store_write")
+    if post is None or post.text or post.text_file or post.category not in OUTBOUND or post.category == "web_post":
+        return
+    seen: dict[int, Classification] = {id(post): replace(post, text=body)}
+
+    def walk(p: Classification) -> Classification:
+        if id(p) not in seen:
+            seen[id(p)] = p          # a part met again through a shared one is left as it is
+            kids = [walk(q) for q in p.parts]
+            if any(a is not b for a, b in zip(kids, p.parts)):
+                seen[id(p)] = replace(p, parts=kids)
+        return seen[id(p)]
+    c.parts = [walk(p) for p in c.parts]
+
+
 def _unread_nest() -> Classification:
     """What a $( ) nested past _NEST stands for: an opaque part, signed so that an exported value keeps it."""
     c = _too_deep("", f"a $( ) nested more than {_NEST} levels deep, not read")
@@ -4331,10 +4350,10 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     # body is a file: another command's heredoc is not that file, and the caller reads the file (#208). On a store
     # write, the post it outranks takes the text (#435: `mail -A <store file> a@b.c <<EOF`).
     body = next((h.body for k in cmds for h in k.heredocs), None)
-    post = c if c.category != "store_write" else _most_severe(p for p in parts if p.category != "store_write")
-    if post is not None and not post.text and not post.text_file and post.category in OUTBOUND and \
-            body is not None and post.category != "web_post":
-        post.text = body
+    if body is not None and c.category == "store_write":
+        _store_post_text(c, body)
+    elif not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
+        c.text = body
     if setters:
         c.setters = [*c.setters, *setters]    # a new list: c may share its setters with a stored result
     return c
