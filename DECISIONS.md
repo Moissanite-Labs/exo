@@ -158,6 +158,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a rewrite with no lifting (throws away Hermes's edge-case fixes and A's 2026 work).
 - **Revisit if:** the lean core misses its wave 1 exit test by more than two waves of effort, or Hermes
   splits out a small, dependency-free core library that Exo could depend on without inheriting the rest.
+- **Amendment 2026-10-21 (#264, W1-6):** exod's HTTP transport answers a bad number in a request with 400 and a
+  JSON `{"error": ...}` body. `Content-Length`, the `since` query value and `Last-Event-ID` must be ASCII digits
+  up to 2^63 - 1, SQLite's largest integer and so the durable event log's bound. Leading zeros are allowed. A
+  bare `int()` read them and the client handler swallowed its `ValueError`, so a word or a float in any of them
+  got no reply, and so did a negative length, which reached `readexactly`. A negative `since` replayed from the
+  start. A `since` past the bound sent the stream's 200 header, then failed in the replay and left its
+  subscription in the hub. A length over 8 MB is still 413 up to the bound, and a 400 past it. The
+  `events.subscribe` command keeps its typed `internal` reply for such a `since`: `GET /events` has no reply
+  envelope, so the bound is checked before the stream opens. A malformed request line still closes the
+  connection with no reply.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -1703,6 +1713,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
+  alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
+  reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
+  event receipts are held only while sends are in flight. A lost reply shows delivery unknown; a refused
+  send shows not sent. The activity line leads with the queued count while a draft is typed. Approval cards lead
+  with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`, before request details. Ctrl+F still deliberately
+  focuses the card, preserves the draft and keeps the existing answer confirmation. No binding or authority changes.
+  Send and unsteer replies received after a thread switch never update the new thread's draft or queued count.
 - **Amendment 2026-10-19 (#276):** the terminal serializes approval-card removal with thread switching and restoration,
   and waits for removal before mounting the next card under the same widget id. A close or answer names its request,
   so a stale event cannot remove its replacement. Threadless requests still survive thread switches. The response
@@ -2275,6 +2293,26 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   strictest outcome winning (rejected above for category lines), and judging a rider under every rule (a second allow
   rule would then lower it, so `rm -rf build && git push --force origin main` would pass under two allow rules, one
   per command, where it asks now).
+  *Amendment 2026-10-21 (issue #396):* the posting checks still read the dominant part only. `decide` ran the
+  footer, the forbidden words and the scrub on the combined result's text, which a compound line takes from its most
+  severe part. So a post that passed, put first, carried a second post past all three. Under footer `F` and the
+  forbidden word `Zork`, `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R myorg/app --body 'Zork'`
+  logged, while the second post alone asks. Now the posting rules read every part. A part is checked, at its own
+  exposure, when its category is under `posting.applies_to` or it is a close or merge carrying text (#326, #397),
+  and it carries text, a title or an unseen body. The dominant part's violations stay bare. Another part's are named
+  after it. A part's unseen body is its own `unseen_body` signal, read from the signals it carried before `_combine`
+  gave it every part's (`Classification.own_signals`, left out of the ledger view). So two unseen posts are both
+  named. Once other parts add violations, a decision lists at most 20 and counts the rest. The dominant part's own
+  violations are always all listed. So is the line-wide unseen-body note for a part the posting rules do not cover.
+  The scrub compiles its patterns once per policy, since a line now runs it once per post. The posting step only
+  adds violations, so no decision is looser than before. The gate differential
+  (#423) bears that out. Over 25,497 actions x 85 policies (the built-in set and nine posting policies) it lowered
+  0 pairs and tightened 1,295, each a `github_post` line going from log or allow to ask. Third-party escalation,
+  the matrix cell and the floors still read the dominant part. So `gh pr comment 5 -R myorg/app --body $'ok\nF' &&
+  gh pr comment 6 -R other/repo --body $'fine\nF'` logs, while the second post alone asks for a third party. That
+  is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
+  lose #326 and #397), and listing every violation of every post (500 posts gave a 115,000-character reason that
+  the card and the ledger repeat).
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).

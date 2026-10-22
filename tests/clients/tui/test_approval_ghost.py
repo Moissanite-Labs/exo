@@ -3,11 +3,16 @@ can be pulled back."""
 
 from __future__ import annotations
 
+import asyncio
 import time
 
+import pytest
+
+from exo.core.types import Message
 from exo.protocol import schema as s
-from exo_tui.widgets import ApprovalCard
+from exo_tui.widgets import ApprovalCard, Block
 from test_tui import pending_approval, run, send, until
+from test_ui import plain
 
 
 async def ask_over_a_draft(app, pilot, eng, draft="a draft"):
@@ -47,16 +52,22 @@ def test_card_is_reachable_by_tab_with_a_draft_in_the_composer(tmp_path):
     run(tmp_path, sc)
 
 
-def test_card_has_a_key_that_works_from_the_composer(tmp_path):
+@pytest.mark.parametrize("keys,decision", [(("o",), "allow"), (("a", "enter"), "allow_always"),
+                                          (("d", "enter"), "deny")])
+def test_card_has_a_key_that_works_from_the_composer(tmp_path, keys, decision):
     async def sc(app, pilot, client, eng):
         await ask_over_a_draft(app, pilot, eng)
+        hint = plain(app.card.body(), 120)
+        assert "Ctrl+F, then [o] once  [a, Enter] always  [d, Enter] deny" in hint
+        assert hint.index("Ctrl+F") < hint.index("run echo?")
         await pilot.press("ctrl+f")  # focus the card from anywhere
         await pilot.pause(0.05)
         assert app.card.has_focus
-        await pilot.press("d")
-        await pilot.press("enter")
+        await pilot.press(*keys)
         await until(lambda: responds(app), pilot)
-        assert responds(app)[0].decision == "deny"
+        assert responds(app)[0].decision == decision
+        await until(lambda: app.card is None and app.composer.has_focus, pilot)
+        assert app.composer.text == "a draft"
 
     run(tmp_path, sc)
 
@@ -149,11 +160,13 @@ def test_queued_steer_shows_pending_and_unsteer_pulls_it_back(tmp_path):
         await steer(app, pilot, "change course")
         await until(lambda: app.pending_steers, pilot)
         assert "change course" in app.transcript_text()
+        assert "1 steer queued" in plain(app.query_one("#activity").render())
         await steer(app, pilot, "/unsteer")
         await until(lambda: not app.pending_steers, pilot)
         assert app.composer.text == "change course"  # back in the composer, to edit
         assert "change course" not in app.transcript_text()  # the queued line is gone from the transcript too
         assert not eng.loop.state(app.session).steer
+        assert "steer queued" not in plain(app.query_one("#activity").render())
 
     run(tmp_path, sc)
 
@@ -180,13 +193,146 @@ def test_delivered_steer_is_no_longer_pending(tmp_path):
         await until(lambda: app.card is not None, pilot)
         await steer(app, pilot, "late word")
         await until(lambda: app.pending_steers, pilot)
+        ((mid, block),) = app.pending_steers
+        assert "steer queued" in plain(block.shown)
+        assert "steer delivered" not in plain(block.shown)
+        app.composer.text = "another thought"
+        assert "1 steer queued (Up to edit)" in plain(app.query_one("#activity").render())
         await pilot.press("ctrl+f")
         await pilot.press("o")  # let the tool run; the steer lands at the next tool boundary
         await until(lambda: not app.pending_steers and not app.busy, pilot)
+        assert "steer delivered" in plain(block.shown)
+        assert "steer queued" not in plain(block.shown)
+        assert "steer queued" not in plain(app.query_one("#activity").render())
+        assert app.composer.text == "another thought"
         await steer(app, pilot, "/unsteer")
         await pilot.pause(0.1)
         assert app.composer.text == ""
         assert "nothing queued" in app.transcript_text()
+
+    run(tmp_path, sc)
+
+
+@pytest.mark.parametrize("early", [False, True], ids=["after-reply", "before-reply"])
+def test_steer_delivery_requires_the_matching_core_event(tmp_path, early):
+    """Both response/event orders must paint a delivery receipt, never a send response alone."""
+    async def sc(app, pilot, client, eng):
+        app.busy = True
+        real = client.send
+
+        async def completed(mid):
+            msg = Message.user("change course")
+            msg.id = mid
+            eng.hub.publish(s.MessageCompleted(message=msg), app.session)
+            await pilot.pause(0.05)
+
+        async def held_send(body):
+            if isinstance(body, s.TurnSend):
+                block = next(b for b in app.transcript.children if isinstance(b, Block) and b.steer)
+                await until(lambda: block.is_mounted, pilot)
+                assert "steer sending" in plain(block.shown)
+                assert "delivered" not in plain(block.shown)
+                if early:
+                    await completed("m_receipt")
+                return s.Response(id="r", result={"steered": True, "message_id": "m_receipt"})
+            return await real(body)
+
+        client.send = held_send
+        await steer(app, pilot, "change course")
+        await until(lambda: not app.sending_messages, pilot)
+        block = next(b for b in app.transcript.children if isinstance(b, Block) and b.steer)
+        if not early:
+            await until(lambda: app.pending_steers, pilot)
+            await completed("m_other")
+            assert "steer queued" in plain(block.shown)
+            await completed("m_receipt")
+        await until(lambda: "steer delivered" in plain(block.shown), pilot)
+        assert not app.pending_steers
+        assert not app.sending_messages
+
+    run(tmp_path, sc)
+
+
+@pytest.mark.parametrize("code,label", [("forbidden", "not sent"), ("connection_lost", "delivery unknown")])
+def test_failed_steer_is_never_labelled_delivered(tmp_path, code, label):
+    async def sc(app, pilot, client, eng):
+        app.busy = True
+        real = client.send
+
+        async def failed_send(body):
+            if isinstance(body, s.TurnSend):
+                return s.Response(id="r", ok=False, error=s.ErrorInfo(code=code, message="failed"))
+            return await real(body)
+
+        client.send = failed_send
+        await steer(app, pilot, "change course")
+        await until(lambda: any(isinstance(b, Block) and b.steer and label in plain(b.shown)
+                               for b in app.transcript.children), pilot)
+        block = next(b for b in app.transcript.children if isinstance(b, Block) and b.steer)
+        assert "delivered" not in plain(block.shown)
+        assert not app.pending_steers and not app.sending_messages
+        if code == "connection_lost":
+            assert app.composer.text == "change course"
+
+    run(tmp_path, sc)
+
+
+def test_steer_reply_after_a_thread_switch_leaves_the_new_composer_and_queue_alone(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.busy = True
+        entered, release = asyncio.Event(), asyncio.Event()
+        real = client.send
+
+        async def delayed_send(body):
+            if isinstance(body, s.TurnSend):
+                entered.set()
+                await release.wait()
+                return s.Response(id="r", result={"steered": True, "message_id": "m_old"})
+            return await real(body)
+
+        client.send = delayed_send
+        task = asyncio.create_task(app.submit("old thread steer"))
+        await entered.wait()
+        assert app.sending_messages
+        await app.new_session()
+        app.composer.text = "new thread draft"
+        release.set()
+        await task
+        assert not app.pending_steers and not app.sending_messages
+        assert "steer queued" not in plain(app.query_one("#activity").render())
+        assert "old thread steer" not in app.transcript_text()
+        assert app.composer.text == "new thread draft"
+
+    run(tmp_path, sc)
+
+
+def test_unsteer_reply_after_a_thread_switch_keeps_the_new_draft(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "ask")
+        await until(lambda: app.card is not None, pilot)
+        await steer(app, pilot, "old thread steer")
+        await until(lambda: app.pending_steers, pilot)
+        old_session = app.session
+        entered, release = asyncio.Event(), asyncio.Event()
+        real = client.send
+
+        async def delayed_unsteer(body):
+            if isinstance(body, s.CommandRun) and body.name == "unsteer":
+                entered.set()
+                await release.wait()
+            return await real(body)
+
+        client.send = delayed_unsteer
+        task = asyncio.create_task(app.unsteer())
+        await entered.wait()
+        await app.new_session()
+        app.composer.text = "new thread draft"
+        release.set()
+        assert not await task
+        assert not eng.loop.state(old_session).steer  # the pullback still applies to the original thread
+        assert not app.pending_steers
+        assert app.composer.text == "new thread draft"
+        assert "old thread steer" not in app.transcript_text()
 
     run(tmp_path, sc)
 

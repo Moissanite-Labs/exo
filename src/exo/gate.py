@@ -95,6 +95,8 @@ OUTBOUND = ("github_post", "message_send", "email_send", "social_post", "web_pos
 # Categories the posting rules apply to unless the policy says otherwise (human-readable posts;
 # raw API payloads of web_post are left out because a footer check on JSON is noise).
 POSTING_DEFAULT = ("github_post", "message_send", "email_send", "social_post")
+# The most posting violations a decision lists when other posts on the line add theirs (#396). The rest are counted.
+_LISTED_VIOLATIONS = 20
 
 
 class PolicyError(ValueError):
@@ -132,6 +134,9 @@ class Classification:
     setters: list[str | None] = field(default_factory=list, repr=False, compare=False)
     # A part that runs the stdin of its line, which a command around that line may give (_runs_stdin, _given_stdin).
     inherits: bool = field(default=False, repr=False, compare=False)
+    # The signals this part carried before _combine gave it every part's (#396), so the posting checks can tell its
+    # own unseen body from another post's. None for a part never combined: its signals are then its own.
+    own_signals: list[str] | None = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
@@ -141,6 +146,7 @@ class Classification:
         d.pop("own")
         d.pop("setters")
         d.pop("inherits")
+        d.pop("own_signals")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -3660,6 +3666,8 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     credentials = [p for p in parts if p.category == "credentials"]
     store = [p for p in parts if p.category == "store_write"]
     c = credentials[0] if credentials else (store[0] if store else (_most_severe(parts) or _make("shell", command=cmd)))
+    if c.own_signals is None:
+        c.own_signals = list(c.signals)
     c.signals = list(dict.fromkeys(c.signals + signals))
     c.parts = c.parts + [p for p in parts if p is not c]    # keep what the chosen part was itself built from
     return c
@@ -5956,17 +5964,58 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
 
     violations: list[str] = []
     unseen = body_unseen(eff)
-    applies = eff.category in (posting.get("applies_to") or POSTING_DEFAULT)
-    if not applies and eff.category in ("github_close", "vcs_merge"):
-        applies = bool(eff.text or eff.title or unseen)  # #326, #397: a close or merge carrying text publishes it
-    if applies and (eff.text or eff.title or unseen):
-        violations = check_post(eff.text, posting, title=eff.title, agents=pol.get("agents") or [],
-                                exposure=eff.exposure)
-        violations += check_scrub(eff.text, pol.get("scrub"), title=eff.title, exposure=eff.exposure)  # D-033
-        if unseen:  # #208: the checks above saw only part of the post, so they cannot pass it
-            violations.append(UNSEEN_BODY)
-        if violations:
-            bump("ask", "posting rules: " + "; ".join(violations), "posting")
+    applies_to = posting.get("applies_to") or POSTING_DEFAULT
+    # Whether the combined classification alone would run the checks (kept for the line-wide
+    # unseen note below): its category is under applies_to, or it is a close or merge carrying
+    # text (#326, #397).
+    line_applies = eff.category in applies_to or (eff.category in ("github_close", "vcs_merge")
+                                                  and (eff.text or eff.title or unseen))
+
+    def post_unseen(p: Classification) -> bool:
+        """One part's unseen body (#208): a body file nobody read into its text, or its own
+        unseen_body signal. _combine gives the part it picks every part's signals, so this reads
+        the ones it carried before (own_signals). A part given them some other way counts a
+        signal a part below it also carries as that part's, not its own."""
+        if p.text_file and not p.text and (p.category in OUTBOUND or p.category == "vcs_merge"):
+            return True
+        if p.own_signals is not None:
+            return "unseen_body" in p.own_signals
+        return "unseen_body" in p.signals and not any(
+            "unseen_body" in q.signals for q in _each_part(p) if q is not p)
+
+    # #396: the checks run on every post on the line, not only on the dominant part's text, so a
+    # clean first post cannot carry a second one past the footer, the forbidden words and the
+    # scrub. A part counts when its category is under applies_to (a close or merge carrying text
+    # counts, #326, #397) and it carries text, a title or an unseen body. The combined
+    # classification's own violations and the line-wide unseen note stay bare and are all listed;
+    # another part's are named after it, and only so many of those are listed (_LISTED_VIOLATIONS)
+    # that a line of many posts keeps its reason and its card short.
+    checked, post_unseen_seen = False, False
+    named: list[str] = []
+    for p in _each_part(eff):
+        p_unseen = post_unseen(p)
+        if p.category not in applies_to and not (p.category in ("github_close", "vcs_merge")
+                                                 and (p.text or p.title or p_unseen)):
+            continue
+        if not (p.text or p.title or p_unseen):
+            continue
+        checked = True
+        found = check_post(p.text, posting, title=p.title, agents=pol.get("agents") or [],
+                           exposure=p.exposure)
+        found += check_scrub(p.text, pol.get("scrub"), title=p.title, exposure=p.exposure)  # D-033
+        if p_unseen:  # the checks above saw only part of this post, so they cannot pass it
+            found.append(UNSEEN_BODY)
+            post_unseen_seen = True
+        if p is eff:
+            violations += found
+        else:
+            named += [f"{p.summary or p.category}: {v}" for v in found]
+    if unseen and not post_unseen_seen and (checked or line_applies):
+        violations.append(UNSEEN_BODY)  # a body on a part the posting rules do not cover is still unseen
+    room = max(_LISTED_VIOLATIONS - len(violations), 0)
+    violations += named[:room] + ([f"and {len(named) - room} more on other posts"] if len(named) > room else [])
+    if violations:
+        bump("ask", "posting rules: " + "; ".join(violations), "posting")
 
     # Operator floor (P11): outside the principal model, cannot be lowered by policy.
     if eff.reversibility == "irreversible" and eff.exposure == "public" and eff.third_party:
@@ -6605,6 +6654,13 @@ def normalize_scrub(raw: Mapping | None, names: Iterable[str] = ()) -> dict:
             "rules": rules, "allow": [str(a).lower() for a in cfg.get("allow") or []]}
 
 
+@functools.lru_cache(maxsize=16)
+def _scrub_compiled(patterns: tuple[str, ...]) -> tuple[re.Pattern, ...]:
+    """The scrub patterns, compiled once (#396). A line is scrubbed once per post on it, and a policy with more
+    patterns than the `re` module's cache keeps would compile every one of them again for each post."""
+    return tuple(re.compile(p, re.I) for p in patterns)
+
+
 def check_scrub(text: str, scrub: Mapping | None, *, title: str = "", exposure: str = "public") -> list[str]:
     """Internal identifiers found in outbound text, as ``"<label>: <match>"``. Empty = clean."""
     if not scrub or not scrub.get("enabled") or exposure not in (scrub.get("exposures") or []):
@@ -6614,8 +6670,9 @@ def check_scrub(text: str, scrub: Mapping | None, *, title: str = "", exposure: 
         return []
     allow = set(scrub.get("allow") or [])
     out: list[str] = []
-    for r in scrub.get("rules") or []:
-        for m in re.finditer(r["pattern"], both, re.I):
+    rules = scrub.get("rules") or []
+    for r, rx in zip(rules, _scrub_compiled(tuple(str(r["pattern"]) for r in rules))):
+        for m in rx.finditer(both):
             hit = m.group(0)
             if hit.lower() in allow:
                 continue
