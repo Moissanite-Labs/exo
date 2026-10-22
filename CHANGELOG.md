@@ -533,6 +533,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   declare and is a `github_post` too.
 
 ### Added
+- `scripts/gate_diff.py` checks a gate change against main (#423, D-038 amendment). It runs `gate.classify` and
+  `gate.decide` of two checkouts, each in its own process, over the calls the gate suites test, a line or call for
+  each entry of the gate's tables (value options and pattern alternatives among them), compound forms of them, each
+  line under the other shell tool names and keys, folder rows, posts that trip each posting rule and more than 80
+  policies. It lists each decision the head makes lower than the base. Exit 1 means something is lower. Exit 2
+  also means a tree holds a gate table in a form the script does not read. Reviewers run main's copy of the script.
+  The developer guide's section "Checking a gate change against main" says how to run it and what it leaves out.
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
