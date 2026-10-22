@@ -477,6 +477,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   says. Its delegate children open with `memory_zoom(subagent=)` only from it or a fork of it. A fork's copies count
   at their original's log position, so a fork opens with its parent's tail. Details in docs/MEMORY-MODEL.md
   "Private threads".
+  *Amendment 2026-10-21 (#245, PR #405):* a copy counts at its original's log position only while the tree holds
+  that original. When the parent undid an entry after the fork, the tree dropped the original, and no tree held
+  the copy. Once the fork's own later entries were summarized, its tail started after the copy, so its calls lost
+  it. Now a fork that is not private keeps such copies in its tail, verbatim, in order, ahead of its own entries
+  (`SessionStore.orphaned_copies`). Only copies of logged entries are kept. A copied context note was never logged,
+  so it still leaves the tail as the tail moves on. This is the second option in #245. The first, a summary tree
+  per fork as a private thread has, was not taken: every public fork would run a second tree, with its own
+  summarizer calls and a turn that waits on it (D-068), for copies that exist only after an undo in the parent.
+  The cost of the second option: the kept copies sit outside `tail_messages` and `/compact`, so a fork whose
+  parent undid 20 turns carries all 20 in every call. In a fork of a fork the kept copies come after the middle
+  fork's own entries, which the tree holds. The lookup runs only on a fork (`fork_seq` set) and reads only its
+  copies, so a thread that is not a fork pays nothing.
 
 ## D-029 (2026-10-12) jevgrep as code_find; native port later if the measured win holds
 - **Why:** "where is X decided" questions cost an agent many grep and read rounds. dzhng/jevgrep (MIT, `jg`
