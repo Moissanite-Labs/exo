@@ -168,6 +168,18 @@ store.ctx("posting rules", budget=1500).text
 assemble(store, "posting rules", 1500).node_ids
 ```
 
+## Find
+
+`find` ranks nodes with BM25. A node's title counts three times, its summary and `load_when` twice, and its tags,
+id and body once. The first `find` tokenizes every node and keeps the tables it builds: each node's word counts and
+length, how many nodes hold each word, and the average length. Later calls tokenize only the query (#254). `ctx`
+and the default ranker of `assemble` call `find`, so they share the tables.
+
+The tables belong to the node set they were built from. `reload()` makes a new set, and so does a `refresh()` that
+sees a node file added, edited or removed. The next `find` then builds the tables again. So `find` always ranks the
+nodes that `nodes` returns. Like `nodes`, it does not see a file written after the last read until a `refresh()` or
+a `reload()`. Callers treat the node dicts as read-only and change a node by writing its file.
+
 ## Store checks
 
 `exo lint` reports errors for missing keys, bad types, an id that does not match its path,
