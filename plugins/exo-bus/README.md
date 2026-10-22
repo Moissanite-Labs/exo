@@ -50,6 +50,9 @@ python -m exo.bus checkpoint --db $EXO_HOME/bus/relay.sqlite --relay-key <relay 
 ```
 
 An existing Divan relay database and `registry.json` open unchanged (same schema and signatures).
+HTTP message and inbox reads accept `since` from 0 to 2^63 - 1 and `limit` from 1 to 1,000 (default 200).
+`/v1/verify` accepts `from` from 1 to 2^63 - 1 and `to` from 0 to 2^63 - 1; omitting `to` uses the current head.
+Malformed or out-of-range numbers answer 422, including negative limits (#455).
 Under the Exo gate these files are the principal's: a tool call that writes `$EXO_HOME/bus/` (the registry, the
 relay database and its `-wal`, `-shm` and `-journal` files) or the files `EXO_BUS_REGISTRY`, `EXO_BUS_DB` and
 `EXO_BUS_KEYS_DIR` name is a `store_write` and asks the principal (`docs/GATE.md`, #210).
