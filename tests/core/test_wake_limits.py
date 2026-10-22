@@ -9,9 +9,11 @@ from exo.bus.ingress import BusTarget
 from exo.core.engine import CoreEngine
 from exo.core.ingress import Ingress, IngressPath
 from exo.core.models.fake import FakeProvider, tool_turn
+from exo.core.types import ToolSpec
+from exo.principal import CHANNEL
 from exo.protocol import schema as s
 from exo.scheduler import Scheduler
-from exo.server.app import Dispatcher
+from exo.server.app import ChannelLink, Dispatcher
 
 
 def aio(fn):
@@ -51,6 +53,8 @@ async def wait_completed(eng, sid, count=1):
         while len(completed(eng, sid)) < count:
             await asyncio.sleep(0.01)
         await asyncio.gather(*eng._tasks)
+        while eng._tasks:  # gather of an already-done task need not yield on Python 3.12+
+            await asyncio.sleep(0)
 
 
 def assert_capped(eng, sid, provider):
@@ -59,6 +63,9 @@ def assert_capped(eng, sid, provider):
     assert all(c["opts"].get("tool_choice") != "none" for c in provider.calls[:24])
     assert provider.calls[-1]["opts"]["tool_choice"] == "none"
     assert provider.calls[-1]["tools"] == provider.calls[0]["tools"]
+    assert "used all 24 tool rounds" in provider.calls[-1]["messages"][-1].text()
+    calls = [e.body for e in eng.hub.since(0) if e.session == sid and isinstance(e.body, s.ModelCall)]
+    assert [call.iteration for call in calls[-25:]] == list(range(1, 26))
     messages = eng.store.messages(sid)
     assert len([m for m in messages if m.role == "tool"
                 and m.meta["turn_id"] == completed(eng, sid)[-1].turn_id]) == 24
@@ -98,8 +105,9 @@ async def test_ingress_wake_completes_with_a_report(tmp_path, source, watching, 
         await eng.close()
 
 
+@pytest.mark.parametrize("caller, author", [("principal:chat", "principal"), (CHANNEL, "local")])
 @aio
-async def test_principal_channel_turn_remains_unlimited_while_a_wake_runs(tmp_path):
+async def test_principal_channel_turn_remains_unlimited_while_a_wake_runs(tmp_path, caller, author):
     eng = engine(tmp_path)
     try:
         wake = (await eng.loop.create_session()).id
@@ -118,16 +126,93 @@ async def test_principal_channel_turn_remains_unlimited_while_a_wake_runs(tmp_pa
 
         eng.loop.provider = PerSession()
         eng.start_turn(wake, "wake pages", {"author": "job"})
-        reply = await Dispatcher(eng, caller="principal:chat").run(
-            s.Command.of(s.TurnSend(session=principal, text="principal pages")))
-        assert reply.ok
+        body = s.TurnSend(session=principal, text="principal pages")
+        if caller == CHANNEL:
+            assert (await ChannelLink(Dispatcher(eng)).call(body))["accepted"]
+        else:
+            assert (await Dispatcher(eng, caller=caller).run(s.Command.of(body))).ok
         await wait_completed(eng, wake)
         await wait_completed(eng, principal)
         assert_capped(eng, wake, providers[wake])
         assert completed(eng, principal)[0].stop_reason == "end"
         assert len(providers[principal].calls) == 31
-        assert eng.store.messages(principal)[0].meta["author"] == "principal"
+        assert eng.store.messages(principal)[0].meta["author"] == author
         assert eng.store.messages(principal)[-1].text() == "finished"
+    finally:
+        await eng.close()
+
+
+@aio
+async def test_wait_completed_drains_a_finished_tasks_queued_cleanup(tmp_path):
+    eng = engine(tmp_path)
+    try:
+        sid = (await eng.loop.create_session()).id
+        eng.loop.provider = FakeProvider(["finished"])
+        await eng.loop.send(sid, "pages")
+        finished = asyncio.create_task(asyncio.sleep(0))
+        await finished
+        eng._tasks.add(finished)
+        finished.add_done_callback(eng._tasks.discard)
+        # Pin the race window: the task is done, but its engine cleanup is still queued.
+        assert finished.done() and finished in eng._tasks
+        await wait_completed(eng, sid)
+        assert not eng._tasks
+    finally:
+        await eng.close()
+
+
+@aio
+async def test_a_principal_message_steered_into_a_wake_keeps_its_cap(tmp_path):
+    eng = engine(tmp_path)
+    entered, release = asyncio.Event(), asyncio.Event()
+    try:
+        async def wait(args, ctx):
+            entered.set()
+            await release.wait()
+            return "ready"
+
+        eng.registry.register(ToolSpec(name="wait", description="wait", toolset="core"), wait)
+        sid = (await eng.loop.create_session()).id
+        provider = eng.loop.provider = RepeatingTools()
+        provider.script.insert(0, tool_turn("wait"))
+        eng.start_turn(sid, "wake pages", {"author": "job"})
+        await asyncio.wait_for(entered.wait(), 10)
+        response = await Dispatcher(eng, caller="principal:tui").run(
+            s.Command.of(s.TurnSend(session=sid, text="check these too", mode="steer")))
+        assert response.ok and response.result["steered"]
+        release.set()
+        await wait_completed(eng, sid)
+        assert_capped(eng, sid, provider)
+        steer = next(m for m in eng.store.messages(sid) if m.text() == "check these too")
+        assert steer.meta["author"] == "principal"
+    finally:
+        release.set()
+        await eng.close()
+
+
+@aio
+async def test_interrupted_wake_wrap_up_records_the_actual_iteration(tmp_path):
+    eng = engine(tmp_path)
+    wrapping = asyncio.Event()
+    try:
+        class HeldWrap(RepeatingTools):
+            async def stream(self, messages, tools, **opts):
+                if opts.get("tool_choice") == "none":
+                    wrapping.set()
+                    await asyncio.Event().wait()
+                async for event in super().stream(messages, tools, **opts):
+                    yield event
+
+        sid = (await eng.loop.create_session()).id
+        eng.loop.provider = HeldWrap()
+        eng.start_turn(sid, "wake pages", {"author": "job"})
+        await asyncio.wait_for(wrapping.wait(), 10)
+        assert eng.loop.interrupt(sid)
+        await wait_completed(eng, sid)
+        assert completed(eng, sid)[-1].stop_reason == "interrupted"
+        calls = [e.body for e in eng.hub.since(0) if e.session == sid and isinstance(e.body, s.ModelCall)]
+        assert [call.iteration for call in calls] == list(range(1, 26))
+        assert calls[-1].stop_reason == "interrupted"
     finally:
         await eng.close()
 

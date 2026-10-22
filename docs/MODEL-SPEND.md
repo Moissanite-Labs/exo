@@ -276,8 +276,8 @@ code `model_spend_refused`. Retained uncertainty or an existing journal stop use
 Principal-started turns, including channel turns, have no default tool-round cap. Unattended scheduled turns
 and turns started by job notices, peer or bus messages stop after 24 tool rounds, including job wakes on
 scheduled threads. Delegated children retain their `max_turns` limit (24 by default). A turn that reaches a positive
-tool-round cap makes one more admitted call, its wrap-up, so it reserves and settles one more journal entry;
-a refusal there is reported with the same codes.
+tool-round cap makes one more admitted call, its wrap-up, so it reserves and settles one more journal entry.
+A refusal there is reported with the same codes.
 
 Application factory composition now lives in `exo.compose.create`: config and
 seat selection, required executor/plugin inventory and product attachment. The

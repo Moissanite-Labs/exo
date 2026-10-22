@@ -104,13 +104,27 @@ when a caller needs a finite limit and the existing wrap-up report. The schedule
 `CoreEngine.start_turn` passes a per-turn `max_iterations` of at most 24 for job-notice, peer and bus wakes,
 including background-job notices on scheduled threads. `Loop.send` uses that limit for this turn only. Do not
 change the shared loop limit or infer a cap from a channel author. Principal-started channel turns keep the
-unlimited default. Keep all three boundaries and preserve interrupt, approval, spend and retry checks. Regression tests cover completion and stops beyond round 24 in `tests/core/loop/test_loop.py`
+unlimited default. Pass the same per-turn limit through wrap-up formatting, the provider call and settlement.
+Keep all three boundaries and preserve interrupt, approval, spend and retry checks. Regression tests cover
+completion and stops beyond round 24 in `tests/core/loop/test_loop.py`
 and `tests/core/models/test_spend_policy.py`, scheduled limits and later launches in
 `tests/core/scheduler/test_scheduler.py`, wakes and concurrent principal turns in `tests/core/test_wake_limits.py`,
 and child limits in `tests/agents/test_delegate.py`.
 Reference: `docs/CORE.md`, "Turn limits".
 `TurnResult` begins at `end`, and only `end` continues for a queued steer. The no-tools reply path retains that
 default for a missing, empty or `tool_use` stop reason. Preserve this rule when adding continuation paths.
+
+Wake regressions assert the report prompt and `model.call` iteration, including provider-call interruption.
+Their completion helper drains queued task cleanup callbacks after `gather`: on Python 3.12 and later, a gather
+of already-finished tasks need not yield. Keep the cleanup assertion and the helper's timeout. Exercise channels
+through the real `ChannelLink`, which stamps `CHANNEL`, as well as principal clients. A principal steer into a
+wake keeps the existing turn's cap (`docs/USER-GUIDE.md`, section 2).
+
+Caller-limit policy is separate from provenance and approval authority. `LOCAL` covers both automation and TCP
+TUI requests, so do not cap it indiscriminately or trust a client-supplied label to promote it. A bounded follow-up
+should define server-verified authority to request unlimited TCP turns separately from general bearer access,
+then default requests without that authority to finite limits while retaining existing principal and channel
+paths. Authority is not proof a human is typing. Choosing finite TCP turns instead also needs a product decision. This PR leaves authentication and `LOCAL` limits unchanged (`docs/CORE.md`, "Turn limits").
 
 ## 2. The protocol
 

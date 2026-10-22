@@ -11,7 +11,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   job for its next launch. Turns started by a job notice, peer or bus message also stop after 24 tool rounds
   plus a wrap-up, including background-job notices on scheduled threads and bus wakes with a client attached.
   Explicit positive limits retain their cap and progress report, and children retain `max_turns` (24 by default).
-  User stops, approvals, spend limits, bounded retries and child token/time limits still apply.
+  A message steered into a running wake shares its cap. The wrap-up prompt and model-call trace use the actual
+  per-turn limit, including an interrupted wrap-up. User stops, approvals, spend limits, bounded retries and
+  child token/time limits still apply. `LOCAL` `turn.send` requests still inherit the shared default, including
+  TCP TUI and automation callers. Their separate caller-limit policy remains unresolved (`docs/CORE.md`).
 - A fork no longer loses its copies of entries the parent undid after the fork (#245). A copy counts
   at its original's log position only while that original is visible, so once the fork's own later
   entries were summarized the tail started after the copy, and no tree held it either: the fork's

@@ -345,10 +345,10 @@ class Loop:
         await self._emit(ev.Notice(text=f"stopped after {max_iterations} tool rounds",
                                    level="warn"), session)
         if self.wrap_up:
-            await self._wrap_up(session, turn_id, system, extra, st, result)
+            await self._wrap_up(session, turn_id, system, extra, st, result, max_iterations)
 
     async def _wrap_up(self, session: str, turn_id: str, system: str, extra: dict[str, Any],
-                       st: _SessionState, result: TurnResult) -> None:
+                       st: _SessionState, result: TurnResult, n: int) -> None:
         """One last call with tool use off, so a capped turn ends with a report, not a dangling tool round.
 
         The same tools stay declared and ``tool_choice="none"`` turns them off: removing them is an edit to the
@@ -357,10 +357,10 @@ class Loop:
         and the Error event say why); an interrupt still ends the turn "interrupted", like any other call."""
         try:
             messages = await self.context.build(session, system, **extra)
-            messages.append(Message.user(WRAP_UP_PROMPT.format(n=self.max_iterations)))
+            messages.append(Message.user(WRAP_UP_PROMPT.format(n=n)))
             msg_id = new_id("m")
-            stream = await self._call(session, messages, msg_id, st, result, self.max_iterations, tool_choice="none")
-            settled = await self._settle(session, turn_id, stream, msg_id, self.max_iterations, st, result)
+            stream = await self._call(session, messages, msg_id, st, result, n, tool_choice="none")
+            settled = await self._settle(session, turn_id, stream, msg_id, n, st, result)
             if settled or not (stream.text or stream.reasoning):
                 return
             # Stray tool calls are dropped: the cap is spent, nothing runs. So is the signed thinking: it was
