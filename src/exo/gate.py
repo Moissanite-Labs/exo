@@ -137,6 +137,9 @@ class Classification:
     # The signals this part carried before _combine gave it every part's (#396), so the posting checks can tell its
     # own unseen body from another post's. None for a part never combined: its signals are then its own.
     own_signals: list[str] | None = field(default=None, repr=False, compare=False)
+    # The same call as the gate read it before #311, where a shell call's own folder argument made it credentials as
+    # a whole (#209). decide takes both readings and the stricter outcome stands.
+    also: "Classification | None" = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
@@ -147,6 +150,7 @@ class Classification:
         d.pop("setters")
         d.pop("inherits")
         d.pop("own_signals")
+        d.pop("also")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -3967,7 +3971,6 @@ def _cd_store_read(cmds: list, subs: list, tools: tuple[str, ...] = ()) -> str:
         _cd_walk(c2, targets, pieces, more)
         if n < _DEPTH:
             queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
-    own = list(targets)                     # the folders the line itself enters
     targets += tools                        # #311: the folder a shell call runs in, as a leading cd would enter it
     if not targets:
         return ""
@@ -4025,14 +4028,6 @@ def _cd_store_read(cmds: list, subs: list, tools: tuple[str, ...] = ()) -> str:
                 if name == "":
                     lo[""] = min(lo.get("", n), n)
 
-    # The tool's folder is where the call starts, not a folder the line enters, so its paths are kept apart. Below a
-    # .claude folder (a checkout in <repo>/.claude/worktrees/x) it checks names one by one, as ~/.kube does, instead
-    # of counting every relative word: a session that works there passes it on every call. Anywhere else it is read
-    # as a `cd` there is: ~/.ssh and the folders below it (~/.ssh/old, ~/.aws/cli/cache) count every relative word,
-    # since a key there can have any name. A folder the line itself also names keeps the line's reading.
-    tool_paths = {p for t in dict.fromkeys(tools) for alt in _brace_alts(t) for p, _ in [folders(alt)]}
-    own_paths = {p for t in dict.fromkeys(own) for alt in _brace_alts(t) for p, _ in [folders(alt)]}
-    tool_only = tool_paths - own_paths
     split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in _brace_alts(t)
              for p, parts in [folders(alt)]]
     for _, parts, _ in split:
@@ -4123,12 +4118,9 @@ def _cd_store_read(cmds: list, subs: list, tools: tuple[str, ...] = ()) -> str:
                     return q
         return _exo_relative(split, max(ups), candidates)
     nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
-    # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one). The
-    # tool's folder below a .claude folder, and in no other store, is not (tool_only, above).
-    wide = [(p, parts, k) for p, parts, k in entered if p not in tool_only or k == len(parts) - 1
-            or parts[k] != ".claude" or StoreSkip._NO_CLAUDE.search(p)]
-    roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in wide)
-    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in wide) or any(map(is_store, roots))
+    # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
+    roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
+    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered) or any(map(is_store, roots))
     hints = names | singles | nxt
     held = any(k == len(parts) - 1 for _, parts, k in entered)     # a target is itself a store folder (~/.kube)
     for q, parts, globbed in candidates():
@@ -4149,6 +4141,9 @@ _EXO_PARTS = 65536   # path parts of the folders and paths _exo_relative may bui
 
 class _Spent(Exception):
     pass
+
+
+_TOO_MANY = "a path in the Exo store (too many to resolve)"     # what _cd_store_read names past the #269 budget
 
 
 def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]]) -> str:
@@ -4172,7 +4167,7 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     memo = _call_memo.get()
     left = [_EXO_PARTS] if memo is None else memo.setdefault("exo_parts", [_EXO_PARTS])
     if left[0] < 0:
-        return "a path in the Exo store (too many to resolve)"
+        return _TOO_MANY
 
     def inside(b: str, real: bool = False) -> bool:
         return any(re.search(r"(^|/)\.exo(/|$)", f) or any(f == r or f.startswith(r.rstrip("/") + "/") for r in roots)
@@ -4238,7 +4233,7 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
         toward = [q for q in names if near(q)]
         words += [(q, w) for b in outer for q in toward for w in [join(b, q)] if inside(w)]
     except _Spent:
-        return "a path in the Exo store (too many to resolve)"
+        return _TOO_MANY
     if not words or not (_sensitive_words([w for _, w in words]) or _glob_words([w for _, w in words])):
         return ""
     return next((q for q, w in words if _sensitive_words([w]) or _glob_words([w])), words[0][0])
@@ -4643,15 +4638,16 @@ def _runs_shell(tool: str, args: Mapping) -> bool:
 
 
 # The arguments a shell tool takes the folder it runs in from: Exo's bash tool `cwd`, Hermes' terminal and Codex's
-# exec_command `workdir` (#311). When a call gives both, each counts.
+# exec_command `workdir` (#311). When a call gives both, each counts. Exo's bash tool ignores `workdir`, but the gate
+# does not know which harness a `bash` call comes from, so it counts there too: it only ever adds an ask.
 _TOOL_FOLDERS = ("cwd", "workdir")
 
 
 def _in_tool_folder(fn: _F) -> _F:
     """Run ``fn(action, cwd)`` in one _Scope that holds the folders the tool may read from (#209): ``cwd``, the
-    session's working folder as the core passes it, always; and for a shell tool, that folder joined with the
-    call's own folder argument (`cwd`, `workdir`). A relative path is resolved from each of them and from the gate's
-    own folder. The shell tool's own folders are also kept apart (tool_cwds) for the store-folder check (#311)."""
+    session's working folder as the core passes it. A relative path is resolved from it and from the gate's own
+    folder. A shell tool's own folder argument (`cwd`, `workdir`), joined to that folder, is kept apart (tool_cwds):
+    _shell_call reads the line in it (#311)."""
     @functools.wraps(fn)
     def run(action: Any, cwd: str | None = None) -> Any:
         folders: list[str] = []
@@ -4665,9 +4661,7 @@ def _in_tool_folder(fn: _F) -> _F:
                 for key in _TOOL_FOLDERS:
                     sub = args.get(key)
                     if isinstance(sub, str) and sub:
-                        folder = os.path.join(base, os.path.expanduser(sub))
-                        folders.append(os.path.abspath(folder))
-                        own.append(folder)
+                        own.append(os.path.join(base, os.path.expanduser(sub)))
         except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
             pass
         token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders)), tool_cwds=tuple(dict.fromkeys(own))))
@@ -5411,31 +5405,101 @@ def _args_of(action: Any) -> tuple[str, dict]:
 
 
 def _shell_call(cmd: str) -> Classification:
-    """A shell tool's line, as classify_shell reads it, run in the call's own folder (#311). The line keeps its own
-    classification: category, target, axes, text and parts. When it reads a secret store by a relative name from the
-    folder its `cwd` or `workdir` argument names, as `cd <folder> && <line>` would (_cd_store_read, D-038), a
-    credentials part is added for that read. decide's credentials floor then asks, and no_grant keeps a standing
-    grant off the call, while the line's own deny entries, rules, matrix cell, posting checks and reserved entries
-    still apply. One check per call, on the whole line: a nested line is read in its own folders only."""
+    """A shell tool's line, as classify_shell reads it, run in the call's own folder argument (#311). The line keeps
+    its own classification: category, target, axes, text and parts. When it reads a secret store from that folder
+    (_tool_folder_read), a credentials part is added for the read. decide's credentials floor then asks, and
+    no_grant keeps a standing grant off the call, while the line's own deny entries, rules, matrix cell, posting
+    checks and reserved entries still apply. Before #311 a relative word that resolves into a store from the folder
+    made the whole call credentials (#209); that reading is kept beside the line (``also``), and decide keeps the
+    stricter of the two. One check per call, on the whole line: a nested line is read in its own folders only."""
     scope = _scope.get()
-    folders = scope.tool_cwds if scope is not None else ()
-    token = _shell_seen.set({}) if folders and _shell_seen.get() is None else None
-    try:                        # one memo for both reads, so the line is parsed once
-        c = classify_shell(cmd)
-        if not folders or c.category in ("credentials", "store_write"):
+    if scope is None or not scope.tool_cwds:
+        return classify_shell(cmd)
+    folders = scope.tool_cwds
+    seen: dict = {}                 # one memo for the reads below, so the line is parsed once
+    wide = replace(scope, cwds=tuple(dict.fromkeys([*scope.cwds, *map(os.path.abspath, folders)])))
+    token, memo = _scope.set(wide), _shell_seen.set(seen)
+    try:
+        whole = classify_shell(cmd)             # its relative words read from the folder too, as before #311
+        read = next((p for p in _each_part(whole) if p.category == "credentials"), None)
+        c = whole
+        if read is not None:                    # the line alone, as a call of its own in the session's folder
+            c = _line_alone(cmd, scope, {k: v for k, v in seen.items() if k[:1] == ("parse",)})
+            c.also = whole
+        if c.category == "store_write" or any(p.category == "credentials" for p in _each_part(c)):
             return c
-        cmds, subs, _ = _parse(cmd or "")
-        found = _cd_store_read(cmds, subs, folders)
+        found = _tool_folder_read(cmd, folders, read)
     finally:
-        if token is not None:
-            _shell_seen.reset(token)
+        _shell_seen.reset(memo)
+        _scope.reset(token)
     if found:
-        where = folders[0] if len(folders) == 1 else " or ".join(folders)
-        part = _make("credentials", summary=f"shell touching {found} in {where}"[:120], target=found, command=cmd,
-                     own=None, signals=["secret store"])
+        summary, target = found
+        part = _make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
+                     signals=["secret store"])
         c.parts = [*c.parts, part]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     return c
+
+
+def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
+    """classify_shell(cmd) in ``scope`` with budgets and a memo of its own, as a call of its own; ``parsed`` holds
+    the line's parses already made."""
+    left, memo = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET]), _call_memo.set({})
+    token, seen = _scope.set(scope), _shell_seen.set(parsed)
+    try:
+        return classify_shell(cmd)
+    finally:
+        _shell_seen.reset(seen)
+        _scope.reset(token)
+        _call_memo.reset(memo)
+        _brace_left.reset(left)
+
+
+def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification | None) -> tuple[str, str] | None:
+    """How a shell call reads a secret store from its own folder argument (#311), as (summary, target), or None. In
+    this order: the folder is itself a store, as a `cd` word is (a link resolved, a glob that could name one); a
+    relative word resolves into one from it (#209; ``read`` is that reading's credentials part); or the line reads
+    a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192). The target is the folder, or the
+    folder joined with the name. A folder in a repo's own .claude worktrees, commands, agents or skills is the
+    repo's, not a store (_repo_claude), so only a word that resolves into a store counts there."""
+    forms: list[tuple[str, str]] = []           # (the folder as the call gives it, a form to check)
+    for f in folders:
+        x = _expand_text(f)
+        real = os.path.realpath(x) if os.path.isabs(x) and not _GLOBBY.search(x) else ""
+        if real and _repo_claude(real):
+            continue
+        linked = [real] if real and real != os.path.normpath(x) else []      # where a link leads, first
+        forms += [(f, g) for g in [*linked, f] if not _repo_claude(g)]
+    for f, g in forms:
+        if is_sensitive_path(g) or _glob_hits_secret(g):
+            return f"shell runs in {f}", g
+    if read is not None:
+        where = folders[0] if len(folders) == 1 else " or ".join(folders)
+        return f"{read.summary} in {where}", _in_folder(_expand_text(folders[0]), read.target)
+    if not forms:
+        return None
+    cmds, subs, _ = _parse(cmd or "")
+    for f, g in forms:
+        if found := _cd_store_read(cmds, subs, (g,)):
+            return f"shell touching {found} in {f}", _in_folder(_expand_text(g), found)
+    return None
+
+
+def _in_folder(folder: str, name: str) -> str:
+    """The path a relative ``name`` read in ``folder`` stands for; the folder when there is no name."""
+    if not name or name == _TOO_MANY:
+        return folder
+    return name if name.startswith(("/", "~", "$")) else os.path.normpath(os.path.join(folder, name))
+
+
+def _repo_claude(folder: str) -> bool:
+    """A folder in a repo's own `.claude` worktrees, commands, agents or skills, and below no other store, as the
+    search tools judge it (StoreSkip, #241): a checkout at <repo>/.claude/worktrees/x holds the repo's files."""
+    p = os.path.normpath(os.path.abspath(folder))
+    if ".claude" not in p.split(os.sep):
+        return False
+    skip = StoreSkip(p)
+    return skip._project_claude(p + "/x") and not skip._hit(p + "/x")
 
 
 @_brace_budget
@@ -5510,9 +5574,10 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         if store:
             c.signals.append("exo store")
             c.summary, c.target = f"{tool} {store}"[:120], store
-    c.tool = tool
-    if c.category in ("web_post", "web_read") and c.target and _is_local_host(c.target):
-        c.exposure, c.third_party = "private", False
+    for r in _readings(c):
+        r.tool = tool
+        if r.category in ("web_post", "web_read") and r.target and _is_local_host(r.target):
+            r.exposure, r.third_party = "private", False
     return c
 
 
@@ -5922,10 +5987,24 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     decided as before, and that decision stands unless the other is stricter, reason and all. That pass reads rules
     and patterns the decision before never reached (a regex past the first match, a rule after the one skipped), so
     when it fails, the line is decided as before, which then fails only where it failed before. A line of one simple
-    command, beside parts the gate made for it, is decided as before (_one_text).
+    command, beside parts the gate made for it, is decided as before (_one_text). A shell call that also carries its
+    reading from before #311 (Classification.also) is decided both ways, and the stricter outcome stands.
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
     ctx = dict(context or {})
+    d = _decide_reading(c, pol, ctx)
+    if c.also is not None:
+        # #311: the call as read before (a shell call's folder made it credentials as a whole, #209) is decided too.
+        # The stricter outcome stands, and the reserved hits and violations of both are kept.
+        was = _decide_reading(c.also, pol, ctx)
+        d, was = (was, d) if OUTCOMES.index(was.outcome) > OUTCOMES.index(d.outcome) else (d, was)
+        d.reserved = list(dict.fromkeys(d.reserved + was.reserved))
+        d.violations = list(dict.fromkeys(d.violations + was.violations))
+    return d
+
+
+def _decide_reading(c: Classification, pol: Mapping, ctx: dict) -> Decision:
+    """decide() for one reading of a call, under normalized policies."""
     if _one_text(c):
         return _decide(c, pol, ctx, None)
     passed: list[Mapping] = []
@@ -6488,16 +6567,24 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
 
 def no_grant(c: Classification) -> bool:
     """True when no standing grant may cover the call, and observe mode still enforces it (D-033, D-038): its
-    category is in NO_GRANT, or a part's is (a store read from a shell call's own folder, #311)."""
-    return any(p.category in NO_GRANT for p in _each_part(c))
+    category is in NO_GRANT, or a part's is (a store read from a shell call's own folder, #311), in either reading."""
+    return any(p.category in NO_GRANT for r in _readings(c) for p in _each_part(r))
+
+
+def _readings(c: Classification) -> tuple[Classification, ...]:
+    """The call as the gate reads it, and as it read it before #311 when that differs (Classification.also)."""
+    return (c,) if c.also is None else (c, c.also)
 
 
 def call_approvers(c: Classification, pinned: Mapping | None, changed: Mapping | None = None) -> list[str]:
     """Who may answer an ask on ``c``: the approvers strictest_approvers allows for its category and also for each
     other NO_GRANT category among its parts, so a store read the line keeps as a part (#311) is answered by those
-    who may answer credentials. The principal is first in each, so the list is never empty."""
+    who may answer credentials. A call that carries its reading from before #311 (``also``) is answered only by
+    those who may answer that reading too. The principal is first in each, so the list is never empty."""
     out = strictest_approvers(c.category, pinned, changed)
-    for cat in dict.fromkeys(p.category for p in _each_part(c) if p.category in NO_GRANT and p.category != c.category):
+    cats = [r.category for r in _readings(c)] + [p.category for r in _readings(c) for p in _each_part(r)
+                                                  if p.category in NO_GRANT]
+    for cat in dict.fromkeys(x for x in cats if x != c.category):
         allowed = strictest_approvers(cat, pinned, changed)
         out = [a for a in out if a in allowed]
     return out

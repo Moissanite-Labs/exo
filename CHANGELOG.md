@@ -60,18 +60,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
   start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
   subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
-- A shell call's own `cwd` argument is checked the way a leading `cd` target is (#311). The bash tool
-  runs the command in that folder, but the gate read only the command text, so `cat config` with a
-  `cwd` of `~/.kube` was a plain read while `cd ~/.kube && cat config` asked as credentials. The
-  folder a shell call runs in, `cwd` or Hermes' and Codex's `workdir`, now counts among the folders
-  a line enters for the relative-name check (D-038), once per call. The line keeps its own
-  classification and the store read is added as a credentials part, so the call asks every time with
-  no grant, also in observe mode, and only those who may answer credentials answer it. Its deny
-  entries, rules, matrix cell, posting checks and reserved entries still apply. Below a `.claude`
-  folder (a worktree in `<repo>/.claude/worktrees/`) names are checked one by one; any other folder
-  is read as after a `cd` there, so a folder below `~/.ssh` or `~/.aws` counts every relative name,
-  as the store itself does. A folder outside a store is unchanged, and a file tool's `cwd` argument still does not count: only a shell call runs in its
-  own. A line that reads a secret and writes the Exo store is now answered by the principal alone.
+- A shell call's own folder argument is read for secret stores (#311). The bash tool runs a command in
+  its `cwd`, and Hermes' `terminal` and Codex's `exec_command` in their `workdir`. The gate read only
+  the command text and the session's folder, so `cat config` with `~/.kube` as `cwd` was a plain read
+  while `cd ~/.kube && cat config` asked. A credentials part is now added when the call reads a store
+  from its folder: the folder is itself a store (a link is resolved), a relative word resolves into
+  one, or the line reads a store name there as after a `cd`. The line keeps its own classification.
+  So the call asks every time with no grant, also in observe mode, and its deny entries, rules, matrix
+  cell, posting checks and reserved entries still apply. Before, a word that resolved into a store
+  from `cwd` made the whole call credentials. That lost a matrix deny on a force push beside it, and a
+  seat that may answer credentials could answer the push. That reading is still decided, and the
+  stricter outcome stands. The ask goes to those who may answer both the line's category and
+  credentials. A checkout in a repo's own `.claude/worktrees` is the repo's folder, not a store. A
+  file tool's folder argument still does not count. A line that reads a secret and writes the Exo
+  store is now answered by the principal alone.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
