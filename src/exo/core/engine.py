@@ -333,7 +333,6 @@ class CoreRuntime:
         self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
         agentlog.release_writer(self._writer)
         self._writer = None
-        trace.remove_sink(self._on_harness_error)
         await self.stop_channels()
         errors: list[BaseException] = []  # every step runs; the first error is raised at the end
         for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
@@ -341,6 +340,7 @@ class CoreRuntime:
                 await step()  # jobs end with exod
             except BaseException as exc:  # noqa: BLE001 - re-raised below
                 errors.append(exc)
+        trace.remove_sink(self._on_harness_error)  # after the steps: a notice that fails in jobs.close is recorded
         try:
             self.store.close()  # last: the hub is closed before this (serve), so nothing writes events after it
         except BaseException as exc:  # noqa: BLE001

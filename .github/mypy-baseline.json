@@ -266,36 +266,6 @@
       "count": 2
     },
     {
-      "path": "src/exo/bus/config.py",
-      "message": "Argument \"bind\" to \"RelayConfig\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/bus/config.py",
-      "message": "Argument \"title\" to \"RelayConfig\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/bus/config.py",
-      "message": "Argument \"url\" to \"ClientConfig\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/bus/config.py",
-      "message": "Argument 1 to \"Path\" has incompatible type \"str | None\"; expected \"str | PathLike[str]\"",
-      "code": "arg-type",
-      "count": 2
-    },
-    {
-      "path": "src/exo/bus/config.py",
-      "message": "Value of type variable \"AnyStr\" of \"expanduser\" cannot be \"str | None\"",
-      "code": "type-var",
-      "count": 2
-    },
-    {
       "path": "src/exo/bus/mcp_server.py",
       "message": "Value of type \"Mapping[str, str] | None\" is not indexable",
       "code": "index",
@@ -712,12 +682,6 @@
     {
       "path": "src/exo/gate.py",
       "message": "Argument 1 to \"_dquote\" of \"_Lexer\" has incompatible type \"_Word | None\"; expected \"_Word\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"tuple[str, tuple[str, str, str], bool]\"; expected \"tuple[str, tuple[str, str, str, str, str], bool]\"",
       "code": "arg-type",
       "count": 1
     },

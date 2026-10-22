@@ -651,7 +651,6 @@ def test_more_exec_keys_are_read_as_commands(cmd):
     ("git -c 'url.ext::sh -c touch% /tmp/p.insteadOf=https://h/' clone https://h/r", "url.ext::"),
     ("git config url.ext::x.pushInsteadOf https://h/", "url.ext::x.pushInsteadOf"),
     ("git config remote.origin.url 'ext::sh -c touch% /tmp/p'", "remote.origin.url"),
-    ("git -c remote.origin.pushurl='ext::sh -c x' push origin HEAD", "remote.origin.pushurl"),
 ])
 def test_ext_transport_switches_ask(cmd, mention):
     asks(cmd, mention)
@@ -676,6 +675,72 @@ def test_ext_transport_switches_ask(cmd, mention):
 def test_git_config_that_runs_nothing_is_unchanged(cmd, category, outcome):
     c = classify(sh(cmd))
     assert (c.category, decide(c).outcome) == (category, outcome), c
+
+
+# --- #335: config set on the line never hides git's subcommand, so a deny on it still fires -----------------
+
+# A `git -c` key that loads a file, allows a transport or names a program stood for the whole line on main 5f434b15,
+# so the push behind it was not read: each line here only asked under DENY, where main before #231 (ad635f03) denied
+# it. The config is a part of its own (_exec_options), and the subcommand keeps its category.
+@pytest.mark.parametrize("cmd,category", [
+    ("git -c protocol.ext.allow=never push --force origin main", "force_push"),
+    ("git -c protocol.allow=user push --force origin main", "force_push"),
+    ("git -c include.path=/dev/null push --force origin main", "force_push"),
+    ("git -c include.path=/dev/null push --delete origin old", "delete"),
+    ("git -c include.path=/dev/null push origin :old", "delete"),
+    ("git -c init.templateDir=/tmp/t push --force origin main", "force_push"),
+    ("git -c browser.x.path=/usr/bin/true push --force origin main", "force_push"),
+    ("git -c interactive.diffFilter=cat push --force origin main", "force_push"),
+    ("git -c remote.origin.receivepack=git-receive-pack push --force origin main", "force_push"),
+    ("git -c remote.origin.pushurl='ext::sh -c x' push origin", "vcs_push"),
+    ("git -c remote.origin.pushurl='ext::sh -c x' push origin HEAD", "vcs_push"),
+    ("git -c url.ext::x.insteadOf=https://example.com/ push origin main", "vcs_push"),
+    ("git --config-env=include.path=X push --force origin main", "force_push"),
+    ("git --config-env include.path=X push --force origin main", "force_push"),
+    ("sudo git -c include.path=/dev/null push -f origin main", "force_push"),
+    ("git -c core.hooksPath=/tmp/h push --force origin main", "force_push"),
+    ("git -c core.pager=less push origin main", "vcs_push"),
+])
+def test_git_c_keeps_the_subcommand_so_a_deny_fires(cmd, category):
+    c = classify(sh(cmd))
+    assert c.category == category and "indirection" in c.signals, c
+    assert decide(c).outcome == "ask", c
+    assert decide(c, DENY).outcome == "deny", c
+
+
+@pytest.mark.parametrize("cmd,denied", [
+    ("git -c include.path=/dev/null push --delete origin old", "delete"),
+    ("git -c protocol.allow=user push origin :old", "delete"),
+    ("git -c include.path=/x reset --hard", "history_rewrite"),
+    ("git -c protocol.ext.allow=never push --force origin main", "force_push"),
+    ("git -c 'include.path=/tmp/c' push --force origin main && rm -rf /srv/data", "force_push"),
+])
+def test_git_c_keeps_the_category_a_deny_names(cmd, denied):
+    c = classify(sh(cmd))
+    assert decide(c, normalize_policies({"gates": {"deny": [denied]}})).outcome == "deny", c
+    assert decide(c, normalize_policies({"gates": {"categories": {denied: "deny"}}})).outcome == "deny", c
+
+
+@pytest.mark.parametrize("cmd,mention", [
+    ("git -c core.pager=less log", "core.pager"),
+    ("git -c include.path=/tmp/c log", "include.path"),
+    ("git -c protocol.ext.allow=always fetch", "protocol.ext.allow"),
+])
+def test_git_c_on_a_read_still_asks(cmd, mention):
+    asks(cmd, mention)
+
+
+def test_git_config_key_keeps_the_local_write_part():
+    """`git config include.path FILE` asks, and it is still the local write it was before #231, so a deny on
+    local_write fires."""
+    c = classify(sh("git config include.path /tmp/c"))
+    assert c.category == "opaque_exec" and "include.path" in c.summary, c
+    assert decide(c, normalize_policies({"gates": {"deny": ["local_write"]}})).outcome == "deny", c
+
+
+def test_an_unknown_subcommand_still_names_the_config_that_may_define_it():
+    c = classify(sh("git -c alias.l='!echo hi' l"))
+    assert c.category == "opaque_exec" and "alias.l" in c.summary, c
 
 
 # --- review of e7f7b19: PS4 is expanded before every traced command, also in a non-interactive shell -----

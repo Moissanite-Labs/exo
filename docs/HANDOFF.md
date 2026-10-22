@@ -32,12 +32,20 @@ needs nothing else. See the skill for the template.
 pinned verbatim blocks. The `exo-context` plugin uses it for `/exo branch`, `/exo handoff` and `/exo resume`.
 The TUI `/handoff` command does not use it.
 
-Its rulings and corrections, the pins included, come only from the principal's own messages (D-040). A user message
-whose `author` or `principal` flag says otherwise is skipped: a peer, a bus seat, a job notice, a context note. A
-pinned block is carried only from a message that opens with it (exo-context's own block) or with a compaction marker
-(a host's summary). One inside a skipped message, a tool result or the agent's reply is not carried. Neither is one
+Its rulings and corrections, the pins included, come only from the principal's own messages (D-040). Message dicts
+are read through `provenance.author_of`, meta tags included. A user message whose author is not the principal is
+skipped: a peer, a bus seat, a job notice, a context note. A peer, bus or job tag in `meta` refuses at any role. A
+pinned block is carried only from a message that opens with it (exo-context's own block). A row opening with a
+compaction marker (a host's summary) carries nothing itself, in a user row as much as an assistant one: a stock
+summary a host built on its own reads as the principal's turn, and nothing separates it from one exo-context
+escaped. exo-context keeps the continuity from its session pins, observed only from the principal's own messages. One
+inside a skipped message, a tool result or the agent's reply is not carried. Neither is one
 quoted further down a message, such as a peer's turn the Exo core's system message quotes word for word because it
-was too small to summarize. There the core also escapes the block's tags, so the model does not read it as a block
+was too small to summarize. The pins are kept per session id and follow it: a host that compacts into a
+child session says so in `on_session_start`, with `boundary_reason="compression"` and `old_session_id`
+set, and the pins carry to the child; a reset-only switch (/new, /resume, /branch) sends no
+`on_session_start`, so the host calls `bind_session_state` instead, and a branch child inherits its
+parent's pins. Open-decision pins keep only the newest 12. There the core also escapes the block's tags, so the model does not read it as a block
 either (#279, `docs/MEMORY-MODEL.md` "Who wrote it"). Every summary has its tags escaped as it is made, and
 `resume_text` escapes every tag in the handoff before `/exo resume` puts it into the system message. The file holds
 the agent's last report and a summary, and it records the principal's rulings and corrections as quoted items under

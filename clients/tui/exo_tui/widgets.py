@@ -62,6 +62,7 @@ class Block(Static):
         self.meta = meta  # panel footer line, dim
         self.shown: Any = None
         self.steer = steer  # a user message sent while a turn was running
+        self.steer_state = "sending"  # delivered only after confirmation from the core
         self.pending = False  # a steer the core still holds: up or /unsteer pulls it back (D-045)
         self.streaming = False  # text still arriving: paint cheap plain text, Markdown once the block closes
 
@@ -103,7 +104,9 @@ class Block(Static):
             row = Table.grid(padding=(0, 1))
             lead = Text()
             if self.steer:
-                lead.append("steer queued " if self.pending else "steer ", style=rich_style("fg3"))
+                state = "queued" if self.pending else self.steer_state
+                role = "accent2" if self.pending else "ok" if state == "delivered" else "fg3"
+                lead.append(f"steer {state} ", style=rich_style(role))
             lead.append(PROMPT, style=rich_style("accent", "bold"))
             row.add_column(no_wrap=True)
             row.add_column(ratio=1)
@@ -527,22 +530,22 @@ class ApprovalCard(Vertical, can_focus=True):
         r = self.req
         width = self.size.width or 60
         out: list[Any] = [header_rule(f"APPROVAL {DOT} {r.risk}", "accent", width)]
+        if not (self.noting or self.confirming):
+            pairs = [("o", "once")] if "allow" in r.options else []
+            if "allow_always" in r.options:
+                pairs.append(("a, Enter", "always"))
+            pairs.append(("d, Enter", "deny"))
+            keys = Text("Choose: " if self.has_focus else "Ctrl+F, then ", style=rich_style("accent2"))
+            keys.append_text(chips(pairs))
+            out.append(keys)
         out.append(Text(r.summary, style=rich_style("fg")))
         if r.call is not None:
             call = Text(f"{r.call.name} {r.call.arguments}", style=rich_style("fg3"), no_wrap=True, overflow="ellipsis")
             out.append(call)
-        pairs = [("o", "once")] if "allow" in r.options else []
-        if "allow_always" in r.options:
-            pairs.append(("a", "always"))
-        pairs.append(("d", "deny"))
         if self.noting:
             out.append(Text("why deny? enter sends, empty is fine", style=rich_style("fg3")))
         elif self.confirming:
             out.append(Text("allow always? enter confirms, any other key cancels", style=rich_style("accent2")))
-        else:
-            out.append(chips(pairs))
-            if not self.has_focus:
-                out.append(Text("tab, click or ctrl+f to answer; your typing is safe", style=rich_style("fg3")))
         return Group(*out)
 
     def compose(self) -> ComposeResult:
