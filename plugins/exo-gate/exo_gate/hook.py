@@ -378,14 +378,21 @@ class Gate:
     # --- hooks ------------------------------------------------------------------------
 
     def _load_body_file(self, c: gate.Classification) -> None:
-        if c.text_file and self.executor_required:
-            # Tool-selected host paths, including symlinks, must never be read before the worker.
-            raise GateAuditError("Body-file inspection is unavailable with a required executor")
-        if not (c.text_file and self.settings.read_body_files and not c.text):
+        """Read a post's body file into its text when the hook can be sure it reads the file the command will:
+        an absolute path to a regular file of at most 256 KiB. A relative or `~` path names a file in the
+        command's folder or home, which the hook does not know. Anything not read stays unseen, so the post
+        asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
+        symlinks included, are never read before the worker, and `_rules` refuses the call."""
+        if not c.text_file or c.text or not self.settings.read_body_files or self.executor_required:
             return
         try:
-            p = Path(c.text_file).expanduser()
-            if p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
+            p = Path(c.text_file)
+            # /dev and /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here
+            # they give exod's own, not what gh will read, so they stay unseen (#208).
+            if any(str(x).startswith(("/dev/", "/proc/")) or str(x) in ("/dev", "/proc")
+                   for x in (p, Path(os.path.realpath(p)))):
+                return
+            if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
                 c.text = p.read_text(encoding="utf-8", errors="replace")
                 if not c.link:
                     c.link = str(p)
@@ -445,15 +452,16 @@ class Gate:
             d.outcome = out
 
     async def apre_tool_call(self, tool_name: str = "", args: Any = None, session_id: str = "", task_id: str = "",
-                             tool_call_id: str = "", turn_id: str = "", risk: Any = None,
+                             tool_call_id: str = "", turn_id: str = "", risk: Any = None, cwd: str = "",
                              **_: Any) -> Optional[dict]:
-        """The registered hook: the rules, plus the decision model when ``decision_model`` is on."""
+        """The registered hook: the rules, plus the decision model when ``decision_model`` is on. ``cwd`` is the
+        session's working folder, from which the tool reads relative paths (#209)."""
         args = args if isinstance(args, dict) else {}
         verdict = None
         risk_s = self._risk(tool_name, risk)
         if self.settings.decision_model:
             try:
-                c, d = self._rules(tool_name, args, risk_s)
+                c, d = self._rules(tool_name, args, risk_s, cwd)
                 if d.outcome != "deny":
                     verdict = await self._verdict(d, c, risk_s, tool_name)  # (option, via) or None
             except Exception as exc:
@@ -464,15 +472,15 @@ class Gate:
                 if self.executor_required:
                     return {"action": "block", "message": "Required gate checks failed"}
         return self.pre_tool_call(tool_name, args, session_id, task_id, tool_call_id, turn_id, risk,
-                                  _verdict=verdict)
+                                  _verdict=verdict, cwd=cwd)
 
     def pre_tool_call(self, tool_name: str = "", args: Any = None, session_id: str = "", task_id: str = "",
                       tool_call_id: str = "", turn_id: str = "", risk: Any = None, _verdict: Any = None,
-                      **_: Any) -> Optional[dict]:
+                      cwd: str = "", **_: Any) -> Optional[dict]:
         args = args if isinstance(args, dict) else {}
         try:
             return self._pre_tool_call(tool_name, args, session_id, tool_call_id, self._risk(tool_name, risk),
-                                       _verdict)
+                                       _verdict, cwd)
         except Exception as exc:
             logger.exception("exo-gate: internal error on %s", tool_name)
             if self.executor_required:
@@ -488,9 +496,10 @@ class Gate:
                                                     "Approve only if you expected this action. Default if no reply: skip.",
                     "rule_key": f"exo-gate:error:{tool_name}"}
 
-    def _rules(self, tool: str, args: dict, risk: str) -> tuple[gate.Classification, gate.Decision]:
+    def _rules(self, tool: str, args: dict, risk: str, cwd: str = "") -> tuple[gate.Classification, gate.Decision]:
         """Classification and the rule outcome (policies, then the registry risk floor)."""
-        c = gate.classify({"tool": tool, "args": args})
+        action = {"tool": tool, "args": args}
+        c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
         self._load_body_file(c)
         today = _dt.date.today().isoformat()
         ctx = {"spent_today": self._spent.get(today, 0.0)}
@@ -509,19 +518,27 @@ class Gate:
         if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
             d.reason += f" (registry risk is high and {tool} is not a known tool)"
             d.outcome = "ask"
+        if self.executor_required and d.outcome != "deny" and (c.text_file or gate.body_unseen(c)):
+            # The gate cannot approve contents it has not seen (#208): a body file, stdin, @file, an expansion.
+            d.outcome, d.rule = "deny", "required"
+            d.reason = ("a required executor runs only a post whose body the gate read on the line; "
+                        "pass the text inline")
         return c, d
 
     def _pre_tool_call(self, tool: str, args: dict, session_id: str, tool_call_id: str,
-                       risk: str = "", verdict: Any = None) -> Optional[dict]:
+                       risk: str = "", verdict: Any = None, cwd: str = "") -> Optional[dict]:
         verdict, via = verdict if isinstance(verdict, tuple) else (verdict, None)
-        c, d = self._rules(tool, args, risk)
+        c, d = self._rules(tool, args, risk, cwd)
         pol = self.policies()
         today = _dt.date.today().isoformat()
         if d.outcome != "deny":
             self._tighten(d, verdict)
         outward = gate.binds_exact(c, d)
         binding = gate.approval_binding(c, args) if outward else ""
-        grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" else None
+        # No standing allow for credentials and store writes, nor for a post whose body the gate did not see:
+        # its binding hashes only the line, so a grant would cover any later body (#208).
+        once = c.category in gate.NO_GRANT or gate.body_unseen(c)
+        grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" and not once else None
         if grant:
             d.outcome, d.rule = "allow", "grant"
             d.reason += f"; standing grant {grant['id']} (until {_iso(grant['expires'])})"
@@ -546,7 +563,10 @@ class Gate:
             if d.violations:
                 msg += " Fix: " + "; ".join(d.violations) + "."
             key = self._rule_key(tool, args, c, d)
-            approvers = gate.approvers_for(c.category, pol.get("approvals"))
+            # D-038 (#211): a changed approvals.yaml can narrow who answers at once; a wider one waits for /gate accept.
+            changed = self.changed_policies()
+            approvers = gate.strictest_approvers(c.category, pol.get("approvals"),
+                                                 changed.get("approvals") if changed is not None else None)
             # persist: this gate keeps "always" grants itself (scoped, expiring, in the store), so the
             # core must not also keep an unscoped one in memory.
             approval_key = "a_" + secrets.token_hex(16)
@@ -555,7 +575,7 @@ class Gate:
                       "persist": True}
             if binding:
                 result["binding"] = binding
-            if c.category in gate.NO_GRANT:
+            if once:
                 result["once"] = True      # the core never stores an "always" for this (no standing allow)
             body["rule_key"] = key
             body["approval_key"] = approval_key
@@ -571,7 +591,7 @@ class Gate:
         if result and result["action"] == "approve":
             with self._lock:
                 scope = {"rule": c.category, "target": c.target or tool, "binding": binding, "outward": outward,
-                         "tool": tool}
+                         "tool": tool, "once": once}
                 self._pending[result["approval_key"]] = PendingApproval(
                     eid, session_id or None, scope, "plugin_rule:" + result["rule_key"], tool_call_id)
                 if len(self._pending) > 500:
@@ -622,12 +642,24 @@ class Gate:
             logger.warning("exo-gate: grant lookup failed; asking instead", exc_info=True)
             return None
 
+    def _grant_days(self, outward: bool) -> float:
+        """How long an "always" lasts: the pinned approvals.yaml, or the shorter of pinned and changed while a
+        change waits for /gate accept, so 0 in either means no grant (D-038, #211)."""
+        key = "outward_always_days" if outward else "always_days"
+        days = float((self.policies().get("approvals") or {}).get(key) or 0)
+        changed = self.changed_policies()
+        if changed is not None:
+            days = min(days, float((changed.get("approvals") or {}).get(key) or 0))
+        return days
+
     def _add_grant(self, scope: Mapping, by: str, session: Optional[str], ref: Optional[str]) -> None:
         if gate.approver_identity(by) != "principal":  # standing grants are the principal's alone
             logger.warning("exo-gate: %s answered always; no standing grant kept", by)
             return
-        approvals = self.policies().get("approvals") or {}
-        days = float(approvals.get("outward_always_days" if scope.get("outward") else "always_days") or 0)
+        if scope.get("once"):  # asked with no "always" option (NO_GRANT, or a body the gate did not see)
+            logger.warning("exo-gate: always answered on a once-only ask; no standing grant kept")
+            return
+        days = self._grant_days(bool(scope.get("outward")))
         args = (str(scope.get("rule") or ""), str(scope.get("target") or ""),
                 str(scope.get("binding") or ""), days, by, str(scope.get("tool") or ""))
         if self.executor_required:

@@ -69,14 +69,12 @@ def test_serve_pid_is_private_before_server_runs(tmp_path, monkeypatch):
     private_dir(home / "run")
     pid = ensure_core.pid_path(home)
 
-    def run(main):
-        try:
-            assert pid.read_text() == f"{os.getpid()}\n"
-            assert mode(pid) == 0o600
-        finally:
-            main.close()
+    async def serve(engine, claimed=None, **kw):  # the pid is written once the socket's start lock is held
+        claimed()
+        assert pid.read_text() == f"{os.getpid()}\n"
+        assert mode(pid) == 0o600
 
-    monkeypatch.setattr(cli_chat.asyncio, "run", run)
+    monkeypatch.setattr("exo.server.app.serve", serve)
     args = SimpleNamespace(seat=None, engine="echo", stdio=False, tcp=None, socket=None)
     assert cli_chat.cmd_serve(args) == 0
     assert not pid.exists()
@@ -94,10 +92,10 @@ def test_spawn_log_and_pid_are_private(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ensure_core.subprocess, "Popen", popen)
     assert ensure_core._spawn(home).pid == 12345
-    assert mode(home) == mode(home / "logs") == mode(home / "run") == 0o700
-    assert mode(ensure_core.log_path(home)) == mode(ensure_core.pid_path(home)) == 0o600
+    assert mode(home) == mode(home / "logs") == 0o700
+    assert mode(ensure_core.log_path(home)) == 0o600
     assert ensure_core.log_path(home).read_bytes() == b"startup log\n"
-    assert ensure_core.pid_path(home).read_text() == "12345\n"
+    assert not ensure_core.pid_path(home).exists()  # the core writes run/exod.pid itself, under the socket's lock
 
 
 @pytest.mark.parametrize("dangling", [False, True])

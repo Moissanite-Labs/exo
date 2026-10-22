@@ -197,9 +197,9 @@ def test_double_quoted_name_is_read_once(monkeypatch, n):
     seen = []
     real = gate.classify_shell
 
-    def counted(cmd, depth=0, *line):
+    def counted(cmd, depth=0):
         seen.append(cmd)
-        return real(cmd, depth, *line)
+        return real(cmd, depth)
 
     monkeypatch.setattr(gate, "classify_shell", counted)
     line = 'unset "a[$(' * n + "true" + ')]"' * n
@@ -219,9 +219,9 @@ def test_escaped_dollar_runs_no_command(monkeypatch, line):
     seen = []
     real = gate.classify_shell
 
-    def counted(cmd, depth=0, *line):
+    def counted(cmd, depth=0):
         seen.append(cmd)
-        return real(cmd, depth, *line)
+        return real(cmd, depth)
 
     monkeypatch.setattr(gate, "classify_shell", counted)
     c = sh(line)

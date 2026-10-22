@@ -6,13 +6,30 @@ import dataclasses
 from typing import Any, Iterable
 
 from exo import handoff as hf
+from exo import provenance
 
 
 def classified(messages: list[dict[str, Any]]) -> tuple[list[hf.Signal], list[hf.Signal]]:
     """(rulings, corrections) from principal messages, verbatim, in order. ``exo.handoff`` classifies
     with ``exo.capture`` and keeps a short message whole, a long one as the classified sentence. A user message
-    whose ``author`` or ``principal`` flag says it is not the principal's is skipped (D-040)."""
+    whose author, read through ``provenance.author_of`` with its meta tags, is not the principal's is skipped
+    (D-040)."""
     return hf.extract_rulings_and_corrections([m for m in messages if isinstance(m, dict)])
+
+
+def open_decisions(messages: list[dict[str, Any]]) -> list[hf.Signal]:
+    """Open decisions as ``exo.handoff`` finds them: a deferred call in the principal's turn, a marked one
+    in the agent's. A row that does not read as the principal's holds none (D-040)."""
+    return hf._open_decisions([m for m in messages if isinstance(m, dict)])
+
+
+def pinned_open_decisions(messages: list[dict[str, Any]]) -> list[hf.Signal]:
+    """The open decisions the engine pins: only the principal's own deferrals, from a user row. The agent's
+    marked line still reaches the block of the compaction that saw it, but it is never pinned as the
+    principal's words (#391 review)."""
+    view = provenance.principal_view([m for m in messages if isinstance(m, dict)])
+    return [s for s in hf._open_decisions(view)
+            if s.index is not None and view[s.index].get('role') == 'user']
 
 
 def merge(*groups: Iterable[hf.Signal]) -> list[hf.Signal]:

@@ -73,7 +73,7 @@ def cmd_serve(a: Any, store: Any = None) -> int:
         print(stop_core())
         return 0
     from exo.core.tools.builtin.shell import raise_nofile_limit
-    from exo.server.app import load_engine, serve
+    from exo.server.app import SocketBusy, load_engine, serve
 
     raise_nofile_limit()  # tools inherit this; macOS defaults to 256 open files
     if a.seat:
@@ -99,8 +99,14 @@ def cmd_serve(a: Any, store: Any = None) -> int:
         token_path = Path(a.token_file).expanduser() if a.token_file else default_token_file()
         token = _server_token(token_path)
         print(f"exod: TCP token in {token_path}", file=sys.stderr)
+    pidfile = pid_path(socket.parent.parent) if socket == default_socket() else None
+
+    def claimed() -> None:  # runs with the socket's start lock held: only the core that owns the socket records itself
+        if pidfile is not None:
+            private_file(pidfile).write_text(f"{os.getpid()}\n")
+
     async def main() -> None:
-        task = asyncio.create_task(serve(engine, socket=socket, tcp=tcp, token=token,
+        task = asyncio.create_task(serve(engine, socket=socket, tcp=tcp, token=token, claimed=claimed,
                                          ready=lambda w: print(f"exod: listening on {w}", file=sys.stderr)))
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -110,11 +116,11 @@ def cmd_serve(a: Any, store: Any = None) -> int:
         except asyncio.CancelledError:
             pass
 
-    pidfile = pid_path(socket.parent.parent) if socket == default_socket() else None
-    if pidfile is not None:
-        private_file(pidfile).write_text(f"{os.getpid()}\n")
     try:
         asyncio.run(main())
+    except SocketBusy as exc:  # a second core on the socket: the start lock, or a live server, names the first
+        print(f"exod: {exc}", file=sys.stderr)
+        return 1
     finally:
         if pidfile is not None and pidfile.is_file() and pidfile.read_text().strip() == str(os.getpid()):
             pidfile.unlink()  # only our own pid: a core that lost a start race leaves the winner's

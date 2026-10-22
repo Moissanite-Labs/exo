@@ -319,7 +319,7 @@ def mark(root: str | Path, exo: str, commit: str, rejected: str | None = None, n
         raise ProvenanceError([f"commit {commit!r} is not a hex sha"])
     if repo is not None:
         full = _git(repo, "rev-parse", "--verify", f"{commit}^{{commit}}").strip()
-        if not force and not _is_ancestor(repo, m.commit, full):
+        if not force and not _git_ok(repo, "merge-base", "--is-ancestor", m.commit, full):
             raise ProvenanceError([f"{commit} does not descend from recorded {m.commit}; use force"])
         commit = full
     today = today or dt.date.today().isoformat()
@@ -357,14 +357,8 @@ def _git(repo: str | Path, *args: str) -> str:
     return r.stdout
 
 
-def _is_ancestor(repo: str | Path, a: str, b: str) -> bool:
-    r = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", a, b], capture_output=True)
-    return r.returncode == 0
-
-
-def _has_commit(repo: str | Path, sha: str) -> bool:
-    r = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True)
-    return r.returncode == 0
+def _git_ok(repo: str | Path, *args: str) -> bool:
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True).returncode == 0
 
 
 def ensure_mirror(url: str, path: str | Path) -> Path:
@@ -394,9 +388,9 @@ def pick_target(repo: str | Path, to: str | None = None, baselines: list[str] = 
         return _git(repo, "rev-parse", "--verify", f"{to}^{{commit}}").strip()
     tags = [t for t in _git(repo, "tag", "--list", "v*").split() if _STABLE.match(t)]
     tags.sort(key=lambda t: tuple(int(x) for x in _STABLE.match(t).groups()), reverse=True)
-    present = [b for b in baselines if _has_commit(repo, b)]
+    present = [b for b in baselines if _git_ok(repo, "cat-file", "-e", f"{b}^{{commit}}")]
     for t in tags[:5]:
-        if all(_is_ancestor(repo, b, t) for b in present):
+        if all(_git_ok(repo, "merge-base", "--is-ancestor", b, t) for b in present):
             return _git(repo, "rev-parse", f"{t}^{{commit}}").strip()
     return _git(repo, "rev-parse", "HEAD").strip()
 
@@ -470,9 +464,7 @@ def _renames(repo: str | Path, base: str, target: str, path: str) -> tuple[str |
         cols = line.split("\t")
         if len(cols) == 3 and cols[0].startswith("R") and cols[1] == new:
             new = cols[2]
-    if new != path:
-        return new, False
-    return None, True
+    return (new, False) if new != path else (None, True)
 
 
 _ATTRS: Path | None = None
@@ -496,10 +488,10 @@ def report_module(repo: str | Path, m: Module | Watch, target: str, root: Path) 
     if not m.commit:
         rep.notes.append("no recorded commit; nothing to diff against")
         return rep
-    if not _has_commit(repo, m.commit):
+    if not _git_ok(repo, "cat-file", "-e", f"{m.commit}^{{commit}}"):
         rep.notes.append(f"recorded commit {m.commit} not found upstream")
         return rep
-    if _is_ancestor(repo, target, m.commit) and target != m.commit:
+    if _git_ok(repo, "merge-base", "--is-ancestor", target, m.commit) and target != m.commit:
         rep.notes.append("target is behind the recorded commit; pass --to")
         return rep
     paths = list(m.upstream)

@@ -75,7 +75,7 @@ picks the seat, `--title TEXT` names a new thread. Keys:
 |---|---|
 | `ctrl+c` | Stops the running turn. Your draft stays. With nothing running it only shows a hint that `ctrl+q` quits; a single press never quits. `/stop` does the same. |
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
-| typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
+| typing while a turn runs | Steers it: the text lands at the next tool step. The line shows `steer sending`, then `steer queued` while waiting and `steer delivered` when it reaches the conversation. The queued count stays beside the composer while you type. Delivered means received, not yet acted on. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
 | `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>` | List the subagents your session handed work to, watch one's session, send a running one a note (it lands at its next tool step) or stop it. A finished subagent answers with a clear error and nothing changes. The parent's receipt says it was steered or stopped. On the web page the Tasks cards have Open, Steer and Stop. |
 | `F6` | Loads 60 earlier messages when the top of the transcript says "N earlier messages" (with `/layout inverse` it is the bottom). Scrolling to that end does the same. |
@@ -285,8 +285,9 @@ does not enable that operation. Installation details are in `docs/EXECUTORS.md`.
 The handoff facts also mark Git information unavailable; inspecting Git runs
 through the installed executor instead of the host handoff collector.
 If the required gate cannot save its decision or approval evidence, the tool
-returns an error and does not run. Body-file posting requests are also blocked
-before host inspection; inline text can be checked by the gate.
+returns an error and does not run. A post whose text the gate cannot read on the
+line (a body file, stdin, `$( )` or a variable) is also refused; inline text can
+be checked by the gate.
 Simultaneous approvals are recorded separately. Changed policies and standing
 grants become active only after their required authorization audit succeeds.
 
@@ -297,7 +298,8 @@ Both clients use `o` to allow once, `a` to choose always, and `d` to deny with a
 including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
 it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
 even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
-`ctrl+f` to move to it. A card goes away the moment the request is closed, whoever closed it, and also when you stop
+`ctrl+f` to move to it. In the terminal, the card leads with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`:
+press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
@@ -313,11 +315,12 @@ What the gate asks about, and why:
   name (#209). `docs/GATE.md` lists the other spellings it misses.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
-  are asked again. This is so a draft you read cannot be swapped for another.
+  are asked again. This is so a draft you read cannot be swapped for another. A post whose text the gate cannot
+  read (piped in, a file given by a relative path, `$( )` or a variable) asks, and offers no "always". The gate
+  reads a body file given by its full path.
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
-  the post and lists what it found. The sweep and the exact-text check see only text in the command itself: a body
-  that comes from standard input, a command or a file the gate cannot load is not swept, and an "always" for that
-  post can cover a later body (#208).
+  the post and lists what it found. The sweep and the exact-text check see only text the gate can read, so a body
+  it cannot read asks instead (#208, above).
 - **Code the gate cannot see into asks (D-038).** A script file, `python -c`, `node -e`, a heredoc fed to a shell,
   `make`, `npm run` or `npm test`, `npx`, `xargs`, `find -exec`, a variable or `$( )` in the program's place, a shell
   function, `source`, or a program the gate does not know: each asks once, for that exact command. Read the whole
@@ -326,7 +329,11 @@ What the gate asks about, and why:
   runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like. These are
   trusted by name, so a test runner still runs your project's files. Options of trusted programs that run a
   command (`tar --to-command`, `rsync -e`, `ssh -o ProxyCommand` and the like) are read as the command they run
-  (#164). A `$( )` inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the
+  (#164). A variable that loads code or changes where programs and config are found asks when the line sets it
+  (`LD_PRELOAD`, `PATH`, `PYTHONPATH`, `HOME`, git config through `git -c` or `GIT_CONFIG_*`; #231). Common setups
+  still run: `PATH=$PATH:./node_modules/.bin`, a virtualenv's `bin` first in `PATH`, `PYTHONPATH=src python -m
+  pytest` and `GIT_CONFIG_GLOBAL=/dev/null`. Any other folder in `PATH`, such as
+  `export PATH="$HOME/.local/bin:$PATH"`, asks. A `$( )` inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the
   like (`printf -v 'a[$(...)]'`) is read (#179, fixed in #189), and so is a command run behind a wrapper such as
   `setsid`, `flock` or `watch` (#160, fixed in #196), and a heredoc or pipe into a group such as `{ bash; }`
   (#161, fixed in #198). The gate finds programs only in the shell forms its parser reads. A command inside a
@@ -336,18 +343,33 @@ What the gate asks about, and why:
   when your policy denies it (#137).
 - **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
   against each command the gate reads on a line, so with pushes denied `git push origin main && rm -rf build` is
-  denied, not asked about the delete. A `categories:` setting or a rule still sees only the line's most severe
-  command, so it can ask where a `deny:` entry would deny (#191).
+  denied, not asked about the delete. A `categories: {X: deny}` setting or a rule with `decision: deny` holds the
+  same way (#191).
+- **An allow rule names the command it allows (#394).** A rule with `decision: allow` or `log` and a `command:` regex
+  lowers a line of several commands, or a command with another run inside it (`ssh host '...'`, `bash -c '...'`,
+  `eval`), only when the regex matches the line, as before, and also the command that decides the line, as you wrote
+  it. So a rule for `^git status` no longer allows `git status; git push --force origin main`, while a rule for
+  `git push --force origin main` still allows `cd repo && git push --force origin main`. The regex must also match any
+  other command on the line that would be asked about or stopped alone (`rm -rf build`), and any command that sets the
+  shell up for the next one (`export`, `alias`, `hash`, a function). This change never makes a decision looser than it
+  was: a rule that did not match a line before still does not. So a rule with anchors such as
+  `^git push --force origin main$` still covers only the push on its own. A rule written for a whole line such as
+  `^git push origin main && git push origin dev$` now has to name each command too, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`. Ask and deny rules still see the
+  whole line, but an ask rule lifts a deny only from the commands it names. `docs/GATE.md` has the details.
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
-  standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
-  covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
-  #125) adds it. The gate resolves symbolic links in an absolute path (#130), but otherwise goes by the path as the
-  command spells it, so some writes are not seen as store writes yet: a relative name such as `gates.yaml` written
-  by a tool whose working folder is `policies/`, a glob spelling, a hard link, and a store file opened on a numbered
-  file descriptor and written back through `/dev/fd/3` (#217). A brace spelling (`polic{i..i}es`) is seen (#224).
-  `docs/GATE.md` lists the rest.
+  standing grants), the ledger, `keys/`, seat files, the core's socket, or the signed-update trust pin in `update/`
+  (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. Reading your policies does
+  not ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves
+  symbolic links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some
+  writes are not seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working
+  folder is `policies/`, a glob spelling, a hard link, and a store file opened on a numbered file descriptor and
+  written back through `/dev/fd/3` (#217). A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md` lists
+  the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
+  This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length
+  (or 0) applies at once. A seat you add waits for `/gate accept`.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
   act on a public place. Reading and local edits do not. Your `policies/gates.yaml` can change any cell.
 
@@ -391,7 +413,7 @@ Details: `docs/PEERS.md`.
 A seat is one named setup of an agent: whom it serves, which models, tools, skills and plugins it has, and where its
 threads start. Seat files live in `$EXO_HOME/seats/`. Run one with `exo serve --seat NAME` or `exo tui --seat NAME`.
 When an `exo serve` already runs, a second seat needs its own socket:
-`exo serve --seat NAME --socket $EXO_HOME/run/NAME.sock`. Without it, `exo serve` refuses to start and says so.
+`exo serve --seat NAME --socket $EXO_HOME/run/NAME.sock`. Without it, `exo serve` refuses to start and says so, and so does the second of two started at the same moment.
 Ready-made role templates are in `plugins/exo-orchestra/seats/`. To write your own, see `docs/SEATS.md`.
 
 A seat can set the folder its threads start in, with `[session] cwd` in `seat.toml`. Exo warns once when a thread's
@@ -426,6 +448,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |
 | The web page says "missing or wrong page token" | Open the link `exo web` printed this time. Each launch has a new token. |
+| The terminal says `not sent: principal connection refused: ...` | The window checked the process on the core's socket against the core's launch record, and the check failed (the message says why: a stale record, another process on the socket, or a core from before an update), so nothing was sent. The text stays in the box. Run `exo stop`, then start `exo` again (`docs/GATE.md` "Unix peer authentication"). |
 | The web page says "this browser link was already used or has expired" | The browser link is good once, for two minutes. Paste the link `exo web` printed in the terminal into this tab; do not click it in the terminal. If the terminal also warned that a link was used twice, paste the new link it printed into the browser that is already open. |
 | Keys must stay private | Exo never writes secrets through `config.set`, and removes known key values from tool output. See `docs/SEATS.md`. |
 

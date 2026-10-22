@@ -81,11 +81,7 @@ def _map_positions_norm_to_orig(orig_to_norm: list[int], norm_matches: list[Span
     starts: dict[int, int] = {}
     for orig_pos, norm_pos in enumerate(orig_to_norm[:-1]):
         starts.setdefault(norm_pos, orig_pos)
-    out: list[Span] = []
-    for ns, ne in norm_matches:
-        if ns in starts:
-            out.append((starts[ns], _norm_end_to_orig(orig_to_norm, starts[ns], ne)))
-    return out
+    return [(starts[ns], _norm_end_to_orig(orig_to_norm, starts[ns], ne)) for ns, ne in norm_matches if ns in starts]
 
 
 def _map_normalized_positions(original: str, normalized: str, matches: list[Span]) -> list[Span]:
@@ -117,10 +113,7 @@ def _map_normalized_positions(original: str, normalized: str, matches: list[Span
         to_end[norm_pos] = orig_pos
     out: list[Span] = []
     for ns, ne in matches:
-        if ns in to_start:
-            start = to_start[ns]
-        else:
-            start = min(i for i, n in enumerate(orig_to_norm) if n >= ns)
+        start = to_start[ns] if ns in to_start else min(i for i, n in enumerate(orig_to_norm) if n >= ns)
         end = to_end[ne - 1] + 1 if ne - 1 in to_end else start + (ne - ns)
         # Absorb trailing collapsed whitespace only when the match itself ended in a space.
         if ne < len(normalized) and normalized[ne - 1] == " ":

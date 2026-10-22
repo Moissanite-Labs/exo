@@ -193,7 +193,6 @@ def _spawn(home: Path, timeout: float = START_TIMEOUT) -> _DetachedCore:
     if proc.returncode or not pid.isdigit() or int(pid) <= 1:
         raise CoreUnavailable(f"Exo core startup helper failed (exit {proc.returncode}). "
                               f"See {log_path(home)}:\n{_tail(log_path(home))}")
-    private_file(pid_path(home)).write_text(f"{int(pid)}\n")
     _STARTED.add(int(pid))
     return _DetachedCore(int(pid))
 
@@ -242,8 +241,7 @@ def ensure_core(home: Path | None = None, agent: str | None = None, timeout: flo
             return found
         holder = writer_holder(home, agent)
         if holder is None:
-            if probe(exod_socket(home)) == "stale":
-                exod_socket(home).unlink(missing_ok=True)
+            # a stale socket file is left for the core's start, which replaces it under the socket's lock
             if say:
                 say("Exo core is not running, starting it...")
             proc = spawn(home) if spawn else _spawn(home, deadline - time.monotonic())
@@ -264,12 +262,51 @@ def ensure_core(home: Path | None = None, agent: str | None = None, timeout: flo
         f"(or run `exo stop`), then try again.")
 
 
+def _lock_file(sock: Path) -> Path:
+    return sock.with_name(sock.name + ".lock")
+
+
+def _lock_pid(sock: Path) -> str:
+    return _read_pid(_lock_file(sock))
+
+
+def _read_pid(path: Path) -> str:
+    try:
+        text = path.read_text().strip()
+    except OSError:
+        return ""
+    return text if text.isdigit() else ""
+
+
+def _try_start_lock(sock: Path) -> int | None:
+    """The socket's start lock (see exo.server.app), taken without waiting and let go by the caller, or None while
+    a core holds it. No folder or file yet means no core is starting."""
+    try:
+        fd = os.open(_lock_file(sock), os.O_RDWR | os.O_NOFOLLOW)
+    except OSError:
+        return os.open(os.devnull, os.O_RDONLY)  # no lock file: nobody is starting; the caller closes this
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
+
+
 def stop_core(home: Path | None = None, timeout: float = 10.0) -> str:
     """Stop the background exod this machine started. Returns a plain sentence."""
     home = home or home_dir()
     if probe(exod_socket(home)) != "alive":
-        exod_socket(home).unlink(missing_ok=True)
-        pid_path(home).unlink(missing_ok=True)
+        sock = exod_socket(home)
+        held = _try_start_lock(sock)
+        if held is None:  # a core holds the socket's start lock: it is starting, and its files are not ours to remove
+            who = _lock_pid(sock) or _read_pid(pid_path(home))
+            return f"Exo core (exod) is starting{f' (pid {who})' if who else ''}; nothing was removed. Try again in a moment."
+        try:
+            sock.unlink(missing_ok=True)
+            pid_path(home).unlink(missing_ok=True)
+        finally:
+            os.close(held)
         return "Exo core (exod) is not running."
     try:
         pid = int(pid_path(home).read_text().strip())

@@ -19,16 +19,19 @@ import re
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
+from exo.core import trace
 from exo.core.ingress import Ingress, IngressPath, Receipt
+from exo.core.models import keys
 from exo.core.peer_target import EngineTarget
 from exo.core.sessions import new_id
 from exo.core.tools.builtin.shell import kill_process_group, masked_note, open_side, tool_env, wrap_pipestatus
 from exo.core.tools.registry import ToolContext, ToolError
-from exo.core.types import ContentPart, Message, ToolSpec
+from exo.core.types import ToolSpec
 from exo.protocol import schema as s
 
 if TYPE_CHECKING:
@@ -36,6 +39,7 @@ if TYPE_CHECKING:
 
 ACTIVE = "running"
 KEEP_DAYS = 14
+ROTATED = "[output rotated: earlier output is in {}.1]\n"  # the live log's first line after it rotates
 
 
 @dataclass
@@ -49,8 +53,7 @@ class JobConfig:
 
     @classmethod
     def of(cls, raw: dict[str, Any] | None) -> "JobConfig":
-        raw = raw or {}
-        c = cls()
+        raw, c = raw or {}, cls()
         for k in ("max_concurrent", "max_wall_s", "output_cap", "notice_lines", "notice_chars"):
             if raw.get(k) not in (None, ""):
                 setattr(c, k, max(1, int(raw[k])))
@@ -86,13 +89,35 @@ def fmt_elapsed(sec: float) -> str:
     return f"{sec // 3600}h{sec % 3600 // 60:02d}m"
 
 
-def tail_text(path: Path, lines: int, chars: int) -> str:
-    """The last ``lines`` lines of a log, at most ``chars`` characters (the end is kept)."""
+def tail_text(path: Path, lines: int, chars: int, values: Sequence[str] = ()) -> str:
+    """The last ``lines`` lines of a log, at most ``chars`` characters (the end is kept), with the key ``values`` cut
+    out before any cut. After a rotation the end of ``<id>.log.1`` stands in for the note and grows until no match in
+    it can change the live log's spans. The live log's own spans are cut out too (docs/JOBS.md, the D-039 amendment)."""
     try:
-        data = path.read_bytes()[-chars * 4:].decode("utf-8", errors="replace")
+        data = path.read_bytes().decode("utf-8", errors="replace")
     except OSError:
         return ""
-    out = "\n".join(data.rstrip("\n").splitlines()[-lines:])
+    note, m, pre = ROTATED.format(path.name), max(map(len, values), default=0), ""
+    n = m - 1 if data.startswith(note) else 0
+    while n > 0:  # a character takes 4 bytes at most, so the last n characters of 4n bytes are those of the file
+        whole, u = True, 0  # also when <id>.log.1 cannot be read: then pre stays as it was
+        with contextlib.suppress(OSError), open(path.with_suffix(".log.1"), "rb") as f:
+            whole = not f.seek(max(0, f.seek(0, os.SEEK_END) - 4 * n))
+            pre = f.read().decode("utf-8", errors="replace")[0 if whole else -n:]
+        text = pre + data[len(note):len(note) + m]  # a match that starts in pre ends in here
+        for v in values:  # in redaction order, u is where spans may change, from pre's start
+            u = max(u, len(v) - 1)
+            while (i := text.rfind(v, 0, u + len(v) - 1)) + len(v) > u:  # the last match that starts before u
+                u = i + len(v)
+        n = 0 if whole or u <= len(pre) else 2 * n
+    text, at, parts, red = pre + data[len(note):] if pre else data, len(pre), [note] if pre else [], -1
+    live = [(a + at, b + at) for a, b in keys.secret_spans(text[at:], values)[0]] if pre else []
+    for a, b in sorted(keys.secret_spans(text, values)[0] + live):  # with live, never less than the log alone
+        if b > at:  # a span inside pre goes with it, and one that crosses into the log is cut out from its start
+            parts += (text[at:max(a, at)], keys.REDACTED) if a >= red else ()  # one that overlaps the last joins it
+            at = red = b
+    data = ("".join(parts) + text[at:]).rstrip("\n")
+    out = "\n".join(data[-chars * 4:].splitlines()[-lines:])  # splitting all of data gives the same out
     return out if len(out) <= chars else "..." + out[-chars:]
 
 
@@ -111,21 +136,9 @@ class JobTarget(EngineTarget):
             return not self.e.hub._subs
         return bool(self.cfg.wake)
 
-    def _message(self, ing: Ingress) -> Message:
-        from exo.core.ingress import frame
-
-        msg = Message(role="user", content=[ContentPart.of_text(frame(ing))])
-        msg.meta.update(self._meta(ing))
-        return msg
-
     def _meta(self, ing: Ingress) -> dict[str, Any]:
         return {"job": {"id": ing.meta.get("job_id"), "state": ing.meta.get("state"), "msg_id": ing.id},
                 "author": "job"}  # D-040: the harness, not the principal
-
-    async def wake(self, session: str, ing: Ingress) -> None:
-        from exo.core.ingress import frame
-
-        self.e.start_turn(session, frame(ing), self._meta(ing))
 
     async def record(self, ing: Ingress, receipt: Receipt, notify: bool) -> None:
         pass  # the job.updated event carries the delivery mode
@@ -142,6 +155,7 @@ class JobManager:
         self.path = IngressPath(self.target, lambda ing: ("auto", "a job the agent started"))
         self._lock = threading.Lock()
         self._tasks: set[asyncio.Task] = set()
+        self._order, self._pool = asyncio.Lock(), ThreadPoolExecutor(1, "exo-notice")  # its own: tools never hold it
         self.recovered = False
 
     # ---------------------------------------------------------------- start
@@ -151,16 +165,19 @@ class JobManager:
         if loop is None:
             with contextlib.suppress(RuntimeError):
                 loop = asyncio.get_running_loop()
-        if loop is None or loop.is_closed():
-            return
-        loop.call_soon_threadsafe(fn, *args)
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(fn, *args)
 
-    def _publish(self, h_id: str, state: str, command: str, session: str | None, code: int | None, started: float,
-                 ended: float | None, detail: str = "") -> None:
-        body = s.JobUpdated(job_id=h_id, state=state, command=command[:300], exit_code=code,
-                            elapsed_ms=int(_elapsed(started, ended) * 1000), log=str(self.log_path(h_id)),
-                            detail=detail)
-        self._threadsafe(self.e.hub.publish, body, session)
+    def _known(self) -> list[str]:
+        with contextlib.suppress(Exception):  # a failed key lookup never loses a notice or an event
+            return keys.known_secret_values()  # cut out before each cut (D-039)
+        return []
+
+    def _body(self, job_id: str, state: str, command: str, code: int | None, started: float, ended: float | None,
+              detail: str = "", log: str | None = None) -> s.JobUpdated:
+        return s.JobUpdated(job_id=job_id, state=state, command=keys.redact_secrets(command, self._known())[:300],
+                            exit_code=code, elapsed_ms=int(_elapsed(started, ended) * 1000),
+                            log=log or str(self.log_path(job_id)), detail=detail)
 
     def log_path(self, job_id: str) -> Path:
         return self.dir / f"{job_id}.log"
@@ -212,16 +229,15 @@ class JobManager:
         h.timer.daemon = True
         h.timer.start()
         threading.Thread(target=self._watch, args=(h, pump), daemon=True).start()
-        self._publish(job_id, ACTIVE, command, session, None, h.started, None, f"pid {proc.pid}, limit {fmt_elapsed(wall)}")
+        body = self._body(job_id, ACTIVE, command, None, h.started, None, f"pid {proc.pid}, limit {fmt_elapsed(wall)}")
+        self._threadsafe(self.e.hub.publish, body, session)
         return {"id": job_id, "pid": proc.pid, "log": str(log), "wall_s": wall}
 
     # ---------------------------------------------------------------- run
 
     def _pump(self, h: Handle, log: Path) -> None:
         """Copy the job's output to its log; past the cap the log rotates (one older file is kept)."""
-        cap = self.cfg.output_cap
-        out = open(log, "ab", buffering=0)
-        size = 0
+        cap, size, out = self.cfg.output_cap, 0, open(log, "ab", buffering=0)
         try:
             for chunk in iter(lambda: h.proc.stdout.read1(65536), b""):  # type: ignore[union-attr]
                 while chunk:
@@ -229,8 +245,7 @@ class JobManager:
                         out.close()
                         os.replace(log, log.with_suffix(".log.1"))
                         out = open(log, "ab", buffering=0)
-                        note = f"[output rotated: earlier output is in {log.name}.1]\n".encode()
-                        out.write(note)
+                        out.write(note := ROTATED.format(log.name).encode())
                         size = len(note)
                     part, chunk = chunk[:max(1, cap - size)], chunk[max(1, cap - size):]
                     out.write(part)
@@ -260,9 +275,8 @@ class JobManager:
 
     def _finish(self, h: Handle, code: int) -> None:
         """On the event loop: record the end, tell clients, and tell the owning thread."""
-        if h.id not in self.live:
+        if self.live.pop(h.id, None) is None:
             return
-        self.live.pop(h.id, None)
         ended = time.time()
         note = masked_note(h.side) if h.side else ""  # also removes the side file
         if h.reason == "killed":
@@ -270,37 +284,46 @@ class JobManager:
         elif h.reason == "timeout":
             state, detail = "timeout", f"killed after {fmt_elapsed(self.cfg.max_wall_s)} (the job wall limit)"
         else:
-            state = "done" if code == 0 else "failed"
-            detail = note if code == 0 else ""
+            state, detail = ("done", note) if code == 0 else ("failed", "")
         self.e.store._q("UPDATE jobs SET state=?, exit_code=?, ended=?, detail=? WHERE id=?", (state, code, ended, detail, h.id))
-        task = asyncio.ensure_future(self._announce(h, state, code, ended, detail))
-        self._tasks.add(task)
+        self._spawn(self._announce(h, state, code, ended, detail))
+
+    def _spawn(self, coro: Any) -> None:
+        self._tasks.add(task := asyncio.ensure_future(coro))  # close() waits for these
         task.add_done_callback(self._tasks.discard)
 
     async def _announce(self, h: Handle, state: str, code: int, ended: float, detail: str) -> None:
-        _mode = ""
-        if state != "killed" or h.kill_by != "job_kill":  # an agent that killed it knows: no notice for that
-            try:
-                rec = await self.path.submit(self._notice(h.id, state, code, h.command, h.started, ended, h.session,
-                                                          detail))
-                _mode = rec.mode or rec.state
+        try:
+            if state != "killed" or h.kill_by != "job_kill":  # an agent that killed it knows: no notice for that
+                rec = await self.path.submit(await self._built(h.id, state, code, h.command, h.started, ended,
+                                                               h.session, detail))
                 detail = (detail + "; " if detail else "") + f"notice {rec.mode or rec.state}"
-            except Exception as exc:  # a delivery problem never loses the job's end
-                from exo.core import trace
+        except Exception as exc:  # a delivery problem never loses the job's end
+            trace.report("jobs.notice", exc, h.session)
+            detail = (detail + "; " if detail else "") + f"notice failed: {exc}"
+        finally:  # nor does a hard stop that cancels this task while the notice is built
+            self.e.hub.publish(self._body(h.id, state, h.command, code, h.started, ended, detail), h.session)
 
-                trace.report("jobs.notice", exc, h.session)
-                detail = (detail + "; " if detail else "") + f"notice failed: {exc}"
-        self.e.hub.publish(s.JobUpdated(job_id=h.id, state=state, command=h.command[:300], exit_code=code,
-                                        elapsed_ms=int(_elapsed(h.started, ended) * 1000), log=str(self.log_path(h.id)),
-                                        detail=detail), h.session)
+    async def _built(self, *args: Any) -> Ingress:
+        """``_notice`` in the notice thread, one at a time, so each is handed on before the next, as the jobs ended."""
+        async with self._order:
+            return await asyncio.get_running_loop().run_in_executor(self._pool, self._notice, *args)
+
+    async def _queue(self, *args: Any) -> None:
+        try:  # in order, as _built hands each on. A turn that started meanwhile takes it at its next tool round
+            if not await self.target.steer(args[6], ing := await self._built(*args)):
+                await self.target.queue(args[6], ing)  # never a wake
+        except Exception as exc:  # a lost job's notice that fails is reported, as _announce reports one
+            trace.report("jobs.notice", exc, args[6])
 
     def _notice(self, job_id: str, state: str, code: int | None, command: str, started: float, ended: float | None,
                 session: str | None, detail: str = "") -> Ingress:
         head = {"done": "finished, exit 0", "failed": f"failed, exit {code}", "timeout": "timed out and was killed",
                 "killed": "was killed", "lost": "lost"}.get(state, state)
         head += f", {fmt_elapsed(_elapsed(started, ended))}"
-        out = tail_text(self.log_path(job_id), self.cfg.notice_lines, self.cfg.notice_chars)
-        body = (f"command: {command[:300]}\n" + (f"{detail}\n" if detail else "")
+        vals = self._known()
+        out = tail_text(self.log_path(job_id), self.cfg.notice_lines, self.cfg.notice_chars, vals)
+        body = (f"command: {keys.redact_secrets(command, vals)[:300]}\n" + (f"{detail}\n" if detail else "")
                 + (f"last output:\n{out}\n" if out else "no output\n") + f"full log: {self.log_path(job_id)} "
                 f"(job_output {job_id})")
         return Ingress("job", "harness", "local", body, session=session, id=new_id("jn"),
@@ -309,9 +332,8 @@ class JobManager:
     # ---------------------------------------------------------------- queries and control
 
     def rows(self, limit: int = 30) -> list[dict[str, Any]]:
-        rs = self.e.store._q("SELECT * FROM jobs WHERE agent=? ORDER BY (state='running') DESC, started DESC LIMIT ?",
-                             (self.e.agent, limit))
-        return [dict(r) for r in rs]
+        return [dict(r) for r in self.e.store._q("SELECT * FROM jobs WHERE agent=? ORDER BY (state='running') DESC, "
+                                                 "started DESC LIMIT ?", (self.e.agent, limit))]
 
     def get(self, job_id: str) -> dict[str, Any]:
         rs = self.e.store._q("SELECT * FROM jobs WHERE agent=? AND id=?", (self.e.agent, job_id.strip()))
@@ -321,11 +343,11 @@ class JobManager:
 
     def read_log(self, job_id: str) -> str:
         p = self.log_path(job_id)
-        old = p.with_suffix(".log.1")
-        parts = []
-        for f in (old, p):
+        parts: list[str] = []
+        for f in (p.with_suffix(".log.1"), p):  # with .log.1 read, the live log's note goes, so a split key is whole
             with contextlib.suppress(OSError):
-                parts.append(f.read_bytes().decode("utf-8", errors="replace"))
+                text = f.read_bytes().decode("utf-8", errors="replace")
+                parts.append(text.removeprefix(ROTATED.format(p.name)) if parts else text)
         return "".join(parts)
 
     def kill(self, job_id: str, by: str = "job_kill") -> bool:
@@ -339,27 +361,32 @@ class JobManager:
     async def close(self) -> None:
         """Jobs end with exod: stop every running job's process group, then record it once, with no notice."""
         self.target.closed = True
-        with self._lock:  # out of live first, so _finish leaves these to this loop when the watcher sees them end
-            handles = list(self.live.values())
-            self.live.clear()
-        for h in handles:
-            h.reason, h.kill_by = "killed", "exod shutting down"
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(kill_process_group, h.proc)
-            if h.timer:
-                h.timer.cancel()
-            masked_note(h.side)  # removes the side file, as _finish would
-            self.e.store._q("UPDATE jobs SET state='killed', exit_code=?, ended=?, detail=? WHERE id=?",
-                            (h.proc.returncode, time.time(), "stopped when exod shut down", h.id))
-            self.e.hub.publish(s.JobUpdated(job_id=h.id, state="killed", command=h.command[:300], exit_code=h.proc.returncode,
-                                            elapsed_ms=int(_elapsed(h.started, None) * 1000), log=str(self.log_path(h.id)),
-                                            detail="stopped when exod shut down"), h.session)
-        await asyncio.gather(*self._tasks, return_exceptions=True)  # notices of jobs that ended just before
+        try:
+            with self._lock:  # out of live first, so _finish leaves these to this loop when the watcher sees them end
+                handles = list(self.live.values())
+                self.live.clear()
+            for h in handles:
+                h.reason, h.kill_by = "killed", "exod shutting down"
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(kill_process_group, h.proc)
+                if h.timer:
+                    h.timer.cancel()
+                masked_note(h.side)  # removes the side file, as _finish would
+                self.e.store._q("UPDATE jobs SET state='killed', exit_code=?, ended=?, detail=? WHERE id=?",
+                                (h.proc.returncode, time.time(), "stopped when exod shut down", h.id))
+                self.e.hub.publish(self._body(h.id, "killed", h.command, h.proc.returncode, h.started, None,
+                                              "stopped when exod shut down"), h.session)
+            await asyncio.gather(*self._tasks, return_exceptions=True)  # notices of jobs that ended just before
+            with contextlib.suppress(RuntimeError):  # an earlier close() shut the pool down already
+                await asyncio.wrap_future(self._pool.submit(int))  # after every build before it, cancelled or not
+        finally:  # a hard stop at any await here: the pool still takes no more work, and its build runs on to its end
+            self._pool.shutdown(wait=False)
+        self._pool.shutdown()  # its one thread is idle now, so this joins it at once
         await self.path.close()
 
     async def recover(self) -> list[str]:
-        """After a restart: jobs the database says were running are ``lost``. Each owning thread gets a notice
-        (queued, never waking it). Old finished jobs and their logs are pruned."""
+        """After a restart: jobs the database says were running are ``lost``. Each owning thread gets a notice that
+        is steered or queued, never a wake. Old finished jobs and logs are pruned. No awaits, so start() runs once."""
         if self.recovered:
             return []
         self.recovered = True
@@ -372,12 +399,9 @@ class JobManager:
             self.e.store._q("UPDATE jobs SET state='lost', ended=?, detail=? WHERE id=?", (now, detail, r["id"]))
             lost.append(r["id"])
             sid = r["session"]
-            self.e.hub.publish(s.JobUpdated(job_id=r["id"], state="lost", command=r["command"][:300],
-                                            elapsed_ms=int(_elapsed(r["started"], now) * 1000), log=r["log"],
-                                            detail=detail), sid)
-            if sid and self.e.store.get_session(sid) is not None:
-                ing = self._notice(r["id"], "lost", None, r["command"], r["started"], now, sid, detail)
-                await self.target.queue(sid, ing)
+            self.e.hub.publish(self._body(r["id"], "lost", r["command"], None, r["started"], now, detail, r["log"]), sid)
+            if sid and self.e.store.get_session(sid) is not None:  # built in a task close() waits for
+                self._spawn(self._queue(r["id"], "lost", None, r["command"], r["started"], now, sid, detail))
         cutoff = time.time() - KEEP_DAYS * 86400
         for r in self.e.store._q("SELECT id, log FROM jobs WHERE agent=? AND state!='running' AND ended<?",
                                  (self.e.agent, cutoff)):
@@ -390,8 +414,6 @@ class JobManager:
 
 def job_text(store: Any, session: str, last: int = 20) -> str:
     """Job events of a session for ``exo trace`` and ``/trace`` (D-032): start, end and how the notice was delivered."""
-    from exo.core import trace
-
     rows = [e for e in trace._events(store, session, deltas=False) if e.type == "job.updated"][-last:]
     if not rows:
         return ""
