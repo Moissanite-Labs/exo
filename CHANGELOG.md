@@ -8,8 +8,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Fixed
 - `unset PATH` is now read as the assignment it amounts to (#329). With PATH unset, bash looks a
   command up in the working folder, so a later `ls` on the line can run a planted `./ls`. The gate
-  already asked on the assignment forms (`PATH= ls`); `unset` and `unset -v` of PATH now ask the
-  same way, as `opaque_exec`. `unset -f` names a function, not the variable, and stays read.
+  already asked on the assignment forms (`PATH= ls`). `unset` and `unset -v` of PATH now ask the
+  same way, as `opaque_exec`. `unset -f` names a function, not the variable, and stays read. An
+  `unset` word the gate cannot read asks too, as a name or as an option: `unset $v`, `unset PAT?`,
+  `unset {PATH,}` and `unset -${f}v PATH`. The exporters read their options the same way, so
+  `export +x -f $V=` and `declare -${f}x $V=` ask as `export $V=` does.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
