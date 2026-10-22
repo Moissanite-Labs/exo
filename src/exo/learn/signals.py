@@ -15,6 +15,7 @@ from .runtime import PRINCIPAL, Runtime
 
 MAX_ANSWER = 4000
 CORRECTION_VERDICTS = ("edit", "reject", "should_have_been")
+CAPTURED = ("ruling", "verdict", "question")  # the ledger kinds a captured signal is written as
 
 
 def _h(*parts: str) -> str:
@@ -141,6 +142,22 @@ def handle_ui_respond(engine: Any, body: Any) -> dict:
     return {"recorded": True, "event": ev["id"]}
 
 
+def known_keys(rt: Runtime) -> set:
+    """The capture keys of every ruling, verdict and question in the ledger (#263).
+
+    The set stays on `rt` with the last row read, and a call reads only the rows after it. The ledger is append-only
+    and nothing takes a key back, so the set only grows. If the ledger no longer holds that row in its place (another
+    ledger, or a file swapped or cut short), the set is built again from the first row. Call it under `rt.lock`."""
+    seq, last, keys = rt.known
+    if last is not None and ((ev := rt.ledger.get(last)) is None or ev["seq"] != seq):
+        seq, last, keys = 0, None, set()
+    for ev in rt.ledger.iter(kind=CAPTURED, since=seq):
+        keys.add((ev["body"] or {}).get("capture_key"))
+        seq, last = ev["seq"], ev["id"]
+    rt.known = (seq, last, keys)
+    return keys
+
+
 def record_chat_signals(lr: Learner, session: str, messages: Sequence[Mapping[str, Any]] | None = None) -> list[dict]:
     """Capture rulings and corrections in the recent chat as ledger events, once each (by capture key).
 
@@ -152,9 +169,9 @@ def record_chat_signals(lr: Learner, session: str, messages: Sequence[Mapping[st
     if messages is None:
         messages = [provenance.flat(m) for m in lr.messages(session)[-12:]]
     msgs = provenance.principal_view(messages)  # D-040: a peer message or job notice is not the principal
-    known = {(e["body"] or {}).get("capture_key") for e in rt.ledger.iter(kind=("ruling", "verdict", "question"))}
     out = []
     with rt.lock:
+        known = known_keys(rt)
         for sig in capture.extract_signals(msgs):
             if sig.key in known or sig.kind == capture.DECISION:
                 continue
@@ -162,7 +179,6 @@ def record_chat_signals(lr: Learner, session: str, messages: Sequence[Mapping[st
             if kind == "verdict":
                 said = capture.content_text(msgs[sig.target_index].get("content")) if sig.target_index is not None else ""
                 body["target"] = ensure_utterance(rt, session, "assistant", said or "(agent output not in the transcript)")
-            ev = rt.ledger.append(kind, body, PRINCIPAL, session=session)
-            known.add(sig.key)
-            out.append(ev)
+            # No known.add: extract_signals gives each key once, and the set holds only what known_keys read.
+            out.append(rt.ledger.append(kind, body, PRINCIPAL, session=session))
     return out

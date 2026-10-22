@@ -60,23 +60,23 @@ its run; measure it per wave here.
 Since the audit, `main` has moved by many merged PRs, mostly the sweep
 series. Measured on `6e4860af`: `gate.py` 4,700 LOC (was 2,756),
 `consolidate.py` 1,639, `core/context.py` 1,046, TUI `app.py` 2,097; mypy
-baseline 170 diagnostics (was 248). The core budget test reports its own
-headroom (D-077); read it before sizing any CORE unit.
+baseline 241 diagnostics in 170 entries (was 248 in 174). The core budget
+test reports its own headroom (D-077). Read it before sizing any CORE unit.
 
 | Issue | Finding | Status on main | Where |
 |-------|---------|----------------|-------|
 | #253 | `_decode` primitives (rank 1) | Open. Fix in open PR #218 (strict decode, "Closes #253") | #218 |
-| #254 | Session/store hot paths (rank 2) | Open, no PR. `messages()` gained `since`/`upto` bounds (merged privacy sweep #216) but still loads and parses every row in range; `store.find` and `events_since(limit=1<<30)` unchanged (`engine.py:78`, `trace.py:484`, `diagnostics.py:155`) | none |
-| #255 | N+1 and per-call reloads (rank 3a-c) | Open, no PR. `list_sessions` still runs one COUNT per row; `Config.load()` still reads and parses per call; grep still reads each whole file (now through `read_regular`, #222 merged, a safety change only) | none |
+| #254 | Session/store hot paths (rank 2) | Open. W1-5 done: `store.find` keeps its BM25 tables for the node set they were built from, and a reload (or a refresh that saw a change) makes a new set, so a repeat query tokenizes only itself. Ranking unchanged. 100 queries on 2,005 synthetic nodes went from 22.9 s to 0.36 s: one build of about 0.2 s, then about 1.6 ms a query. W2-4 open: `messages()` gained `since`/`upto` bounds (merged privacy sweep #216) but still loads and parses every row in range. `events_since(limit=1<<30)` is unchanged (`engine.py:78`, `trace.py:484`, `diagnostics.py:155`) | `src/exo/store.py` (W1-5) |
+| #255 | N+1 and per-call reloads (rank 3a-c) | All three units done: W1-2 merged in #351 (counts in one query, 501 -> 1 at limit 500; final shape in #367: the limited page is a subquery and the correlated count runs outside it, so count work is bound by the limit, not the table), W1-3 merged in #354 (`Config.load()` caches on size and `mtime_ns`, deep copies out), W1-4 grep streams each file line by line instead of decoding and splitting it whole, output byte-identical | #351, #357, #367, #354, #362 |
 | #256 | Ledger anchor writes (rank 3d) | Partly changed. Merged #221 (`e55183c1`, `066f5768`) removed the O(n) COUNT from append (indexed lookups), made append refuse past a frozen or mismatched anchor, and lets the anchor trail the ledger by at most one event. Two anchor atomic writes per append remain. Open PR #296 also changes `ledger.py` | #221 merged, #296 open |
 | #257 | Split `gate.py` (rank 4) | Open, no split. `gate.py` is 4,700 LOC and six open PRs change it (section 1b) | none |
 | #258 | Site asset pipeline (rank 5) | Open, no PR. No `vercel.json`; media unchanged | none |
 | #259 | Monolith splits (rank 6) | Open, no PR. Sizes in the header of this section | none |
-| #260 | CLI eager imports (rank 7) | Open, no PR. `cli.py` imports unchanged | none |
+| #260 | CLI eager imports (rank 7) | W2-6 done: `cli.py` imports a command's module only when it runs (`LAZY` table, D-035 amendment). Best of 5: `import exo.cli` 190 to 14 ms, `exo --help` 251 to 42 ms, `exo --version` 240 to 73 ms. Every `--help`, usage line and parse error byte-identical (65 outputs compared with the old parser). `tests/test_cli_lazy.py` keeps the lazy and full parsers equal | W2-6 this PR |
 | #261 | Core coupling (rank 8) | Open, no PR. `core/engine.py` still imports `exo.server.engine` | none |
 | #262 | Context/loop repeated work (rank 9) | Open, no PR. `context.py` changed for privacy (#216 merged), not for these paths | none |
-| #263 | Learn/signals, HTTP clients, bus store (rank 10) | Open, no PR. `core/models/base.py` and `bus/store.py` untouched since the audit | none |
-| #264 | Types/errors ratchet (rank 11) | Open. Baseline fell 248 to 170 on main as a side effect of other work; `server/app.py` int parsing still bare (`app.py:224`, `:232`); #218 changes `server/app.py` | #218 (partly) |
+| #263 | Learn/signals, HTTP clients, bus store (rank 10) | Partly done. W2-7's signals half: the chat capture keeps the known capture keys with the last ledger row read and reads only newer rows (10,000 captured rows: about 70 ms per turn before, under 1 ms after the first turn). Open: W2-7's HTTP client half (one client per transport and event loop adds 15 counted core lines, past the ceiling, so it waits for a core reduction or an owner call) and W3-4's bus store half (FTS5 changes what a search matches: needs an owner call) | #263 (W2-7 signals half) |
+| #264 | Types/errors ratchet (rank 11) | Open. W1-6 done: `server/app.py` reads `Content-Length`, `since` and `Last-Event-ID` as ASCII digits up to 2^63 - 1 and answers anything else with 400 `{error}` (most of these got no reply before). Still open: the mypy burn-down (the baseline holds 234 diagnostics in 165 entries on main, down from 248 in 174 at the audit, seven of the drop pruned under #264), ruff `PERF`/`BLE`, typed settings for learn and eval, and the size gate | #218 (partly) |
 | #265 | CI and docs serialization (rank 12) | Open, no PR. `ci.yml` untouched since the audit; no `AGENTS.md` for the repo root, no `CODEOWNERS` | none |
 | #266 | Wave 0 guardrails | Open, not started. No `tests/arch`, no `tests/bench`, no baseline script (only `scripts/wire_bench.py`) | none |
 
@@ -167,7 +167,7 @@ fresh agent resumes a killed worker from brief + handoff only).
 | Unit | Owned files | Change |
 |------|-------------|--------|
 | W1-1 (rank 1) | `src/exo/core/types.py` (`_decode` only) | USER-VISIBLE: rejects bodies accepted today. Strict decoding only (non-strict callers `protocol/client.py:110`, `schema.py:678`, `sessions.py:536` and the TUI stay lenient). Validate str/int (excluding bool)/float/bool/dict[str,T] primitives; delete downstream guards only in strict-only handlers. Owned in practice by open PR #218 (strict-only, closes #253): do not duplicate it |
-| W1-2 (rank 3a) | `src/exo/core/sessions.py` (`list_sessions`/`_info` only) | Single LEFT JOIN/GROUP BY count query; query-count test proves 501->1 |
+| W1-2 (rank 3a) | `src/exo/core/sessions.py` (`list_sessions`/`_info` only) | One query: the limited page as a subquery, a correlated count per kept row outside it; query-count test proves one statement at any limit, progress-handler test proves count work stays bound by the limit (shipped in #351/#357/#367) |
 | W1-3 (rank 3b) | `src/exo/config.py` | USER-VISIBLE (changes when external edits are seen). Cache keyed on file size and `mtime_ns`; `load()` returns a deep copy so `set()` before a failed `save()` and mutation of a `get()` result never reach the next `load()` (readers include `update.require_signed` and `principal`); explicit reload on save. Tests: external edit seen, failed save invisible to the next load, mutating `get()`'s return does not leak |
 | W1-4 (rank 3c) | `src/exo/core/tools/builtin/search.py` | USER-VISIBLE if it changes output. Stream lines instead of decoding and splitting each whole file; cheap binary skip. Grep has no count parameter, and the tool JSON schema snapshot must stay 0 bytes, so keep counting past the limit and keep the `[N more matches; narrow the search]` line exactly. Stopping early would change that line: needs decision, not part of this unit |
 | W1-5 (rank 2 store) | `src/exo/store.py` (`find`/`reload` only) | Cache BM25 Counter/df/avg keyed to reload generation, invalidate in `reload()` |

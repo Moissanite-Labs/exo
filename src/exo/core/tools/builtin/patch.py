@@ -111,8 +111,7 @@ def parse_v4a_patch(text: str) -> tuple[list[PatchOperation], str | None]:
                 hm = _HINT.match(line)
                 hunk = Hunk(context_hint=hm.group(1) if hm else None)
         elif op and line:
-            if hunk is None:
-                hunk = Hunk()
+            hunk = hunk or Hunk()
             if line[0] in "+- ":
                 hunk.lines.append(HunkLine(line[0], line[1:]))
             elif line[0] != "\\":  # "\ No newline at end of file"

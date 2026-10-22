@@ -44,6 +44,11 @@ enabled = true
 
 ## Bus seats (D-040)
 
+The relay's message and inbox HTTP reads accept `since` from 0 to 2^63 - 1 and `limit` from 1 to 1,000
+(defaults: 0 and 200). Public `/v1/verify` accepts `from` from 1 to 2^63 - 1 and `to` from 0 to 2^63 - 1;
+omitting `to` verifies through the current head. Out-of-range or malformed numbers answer 422 (#455).
+`to=0` remains valid for an empty log. These bounds match SQLite's integer range and keep read pages bounded.
+
 The exo-bus channel brings messages from other seats on the Exo Bus. It does not start turns itself. For each
 inbox envelope it calls the `peers` command with action `bus`, and the core takes it from there
 (`src/exo/bus/ingress.py`). Only a channel exod runs can do this: exod gives its channels an in-process link
@@ -121,4 +126,6 @@ The `exo-bus` plugin carries a peers module. Turn it on per profile with `EXO_PE
 
 Held messages live in memory: a restart drops them. The web client gets the events through the protocol but
 has no `/peers` view yet. Bus sends are posted and not receipted. A bus seat's first key is trusted as the registry
-serves it (trust on first use); pin it by hand first if the relay is not yours.
+serves it (trust on first use); pin it by hand first if the relay is not yours. On the machine itself the gate
+guards where those keys come from: a tool call that writes `$EXO_HOME/bus/` or the keys folder asks the principal
+(`docs/GATE.md` "The store is credentials", #210).
