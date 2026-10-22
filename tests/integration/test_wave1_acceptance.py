@@ -187,7 +187,7 @@ CORE = ["src/exo/core", "src/exo/protocol", "src/exo/server", "src/exo/cli_chat.
 
 # The core budget is a ratchet with headroom (D-077, docs/ENGINE-SPLIT.md "Budget policy").
 CORE_FLOOR = 14813  # counted lines right after the last real reduction (#124, D-067). It only ever goes down.
-CORE_HEADROOM = 1029  # room for shipping. A security or robustness fix may raise it, by the minimum, with a note.
+CORE_HEADROOM = 1000  # room for shipping. A security or robustness fix may raise it, by the minimum, with a note.
 BIG_FILE = 1000  # the report flags counted files above this many lines. Information, not an assertion.
 
 

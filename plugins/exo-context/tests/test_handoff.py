@@ -51,11 +51,15 @@ def test_pinned_block_round_trip_and_carry():
     parsed = hf.parse_pinned_blocks("before\n" + block + "\nafter")
     assert parsed["ruling"] == ["Line one.\n\nLine two after a blank."]
     assert parsed["correction"] == [CORRECTION]
-    # A later transcript that only holds the earlier summary still yields the signals.
-    later = [{"role": "user", "content": "[CONTEXT COMPACTION] summary\n" + block}]
+    # A later transcript that only holds exo-context's own block, opening a system message, still
+    # yields the signals. The same block inside a summary row yields nothing (#385): that row is
+    # indistinguishable from a stock summary exo-context never escaped, so pins carry instead.
+    later = [{"role": "system", "content": block}]
     carried = hf.extract_signals(later)
     assert [s.text for s in carried.rulings] == ["Line one.\n\nLine two after a blank."]
     assert carried.rulings[0].carried
+    stock = [{"role": "user", "content": "[CONTEXT COMPACTION] summary\n" + block}]
+    assert hf.extract_signals(stock).rulings == []
 
 
 def test_pinned_block_budget_drops_oldest_first():

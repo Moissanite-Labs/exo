@@ -10,6 +10,41 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
   without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
+- Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
+  life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
+  the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
+  and the handoff already kept. This change also corrects the upgrade note in the #385 entry below and in
+  the D-040 amendment: a session last compacted on 0.2.0 loses its rulings and corrections as well as its
+  open decisions, not the open decisions alone.
+- A reopen's comment and a merge's subject and body are checked by the posting rules (#397).
+  `gh issue reopen --comment` and `gh pr reopen -c` post a comment the gate filed as a post but
+  never read, and `gh pr merge --body` was read but never checked, with `--subject` not read at
+  all: text that asks as a comment post logged. A reopen now reads its comment as a close does
+  (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
+  text, an unread body file included. A reopen or merge carrying no text is unchanged.
+- A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
+  reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
+  with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
+  with the block itself carries one. The session pins take open decisions beside rulings and corrections, and
+  follow the session id across a compression child session and a resume, so everything a pinned block held
+  still survives compaction, now by the pins, in a session whose pins were observed. One upgrade note: a
+  session compacted before this change holds its open decisions only inside an earlier summary's block, and
+  those drop at its first compaction after the upgrade. A session last compacted before pins were observed
+  at compaction at all (any 0.2.0 Hermes session: its compactions never observed pins) holds its rulings and
+  corrections only in that block too, and all three drop at that first compaction. The handoff written at
+  that earlier compaction still has them: read it, or run `/exo resume`, before the first compaction after
+  the upgrade. A 0.2.0 handoff may quote a forged block, so read it as a record, not as the principal's words.
+- A no-behaviour-change reduction took 40 lines out of the counted core (#373), undoing the #346 headroom
+  raise. Dead job-notice overrides now inherit, a duplicate id helper now imports from the schema, two git
+  helpers merged, and four exception clauses the next handler could never reach are gone. `CORE_HEADROOM`
+  is back at 1,000 (D-077), and the counted core stands at 15,801 against a ceiling of 15,813.
+- A close's comment is checked by the posting rules (#326). `gh issue close --comment` and
+  `gh pr close -c` attach a comment to the close, but the gate filed the call as `github_close` and
+  read no text, so the footer, the forbidden words, the scrub and the exact-text binding never saw
+  it: text that asks as a comment post logged as a close. A close now reads its comment as the
+  call's text, a comment the gate cannot read as gh does asks as unseen, and the posting rules see
+  a close carrying a comment whether or not it is named in `applies_to`. A close with no comment,
+  or a comment that passes, still logs.
 - The principal's pinned block no longer drops out when a host summary rides in an assistant row (#371).
   Hosts that alternate roles put the summary there, and the row reads as the agent's, so it carries nothing
   itself. That stays so. A host can also build summary rows exo-context never escaped, and the host's
@@ -113,6 +148,38 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
+  name, and the change never makes a decision looser than before. The regex saw the whole line, so
+  `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under
+  `categories: {force_push: deny}`, and `{command: 'rm -rf build', decision: allow}` lifted
+  `categories: {github_post: deny}` from the post in `gh pr comment 3 --body hi && rm -rf build`. Each simple command on
+  a line now carries its own text, as written with its redirections, nested ones too (`$( )`, `bash -c`, `eval`, a
+  heredoc a shell reads, `ssh`). A rule that would lower a compound line (an allow or log rule below the line's matrix
+  cell and category line, an ask rule under a category deny, an allow or log rule that names `opaque_exec`) must still
+  match the line as before. Its regex must also cover every command that decides the line, every other command on the
+  line that would be stricter alone, and every command that changes shell state for later commands (an assignment,
+  `export`, `hash`, `alias`, `set -a`, `source`, `read`, a function definition and the like). Otherwise the rule is
+  passed over and the walk goes on, but the rule step keeps the stricter of the first match and the rule found after it,
+  and a rule passed over does not name `opaque_exec` for the floor. In the #191 pass an allow, log or ask rule lifts a
+  part's category deny only when it also names that part. When a rule is passed over, the line is also decided as
+  before, and that decision stands, reason and all, unless the new one is stricter. So under
+  `{command: 'git push --force origin main', decision: allow}` the push is still allowed after `cd repo`, but asks
+  beside `rm -rf build` or after `export GIT_SSH_COMMAND=$X`, and `gh pr comment 3 --body hi && rm -rf build` is denied
+  under `categories: {github_post: deny}` and `{command: 'rm -rf build', decision: ask}`. An anchored rule such as
+  `'^git push --force origin main$'` still matches no compound line, as before. `cd` is not a setter, and that cannot
+  loosen a decision, since the rule must still match the line. A part with no own text (an unread nest, a string literal
+  in code, the opaque_exec reading of a `$".."` line) passes no such test. A line of one simple command beside parts
+  the gate made for it with no own text (`cat ~/.kube/config`, where the secret path decides the line, or a string
+  literal in `node -e` code) is decided as before. A shell or interpreter that runs a pipe has
+  the pipeline as its text. Those texts hold at most four times the line's length plus 4 KB on one line, and a reader
+  past that has none, so a long pipeline into shells stays linear in memory. A command run inside another (an
+  `eval`, `bash -c` or `ssh` string, an `-x` or `--exec` value) must be named too, so `eval "$CMD"` now asks under
+  `{category: opaque_exec, command: '^eval', decision: allow}`. A rule written for a whole compound line, such as
+  `'^git push origin main && git push origin dev$'`, has to name each command too, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`. Until it does, that line logs, as
+  its matrix cell says. Rules that keep or raise the line, deny rules in the #191 pass and
+  the `reserved:` and `deny:` lists match the whole line and its decoded views as before. The ledger view leaves the own
+  text out.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40

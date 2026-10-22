@@ -150,7 +150,7 @@ def harness_version(refresh: bool = False) -> str:
     from exo import __version__
 
     repo = _repo()
-    sha = _git(repo, "rev-parse", "--short", "HEAD") if repo else ""
+    sha = _git(repo, "rev-parse", "--short", "HEAD")[1] if repo else ""
     _VERSION[:] = [sha.strip() or f"exo-{__version__}"]
     return _VERSION[0]
 
@@ -160,12 +160,12 @@ def _repo() -> Path | None:
     return root if (root / ".git").exists() else None
 
 
-def _git(repo: Path, *args: str) -> str:
+def _git(repo: Path, *args: str) -> tuple[int, str]:
     try:
         r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=5)
-        return r.stdout if r.returncode == 0 else ""
+        return r.returncode, r.stdout if r.returncode == 0 else ""
     except Exception:
-        return ""
+        return 128, ""
 
 
 def at_or_after(running: str, fixed_in: str | None) -> bool:
@@ -180,12 +180,7 @@ def at_or_after(running: str, fixed_in: str | None) -> bool:
     repo = _repo()
     if repo is None or not re.fullmatch(r"[0-9a-f]{4,40}", fixed_in) or not re.fullmatch(r"[0-9a-f]{4,40}", running):
         return True
-    try:
-        r = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", fixed_in, running],
-                           capture_output=True, timeout=5)
-    except Exception:
-        return True
-    return r.returncode != 1  # 1 = not an ancestor; 128 = unknown commit, assume live
+    return _git(repo, "merge-base", "--is-ancestor", fixed_in, running)[0] != 1  # 128 = unknown, assume live
 
 
 # ---------------------------------------------------------------- thresholds
