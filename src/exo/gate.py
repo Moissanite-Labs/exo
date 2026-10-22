@@ -2007,12 +2007,20 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
     return _make("local_write", summary=f"git {sub}".strip(), command=cmd)
 
 
-def _gh_url(word: str) -> tuple[str, str] | None:
-    """(owner/name, number) of a GitHub URL (#399): http or https in any case, the host in any case, without a user,
-    a port or a leading `www.`, and the path decoded, close to what Go's url.Parse and `ghrepo.NewWithHost` give gh
-    (gh 2.89). gh's own readers take a pull request URL (`ParseURL`) or an issue or pull request URL (the issue
-    lookup). This takes a discussion URL and a repo URL too, which has no number: a reading more, since `-R` and the
-    reading before #399 stay other targets. None for a word that is no such URL or names another host."""
+def _gh_on_github(host: str) -> bool:
+    """Whether gh sends its requests for a repo on ``host`` to github.com (round 6 of #399). ``host`` is as gh keeps
+    it, in lower case and without a leading `www.` (ghrepo.NewWithHost in gh 2.89). go-gh 2.13's NormalizeHostname
+    reads github.com and any host that ends in `.github.com` as github.com, and its GraphQL and REST clients send
+    the request there with the github.com token (`api.github.com`, `gist.github.com`). garage.github.com is the one
+    such host they call at itself. Any other host is another instance (`ghe.corp`, `x.ghe.com`, `github.com.`)."""
+    return host != "garage.github.com" and (host == "github.com" or host.endswith(".github.com"))
+
+
+def _gh_url_parts(word: str) -> tuple[str, str, str] | None:
+    """(host, owner/name, number) of a URL gh may read for a repo (#399): http or https in any case, the host
+    taken without a user and a port, then without a leading `www.` and in lower case, as Go's url.Parse and
+    `ghrepo.NewWithHost` give gh (gh 2.89), and the path decoded. A pull request, issue or discussion URL has a
+    number, a repo URL has none. None for any other word."""
     if not re.match(r"(?i)https?://", word):
         return None
     try:
@@ -2020,10 +2028,33 @@ def _gh_url(word: str) -> tuple[str, str] | None:
         _ = u.port                           # gh refuses a port that is not a number
     except ValueError:
         return None
-    if (u.hostname or "").removeprefix("www.") != "github.com":
-        return None
+    host = u.netloc.rpartition("@")[2].partition(":")[0]          # Go's u.Hostname(), its case kept
     m = re.match(r"/([\w.-]+/[\w.-]+)(?:/(?:pull|issues|discussions)/(\d+))?", unquote(u.path))
-    return (m.group(1), m.group(2) or "") if m else None
+    return (host.removeprefix("www.").lower(), m.group(1), m.group(2) or "") if m and host else None
+
+
+def _gh_url(word: str) -> tuple[str, str] | None:
+    """(owner/name, number) of a GitHub URL (#399): one on a host gh sends to github.com (_gh_on_github), read by
+    _gh_url_parts. gh's own readers take a pull request URL (`ParseURL`) or an issue or pull request URL (the issue
+    lookup). This takes a discussion URL and a repo URL too, which has no number: a reading more, since `-R` and the
+    reading before #399 stay other targets. None for a word that is no such URL or names another instance."""
+    parts = _gh_url_parts(word)
+    return (parts[1], parts[2]) if parts and _gh_on_github(parts[0]) else None
+
+
+def _gh_elsewhere(group: str, words: list[str]) -> list[tuple[str, str]]:
+    """The (target, link) readings of the operands that name a repo on another instance (round 6 of #399): a URL
+    on a host gh does not send to github.com (`https://ghe.corp/pub/repo/pull/9` is `ghe.corp/pub/repo#9`), and
+    gh repo's first word in another form (`ghe.corp/pub/repo`), as written. gh acts there, and a scope names repos
+    on github.com, so each is a target the scopes may not mean, as a `-R` on another host is."""
+    out = []
+    for n, a in enumerate(words):
+        parts = _gh_url_parts(a)
+        if parts and not _gh_on_github(parts[0]):
+            out.append((f"{parts[0]}/{parts[1]}" + (f"#{parts[2]}" if parts[2] else ""), redact_userinfo(a)))
+        elif not parts and group == "repo" and n == 0 and _gh_repo(a)[0] != a and not _gh_repo(a)[1]:
+            out.append((redact_userinfo(a), ""))
+    return out
 
 
 def _gh_read(group: str, repo: str, words: list[str], url: bool = True, before: bool = False) -> tuple[str, str]:
@@ -2069,19 +2100,20 @@ def _gh_operands(argv: list[str], takes: str, longs: tuple) -> tuple[str, list[i
 def _gh_repo(value: str) -> tuple[str, bool]:
     """(owner/name, sure) of a repo as gh reads `-R` (ghrepo.FromFullName in gh 2.89): `owner/name`,
     `HOST/owner/name`, or a URL (`https://HOST/owner/name`, `git@HOST:owner/name.git`), whose path reads decoded
-    as Go's url.Parse gives it. Sure when the host is github.com, as a scope means. A value gh refuses comes back
-    as written, and not sure (#399)."""
+    as Go's url.Parse gives it. Sure when gh sends the request to github.com (_gh_on_github), as a scope means. A
+    value gh refuses comes back as written, and not sure (#399)."""
     rest, host = value, "github.com"
     m = re.fullmatch(r"(?:(?:ssh|git\+ssh|git|https?|git\+https)://(?:[^@/]*@)?|git@)([^/:]+)(?::\d*)?[/:](.*)", value)
     if m:
         host, rest = m.group(1), unquote(m.group(2)).strip("/")
         rest = rest[:-4] if rest.endswith(".git") else rest
+        host = host.removeprefix("www.").lower()    # go-gh's RepoInfoFromURL, then ghrepo.NewWithHost below
     elif value.count("/") == 2:
         host, _, rest = value.partition("/")
     parts = rest.split("/")
     if len(parts) != 2 or not all(parts) or not host:
         return value, False
-    return rest, host.lower().removeprefix("www.") == "github.com"
+    return rest, _gh_on_github(host.removeprefix("www.").lower())
 
 
 _GH_ANY_SHORT = "".join(chr(n) for n in range(33, 127))   # every character a short option can be
@@ -2138,7 +2170,8 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     word with a `/` and no `=` after `api`, an option's value too, is the other reading.
 
     An operand from an expansion (an index in ``dynamic``) may be a URL for any repo, so the empty target, a repo
-    the line does not name, is a reading too."""
+    the line does not name, is a reading too. So is an operand that names a repo on another instance
+    (_gh_elsewhere)."""
     group, verb = (argv + ["", ""])[1:3]
     if group == "api":
         ops = _gh_api_operands(argv)
@@ -2159,6 +2192,7 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _gh_url(argv[i]))])
     readings = [_gh_read(group, r, [argv[i] for i in o], url) for r, o in parses for url in (True, False) if url or r]
     readings += raw + [("", "")] * any(i in dynamic for _, o in parses for i in o)
+    readings += [r for _, o in parses for r in _gh_elsewhere(group, [argv[i] for i in o])]
     # Outside the table gh may take some options' values and not others, a mix of the two readings. The words both
     # call operands, with the first one's repo, are such a mix: in `gh pr checkout -b 7 9 -f -R pub/repo` gh checks
     # out pub/repo#9, which neither reading names. In the table there is one reading, and this is it again.
@@ -2245,20 +2279,52 @@ _GH_ALIASES = {**{(g, "ls"): "list" for g in ("pr", "issue", "repo", "release", 
                ("pr", "co"): "checkout", ("secret", "remove"): "delete", ("variable", "remove"): "delete"}
 
 
-def _gh_verb_order(argv: list[str], dynamic: frozenset) -> list[int] | None:
-    """argv's indexes in the order gh reads them, with the subcommand third (#399). gh (cobra) finds the subcommand
-    past the options before it: an option word without `=` that starts with `--` or has two characters takes the
-    next word as its value (`-R owner/name`, `-b text`, `-h comment`), `--help` and any other option word stand
-    alone (`-Rowner/name`, `--body=text`, `-`), an empty word is passed over, and `--` ends the search. The
-    subcommand then parses every option on the line, so `gh pr -b text comment 5` is `gh pr comment -b text 5`.
-    An empty word before the command is passed over too, so the command comes second (`gh "" pr comment`). None
-    when a word from an expansion stands where the subcommand or an option may be: the gate cannot tell what gh
-    runs."""
+def _gh_takes_value(word: str, alone: tuple = ("--help",)) -> bool:
+    """Whether cobra's stripFlags takes the word after option ``word`` for its value where it looks for a command:
+    an option word without `=` that starts with `--` or has two characters, unless it is a boolean flag the
+    command knows (``alone``). gh's root knows `--help` and `--version`, a group `--help` (gh 2.89, cobra 1.10)."""
+    return "=" not in word and word not in alone and (word.startswith("--") or len(word) == 2)
+
+
+def _gh_command_at(argv: list[str], dynamic: frozenset, split: frozenset) -> int:
+    """The index of gh's command word, past the options before it, as cobra's stripFlags finds it with gh's root
+    flags (round 6 of #399): an option word takes the next word as its value by _gh_takes_value, where `--help` and
+    `--version` stand alone, any other option word stands alone, an empty word is passed over and `--` ends the
+    search. So in `gh -R pub/repo pr comment 5` the command is `pr`, which then reads `-R` (gh 2.89, where `-R` is
+    a persistent flag of pr, issue, repo, release and the other groups). A word from an expansion where the command
+    or an option may stand is the command word, and so is an option's value that may split into several words
+    (``split``, `gh -R $R pr view 5`): gh may run any command there. len(argv) when there is none."""
+    k = 1
+    while k < len(argv):
+        a = argv[k]
+        if k in dynamic or (a and not a.startswith("-")):
+            return k
+        if a == "--":
+            break
+        if a and _gh_takes_value(a, ("--help", "--version")):
+            if k + 1 in split:
+                return k + 1
+            k += 2
+        else:
+            k += 1
+    return len(argv)
+
+
+def _gh_verb_order(argv: list[str], dynamic: frozenset, split: frozenset = frozenset()) -> list[int] | None:
+    """argv's indexes in the order gh reads them, with the command second and the subcommand third (#399). gh
+    (cobra) finds the command past the options before it (_gh_command_at), and the subcommand past the options
+    before that: an option word takes the next word as its value by _gh_takes_value (`-R owner/name`, `-b text`,
+    `-h comment`), `--help` and any other option word stand alone (`-Rowner/name`, `--body=text`, `-`), an empty
+    word is passed over, and `--` ends the search. The command and then the subcommand parse every option on the
+    line, so `gh pr -b text comment 5` and `gh -b text pr comment 5` are `gh pr comment -b text 5`. None when a
+    word from an expansion stands where the subcommand or an option may be, or an option's value before the
+    subcommand may split into several words (``split``: an expansion outside quotes, `gh pr -R $R view 5`): the
+    gate cannot tell what gh runs. A quoted one (`gh pr -R "$R" comment 5`) is only that value."""
     order = list(range(len(argv)))
-    g = next((k for k in order[1:] if argv[k] != "" or k in dynamic), len(argv))
-    if 1 < g < len(argv):                    # cobra's stripFlags passes over an empty word
+    g = _gh_command_at(argv, dynamic, split)
+    if 1 < g < len(argv):                    # cobra's stripFlags passes over the options before it
         order = [0, g] + order[1:g] + order[g + 1:]
-    if argv[g:g + 1] and argv[g] in _GH_VERB_GROUPS:
+    if argv[g:g + 1] and argv[g] in _GH_VERB_GROUPS and g not in dynamic:
         i = 2
         while i < len(order) and argv[order[i]] != "--":
             a = argv[order[i]]
@@ -2269,7 +2335,12 @@ def _gh_verb_order(argv: list[str], dynamic: frozenset) -> list[int] | None:
                 continue
             if not a.startswith("-"):
                 return order[:2] + [order[i]] + order[2:i] + order[i + 1:]
-            i += 2 if "=" not in a and a != "--help" and (a.startswith("--") or len(a) == 2) else 1
+            if _gh_takes_value(a):
+                if order[i + 1:i + 2] and order[i + 1] in split:
+                    return None
+                i += 2
+            else:
+                i += 1
     return order
 
 
@@ -2280,15 +2351,16 @@ _GH_MOVED = ("gh", "subcommand moved")      # the mark in _call_memo that the ca
 
 
 def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
-                 dynamic: frozenset = frozenset()) -> Classification:
+                 dynamic: frozenset = frozenset(), split: frozenset = frozenset()) -> Classification:
     """A gh command. ``stdin`` is its stdin when the line spells it out (`_literal_stdin`), ``dynamic`` the
-    indexes of words that come from an expansion. An outbound post whose text the gate cannot fully read
-    carries the ``unseen_body`` signal (#208). The subcommand is the word gh takes for it (_gh_verb_order), and
-    an alias reads as the subcommand it names (_GH_ALIASES). When that is not the third word as written, the call
-    also gets a floor (classify)."""
+    indexes of words that come from an expansion, ``split`` those of them bash may split into several words or
+    none (_gh_splits). An outbound post whose text the gate cannot fully read carries the ``unseen_body`` signal
+    (#208). The command and the subcommand are the words gh takes for them (_gh_verb_order), and an alias reads as
+    the subcommand it names (_GH_ALIASES). When that is not the second and third word as written, the call also
+    gets a floor (classify)."""
     if _gh_third_word.get():
         return _classify_gh_words(argv, cmd, stdin, dynamic)
-    order = _gh_verb_order(argv, dynamic)
+    order = _gh_verb_order(argv, dynamic, split)
     words = argv if order is None else [argv[i] for i in order]
     group, verb = (words + ["", ""])[1:3]
     alias = _GH_ALIASES.get((group, verb))
@@ -2300,13 +2372,15 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
     if order is not None:
         return _classify_gh_words(words[:2] + [alias or words[2]] + words[3:], cmd, stdin,
                                   frozenset(n for n, i in enumerate(order) if i in dynamic))
-    # The line as written, past the empty words before the command, as gh passes over them (`gh "" secret "$V"`).
-    g = next((k for k in range(1, len(argv)) if argv[k] != "" or k in dynamic), len(argv))
-    lead = argv[:1] + argv[g:]
-    as_written = _classify_gh_words(lead, cmd, stdin, frozenset(k - g + 1 for k in dynamic if k >= g))
+    # The line as written with its command second, past the empty words and the options before it, as gh passes
+    # over them (`gh "" secret "$V"`, `gh -R pub/repo secret "$V"`).
+    g = _gh_command_at(argv, dynamic, split)
+    lead = [0, g] + [k for k in range(1, g) if argv[k] != "" or k in dynamic] + list(range(g + 1, len(argv)))
+    as_written = _classify_gh_words([argv[k] for k in lead], cmd, stdin,
+                                    frozenset(n for n, k in enumerate(lead) if k in dynamic))
     if as_written.category in NO_GRANT:
         return as_written                    # gh auth and gh secret hold credentials whatever the subcommand
-    return _opaque(f"gh {(lead + [''])[1]} with a word from an expansion where its subcommand may be", cmd)
+    return _opaque(f"gh {argv[g]} with a word from an expansion where its subcommand may be", cmd)
 
 
 def _classify_gh_words(argv: list[str], cmd: str, stdin: str | None, dynamic: frozenset) -> Classification:
@@ -2639,6 +2713,53 @@ def _expands(w: _Word) -> bool:
     `..` stays as it is."""
     return (w.dynamic or w.raw.startswith("~") or (w.glob and bool(re.search(r"[*?\[]", w.text)))
             or (w.brace and bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
+
+
+def _gh_splits(w: _Word) -> bool:
+    """Whether bash may make several words of ``w``, or none (round 6 of #399): a glob, a brace expansion, an
+    expansion outside double quotes (`$R`, `${R}`, `$(..)`, backticks), or `"$@"` and `"${name[@]}"` inside them.
+    `"$R"` is one word. The word's source is read as bash reads its quotes: a backslash, '..', $'..' and "..";
+    in "..", a `$(..)` is passed over to its closing parenthesis, counted, and a backtick body to its end."""
+    if (w.glob and re.search(r"[*?\[]", w.text)) or (w.brace and re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text)):
+        return True
+    if not w.dynamic:
+        return False
+    raw, i, dq = w.raw, 0, False
+    if not raw:
+        return True                          # a word the gate made itself: no source to read
+    while i < len(raw):
+        ch, nxt = raw[i], raw[i + 1:i + 2]
+        if ch == "\\":
+            i += 2
+        elif ch == '"':
+            dq, i = not dq, i + 1
+        elif not dq and ch == "'":
+            j = raw.find("'", i + 1)
+            i = len(raw) if j < 0 else j + 1
+        elif not dq and ch == "$" and nxt == "'":
+            j = i + 2
+            while j < len(raw) and raw[j] != "'":
+                j += 2 if raw[j] == "\\" else 1
+            i = j + 1
+        elif not dq and ch == "$" and nxt == '"':
+            dq, i = True, i + 2
+        elif ch == "`" or (ch == "$" and nxt and (nxt in "({@_!#?*-$" or nxt.isalnum())):
+            if not dq or (ch == "$" and nxt == "@"):
+                return True                  # outside "..", or "$@"
+            close = {"`": "`", "(": ")", "{": "}"}.get(nxt if ch == "$" else ch)
+            if close is None:                # "$R", "$1": one word
+                i += 2
+                continue
+            opener, depth, j = (nxt if ch == "$" else ""), 1, i + (2 if ch == "$" else 1)
+            while j < len(raw) and depth:
+                depth += (opener != "" and raw[j] == opener) - (raw[j] == close)
+                j += 2 if raw[j] == "\\" else 1
+            if close == "}" and "@" in raw[i + 2:j]:
+                return True                  # "${name[@]}", "${!name@}", "${@:2}"
+            i = j
+        else:
+            i += 1
+    return False
 
 
 def _literal_stdin(k: _Cmd, piped: str | None) -> str | None:
@@ -3193,7 +3314,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "exo":
         return [_classify_exo(argv, cmd)]
     if prog == "gh":
-        return [_classify_gh(argv, cmd, ctx.get("post_stdin"), frozenset(i for i, w in enumerate(words) if _expands(w)))]
+        dyn = frozenset(i for i, w in enumerate(words) if _expands(w))
+        return [_classify_gh(argv, cmd, ctx.get("post_stdin"), dyn, frozenset(i for i in dyn if _gh_splits(words[i])))]
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
         return [_classify_http(argv, cmd, frozenset(i for i, w in enumerate(words) if _expands(w)),
                                k.piped_in or _own_stdin(k))]

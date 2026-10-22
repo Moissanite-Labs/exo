@@ -280,3 +280,65 @@ def test_the_line_as_read_before_gets_the_own_text_pass():
     assert decide(replace(c, floor=None), pol).outcome == "allow"
     assert decide(c.floor, pol).outcome == "ask"
     assert d.outcome == "ask", d
+
+
+# Round 6, should fix. cobra finds the command past the options before it too (stripFlags with gh's root flags,
+# where only `--help` and `--version` stand alone), and the subcommand then parses them: `-R` is a persistent flag
+# of pr, issue, repo, release and the other groups (cmdutil.EnableRepoOverride in gh 2.89). So each of the review's
+# lines posts on pub/repo#5. The gate read `-R` or `-b` as an alias or extension, so with `opaque_exec: allow` the
+# post ran with no footer check and no scrub.
+OPAQUE_OK = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "categories": {"opaque_exec": "allow"}},
+                                "posting": POST})
+
+
+@pytest.mark.parametrize("line,canonical", [
+    ("gh -R pub/repo pr comment 5 -b x", "gh pr comment -R pub/repo 5 -b x"),
+    ("gh --repo pub/repo pr comment 5 -b x", "gh pr comment --repo pub/repo 5 -b x"),
+    ("gh -b x pr comment 5 -R pub/repo", "gh pr comment -b x 5 -R pub/repo"),
+    ("gh -R pub/repo pr -b x comment 5", "gh pr comment -R pub/repo -b x 5"),
+    ("gh --repo=pub/repo issue close 5", "gh issue close --repo=pub/repo 5"),
+    ("gh -Rpub/repo '' pr comment 5 -b x", "gh pr comment -Rpub/repo '' 5 -b x"),
+    ("gh -X DELETE api repos/pub/repo", "gh api -X DELETE repos/pub/repo"),
+])
+def test_options_before_the_command(line, canonical):
+    c, d = same(line, canonical)
+    assert c.category not in ("read", "opaque_exec") and c.target.startswith("pub/repo"), c
+    assert c.floor is not None and c.floor.category == "opaque_exec", c
+
+
+@pytest.mark.parametrize("line", ["gh -R pub/repo pr comment 5 -b x", "gh --repo pub/repo pr comment 5 -b x",
+                                  "gh -b x pr comment 5 -R pub/repo", "gh -R pub/repo pr comment 5 -b $'Note SECRETX\\nF'"])
+def test_options_before_the_command_meet_the_posting_rules(line):
+    c, d = run(line, OPAQUE_OK)
+    assert (c.category, c.target, decide(c.floor, OPAQUE_OK).outcome) == ("github_post", "pub/repo#5", "allow"), c
+    assert (d.outcome, d.exposure) == ("ask", "public"), (line, d)
+    assert ("internal name: SECRETX" if "SECRETX" in line else "missing footer") in " ".join(d.violations), d
+
+
+# gh's root flags stand alone, and a line with no command stays as it was.
+@pytest.mark.parametrize("line,category", [("gh --version", "read"), ("gh --help", "read"), ("gh -h", "opaque_exec")])
+def test_gh_s_own_flags_alone_stay_as_they_were(line, category):
+    c, _ = run(line)
+    assert (c.category, c.floor) == (category, None), c
+
+
+# Round 6, nit 1. An option's value before the subcommand that bash may split (an expansion outside quotes, a glob,
+# a brace expansion) may put a word where gh looks for the subcommand: with R='pub/repo comment -F' and a file
+# named view, `gh pr -R $R view 5` comments on pub/repo#5. The gate cannot tell, as for "$V" in the subcommand's
+# place. The line as read before is the floor. A quoted value is one word and only that value.
+@pytest.mark.parametrize("line", ["gh pr -R $R view 5", "gh pr -R ${R} view 5", "gh pr -R $(cat r) view 5",
+                                  "gh pr -R {pub/repo,comment} view 5", "gh pr -R pub/* view 5",
+                                  'gh pr -R "$R"$S view 5', 'gh pr -R "$@" view 5', "gh -R $R pr view 5",
+                                  "gh pr -b $B view 5 -R pub/repo", "gh -R pub/repo pr -R $R view 5"])
+def test_an_unquoted_expansion_before_the_subcommand(line):
+    c, d = run(line)
+    assert c.category == "opaque_exec" and c.floor is not None, (line, c)
+    assert d.outcome == "ask", (line, d)
+
+
+@pytest.mark.parametrize("line,category", [('gh pr -R "$R" view 5', "read"), ('gh pr -R "${R}" view 5', "read"),
+                                           ('gh -R "$R" pr view 5', "read"), ('gh -R "$R" pr comment 5 -b x', "github_post"),
+                                           ('gh pr -R "$(cat r)" view 5', "read"), ('gh pr view 5 -R $R', "read")])
+def test_a_quoted_expansion_before_the_subcommand_is_one_word(line, category):
+    c, _ = run(line)
+    assert c.category == category, (line, c)
