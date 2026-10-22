@@ -91,14 +91,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   all: text that asks as a comment post logged. A reopen now reads its comment as a close does
   (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
   text, an unread body file included. A reopen or merge carrying no text is unchanged.
-- ssh reads its stdin as commands on the remote host through three more spellings (#316). A compound
-  redirected from a file (`{ ssh host; } < cmds.sh`), an output process substitution (`>(ssh host)`,
-  whose commands are fed what the outer command writes) and a remote hop (`ssh a ssh b`, which passes
-  its stdin on to `ssh b`) each left that stdin unseen, so the line read as plain `ssh` and was allowed.
-  A feed whose text the gate cannot read now marks the commands it reaches instead of filling in texts,
-  a >( ) body is classified as fed, and a hop to an ssh with no remote command of its own is read as
-  running the outer line's stdin on the inner host. `ssh -n`, an inner ssh with a command of its own,
-  and a compound fed only /dev/null are unchanged.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
@@ -269,6 +261,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Reads stay `read`, and a project folder called `update` is unchanged. A file tool's write to the pin is
   `store_write`, and since #448 it keeps its `local_write` reading as a part, so a `local_write` deny still
   denies it. `config.json` is left to #125 (D-074).
+- Gate (#316, follow-up to #240, D-038): ssh's stdin reached its login shell in four more ways the gate did not
+  see, so the line read as plain `ssh` and was allowed, even under category denies. A compound fed from a file or
+  an unread pipe (`{ ssh host; } < cmds.sh`, `while read h; do ssh host; done < hosts.txt`), an output process
+  substitution (`echo 'rm -rf /data' > >(ssh host)`, `tee >(ssh host)`), a `$( )` that inherits such a stdin
+  (`cat cmds.sh | echo $(ssh host)`) and a remote hop (`ssh a ssh b`, `ssh a 'cd /; ssh b'`, `ssh a ssh b ssh
+  c`) now ask as `opaque_exec`. A known text fed through a hop is read, so `echo 'rm -rf /data' | ssh prod-db ssh
+  inner` is denied under `deny: [delete]`. The command a wrapper runs is read too (`{ uv run ssh host; } <
+  cmds.sh`). `ssh -n`, a command's own `< /dev/null` (also on a wrapper around it), an inner ssh with a command or
+  a stdin of its own, and a compound fed only `/dev/null` keep their reading. A `>( )` is still read for a `cd` in
+  it (`echo >(cd ~/.config); cat gh/hosts.yml` stays `credentials`) and in a declare value. The new `opaque_exec`
+  part can now decide the line, as it does for the direct form. So under a policy that allows or logs
+  `opaque_exec`, a line where it displaces a logged part, such as `sudo` or a `git push` beside the ssh, goes from
+  `log` to `allow` (`{ sudo ssh host; } < cmds.sh`, as `sudo ssh host < cmds.sh` did). A rule that denies `costly`
+  `shell` parts, which sudo makes, asks instead on such a line, as on the direct form. A reserved hit on the
+  displaced part goes, and the line still asks. `deny` entries and category denies still see every part.
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under
