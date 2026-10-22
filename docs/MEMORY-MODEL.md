@@ -78,10 +78,15 @@ Each model call is built fresh, in this order:
 2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its last
    `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored in the
    thread are part of it. A fork's copies count at their original's log position, so a fork opens with its
-   parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too. A copy counts only
-   while the tree can hold its original. A private thread's fork has a tree of its own (below), which summarizes
-   its copies. A copy of an entry the parent undid after the fork counts nowhere. It stays in the tail only until
-   the fork's own later entries are summarized, and then the fork's calls no longer carry it.
+   parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too, except for the
+   kept copies below. A copy counts only while the tree can hold its original. A private thread's fork has a
+   tree of its own (below), which summarizes its copies. In any other fork, the parent may undo an entry after
+   the fork. The tree then drops the original, so no tree holds the fork's copy of it (#245). The fork's tail
+   keeps such copies verbatim, in order, ahead of the fork's own entries. They sit outside `tail_messages` and
+   `/compact`, so every call of the fork carries them: a fork whose parent undid 20 turns carries all 20. In a
+   fork of that fork, the kept copies come after the middle fork's own entries, which the tree holds, so they
+   read later than they happened. Copied context notes are not kept this way. A note was never in the log, so
+   it leaves a fork's tail as the tail moves on, as it does in the parent.
 3. **Context notes.** Before a model call, entries other threads committed since this thread last looked
    (and after the frontier) are written into this thread as one compact note: `In thread "tui 2", 4 min
    ago: user: ... / you: ...`. The note is stored (thread-local, not in the log), so the next call sees
@@ -189,8 +194,9 @@ content is the same once the summaries finish. Tests: `tests/core/test_turn_sett
   then. Context notes stored in the thread stay. They hold other threads' news, which the thread has already
   marked as seen, so dropping them would lose that news. Undo does not reach copies made before it: a note
   another thread stored keeps the undone text (that thread's model has seen it, and the note is replayed byte
-  for byte), and so does a fork. A summary of a deleted node that was already running when undo ran is not saved
-  afterwards. The next turn rebuilds the summary from the entries that are left.
+  for byte), and so does a fork, whose tail keeps such a copy for good ("Context assembly per turn"). A summary of
+  a deleted node that was already running when undo ran is not saved afterwards. The next turn rebuilds the summary
+  from the entries that are left.
 - **Failures.** A node whose summary fails is retried with backoff (30 s, then 60 s, ... up to five minutes, set by
   `retry_backoff`). During backoff the span stays verbatim and the turn does not wait for it. A temporary failure
   keeps its turn on later upkeep: an outage, or an error that says when its route reopens (`retry_after`), such as
@@ -245,17 +251,18 @@ What uses it:
   logs a peer's or job's turn under that author, not the principal's id.
 - The learning loop's chat capture (`record_chat_signals`) and `/handoff` pins read the same flags.
 - The context plugin's `select_context` gets `author` and `principal` on each message, with `principal` read from
-  the author alone. exo-context pins a ruling or correction, and quotes it in a handoff as the principal's words,
+  the author alone. exo-context pins a ruling, correction or open decision, and quotes it in a handoff as the principal's words,
   only from a principal message. A fork's copy of the principal's message keeps its author, so the child thread pins
   it too (`is_principal` skips the copy, so capture does not take it twice). A copy of a message stored before D-040
   has no author to keep. It reads as `system`, so the fork does not pin it. The recalled-memory block before each
   turn is authored `system`. Host message dicts with no core stamp are read through `provenance.author_of` the same
   way, meta tags included. A peer, bus or job tag in `meta` refuses at any role, an untagged user turn still reads
   as the principal, and an untagged assistant turn reads as the agent's. A handoff carries a pinned block only from
-  a message that opens with it (exo-context's own block) or with a compaction marker (a host's summary). A host
-  summary in an assistant row, where the host alternates roles, carries nothing itself. Its `_compressed_summary`
-  flag shows a host made the row, not that exo-context escaped it. exo-context keeps continuity from its session
-  pins, observed only from the principal's own messages and persisted per session. One in peer, bus, job, tool or
+  a message that opens with it (exo-context's own block). A row opening with a compaction marker (a host's
+  summary) carries nothing itself, in an assistant row where the host alternates roles or in a user row where a
+  stock summary reads as the principal's turn. Its `_compressed_summary` flag shows a host made the row, not that
+  exo-context escaped it. exo-context keeps continuity from its session pins (rulings, corrections and open
+  decisions), observed only from the principal's own messages and persisted per session. One in peer, bus, job, tool or
   agent text is not carried, and neither is one quoted further down a message.
   The core's system message quotes each span too small to
   summarize word for word, a peer's turn included, so a peer's block there is data too.

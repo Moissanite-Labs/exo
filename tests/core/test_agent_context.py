@@ -695,3 +695,84 @@ def test_a_fork_keeps_the_copies_the_tree_cannot_hold():
     assert shown("4417") and shown("private chat 0")
     assert not any("4417" in t for t, k in zip(summ.prompts, summ.keys) if k == "agent:razi")
     assert "5521" in a_text and "early turn 0" not in a_text  # the tree holds the copies before it
+
+
+def test_a_fork_keeps_copies_of_entries_the_parent_undid_after_the_fork():
+    """#245: a copy counts at its original's position only while the original is visible. Once the fork's
+    own later entries are summarized, the tail starts after a copy whose original was undone, and no tree
+    holds it. The tail keeps those copies, in order, ahead of the fork's own entries."""
+    store, ctx, prov, loop, summ = setup()
+
+    async def go():
+        a = await loop.create_session(agent="razi")
+        for i in range(4):
+            await loop.send(a.id, f"early turn {i}")
+        await loop.send(a.id, "my pin is 5521")
+        child = await loop.fork(a.id)
+        assert store.undo(a.id) == 2
+        for i in range(10):
+            await loop.send(child.id, f"fork turn {i}")
+            await ctx.settle("agent:razi", 5, None)
+        return await ctx.build(child.id, "SYS")
+    built = run(go())
+    texts = [m.text() for m in built]
+    pin = texts.index("my pin is 5521")
+    assert texts.count("my pin is 5521") == 1
+    assert built[pin + 1].role == "assistant"  # the copy's reply comes with it
+    assert pin < texts.index("fork turn 9")  # ahead of the fork's own entries
+    assert "early turn 0" not in texts  # a visible original's copy stays the tree's, not the tail's
+
+
+def test_a_fork_does_not_keep_its_parents_old_notes():
+    """Review of #245: only a copy of a logged entry can lose its place in the tree. A copied context note was
+    never logged, so it leaves the fork's tail as the tail moves on, as it does in the parent, and in a fork of the
+    fork too. The copy of an entry the parent undid after the fork stays in both, and `/compact` keeps it."""
+    store, ctx, prov, loop, summ = setup()
+
+    async def go():
+        a = await loop.create_session(agent="razi", title="A")
+        b = await loop.create_session(agent="razi", title="B")
+        for i in range(30):
+            await loop.send(b.id, f"b fact {i} " + "y" * 200)
+            await loop.send(a.id, f"a turn {i}")  # its context note carries B's fact
+            await ctx.settle("agent:razi", 5, None)
+        await loop.send(a.id, "my pin is 5521")
+        child = await loop.fork(a.id)
+        assert store.undo(a.id) == 2
+        builds, reports = [], []
+        for fork in (child, await loop.fork(child.id)):
+            for i in range(30):
+                await loop.send(fork.id, f"fork turn {i}")
+                await ctx.settle("agent:razi", 5, None)
+            builds.append(await ctx.build(fork.id, "SYS"))
+            reports.append(ctx.report(fork.id, "SYS"))
+            await ctx.compact(fork.id, "SYS")
+            builds.append(await ctx.build(fork.id, "SYS"))
+        return builds, reports
+    builds, reports = run(go())
+    for built in builds:
+        texts = [m.text() for m in built]
+        assert not [m for m in built if m.meta.get("note") and m.meta.get("local") == "fork"]  # was 30
+        assert texts.count("my pin is 5521") == 1 and texts.index("my pin is 5521") < texts.index("fork turn 29")
+    assert [r["notes"]["stored"] for r in reports] == [0, 0]
+
+
+def test_the_kept_copies_lookup_reads_only_a_forks_copies():
+    """Review of #245: the lookup runs on every build of every thread. A thread that is not a fork reads none of its
+    rows, and a fork reads only its copies, not its own entries (SQLite steps counted in blocks of 100)."""
+    store = SessionStore()
+    a = store.create_session(title="A", agent="razi", kind="thread")
+    for i in range(10):
+        store.append_message(a.id, Message.user(f"turn {i}"))
+    child = store.fork(a.id)
+    for sid in (a.id, child.id):
+        for i in range(500):
+            store.append_message(sid, Message.user(f"more {i} " + "x" * 1000))
+    steps = {}
+    for sid in (a.id, child.id):
+        count = []
+        store._db.set_progress_handler(lambda: count.append(1), 100)
+        assert store.orphaned_copies(sid, store.last_seq(sid)) == []
+        store._db.set_progress_handler(None, 100)
+        steps[sid] = len(count)
+    assert steps[a.id] == 0 and steps[child.id] <= 10  # were 30 and 35: every row of each thread was read

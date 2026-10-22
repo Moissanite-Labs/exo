@@ -1,7 +1,7 @@
 """`exo ingest <kind> <path> [--since TS]`.
 
-Hook into exo.cli: in `build_parser()` call `register(sp, common)`, and import `cmd_ingest`
-into exo.cli so `main()` finds it.
+`exo.cli` lists `ingest` in its `LAZY` table. It imports this module, calls `register(sp, common)` and
+runs `cmd_ingest` only when `exo ingest` runs.
 
 The ledger is the active store's ledger (`--principal` / `--root`), or `--ledger PATH`.
 Events are signed by the ingest seat key (`--as`, default `ingest`, key at
