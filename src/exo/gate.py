@@ -4945,14 +4945,14 @@ def _glob_words(words: list[str]) -> bool:
     return any(_glob_word(w, home, samples, secrets, runs) for w in words)
 
 
-_PROC_FILE = re.compile(r"/proc/[^/]+/(?:task/[^/]+/)?([^/]+)")
+_PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
 
 
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
-    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ of any process, direct or under task/ (#199, #313)
-    if proc and _glob_names(proc[1], ("environ",)):
+    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ, or a thread's (#199, #313)
+    if proc and (proc[1] is None or _glob_names(proc[1], ("task",))) and _glob_names(proc[2], ("environ",)):
         return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
