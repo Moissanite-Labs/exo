@@ -165,14 +165,14 @@ def test_brand_bar_live_dot_and_names(tmp_path):
 def test_steer_state_in_prompt_placeholder_and_user_block(tmp_path):
     async def sc(app, pilot, client, eng):
         assert app.composer.placeholder in (IDLE_HINT, app.tip_line())  # a first run shows its one guidance line (D-037)
-        eng.hub.publish(s.TurnStarted(turn_id="t", model="fake:x"), app.session)
-        await until(lambda: app.busy, pilot)
+        await send(app, pilot, "ask")  # a real held turn, so the core accepts the next line as a steer
+        await until(lambda: app.card is not None, pilot)
         assert plain(app.prompt.render()).strip() == "steer ›"
         assert app.composer.placeholder == BUSY_HINT
         await send(app, pilot, "change course")
         await until(lambda: any(isinstance(w, Block) and w.kind == "user" and w.steer for w in app.transcript.children),
                     pilot)
-        eng.hub.publish(s.TurnCompleted(turn_id="t"), app.session)
+        await pilot.press("ctrl+f", "o")
         await until(lambda: not app.busy, pilot)
         assert plain(app.prompt.render()).strip() == "›"
 
@@ -280,7 +280,7 @@ def test_approval_card_draws_header_and_key_chips(tmp_path):
         await pilot.pause(0.1)
         out = plain(app.card.body(), 70)
         assert out.startswith("APPROVAL · PUBLIC, IRREVERSIBLE") and "Post it?" in out
-        assert "[o] once  [a] always  [d] deny" in out
+        assert "Ctrl+F, then [o] once  [a, Enter] always  [d, Enter] deny" in out
         await pilot.press("ctrl+f")
         await pilot.press("d")
         await pilot.pause(0.1)
@@ -293,7 +293,7 @@ def test_approval_chips_follow_the_options(tmp_path):
     req = s.ApprovalRequested(request_id="r", summary="x", risk="low", options=["allow", "deny"])
     card = ApprovalCard(req)
     out = plain(card.body(), 60)
-    assert "[o] once" in out and "[a]" not in out and "[d] deny" in out
+    assert "[o] once" in out and "[a," not in out and "[d, Enter] deny" in out
 
 
 # ---------------------------------------------------------------- boot sequence
