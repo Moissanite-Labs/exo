@@ -2800,6 +2800,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_opaque(f"writes to a path from a variable ({t.text[:60]})", cmd))
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
+            if sudo:
+                ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
     hit = _store_touch(k, words, parts, ctx)
     hits = [hit] if hit else []
     if hit and ctx.get("fd_cwd") not in (None, hit):
@@ -4334,7 +4336,17 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     if func:
         parts.append(_opaque("defines a shell function", cmd))
     setters = [k.own for k in cmds if _sets_state(k)] + ([None] if func else [])
-    c = _combine(parts, cmd)
+    # #454: bash opens a redirection's file as the calling user, before sudo runs, so the write of `sudo echo hi >
+    # /tmp/f` happens either way. Sudo makes the command's own read costly, so it outranked the write. When such a
+    # part leads the line, a copy of a sudo command's write with its cost leads in its place, so the line has the
+    # category it has without sudo. Every other part ranks below the copy, and a part that outranks the read (an
+    # unknown program) keeps the lead. The write part itself stays as it is, so a rule or entry on a part sees it.
+    lead, writes = _most_severe(parts), ctx.get("sudo_writes")
+    if writes and lead and lead.category in ("read", "shell", "code") and lead.exposure == "private" \
+            and not lead.third_party:
+        c = _combine([replace(writes[0], reversibility=lead.reversibility), *parts], cmd)
+    else:
+        c = _combine(parts, cmd)
     if c.category == "credentials":  # a secret beside an irreversible command keeps that command's weight
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
