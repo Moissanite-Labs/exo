@@ -1453,7 +1453,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   2026-10-22 (#460): a posting violation counts as often as each tree lists it, so a head that lists once a text
   two posts of one name both meet is lower. Each seed also runs under each tool table name of either tree that ends
   in `terminal` or `shell`, since adding such a name to the table stops the gate reading it as a shell, and in a call
-  that holds both `command` and `cmd`. The report shows a few reworded pairs, and `--json` lists them.
+  that holds both `command` and `cmd`. The report shows a few reworded pairs, and `--json` lists them. The line
+  `and N more on other posts` is not compared: it names no text, and a head that lists every text has none.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
