@@ -38,12 +38,25 @@ Scheduled unattended runs explicitly pass `JOB_MAX_ROUNDS=24` and release the jo
 scheduled threads and bus wakes with a client attached. It passes a per-turn `Loop.send(max_iterations=...)`
 limit, keeping a stricter explicit loop limit. The shared loop limit stays unchanged, so principal-started turns
 from the terminal or a channel remain unlimited by default, even while another session runs a capped wake.
+The wrap-up uses this turn's actual limit `N` in its prompt and model-call records, even when the shared loop
+default is zero. Its trace iteration is `N + 1`, including a wrap-up interrupted during the provider call.
+A principal message steered into a running wake retains the wake's cap. It does not start a new unlimited turn.
 The engine copies turn metadata, retaining its author or defaulting a missing or empty author to `system`.
 Delegated children explicitly use their `max_turns` limit, or 24 when unset or zero. Approvals, spend admission,
 interrupts, provider retry limits and child token/time limits keep their existing checks.
 For a reply without tool calls, a missing, empty or `tool_use` stop reason retains the turn's default `end`.
 Other stop reasons are copied. A queued steer continues only from `end`, so its answer starts with that same
 default. This normalization preserves the existing completion and steer behavior.
+
+Known caller-policy gap (#363): all `turn.send` callers currently inherit the shared loop default, including
+`LOCAL`. Both local automation and a TUI over TCP are `LOCAL`. Verified Unix principal clients and in-process
+principal clients are distinct, and exod's `ChannelLink` alone supplies the trusted `CHANNEL` caller. Channel
+messages still have local authorship. No TCP token, client label or command-body field proves human intent.
+Principal standing grants client authority, not proof a human is typing. D-039 also trusts same-user code outside
+the core's process tree when it holds the principal credential. A blanket `LOCAL` cap would also cap the TCP TUI.
+A separate policy must authorize unlimited TCP turns independently of general bearer-token access, or explicitly
+choose finite TCP turns. This PR changes neither caller attribution nor that policy. Unattended code should use
+the existing finite scheduler or wake paths.
 
 ## The protocol in numbers
 

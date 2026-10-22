@@ -45,6 +45,8 @@ scheduled thread and bus wakes with a client attached. Positive caller limits an
 finite (24 by default for children). Interrupts, approvals, spend checks and retry limits still apply. A turn that
 reaches its `max_iterations` limit emits the `stopped after N tool rounds` notice, then makes one more model call
 with `tool_choice="none"` and a transient `[harness]` prompt asking what was done, what is open and the next step.
+That prompt uses the effective per-turn limit `N`, and the wrap-up model call is trace iteration `N + 1`, including
+an interrupted provider call. It never substitutes the shared loop default for this turn's limit.
 The prompt is never stored. The reply is stored with `meta.wrap_up` (and the route's `meta.model`). A tool call in
 it is dropped and never runs, and its signed thinking is not kept (it was signed against the unstored prompt).
 `stop_reason` stays `max_iterations`. A failed wrap-up stores any shown text as above, emits the same coded `error`

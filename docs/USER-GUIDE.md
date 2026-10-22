@@ -72,7 +72,9 @@ Use `ctrl+c` or `/stop` to stop it. Approvals and spend limits still apply. Suba
 explicit round limit retain their finite limits. Reaching one ends with a short progress report. Unattended
 scheduled runs stop after 24 tool rounds and warn if the task is unfinished. Turns started by a job notice,
 peer or bus message also stop after 24 tool rounds with a progress report. This includes a background job waking
-a scheduled thread, or a bus message arriving while a client is attached. Details: `docs/CORE.md`, "Turn limits".
+a scheduled thread, or a bus message arriving while a client is attached. A message you send that is steered
+into a running wake shares that wake's 24-round limit. A new turn after the wake finishes uses the normal
+unlimited default. Details: `docs/CORE.md`, "Turn limits".
 
 **Terminal (`exo tui`).** Type a message and press Enter. Options: `--resume` continues the newest thread
 with messages (each launch opens a thread, so it skips the empty ones), `--session ID` continues one, `--seat NAME`
