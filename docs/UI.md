@@ -41,18 +41,18 @@ the middle dot as separator come straight from the site.
 
 1. Brand bar: `E X O`, agent, thread, and `LIVE` with a pulsing dot while a turn runs (`IDLE` otherwise). It shows
    the open thread's turn: after a switch it shows the new thread's state.
-2. Transcript: `›` and your text for a prompt (`steer ›` when sent mid-turn); agent text in fg-2 as Markdown;
+2. Transcript: `›` and your text for a prompt (`steer sending ›`, then `steer queued ›` or `steer delivered ›` when sent mid-turn); agent text in fg-2 as Markdown;
    one line per tool with state glyph, name, short args, line count and elapsed time (ctrl+o expands); system
    lines dim; tips as `tip · ...` in dim italic; `memory · log 1-16 folded · 1781 → 153 tok` as a cold line.
-3. Panels: approval (orange rule, `APPROVAL · <risk>`, key chips `[o] once [a] always [d] deny`; both `a` and `A` wait for Enter; the card never takes focus automatically and says "tab, click or ctrl+f to answer"; it is removed when the core closes the request, when the turn is stopped, and by a check against `approvals.list` every few seconds), taste,
+3. Panels: approval (orange rule, `APPROVAL · <risk>`, followed by `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny` before the request details; both `a` and `A` wait for Enter; the card never takes focus automatically, and Ctrl+F keeps the composer draft; it is removed when the core closes the request, when the turn is stopped, and by a check against `approvals.list` every few seconds), taste,
    finding, `/context` report and the short orientation `INTRO` shows when the `exo-intro` skill is missing
    (cold rule), peer message (double cold rule, sender and trust in the header,
    never styled as you). The side panel for `ui.panel` uses the same header and rule.
    The terminal waits for an approval card's removal before mounting the next queued card under the same widget id.
    Answers and close events name their request, so a late event cannot close its replacement. Thread switches and
    restoration share this transition. A request with no thread still stays across thread switches (#276, D-045).
-4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`.
-5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question. A steer sent mid-turn shows `steer queued ›` until it lands (its `message.completed`); `Up` in an empty composer or `/unsteer` sends `command.run unsteer` and puts the text back in the composer (D-045). Esc is not used for this.
+4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`. A queued steer count leads this line (`1 steer queued (Up to edit)`), visible even with a draft in the composer.
+5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question. A steer sent mid-turn shows `steer sending ›` while its reply is pending, `steer queued ›` after the core queues it, then `steer delivered ›` on its matching `message.completed` or a successful `unsteer` reply confirming it already left the queue. Delivery means the text reached the conversation, not that the model has acted on it. Delivery events received before the send reply are retained only for in-flight sends. A send reply alone never proves delivery. A lost reply says `steer delivery unknown`; a refused send says `steer not sent`. `Up` in an empty composer or `/unsteer` sends `command.run unsteer` and puts queued text back in the composer (D-045). Esc is not used for this.
    Under it, when you type `/`, `@` or `!`, the completion menu (D-037): a hairline above, mono rows, an orange rule on
    the selected row, a dim argument shape, up to eight rows then `N matches`. Ghost text is drawn dim after the caret.
    The placeholder doubles as the one-line guidance (`job j1 finished: ask for its job_output · tab fills it in`).
