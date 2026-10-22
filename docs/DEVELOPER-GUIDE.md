@@ -428,9 +428,10 @@ The actions are the lines and tool calls the gate suites test, read from the tes
 runs when the head deletes its test. Each call runs as written: a `bash` call stays a `bash` call, and a line under
 `cmd` stays there. The script reads the gate's own tables from both trees the same way, with `ast`: a literal at
 module level, and each `|=`, `+=` or `NAME[key] =` of a literal after it. So a head that drops a table entry still
-runs the base's line for it, and a head that adds one runs its own. A table a tree holds in any other form (built by
-a helper call, changed with `.update()` or inside a function, or a list where the other tree has a mapping) is named
-on stderr and in the summary, since its entries may get no lines. To these come generated forms:
+runs the base's line for it, and a head that adds one runs its own. A table a tree holds in any other form (built by a
+helper call, changed with `.update()` or inside a function, or, where the two trees hold different kinds of value, one
+the script does not read for that table, such as a string for a set of names or a list for a mapping) is named on
+stderr and in the summary, since its entries may get no lines. To these come generated forms:
 
 - a line for each entry of the program, prefix and shell tables: each program of `PROGRAMS` with a file, each
   `SUBCOMMANDS` pair, `rm -rf build` behind each prefix (`sudo`, `nohup`, `doas`), wrapper and tmux command, run by
@@ -494,13 +495,15 @@ Add policies with `--policies more.py` (a `POLICIES` mapping). Their forbid and 
 
 Exit status 0 means nothing is lower. Exit 1 means at least one pair of action and policy is lower: an outcome below
 main's in the order allow, log, ask, deny, a reserved hit lost, or a posting violation main lists that the head does
-not (a reworded one counts too). At an equal deny, lost reserved hits and violations are not counted. The call is
-blocked, and both only matter for an ask: a reserved hit keeps a standing grant from covering it, and a violation is
-named in its message. A classify or decide that raises counts as the hook's answer to an error: ask, or allow for a
-read tool. The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
-Tightenings are only counted. `--json` writes the lowered actions and pairs, the first 5,000 of each in corpus order.
-The `--corpus` lines come first in that order, so the cap keeps them before the built-in lines. Fix each lowered
-line, or name it in the decision amendment the change records, with the reason it is safe.
+not (one the head words otherwise counts too). A violation the head lists after the name of its post, as a line of
+several posts does (`<post>: <main's text>`), is kept. The summary counts those pairs as reworded, and they do not
+exit 1. At an equal deny, lost reserved hits and violations are not counted. The call is blocked, and both only matter
+for an ask: a reserved hit keeps a standing grant from covering it, and a violation is named in its message. A
+classify or decide that raises counts as the hook's answer to an error: ask, or allow for a read tool. The summary
+groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy. Tightenings are only
+counted. `--json` writes the lowered actions and pairs, the first 5,000 of each in corpus order. The `--corpus` lines
+come first in that order, so the cap keeps them before the built-in lines. Fix each lowered line, or name it in the
+decision amendment the change records, with the reason it is safe.
 
 Exit 2 means a tree could not run or the script failed, such as on a folder that does not exist or a policy file
 that raises. A tree that dies or runs past `--timeout` (an hour by default) is stopped with exit 2 too. So is a run

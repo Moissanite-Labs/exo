@@ -876,6 +876,15 @@ def test_compare_ranks_pairs_as_the_hook_would(tmp_path, base, head, kind):
     assert kind != "same" or c["pairs_detail_changed"] + c["pairs_same"] == 1
 
 
+@pytest.mark.parametrize("head, lowered", [(["post: X"], 0), (["Y"], 1)])
+def test_a_violation_named_after_its_post_is_kept(tmp_path, head, lowered):
+    # A line of several posts names each one's violations after the post (#406): main's text is still there.
+    _stream(tmp_path / "b.gz", [["github_post", "x", None, [_d("ask", violations=["X"])], [0], 0]], ["p"])
+    _stream(tmp_path / "h.gz", [["github_post", "x", None, [_d("ask", violations=head)], [0], 0]], ["p"])
+    rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
+    assert rep["counts"]["lowered_pairs"] == lowered and rep["counts"]["violations_reworded"] == 1 - lowered
+
+
 def test_a_classify_error_is_labelled_error(tmp_path):
     _stream(tmp_path / "b.gz", [[None, None, "classify raised", [["ask", "error", "why", [], []]], [0], 0]], ["p"])
     _stream(tmp_path / "h.gz", [["read", "x", None, [_d("allow")], [0], 0]], ["p"])
@@ -1047,8 +1056,12 @@ def test_a_table_the_head_writes_otherwise_stops_the_run(tmp_path, monkeypatch):
     other = _tree(tmp_path, "other", ('OUTBOUND = ("github_post", "message_send", "email_send", "social_post", "web_post", '
                                       '"publish")', 'OUTBOUND = "github_post"'))
     assert gate_diff.unread_tables({"head": other, "base": ROOT}) == {
-        "head": {"OUTBOUND": "a string here, a collection in the base"},
-        "base": {"OUTBOUND": "a collection here, a string in the head"}}
+        "head": {"OUTBOUND": "a string here, a collection in the base"}, "base": {}}
+    # A mapping where main has a set is read the same (its keys), so neither tree is named.
+    shells = _tree(tmp_path, "shells", ('_SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "fish", "mksh", "busybox"}',
+                                        '_SHELLS = {"bash": 1, "sh": 1, "zsh": 1, "dash": 1, "ksh": 1, "fish": 1, '
+                                        '"mksh": 1, "busybox": 1}'))
+    assert gate_diff.unread_tables({"head": shells, "base": ROOT}) == {"head": {}, "base": {}}
 
 
 def test_odd_table_values_never_stop_the_forms(tmp_path):
