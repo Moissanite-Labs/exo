@@ -1281,8 +1281,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   quotes, which bash may split into more names (in `unset a[$i]`, `i='1] PATH ['` splits off `PATH`), a glob
   (`unset PAT?`), or an unquoted brace (`unset {PATH,}`). A word wholly in double quotes is read as before, so
   `unset "arr[$k]"` keeps its class. `unset -n PATH` asks, to be safe. bash leaves a plain `PATH` set under `-n`,
-  but it unsets a `PATH` that an earlier command made a nameref, and the gate does not track namerefs. *Exporters.* One
-  helper, `_builtin_options`, now reads the options of unset and of the exporters. export, readonly and unset take
+  but it unsets a `PATH` that an earlier command made a nameref, and the gate does not track namerefs. *Exporters.*
+  One helper, `_builtin_options`, now reads the options of unset and of the exporters. export, readonly and unset take
   no `+x`, and a word that may expand ends the options. So `V=PATH; export +x -f $V=; ls` and
   `V=PATH; declare -${f}x $V=; ls`, which were `read` on main and run a planted `./ls`, ask. An option-like word
   with a value the gate cannot read (`declare -x=$v -n r=PATH`) still asks. *Intended asks.* Some new asks fall
@@ -1297,12 +1297,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   ask}`, `unset PATH; echo hi > out.txt` goes from ask to allow. Main already allows `PATH=; echo hi > out.txt` under
   that policy, so this follows the design. In the same way, an allow rule that names `opaque_exec` now allows `unset
   a[$i]`, which main asked on for its subscript. Main allows `export a[$i]=1` and `read a[$i]` under that rule. A deny
-  on any part still holds (D-075, #191). Differential (#423), with 123 probe lines added to the corpus: 24,996 actions
-  x 76 built-in policies, 1,899,696 pairs, lowered 8 pairs on 4 probe actions, each an `a[$i]` line under an allow
-  rule that names `opaque_exec`. With 4 mixed category policies, 99,984 pairs, lowered 12 pairs on 7 probe actions,
-  each the mixed category case. Not done: an exporter name in a brace (`export {PATH,X}=`) is not read yet (#438).
-  Rejected: matching a brace set's words against `PATH`. The brace check the store paths use misses a quoted `}`
-  (`unset {"}",PATH}` unsets PATH), and an unquoted `{` is rare in an `unset` line.
+  on any part still holds (D-075, #191). Differential (#423), with 123 probe lines added to the corpus: 25,042 actions
+  x 76 built-in policies, 1,903,192 pairs, lowered 28 pairs on 14 actions, each an unquoted `a[$i]` line under an
+  allow rule that names `opaque_exec` (probe lines, and the variants of `unset a[$i]` from the new test). With 4 mixed
+  category policies, 100,168 pairs, lowered 12 pairs on 7 probe actions, each the mixed category case. Not done: an
+  exporter name in a brace (`export {PATH,X}=`) is not read yet (#438). Rejected: matching a brace set's words against
+  `PATH`. The brace check the store paths use misses a quoted `}` (`unset {"}",PATH}` unsets PATH), and an unquoted
+  `{` is rare in an `unset` line.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
