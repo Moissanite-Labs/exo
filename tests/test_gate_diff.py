@@ -911,6 +911,18 @@ def test_a_text_main_lists_twice_counts_twice(tmp_path):
         assert rep["counts"]["lowered_pairs"] == lowered, (base, head, rep["counts"])
 
 
+@pytest.mark.parametrize("base, head, lowered", [
+    (["A", "B", "and 2 more on other posts"], ["A", "B", "C", "D"], 0),     # the head lists what main hid
+    (["A", "B", "and 1 more on other posts"], ["A", "and 2 more on other posts"], 1),    # B is gone
+    (["A", "and 1 more on other posts"], ["A", "and 3 more on other posts"], 0),
+])
+def test_the_line_that_counts_hidden_violations_is_not_compared(tmp_path, base, head, lowered):
+    _stream(tmp_path / "b.gz", [["github_post", "x", None, [_d("ask", violations=base)], [0], 0, []]], ["p"])
+    _stream(tmp_path / "h.gz", [["github_post", "x", None, [_d("ask", violations=head)], [0], 0, []]], ["p"])
+    rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
+    assert rep["counts"]["lowered_pairs"] == lowered, rep["counts"]
+
+
 def test_a_reworded_pair_is_shown_and_counted_once(tmp_path):
     base, head = ["on a#9: missing footer: F"], ["on b#5: missing footer: F"]
     _stream(tmp_path / "b.gz", [["github_post", "x", None, [_d("ask", violations=base)], [0], 0, ["on a#9"]]], ["p"])

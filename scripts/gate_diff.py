@@ -2152,6 +2152,11 @@ def show_action(a: dict, width: int = 160) -> str:
     return text if len(text) <= width else text[:width - 3] + "..."
 
 
+# The line decide adds when it lists only so many of other posts' violations (#406). It names no text, so it is not
+# compared: a text it hides is missing from the explicit list either way, and a head that lists more has none.
+_MORE_LINE = re.compile(r"and \d+ more on other posts")
+
+
 def _bare(v: str, names: Iterable[str]) -> str:
     """A violation's text without the part name a line of several posts puts before it (`<name>: v`)."""
     return next((v[len(n) + 2:] for n in names if v.startswith(n + ": ")), v)
@@ -2169,8 +2174,9 @@ def _lost(db: list, dh: list, nb: Iterable[str] = (), nh: Iterable[str] = ()) ->
     rb, rh = {tuple(x) for x in db[3]}, {tuple(x) for x in dh[3]}
     if rb and (len(rh) < len(rb) or not {c for c, _ in rb} <= {c for c, _ in rh}):
         kinds.append("reserved")
-    if Counter(db[4]) - Counter(dh[4]):
-        kept = not Counter(_bare(v, nb) for v in db[4]) - Counter(_bare(h, nh) for h in dh[4])
+    vb, vh = ([v for v in d[4] if not _MORE_LINE.fullmatch(v)] for d in (db, dh))
+    if Counter(vb) - Counter(vh):
+        kept = not Counter(_bare(v, nb) for v in vb) - Counter(_bare(h, nh) for h in vh)
         kinds.append("reworded" if kept else "violations")
     return kinds
 
