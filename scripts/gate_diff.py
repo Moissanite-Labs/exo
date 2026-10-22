@@ -25,19 +25,30 @@ action runs as written. A plain command line is the terminal call {"tool": "term
 
 The built-in corpus is harvested from the gate tests of both trees (tests/security/test_gate*.py and
 plugins/exo-gate/tests/*.py, read with `ast`, never run), so a head that deletes a test row still runs its line.
-To that come the generated forms: compound variants (VARIANTS) of each simple line of the harvest, of the --corpus
-files and of SEED_COMMANDS, each line under the other shell tool names and keys the gate reads (SHELL_FORMS: every
-seed under each, every other line under one in turn), and the seeds in two session folders (SESSION_CWDS). The
-built-in policies are below (BUILTIN_POLICIES).
+The literal tables of both gates (GATE_TABLES, gate_tables) are read the same way. To that come the generated forms:
+- a line for each entry of the program, prefix and shell tables (table_lines: each PROGRAMS key, SUBCOMMANDS pair,
+  prefix, wrapper, tmux command, shell and interpreter flag) and of the allowlists (allowlist_lines);
+- compound variants (VARIANTS) of each simple line of the harvest, of the --corpus files, of SEED_COMMANDS and of
+  the table lines;
+- each line under the other shell tool names and keys the gate reads (shell_forms: every seed under each, every
+  other line under one in turn);
+- folder rows (cwd_rows): calls that read a secret store only as resolved from the session folder or from the call's
+  own cwd (#209), each of which main decides otherwise without the folder;
+- calls of the other tools (tool_actions): each TOOLS key, each name classify compares a tool with and a name for
+  each NAME_HINTS word, store and secret paths under each path key, and posts and targets under each text, title and
+  target key.
+The built-in policies are below (BUILTIN_POLICIES).
 
 Left out: the environment of a real seat (EXO_HOME, EXO_PRINCIPAL_STORE, EXO_KEYS_FILE and EXO_BUS_* move the
-stores, and both trees run without them), the session folders of real sessions (only the corpus's own "cwd" values
-and SESSION_CWDS run), and every hook step after decide: standing grants and NO_GRANT, binds_exact, the registry risk
-floor, the required executor, a policy changed mid-session and the decision model.
+stores, and both trees run without them), session folders other than the corpus's own "cwd" values and cwd_rows,
+argument keys and tool names the gate reads outside its tables (only where a test names them), and every hook step
+after decide: standing grants and NO_GRANT, binds_exact, the registry risk floor, the required executor, a policy
+changed mid-session and the decision model.
 
 Exit status: 0 when nothing is lowered, 1 when anything is lowered, 2 when a tree could not be run, the script
 itself failed (a bad flag or path, a policy file that raises or holds no plain data) or a SIGTERM or SIGHUP stopped
-it. Both tree processes and the work folder are removed on each of these.
+it. Both tree processes and the work folder are removed on each of these. A stop signal the script started with
+ignored (under nohup) stays ignored, so the run goes on.
 """
 from __future__ import annotations
 
@@ -61,15 +72,27 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Collection, Iterable, Iterator
 
 RANK = {"allow": 0, "log": 1, "ask": 2, "deny": 3}
-# The calls the gate reads as a shell line (gate._runs_shell, gate.classify): these tool names, and an unknown tool
-# whose name ends in terminal or shell, with the line under "command" or "cmd".
+# The calls the gate reads as a shell line (gate._runs_shell, gate.classify): the tool names _runs_shell lists, with
+# the line under "command" or "cmd", and a tool not in gate.TOOLS whose name ends in terminal or shell, when its
+# "command" is a string. build_corpus adds any other name a tree's _runs_shell lists.
 SHELL_TOOLS = ("terminal", "shell", "bash", "run_command", "exec_command")
-SHELL_NAMES = SHELL_TOOLS + ("remote_terminal", "remote_shell")
+SHELL_SUFFIXES = ("terminal", "shell")
+SHELL_NAMES = SHELL_TOOLS + ("remote_terminal", "remote_shell", "powershell", "mcp__host__terminal")
 SHELL_KEYS = ("command", "cmd")
-SHELL_FORMS = tuple((t, k) for t in SHELL_NAMES for k in SHELL_KEYS if (t, k) != ("terminal", "command"))
+
+
+def shell_forms(tools: Iterable[str] = SHELL_TOOLS) -> tuple[tuple[str, str], ...]:
+    """Each (tool name, key) the gate reads as a shell line, but the canonical terminal and command."""
+    tools = tuple(dict.fromkeys(tools))
+    names = tools + tuple(n for n in SHELL_NAMES if n not in tools)
+    return tuple((t, k) for t in names for k in SHELL_KEYS
+                 if (t in tools or k == "command") and (t, k) != ("terminal", "command"))
+
+
+SHELL_FORMS = shell_forms()
 HARVEST_GLOBS = ("tests/security/test_gate*.py", "plugins/exo-gate/tests/*.py")
 MAX_COMMAND = 10000           # longer harvested lines (stress tests) are left out
 
@@ -172,6 +195,9 @@ BUILTIN_POLICIES: dict[str, dict] = {
     "posting_agent_names": {"posting": {"forbid_agent_names": True}, "agents": ["builder", "scout"]},
     "posting_close_and_merge": {"posting": {"applies_to": ["github_post", "github_close", "vcs_merge", "message_send"],
                                             "footer": "-- bot", "forbid_words": ["done", "secret"]}},
+    "posting_forbid_ignore_case": {"posting": {"forbid": [{"pattern": "secret", "label": "secret", "ignore_case": True}]}},
+    "posting_footer_everywhere": {"gates": {"scopes": {"private": ["*"]}},
+                                  "posting": {"footer": "-- bot", "footer_exposures": list(_EXPOSURES)}},
     # escalate settings
     "escalate_off": {"gates": {"escalate": {"third_party": False, "cost_over_budget": False, "categories": []}}},
     "escalate_more": {"gates": {"escalate": {"categories": ["delete", "store_write", "local_write", "opaque_exec",
@@ -189,6 +215,13 @@ BUILTIN_POLICIES: dict[str, dict] = {
     "third_party_allow_gh": {"gates": {"rules": [_rule("^gh ", third_party=True)]}},
     "budget_spent": {"policy": {"budget": {"per_action_max": 1, "per_day_max": 5}, "gates": {"rules": [_rule(".*")]}},
                      "context": {"spent_today": 10}},
+    # rules written flat and named, and the keys normalize_policies only carries along
+    "rules_flat_named": {"gates": {"rules": [{"command": "^git status$", "decision": "allow", "name": "status"},
+                                             {"category": "delete", "decision": "log", "name": "deletes"}],
+                                   "ask_default": "deny"},
+                         "budget": {"per_month_ceiling": 50},
+                         "approvals": {"approvers": {"default": ["principal"]}, "always": {"days": 1}},
+                         "interruptions": {"quiet": True}},
 }
 
 
@@ -784,15 +817,298 @@ VARIANTS = (
     "bash <<< {q}", "cd ~/.exo/state && {c}", "cd ~/.exo/state && (cd /dev) && {c}", "cd /dev && {c}",
 )
 
-# The seeds also run with these session folders, the cwd the hook passes to classify (#209), and so do these file
-# calls with relative paths.
-SESSION_CWDS = ("~/.exo/state", "~/.ssh")
-CWD_ACTIONS = (
-    {"tool": "read_file", "args": {"path": "id_rsa"}}, {"tool": "read_file", "args": {"path": "gate-grants.json"}},
-    {"tool": "write_file", "args": {"path": "gate-grants.json", "content": "x"}},
-    {"tool": "write_file", "args": {"path": "authorized_keys", "content": "x"}},
-    {"tool": "grep", "args": {"pattern": "key", "path": "."}},
-)
+# Calls that read a secret store only as resolved from a folder (#209): the session folder the hook passes to
+# classify, a shell call's own cwd argument, or that argument joined to the session folder. A relative `keys`, `run`
+# or file below a secret root names no store by itself, so main decides each row otherwise without its folder
+# (tests/test_gate_diff.py checks that), and a head that stops reading the folder one of these ways shows.
+CWD_LINES = (("~/.exo", "cat keys"), ("~/.exo", "ls run"), ("~/.claude", "cat settings.json"),
+             ("~/.exo/keys", "ls"), ("~/.exo/keys", "cat credentials.db"))
+CWD_CALLS = (("~/.exo", {"tool": "read_file", "args": {"path": "keys"}}),
+             ("~/.exo", {"tool": "list_dir", "args": {"path": "run"}}),
+             ("~/.claude", {"tool": "read_file", "args": {"path": "settings.json"}}),
+             ("~/.exo/keys", {"tool": "read_file", "args": {"path": "credentials.db"}}),
+             ("~/.exo/keys", {"tool": "write_file", "args": {"path": "seat.db", "content": "x"}}),
+             ("~/.exo/keys", {"tool": "edit_file", "args": {"file_path": "seat.db", "old_string": "a",
+                                                            "new_string": "b"}}))
+CWD_JOINED = ("~/.exo", "keys", "ls")     # the session folder, the call's own cwd below it, the line
+
+
+def cwd_rows(forms: Iterable[tuple[str, str]] = SHELL_FORMS) -> list[dict]:
+    """The folder rows: each line of CWD_LINES under terminal and every shell form, once in the folder as the session
+    folder and once with it as the call's own cwd; CWD_JOINED's line under each form with its cwd below the session
+    folder; and each file call of CWD_CALLS in its session folder."""
+    every = (("terminal", "command"), *forms)
+    out: list[dict] = []
+    for folder, line in CWD_LINES:
+        for tool, key in every:
+            out.append({"tool": tool, "args": {key: line}, "cwd": folder})
+            out.append({"tool": tool, "args": {key: line, "cwd": folder}})
+    folder, sub, line = CWD_JOINED
+    out += [{"tool": tool, "args": {key: line, "cwd": sub}, "cwd": folder} for tool, key in every]
+    out += [{**call, "cwd": folder} for folder, call in CWD_CALLS]
+    return out
+
+
+def without_cwd(action: dict) -> dict:
+    """The same call with no session folder and no cwd argument."""
+    out = {k: v for k, v in action.items() if k != "cwd"}
+    if isinstance(out.get("args"), dict) and "cwd" in out["args"]:
+        out["args"] = {k: v for k, v in out["args"].items() if k != "cwd"}
+    return out
+
+
+# --- the gate's own tables -----------------------------------------------------------------------------------------
+
+# The module-level literals of gate.py the generated forms come from. They are read with ast from both trees, never
+# imported, so an entry one tree drops or adds still runs.
+GATE_TABLES = ("TOOLS", "OUTBOUND", "PROGRAMS", "SUBCOMMANDS", "READ_PROGRAMS", "SHELL_PROGRAMS", "TOOL_SUBCOMMANDS",
+               "_RUN_WRAPPERS", "_PREFIXES", "_WRAPPERS", "_WRAPPER_OPERANDS", "_TMUX_RUNS", "_TMUX_ALIASES", "_SHELLS",
+               "_INTERPRETERS", "_PATH_ARG_KEYS", "_TEXT_KEYS", "_TITLE_KEYS", "_TARGET_KEYS", "_AMOUNT_KEYS",
+               "NAME_HINTS", "_READ_VERBS")
+_BUILDERS: dict[str, Callable[..., Any]] = {"frozenset": frozenset, "set": set, "tuple": tuple, "list": list,
+                                            "sorted": sorted, "dict": dict}
+
+
+class _NotLiteral(Exception):
+    """An expression gate_tables does not evaluate."""
+
+
+def _lit(node: ast.AST, env: dict[str, Any]) -> Any:
+    """The value of a literal expression: constants, containers, names bound above, comprehensions over them, `+`
+    and `|`, and the frozenset, set, tuple, list, sorted, dict, split, items, keys and values calls."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id not in env:
+            raise _NotLiteral(node.id)
+        return env[node.id]
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        items: list = []
+        for e in node.elts:
+            if isinstance(e, ast.Starred):
+                items.extend(_lit(e.value, env))
+            else:
+                items.append(_lit(e, env))
+        return tuple(items) if isinstance(node, ast.Tuple) else set(items) if isinstance(node, ast.Set) else items
+    if isinstance(node, ast.Dict):
+        d: dict = {}
+        for k, v in zip(node.keys, node.values):
+            if k is None:
+                d.update(_lit(v, env))
+            else:
+                d[_lit(k, env)] = _lit(v, env)
+        return d
+    if isinstance(node, (ast.DictComp, ast.ListComp, ast.SetComp, ast.GeneratorExp)) and len(node.generators) == 1 \
+            and not node.generators[0].ifs:
+        gen, rows = node.generators[0], []
+        for item in _lit(gen.iter, env):
+            local = dict(env)
+            _lit_bind(gen.target, item, local)
+            if isinstance(node, ast.DictComp):
+                rows.append((_lit(node.key, local), _lit(node.value, local)))
+            else:
+                rows.append(_lit(node.elt, local))
+        return dict(rows) if isinstance(node, ast.DictComp) else set(rows) if isinstance(node, ast.SetComp) else rows
+    if isinstance(node, ast.Call) and not node.keywords:
+        args = [_lit(a, env) for a in node.args]
+        f = node.func
+        if isinstance(f, ast.Name) and f.id in _BUILDERS and len(args) <= 1:
+            return _BUILDERS[f.id](*args)
+        if isinstance(f, ast.Attribute) and f.attr in ("split", "items", "keys", "values"):
+            obj = _lit(f.value, env)
+            if f.attr == "split" and isinstance(obj, str) and all(isinstance(a, str) for a in args):
+                return obj.split(*args)
+            if f.attr != "split" and isinstance(obj, dict) and not args:
+                return list(getattr(obj, f.attr)())
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.BitOr)):
+        left, right = _lit(node.left, env), _lit(node.right, env)
+        return left + right if isinstance(node.op, ast.Add) else left | right
+    raise _NotLiteral(type(node).__name__)
+
+
+def _lit_bind(target: ast.AST, value: Any, env: dict[str, Any]) -> None:
+    if isinstance(target, ast.Name):
+        env[target.id] = value
+    elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (tuple, list)) \
+            and len(value) == len(target.elts):
+        for t, v in zip(target.elts, value):
+            _lit_bind(t, v, env)
+    else:
+        raise _NotLiteral("a loop target")
+
+
+def gate_tables(tree: Path) -> dict[str, Any]:
+    """The GATE_TABLES of a tree's gate.py that are plain literals, and from its code "tool_names" (each name it
+    compares `tool` with), "shell_tools" (those _runs_shell names) and "first_keys" (each argument key classify hands
+    to _first in a literal tuple). Empty when the file does not parse."""
+    path = tree / "src" / "exo" / "gate.py"
+    try:
+        mod = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
+        return {}
+    env: dict[str, Any] = {}
+    for st in mod.body:
+        if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+            name, value = st.targets[0].id, st.value
+        elif isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name) and st.value is not None:
+            name, value = st.target.id, st.value
+        else:
+            continue
+        try:
+            env[name] = _lit(value, env)
+        except (_NotLiteral, TypeError, ValueError, KeyError, AttributeError, RecursionError):
+            env.pop(name, None)       # a later assignment that is no literal hides the earlier one
+    out: dict[str, Any] = {k: env[k] for k in GATE_TABLES if k in env}
+
+    def strings(node: ast.AST) -> list[str]:
+        vals = node.elts if isinstance(node, (ast.Tuple, ast.List, ast.Set)) else [node]
+        return [v.value for v in vals if isinstance(v, ast.Constant) and isinstance(v.value, str)]
+
+    def compared(root: ast.AST) -> list[str]:
+        return list(dict.fromkeys(s for n in ast.walk(root) if isinstance(n, ast.Compare)
+                                  and isinstance(n.left, ast.Name) and n.left.id == "tool"
+                                  for c in n.comparators for s in strings(c)))
+
+    out["tool_names"] = compared(mod)
+    out["shell_tools"] = [s for fn in mod.body if isinstance(fn, ast.FunctionDef) and fn.name == "_runs_shell"
+                          for s in compared(fn)]
+    out["first_keys"] = list(dict.fromkeys(s for n in ast.walk(mod) if isinstance(n, ast.Call)
+                                           and _callee(n) == "_first" and len(n.args) > 1 for s in strings(n.args[1])))
+    return out
+
+
+def _names(v: Any) -> list[str]:
+    """The string entries of a table, sorted: a mapping's keys, or the items of a sequence or set."""
+    if isinstance(v, dict):
+        v = list(v)
+    if not isinstance(v, (list, tuple, set, frozenset)):
+        return []
+    return sorted({x for x in v if isinstance(x, str) and x.strip()})
+
+
+def _pairs(v: Any) -> list[tuple[str, str]]:
+    """The (program, subcommand) entries of a table of pairs, sorted."""
+    keys = list(v) if isinstance(v, (dict, list, tuple, set, frozenset)) else []
+    return sorted({(k[0], k[1]) for k in keys if isinstance(k, tuple) and len(k) == 2
+                   and all(isinstance(x, str) and x.strip() for x in k)})
+
+
+_CODE = 'system("rm -rf build")'      # program text: the gate reads its string literal as a shell line
+
+
+def table_lines(tables: Iterable[dict]) -> list[str]:
+    """A line for each entry of the program, prefix and shell tables of each tree: each PROGRAMS key with a file
+    operand, each SUBCOMMANDS pair, `rm -rf build` behind each _RUN_WRAPPERS pair, prefix and wrapper (after the
+    operands _WRAPPER_OPERANDS counts, and as -c text where the wrapper takes -c) and each tmux command that runs
+    one, the same line run by each shell with -c and from its input, and code that runs it given to each interpreter
+    with each of its flags and on its input."""
+    q = shlex.quote
+    out: dict[str, None] = {}
+    for t in tables:
+        lines = [f"{q(p)} notes.md" for p in _names(t.get("PROGRAMS"))]
+        lines += [f"{q(a)} {q(b)}" for a, b in _pairs(t.get("SUBCOMMANDS"))]
+        lines += [f"{q(a)} {q(b)} rm -rf build" for a, b in _pairs(t.get("_RUN_WRAPPERS"))]
+        lines += [f"{q(p)} rm -rf build" for p in _names(t.get("_PREFIXES"))]
+        wrappers, operands = t.get("_WRAPPERS"), t.get("_WRAPPER_OPERANDS")
+        for w in _names(wrappers):
+            n = operands.get(w, 0) if isinstance(operands, dict) else 0
+            lead = q(w) + " 1" * (n if isinstance(n, int) and 0 <= n <= 4 else 0)
+            lines.append(f"{lead} rm -rf build")
+            if "-c" in _names(wrappers.get(w) if isinstance(wrappers, dict) else ()):
+                lines.append(f"{lead} -c 'rm -rf build'")
+        lines += [f"tmux {q(c)} 'rm -rf build'" for c in _names(t.get("_TMUX_RUNS")) + _names(t.get("_TMUX_ALIASES"))]
+        for s in _names(t.get("_SHELLS")):
+            lines += [f"{q(s)} -c 'rm -rf build'", f"echo 'rm -rf build' | {q(s)}"]
+        interpreters = t.get("_INTERPRETERS")
+        for i in _names(interpreters):
+            flags = interpreters.get(i) if isinstance(interpreters, dict) else ()
+            lines += [f"{q(i)} {q(f)} {q(_CODE)}" for f in _names(flags)] + [f"echo {q(_CODE)} | {q(i)}"]
+        out.update(dict.fromkeys(lines))
+    return list(out)
+
+
+def allowlist_lines(tables: Iterable[dict]) -> list[str]:
+    """A line for each program of the allowlists (READ_PROGRAMS, SHELL_PROGRAMS) with a file operand, and each
+    subcommand TOOL_SUBCOMMANDS allows, of each tree: a head that adds or moves an entry shows on its line."""
+    q = shlex.quote
+    out: dict[str, None] = {}
+    for t in tables:
+        lines = [f"{q(p)} notes.md" for p in _names(t.get("READ_PROGRAMS")) + _names(t.get("SHELL_PROGRAMS"))]
+        subs = t.get("TOOL_SUBCOMMANDS")
+        for p in _names(subs):
+            lines += [f"{q(p)} {q(s)}" for s in _names(subs.get(p) if isinstance(subs, dict) else ())]
+        out.update(dict.fromkeys(lines))
+    return list(out)
+
+
+# What the generated tool calls carry: a store path, a secret path, a post with a forbidden word (posting_* policies
+# forbid "secret"), a target deny_target_pub denies, and the words around a NAME_HINTS word in a tool name.
+STORE_PATH, SECRET_PATH = "~/.exo/state/gate-grants.json", "~/.ssh/id_rsa"
+POST_TEXT, POST_TARGET = "Secret plan", "pub/notes"
+HINT_AROUND = ("acme", "item")
+
+
+def _hints(t: dict) -> list[tuple[list[str], list[str], str]]:
+    """The NAME_HINTS entries of a tree as (words, words it needs, category)."""
+    raw = t.get("NAME_HINTS")
+    return [(_names(e[0]), _names(e[1]), e[2]) for e in (raw if isinstance(raw, (list, tuple)) else [])
+            if isinstance(e, (list, tuple)) and len(e) == 3 and isinstance(e[2], str)]
+
+
+def hint_names(t: dict) -> list[str]:
+    """A tool name for each NAME_HINTS word, alone and after each word it needs, as an MCP tool and as a plugin tool,
+    and an MCP tool name for each read verb: mcp_acme_trash_item, mcp_github_merge_item, acme_trash_item."""
+    x, y = HINT_AROUND
+    out: dict[str, None] = {}
+    for hits, needs, _ in _hints(t):
+        for w in hits:
+            for lead in [x, *needs]:
+                out.update(dict.fromkeys((f"mcp_{lead}_{w}_{y}", f"{lead}_{w}_{y}")))
+    out.update(dict.fromkeys(f"mcp_{x}_{v}_{y}" for v in _names(t.get("_READ_VERBS"))))
+    return list(out)
+
+
+def tool_actions(tables: Iterable[dict], shell_tools: Iterable[str] = SHELL_TOOLS) -> list[dict]:
+    """Calls of the tools that are not shell tools, from the tables of each tree. With no arguments: each TOOLS key,
+    each name classify compares a tool with and each hint_names name. A store path and a secret path under each path
+    key (_PATH_ARG_KEYS and the keys classify hands to _first) for those tools but the hint names, and one name per
+    NAME_HINTS entry. For each outbound tool (a TOOLS key or NAME_HINTS entry whose category is in OUTBOUND), a post
+    with a forbidden word under each text and title key and a pub/ target under each target key. For a payment tool, an
+    amount under each _AMOUNT_KEYS key."""
+    shell = set(shell_tools)
+    x, y = HINT_AROUND
+    named: dict[str, None] = {}
+    hinted: dict[str, None] = {}
+    outbound: dict[str, None] = {}
+    payment: dict[str, None] = {}
+    keys: dict[str, dict[str, None]] = {"path": {}, "text": {}, "target": {}, "amount": {}}
+    for t in tables:
+        tools, out_cats = t.get("TOOLS"), set(_names(t.get("OUTBOUND")))
+        for name in _names(tools):
+            named[name] = None
+            if isinstance(tools, dict) and tools.get(name) in out_cats:
+                outbound[name] = None
+        named.update(dict.fromkeys(n for n in _names(t.get("tool_names")) if n not in shell))
+        hinted.update(dict.fromkeys(hint_names(t)))
+        for hits, needs, cat in _hints(t):
+            if hits:
+                rep = f"mcp_{needs[0] if needs else x}_{hits[0]}_{y}"
+                named[rep] = None
+                if cat in out_cats:
+                    outbound[rep] = None
+                if cat == "payment":
+                    payment[rep] = None
+        first = _names(t.get("first_keys"))
+        keys["path"].update(dict.fromkeys(_names(t.get("_PATH_ARG_KEYS")) + first))
+        keys["text"].update(dict.fromkeys(_names(t.get("_TEXT_KEYS")) + _names(t.get("_TITLE_KEYS")) + first))
+        keys["target"].update(dict.fromkeys(_names(t.get("_TARGET_KEYS")) + first))
+        keys["amount"].update(dict.fromkeys(_names(t.get("_AMOUNT_KEYS"))))
+    calls = [(n, {}) for n in {**named, **hinted}]
+    calls += [(n, {k: v}) for n in named for k in keys["path"] for v in (STORE_PATH, SECRET_PATH)]
+    calls += [(n, {k: POST_TEXT}) for n in outbound for k in keys["text"]]
+    calls += [(n, {k: POST_TARGET}) for n in outbound for k in keys["target"]]
+    calls += [(n, {k: "10"}) for n in payment for k in keys["amount"]]
+    return [{"tool": n, "args": a} for n, a in calls]
 
 
 def simple(cmd: str) -> bool:
@@ -838,18 +1154,23 @@ def normal_action(item: Any) -> dict | None:
     return None
 
 
-def shell_line(action: dict) -> str | None:
-    """The line of a call the gate reads as a shell line, whatever its tool name and key, or None."""
-    args = action.get("args")
-    if action.get("tool") not in SHELL_NAMES or not isinstance(args, dict):
+def shell_line(action: dict, tools: Collection[str] = SHELL_TOOLS, known: Collection[str] = ()) -> str | None:
+    """The line of a call the gate reads as a shell line, or None. As gate._runs_shell: a tool of ``tools``, or a tool
+    not in ``known`` (gate.TOOLS) whose name ends in terminal or shell when its "command" is a string. The line is
+    "command", or "cmd" when that is empty."""
+    tool, args = action.get("tool"), action.get("args")
+    if not isinstance(tool, str) or not isinstance(args, dict):
+        return None
+    if not (tool in tools or (tool not in known and tool.endswith(SHELL_SUFFIXES)
+                              and isinstance(args.get("command"), str))):
         return None
     line = args.get("command") or args.get("cmd")
     return line if isinstance(line, str) and line.strip() else None
 
 
-def shell_form(line: str) -> tuple[str, str]:
-    """The tool name and key a line runs under besides terminal: one of SHELL_FORMS, the same in every run."""
-    return SHELL_FORMS[zlib.crc32(line.encode("utf-8", "surrogatepass")) % len(SHELL_FORMS)]
+def shell_form(line: str, forms: tuple[tuple[str, str], ...] = SHELL_FORMS) -> tuple[str, str]:
+    """The tool name and key a line runs under besides terminal: one of ``forms``, the same in every run."""
+    return forms[zlib.crc32(line.encode("utf-8", "surrogatepass")) % len(forms)]
 
 
 def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: bool = True, generate: bool = True
@@ -858,12 +1179,18 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
 
     ``trees`` is (head, base). Both are harvested, so a row the head deletes from a test is still run: a change
     cannot hide a lowered line by dropping its test. What only the base names is counted as harvested_base_only.
-    ``builtin`` adds the harvest and the seeds. ``generate`` adds the generated forms of every line: of the --corpus
+    The tables of both gates are read the same way (gate_tables). ``builtin`` adds the harvest, the seeds, the table
+    lines, the folder rows and the tool calls. ``generate`` adds the generated forms of every line: of the --corpus
     files alone when ``builtin`` is off.
     """
+    trees = list(dict.fromkeys(trees))
     out: dict[str, dict] = {}
     counts: Counter[str] = Counter()
     lines: dict[str, None] = {}     # the shell lines of the files and the harvest, in order
+    tables = [gate_tables(t) for t in trees] if generate else []
+    known = {n for t in tables for n in _names(t.get("TOOLS"))}
+    shell_tools = tuple(dict.fromkeys([*SHELL_TOOLS, *(n for t in tables for n in _names(t.get("shell_tools")))]))
+    forms = shell_forms(shell_tools)
 
     def put(item: Any, source: str) -> None:
         item = normal_action(item)
@@ -873,7 +1200,7 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
         if key not in out:
             out[key] = item
             counts[source] += 1
-        line = shell_line(item)
+        line = shell_line(item, shell_tools, known)
         if line is not None and source in ("files", "harvested", "harvested_base_only"):
             lines.setdefault(line, None)
 
@@ -881,7 +1208,7 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
         for item in read_corpus_file(f):
             put(item, "files")
     if builtin:
-        for k, tree in enumerate(dict.fromkeys(trees)):
+        for k, tree in enumerate(trees):
             h = harvest(tree)
             source = "harvested" if k == 0 else "harvested_base_only"
             for cmd in h.commands:
@@ -894,23 +1221,28 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
     seed_lines = seeds + list(variants(seeds))
     for cmd in seed_lines:
         put(cmd, "generated")
-    others = [c for c in lines if c not in set(seeds)]
-    for cmd in variants(others):
+    table = table_lines(tables) if builtin else []
+    allow = allowlist_lines(tables) if builtin else []
+    for cmd in table + allow:
+        put(cmd, "tables")
+    seed_set = set(seeds)
+    wrapped = list(dict.fromkeys(c for c in [*lines, *table] if c not in seed_set))
+    for cmd in variants(wrapped):
         put(cmd, "generated")
     # The gate reads the line under other tool names and keys too: a head that drops one must show. Every seed line
     # (the delete, store and credential seeds among them) runs under each form, and every other line under one, so
-    # each form gets many lines while the run grows by about a third, not by a factor of 13.
+    # each form gets many lines while the run grows by a fraction, not by a factor of 13.
     for cmd in seed_lines:
-        for tool, key in SHELL_FORMS:
+        for tool, key in forms:
             put({"tool": tool, "args": {key: cmd}}, "shell_forms")
-    for cmd in others:
-        tool, key = shell_form(cmd)
+    for cmd in dict.fromkeys(wrapped + allow):
+        tool, key = shell_form(cmd, forms)
         put({"tool": tool, "args": {key: cmd}}, "shell_forms")
-    for cwd in SESSION_CWDS if builtin else ():
-        for cmd in seeds:
-            put({"tool": "terminal", "args": {"command": cmd}, "cwd": cwd}, "cwd_forms")
-        for a in CWD_ACTIONS:
-            put({**a, "cwd": cwd}, "cwd_forms")
+    if builtin:
+        for a in cwd_rows(forms):
+            put(a, "cwd_forms")
+        for a in tool_actions(tables, shell_tools):
+            put(a, "tool_forms")
     return list(out.values()), dict(counts)
 
 
@@ -1390,6 +1722,8 @@ def main(argv: list[str] | None = None) -> int:
     before = {}
     try:
         for sig in _STOP_SIGNALS:
+            if signal.getsignal(sig) is signal.SIG_IGN:   # nohup, or a parent that ignores it: keep ignoring it,
+                continue                                  # as Python does for SIGINT
             before[sig] = signal.signal(sig, _stop)
     except ValueError:              # not the main thread: no handlers, as before
         pass

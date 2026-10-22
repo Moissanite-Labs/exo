@@ -1027,10 +1027,11 @@ gate does not read:
   (`reread`, above).
 
 A change to the classifier or to `decide` is checked against main with `scripts/gate_diff.py` (#423, D-038
-amendment of 2026-10-22). It runs both gates over the suites' lines, generated forms of them and a set of policies,
-and lists every decision the change makes lower. A lowered line is fixed or named in the change's decision
-amendment. The check does not see the stores the environment moves, the session folders of real sessions or the
-hook steps after `decide` (developer guide §7, "Checking a gate change against main").
+amendment of 2026-10-22). It runs both gates over the suites' lines, a line or call for each entry of the gate's
+tables, generated forms of them and a set of policies, and lists every decision the change makes lower. A lowered
+line is fixed or named in the change's decision amendment. The check does not see the stores the environment moves,
+session folders beyond the ones it generates, names and keys the gate reads outside its tables unless a test names
+them, or the hook steps after `decide` (developer guide §7, "Checking a gate change against main").
 
 Known limits. Each one is true of main today; where a fix is open, its PR is named.
 

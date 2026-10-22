@@ -443,9 +443,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Added
 - `scripts/gate_diff.py` checks a gate change against main (#423, D-038 amendment). It runs `gate.classify` and
-  `gate.decide` of two checkouts, each in its own process, over the calls the gate suites test, compound forms of
-  them, each line under the other shell tool names and keys, and more than 70 policies. It lists each decision the
-  head makes lower than the base. Exit 1 means something is lower. Reviewers run main's copy of the script. The
+  `gate.decide` of two checkouts, each in its own process, over the calls the gate suites test, a line or call for
+  each entry of the gate's tables, compound forms of them, each line under the other shell tool names and keys,
+  folder rows and more than 70 policies. It lists each decision the head makes lower than the base. Exit 1 means something is lower. Reviewers run main's copy of the script. The
   developer guide's section "Checking a gate change against main" says how to run it and what it leaves out.
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
