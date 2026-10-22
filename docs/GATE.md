@@ -532,7 +532,8 @@ command, so a grant for one line never covers a changed second body.
 
 Third-party escalation, the matrix cell and the floors still read only the dominant part. So
 `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R other/repo --body $'fine\nF'`
-logs, while the second post alone asks because it affects a third party. That is open as #437.
+logs, while the second post alone asks because it affects a third party. That is open as #437. On
+a store write, a part's own matrix cell can deny the line (#435, "The store is credentials").
 
 ## The decision model's second opinion (D-015, D-081)
 
@@ -642,9 +643,10 @@ gate does not read:
   written for another command on the line does not lift the part's deny: under
   `categories: {github_post: deny}`, an allow rule for `'^git push --force origin main$'` and an
   ask rule for `git push` after it, `gh pr comment 3 --body x && git push --force origin main` is
-  denied. Only a deny reaches the parts: allow, log and ask lines and rules, the opaque bump,
-  third-party escalation and the floors see the dominant part (a `reserved:` entry gives an ask on
-  any part). The posting checks are the one exception: they read every post on the line (#396,
+  denied. On a store write, a part with no category line is also decided by its own matrix cell,
+  since the store outranks it by category, not by cell (#435). Only a deny reaches the parts: allow,
+  log and ask lines and rules, the opaque bump, third-party escalation and the floors see the
+  dominant part (a `reserved:` entry gives an ask on any part). The posting checks are the one exception: they read every post on the line (#396,
   "Every post on a line"). Third-party escalation on a part is open as #437. A part carries the
   tool of the call it came in on (`tool:execute_code` matches the `execute_code` tool, not
   `python -c` run from bash) and the views of its line, so the
@@ -1099,7 +1101,8 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   every post on the line (#396), so a forbidden word or a missing footer in any post asks. But
   third-party escalation, the matrix cell and the floors read the dominant part only (#437):
   `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R other/repo --body $'fine\nF'`
-  logs, while the second post alone asks. Since #394 a rule that
+  logs, while the second post alone asks. On a store write a part's `deny` matrix cell does reach
+  the line (#435). Since #394 a rule that
   would lower a compound line must also name its deciding command and every command that would get
   a stricter outcome alone, but a command allowed alone still rides on the outcome the rule gives,
   as before: `cd /tmp/other && git push --force origin main` and
@@ -1404,15 +1407,34 @@ runs, so it is a `store_write` when made in any of these ways: a file tool, a re
 or `pip install --target` into it, a `mkdir`, `chmod` or `rm` there, a writing command after a `cd` into
 it, with the folder spelt with `~`, `$HOME` or `$EXO_HOME`, as its resolved path, through a link into
 it, or as a relative `.exo/plugins/...`. That covers a plugin's own files too, such as its
-`config.json`. Reads stay reads: `cat`, `ls`, `grep -r`, `find`, `diff`, `git -C <folder> log`,
-`read_file`. As for every protected folder, a file tool's write or delete there is one `store_write`
-with no part left for `local_write` or `delete`, so a `deny` or `categories:` line on those no longer
-denies it and the floor asks instead. A shell line keeps its own command as a part, so a deny on that
-still holds. To refuse such writes outright, deny `store_write` or name the folder in a `target:`
-entry. Known friction (fails closed, no grant): a writing command that names a path in the folder
-only as a source asks too (`cp ~/.exo/plugins/foo/x.py /tmp/`), as for the rest of the store, and
-running a plugin's own script by its path (`~/.exo/plugins/foo/tool.sh`) asks the principal alone,
-where before a seat could answer its `opaque_exec` ask. Not covered here: the folders in
+`config.json`. A read with a read command stays a read: `cat`, `ls`, `grep -r`, `find`, `diff`,
+`git -C <folder> log`, and the read tools (`read_file`, `list_dir`, `grep`, `glob`).
+
+What a policy can still do there. As for every protected folder, a file tool's write or delete there
+is one `store_write` with no part left for `local_write` or `delete`. So a `deny` or `categories:`
+line on those no longer denies it, and the floor asks instead. A shell line keeps its own command as
+a part, so a deny on that still holds. A call that is not a file write and names a file in a
+protected folder only as what it sends keeps the call as a part, with its target and text (#435
+review). Examples are an `email_send`, post, upload or payment tool call with the file in `files:`,
+and `curl -T`, `curl -F` or `mail -A` on a shell line. So a `deny`, `reserved` or `categories:` entry
+for the call, a rule that matches it, and the posting rules still apply to it. On a store write a
+part with no category line also reads its own matrix cell, and a `deny` cell there denies the line
+(`_override_deny`). The store outranks a post by its category, not by its cell, so the store's cell
+(costly and private) would hide it. Each of these still asks the principal alone when nothing
+denies it. `deny: [store_write]` is the reliable way to refuse every write into the folder. A
+`target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*` denies
+`cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the absolute path and
+`~/.exo/../.exo/plugins/...` still only ask.
+
+Known friction (fails closed, no grant). A command that names a path in the folder and is not a
+read command asks the principal, as for the rest of the store. That covers a writing command that
+names the path only as a source (`cp ~/.exo/plugins/foo/x.py /tmp/`). It also covers commands that
+only read but that the gate reads as `shell` or `opaque_exec`: `sed -n 1,10p`, `tree`, `sort`,
+`uniq`, `xxd`, `bat`, `python3 -m json.tool`, a dry-run `rsync -an`, and a `grep -rn` whose output
+goes to a file elsewhere. The installer puts every core plugin in the folder, so read plugin code
+with `cat`, `grep` or a read tool. Main reads `policies/` and `state/` the same way. Running a
+plugin's own script by its path (`~/.exo/plugins/foo/tool.sh`) asks the principal alone too, where
+before a seat could answer its `opaque_exec` ask. Not covered here: the folders in
 `$EXO_PLUGIN_DIRS`. Section 4 of the developer guide points that variable at a checkout's `plugins/`,
 so a principal-only floor there would ask on every edit, and protecting it is a separate change. The
 installer and `exo update`, which copy Exo's plugins into the folder, stay `opaque_exec`. A copy that

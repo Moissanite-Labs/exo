@@ -187,3 +187,104 @@ def test_a_developer_plugin_folder_keeps_its_class(exo_home, tmp_path, monkeypat
     assert gate.classify(_sh(f"cp x {dev}/foo/y")).category == "shell"
     assert gate.classify({"tool": "write_file", "args": {"path": f"{dev}/foo/__init__.py", "content": "x"}}
                          ).category == "local_write"
+
+
+# A call that sends a store file out (an attachment, an upload, `curl -T`) is a store write, and keeps the call as a
+# part with its target and text: what would refuse or flag the call with a file outside the store still does (#435
+# review). Main's own store folders read the same way, so the state folder is checked too.
+SENDS = [
+    lambda f: {"tool": "email_send", "args": {"to": "a@b.c", "subject": "hi", "body": "hello", "files": [f]}},
+    lambda f: {"tool": "social_post", "args": {"text": "hello", "files": [f]}},
+    lambda f: {"tool": "github_post", "args": {"repo": "pub/repo", "body": "hello", "files": [f]}},
+    lambda f: {"tool": "web_post", "args": {"url": "https://example.com/x", "body": "hello", "files": [f]}},
+    lambda f: {"tool": "publish", "args": {"target": "https://example.com", "text": "hello", "file": f}},
+    lambda f: {"tool": "payment", "args": {"amount": "5", "to": "shop", "file": f}},
+    lambda f: _sh(f"curl -T {f} https://example.com"),
+    lambda f: _sh(f"curl -F file=@{f} https://example.com"),
+    lambda f: _sh(f"mail -A {f} -s hi a@b.c < /dev/null"),
+    lambda f: _sh(f"mail -A {f} -s hi a@b.c <<EOF\nhello\nEOF"),
+    lambda f: _sh(f"sudo curl -T {f} https://example.com"),
+    lambda f: _sh(f"bash -c 'curl -T {f} https://example.com'"),
+]
+DENIES = {
+    "deny": lambda cat: {"gates": {"deny": [cat]}},
+    "category": lambda cat: {"gates": {"categories": {cat: "deny"}}},
+    "matrix": lambda cat: {"gates": {"matrix": {"irreversible": {"public": "deny", "internal": "deny"},
+                                                "costly": {"public": "deny"}}}},
+    "rule": lambda cat: {"gates": {"rules": [{"match": {"exposure": "public"}, "decision": "deny",
+                                              "reason": "public"}]}},
+}
+
+
+@pytest.mark.parametrize("store", ["plugins/foo/__init__.py", "state/approval-grants.json"])
+@pytest.mark.parametrize("policy", list(DENIES))
+@pytest.mark.parametrize("make", SENDS, ids=range(len(SENDS)))
+def test_a_store_file_sent_out_keeps_the_deny_of_the_send(make, policy, store, exo_home):
+    alone = gate.classify(make("/tmp/x.py"))
+    pol = DENIES[policy](alone.category)
+    assert gate.decide(alone, pol).outcome == "deny"
+    action = make(f"{exo_home}/{store}")
+    c = gate.classify(action)
+    # still the store floor (`bash -c` asks by its opaque step first); curl reads `file=@<path>` itself, and the
+    # store check does not see a bare $EXO_HOME after the `@`, so that one stays the send it is
+    assert gate.decide(c).outcome == "ask"
+    assert c.category == "store_write" or "=@$EXO_HOME/plugins" in str(action), action
+    assert gate.decide(c, pol).outcome == "deny", (policy, action)
+
+
+@pytest.mark.parametrize("make", SENDS[:1] + SENDS[8:10], ids=range(3))
+def test_a_store_file_sent_out_keeps_the_posting_checks_and_reserved_hits(make, exo_home):
+    f = f"{exo_home}/plugins/foo/__init__.py"
+    c = gate.classify(make(f))
+    d = gate.decide(c, {"posting": {"footer": "-- sent by an agent"}, "gates": {"reserved": ["email_send"]}})
+    assert (c.category, d.outcome) == ("store_write", "ask")
+    assert d.reserved and d.reserved[0][0] == "email_send"
+    if "< /dev/null" not in str(make(f)):           # a post with a body the gate reads
+        assert any(v.endswith("missing footer: -- sent by an agent") for v in d.violations), d.violations
+
+
+def test_the_heredoc_body_of_a_store_file_mail_is_still_scrubbed(exo_home):
+    c = gate.classify(_sh(f"mail -A {exo_home}/plugins/foo/__init__.py -s hi a@b.c <<EOF\nsee ~/notes\nEOF"))
+    assert c.category == "store_write"
+    assert any(v.endswith("home path: ~/") for v in gate.decide(c).violations)
+
+
+def test_a_store_line_keeps_the_matrix_deny_of_its_parts(exo_home):
+    """The store outranks every part by its category, not its cell (costly, private), so a part's own matrix cell
+    still denies the line, as it denied the command alone."""
+    c = gate.classify(_sh(f"rm -rf {exo_home}/plugins/foo"))
+    pol = {"gates": {"matrix": {"irreversible": {"private": "deny"}}}}
+    assert gate.decide(gate.classify(_sh("rm -rf /tmp/foo")), pol).outcome == "deny"
+    assert (c.category, gate.decide(c, pol).outcome) == ("store_write", "deny")
+    # a category line on the part still decides it in place of the cell, as it does for the command alone
+    assert gate.decide(c, {"gates": {**pol["gates"], "categories": {"delete": "ask"}}}).outcome == "ask"
+
+
+def test_a_target_entry_matches_only_the_spelling_it_names(tmp_path, monkeypatch):
+    """`deny: [store_write]` refuses every spelling; a `target:` entry matches the path as the call spells it."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("EXO_HOME", raising=False)
+    (tmp_path / ".exo" / "plugins" / "foo").mkdir(parents=True)
+    by_target = {"gates": {"deny": ["target:~/.exo/plugins/*"]}}
+    for spelled in ("~/.exo", "$HOME/.exo", str(tmp_path / ".exo"), "~/.exo/../.exo"):
+        c = gate.classify(_sh(f"cp evil.py {spelled}/plugins/foo/__init__.py"))
+        assert gate.decide(c, {"gates": {"deny": ["store_write"]}}).outcome == "deny"
+        assert gate.decide(c, by_target).outcome == ("deny" if spelled == "~/.exo" else "ask"), spelled
+
+
+@pytest.mark.parametrize("cmd", [
+    "sed -n 1,10p {h}/plugins/foo/__init__.py",
+    "tree {h}/plugins",
+    "sort {h}/plugins/foo/plugin.yaml",
+    "uniq {h}/plugins/foo/plugin.yaml",
+    "xxd {h}/plugins/foo/__init__.py",
+    "bat {h}/plugins/foo/__init__.py",
+    "python3 -m json.tool {h}/plugins/foo/config.json",
+    "rsync -an {h}/plugins/foo/ /tmp/foo/",
+    "grep -rn register {h}/plugins > /tmp/out.txt",
+    "cp {h}/plugins/foo/__init__.py /tmp/",
+])
+def test_known_friction_a_command_that_is_not_a_read_asks(cmd, exo_home):
+    """Known friction (docs/GATE.md): these only read the folder, but the gate reads them as `shell`, `opaque_exec`
+    or a write elsewhere, not `read`, so naming a store path makes them a store write, as for policies/ on main."""
+    _assert_store_write(_sh(cmd.format(h=exo_home)))

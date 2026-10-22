@@ -173,10 +173,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   counts anywhere. A write there is `store_write` (the principal alone, no grant) when made by a file tool, a
   redirection, `cp`, `cp -t`, `mv`, `install`, `tee`, `sed -i`, `ln`, `rsync`, `tar -C`, `unzip -d`, `curl -o`,
   `git clone` or `pip install --target` into it, or `mkdir`, `chmod` or `rm` there, spelt with `~`, `$HOME`,
-  `$EXO_HOME`, the resolved path or a link into it. Reads stay reads. A writing command that names a file there only
-  as a source asks too, as for the rest of the store. Not covered: the folders in `$EXO_PLUGIN_DIRS`, which developers
-  point at a checkout, and, as for the rest of the store, a relative path written by a tool whose working folder is in
-  the plugins folder.
+  `$EXO_HOME`, the resolved path or a link into it. A read with a read command (`cat`, `ls`, `grep -r`, `find`, a read
+  tool) stays a read. A writing command that names a file there only as a source asks too, as for the rest of the
+  store, and so do other commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `xxd`). A call
+  that sends a store file out (an `email_send`, post, upload or payment tool call with the file in `files:`,
+  `curl -T`, `curl -F`, `mail -A`) keeps the call as a part, with its target and text. So a deny, reserved entry,
+  rule, matrix deny cell or posting rule on that call still applies, as on main. For `policies/` and `state/` that is
+  stricter than before. Not covered: the folders in `$EXO_PLUGIN_DIRS`, which developers point at a checkout, and,
+  as for the rest of the store, a relative path written by a tool whose working folder is in the plugins folder.
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under

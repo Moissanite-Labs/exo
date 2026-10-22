@@ -4314,10 +4314,13 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         *(view for part in parts for view in part._command_views),
     ]))
     # Outbound text: if several gh segments post text, keep the most severe one's text. Never for a post whose
-    # body is a file: another command's heredoc is not that file, and the caller reads the file (#208).
+    # body is a file: another command's heredoc is not that file, and the caller reads the file (#208). On a store
+    # write, the post it outranks takes the text (#435: `mail -A <store file> a@b.c <<EOF`).
     body = next((h.body for k in cmds for h in k.heredocs), None)
-    if not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
-        c.text = body
+    post = c if c.category != "store_write" else _most_severe(p for p in parts if p.category != "store_write")
+    if post is not None and not post.text and not post.text_file and post.category in OUTBOUND and \
+            body is not None and post.category != "web_post":
+        post.text = body
     if setters:
         c.setters = [*c.setters, *setters]    # a new list: c may share its setters with a stored result
     return c
@@ -5418,7 +5421,7 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         if not secret and cat not in ("read", "web_read"):
             store = next((v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
                           else [args.get(k)]) if isinstance(v, str) and is_store_path(v, ancestors=cat == "delete")), "")
-            if store:
+            if store and cat in ("local_write", "delete"):
                 cat = "store_write"
         target = _first(args, _TARGET_KEYS)
         text = _first(args, _TEXT_KEYS) if cat in OUTBOUND else ""
@@ -5438,13 +5441,25 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         if secret:
             c.signals.append("secret store")
             c.summary, c.target = f"{tool} {secret}"[:120], secret
+        if store and cat != "store_write":
+            # #435: a call that does not write files (a post, an upload, a payment) and names a store path takes it
+            # as a source. It is a store write, and keeps the call as a part, with its target and text, so a deny,
+            # rule, matrix cell or posting rule on that call still holds (D-075, #191, #396).
+            c.tool = tool
+            _local_post(c)
+            c = _make("store_write", link=link, parts=[c])
         if store:
             c.signals.append("exo store")
             c.summary, c.target = f"{tool} {store}"[:120], store
     c.tool = tool
+    _local_post(c)
+    return c
+
+
+def _local_post(c: Classification) -> None:
+    """A web post or read to a local host is private and no third party."""
     if c.category in ("web_post", "web_read") and c.target and _is_local_host(c.target):
         c.exposure, c.third_party = "private", False
-    return c
 
 
 # --- policies ------------------------------------------------------------------------------
@@ -5745,13 +5760,19 @@ def _override_deny(c: Classification, gates: Mapping,
     whose `command` regex matches only a decoded view of the line (#136). ``(part, why, step)`` or None.
     With ``passed`` (#394), an allow, log or ask rule keyed on `command` that matches must also match the part's own
     text, or it is passed over and added to ``passed``: a rule written for another command on the line does not lift
-    the part's deny. Deny rules match as before, so every part denied without this test is denied with it."""
+    the part's deny. Deny rules match as before, so every part denied without this test is denied with it.
+    On a store write, a part with no category line reads its matrix cell too (#435): the store outranks a post by
+    its category, not its cell, so `curl -T <store file> <url>` keeps the deny of the post's cell."""
     cats, rules = gates.get("categories") or {}, gates.get("rules") or []
-    if not (cats or rules):
+    store = c.category == "store_write"
+    if not (cats or rules or store):
         return None
     line = _line_matcher(c)
     for p in list(_each_part(c))[1:]:
         out, why, step = cats.get(p.category), f"category {p.category}", "category"
+        if out is None and store:
+            out, why, step = gates["matrix"][p.reversibility][p.exposure], f"{p.reversibility} and {p.exposure}", \
+                "matrix"
         first = None
         for r in rules:
             if not _rule_matches(r["match"], p):
