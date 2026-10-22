@@ -13,6 +13,60 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   is no `/proc` (macOS), the umask probe in `atomic_write` set the process mask to 077 and restored it with
   no lock: concurrent writes with `mode=None` interleaved set and restore, so files came out 0600 under a
   022 mask and a run could leave the process at 077. The probe runs under a module lock now.
+- Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
+  verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
+  Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.
+- A fork no longer loses its copies of entries the parent undid after the fork (#245). A copy counts
+  at its original's log position only while that original is visible, so once the fork's own later
+  entries were summarized the tail started after the copy, and no tree held it either: the fork's
+  calls dropped it. The tail now keeps such copies, in order, ahead of the fork's own entries. They stay
+  verbatim, outside `tail_messages` and `/compact`, in every call of the fork. Copied context notes are
+  not kept: they leave a fork's tail as before. The lookup reads only a fork's copies, so a thread that
+  is not a fork pays nothing for it (D-028 amendment).
+- `store.find` tokenized every node and rebuilt its BM25 tables on each call (#254, W1-5). `ctx`, `exo find`, the
+  default retrieval ranker, the learner and the memory plugin all call it, so each query paid for the whole store.
+  The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
+  the node set they were built from. A `reload()`, or a `refresh()` that sees a node file change, makes a new set
+  and the next `find` builds them again. A repeat query tokenizes only itself. Scores and order are unchanged.
+- A thread's environment file is a secret store, like the process's own (#313).
+  `/proc/<pid>/task/<tid>/environ` holds the same environment as `/proc/<pid>/environ`, another
+  process's included, but the gate read it as an ordinary file, literal path and glob alike.
+  Both the sensitive-path list and the `/proc/<pid>/<glob>` check now cover the `task/<tid>/`
+  form, also with a glob in the `task` folder itself (`cat /proc/1/*/*/environ`). The search
+  tools leave it out of a walk. Other files under `task/` keep their class. Such a path is
+  decided as `/proc/<pid>/environ` already was, so some lines decide lower than before. A file
+  tool on it asks under a `read` or `local_write` deny, a matrix deny cell for a read no longer
+  applies, and on a compound line the credentials part can hide another part's matrix deny or
+  a second store's `target:` entry (a post beside it keeps its violations, since #396). Beside a store write the line is
+  `credentials`, so a seat delegated `credentials` may answer it, where only the principal
+  answered. The D-038 amendment and `docs/GATE.md` "A thread's environment file" list them.
+- The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
+  the footer, the forbidden words and the scrub on the combined classification's text. A compound
+  line takes that text from its most severe part. So a post that passed, put first, carried a
+  second post on the same line past all three. The checks now run on every part whose category is
+  under `posting.applies_to` and that carries text, a title or an unseen body. They also run on a
+  close carrying a comment (#326), and on a merge carrying a subject, a body or a body file the gate
+  did not read (#397). A reopen's comment is a post, so it is checked too. Another part's violations
+  are named after that part, and when two posts both have an unseen body, both are named. Once other
+  posts add violations, a decision lists at most 20 and counts the rest. A single post is checked
+  exactly as before. The exact-text binding already hashed the whole command, so a grant for one
+  line never covered a changed second body. Third-party escalation, the matrix cell and the floors
+  still read the dominant part (#437).
+- Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
+  while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
+  acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
+  without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
+- The chat capture after each turn no longer reads the whole ledger (#263, the signals half of W2-7). To skip
+  corrections and rulings already written, it built the set of capture keys from every ruling, verdict and
+  question in the ledger on every turn: about 70 ms per turn with 10,000 such rows. The learner now keeps that set
+  with the last row it read and reads only the rows after it, so a turn after the first takes under 1 ms. What is
+  written is unchanged. A ledger that no longer holds that row in its place (another file, or one cut short) is
+  read again from the first row. The HTTP client half of W2-7 and the bus store half (W3-4) stay open.
+- exod answers a request with a bad number with 400 and a JSON `{"error": ...}` body (#264). `Content-Length`,
+  `since` and `Last-Event-ID` were read with a bare `int()` and the handler swallowed its error, so a word or a
+  float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
+  start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
+  subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
@@ -151,6 +205,38 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
+  name, and the change never makes a decision looser than before. The regex saw the whole line, so
+  `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under
+  `categories: {force_push: deny}`, and `{command: 'rm -rf build', decision: allow}` lifted
+  `categories: {github_post: deny}` from the post in `gh pr comment 3 --body hi && rm -rf build`. Each simple command on
+  a line now carries its own text, as written with its redirections, nested ones too (`$( )`, `bash -c`, `eval`, a
+  heredoc a shell reads, `ssh`). A rule that would lower a compound line (an allow or log rule below the line's matrix
+  cell and category line, an ask rule under a category deny, an allow or log rule that names `opaque_exec`) must still
+  match the line as before. Its regex must also cover every command that decides the line, every other command on the
+  line that would be stricter alone, and every command that changes shell state for later commands (an assignment,
+  `export`, `hash`, `alias`, `set -a`, `source`, `read`, a function definition and the like). Otherwise the rule is
+  passed over and the walk goes on, but the rule step keeps the stricter of the first match and the rule found after it,
+  and a rule passed over does not name `opaque_exec` for the floor. In the #191 pass an allow, log or ask rule lifts a
+  part's category deny only when it also names that part. When a rule is passed over, the line is also decided as
+  before, and that decision stands, reason and all, unless the new one is stricter. So under
+  `{command: 'git push --force origin main', decision: allow}` the push is still allowed after `cd repo`, but asks
+  beside `rm -rf build` or after `export GIT_SSH_COMMAND=$X`, and `gh pr comment 3 --body hi && rm -rf build` is denied
+  under `categories: {github_post: deny}` and `{command: 'rm -rf build', decision: ask}`. An anchored rule such as
+  `'^git push --force origin main$'` still matches no compound line, as before. `cd` is not a setter, and that cannot
+  loosen a decision, since the rule must still match the line. A part with no own text (an unread nest, a string literal
+  in code, the opaque_exec reading of a `$".."` line) passes no such test. A line of one simple command beside parts
+  the gate made for it with no own text (`cat ~/.kube/config`, where the secret path decides the line, or a string
+  literal in `node -e` code) is decided as before. A shell or interpreter that runs a pipe has
+  the pipeline as its text. Those texts hold at most four times the line's length plus 4 KB on one line, and a reader
+  past that has none, so a long pipeline into shells stays linear in memory. A command run inside another (an
+  `eval`, `bash -c` or `ssh` string, an `-x` or `--exec` value) must be named too, so `eval "$CMD"` now asks under
+  `{category: opaque_exec, command: '^eval', decision: allow}`. A rule written for a whole compound line, such as
+  `'^git push origin main && git push origin dev$'`, has to name each command too, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`. Until it does, that line logs, as
+  its matrix cell says. Rules that keep or raise the line, deny rules in the #191 pass and
+  the `reserved:` and `deny:` lists match the whole line and its decoded views as before. The ledger view leaves the own
+  text out.
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
@@ -511,6 +597,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   by `src`.
 
 ### Changed
+- `exo` imports a command's module only when that command runs (#260, D-035 amendment). Before, every call loaded
+  every command's module, with the ledger, signing, HTTP and model code behind them, and a module that failed to
+  import broke all of `exo`. Now `exo --help`, `exo --version` and bare `exo` load none of them, and a broken module
+  breaks only its own commands. Measured best of 5: `import exo.cli` 190 ms to 14 ms, `exo --version` 240 ms to
+  73 ms, `exo --help` 251 ms to 42 ms. Usage, errors and every `--help` are byte-identical. `exo update`'s
+  self-check still imports every command's module. Code that imported a name such as `cmd_ask` from `exo.cli`
+  still gets it.
 - Gate timing tests (#308): the linear-time checks in `tests/security` and `plugins/exo-gate/tests` measure process CPU time
   (`time.process_time`) instead of wall time, and the scaling checks retry up to three times before they fail, so a
   suite running beside other suites no longer trips them. A quadratic step still fails every attempt. Test-only.
