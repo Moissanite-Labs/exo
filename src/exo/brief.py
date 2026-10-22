@@ -373,8 +373,8 @@ def write_brief(root: str | os.PathLike, brief: Brief, day: date | None = None) 
 
 
 # --- CLI hook -----------------------------------------------------------------------------------
-# Wire into exo.cli: in build_parser() call `brief.register(sp, common)`, and expose `cmd_brief`
-# in exo.cli's globals (e.g. `from .brief import cmd_brief`).
+# `exo.cli` lists `brief` in its LAZY table. It imports this module, calls `register(sp, common)` and runs
+# `cmd_brief` only when `exo brief` runs.
 
 def register(sp, common) -> None:
     p = sp.add_parser("brief", parents=[common], help="morning brief (Markdown and HTML)")
