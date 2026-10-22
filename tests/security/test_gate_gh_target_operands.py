@@ -12,7 +12,7 @@ from dataclasses import replace
 
 import pytest
 
-from exo.gate import UNSEEN_BODY, body_unseen, classify, decide, fill_body, normalize_policies, summarize
+from exo.gate import UNSEEN_BODY, _each_part, body_unseen, classify, decide, fill_body, normalize_policies, summarize
 
 POST = {"footer": "F", "scrub": {"names": ["SECRETX"]}}
 POLICY = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "posting": POST})
@@ -814,19 +814,97 @@ def test_the_card_redacts_a_user_and_password_in_another_target():
     assert "It may land on https://***@ghe.example.com/pub/repo#5 instead." in card and "tok" not in card, card
 
 
-# #406 names a post's violations, and #191 a denied part, after that post. A post on another target is named
-# after the URL as written, so its user and password are hidden there too, in the reason and the card.
-@pytest.mark.parametrize("policy", [
-    {"posting": POST},
-    {"gates": {"rules": [{"match": {"target": "*ghe.example.com*"}, "decision": "deny", "reason": "no ghe"}]}},
+# #406 names a post's violations, and #191 a denied part, after that post. A post's copy on another target lists
+# none of the post's own violations again, and a denied copy is named after the URL as written, with its user and
+# password hidden. Neither shows in the reason, the violations, the card or the ledger views.
+@pytest.mark.parametrize("policy, named", [
+    ({"posting": POST}, "missing footer: F"),
+    ({"gates": {"rules": [{"match": {"target": "*ghe.example.com*"}, "decision": "deny", "reason": "no ghe"}]}},
+     "GitHub PR comment on https://***@ghe.example.com/pub/repo#5"),
 ])
-def test_a_post_on_another_target_is_named_without_its_user_and_password(policy):
+def test_a_post_on_another_target_is_named_without_its_user_and_password(policy, named):
     secret = "u:tok" + "@ghe.example.com"
     c, d = run(f"gh pr comment 5 -R https://{secret}/pub/repo -b x", normalize_policies(policy))
-    named = "GitHub PR comment on https://***@ghe.example.com/pub/repo#5"
     assert named in d.reason + "; ".join(d.violations), d
-    for text in (d.reason, *d.violations, summarize(c, d), str(d.as_dict())):
+    assert "posting" not in policy or d.violations == ["missing footer: F"], d.violations
+    for text in (d.reason, *d.violations, summarize(c, d), str(d.as_dict()), str(c.as_dict())):
         assert "tok" not in text, text
+
+
+# Round 10: each copy of a post repeated the post's violations, so a post with many of them pushed another post's
+# violation past the twenty listed, where main listed it. A copy lists only what neither its post nor another copy of
+# it lists, right after its post, and a line with copies is not cut, so the line lists what main lists.
+@pytest.mark.parametrize("line, names", [
+    ("gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app -b 'N0X N1X N2X N3X N4X N5X'", 6),
+    ("gh pr comment 5 -R https://ghe.example.com/pub/repo -b 'N0X N1X N2X N3X N4X N5X N6X N7X N8X'", 9),
+])
+def test_copies_of_a_post_do_not_push_another_post_out_of_the_list(line, names):
+    pol = normalize_policies({"posting": {"footer": "F", "scrub": {"names": [f"N{i}X" for i in range(names)]
+                                                                            + ["ZZOTHER"]}}})
+    c, d = run(f"{line} && gh pr comment 7 -R pub/other -b 'ZZOTHER F'", pol)
+    assert c.alt_targets and d.outcome == "ask", (c, d)
+    assert "GitHub PR comment on pub/other#7: internal name: ZZOTHER" in d.violations, d.violations
+    assert len(d.violations) == names + 2 and not any(v.startswith("and ") for v in d.violations), d.violations
+
+
+def test_a_copys_own_violations_are_listed_and_nothing_is_cut():
+    # A copy that finds more than its post (here its text is given ten more names) lists that right after its post,
+    # and a line with copies lists every violation, so the other post's is there too.
+    pol = normalize_policies({"posting": {"footer": "F", "scrub": {
+        "names": [f"N{i}X" for i in range(9)] + [f"M{i}X" for i in range(10)] + ["ZZOTHER"]}}})
+    c = classify(sh("gh pr comment 5 -R https://ghe.example.com/pub/repo -b '" + " ".join(f"N{i}X" for i in range(9))
+                    + "' && gh pr comment 7 -R pub/other -b 'ZZOTHER F'"))
+    copy = next(p for p in _each_part(c) if p.alt_copy)
+    copy.text += " " + " ".join(f"M{i}X" for i in range(10))
+    v = decide(c, pol).violations
+    assert "GitHub PR comment on pub/other#7: internal name: ZZOTHER" in v and len(v) == 21, v
+    assert all(any(f"M{i}X" in x for x in v) for i in range(10)) and not any(x.startswith("and ") for x in v), v
+
+
+# Round 10, second pass: under a scope a post's copy can find what its post does not (main read the post on the copy's
+# target, a public one). The line lists that, and nothing is cut, whatever target main read each post on.
+NAMES13 = " ".join(f"N{i}X" for i in range(1, 12)) + " ZZOTHER YYTHIRD"
+SCOPED = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "posting": {"footer": "F", "scrub": {
+    "names": [f"N{i}X" for i in range(12)] + ["ZZOTHER", "YYTHIRD"]}}})
+
+
+@pytest.mark.parametrize("post, text", [
+    ("gh pr comment 5 -R https://ghe.example.com/myorg/repo -b 'N0X F'", "internal name: N0X"),
+    ("gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app -b 'N0X'", "internal name: N0X"),
+    ("gh pr comment \"$U\" -R myorg/app -b 'N0X F'", "internal name: N0X"),
+])
+def test_a_line_with_copies_lists_what_main_lists_under_a_scope(post, text):
+    c, d = run(f"gh pr comment 1 -R pub/a -b 'F' && {post} && gh pr comment 2 -R pub/r -b '{NAMES13}'"
+               f" && gh pr comment 3 -R pub/s -b '{NAMES13}'", SCOPED)
+    v = d.violations
+    assert any(x.endswith(text) for x in v), v
+    for n in NAMES13.split():
+        for post_name in ("pub/r#2", "pub/s#3"):
+            assert f"GitHub PR comment on {post_name}: internal name: {n}" in v, (n, post_name, v)
+    assert not any(x.startswith("and ") for x in v), v
+
+
+def test_two_copies_of_a_post_list_a_finding_once():
+    # The post lands on pub/repo#9, internal here, and its two copies (myorg/app#9 and myorg/app) are public: each
+    # finds SECRETX, and the second lists none of what the first did.
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["pub/*"]}},
+                              "posting": {"footer": "F", "scrub": {"names": ["SECRETX"]}}})
+    c, d = run("gh pr comment 1 -R pub/a -b F && gh pr comment https://GitHub.com:443/pub/repo/pull/9 -R myorg/app"
+               " -b 'SECRETX F'", pol)
+    assert sum(p.alt_copy for p in _each_part(c)) == 2, c
+    assert sum("SECRETX" in v for v in d.violations) == 1, d.violations
+
+
+# A text two posts of one name both meet is listed twice, as main lists it, also when decide merges the line's
+# readings (another target, or the line as read before).
+@pytest.mark.parametrize("post", [
+    "gh -R pub/repo pr comment 5 -b {}",
+    "gh pr comment 5 -R https://ghe.example.com/pub/repo -b {}",
+])
+def test_a_text_two_posts_of_one_name_meet_is_listed_twice(post):
+    c, d = run("; ".join(post.format(b) for b in "abc"), normalize_policies({"posting": {"footer": "-- bot"}}))
+    assert c.floor is not None or c.alt_targets, c
+    assert d.violations.count("GitHub PR comment on pub/repo#5: missing footer: -- bot") == 2, d.violations
 
 
 # gh api's method reads as pflag reads it (round 5, item 5): a cluster ends at `-X` (`-iX DELETE`, `-iXPUT`) and gh

@@ -820,8 +820,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   caught before.
   2026-10-22, round 6 of the review: gh sends its request for a repo on any host that ends in `.github.com` to
   github.com, with the github.com token. go-gh 2.13's `auth.NormalizeHostname` reads such a host as github.com, and
-  its GraphQL and REST clients (`graphQLEndpoint`, `restPrefix`) call github.com's API for it. The one exception is
-  garage.github.com, which they call at itself. `_gh_url` took only github.com and `www.github.com`, so
+  its GraphQL and REST clients (`graphQLEndpoint`, `restPrefix`) call github.com's API for it. gh's own
+  `ghinstance.RESTPrefix` does not read the host that way, and `gh repo delete` builds its URL with it, so
+  `gh repo delete https://api.github.com/pub/repo` asks `api.api.github.com`, which no DNS name answers. Reading
+  such a host as github.com is the stricter reading either way. The one exception is garage.github.com, which both
+  clients call at itself. `_gh_url` took only github.com and `www.github.com`, so
   `gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app` read as a post on myorg/app and logged under
   `internal: [myorg/*]`, with no scrub and no third-party check. `_gh_on_github` now decides the host for `_gh_url`
   and for `_gh_repo`'s sure, after the case, a user, a port and a leading `www.` go as gh drops them, so a `gh repo`
@@ -911,6 +914,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   harness under 119 policies and the exo-gate hook harness in 13 setups, and none is lower on a decision axis or in
   the hook. On 954 the line as read drops the `indirection` signal and the line as read before keeps it, so the
   decision and the hook stand.
+  2026-10-22, round 10 of the review: since #406 the posting checks run on every post, and each copy of a post on
+  another target repeated the post's violations under the copy's name. A post with many violations then pushed
+  another post's past the twenty listed, where main lists it (`gh pr comment 5 -R https://ghe.corp/pub/repo -b
+  '<nine names>' && gh pr comment 7 -R pub/other -b 'ZZOTHER F'`). gate_diff counted 12 lowered pairs on 4 such
+  lines. A copy now lists, right after its post, only what neither the post nor another copy of it lists. A copy
+  can still find what its post does not: under a scope its target may be public where the post's is internal, and
+  main may have read the post on that target. A post read on another target than main's can also list more than
+  main does. So a line with such copies lists every violation, with no cap, and its list holds what main lists.
+  When decide merges the line's readings, a text two posts of one name both meet stays listed as often as one
+  reading lists it, as main lists it, where the merge kept it once. The ledger view (`Classification.as_dict`)
+  hides a user and password in `alt_targets` too. gate_diff, main 39cafcba against this change: the built-in
+  corpus, 62,293 actions under 87 policies, 0 lowered. 1,024 lines of crowded, repeated-name and scoped posts
+  under 93 policies: 0 lowered with the #460 script. Main's script at 3ddd89e9 counts 80 pairs on 16 of those
+  lines, and on each the one text missing is main's `and N more on other posts`, which a line that lists every
+  violation has no need of. #460 stops counting that line.
   Limits: `docs/GATE.md` "Where a gh command lands".
 
 - **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.
