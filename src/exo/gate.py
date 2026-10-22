@@ -37,7 +37,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import EllipsisType
 from typing import Any, Callable, Iterable, Iterator, Mapping, TypeVar, cast
-from urllib.parse import unquote, urlparse, urlsplit
+from urllib.parse import unquote, urlparse
 
 REVERSIBILITY = ("reversible", "costly", "irreversible")
 EXPOSURE = ("private", "internal", "public")
@@ -390,6 +390,7 @@ class _Word:
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
     redir_after: bool = False  # a redirection, heredoc or here-string follows it before the next word (#207)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
+    split: bool = False        # bash may make several words of it, or none: an expansion outside "..", or "$@" (#399)
     exps: list = field(default_factory=list)  # (scan text, source, ${ frames) per ${..} and $((..)) bash expands
     fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
 
@@ -450,7 +451,7 @@ class _Lexer:
         self.cuts.append((a, b, s[a] + "(" + _TOO_DEEP + ends + ")"))
         self.subs.append(_TOO_DEEP)
         w.text += "<(..)" if s[a] in "<>" else "$(" + s[a + 2:max(a + 2, b - 1)] + ")"
-        w.dynamic = w.started = True
+        w.dynamic = w.started = w.split = True       # not read, so it may be outside double quotes
         self.i = b
 
     def _source(self, a: int, b: int) -> str:
@@ -619,7 +620,7 @@ class _Lexer:
             elif ch == "$":
                 self._dollar(w, double=True)
             elif ch == "`":
-                self._backtick(w)
+                self._backtick(w, double=True)
             else:
                 w.text += ch
                 self.i += 1
@@ -638,7 +639,7 @@ class _Lexer:
         w.text += "<(..)"
         w.dynamic = w.started = True
 
-    def _backtick(self, w: _Word) -> None:
+    def _backtick(self, w: _Word, double: bool = False) -> None:
         s, j, out = self.s, self.i + 1, []
         while j < len(s) and s[j] != "`":
             if s[j] == "\\" and j + 1 < len(s):
@@ -652,6 +653,7 @@ class _Lexer:
         self.i = j + 1
         w.text += "`" + inner + "`"
         w.dynamic = w.started = True
+        w.split = w.split or not double
 
     def _dollar(self, w: _Word, double: bool = False) -> None:
         s, i = self.s, self.i
@@ -677,6 +679,7 @@ class _Lexer:
                 w.exps.append((body, body, None))
             w.text += body
             w.dynamic = True
+            w.split = w.split or not double
             self.i = j
         elif nxt == "(":
             if self.nest >= _NEST:
@@ -689,6 +692,7 @@ class _Lexer:
             self.nest -= 1
             inner = s[start:max(start, self.i - 1)]
             lit = _literal_heredoc(toks)
+            w.split = w.split or not double                  # bash splits its output outside double quotes
             if lit is not None:
                 w.text += lit          # $(cat <<'EOF' ... EOF) is plain text
             else:
@@ -705,6 +709,9 @@ class _Lexer:
                 self.covered = close + 1
             w.text += s[i:j + 1]
             w.dynamic = True
+            # "${name[@]}", "${!name@}" and "${@:2}" make several words. bash may read past the first } when a
+            # quote, a backtick, a backslash or a $( comes before it, and the lexer cannot tell what is quoted after.
+            w.split = w.split or not double or "@" in s[i:j + 1] or bool(re.search(r"[\"'`\\]|\$\(", s[i + 2:j]))
             self.i = j + 1
         elif nxt == "'":                       # $'..' (ANSI-C quoting): decode the escapes
             j, out = i + 2, []
@@ -730,6 +737,7 @@ class _Lexer:
             if m:
                 w.text += m.group(0)
                 w.dynamic = True
+                w.split = w.split or not double or m.group(1) == "@"
                 self.i = i + len(m.group(0))
             else:
                 w.text += "$"
@@ -2016,21 +2024,47 @@ def _gh_on_github(host: str) -> bool:
     return host != "garage.github.com" and (host == "github.com" or host.endswith(".github.com"))
 
 
-def _gh_url_parts(word: str) -> tuple[str, str, str] | None:
-    """(host, owner/name, number) of a URL gh may read for a repo (#399): http or https in any case, the host
-    taken without a user and a port, then without a leading `www.` and in lower case, as Go's url.Parse and
-    `ghrepo.NewWithHost` give gh (gh 2.89), and the path decoded. A pull request, issue or discussion URL has a
-    number, a repo URL has none. None for any other word."""
-    if not re.match(r"(?i)https?://", word):
+def _gh_host(host: str) -> str:
+    """A repo's host as gh keeps it (ghrepo.NewWithHost in gh 2.89): without a leading `www.`, then in lower case as
+    Go's strings.ToLower gives it, one character for one (round 7 of #399). Python lowers U+0130 to `i` and a
+    combining dot, Go to `i` alone, so for gh `gİthub.com` is github.com. No other character differs."""
+    return "".join("i" if c == "\u0130" else c.lower() for c in host.removeprefix("www."))
+
+
+def _gh_url_host(authority: str) -> str | None:
+    """The host gh takes from a URL's authority (round 7 of #399), as Go 1.26's url.Parse and u.Hostname() give it:
+    after the last `@` and without the port, then percent-decoded, then as gh keeps it (_gh_host). url.Parse takes
+    the port after the first `:`, or after the `]` of an IPv6 address in brackets, and checks only that it is digits,
+    so `github.com:99999` is github.com. It refuses another port, a `[` elsewhere, a `%` not before two hex digits,
+    and an escape below %80 other than %25 (None then)."""
+    hostport = authority.rpartition("@")[2]
+    if hostport.startswith("["):
+        name, bracket, port = hostport[1:].rpartition("]")
+        if not bracket or "[" in name or not re.fullmatch(r"(?::[0-9]*)?", port):
+            return None
+    else:
+        name, colon, port = hostport.partition(":")
+        if "[" in hostport or (colon and not re.fullmatch(r"[0-9]*", port)):
+            return None
+    if re.search(r"%(?!25|[89a-fA-F][0-9a-fA-F])", name):
         return None
-    try:
-        u = urlsplit(word)
-        _ = u.port                           # gh refuses a port that is not a number
-    except ValueError:
+    return _gh_host(unquote(name, errors="replace"))
+
+
+_GH_URL_PARTS = re.compile(r"(?i)https?://([^/?#]*)([^?#]*)")
+
+
+def _gh_url_parts(word: str) -> tuple[str, str, str, str] | None:
+    """(host, owner/name, kind, number) of a URL gh may read for a repo (#399): http or https in any case, the
+    authority up to the path, a query or a fragment, its host read by _gh_url_host, and the path decoded, as Go's
+    url.Parse reads them for gh 2.89 (url.Parse refuses a control character). A pull request, issue or discussion
+    URL has its kind (`pull`, `issues`, `discussions`) and number, a repo URL neither. None for any other word."""
+    m = _GH_URL_PARTS.match(word)
+    if not m or re.search(r"[\x00-\x1f\x7f]", word):
         return None
-    host = u.netloc.rpartition("@")[2].partition(":")[0]          # Go's u.Hostname(), its case kept
-    m = re.match(r"/([\w.-]+/[\w.-]+)(?:/(?:pull|issues|discussions)/(\d+))?", unquote(u.path))
-    return (host.removeprefix("www.").lower(), m.group(1), m.group(2) or "") if m and host else None
+    host = _gh_url_host(m.group(1))
+    path = re.match(r"/([\w.-]+/[\w.-]+)(?:/(pull|issues|discussions)/([0-9]+))?", unquote(m.group(2)))
+    return (host, path.group(1), path.group(2) or "", path.group(3) or "") if path and host else None
 
 
 def _gh_url(word: str) -> tuple[str, str] | None:
@@ -2039,21 +2073,30 @@ def _gh_url(word: str) -> tuple[str, str] | None:
     lookup). This takes a discussion URL and a repo URL too, which has no number: a reading more, since `-R` and the
     reading before #399 stay other targets. None for a word that is no such URL or names another instance."""
     parts = _gh_url_parts(word)
-    return (parts[1], parts[2]) if parts and _gh_on_github(parts[0]) else None
+    return (parts[1], parts[3]) if parts and _gh_on_github(parts[0]) else None
 
 
-def _gh_elsewhere(group: str, words: list[str]) -> list[tuple[str, str]]:
-    """The (target, link) readings of the operands that name a repo on another instance (round 6 of #399): a URL
-    on a host gh does not send to github.com (`https://ghe.corp/pub/repo/pull/9` is `ghe.corp/pub/repo#9`), and
-    gh repo's first word in another form (`ghe.corp/pub/repo`), as written. gh acts there, and a scope names repos
-    on github.com, so each is a target the scopes may not mean, as a `-R` on another host is."""
+# The kinds of URL gh reads a repo from in each group: a pull request URL in gh pr (finder.go's ParseURL), an issue
+# or pull request URL in gh issue (lookup.go), and a discussion URL in the gate's discussion group.
+_GH_URL_KINDS = {"pr": ("pull",), "issue": ("issues", "pull"), "discussion": ("discussions",)}
+
+
+def _gh_elsewhere(group: str, verb: str, words: list[str]) -> list[tuple[str, str]]:
+    """The (target, link) readings of the operands that name a repo on another instance (round 6 of #399), where gh
+    reads a repo from an operand (round 7): a URL of its group's kind (_GH_URL_KINDS) on a host gh does not send to
+    github.com (`https://ghe.corp/pub/repo/pull/9` is `ghe.corp/pub/repo#9`), and the first word of gh repo and of
+    gh label clone, its source, in any form ghrepo.FromFullName reads (`ghe.corp/pub/repo`). gh acts there, and a
+    scope names repos on github.com, so each is a target the scopes may not mean, as a `-R` on another host is.
+    Another URL, such as an option's value in a reading where every option is a flag, names no target here."""
     out = []
     for n, a in enumerate(words):
-        parts = _gh_url_parts(a)
-        if parts and not _gh_on_github(parts[0]):
-            out.append((f"{parts[0]}/{parts[1]}" + (f"#{parts[2]}" if parts[2] else ""), redact_userinfo(a)))
-        elif not parts and group == "repo" and n == 0 and _gh_repo(a)[0] != a and not _gh_repo(a)[1]:
-            out.append((redact_userinfo(a), ""))
+        url = _gh_url_parts(a)
+        if url and url[3] and url[2] in _GH_URL_KINDS.get(group, ()) and not _gh_on_github(url[0]):
+            out.append((f"{url[0]}/{url[1]}#{url[3]}", redact_userinfo(a)))
+        elif n == 0 and (group == "repo" or (group, verb) == ("label", "clone")):
+            repo = _gh_repo_parts(a)
+            if repo and not _gh_on_github(repo[0]):
+                out.append((f"{repo[0]}/{repo[1]}", redact_userinfo(a) if url else ""))
     return out
 
 
@@ -2097,23 +2140,35 @@ def _gh_operands(argv: list[str], takes: str, longs: tuple) -> tuple[str, list[i
     return (repos[-1] if repos else ""), ops
 
 
-def _gh_repo(value: str) -> tuple[str, bool]:
-    """(owner/name, sure) of a repo as gh reads `-R` (ghrepo.FromFullName in gh 2.89): `owner/name`,
-    `HOST/owner/name`, or a URL (`https://HOST/owner/name`, `git@HOST:owner/name.git`), whose path reads decoded
-    as Go's url.Parse gives it. Sure when gh sends the request to github.com (_gh_on_github), as a scope means. A
-    value gh refuses comes back as written, and not sure (#399)."""
-    rest, host = value, "github.com"
-    m = re.fullmatch(r"(?:(?:ssh|git\+ssh|git|https?|git\+https)://(?:[^@/]*@)?|git@)([^/:]+)(?::\d*)?[/:](.*)", value)
+_GH_REPO_URL = re.compile(r"(?:ssh|git\+ssh|git|https?|git\+https)://([^/?#]*)([^?#]*)")
+
+
+def _gh_repo_parts(value: str) -> tuple[str, str] | None:
+    """(host, owner/name) of a repo as gh reads `-R` (ghrepo.FromFullName in gh 2.89): `owner/name`,
+    `HOST/owner/name`, or a URL (`https://HOST/owner/name`, `git@HOST:owner/name.git`). go-gh's git.ParseURL makes
+    `git@HOST:path` `ssh://git@HOST/path`, and Go's url.Parse reads the URL: its host as _gh_url_host reads it, and
+    its path decoded, without a query or a fragment, then without `.git`. The host is as gh keeps it (_gh_host).
+    None for a value gh refuses (#399)."""
+    url = "ssh://" + value.replace(":", "/", 1) if value.startswith("git@") and ":" in value else value
+    m = _GH_REPO_URL.match(url)
     if m:
-        host, rest = m.group(1), unquote(m.group(2)).strip("/")
+        host = None if re.search(r"[\x00-\x1f\x7f]", url) else _gh_url_host(m.group(1))
+        rest = unquote(m.group(2)).strip("/")
         rest = rest[:-4] if rest.endswith(".git") else rest
-        host = host.removeprefix("www.").lower()    # go-gh's RepoInfoFromURL, then ghrepo.NewWithHost below
     elif value.count("/") == 2:
         host, _, rest = value.partition("/")
+        host = _gh_host(host)
+    else:
+        host, rest = "github.com", value
     parts = rest.split("/")
-    if len(parts) != 2 or not all(parts) or not host:
-        return value, False
-    return rest, _gh_on_github(host.removeprefix("www.").lower())
+    return (host, rest) if host and len(parts) == 2 and all(parts) else None
+
+
+def _gh_repo(value: str) -> tuple[str, bool]:
+    """(owner/name, sure) of a repo as gh reads `-R` (_gh_repo_parts). Sure when gh sends the request to github.com
+    (_gh_on_github), as a scope means. A value gh refuses comes back as written, and not sure (#399)."""
+    parts = _gh_repo_parts(value)
+    return (parts[1], _gh_on_github(parts[0])) if parts else (value, False)
 
 
 _GH_ANY_SHORT = "".join(chr(n) for n in range(33, 127))   # every character a short option can be
@@ -2192,7 +2247,7 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
     target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _gh_url(argv[i]))])
     readings = [_gh_read(group, r, [argv[i] for i in o], url) for r, o in parses for url in (True, False) if url or r]
     readings += raw + [("", "")] * any(i in dynamic for _, o in parses for i in o)
-    readings += [r for _, o in parses for r in _gh_elsewhere(group, [argv[i] for i in o])]
+    readings += [r for _, o in parses for r in _gh_elsewhere(group, verb, [argv[i] for i in o])]
     # Outside the table gh may take some options' values and not others, a mix of the two readings. The words both
     # call operands, with the first one's repo, are such a mix: in `gh pr checkout -b 7 9 -f -R pub/repo` gh checks
     # out pub/repo#9, which neither reading names. In the table there is one reading, and this is it again.
@@ -2370,6 +2425,12 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
     if memo is not None:
         memo[_GH_MOVED] = True
     if order is not None:
+        if order[1:2] and order[1] in split:
+            # The command's place holds an option's value bash may split (`gh -R $R secret set X`). As one word the
+            # value is only -R's, and gh secret holds credentials: that reading stands when it gives no grant.
+            one = _classify_gh(argv, cmd, stdin, dynamic)
+            if one.category in NO_GRANT:
+                return one
         return _classify_gh_words(words[:2] + [alias or words[2]] + words[3:], cmd, stdin,
                                   frozenset(n for n, i in enumerate(order) if i in dynamic))
     # The line as written with its command second, past the empty words and the options before it, as gh passes
@@ -2716,50 +2777,13 @@ def _expands(w: _Word) -> bool:
 
 
 def _gh_splits(w: _Word) -> bool:
-    """Whether bash may make several words of ``w``, or none (round 6 of #399): a glob, a brace expansion, an
-    expansion outside double quotes (`$R`, `${R}`, `$(..)`, backticks), or `"$@"` and `"${name[@]}"` inside them.
-    `"$R"` is one word. The word's source is read as bash reads its quotes: a backslash, '..', $'..' and "..";
-    in "..", a `$(..)` is passed over to its closing parenthesis, counted, and a backtick body to its end."""
-    if (w.glob and re.search(r"[*?\[]", w.text)) or (w.brace and re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text)):
-        return True
-    if not w.dynamic:
-        return False
-    raw, i, dq = w.raw, 0, False
-    if not raw:
-        return True                          # a word the gate made itself: no source to read
-    while i < len(raw):
-        ch, nxt = raw[i], raw[i + 1:i + 2]
-        if ch == "\\":
-            i += 2
-        elif ch == '"':
-            dq, i = not dq, i + 1
-        elif not dq and ch == "'":
-            j = raw.find("'", i + 1)
-            i = len(raw) if j < 0 else j + 1
-        elif not dq and ch == "$" and nxt == "'":
-            j = i + 2
-            while j < len(raw) and raw[j] != "'":
-                j += 2 if raw[j] == "\\" else 1
-            i = j + 1
-        elif not dq and ch == "$" and nxt == '"':
-            dq, i = True, i + 2
-        elif ch == "`" or (ch == "$" and nxt and (nxt in "({@_!#?*-$" or nxt.isalnum())):
-            if not dq or (ch == "$" and nxt == "@"):
-                return True                  # outside "..", or "$@"
-            close = {"`": "`", "(": ")", "{": "}"}.get(nxt if ch == "$" else ch)
-            if close is None:                # "$R", "$1": one word
-                i += 2
-                continue
-            opener, depth, j = (nxt if ch == "$" else ""), 1, i + (2 if ch == "$" else 1)
-            while j < len(raw) and depth:
-                depth += (opener != "" and raw[j] == opener) - (raw[j] == close)
-                j += 2 if raw[j] == "\\" else 1
-            if close == "}" and "@" in raw[i + 2:j]:
-                return True                  # "${name[@]}", "${!name@}", "${@:2}"
-            i = j
-        else:
-            i += 1
-    return False
+    """Whether bash may make several words of ``w``, or none (round 6 of #399): a glob, a brace expansion, or an
+    expansion the lexer read outside double quotes, or `"$@"` or `"${name[@]}"` in them (_Word.split). `"$R"` and
+    `"$(cat r)"` are one word. The lexer reads a `$(..)` or backtick body as bash does, quotes in it too, so
+    `"$(: ")")"$R` holds `$R` outside quotes (round 7). A word the gate made itself has no source to read, so an
+    expansion in it may split."""
+    return (w.split or (w.dynamic and not w.raw) or (w.glob and bool(re.search(r"[*?\[]", w.text)))
+            or (w.brace and bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
 
 
 def _literal_stdin(k: _Cmd, piped: str | None) -> str | None:
@@ -3314,7 +3338,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "exo":
         return [_classify_exo(argv, cmd)]
     if prog == "gh":
-        dyn = frozenset(i for i, w in enumerate(words) if _expands(w))
+        # A word bash splits is a word from an expansion here, also `$(cat <<'EOF' .. EOF)` outside quotes (#399).
+        dyn = frozenset(i for i, w in enumerate(words) if _expands(w) or w.split)
         return [_classify_gh(argv, cmd, ctx.get("post_stdin"), dyn, frozenset(i for i in dyn if _gh_splits(words[i])))]
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
         return [_classify_http(argv, cmd, frozenset(i for i, w in enumerate(words) if _expands(w)),

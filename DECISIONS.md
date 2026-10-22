@@ -807,6 +807,34 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   and 20,000 lines sampled from the round 5 corpus under 124 policies, and the exo-gate hook harness in 13 setups.
   On 5,500 of them the line as read drops a signal (`indirection` mostly) or a body the executor checks, and the line
   as read before keeps it, so the decision and the hook stand.
+  2026-10-22, round 7 of the review: Go's url.Parse checks only that a port is digits, with no range check
+  (`validOptionalPort` in Go 1.26), and `u.Hostname()` drops it. Python refuses a port past 65535, so `_gh_url` read
+  `https://github.com:99999/pub/x/pull/9` as no URL, and `gh pr review` with it and `-R myorg/app` was a post on
+  myorg/app that an allow rule there let through, while gh approves pub/x#9. url.Parse also decodes the host, and
+  Go's strings.ToLower maps U+0130 to `i`, where Python gives `i` and a combining dot, so for gh
+  `https://g%C4%B0thub.com/pub/repo/pull/9` is on github.com. `_gh_url_host` now reads the host as Go 1.26 does:
+  after the last `@`, the port after the first `:` (or after the `]` of an IPv6 address) as digits only, the host
+  decoded, and None where url.Parse refuses the URL (a second colon, a `[` past the start, an escape below %80
+  other than %25, a control character). `_gh_host` lowers it one character for one, U+0130 to `i`. It is the only
+  character whose lower case differs between Go 1.26 and Python 3.13. `_gh_repo` reads a URL `-R` the same way, its
+  query and fragment dropped. `_gh_elsewhere` took any URL with two path segments, in any operand, also an option's
+  value in the reading where every option is a flag, so `gh variable set X -R myorg/app --body
+  https://hooks.example.com/a/b` logged under `private: [myorg/*]`. It now reads a repo only where gh does: a pull
+  request URL in gh pr (finder.go's `ParseURL`), an issue or pull request URL in gh issue (lookup.go), a discussion
+  URL in the gate's discussion group, and the first word of gh repo and of gh label clone (`ghrepo.FromFullName`).
+  `_gh_splits` scanned the source of a double-quoted word itself and counted parentheses in a `$( )` without its
+  quotes, so `gh pr -R "$(: ")")"$R view 5` read as a view. The lexer now marks a word bash may split
+  (`_Word.split`): an expansion outside double quotes, `"$@"`, `"${name[@]}"`, a `$( )` past the nesting cap, and a
+  `${ }` with a quote, a backslash or a `$(` before its first `}`, since bash may read past that `}`. An unquoted
+  `$(cat <<'EOF' .. EOF)` is such a word too, so gh reads it as a word from an expansion. Last, `gh -R $R secret set X`
+  stayed `opaque_exec`, since the split value took the command's place. When it does, the line is also read with
+  the value as one word, and that reading stands when it gives no grant (`credentials`).
+  A differential against main 2ef1a81f found no line lower. gate_diff read 14,426 targeted lines (each port, host
+  and escape form, URLs in option values, quotes in a `$( )`, here-doc substitutions, split values before the
+  command, each also behind wrappers and in compound lines) and round 6's 23,263 lines under 106 policies, and its
+  built-in corpus of 30,515 actions under its 76 policies. The decide harness read 3,796 of the lines that classify
+  differently under 119 policies, and the exo-gate hook harness 1,400 of them in 13 setups. On 208 the line as read
+  drops the `indirection` signal and the line as read before keeps it, so the decision and the hook stand.
   Limits: `docs/GATE.md` "Where a gh command lands".
 
 - **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.

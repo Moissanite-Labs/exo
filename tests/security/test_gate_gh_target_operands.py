@@ -501,7 +501,11 @@ def test_a_url_operand_keeps_the_reading_before():
     assert (c.target, c.alt_targets, d.outcome) == ("pub/repo", ["pub/repo.git"], "deny"), (c, d)
 
 
-@pytest.mark.parametrize("url", ["https://github.com:x/pub/repo/pull/5", "ftp://github.com/pub/repo/pull/5"])
+# Go 1.26's url.Parse refuses a port that is not ASCII digits, a second colon, and an escape below %80 other than
+# %25 in the host (round 7).
+@pytest.mark.parametrize("url", ["https://github.com:x/pub/repo/pull/5", "ftp://github.com/pub/repo/pull/5",
+                                 "https://github.com:80:80/pub/repo/pull/5", "https://g%69thub.com/pub/repo/pull/5",
+                                 "https://github.com:\u0665/pub/repo/pull/5"])
 def test_a_url_gh_refuses_names_no_repo(url):
     c, _ = run(f"gh pr merge {url} -R myorg/app")
     assert (c.target, c.alt_targets) == ("myorg/app", []), c
@@ -519,6 +523,11 @@ REVIEW = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "po
     "gh pr comment https://www.github.com/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'",
     "gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'",
     "gh issue comment https://gist.github.com/pub/repo/issues/9 -R myorg/app -b $'Note\\nF'",
+    # Round 7: url.Parse checks only that a port is digits, with no range check, and u.Hostname() drops it. So gh
+    # reads github.com here, and the gate read no URL at all, since Python refuses a port past 65535.
+    "gh pr comment https://github.com:99999/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'",
+    "gh pr comment https://api.github.com:65536/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'",
+    "gh issue comment https://github.com:99999/pub/repo/issues/9 -R myorg/app -b $'Note\\nF'",
 ])
 def test_a_url_on_a_github_com_host_names_the_repo(line):
     c, d = run(line, REVIEW)
@@ -526,10 +535,11 @@ def test_a_url_on_a_github_com_host_names_the_repo(line):
     assert (d.outcome, d.exposure, d.third_party) == ("ask", "public", True), (line, d)
 
 
-def test_an_allow_rule_on_the_r_repo_does_not_cover_the_url_s_repo():
+@pytest.mark.parametrize("host", ["api.github.com", "github.com:99999"])
+def test_an_allow_rule_on_the_r_repo_does_not_cover_the_url_s_repo(host):
     pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "rules": [
         {"match": {"category": "github_post", "target": "myorg/*"}, "decision": "allow"}]}, "posting": {"footer": "F"}})
-    c, d = run("gh pr review https://api.github.com/pub/x/pull/9 -R myorg/app --approve -b $'hi\\nF'", pol)
+    c, d = run(f"gh pr review https://{host}/pub/x/pull/9 -R myorg/app --approve -b $'hi\\nF'", pol)
     assert c.target == "pub/x#9", c
     assert d.outcome == "ask", d
 
@@ -537,7 +547,14 @@ def test_an_allow_rule_on_the_r_repo_does_not_cover_the_url_s_repo():
 @pytest.mark.parametrize("line", ["gh repo archive https://api.github.com/pub/x --yes",
                                   "gh repo archive api.github.com/pub/x --yes",
                                   f"gh repo archive git{GIT_AT[3:4]}api.github.com:pub/x.git --yes",
-                                  "gh pr comment 5 -R api.github.com/pub/x -b x"])
+                                  "gh pr comment 5 -R api.github.com/pub/x -b x",
+                                  # Round 7: a port past 65535, and a host gh lowers to github.com
+                                  "gh repo archive https://github.com:99999/pub/x --yes",
+                                  "gh issue close https://github.com:99999/pub/x/issues/9 -R myorg/app",
+                                  "gh pr review https://github.com:99999/pub/x/pull/9 -R myorg/app --approve",
+                                  "gh repo archive https://g%C4%B0thub.com/pub/x --yes",
+                                  "gh repo archive g\u0130thub.com/pub/x --yes",
+                                  "gh pr comment 5 -R https://g%C4%B0thub.com/pub/x -b x"])
 def test_a_repo_on_a_github_com_host_meets_a_deny(line):
     c, d = run(line, normalize_policies({"gates": {"deny": ["target:pub/*"]}}))
     assert c.target.startswith("pub/x"), c
@@ -547,7 +564,11 @@ def test_a_repo_on_a_github_com_host_meets_a_deny(line):
 # Every host gh sends to github.com, in the forms gh reads: the case, a user, a port and a leading `www.` go first.
 @pytest.mark.parametrize("host", ["api.github.com", "gist.github.com", "uploads.github.com", "codeload.github.com",
                                   "raw.github.com", "www.github.com", "API.GitHub.COM", "WWW.api.github.com",
-                                  "u:p" + "@api.github.com", "api.github.com:443", "a.b.github.com"])
+                                  "u:p" + "@api.github.com", "api.github.com:443", "a.b.github.com",
+                                  # Round 7: url.Parse decodes the host, and Go's strings.ToLower makes U+0130 `i`
+                                  # (Python makes it `i` and a combining dot). A port has no range check.
+                                  "g\u0130thub.com", "g%C4%B0thub.com", "api.g%c4%b0thub.com", "www.g\u0130thub.com",
+                                  "github.com:99999", "github.com:", "a]b.github.com"])
 def test_each_github_com_host_names_the_repo(host):
     c, d = run(f"gh pr comment https://{host}/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'", REVIEW)
     assert c.target == "pub/repo#9" and "myorg/app#9" in c.alt_targets, c
@@ -571,10 +592,41 @@ def test_a_url_on_another_instance_is_another_target(host):
 def test_a_repo_operand_on_another_instance_is_another_target():
     for line, other in [("gh repo delete ghe.corp/myorg/app --yes", "ghe.corp/myorg/app"),
                         ("gh repo delete https://ghe.corp/myorg/app --yes", "ghe.corp/myorg/app"),
-                        ("gh issue close https://x.ghe.com/pub/repo/issues/3 -R myorg/app", "x.ghe.com/pub/repo#3")]:
+                        ("gh issue close https://x.ghe.com/pub/repo/issues/3 -R myorg/app", "x.ghe.com/pub/repo#3"),
+                        ("gh issue close https://x.ghe.com/pub/repo/pull/3 -R myorg/app", "x.ghe.com/pub/repo#3"),
+                        ("gh pr close https://ghe.corp/pub/repo/pull/3 -R myorg/app", "ghe.corp/pub/repo#3"),
+                        ("gh pr comment https://[::1]:8/pub/x/pull/9 -R myorg/app -b x", "::1/pub/x#9")]:
         c, d = run(line)
         assert other in c.alt_targets, (line, c)
         assert d.exposure == "public", (line, d)
+
+
+# Round 7: gh label clone reads its source with ghrepo.FromFullName, so a source on another instance is a repo the
+# scopes may not mean. The line no longer reads as private only.
+@pytest.mark.parametrize("source", ["ghe.corp/pub/x", "https://ghe.corp/pub/x", f"git{GIT_AT[3:4]}ghe.corp:pub/x.git"])
+def test_a_label_clone_source_on_another_instance_is_another_target(source):
+    pol = normalize_policies({"gates": {"scopes": {"private": ["myorg/*"]}}})
+    c, d = run(f"gh label clone {source} -R myorg/app", pol)
+    assert (c.target, c.alt_targets) == ("myorg/app", ["ghe.corp/pub/x"]), c
+    assert d.exposure != "private", d
+
+
+# Round 7: gh reads a repo from an operand only in a few places: a pull request URL in gh pr (ParseURL), an issue or
+# pull request URL in gh issue (the issue lookup), and the first word of gh repo and of gh label clone
+# (ghrepo.FromFullName). Another URL on another host names no target, also as an option's value that the reading
+# with every option a flag takes for an operand. These lines were allow and private on main and log and internal
+# at round 6, each with a target such as `hooks.example.com/a/b`.
+@pytest.mark.parametrize("line", ["gh variable set X -R myorg/app --body https://hooks.example.com/a/b",
+                                  "gh repo edit myorg/app --homepage https://myorg.github.io/app/docs",
+                                  "gh repo edit myorg/app --description https://docs.corp.io/a/b",
+                                  "gh label create bug -R myorg/app --description https://example.com/a/b",
+                                  "gh pr close https://x.ghe.com/pub/repo/issues/3 -R myorg/app",
+                                  "gh pr comment https://ghe.corp/pub/repo -R myorg/app -b x",
+                                  "gh label clone pub/x -R myorg/app"])
+def test_a_url_where_gh_reads_no_repo_is_no_target(line):
+    c, d = run(line, normalize_policies({"gates": {"scopes": {"private": ["myorg/*"]}}}))
+    assert (c.target, c.alt_targets) == ("myorg/app", []), (line, c)
+    assert (d.outcome, d.exposure) == ("allow", "private"), (line, d)
 
 
 # Round 5, item 4: one test for each safety mutant the review found alive.
@@ -690,9 +742,12 @@ def test_gh_api_s_method_read_one_way_has_no_floor(line):
     assert c.floor is None, c
 
 
-# Round 5, item 6: `-R` as a URL reads its path decoded, as Go's url.Parse gives it to ghrepo.FromURL.
+# Round 5, item 6: `-R` as a URL reads its path decoded, as Go's url.Parse gives it to ghrepo.FromURL. Round 7: url.Parse
+# leaves a query and a fragment out of the path, decodes the host, and takes any port of digits.
 @pytest.mark.parametrize("value", ["https://github.com/pub/re%70o", "https://github.com/pub%2Frepo",
-                                   f"ssh://{GIT_AT}/pub/re%70o.git"])
+                                   f"ssh://{GIT_AT}/pub/re%70o.git", "'https://github.com/pub/repo?tab=x'",
+                                   "'https://github.com/pub/repo#x'", "https://g%C4%B0thub.com/pub/repo",
+                                   "https://github.com:99999/pub/repo", f"ssh://{GIT_AT}:99999/pub/repo.git"])
 def test_r_as_a_url_reads_its_path_decoded(value):
     c, d = run(f"gh pr comment 5 -R {value} -b x", DENY_PUB)
     assert c.target == "pub/repo#5", c
