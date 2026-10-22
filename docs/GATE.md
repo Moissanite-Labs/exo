@@ -1540,10 +1540,12 @@ stays `store_write`.
 
 What the floor does to a policy's denies. A shell write to the store keeps its own reading
 (`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category
-still denies the line (D-075, #191). A file tool's write (`write_file`, `edit_file`, `patch`,
+still denies the line (D-075, #191). The matrix reads the dominant part only, so a matrix deny on delete
+can instead become a principal-only store-write ask (`ssh host 'rm -rf ~/.exo/update'`), as for
+`~/.exo/state`. A file tool's write (`write_file`, `edit_file`, `patch`,
 `apply_patch`, `create_directory`, `move_file`, a delete tool) is `store_write` alone, so a
 `local_write` or `delete` deny does not reach it: it asks the principal instead. After `cd /dev`,
-a write to a store name (`printf x > update/allowed_signers`) has that name as its target, not
+a line naming a store path (`printf x > update/allowed_signers`, or a credentials command naming the pin) has that path as its target, not
 `/dev`, so a `target:/dev*` deny does not reach it either. `exo update --pin-trust` keeps its old
 `opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it, and naming
 `opaque_exec` at `allow` or `log` no longer lets it run without an ask.

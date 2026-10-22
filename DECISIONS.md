@@ -990,16 +990,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   at `update/allowed_signers` asks. The pin lives in `$EXO_HOME` only, so the principal stores get no `update`
   entry. This closes the gap the D-073 amendment of 2026-10-17 named for the pin. `config.json` stays an ordinary
   local write until D-074 (#125). The gate differential against main (#423), with a corpus of these forms added,
-  lowers 37 pairs on 15 actions, of two kinds. In both the pin now decides as `state/` and `bus/` files already
+  lowered 37 pairs on 15 actions in the original corpus. The expanded review corpus found a third kind below.
+  In each kind the pin now decides as `state/` and `bus/` files already
   decide on main, and the line still asks the principal alone, with no grant. (1) A file tool's write or delete
   on the pin or the folder (any file tool, such as `write_file`, `edit_file`, `patch`, `apply_patch`,
   `create_directory`, `move_file` or `delete_file`) was
   `local_write` or `delete` and is now `store_write` alone, so `deny: [local_write]` or `deny: [delete]`, a
   `categories:` deny or a rule on those categories no longer denies it, and a `reserved: [delete]` entry no longer
   marks it (31 pairs on 9 actions). A shell write keeps its `local_write`, `shell` or `delete` part beside the store
-  part, so its deny holds (D-075). (2) After `cd /dev`, a write to a store name (`printf x > update/allowed_signers`,
+  part, so its category deny holds (D-075). (2) After `cd /dev`, a line that names a store path (`printf x > update/allowed_signers`,
   or a path through `.exo/update`) takes that name as its target where it took `/dev`, so a `target:/dev*` deny no
-  longer matches it (6 pairs on 6 actions). Chosen over keeping a file tool's old category as a part, which would
+  longer matches it (6 pairs on 6 actions). This also covers credentials commands naming the pin.
+  (3) The matrix reads the dominant part only. A remote delete such as `ssh host 'rm -rf ~/.exo/update'`
+  changes from a matrix deny on delete to the principal-only store-write ask, as deleting `~/.exo/state`
+  already does. Category denies still read the retained delete part. Chosen over keeping a file tool's old category as a part, which would
   change the decisions for every store path, not only the pin's. That is a follow-up for the whole store. Not done,
   as for the other store folders (`docs/GATE.md` "Known limits"): a glob or hard-link spelling, a copy or archive
   unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
