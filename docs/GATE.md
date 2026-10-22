@@ -1445,14 +1445,17 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 (including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
 `$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats` and `$EXO_HOME/bus`
 (the bus registry that signed seat answers and the relay trust, the relay database and its
-`-wal`, `-shm` and `-journal` files, #210), any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store
+`-wal`, `-shm` and `-journal` files, #210), `$EXO_HOME/update` (`allowed_signers`, the
+signed-update trust pin of D-073, #133), any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store
 root recorded in config `principals` (`exo init --root`, `exo import-store --root`), for every id,
 not only the active one. When the environment moves a bus file, the gate protects where it points:
 the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with the database's sidecars) and the folder
 `EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_` name, and both spellings when both are
 set. Distinctive names match anywhere, so a relative `policies/gates.yaml`,
-`state/approval-grants.json`, `bus/registry.json` or `bus/relay.sqlite` counts too, and `.exo/bus`
-counts whatever `EXO_HOME` is.
+`state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or `update/allowed_signers`
+counts too, and `.exo/bus` and `.exo/update` count whatever `EXO_HOME` is. A project folder called
+`update` is ordinary; only a file in it named `allowed_signers` asks. `config.json` is not on the
+list yet (D-074, #125).
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
@@ -1481,7 +1484,11 @@ Known limits. These are classification checks, not a filesystem sandbox: a symli
 between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
 without a link to resolve, so only distinctive names catch a write through it. Only the store roots
 are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
-write to the outside spelling is a local write. Name and prefix checks are case-sensitive, so a
+write to the outside spelling is a local write. A copy or an archive unpacked into the home folder
+itself, which makes a protected folder from its source name (`cp -r /tmp/x/update ~/.exo/`,
+`tar -C ~/.exo -xf x.tar`), is not seen either. Nor is a path held in a variable or made by a
+command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
+`cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks are case-sensitive, so a
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
@@ -1524,8 +1531,8 @@ path is one the gate cannot resolve, not that the command writes it. A body file
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
 `sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
-`exo log append`, `exo keygen`, `exo init`, `git -C <store>` with a writing subcommand, and any
-writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
+`exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `git -C <store>` with a
+writing subcommand, and any writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
 `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. Reads of the store stay `read`, except `keys/` and the run folder's secrets
@@ -1540,6 +1547,18 @@ always asks and is never granted, but a seat that `approvals.yaml` delegates `cr
 answers a `store_write` (#169, the D-038 amendment; `keys/` was already so). A delete of job
 output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name (`rm ~/.exo/run/exod.sock`)
 stays `store_write`.
+
+What the floor does to a policy's denies. A shell write to the store keeps its own reading
+(`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category
+still denies the line (D-075, #191). The matrix reads the dominant part only, so a matrix deny on delete
+can instead become a principal-only store-write ask (`ssh host 'rm -rf ~/.exo/update'`), as for
+`~/.exo/state`. A file tool's write (`write_file`, `edit_file`, `patch`,
+`apply_patch`, `create_directory`, `move_file`, a delete tool) is `store_write` alone, so a
+`local_write` or `delete` deny does not reach it: it asks the principal instead. After `cd /dev`,
+a line naming a store path (`printf x > update/allowed_signers`, or a credentials command naming the pin) has that path as its target, not
+`/dev`, so a `target:/dev*` deny does not reach it either. `exo update --pin-trust` keeps its old
+`opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it, and naming
+`opaque_exec` at `allow` or `log` no longer lets it run without an ask.
 
 ## Policy changes during a session (D-038)
 

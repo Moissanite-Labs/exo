@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
+  verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
+  Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.
 - A fork no longer loses its copies of entries the parent undid after the fork (#245). A copy counts
   at its original's log position only while that original is visible, so once the fork's own later
   entries were summarized the tail started after the copy, and no tree held it either: the fork's
@@ -195,6 +198,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate store protection (#133, D-038 amendment): the signed-update trust pin is a store path. With
+  `update.require_signed` on, `exo update` installs the upstream tip only when it verifies against
+  `$EXO_HOME/update/allowed_signers` (D-073), and a tool could rewrite that file with no ask: `cp /tmp/evil
+  ~/.exo/update/allowed_signers` was an allowed `shell` and a `write_file` there an allowed `local_write`, so the
+  principal's next approved `exo update` could install code signed by the tool's own key. A write to
+  `$EXO_HOME/update` or anything in it (a redirection, `cp`, `mv`, `tee`, `sed -i`, `ln`, `rm -rf` of the folder, a
+  file tool, a relative name after `cd`) is now `store_write`: it always asks, only the principal answers, and no
+  grant covers it. `.exo/update` and `update/allowed_signers` count by name anywhere. `exo update --pin-trust` is
+  `store_write` too and keeps its `opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it.
+  Reads stay `read`, and a project folder called `update` is unchanged. A file tool's write to the pin is
+  `store_write` alone, so it now asks where a `local_write` deny denied it before, as a file tool's write to
+  `state/` already did. `config.json` is left to #125 (D-074).
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under
