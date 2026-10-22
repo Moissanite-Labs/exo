@@ -25,6 +25,7 @@ from .store import PrevMismatch, Store
 
 log = logging.getLogger("exo.bus.relay")
 TS_SKEW_MINUTES = 10
+MAX_SEQ = 2**63 - 1  # SQLite INTEGER, including the pagination and verification query bindings.
 
 
 class Relay:
@@ -179,13 +180,14 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
         return await relay.accept(await request.json())
 
     @app.get("/v1/messages")
-    async def get_messages(request: Request, since: int = 0, to: str | None = None,
-                           thread: str | None = None, limit: int = Query(200, le=1000)):
+    async def get_messages(request: Request, since: int = Query(0, ge=0, le=MAX_SEQ), to: str | None = None,
+                           thread: str | None = None, limit: int = Query(200, ge=1, le=1000)):
         auth(request)
         return relay.store.messages(since, to, thread, limit)
 
     @app.get("/v1/inbox/{seat}")
-    async def inbox(request: Request, seat: str, since: int = 0, limit: int = Query(200, le=1000)):
+    async def inbox(request: Request, seat: str, since: int = Query(0, ge=0, le=MAX_SEQ),
+                    limit: int = Query(200, ge=1, le=1000)):
         if auth(request) != seat:
             raise HTTPException(403, "you can only read your own inbox")
         return relay.store.inbox(relay.registry.audiences(seat), since, limit)
@@ -200,7 +202,8 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
         return relay.registry.document
 
     @app.get("/v1/verify")
-    async def verify(from_seq: int = Query(1, alias="from"), to_seq: int | None = Query(None, alias="to")):
+    async def verify(from_seq: int = Query(1, alias="from", ge=1, le=MAX_SEQ),
+                     to_seq: int | None = Query(None, alias="to", ge=0, le=MAX_SEQ)):
         return relay.store.verify(from_seq, to_seq, relay.signer_keys)
 
     @app.get("/v1/checkpoints")
