@@ -95,6 +95,11 @@ hand. That is the only override. The check cannot tell an old list from a new on
 signed earlier can be pinned again, so read what `--pin-trust` prints. Tag signatures are not consulted: the tip
 commit must be signed.
 
+The gate treats `$EXO_HOME/update` as part of Exo's store. A tool call that writes, moves or deletes anything
+there, or runs `exo update --pin-trust`, always asks you, and only you can answer. Reading the pin with `cat`,
+`grep` or a file tool needs no approval. The gate reads commands, so it has limits. `docs/GATE.md` "The store is
+credentials" lists them.
+
 ## What it does
 
 | Step | Action |
