@@ -6,6 +6,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Decision titles in the docs map keep a stable pointer to their amendment history in `DECISIONS.md` (#278).
+  New amendments update coverage cells when needed, without appending another date to a shared title line.
 - A fork no longer loses its copies of entries the parent undid after the fork (#245). A copy counts
   at its original's log position only while that original is visible, so once the fork's own later
   entries were summarized the tail started after the copy, and no tree held it either: the fork's

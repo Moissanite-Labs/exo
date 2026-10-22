@@ -9,7 +9,10 @@ of all docs is `docs/DOCS-MAP.md`. Users read `docs/USER-GUIDE.md`.
 Every change that lands does all of this in the same commit:
 
 1. Updates its technical doc (the `docs/*.md` page for that part) and `DECISIONS.md`.
-2. Adds or updates a row in `docs/DOCS-MAP.md`.
+2. Adds or updates a row in `docs/DOCS-MAP.md`. For an amendment to an existing decision, keep its row title
+   stable and the dated history only in `DECISIONS.md`. Update the row's documentation cells when coverage
+   changes; an amendment alone does not require a row edit. A separate coverage row may index new links or
+   guide sections. This applies to every decision (#278).
 3. Notes its impact on the user guide and the developer guide. If a command, key, setting or step changed, edit
    `docs/USER-GUIDE.md` or this file in the same commit. If nothing changed for them, say "none" in the commit
    message.
