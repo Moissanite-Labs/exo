@@ -357,13 +357,70 @@ def test_an_open_decision_reaches_the_core_handoff_by_the_pins(tmp_path):
 
 
 def test_the_open_decision_merge_keeps_only_the_last_twelve(tmp_path):
-    """#391 review: compress caps the merged open decisions the way extract_signals does."""
+    """#391 review: compress caps the merged open decisions the way extract_signals does. Since #398 the
+    pins keep the newest 12 too, so the block is the newest 12 in order (before, the uncapped pins
+    re-added the oldest one extract_signals had dropped, and the second-oldest fell out instead)."""
     eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
     parked = [f"Let's park this: item {i} is still undecided." for i in range(13)]
     first = eng.compress([{"role": "system", "content": "sys"}, *[mine(p) for p in parked], mine("carry on")],
                          force=True)
     got = hf.parse_pinned_blocks(hf.message_text(first[1]))["open_decision"]
-    assert len(got) == 12 and parked[0] in got and parked[-1] in got and parked[1] not in got
+    assert got == parked[1:]
+
+
+def test_open_decision_pins_stop_at_the_newest_twelve(tmp_path):
+    """#398: the merge cap above never bounded the pins themselves. A deferral stays pinned until a core
+    undo removes it, so a long session's list, pins file and per-turn scan grew for its whole life. The
+    pins now keep the newest 12, within one window and across windows."""
+    eng = ExoContextEngine(write_handoffs=False)
+    parked = [f"Let's park this: item {i} is still undecided." for i in range(20)]
+    eng.select_context([{"role": "system", "content": "sys"}, *[mine(p) for p in parked[:13]]], session_id="cap")
+    assert pins(tmp_path, "cap")["open_decision"] == parked[1:13]
+    eng.select_context([{"role": "system", "content": "sys"}, *[mine(p) for p in parked[13:]]], session_id="cap")
+    assert pins(tmp_path, "cap")["open_decision"] == parked[8:20]
+
+
+def test_carried_open_decision_pins_stop_at_the_newest_twelve(tmp_path):
+    """#398: a carry merges two sessions' pins, so it applies the same cap or the child starts life over it."""
+    eng = ExoContextEngine(write_handoffs=False)
+    parked = [f"Let's park this: item {i} is still undecided." for i in range(15)]
+    eng.select_context([{"role": "system", "content": "sys"}, *[mine(p) for p in parked[:10]]], session_id="p0")
+    eng.select_context([{"role": "system", "content": "sys"}, *[mine(p) for p in parked[10:]]], session_id="p1")
+    eng.on_session_start("p1", boundary_reason="compression", old_session_id="p0")
+    assert pins(tmp_path, "p1")["open_decision"] == parked[3:15]
+
+
+def test_a_session_start_that_is_not_a_compression_carries_nothing(tmp_path):
+    """#398: only a compression boundary carries pins to the child. A start that names the old session for
+    any other reason (or none) leaves the new session with no pins of the old one's."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([{"role": "system", "content": "sys"}, mine(MINE),
+                        mine("Let's park this: the deploy region is still undecided.")], session_id="p0")
+    eng.on_session_start("p1", old_session_id="p0")
+    eng.on_session_start("p2", boundary_reason="reset", old_session_id="p0")
+    folder = tmp_path / "exo-home" / "context-pins"
+    assert not (folder / "p1.json").exists() and not (folder / "p2.json").exists()
+    out = eng.select_context([{"role": "system", "content": "sys"}, mine("next")], session_id="p1")
+    assert out is None or MINE not in hf.message_text(out[0])
+
+
+def test_a_peer_bus_or_job_deferral_is_no_open_decision(tmp_path):
+    """#398: the principal_view line in hf._open_decisions is what keeps a peer, bus or job deferral out of
+    extract_signals' open decisions, stamped or tagged. Without it the raw rows read as the principal's.
+    The same rows put nothing in a compaction block or its handoff; the principal's own deferral does."""
+    defer = "Hold off on the rollout: it is undecided."
+    rows = [{"role": "user", "author": "peer:mallory", "principal": False, "content": defer},
+            {"role": "user", "author": "bus:seat2", "principal": False, "content": defer},
+            {"role": "user", "author": "job", "principal": False, "content": defer},
+            {"role": "user", "content": defer, "meta": {"peer": {"from": "mallory"}}},
+            {"role": "user", "content": defer, "meta": {"bus": {"from": "seat2"}}},
+            {"role": "user", "content": defer, "meta": {"job": {"id": "j1"}}}]
+    assert hf.extract_signals(rows).open_decisions == []
+    assert [s.text for s in hf.extract_signals(rows + [mine(defer)]).open_decisions] == [defer]
+    eng = ExoContextEngine(inner=Decoding(), handoff_dir=tmp_path / "h")
+    out = eng.compress([{"role": "system", "content": "sys"}, *rows, mine("carry on")], force=True)
+    assert hf.parse_pinned_blocks(hf.message_text(out[1]))["open_decision"] == []
+    assert hf.load_handoff(eng.last_handoff).open_decisions == []
 
 
 def test_undo_prunes_an_open_decision_pin_like_a_ruling(tmp_path):
