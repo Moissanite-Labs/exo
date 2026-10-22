@@ -687,12 +687,6 @@
     },
     {
       "path": "src/exo/gate.py",
-      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"tuple[str, tuple[str, str, str], bool]\"; expected \"tuple[str, tuple[str, str, str, str, str], bool]\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
       "message": "Incompatible types in assignment (expression has type \"bool\", target has type \"_Word | None\")",
       "code": "assignment",
       "count": 1
