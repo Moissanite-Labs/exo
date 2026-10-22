@@ -413,8 +413,7 @@ run main's copy of the script on both trees:
 
 Run main's copy, not the branch's. The script holds the seeds, the generated forms and the policies, so a branch
 that edits it would check itself with its own copy. A reviewer of a gate PR runs main's copy against the PR head and
-reads any change the PR makes to `scripts/gate_diff.py`. Until #434 lands, main has no copy: use the PR's copy then,
-and read it as part of the PR.
+reads any change the PR makes to `scripts/gate_diff.py`.
 
 The script compares two trees, not a diff. If main moved after your branch began, merge main into the branch
 first. Otherwise each line a later main change made stricter shows up as lowered.
@@ -454,9 +453,17 @@ key `check_post`, `decide` and `normalize_policies` read appears in a built-in p
 minutes on four cores. `--jobs` sets the workers in each tree (half the cores by default).
 
 Add actions with `--corpus lines.txt`: one command per line, or a JSON list of commands and `{"tool", "args"}`
-actions. An action may also hold `"cwd"`, the session folder the hook passes to `classify` (#209). The `--corpus`
-lines get the same generated forms as the harvested ones. `--only-corpus` skips the harvest and the seeds, and
-`--no-variants` skips every generated form. Add policies with `--policies more.py` (a `POLICIES` mapping).
+actions. An action may also hold `"cwd"`, the session folder the hook passes to `classify` (#209). An item in another
+shape, such as a call with no `args` mapping, stops the run with exit status 2 and names the item. The `--corpus`
+lines get the same generated forms as the harvested ones.
+
+- `--only-corpus` runs the `--corpus` items, the compound forms of their simple lines, and each line under one other
+  shell tool name and key. It skips the harvest, the seeds, the table and allowlist lines, the folder rows and the
+  calls of the other tools.
+- `--no-variants` runs only the `--corpus` items and the harvest. It skips the seeds, the table and allowlist lines,
+  the compound forms, the other shell tool names and keys, the folder rows and the calls of the other tools.
+
+Add policies with `--policies more.py` (a `POLICIES` mapping).
 
 Exit status 0 means nothing is lower. Exit 1 means at least one pair of action and policy is lower: an outcome below
 main's in the order allow, log, ask, deny, a reserved hit lost, or a posting violation main lists that the head does

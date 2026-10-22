@@ -101,19 +101,23 @@ def test_a_tree_that_cannot_run_exits_2(tmp_path):
     assert proc.returncode == 2, proc.stdout + proc.stderr
 
 
-@pytest.mark.parametrize("case", ["home", "json", "raises", "not_json"])
+@pytest.mark.parametrize("case", ["home", "json", "raises", "not_json", "corpus_item"])
 def test_an_error_in_the_script_exits_2_not_1(tmp_path, case):
     # Exit 1 means lowered: a fault of the tool or of its input must never read as one.
     pol = tmp_path / "pols.py"
     pol.write_text({"raises": "POLICIES = {'x': undefined_name}\n",
                     "not_json": "POLICIES = {'x': {'gates': {'deny': {'delete'}}}}\n"}.get(case, "POLICIES = {}\n"),
                    encoding="utf-8")
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(["ls", {"tool": "bash"}]), encoding="utf-8")
     extra = {"home": ["--home", str(tmp_path / "missing")],
-             "json": ["--json", str(tmp_path / "missing" / "out.json")]}.get(case, ["--policies", str(pol)])
+             "json": ["--json", str(tmp_path / "missing" / "out.json")],
+             "corpus_item": ["--corpus", str(bad)]}.get(case, ["--policies", str(pol)])
     proc, _ = _run(ROOT, ROOT, tmp_path, *extra)
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "gate_diff:" in proc.stderr and "Traceback" not in proc.stderr, proc.stderr
     assert "nothing lowered" not in proc.stdout
+    assert case != "corpus_item" or 'item 2 is not a command' in proc.stderr and '{"tool": "bash"}' in proc.stderr
 
 
 def test_a_worker_that_dies_fails_the_run_and_never_hangs(tmp_path):
@@ -331,6 +335,29 @@ def test_corpus_actions_are_kept_as_written():
         gate_diff.normal_action({"tool": "terminal", "args": {"command": "ls"}, "cwd": 3})
 
 
+@pytest.mark.parametrize("item", [
+    {"tool": "bash"}, {"tool": "bash", "args": "ls"}, {"tool": "bash", "arguments": ["ls"]},
+    {"tool": "bash", "args": None, "arguments": {"command": "ls"}}, {"args": {"command": "ls"}},
+    ["bash", {"command": "ls"}], 3, None, "", "   ",
+], ids=["no args", "args a string", "arguments a list", "args null", "no tool", "a list", "a number", "null",
+        "empty", "blank"])
+def test_a_corpus_item_in_another_shape_stops_the_run(tmp_path, item):
+    # A reviewer's item is never dropped, and a call with no arguments is not run as one with empty arguments.
+    f = tmp_path / "mine.json"
+    f.write_text(json.dumps(["ls", item]), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"mine\.json: item 2 is not a command or a \{tool, args\} action"):
+        gate_diff.build_corpus((tmp_path,), [f], builtin=False, generate=False)
+
+
+def test_a_corpus_file_reads_each_documented_shape():
+    items = ["ls", {"tool": "bash", "args": {"cmd": "ls"}}, {"tool": "bash", "arguments": {"command": "ls"}},
+             {"tool": "read_file", "args": {"path": "id_rsa"}, "cwd": "~/.ssh"}, {"tool": "list_tools", "args": {}}]
+    assert [gate_diff.corpus_action(x) for x in items] == [
+        {"tool": "terminal", "args": {"command": "ls"}}, {"tool": "bash", "args": {"cmd": "ls"}},
+        {"tool": "bash", "args": {"command": "ls"}}, {"tool": "read_file", "args": {"path": "id_rsa"}, "cwd": "~/.ssh"},
+        {"tool": "list_tools", "args": {}}]
+
+
 def test_every_seed_runs_under_every_shell_form(tmp_path):
     actions, counts = gate_diff.build_corpus((tmp_path,))
     seen = {json.dumps(a, sort_keys=True) for a in actions}
@@ -498,6 +525,41 @@ def test_each_loosening_a_reviewer_found_is_lowered(tmp_path):
 
 SLEEP3_PATCH = (CLASSIFY_DOC_END, CLASSIFY_DOC_END + "    if 'zz-sleep' in str(action):\n"
                                                      "        __import__('time').sleep(3)\n")
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="needs SIGHUP")
+def test_a_stop_signal_during_the_cleanup_is_ignored(tmp_path, monkeypatch):
+    # A SIGTERM that comes while the trees are stopped must not leave one running or the work folder behind. After
+    # main, the handlers it found are back, and a signal ignored at the start (nohup) is still ignored.
+    work, seen = tmp_path / "work", []
+
+    def work_dir() -> Path:
+        work.mkdir()
+        return work
+
+    def stop_tree(_p: object) -> None:
+        seen.append([signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)])
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(gate_diff, "work_dir", work_dir)
+    monkeypatch.setattr(gate_diff, "start_tree", lambda *a: object())
+    monkeypatch.setattr(gate_diff, "wait_trees", lambda procs, timeout: ({}, "head exit 3"))
+    monkeypatch.setattr(gate_diff, "stop_tree", stop_tree)
+    corpus = tmp_path / "mine.txt"
+    corpus.write_text("ls\n", encoding="utf-8")
+    before = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        code = gate_diff.main(["--base", str(ROOT), "--head", str(ROOT), "--only-corpus", "--no-variants",
+                               "--corpus", str(corpus), "--pick", "default", "--jobs", "1"])
+        after = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+    finally:
+        for s, h in before.items():
+            signal.signal(s, h)
+    assert code == 2
+    assert seen == [[signal.SIG_IGN, signal.SIG_IGN]] * 2       # both trees stopped, with both signals ignored
+    assert not work.exists()
+    assert after == {signal.SIGTERM: before[signal.SIGTERM], signal.SIGHUP: signal.SIG_IGN}
 
 
 @pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="needs SIGHUP")
