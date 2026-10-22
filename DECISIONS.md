@@ -791,13 +791,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   and for `_gh_repo`'s sure, after the case, a user, a port and a leading `www.` go as gh drops them, so a `gh repo`
   operand such as `api.github.com/pub/x` names pub/x. A host gh treats as another instance (`ghe.corp`, a ghe.com
   tenancy, `github.com.`, a look-alike) names that instance's repo: a URL operand there, or `gh repo`'s first word, is
-  an other target (`_gh_elsewhere`), as a `-R` on another host is. The gate read such a URL as no repo before. gh
+  an other target (`_gh_elsewhere`), as a `-R` on another instance is. The gate read such a URL as no repo before. gh
   also finds the command past the options before it (cobra's `stripFlags` with gh's root flags, where `--help` and
-  `--version` stand alone), and `-R` is a persistent flag of the groups (`cmdutil.EnableRepoOverride`), so
+  `--version` stand alone). `-R` is a persistent flag of each group that calls `cmdutil.EnableRepoOverride`: pr,
+  issue, release, secret, variable and others, but not repo, where only some subgroups call it. So
   `gh -R pub/repo pr comment 5` posts on pub/repo#5. The gate read `-R` there as an alias or extension, so under
-  `opaque_exec: allow` the post ran with no posting checks. `_gh_command_at` finds the command as cobra does, and
-  the line as read before stays the floor. An option's value before the subcommand that bash may split (`_gh_splits`:
-  an expansion outside quotes, a glob, a brace expansion, `"$@"`) may put a word where gh looks for the subcommand, so
+  `opaque_exec: allow` the post ran with no posting checks. `_gh_command_at` finds the command as cobra does, and the
+  line as read before stays the floor. An option's value before the subcommand that bash may split (`_gh_splits`: an
+  expansion outside quotes, a glob, a brace expansion, `"$@"`) may put a word where gh looks for the subcommand, so
   the line counts as `opaque_exec`, as with a word from an expansion in the subcommand's place (`gh pr -R $R view 5`).
   A quoted value is one word. The reading before #399 and the floor keep what main read.
   A differential against main 2ef1a81f found no line lower. gate_diff read 69,792 actions (its built-in
@@ -835,6 +836,22 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   built-in corpus of 30,515 actions under its 76 policies. The decide harness read 3,796 of the lines that classify
   differently under 119 policies, and the exo-gate hook harness 1,400 of them in 13 setups. On 208 the line as read
   drops the `indirection` signal and the line as read before keeps it, so the decision and the hook stand.
+  2026-10-22, round 8 of the review: gh reads `-R` and `gh repo`'s first word with `ghrepo.FromFullName`. For a URL,
+  go-gh's `RepoInfoFromURL` drops a leading `www.` and lowers the host, and `ghrepo.NewWithHost` does both again. The
+  gate gave such a host one strip, so `gh repo delete https://WWW.garage.github.com/pub/x` read as pub/x on
+  github.com, while gh deletes the repo on garage.github.com. `_gh_repo_parts` now gives a URL's host `_gh_host`
+  twice, and `_gh_url` does the same for gh repo's first word. That line now has the empty target and the other target
+  `garage.github.com/pub/x`, as `https://garage.github.com/pub/x` has. A pull request URL keeps one strip, as
+  finder.go's `ParseURL` gives it. gh gist takes a gist's URL or id (`GistIDFromURL`), never a repo. Round 6 read
+  `https://gist.github.com/pub/abc` as the repo pub/abc, since its host ends in `.github.com`, so `_gh_read` no longer
+  reads a URL in gh gist. The reading before #399 keeps a github.com URL there, as main read it. The docs now say
+  which groups take `-R`: those that call `cmdutil.EnableRepoOverride`, such as pr, issue, release, secret and
+  variable, and not repo. GATE.md's limits name `GH_COBRA`, under which gh's root has no `--version` flag. A
+  differential against main 2ef1a81f found no line lower. gate_diff read 34,440 targeted lines (each `www.` form of a
+  repo word, `-R` and a pull request URL, gist URLs and ids, `--version` before the command with and without
+  `GH_COBRA`, each also behind ssh and `bash -c` and in compound lines) under 106 policies. The 3,822 of them that
+  classify differently from round 7 went through the decide harness under 119 policies and the exo-gate hook harness
+  in 13 setups, and none is lower on any axis.
   Limits: `docs/GATE.md` "Where a gh command lands".
 
 - **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.

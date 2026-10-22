@@ -283,10 +283,11 @@ def test_the_line_as_read_before_gets_the_own_text_pass():
 
 
 # Round 6, should fix. cobra finds the command past the options before it too (stripFlags with gh's root flags,
-# where only `--help` and `--version` stand alone), and the subcommand then parses them: `-R` is a persistent flag
-# of pr, issue, repo, release and the other groups (cmdutil.EnableRepoOverride in gh 2.89). So each of the review's
-# lines posts on pub/repo#5. The gate read `-R` or `-b` as an alias or extension, so with `opaque_exec: allow` the
-# post ran with no footer check and no scrub.
+# where only `--help` and `--version` stand alone), and the subcommand then parses them. In gh 2.89 `-R` is a
+# persistent flag of each group that calls cmdutil.EnableRepoOverride: pr, issue, release, secret, variable and
+# others. gh repo does not call it, only some of its subgroups. So each of the review's lines posts on pub/repo#5.
+# The gate read `-R` or `-b` as an alias or extension, so with `opaque_exec: allow` the post ran with no footer
+# check and no scrub.
 OPAQUE_OK = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "categories": {"opaque_exec": "allow"}},
                                 "posting": POST})
 
@@ -320,6 +321,15 @@ def test_options_before_the_command_meet_the_posting_rules(line):
 def test_gh_s_own_flags_alone_stay_as_they_were(line, category):
     c, _ = run(line)
     assert (c.category, c.floor) == (category, None), c
+
+
+# Round 8: gh's root `--version` is a boolean flag, so cobra passes over it alone and finds the command `pr`. The pr
+# group does not know `--version`, so there it takes `comment` for its value, and gh stops on the unknown flag. The
+# gate reads the line as a read. Were `--version` to take a value at the root, the command would be `comment`, an
+# alias or extension, which counts as `opaque_exec`.
+def test_version_before_the_command_stands_alone():
+    c, _ = run("gh --version pr comment 5 -b x")
+    assert (c.category, c.floor.category if c.floor else None) == ("read", "read"), c
 
 
 # Round 6, nit 1. An option's value before the subcommand that bash may split (an expansion outside quotes, a glob,
