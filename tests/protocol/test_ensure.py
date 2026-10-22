@@ -89,7 +89,7 @@ def test_concurrent_starts_spawn_once(home):
     keep[0].close()
 
 
-def test_stale_socket_file_is_cleaned_and_core_started(home):
+def test_stale_socket_file_is_left_for_the_core_to_replace(home):
     stale = ensure.exod_socket(home)
     srv = listener(stale)
     srv.close()  # the file stays, nobody listens
@@ -98,11 +98,16 @@ def test_stale_socket_file_is_cleaned_and_core_started(home):
 
     def spawn(h):
         seen.append(ensure.exod_socket(h).exists())
-        threading.Timer(0.2, lambda: keep.append(listener(ensure.exod_socket(h)))).start()
+
+        def core_binds():  # the core's start replaces a stale file under the socket's lock
+            ensure.exod_socket(h).unlink()
+            keep.append(listener(ensure.exod_socket(h)))
+
+        threading.Timer(0.2, core_binds).start()
         return FakeProc()
 
     ensure.ensure_core(home, "default", timeout=5, spawn=spawn)
-    assert seen == [False]
+    assert seen == [True]  # ensure_core no longer removes it itself
 
 
 def test_tui_in_process_core_is_attached_not_replaced(home):

@@ -35,6 +35,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import provenance
 from .ask import QUEUE_REL, parse_ts
 
 Responder = Callable[[str], str]
@@ -118,21 +119,40 @@ class LLMGrader:
         return parse_score(out)
 
 
-def parse_score(text: str) -> float:
-    t = text.strip()
-    if re.search(r"\bincorrect\b|\bwrong\b", t, re.I):
-        return 0.0
-    if re.search(r"\bcorrect\b", t, re.I) and not re.search(r"\d", t):
-        return 1.0
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:/\s*(\d+))?", t)
-    if not m:
-        return 0.0
+_SCALE = re.compile(r"\b0(?:\.0+)?\s*(?:-|\u2013|\u2014|to|and)\s*(?:1|10|100)(?:\.0+)?\b", re.I)
+_NUM = r"(\d+(?:\.\d+)?)\s*(?:/\s*(\d+(?:\.\d+)?))?"
+_WRONG = re.compile(r"\b(?:incorrect|wrong)\b|\bnot\s+(?:correct|right)\b|n['\u2019]t\s+(?:correct|right)\b", re.I)
+_NOT_WRONG = re.compile(r"\b(?:nothing|not|never|no)\s+(?:(?:is|was)\s+)?(?:wrong|incorrect)\b|"
+                        r"n['\u2019]t\s+(?:wrong|incorrect)\b", re.I)
+
+
+def _scaled(m: re.Match) -> float:
     x = float(m.group(1))
     if m.group(2):
         x /= float(m.group(2)) or 1.0
     elif x > 1.0:
         x /= 10.0 if x <= 10 else 100.0
     return max(0.0, min(1.0, x))
+
+
+def parse_score(text: str) -> float:
+    """A judge reply as a score from 0 to 1. A named scale ("0 to 1", "(0-10)") is only a label. A number that opens
+    the reply is the score, as the prompt asks. Otherwise a reply that calls the answer wrong, incorrect or not
+    correct is 0 ("nothing wrong" does not), a bare "correct" is 1, and the first number counts. A full score in a
+    reply that also calls the answer wrong is 0. x/y is divided out, and a bare number above 1 reads as out of 10
+    (above 10, out of 100). No number is 0."""
+    t = _SCALE.sub(" ", text.strip())
+    wrong = bool(_WRONG.search(_NOT_WRONG.sub(" ", t)))
+    lead = re.match(r"[\W_]*" + _NUM, t)
+    if lead:
+        x = _scaled(lead)
+        return 0.0 if wrong and x >= 1.0 else x
+    if wrong:
+        return 0.0
+    if re.search(r"\bcorrect\b", t, re.I) and not re.search(r"\d", t):
+        return 1.0
+    m = re.search(_NUM, t)
+    return _scaled(m) if m else 0.0
 
 
 # --- eval Q&A -----------------------------------------------------------------------------------
@@ -483,7 +503,7 @@ def _item_ts(ev: Mapping) -> str:
     return str(ev.get("ts") or "")
 
 
-def build_replays(ledger, cutoff: str | None = None) -> list[dict]:
+def build_replays(ledger, cutoff: str | None = None, principals: Iterable[str] | None = None) -> list[dict]:
     """Session replay items from ledger verdict, answer and ruling events (6.1).
 
     Each item is the context the agent had, cut before the principal's move, and what the principal did:
@@ -491,7 +511,10 @@ def build_replays(ledger, cutoff: str | None = None) -> list[dict]:
       edit, should_have_been   gold is the better version the principal gave
       answer            gold is the answer to the asked question
       ruling            gold is the rule, given the principal message that led to it
-    Rejections carry no better version, so they are skipped. `cutoff` keeps events at or before that timestamp."""
+    Rejections carry no better version, so they are skipped. `cutoff` keeps events at or before that timestamp.
+    Only the principal's own events count (D-040; `principals`, default `provenance.principal_names()`): a verdict
+    the agent reported with exo_should_have_been, or a peer's message, is never a gold answer or a question."""
+    who = set(principals) if principals is not None else set(provenance.principal_names())
     items: list[dict] = []
     last_user: dict[str, str] = {}
     for ev in ledger.iter():
@@ -501,8 +524,14 @@ def build_replays(ledger, cutoff: str | None = None) -> list[dict]:
         sess = ev.get("session") or ""
         text = next((b[k] for k in ("text", "content", "description", "summary") if isinstance(b.get(k), str)
                      and b[k].strip()), "")
-        if ev["kind"] == "utterance" and b.get("role", "user") == "user":
-            last_user[sess] = text
+        mine = ev.get("author") in who
+        if ev["kind"] == "utterance" and b.get("role", "user") in ("user", "principal"):  # principal: exo ingest
+            if mine:
+                last_user[sess] = text
+            else:   # a later verdict answers this message, not an older one of the principal's
+                last_user.pop(sess, None)
+            continue
+        if not mine:
             continue
         base = {"ts": ev["ts"], "source": ev["id"], "session": sess, "kind": "replay",
                 "domain": b.get("domain") or (b.get("node") or "general").split("/", 1)[0]}
@@ -536,6 +565,14 @@ def build_replays(ledger, cutoff: str | None = None) -> list[dict]:
                 items.append({**base, "id": f"r-{ev['id'][:12]}", "question": context, "gold": text,
                               "verdict": "ruling"})
     return items
+
+
+def derived_from(item: Mapping, ids: Iterable[str]) -> bool:
+    """True when an item was built from one of these ledger events: a replay's `source`, or a pair's `evidence`."""
+    ids = set(ids)
+    src, ev = item.get("source"), item.get("evidence")
+    return bool(ids) and ((isinstance(src, str) and src in ids)
+                          or (isinstance(ev, (list, tuple)) and any(isinstance(e, str) and e in ids for e in ev)))
 
 
 def _hash_pct(key: str) -> int:
@@ -741,14 +778,17 @@ class Budget:
     noise_runs: int = 1          # extra scorings of the incumbent to measure noise
 
 
-def load_items(root: str | os.PathLike, ledger=None, cutoff: str | None = None) -> list[dict]:
-    """Eval Q&A, preference pairs and session replays of a store, each with an id."""
+def load_items(root: str | os.PathLike, ledger=None, cutoff: str | None = None,
+               principals: Iterable[str] | None = None) -> list[dict]:
+    """Eval Q&A, preference pairs and session replays of a store, each with an id. Replays come only from the
+    events of `principals` (default `provenance.principal_names` for the store at `root`)."""
     root = Path(root)
     items = [{**q, "id": q.get("id") or f"qa-{i}"} for i, q in enumerate(load_jsonl(root / "training" / "eval-qa.jsonl"))]
     items += [{**p, "id": p.get("id") or f"pair-{i}"} for i, p in
               enumerate(load_jsonl(root / "training" / "preference-pairs.jsonl")) if p.get("chosen") and p.get("rejected")]
     if ledger is not None:
-        items += build_replays(ledger, cutoff)
+        items += build_replays(ledger, cutoff, provenance.principal_names(extra=(root.name,))
+                               if principals is None else principals)
     seen, out = set(), []
     for it in items:
         if it["id"] not in seen:
@@ -765,15 +805,20 @@ def _cfg_hash(cfg: Any) -> str:
 def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates: Iterable[Mapping],
           responder_for: Callable[[Any], Responder], grader: Grader | None = None, rules: Iterable[Any] | None = None,
           items: Iterable[Mapping] | None = None, ledger=None, policy: Mapping | None = None,
-          weights: Mapping[str, float] | None = None, seed: int = 0) -> dict:
+          weights: Mapping[str, float] | None = None, seed: int = 0, fingerprint: Any = None) -> dict:
     """One night of greedy, conservative hill-climbing (6.4, 6.7).
 
     `incumbent` and each candidate are {"id", "config", "domains"?, "note"?}; `responder_for(config)` builds the
     Responder. At most `budget.candidates` are tried. A candidate replaces the incumbent only if it is better
     on dev by the margin and the incumbent's noise band, is not worse on held-out, and passes `gate`. Only
-    items in a candidate's `domains` are rescored; the rest reuse the incumbent's cached rows. The incumbent's
-    scores are cached in `<store>/eval/incumbent.json`. The decision is a ledger note with both scores when a
-    writable `ledger` is given. Returns the report: incumbent id, one record per candidate, accepted ids, calls."""
+    items in a candidate's `domains` are rescored; the rest reuse the incumbent's cached rows. Items built from
+    the ledger events in a candidate's `exclude` (its lesson's own evidence) never count for or against it, and a
+    candidate with no other held-out item in its domains cannot pass: pinned items are gated too, but they are
+    not held out, so they never make up for it. The incumbent's scores are cached in `<store>/eval/incumbent.json`,
+    keyed on its config, the items' contents, the rules, `weights`, `seed` and `fingerprint` (whatever else
+    changes scores, such as the models and the rubric behind the responder and `grader`). The decision is a
+    ledger note with both scores when a writable `ledger` is given. Returns the report: incumbent id, one record
+    per candidate, accepted ids, calls."""
     budget = budget or Budget()
     root = Path(store) if isinstance(store, (str, os.PathLike)) else Path(store.root)
     rules = list(load_checks(root) if rules is None else rules)
@@ -803,7 +848,9 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
 
     inc = dict(incumbent)
     cache_path = root / "eval" / "incumbent.json"
-    key = {"cfg": _cfg_hash(inc.get("config")), "items": _cfg_hash(sorted(str(i["id"]) for i in pool))}
+    key = {"cfg": _cfg_hash(inc.get("config")), "items": _cfg_hash(sorted(pool, key=lambda i: str(i["id"]))),
+           "env": _cfg_hash({"rules": rules, "weights": weights, "seed": seed, "noise_runs": budget.noise_runs,
+                             "fingerprint": fingerprint})}
     cache: dict = {}
     try:
         cache = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -825,21 +872,28 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
         rec: dict[str, Any] = {"id": cand["id"], "status": "dropped"}
         report["candidates"].append(rec)
         try:
-            doms = set(cand.get("domains") or ())
+            doms, own = set(cand.get("domains") or ()), set(cand.get("exclude") or ())
+            # Its own evidence is scored (the cache stays whole) but never compared: re-scoring it proves nothing.
+            fair = {i["id"] for i in pool if not derived_from(i, own)}
             affected = [i for i in dev if not doms or domain_of(i) in doms]
             cand_dev = score(cand["config"], affected)
-            inc_dev = {**cache["dev"], "rows": [r for r in cache["dev"]["rows"] if r["id"] in {i["id"] for i in affected}]}
+            dev_ids = {i["id"] for i in affected} & fair
+            inc_dev = {**cache["dev"], "rows": [r for r in cache["dev"]["rows"] if r["id"] in dev_ids]}
             cmp_dev = compare(inc_dev, cand_dev, noise=cache["noise"], margin=budget.margin)
             rec["dev"] = {k: cmp_dev[k] for k in ("inc", "cand", "delta", "better")}
             if not cmp_dev["better"]:
                 rec["reason"] = "not better on dev by the margin and noise"
                 continue
             affected_held = [i for i in held if not doms or domain_of(i) in doms]
+            # Pinned items are gated too, but they are not held out: alone they cannot show it is not worse.
+            if not {i["id"] for i in affected_held} & fair:
+                rec["status"], rec["reason"] = "gate_failed", "no held-out cases"
+                continue
             gate_items = affected_held + [i for i in pinned if i not in affected_held]
-            inc_rows = [r for r in cache["held"]["rows"] + cache["pinned"]["rows"]
-                        if r["id"] in {i["id"] for i in gate_items}]
-            inc_held = {"rows": inc_rows}
-            cmp_held = compare(inc_held, score(cand["config"], gate_items), margin=0.0)
+            gate_ids = {i["id"] for i in gate_items} & fair
+            inc_held = {"rows": [r for r in cache["held"]["rows"] + cache["pinned"]["rows"] if r["id"] in gate_ids]}
+            cand_held = score(cand["config"], gate_items)
+            cmp_held = compare(inc_held, cand_held, margin=0.0)
             g = gate(cmp_held, policy)
             rec["held"] = {k: cmp_held[k] for k in ("inc", "cand", "delta")}
             rec["gate"] = g
@@ -853,16 +907,14 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
         report["accepted"].append(cand["id"])
         inc = dict(cand)
         # The accepted candidate becomes the incumbent: its cached rows are its scored rows over the old ones.
-        newkey = {"cfg": _cfg_hash(inc.get("config")), "items": key["items"]}
+        newkey = {**key, "cfg": _cfg_hash(inc.get("config"))}
         merged = {r["id"]: r for r in cache["dev"]["rows"]}
         merged.update({r["id"]: r for r in cand_dev["rows"]})
         dev_rows = list(merged.values())
         held_map = {r["id"]: r for r in cache["held"]["rows"]}
         pin_map = {r["id"]: r for r in cache["pinned"]["rows"]}
-        for iid, r in cmp_held["items"].items():
-            row = {"id": iid, "domain": r["domain"], "kind": "qa", "score": r["cand"], "rule_ok": r["cand_rule_ok"],
-                   "pinned": r["pinned"]}
-            (pin_map if r["pinned"] and iid not in held_map else held_map)[iid] = row
+        for r in cand_held["rows"]:
+            (pin_map if r["pinned"] and r["id"] not in held_map else held_map)[r["id"]] = r
         cache = {"key": newkey, "dev": {"composite": _round(_mean(r["score"] for r in dev_rows)), "rows": dev_rows},
                  "held": {"composite": _round(_mean(r["score"] for r in held_map.values())), "rows": list(held_map.values())},
                  "pinned": {"rows": list(pin_map.values())}, "noise": cache["noise"]}
@@ -881,8 +933,8 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
 
 
 # --- CLI hook -----------------------------------------------------------------------------------
-# Wire into exo.cli: in build_parser() call `eval.register(sp, common)`, and expose `cmd_eval`
-# in exo.cli's globals (e.g. `from .eval import cmd_eval`).
+# `exo.cli` lists `eval` in its LAZY table. It imports this module, calls `register(sp, common)` and runs
+# `cmd_eval` only when `exo eval` runs.
 
 def register(sp, common) -> None:
     p = sp.add_parser("eval", parents=[common], help="n=1 evaluation report")

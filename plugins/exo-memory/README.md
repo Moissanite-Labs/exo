@@ -7,7 +7,7 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 | Hook | Behaviour |
 |---|---|
 | `system_prompt_block` | The store's `PRINCIPAL.md`, curator comments removed, trimmed to `pack_budget` tokens, then the taste block (D-044: house, learned and pinned taste items with their source, under `taste_budget` tokens; `docs/TASTE-BASELINE.md`), plus one line naming the tools. Built once per process, so the prompt cache holds. |
-| `prefetch` | Belief nodes from `exo.retrieve.assemble`, then episodic recall: keyword hits from the log and the summary view. Each section is labelled. The whole block stays under `prefetch_budget`. |
+| `prefetch` | Belief nodes from `exo.retrieve.assemble`, then episodic recall: keyword hits from the log and the summary view. Each section is labelled. The whole block stays under `prefetch_budget`. Nodes are read fresh on each call (`PrincipalStore.refresh`), so a belief accepted, promoted, edited or reverted since the last turn shows up or drops out at once, by `exo proposals` in another process or by learning in this one. |
 | `on_turn_start`, `sync_turn` | `utterance` events in the ledger. User turns are authored by the principal, assistant turns by the agent id. The turn also goes to the episodic log. |
 | `on_memory_write` | A `note` event of type `memory_write`. |
 | `on_delegation` | An `action` event of type `delegation`, and a `work` line in the episodic log. |
@@ -23,6 +23,10 @@ author is `principal` becomes a ruling, a correction or a principal utterance; a
 turn is logged under that author. `exo_note` cannot write `ruling` or `answer` (it keeps them as a `note` of type
 `agent_note`), and `exo_should_have_been` is signed as the agent with `for: <principal>`. On first use the provider
 adds its configured principal id to the key registry, so consolidation reads that id as the principal.
+
+Private threads (D-028): the Exo core calls no write hook in or under a private thread (its delegate children
+included), and passes `agent_context="private"` to a tool called there. Then `exo_note` and
+`exo_should_have_been` write nothing and return an error that says why. `exo_recall` and `exo_get` still answer.
 
 A correction becomes a `verdict` event that points at the agent output it judges. If that output is not
 in the ledger yet, it is logged first.
@@ -49,7 +53,11 @@ Everything lives in the principal store. Nothing is written to the Exo home exce
 
 The Exo plugin loader finds this folder under `plugins/`. Select it with `memory_provider: exo-memory` in `$EXO_HOME/config.json` and set `EXO_PRINCIPAL` (or `plugin_config`).
 
-A store must exist first: `exo init <id>`.
+A store must exist first: `exo init <id>`. It also sets the active principal in `$EXO_HOME/config.json`, which the
+plugin falls back to when nothing above names one. With no principal at all, memory is off and that is a setup state,
+not a fault: `initialize` raises `exo.core.slots.NotConfigured`, the core shows one quiet notice naming
+`exo init <id>` and files no finding, and the plugin offers no tools. It turns on at the next start after the store
+exists.
 
 ## Config
 
@@ -59,7 +67,7 @@ Order, lowest first: defaults, environment, `<exo_home>/exo-memory/config.json`,
 |---|---|---|
 | `principal` | `EXO_PRINCIPAL` | none |
 | `exo_home` | `EXO_HOME` | `~/.exo` |
-| `store_root` | `EXO_STORE` | `<exo_home>/principals/<principal>` |
+| `store_root` | `EXO_STORE` | `principals.<principal>` in `<exo_home>/config.json` (`exo init --root`), else `<exo_home>/principals/<principal>` |
 | `agent_id` | | the seat identity, else `exo-memory` |
 | `pack_budget` | | 1500 tokens |
 | `taste_budget` | | 400 tokens (0 = no taste block) |

@@ -97,12 +97,7 @@ def scan(folder: Path) -> list[Skill]:
         found.append(folder / "SKILL.md")
     if folder.is_dir():
         found += sorted(p for p in folder.glob("*/SKILL.md") if p.is_file())
-    out = []
-    for p in found:
-        sk = read_skill(p)
-        if sk:
-            out.append(sk)
-    return out
+    return [sk for p in found if (sk := read_skill(p))]
 
 
 class SkillIndex:
@@ -120,8 +115,12 @@ class SkillIndex:
                 self.add(sk)
 
     def add_plugin_skills(self, entries: Iterable[Any]) -> None:
-        """``entries``: PluginManager.skills values (name, path, description, frontmatter, plugin)."""
+        """``entries``: PluginManager.skills values (name, path, description, frontmatter, plugin). A plugin
+        entry for a file a folder already gave (an installed pack under $EXO_HOME/skills) is skipped."""
+        seen = {s.path.resolve() for s in self.skills.values()}
         for e in entries:
+            if Path(e.path).resolve() in seen:
+                continue
             sk = read_skill(Path(e.path), name=e.name)
             if sk:
                 sk.description = e.description or sk.description
@@ -159,6 +158,9 @@ class SkillIndex:
         if sk is None:
             low = {k.lower(): k for k in self.skills}
             sk = self.skills.get(low.get(name.lower(), ""))
+        if sk is None:  # a bare name for one plugin skill, e.g. exo-intro for exo-orchestra:exo-intro
+            tail = [s for k, s in self.skills.items() if k.split(":")[-1].lower() == name.lower()]
+            sk = tail[0] if len(tail) == 1 else None
         if sk is None:
             raise ToolError(f"no skill {name!r}. Known: {', '.join(sorted(self.skills)) or 'none'}")
         return f"# Skill: {sk.name}\n(folder: {sk.path.parent})\n\n{sk.body()}"

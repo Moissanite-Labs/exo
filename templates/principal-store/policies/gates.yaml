@@ -69,7 +69,14 @@ escalate:
 # Fill from their rulings.
 reserved: []
 
-# Actions no agent may take at all (block). Same entry format as reserved.
+# Actions refused outright instead of asked (deny). Same entry format as reserved. A deny
+# entry, a reserved entry, a `categories:` deny and a category deny rule reach every command
+# the gate reads on a line, nested ones included. An allow, log or ask category line sees
+# only the line's most severe part. A rule's `command` regex is matched against the whole
+# line. An allow or log rule that would lower a line must also match each command on it
+# that would be stricter alone, and each command that sets shell state for later ones, so
+# an allow rule on `^ls` does not cover `ls; rm -rf build` (#394). See docs/GATE.md
+# "Known limits" for what the gate does not read yet.
 deny: []
 
 # What happens when the principal does not answer an ask. The host blocks on timeout, so

@@ -266,36 +266,6 @@
       "count": 2
     },
     {
-      "path": "src/exo/bus/config.py",
-      "message": "Argument \"bind\" to \"RelayConfig\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/bus/config.py",
-      "message": "Argument \"title\" to \"RelayConfig\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/bus/config.py",
-      "message": "Argument \"url\" to \"ClientConfig\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/bus/config.py",
-      "message": "Argument 1 to \"Path\" has incompatible type \"str | None\"; expected \"str | PathLike[str]\"",
-      "code": "arg-type",
-      "count": 2
-    },
-    {
-      "path": "src/exo/bus/config.py",
-      "message": "Value of type variable \"AnyStr\" of \"expanduser\" cannot be \"str | None\"",
-      "code": "type-var",
-      "count": 2
-    },
-    {
       "path": "src/exo/bus/mcp_server.py",
       "message": "Value of type \"Mapping[str, str] | None\" is not indexable",
       "code": "index",
@@ -717,12 +687,6 @@
     },
     {
       "path": "src/exo/gate.py",
-      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"tuple[str, tuple[str, str, str], bool]\"; expected \"tuple[str, tuple[str, str, str, str, str], bool]\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
       "message": "Incompatible types in assignment (expression has type \"bool\", target has type \"_Word | None\")",
       "code": "assignment",
       "count": 1
@@ -857,7 +821,7 @@
       "path": "src/exo/learn/climb.py",
       "message": "Item \"None\" of \"Runtime | None\" has no attribute \"ledger\"",
       "code": "union-attr",
-      "count": 10
+      "count": 9
     },
     {
       "path": "src/exo/learn/climb.py",
@@ -869,7 +833,7 @@
       "path": "src/exo/learn/climb.py",
       "message": "Item \"None\" of \"Runtime | None\" has no attribute \"root\"",
       "code": "union-attr",
-      "count": 11
+      "count": 9
     },
     {
       "path": "src/exo/learn/climb.py",
@@ -933,12 +897,6 @@
     },
     {
       "path": "src/exo/ledger.py",
-      "message": "Argument 2 to \"Head\" has incompatible type \"list[str] | Mapping[Any, Any] | str | None\"; expected \"str | None\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/ledger.py",
       "message": "Argument 2 to \"chain_hash\" has incompatible type \"list[str] | Mapping[Any, Any] | str | None\"; expected \"str\"",
       "code": "arg-type",
       "count": 1
@@ -963,20 +921,8 @@
     },
     {
       "path": "src/exo/principal.py",
-      "message": "\"None\" has no attribute \"proc_pidinfo\"",
-      "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/principal.py",
       "message": "\"object\" has no attribute \"getsockopt\"",
       "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/principal.py",
-      "message": "Incompatible types in assignment (expression has type \"CDLL\", variable has type \"None\")",
-      "code": "assignment",
       "count": 1
     },
     {
@@ -1019,12 +965,6 @@
       "path": "src/exo/server/app.py",
       "message": "\"Engine\" has no attribute \"start_channels\"",
       "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/server/app.py",
-      "message": "Value of type \"tuple[str, int] | None\" is not indexable",
-      "code": "index",
       "count": 1
     },
     {

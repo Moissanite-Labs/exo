@@ -15,12 +15,23 @@ a question about what you are used to (Claude Code, ChatGPT, Hermes), then topic
 mentioning `/tutorial`. It is a conversation, so ask anything. (`/handoff` also uses its own skill, `exo-handoff`, for the note's template.) A test checks every slash command in `/help`
 appears in the skill, so the two cannot drift.
 
+The installer copies the skill pack into `$EXO_HOME/skills` (`docs/INSTALL.md`, step 5). A source checkout also
+finds it in `skills/`. Before sending the turn, the client asks the core for its skills. When none is `exo-intro`
+(say, a pip install without the installer), it sends no turn, because the agent could only improvise. It shows a
+short orientation panel instead, drawn from the same facts (what Exo is, memory, three things for day one,
+`/tutorial`), with a note that running `scripts/install.sh` from a checkout adds the full one (`exo update` does
+not, on a pip or `uv tool` install). A test checks that every command the short version names exists and appears in
+the skill. If the core cannot answer, the turn is sent as before.
+
 ### First run
-`$EXO_HOME/state/onboarding.json` holds `{"onboarded": <time>, "hints_seen": [...]}`. When `onboarded` is
-missing, `exo` runs `/intro` at launch and turns tutorial mode on. The marker is written when the intro
-turn actually starts, so a crash before that shows the intro again next time. It does not run when you resume
-a session (`--resume`, `--session`), and never in tests, `exo serve` or headless runs, because only the
-`exo` entry point asks for it.
+`$EXO_HOME/state/onboarding.json` holds `{"onboarded": <time>, "intro_started": <time>, "hints_seen": [...]}`. When
+neither `onboarded` nor `intro_started` is set, `exo` runs `/intro` at launch. `intro_started` is written when that
+intro turn actually starts, so a crash before that shows the intro again next time. An intro that started but failed,
+was stopped or got no reply is not sent again at each launch: until one completes, the composer offers `/intro`
+instead. `onboarded` is written when an intro gets a real reply (not the offline fake model) or the short
+orientation shows. Until then every `/intro`, typed or taken from the composer, counts as the first run, so the one
+that completes turns tutorial mode on. The automatic intro does not run when you resume a session (`--resume`,
+`--session`), and never in tests, `exo serve` or headless runs, because only the `exo` entry point asks for it.
 - `exo --no-intro` skips it and records the home as onboarded.
 - `EXO_NO_INTRO=1` skips it for that launch and writes nothing.
 - Delete the file (or run `/tutorial reset` for tips only) to see it again.
@@ -54,7 +65,15 @@ exo interview --principal sam                  # more questions later, on an exi
 ```
 
 `exo init` copies `templates/principal-store`, creates the ledger (0600), and makes the id the
-active principal in `$EXO_HOME/config.json` when none is set.
+active principal in `$EXO_HOME/config.json` when none is set. exo-memory and learning both fall back to
+that key, so they use the same store.
+
+Until a store exists (an install with `--no-interview`, or without a terminal), memory and learning are
+off. That is a setup state, not an error: when a thread starts, one quiet notice names `exo init <id>`,
+the boot line says `memory off, no principal store`, and no finding is filed. A first run does not make a
+store under an id nobody chose. The id is the principal's to pick, and `exo init` sets the active principal
+only when none is set, so a default store would keep their memory under a name they never chose, apart from
+the store they make later (D-004). Memory and learning pick the store up at the next start.
 
 ### How questions are chosen (principle 13)
 
@@ -151,20 +170,33 @@ exo import-store ~/hafiz --id a --include-private --root /path/to/fresh/dir
 - Copies, never moves. The source is only read.
 - Needs `INDEX.md` and `nodes/` in the source.
 - Skips `.git`, caches, `_drafts`, `*.key` files and symlinks (listed, not followed). Skips
-  `corpus/private` and `ledger.sqlite` unless `--include-private`.
+  `corpus/private` and the ledger (`ledger.sqlite`, its `-wal` and `-shm` files and its `.head` anchor)
+  unless `--include-private`.
 - Fills in what the template has and the source lacks (`policies/`, `agents/`, ...) and merges
   `.gitignore`.
 - Creates `corpus/private/` (0700) and the ledger, and appends one `ingest` event that records
-  the source, counts and skips.
+  the source, counts and skips. That event anchors the ledger. An anchor in `$EXO_HOME/keys/heads` left by a
+  store deleted from the destination path is dropped first, as `exo init` does (D-040).
 - Refuses a destination that exists and is not empty.
 - Prints the lint summary. This is how A's `~/hafiz` becomes principal store #1 (migration M1).
 
 ## 4. Config
 
 `exo.config` owns `$EXO_HOME/config.json`: `principal`, `hermes_dir`, `hermes_home`, `venv`,
-`plugins`, `plugin_config.<plugin>`, `principals.<id>` (explicit store roots). Each value
+`plugins`, `plugin_selection` (the installer's remembered `--plugins` list), `plugin_config.<plugin>`,
+`principals.<id>` (explicit store roots). Each value
 resolves from the environment (`EXO_PRINCIPAL`, `EXO_HERMES_DIR`, `EXO_HERMES_HOME`,
 `EXO_VENV`), then the file, then the default. Environment values are never written back.
+
+`exo init <id> --root DIR` and `exo import-store --root DIR` record DIR as `principals.<id>`.
+A DIR at the default `$EXO_HOME/principals/<id>` clears it instead. From then on the id finds that
+store everywhere: the store commands, `exo memory verify`, exo-memory, learning, handoffs, the
+gate's policies, the command center's decisions queue and check-prose's policy. They all go
+through one function, `exo.store.principal_root`. The gate protects
+that store's `policies/`, `state/`, `keys/` and ledger as it protects the stores in the home.
+`exo memory verify` with no `--principal` checks every store in the home and every recorded root.
+A recorded root must be an absolute path once `~` is expanded. One that is relative, holds a NUL byte or names an
+unknown user (`~nosuchuser/x`) is skipped, and the id finds `$EXO_HOME/principals/<id>` instead.
 
 ```sh
 exo config show
@@ -177,35 +209,16 @@ cfg = Config.load()
 cfg.principal, cfg.hermes_home, cfg.plugin_config('exo-memory')
 ```
 
-## 5. Wiring into `exo.cli` (for the lead)
+## 5. Wiring into `exo.cli`
 
-Until this lands, `python -m exo.onboard init|interview|import-store|config ...` works on its
-own (the installer uses it). The patch to `src/exo/cli.py`:
+`src/exo/cli.py` lists `interview`, `import-store` and `config` in its `LAZY` table, with
+`exo.onboard` as their module. It imports `exo.onboard` only when one of them, or `exo init`, runs
+(#260). For `exo init` it adds the flags from `add_init_args` and runs `exo.onboard.cmd_init`.
+`python -m exo.onboard init|interview|import-store|config ...` also works on its own (the installer
+uses it).
 
-```diff
- from .consolidate import register as register_consolidate, cmd_consolidate, cmd_proposals  # noqa: F401
-+from .onboard import (register as register_onboard, add_init_args, cmd_init as onboard_init,  # noqa: F401
-+                      cmd_interview, cmd_import_store, cmd_config)
-@@ build_parser
-     p.add_argument('--from-template', nargs='?', const='', default='', metavar='PATH',
-                    help='template directory (default: the bundled empty store)')
-+    add_init_args(p)
-@@
-     register_consolidate(sp, common)
-+    register_onboard(sp, common)
-     return ap
-@@ main
-     if a.cmd == 'init':
--        return cmd_init(a)
-+        return onboard_init(a)
-+    if a.cmd == 'import-store':
-+        return cmd_import_store(a)
-+    if a.cmd == 'config':
-+        return cmd_config(a)
-```
-
-`onboard_init` without `--interview` does what `cmd_init` did, and also sets the active principal
-in `config.json` when none is set.
+`exo.onboard.cmd_init`, without `--interview`, does what `cmd_init` in `cli.py` does, and also
+sets the active principal in `config.json` when none is set.
 
 ## 6. One `/exo` command: `exo.dispatcher`
 
