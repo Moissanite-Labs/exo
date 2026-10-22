@@ -282,7 +282,7 @@ async def test_capped_run_without_a_wrap_up_reports_no_tool_round_text(tmp_path,
                         tool_turn("no_such_tool", call_id="c2", text="Now the totals sheet."), last])
     sch = eng.scheduler = Scheduler(eng)
     sch.launch(sch.add("every 1h", "x", title="R"))
-    await sch.wait()
+    await asyncio.wait_for(sch.wait(), 10)
     note = bodies(eng, s.Notice)[-1]
     assert "stopped early (max_iterations)" in note.text
     assert "totals sheet" not in note.text and "ledger" not in note.text  # a mid-task line is not the report

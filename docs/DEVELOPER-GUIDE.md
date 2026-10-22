@@ -100,10 +100,14 @@ the model sees stays the same.
 
 **Turn limits (D-010).** `Loop` defaults to `max_iterations=0` (unlimited tool rounds). Pass a positive value
 when a caller needs a finite limit and the existing wrap-up report. The scheduler explicitly passes
-`JOB_MAX_ROUNDS=24` for unattended runs; the delegator passes `max_turns or 24` for children. Keep both boundaries. Changes to the loop must preserve interrupt, approval, spend and
-retry checks. Regression tests cover completion and stops beyond round 24 in `tests/core/loop/test_loop.py`
+`JOB_MAX_ROUNDS=24` for unattended runs; the delegator passes `max_turns or 24` for children.
+`CoreEngine.start_turn` passes a per-turn `max_iterations` of at most 24 for job-notice, peer and bus wakes,
+including background-job notices on scheduled threads. `Loop.send` uses that limit for this turn only. Do not
+change the shared loop limit or infer a cap from a channel author. Principal-started channel turns keep the
+unlimited default. Keep all three boundaries and preserve interrupt, approval, spend and retry checks. Regression tests cover completion and stops beyond round 24 in `tests/core/loop/test_loop.py`
 and `tests/core/models/test_spend_policy.py`, scheduled limits and later launches in
-`tests/core/scheduler/test_scheduler.py`, and child limits in `tests/agents/test_delegate.py`.
+`tests/core/scheduler/test_scheduler.py`, wakes and concurrent principal turns in `tests/core/test_wake_limits.py`,
+and child limits in `tests/agents/test_delegate.py`.
 Reference: `docs/CORE.md`, "Turn limits".
 `TurnResult` begins at `end`, and only `end` continues for a queued steer. The no-tools reply path retains that
 default for a missing, empty or `tool_use` stop reason. Preserve this rule when adding continuation paths.

@@ -630,15 +630,16 @@ class CoreRuntime:
         return {"accepted": True}
 
     def start_turn(self, session: str, text: str, meta: dict[str, Any] | None = None) -> None:
-        """Start a turn in the background (a peer woke an idle session)."""
-        self._spawn_turn(s.TurnSend(session=session, text=text), meta)
+        """Start an unattended wake with 24 tool rounds plus wrap-up (peer, bus or job notice)."""
+        self._spawn_turn(s.TurnSend(session=session, text=text), meta, max_iterations=min(self.loop.max_iterations or 24, 24))
 
-    def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None) -> None:
-        task = asyncio.create_task(self.run_turn(b, meta))
+    def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None, max_iterations: int | None = None) -> None:
+        task = asyncio.create_task(self.run_turn(b, meta, max_iterations=max_iterations))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
+    async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None,
+                       max_iterations: int | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
         meta = dict(meta or {})
@@ -648,7 +649,7 @@ class CoreRuntime:
         await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
         try:
             return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
-                                                 meta=meta)
+                                                 meta=meta, max_iterations=max_iterations)
         finally:
             await hooks.afire("on_turn_end", session_id=b.session)
 
