@@ -182,6 +182,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   local only until A rules on a private remote.
 - **Rejected:** keeping Arif in Postgres (cannot travel to a device); three separate stores per person
   (drift); remote embeddings (personal text leaves the machine).
+- **Amendment 2026-10-21 (#254):** until the FTS5 and embedding stages are built, retrieval is the in-memory BM25 of
+  `store.find`. It rebuilt its tables from every node on each call. It now keeps them with the node set they were
+  built from and builds them again when a reload makes a new set (a refresh that sees a change reloads). Holding the
+  set itself is the reload generation: a separate counter, read apart from the set, could pair an old set with a new
+  number when two threads share a store. Rejected: building the tables in `reload()`, which would tokenize stores that
+  are never searched. Also rejected: moving to FTS5 now, which is stage 3 of `docs/STORE-V2.md` and a larger change.
+  Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
@@ -197,6 +204,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   auto-promote under rule 4. The principal reviews that first batch, as `docs/ARCHITECTURE.md` section 5 says.
   Imported evidence is dated by its source time, and superseded rows (an edited ChatGPT prompt's older
   versions, inactive Hermes rows) do not count for the rule of three.
+  *Amendment 2026-10-21 (issue #263):* the chat capture after each turn no longer reads the whole ledger to find the
+  capture keys already written. The learner keeps them, with the last row it read, and reads only the rows after it.
+  The result is the same as a full read of any ledger `exo log verify` passes: the ledger is append-only and nothing
+  takes a key back. A ledger that no longer holds that row in its place is read again from the first row. With 10,000
+  captured rows in the ledger, each turn's capture took about 70 ms. Now the first turn after a start takes that once,
+  and each later turn under 1 ms.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
@@ -798,6 +811,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   gains the name. Rejected: treating a marker with no name as Exo's, because that deletes copies made before this
   change. Rejected: comparing the folder with the checkout's plugin, because an older install of a plugin that has
   changed since differs from it as much as an edited copy does.
+  *Amendment 2026-10-21 (#260):* the subcommand parser imports a command's module only when that command runs.
+  `src/exo/cli.py` lists each command that lives in another module in a `LAZY` table, with its module, handler and
+  help line. `build_parser(cmd)` builds the full parser for `cmd` alone. Every other command keeps its name and
+  help line, so usage, errors and `exo --help` are byte-identical to the full parser, and a test compares the two
+  for every command. `exo --help`, `exo --version` and bare `exo` import no command module, and a module that fails
+  to import breaks only its own commands. The update self-check now builds the full parser, so it still imports
+  every command's module. Rejected: building the full parser for `exo --help`, because help would still pay for
+  every import. Rejected: a checked-in snapshot of the help text, because every help change would have to edit it
+  too. The cost is that each help line is written twice, in the module and in the table, and the test fails when
+  they differ.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
