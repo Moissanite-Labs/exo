@@ -6477,7 +6477,25 @@ DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, 
 def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
     and code the gate cannot see into (D-038), so one "always" never covers a different script."""
-    return is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
+    return is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
+
+
+def no_grant(c: Classification) -> bool:
+    """True when no standing grant may cover the call, and observe mode still enforces it (D-033, D-038): its
+    category is in NO_GRANT, or a part's is (a store write beside a secret read that leads the line, #447)."""
+    return any(p.category in NO_GRANT for p in _each_part(c))
+
+
+def call_approvers(c: Classification, pinned: Mapping | None, changed: Mapping | None = None) -> list[str]:
+    """Who may answer an ask on ``c``: the approvers strictest_approvers allows for its category and also for each
+    other NO_GRANT category among its parts, so a store write beside a secret read (`env; echo x >
+    ~/.exo/policies/gates.yaml` is credentials, #447) is the principal's alone. The principal is first in each, so
+    the list is never empty."""
+    out = strictest_approvers(c.category, pinned, changed)
+    for cat in dict.fromkeys(p.category for p in _each_part(c) if p.category in NO_GRANT and p.category != c.category):
+        allowed = strictest_approvers(cat, pinned, changed)
+        out = [a for a in out if a in allowed]
+    return out
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:

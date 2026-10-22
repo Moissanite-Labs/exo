@@ -7,6 +7,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from exo import crypto
 from exo.core.approvals import sign_approval
 from exo.core.engine import CoreEngine
@@ -21,7 +23,7 @@ MODELS = {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
 APPROVALS = 'approvers:\n  message_send: [principal, "seat:saga-divan"]\n'
 
 
-def _engine(tmp_path, sent, store=""):
+def _engine(tmp_path, sent, store="", models=MODELS):
     pm = PluginManager(config={"exo-gate": {"principal_store": str(store), "key_path": str(tmp_path / "none.key"),
                                             "decision_model": False}})
     assert pm.load_folder(REPO / "plugins" / "exo-gate").ok, pm.errors()
@@ -30,17 +32,21 @@ def _engine(tmp_path, sent, store=""):
         ctx.register_tool("send_message", "demo", {"parameters": {"type": "object", "properties": {
             "target": {"type": "string"}, "message": {"type": "string"}}}},
             handler=lambda args, **kw: (sent.append(args["message"]), "sent")[1], risk="high")
+        # A shell tool by name, so the gate reads its command; it only records the line, never runs it.
+        ctx.register_tool("run_command", "demo", {"parameters": {"type": "object", "properties": {
+            "command": {"type": "string"}}}},
+            handler=lambda args, **kw: (sent.append(args["command"]), "ran")[1], risk="high")
     pm._run_register(Manifest(name="demo"), "dir", register)
-    return CoreEngine(tmp_path / "home", MODELS, plugins=pm, cwd=str(tmp_path), env={})
+    return CoreEngine(tmp_path / "home", models, plugins=pm, cwd=str(tmp_path), env={})
 
 
-async def _turn(eng, answers):
+async def _turn(eng, answers, text="announce the release"):
     """Run one gated turn. ``answers`` is a list of ApprovalRespond kwargs tried in order on the first
     request; returns (request, responses). The dispatcher is a local connection (D-039); an answer with
     ``caller="principal:tui"`` comes from a principal connection."""
     d = Dispatcher(eng)
     sid = (await d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
-    await d.run(s.Command.of(s.TurnSend(session=sid, text="announce the release")))
+    await d.run(s.Command.of(s.TurnSend(session=sid, text=text)))
     deadline, req, out = time.monotonic() + 10, None, []
     while eng._tasks and time.monotonic() < deadline:
         for ev in eng.hub.since(0):
@@ -160,3 +166,40 @@ def test_matching_binding_is_accepted_and_always_is_kept_by_the_gate(tmp_path):
     assert not eng.approvals.always  # no unscoped in-memory allow: the gate keeps a text-bound grant instead
     grants = json.loads((Path(os.environ["EXO_HOME"]) / "state" / "gate-grants.json").read_text())
     assert grants[0]["rule"] == "message_send" and grants[0]["binding"] == holder["req"].binding
+
+
+@pytest.mark.parametrize("line, seat_answers", [
+    ("env; echo x > ~/.exo/policies/gates.yaml", False),                      # credentials, with a store write
+    ("cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml", False),
+    ("sudo sh -c 'env; echo x > ~/.exo/policies/gates.yaml'", False),        # behind wrappers
+    ("timeout 5 bash -c 'cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml'", False),
+    ("env FOO=1 sh -c 'env; echo x > ~/.exo/policies/gates.yaml'", False),
+    ("(cat ~/.kube/config && cp evil.yaml ~/.exo/policies/default.yaml)", False),
+    ('echo "$(env)" > ~/.exo/policies/gates.yaml', False),
+    ("bash <<'EOF'\nenv\necho x > ~/.exo/policies/gates.yaml\nEOF", False),
+    ("env", True),                                                            # credentials alone
+    ("sudo cat ~/.kube/config", True),
+])
+def test_a_seat_delegated_credentials_may_not_answer_a_store_write_on_the_line(tmp_path, line, seat_answers):
+    """#447, D-038: a secret read leads the line, but the store write beside it keeps the answer with the principal,
+    also behind a wrapper, in a subshell, a $( ) or a heredoc. A secret read alone keeps the delegation."""
+    store = tmp_path / "store"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "approvals.yaml").write_text('approvers:\n  credentials: [principal, "seat:builder"]\n')
+    models = {"fake": {"rules": [{"match": "run it", "steps": [{"tool": "run_command", "args": {"command": line}},
+                                                               "done"]}]},
+              "roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
+    ran: list[str] = []
+    eng = _engine(tmp_path, ran, store, models)
+    builder = _seat_key("builder")
+    req, out = asyncio.run(_turn(eng, [_signed(builder, "builder", "allow"),
+                                       {"decision": "allow", "caller": "principal:tui"}], text="run it"))
+    assert req.options == ["allow", "deny"]                                   # no standing grant on offer
+    if seat_answers:
+        assert req.approvers == ["principal", "seat:builder"]
+        assert out[0].ok and not out[1].ok, [r.error for r in out]
+    else:
+        assert req.approvers == ["principal"]
+        assert not out[0].ok and "seat:builder may not answer" in out[0].error.message
+        assert out[1].ok, out[1].error
+    assert ran == [line]
