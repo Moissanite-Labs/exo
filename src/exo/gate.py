@@ -2057,10 +2057,11 @@ _GH_URL_PARTS = re.compile(r"(?i)https?://([^/?#]*)([^?#]*)")
 def _gh_url_parts(word: str) -> tuple[str, str, str, str] | None:
     """(host, owner/name, kind, number) of a URL gh may read for a repo (#399): http or https in any case, the
     authority up to the path, a query or a fragment, its host read by _gh_url_host, and the path decoded, as Go's
-    url.Parse reads them for gh 2.89 (url.Parse refuses a control character). A pull request, issue or discussion
+    url.Parse reads them for gh 2.89. url.Parse refuses a control character before the first `#` only: it cuts the
+    fragment off first and keeps one with a control character in it (round 9). A pull request, issue or discussion
     URL has its kind (`pull`, `issues`, `discussions`) and number, a repo URL neither. None for any other word."""
     m = _GH_URL_PARTS.match(word)
-    if not m or re.search(r"[\x00-\x1f\x7f]", word):
+    if not m or re.search(r"[\x00-\x1f\x7f]", word.partition("#")[0]):
         return None
     host = _gh_url_host(m.group(1))
     path = re.match(r"/([\w.-]+/[\w.-]+)(?:/(pull|issues|discussions)/([0-9]+))?", unquote(m.group(2)))
@@ -2073,11 +2074,20 @@ def _gh_url(word: str, repo_word: bool = False) -> tuple[str, str] | None:
     lookup). This takes a discussion URL and a repo URL too, which has no number: a reading more, since `-R` and the
     reading before #399 stay other targets. None for a word that is no such URL or names another instance.
 
-    With ``repo_word`` the word is one gh reads as a repo (ghrepo.FromFullName, gh repo's first word), whose host
-    drops a leading `www.` twice, as _gh_repo_parts reads it (round 8). So `https://WWW.garage.github.com/pub/x`
-    there is on garage.github.com, another instance, where a pull request URL's host keeps one `www.`."""
+    With ``repo_word`` the word is one gh reads as a repo with ghrepo.FromFullName (`-R`, gh repo's first word),
+    whose host drops a leading `www.` twice, as _gh_repo_parts reads it (round 8). So
+    `https://WWW.garage.github.com/pub/x` there is on garage.github.com, another instance, where a pull request
+    URL's host keeps one `www.`, as does a URL that gh repo fork and clone read with ghrepo.FromURL (_gh_from_url)."""
     parts = _gh_url_parts(word)
     return (parts[1], parts[3]) if parts and _gh_on_github(_gh_host(parts[0]) if repo_word else parts[0]) else None
+
+
+def _gh_from_url(verb: str, word: str) -> bool:
+    """Whether gh repo ``verb`` reads its first word with ghrepo.FromURL, after cli's git.ParseURL, and not with
+    ghrepo.FromFullName (round 9 of #399). In gh 2.89 gh repo fork reads an `http:/`, `https:/` or `git@` value so
+    (fork.go), and gh repo clone any value with a `:` (clone.go). FromURL drops a leading `www.` once, so
+    `https://www.www.garage.github.com/pub/x` is on www.garage.github.com there, which gh sends to github.com."""
+    return (verb == "fork" and word.startswith(("http:/", "https:/", "git@"))) or (verb == "clone" and ":" in word)
 
 
 # The kinds of URL gh reads a repo from in each group: a pull request URL in gh pr (finder.go's ParseURL), an issue
@@ -2089,8 +2099,8 @@ def _gh_elsewhere(group: str, verb: str, words: list[str]) -> list[tuple[str, st
     """The (target, link) readings of the operands that name a repo on another instance (round 6 of #399), where gh
     reads a repo from an operand (round 7): a URL of its group's kind (_GH_URL_KINDS) on a host gh does not send to
     github.com (`https://ghe.corp/pub/repo/pull/9` is `ghe.corp/pub/repo#9`), and the first word of gh repo and of
-    gh label clone, its source, in any form ghrepo.FromFullName reads (`ghe.corp/pub/repo`). gh acts there, and a
-    scope names repos on github.com, so each is a target the scopes may not mean, as a `-R` on another instance is.
+    gh label clone, its source, in any form gh reads there (`ghe.corp/pub/repo`, _gh_repo_parts). gh acts there, and
+    a scope names repos on github.com, so each is a target the scopes may not mean, as a `-R` on another instance is.
     Another URL, such as an option's value in a reading where every option is a flag, names no target here."""
     out = []
     for n, a in enumerate(words):
@@ -2098,19 +2108,20 @@ def _gh_elsewhere(group: str, verb: str, words: list[str]) -> list[tuple[str, st
         if url and url[3] and url[2] in _GH_URL_KINDS.get(group, ()) and not _gh_on_github(url[0]):
             out.append((f"{url[0]}/{url[1]}#{url[3]}", redact_userinfo(a)))
         elif n == 0 and (group == "repo" or (group, verb) == ("label", "clone")):
-            repo = _gh_repo_parts(a)
+            repo = _gh_repo_parts(a, verb if group == "repo" else "")
             if repo and not _gh_on_github(repo[0]):
                 out.append((f"{repo[0]}/{repo[1]}", redact_userinfo(a) if url else ""))
     return out
 
 
-def _gh_read(group: str, repo: str, words: list[str], url: bool = True, before: bool = False) -> tuple[str, str]:
+def _gh_read(group: str, repo: str, words: list[str], url: bool = True, before: bool = False,
+             verb: str = "") -> tuple[str, str]:
     """(target, link) from a `-R` value and the words that may name the target: the first GitHub URL (_gh_url), whose
     repo replaces the `-R` value when ``url`` (gh does that), else the first number, and for `gh repo` an
     `owner/name` first word, also `github.com/owner/name` or a repo URL (_gh_repo). gh repo drops a repo URL's
-    `.git`, and its first word's host is read as gh reads a repo's (_gh_url with ``repo_word``). gh gist reads no
-    repo from a URL: it takes the gist's id from it. With ``before`` the words read as before #399: a URL only as
-    _GH_URL matches it, as written, and gh repo's first word as written."""
+    `.git`, and its first word's host is read as gh repo ``verb`` reads a repo's (_gh_url with ``repo_word``, unless
+    _gh_from_url). gh gist reads no repo from a URL: it takes the gist's id from it. With ``before`` the words read
+    as before #399: a URL only as _GH_URL matches it, as written, and gh repo's first word as written."""
     number = link = ""
     for n, a in enumerate(words):
         if before:
@@ -2119,7 +2130,7 @@ def _gh_read(group: str, repo: str, words: list[str], url: bool = True, before: 
         elif group == "gist":
             found = None                    # gh gist takes a gist's URL or id, never a repo (GistIDFromURL)
         else:
-            found = _gh_url(a, repo_word=group == "repo" and n == 0)
+            found = _gh_url(a, repo_word=group == "repo" and n == 0 and not _gh_from_url(verb, a))
         if found:
             number = found[1]
             if url:
@@ -2131,7 +2142,7 @@ def _gh_read(group: str, repo: str, words: list[str], url: bool = True, before: 
         if re.fullmatch(r"#?\d+", a) and not number:
             number = a.lstrip("#")
     if not repo and group == "repo" and words:
-        named, sure = (words[0], True) if before else _gh_repo(words[0])
+        named, sure = (words[0], True) if before else _gh_repo(words[0], verb)
         if sure and re.fullmatch(r"[\w.-]+/[\w.-]+", named):
             repo = named
     if not link and repo:
@@ -2148,22 +2159,41 @@ def _gh_operands(argv: list[str], takes: str, longs: tuple) -> tuple[str, list[i
 
 
 _GH_REPO_URL = re.compile(r"(?:ssh|git\+ssh|git|https?|git\+https)://([^/?#]*)([^?#]*)")
+# The schemes cli's git.ParseURL reads as a URL (isPossibleProtocol in gh 2.89). It reads any other value with a `:`
+# and no `\` as scp-like ssh.
+_GH_GIT_SCHEMES = ("ssh:", "git+ssh:", "git:", "http:", "git+https:", "https:", "ftp:", "ftps:", "file:")
+_GH_GIT_URL = re.compile(r"(?:ssh|git\+ssh|git|https?|git\+https|ftps?|file)://([^/?#]*)([^?#]*)")
 
 
-def _gh_repo_parts(value: str) -> tuple[str, str] | None:
+def _gh_repo_parts(value: str, verb: str = "") -> tuple[str, str] | None:
     """(host, owner/name) of a repo as gh reads `-R` (ghrepo.FromFullName in gh 2.89): `owner/name`,
     `HOST/owner/name`, or a URL (`https://HOST/owner/name`, `git@HOST:owner/name.git`). go-gh's git.ParseURL makes
     `git@HOST:path` `ssh://git@HOST/path`, and Go's url.Parse reads the URL: its host as _gh_url_host reads it, and
-    its path decoded, without a query or a fragment, then without `.git`. The host is as gh keeps it (_gh_host).
-    A URL's host gets _gh_host twice, since go-gh's RepoInfoFromURL drops a leading `www.` and lowers the host,
-    and ghrepo.NewWithHost does it again (round 8): `https://WWW.garage.github.com/x/y` is on garage.github.com.
-    None for a value gh refuses (#399)."""
-    url = "ssh://" + value.replace(":", "/", 1) if value.startswith("git@") and ":" in value else value
-    m = _GH_REPO_URL.match(url)
+    its path decoded, without a query or a fragment, then without `.git`. url.Parse refuses a control character
+    before the first `#` only (round 9). The host is as gh keeps it (_gh_host). A URL's host gets _gh_host twice,
+    since go-gh's RepoInfoFromURL drops a leading `www.` and lowers the host, and ghrepo.NewWithHost does it again
+    (round 8): `https://WWW.garage.github.com/x/y` is on garage.github.com.
+
+    ``verb`` is gh repo's subcommand when the value is its first word. gh repo fork and clone read some values with
+    cli's git.ParseURL and ghrepo.FromURL instead (_gh_from_url): a host gets _gh_host once there, any value with a
+    `:` and no scheme of _GH_GIT_SCHEMES is scp-like ssh, and gh repo clone keeps the path's first two parts
+    (clone.go's simplifyURL). None for a value gh refuses (#399)."""
+    once = _gh_from_url(verb, value)
+    if once:
+        scp = ":" in value and "\\" not in value and not value.startswith(_GH_GIT_SCHEMES)
+        url, pattern = ("ssh://" + value.replace(":", "/", 1) if scp else value), _GH_GIT_URL
+    else:
+        url = "ssh://" + value.replace(":", "/", 1) if value.startswith("git@") and ":" in value else value
+        pattern = _GH_REPO_URL
+    m = pattern.match(url)
+    if once and not m:
+        return None
     if m:
-        host = None if re.search(r"[\x00-\x1f\x7f]", url) else _gh_url_host(m.group(1))
-        host = _gh_host(host) if host else None
+        host = None if re.search(r"[\x00-\x1f\x7f]", url.partition("#")[0]) else _gh_url_host(m.group(1))
+        host = _gh_host(host) if host and not once else host
         rest = unquote(m.group(2)).strip("/")
+        if once and verb == "clone":
+            rest = "/".join(rest.split("/", 2)[:2])
         rest = rest[:-4] if rest.endswith(".git") else rest
     elif value.count("/") == 2:
         host, _, rest = value.partition("/")
@@ -2174,10 +2204,11 @@ def _gh_repo_parts(value: str) -> tuple[str, str] | None:
     return (host, rest) if host and len(parts) == 2 and all(parts) else None
 
 
-def _gh_repo(value: str) -> tuple[str, bool]:
-    """(owner/name, sure) of a repo as gh reads `-R` (_gh_repo_parts). Sure when gh sends the request to github.com
-    (_gh_on_github), as a scope means. A value gh refuses comes back as written, and not sure (#399)."""
-    parts = _gh_repo_parts(value)
+def _gh_repo(value: str, verb: str = "") -> tuple[str, bool]:
+    """(owner/name, sure) of a repo as gh reads `-R`, or gh repo ``verb`` its first word (_gh_repo_parts). Sure when
+    gh sends the request to github.com (_gh_on_github), as a scope means. A value gh refuses comes back as written,
+    and not sure (#399)."""
+    parts = _gh_repo_parts(value, verb)
     return (parts[1], _gh_on_github(parts[0])) if parts else (value, False)
 
 
@@ -2251,17 +2282,19 @@ def _gh_target(argv: list[str], dynamic: frozenset = frozenset()) -> tuple[str, 
         parses = [_gh_operands(argv, "", ()), _gh_operands(argv, _GH_ANY_SHORT, longs)]
         sure = set(parses[0][1]) & set(parses[1][1])
     # A `-R` on another instance names a repo the scopes may not mean: its value as written is a reading too.
-    raw = [_gh_read(group, r, [argv[i] for i in o]) for r, o in parses if r and not _gh_repo(r)[1]]
+    raw = [_gh_read(group, r, [argv[i] for i in o], verb=verb) for r, o in parses if r and not _gh_repo(r)[1]]
     parses = [(_gh_repo(r)[0], o) for r, o in parses]
     repo, ops = parses[0]
-    target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _gh_url(argv[i]))])
-    readings = [_gh_read(group, r, [argv[i] for i in o], url) for r, o in parses for url in (True, False) if url or r]
+    target, link = _gh_read(group, repo, [argv[i] for i in ops if i in sure or not (repo and _gh_url(argv[i]))],
+                            verb=verb)
+    readings = [_gh_read(group, r, [argv[i] for i in o], url, verb=verb)
+                for r, o in parses for url in (True, False) if url or r]
     readings += raw + [("", "")] * any(i in dynamic for _, o in parses for i in o)
     readings += [r for _, o in parses for r in _gh_elsewhere(group, verb, [argv[i] for i in o])]
     # Outside the table gh may take some options' values and not others, a mix of the two readings. The words both
     # call operands, with the first one's repo, are such a mix: in `gh pr checkout -b 7 9 -f -R pub/repo` gh checks
     # out pub/repo#9, which neither reading names. In the table there is one reading, and this is it again.
-    readings += [_gh_read(group, repo, [argv[i] for i in sorted(sure)]),
+    readings += [_gh_read(group, repo, [argv[i] for i in sorted(sure)], verb=verb),
                  _gh_read(group, _opt(argv, "-R", "--repo") or "", argv[3:], before=True)]     # as before #399
     return target, link, _gh_others(target, readings)
 
@@ -2360,10 +2393,15 @@ def _gh_command_at(argv: list[str], dynamic: frozenset, split: frozenset) -> int
     cache, run, workflow and ruleset, and the browse command. gh repo has none, only its deploy-key and autolink
     groups. A word from an expansion where the command or an option may stand is the command word, and so is an
     option's value that may split into several words (``split``, `gh -R $R pr view 5`): gh may run any command
-    there. len(argv) when there is none."""
+    there. One that starts with a `-` and has a `=` before any expansion (`--repo="$R"`) is an option that stands
+    alone, as it has a `=` whatever bash puts in it, unless bash may split it (round 9). len(argv) when there is
+    none."""
     k = 1
     while k < len(argv):
         a = argv[k]
+        if k in dynamic and k not in split and re.match(r"-[\w.-]*=", a):
+            k += 1
+            continue
         if k in dynamic or (a and not a.startswith("-")):
             return k
         if a == "--":
@@ -2428,6 +2466,13 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
     if _gh_third_word.get():
         return _classify_gh_words(argv, cmd, stdin, dynamic)
     order = _gh_verb_order(argv, dynamic, split)
+    if order is not None and order[1:2] and order[1] in split:
+        # The command's place holds a word bash may split: an option's value (`gh -R $R secret set X`) or an option
+        # with its `=` (`gh --repo=$R secret set X`). As one word it is only that option's, and gh secret holds
+        # credentials: that reading stands when it gives no grant.
+        one = _classify_gh(argv, cmd, stdin, dynamic)
+        if one.category in NO_GRANT:
+            return one
     words = argv if order is None else [argv[i] for i in order]
     group, verb = (words + ["", ""])[1:3]
     alias = _GH_ALIASES.get((group, verb))
@@ -2437,12 +2482,6 @@ def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
     if memo is not None:
         memo[_GH_MOVED] = True
     if order is not None:
-        if order[1:2] and order[1] in split:
-            # The command's place holds an option's value bash may split (`gh -R $R secret set X`). As one word the
-            # value is only -R's, and gh secret holds credentials: that reading stands when it gives no grant.
-            one = _classify_gh(argv, cmd, stdin, dynamic)
-            if one.category in NO_GRANT:
-                return one
         return _classify_gh_words(words[:2] + [alias or words[2]] + words[3:], cmd, stdin,
                                   frozenset(n for n, i in enumerate(order) if i in dynamic))
     # The line as written with its command second, past the empty words and the options before it, as gh passes
