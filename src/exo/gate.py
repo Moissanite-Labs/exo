@@ -2801,9 +2801,12 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
     hit = _store_touch(k, words, parts, ctx)
-    # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too, so a
-    # `target:/dev*` entry still matches it, as it matches any other write there
-    for t in dict.fromkeys([hit, ctx.get("fd_cwd") or hit] if hit else []):
+    hits = [hit] if hit else []
+    if hit and ctx.get("fd_cwd") not in (None, hit):
+        # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
+        # so a `target:/dev*` entry still matches it, as it matches any other write there
+        hits.append(ctx["fd_cwd"])
+    for t in hits:
         # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
         # command is known to write there (`gh ... --body-file /dev/stdin` reads it), so the card says just that
         what = (f"uses {t}, a descriptor path or folder the gate cannot resolve (it may lead to an Exo store file)"
@@ -5414,8 +5417,9 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         c = _make(cat, summary=f"write {path}", target=path, link=path)
         if cat == "store_write":
             c.signals.append("exo store")
-        if cat != "local_write":    # #448: the write stays a part, so its deny, reserved and matrix entries still apply
-            c.parts = [_make("local_write", summary=f"write {path}", target=path, link=path)]
+        if cat != "local_write":    # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply
+            c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
+                       for p in dict.fromkeys(paths or [path])]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
