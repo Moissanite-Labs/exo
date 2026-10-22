@@ -209,35 +209,16 @@ cfg = Config.load()
 cfg.principal, cfg.hermes_home, cfg.plugin_config('exo-memory')
 ```
 
-## 5. Wiring into `exo.cli` (for the lead)
+## 5. Wiring into `exo.cli`
 
-Until this lands, `python -m exo.onboard init|interview|import-store|config ...` works on its
-own (the installer uses it). The patch to `src/exo/cli.py`:
+`src/exo/cli.py` lists `interview`, `import-store` and `config` in its `LAZY` table, with
+`exo.onboard` as their module. It imports `exo.onboard` only when one of them, or `exo init`, runs
+(#260). For `exo init` it adds the flags from `add_init_args` and runs `exo.onboard.cmd_init`.
+`python -m exo.onboard init|interview|import-store|config ...` also works on its own (the installer
+uses it).
 
-```diff
- from .consolidate import register as register_consolidate, cmd_consolidate, cmd_proposals  # noqa: F401
-+from .onboard import (register as register_onboard, add_init_args, cmd_init as onboard_init,  # noqa: F401
-+                      cmd_interview, cmd_import_store, cmd_config)
-@@ build_parser
-     p.add_argument('--from-template', nargs='?', const='', default='', metavar='PATH',
-                    help='template directory (default: the bundled empty store)')
-+    add_init_args(p)
-@@
-     register_consolidate(sp, common)
-+    register_onboard(sp, common)
-     return ap
-@@ main
-     if a.cmd == 'init':
--        return cmd_init(a)
-+        return onboard_init(a)
-+    if a.cmd == 'import-store':
-+        return cmd_import_store(a)
-+    if a.cmd == 'config':
-+        return cmd_config(a)
-```
-
-`onboard_init` without `--interview` does what `cmd_init` did, and also sets the active principal
-in `config.json` when none is set.
+`exo.onboard.cmd_init`, without `--interview`, does what `cmd_init` in `cli.py` does, and also
+sets the active principal in `config.json` when none is set.
 
 ## 6. One `/exo` command: `exo.dispatcher`
 
