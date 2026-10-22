@@ -46,9 +46,10 @@ after decide: standing grants and NO_GRANT, binds_exact, the registry risk floor
 changed mid-session and the decision model.
 
 Exit status: 0 when nothing is lowered, 1 when anything is lowered, 2 when a tree could not be run, the script
-itself failed (a bad flag or path, a policy file that raises or holds no plain data) or a SIGTERM or SIGHUP stopped
-it. Both tree processes and the work folder are removed on each of these. A stop signal the script started with
-ignored (under nohup) stays ignored, so the run goes on.
+itself failed (a bad flag or path, a --corpus item that is not a command or a {tool, args} action, a policy file
+that raises or holds no plain data) or a SIGTERM or SIGHUP stopped it. Both tree processes and the work folder are
+removed on each of these. A stop signal the script started with ignored (under nohup) stays ignored, so the run
+goes on. Once the cleanup starts, stop signals are ignored, so it runs to its end.
 """
 from __future__ import annotations
 
@@ -1125,13 +1126,36 @@ def variants(commands: Iterable[str]) -> Iterator[str]:
                 yield v.format(c=c, q=q)
 
 
-def read_corpus_file(path: Path) -> list[Any]:
+def read_corpus_file(path: Path) -> list[dict]:
+    """The actions of a --corpus file. An item that is not a command or a {tool, args} action is a ValueError that
+    names it: a reviewer's line is never dropped or run with its arguments emptied."""
     if path.suffix == ".txt":
-        return [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise ValueError(f"{path}: expected a JSON list of commands or actions")
-    return data
+        items: list[Any] = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    else:
+        items = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(items, list):
+            raise ValueError(f"{path}: expected a JSON list of commands or actions")
+    out = []
+    for n, item in enumerate(items, 1):
+        action = corpus_action(item)
+        if action is None:
+            raise ValueError(f"{path}: item {n} is not a command or a {{tool, args}} action with args a mapping: "
+                             f"{json.dumps(item)[:200]}")
+        out.append(action)
+    return out
+
+
+def corpus_action(item: Any) -> dict | None:
+    """A --corpus item as an action, or None: a command string, or a mapping with a tool name and an "args" (or
+    "arguments") mapping, and an optional "cwd". normal_action alone would read a call with no arguments as one with
+    empty arguments."""
+    if isinstance(item, dict):
+        args = item["args"] if "args" in item else item.get("arguments")
+        if not isinstance(args, dict):
+            return None
+    elif not isinstance(item, str):
+        return None
+    return normal_action(item)
 
 
 def normal_action(item: Any) -> dict | None:
@@ -1179,9 +1203,10 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
 
     ``trees`` is (head, base). Both are harvested, so a row the head deletes from a test is still run: a change
     cannot hide a lowered line by dropping its test. What only the base names is counted as harvested_base_only.
-    The tables of both gates are read the same way (gate_tables). ``builtin`` adds the harvest, the seeds, the table
-    lines, the folder rows and the tool calls. ``generate`` adds the generated forms of every line: of the --corpus
-    files alone when ``builtin`` is off.
+    The tables of both gates are read the same way (gate_tables). The files always run. ``builtin`` adds the harvest,
+    and with ``generate`` the seeds, the table and allowlist lines, the folder rows and the calls of the other tools.
+    ``generate`` adds the compound forms of the simple lines and the other shell tool names and keys. With ``builtin``
+    off they are the forms of the files' lines alone. With ``generate`` off only the files and the harvest run.
     """
     trees = list(dict.fromkeys(trees))
     out: dict[str, dict] = {}
@@ -1661,11 +1686,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="more actions: a JSON list of commands or {tool, args, cwd} actions (cwd optional), or a "
                         ".txt file, one command per line")
     p.add_argument("--only-corpus", action="store_true",
-                   help="skip the built-in corpus (the harvest and the seeds): run the --corpus items and their "
-                        "generated forms")
+                   help="skip the built-in corpus (the harvest of the test files, the seeds, the table and allowlist "
+                        "lines, the folder rows and the calls of the other tools): run the --corpus items, the "
+                        "compound forms of their simple lines, and each line under one other shell tool name and key")
     p.add_argument("--no-variants", action="store_true",
-                   help="skip every generated form (compound variants, other shell tool names and keys, session "
-                        "folders)")
+                   help="run only the --corpus items and the harvest of the test files: skip the seeds, the table and "
+                        "allowlist lines, the compound forms, the other shell tool names and keys, the folder rows "
+                        "and the calls of the other tools")
     p.add_argument("--policies", nargs="+", action="extend", default=[], type=Path,
                    help="more policies: a .py file with POLICIES (and CONTEXTS) or a .json mapping")
     p.add_argument("--only-policies", action="store_true", help="skip the built-in policies")
@@ -1697,9 +1724,18 @@ class Stopped(BaseException):
 _STOP_SIGNALS = tuple(getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n))
 
 
+def _ignore_stops() -> None:
+    """Ignore SIGTERM and SIGHUP from here on, so a stop signal cannot cut the cleanup short. main puts back the
+    handlers it found, so a signal ignored at the start (nohup) stays ignored."""
+    for sig in _STOP_SIGNALS:
+        try:
+            signal.signal(sig, signal.SIG_IGN)
+        except ValueError:          # not the main thread: main set no handlers either
+            return
+
+
 def _stop(signum: int, _frame: Any) -> None:
-    for sig in _STOP_SIGNALS:       # a second signal must not cut the cleanup short
-        signal.signal(sig, signal.SIG_IGN)
+    _ignore_stops()                 # a second signal must not cut the cleanup short
     raise Stopped(signal.Signals(signum).name)
 
 
@@ -1721,13 +1757,13 @@ def main(argv: list[str] | None = None) -> int:
     a = parse_args(argv)
     before = {}
     try:
-        for sig in _STOP_SIGNALS:
-            if signal.getsignal(sig) is signal.SIG_IGN:   # nohup, or a parent that ignores it: keep ignoring it,
-                continue                                  # as Python does for SIGINT
-            before[sig] = signal.signal(sig, _stop)
-    except ValueError:              # not the main thread: no handlers, as before
-        pass
-    try:
+        try:
+            for sig in _STOP_SIGNALS:
+                if signal.getsignal(sig) is signal.SIG_IGN:   # nohup, or a parent that ignores it: keep ignoring it,
+                    continue                                  # as Python does for SIGINT
+                before[sig] = signal.signal(sig, _stop)
+        except ValueError:          # not the main thread: no handlers, as before
+            pass
         return run(a)
     except Failed as exc:
         print(f"gate_diff: {exc}", file=sys.stderr)
@@ -1746,38 +1782,39 @@ def main(argv: list[str] | None = None) -> int:
 
 def run(a: argparse.Namespace) -> int:
     t0 = time.monotonic()
-    json_path, dump_path = _out_path(a.json, "--json"), _out_path(a.dump_corpus, "--dump-corpus")
-    home = a.home.expanduser().resolve() if a.home else None
-    if home is not None and not home.is_dir():
-        raise Failed(f"--home {a.home}: no such folder")
-    try:
-        actions, corpus_counts = build_corpus((a.head, a.base), a.corpus, builtin=not a.only_corpus,
-                                              generate=not a.no_variants)
-    except (OSError, ValueError) as exc:
-        raise Failed(f"could not build the corpus: {exc}") from None
-    policies = {} if a.only_policies else {k: _entry(v) for k, v in BUILTIN_POLICIES.items()}
-    if a.pick:
-        keep = [x.strip() for x in a.pick.split(",") if x.strip()]
-        missing = [k for k in keep if k not in policies]
-        if missing:
-            raise Failed(f"unknown built-in policies: {', '.join(missing)}")
-        policies = {k: policies[k] for k in keep}
-    for f in a.policies:
-        try:
-            loaded = load_policy_file(f)
-        except Exception as exc:    # a .py policy file may raise anything
-            raise Failed(f"could not load policies from {f}: {type(exc).__name__}: {exc}") from None
-        for name, entry in loaded.items():
-            policies[name if name not in policies else f"{name}@{f.name}"] = entry
-    if not actions or not policies:
-        raise Failed("the corpus or the policy set is empty")
-    if dump_path:
-        dump_path.write_text(json.dumps(actions, indent=0) + "\n", encoding="utf-8")
-    print(f"gate_diff: {len(actions)} actions ({', '.join(f'{k} {v}' for k, v in corpus_counts.items())}), "
-          f"{len(policies)} policies, {a.jobs} jobs per tree", file=sys.stderr, flush=True)
-    work = work_dir()
+    work: Path | None = None
     procs: dict[str, subprocess.Popen] = {}
     try:
+        json_path, dump_path = _out_path(a.json, "--json"), _out_path(a.dump_corpus, "--dump-corpus")
+        home = a.home.expanduser().resolve() if a.home else None
+        if home is not None and not home.is_dir():
+            raise Failed(f"--home {a.home}: no such folder")
+        try:
+            actions, corpus_counts = build_corpus((a.head, a.base), a.corpus, builtin=not a.only_corpus,
+                                                  generate=not a.no_variants)
+        except (OSError, ValueError) as exc:
+            raise Failed(f"could not build the corpus: {exc}") from None
+        policies = {} if a.only_policies else {k: _entry(v) for k, v in BUILTIN_POLICIES.items()}
+        if a.pick:
+            keep = [x.strip() for x in a.pick.split(",") if x.strip()]
+            missing = [k for k in keep if k not in policies]
+            if missing:
+                raise Failed(f"unknown built-in policies: {', '.join(missing)}")
+            policies = {k: policies[k] for k in keep}
+        for f in a.policies:
+            try:
+                loaded = load_policy_file(f)
+            except Exception as exc:    # a .py policy file may raise anything
+                raise Failed(f"could not load policies from {f}: {type(exc).__name__}: {exc}") from None
+            for name, entry in loaded.items():
+                policies[name if name not in policies else f"{name}@{f.name}"] = entry
+        if not actions or not policies:
+            raise Failed("the corpus or the policy set is empty")
+        if dump_path:
+            dump_path.write_text(json.dumps(actions, indent=0) + "\n", encoding="utf-8")
+        print(f"gate_diff: {len(actions)} actions ({', '.join(f'{k} {v}' for k, v in corpus_counts.items())}), "
+              f"{len(policies)} policies, {a.jobs} jobs per tree", file=sys.stderr, flush=True)
+        work = work_dir()           # in the try, so a stop signal right after it still removes it
         home = home or make_home(work)
         corpus_path, pol_path = work / "corpus.json", work / "policies.json"
         corpus_path.write_text(json.dumps(actions), encoding="utf-8")
@@ -1794,9 +1831,15 @@ def run(a: argparse.Namespace) -> int:
         except (RuntimeError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
             raise Failed(f"could not compare the results: {exc}") from None
     finally:
-        for p in procs.values():     # an interrupt or an error here: no tree keeps running
-            stop_tree(p)
-        shutil.rmtree(work, ignore_errors=True)
+        # From here to the end of main, SIGTERM and SIGHUP are ignored, as after a first stop: the cleanup runs to
+        # its end, and the summary or the error is printed in full. A signal ignored at the start stays ignored.
+        try:
+            _ignore_stops()
+        finally:                    # a signal just before is raised by _stop, which ignores both first
+            for p in procs.values():    # an interrupt or an error here: no tree keeps running
+                stop_tree(p)
+            if work is not None:
+                shutil.rmtree(work, ignore_errors=True)
     rep.update(base=f"{a.base} {_commit(a.base)}".strip(), head=f"{a.head} {_commit(a.head)}".strip(),
                corpus_counts=corpus_counts, wall_secs=round(time.monotonic() - t0, 1))
     if json_path:                   # before the summary, so a failed write never follows a printed result
