@@ -420,18 +420,31 @@ first. Otherwise each line a later main change made stricter shows up as lowered
 
 The script runs `gate.classify` and `gate.decide` of each tree in a process of its own, with the same HOME and no
 `EXO_*` variables. That HOME is a temp folder under /var/tmp, outside /tmp, so a line that names /tmp does not touch the
-store. `--home` sets another. The script never imports either gate itself.
+store. It holds a key file, a grants file in the store, and two plain names that are links to them
+(`~/notes-link.txt` and `~/grants-link.json`), so a head that stops following links shows. `--home` sets another
+HOME. The script never imports either gate itself.
 
 The actions are the lines and tool calls the gate suites test, read from the test files of both trees, so a line still
 runs when the head deletes its test. Each call runs as written: a `bash` call stays a `bash` call, and a line under
-`cmd` stays there. The script reads the gate's own tables from both trees the same way, with `ast`. So a head that
-drops a table entry still runs the base's line for it, and a head that adds one runs its own. To these come generated
-forms:
+`cmd` stays there. The script reads the gate's own tables from both trees the same way, with `ast`: a literal at
+module level, and each `|=`, `+=` or `NAME[key] =` of a literal after it. So a head that drops a table entry still
+runs the base's line for it, and a head that adds one runs its own. A table a tree holds in any other form (built by
+a helper call, changed with `.update()` or inside a function, or a list where the other tree has a mapping) is named
+on stderr and in the summary, since its entries may get no lines. To these come generated forms:
 
 - a line for each entry of the program, prefix and shell tables: each program of `PROGRAMS` with a file, each
   `SUBCOMMANDS` pair, `rm -rf build` behind each prefix (`sudo`, `nohup`, `doas`), wrapper and tmux command, run by
   each shell with `-c` and from its input, and code that runs it given to each interpreter with each of its flags.
-  Also a line for each program and subcommand of the allowlists.
+  Also a line for each program and subcommand of the allowlists, and `python -m` with each module of
+  `_SAFE_PY_MODULES` and each pip subcommand.
+- a line for each value option: `doas -u x rm -rf build`, `flock --wait x 1 rm -rf build`, a tmux command's
+  options, an interpreter's (`python -W x -c ...`) and a run wrapper's (`uv run --with x rm -rf build`). Long options
+  run as `--opt=x` too. Also each option whose value is a command line (`git rebase --exec`, `tar --to-command`) or a
+  script file, `touch` behind each privileged wrapper (`chroot`), a write by each redirection operator, a POST to
+  each local host, a read in each store folder, and a read of each secret sample path and of a glob that matches it.
+- a string for each alternative of a few patterns, written by `regex_samples`: a read of a path for each
+  alternative of the secret path pattern (`x.pem`, `.gnupg`), a SQL line for each destructive statement kind (`drop
+  database`), and a patch header for each kind (`*** Add File:`) that names the store or a secret.
 - compound forms of each simple line: in a list or a pipe, in `$( )`, after `bash -c`, `sudo`, `env`, `timeout` or
   `ssh`, fed to `bash` by a heredoc or a here-string, and after a `cd` into the store or `/dev`
 - each line under the other tool names and keys the gate reads as a shell line: `shell`, `bash`, `run_command` and
@@ -442,15 +455,26 @@ forms:
   `ls` in `~/.exo/keys`, `cat settings.json` in `~/.claude`, and file tool calls like them. Each line runs under
   every shell form, once with the folder as the session folder and once as the call's own `cwd`. Main decides each
   row otherwise without its folder, and a test checks that, so a head that stops reading the folder shows.
+- posts that trip each posting rule: a home path, an internal id and a model id for the default scrub, and each
+  forbid entry, forbidden word, agent name and scrub pattern of the policies the run uses. Each runs as a `gh`
+  comment and title and under the text and title keys of the outbound tools.
 - calls of the other tools: each tool of the tool table and each tool name the classifier names, with no arguments,
   and a tool name for each name hint word (`mcp_acme_trash_item`). A store path and a secret path under each path key
   (`path`, `file_path`, `destination` and the rest), and for an outbound tool, a post with a forbidden word or a
-  `pub/` target under each text, title and target key.
+  `pub/` target under each text, title and target key. Payment and account calls with a plain target and amounts
+  below and above the budget policies' limits. For a tool whose branch compares an argument (the `action` of
+  `cronjob_manage` and `send_message`), each value it names and others (`remove`, `reply`, `xyz`).
 
-That is about 50,000 actions. The policies are built into the script (more than 70). Each posting shape the gate
-reads is used by one of them, `footer_exposures` and `ignore_case` among them, and a test checks that every policy
-key `check_post`, `decide` and `normalize_policies` read appears in a built-in policy. A full run takes about three
-minutes on four cores. `--jobs` sets the workers in each tree (half the cores by default).
+That is about 52,000 actions. The policies are built into the script (more than 80). A test checks that every policy
+key `check_post`, `decide`, `normalize_policies`, `normalize_scrub` and `check_scrub` read appears in a built-in
+policy, `footer_exposures`, `ignore_case` and the scrub's `patterns` among them. A key that appears in a policy is not
+yet a key whose loss changes a decision, so two more tests take things out of main's gate in turn. Each table entry
+is removed alone, and main must decide one of its lines or calls otherwise. Each step of `decide` that raises an
+outcome (the budget, the escalation, the posting rules, the floors, the deny entries) is removed alone, and a built-in
+pair must come out lower. A step that every built-in policy masks with another ask fails that test. Some entries
+main never reads on their own, such as an opaque program (an unknown program asks too) or a long option that is a
+prefix of a longer one. The test lists each with the reason. A full run takes three to four minutes on four cores.
+`--jobs` sets the workers in each tree (half the cores by default).
 
 Add actions with `--corpus lines.txt`: one command per line, or a JSON list of commands and `{"tool", "args"}`
 actions. An action may also hold `"cwd"`, the session folder the hook passes to `classify` (#209). An item in another
@@ -458,12 +482,15 @@ shape, such as a call with no `args` mapping, stops the run with exit status 2 a
 lines get the same generated forms as the harvested ones.
 
 - `--only-corpus` runs the `--corpus` items, the compound forms of their simple lines, and each line under one other
-  shell tool name and key. It skips the harvest, the seeds, the table and allowlist lines, the folder rows and the
-  calls of the other tools.
-- `--no-variants` runs only the `--corpus` items and the harvest. It skips the seeds, the table and allowlist lines,
-  the compound forms, the other shell tool names and keys, the folder rows and the calls of the other tools.
+  shell tool name and key. It skips the harvest, the seeds, the lines and calls of the tables, the posts, the folder
+  rows and the calls of the other tools.
+- `--no-variants` runs only the `--corpus` items and the harvest. It skips the seeds, the lines and calls of the
+  tables, the posts, the compound forms, the other shell tool names and keys, the folder rows and the calls of the
+  other tools.
 
-Add policies with `--policies more.py` (a `POLICIES` mapping).
+Neither reads the gate's tables for lines, so neither names a table it cannot read.
+
+Add policies with `--policies more.py` (a `POLICIES` mapping). Their forbid and scrub entries get posts too.
 
 Exit status 0 means nothing is lower. Exit 1 means at least one pair of action and policy is lower: an outcome below
 main's in the order allow, log, ask, deny, a reserved hit lost, or a posting violation main lists that the head does
@@ -479,6 +506,9 @@ Exit 2 means a tree could not run or the script failed, such as on a folder that
 that raises. A tree that dies or runs past `--timeout` (an hour by default) is stopped with exit 2 too. So is a run
 stopped by SIGTERM or SIGHUP, such as a CI cancel. The script stops both trees and removes the temp folder first.
 A signal the script starts with ignored stays ignored, so a run under `nohup` goes on when the terminal closes.
+Exit 2 also follows a run with nothing lower when a tree holds a gate table in a form the script does not read. The
+summary lists each such table with the reason, as `INCOMPLETE`. Keep the table a literal, or read the change and
+name the table in `--accept-unread TOOLS,...` to accept the missing lines. A lowered pair still exits 1.
 
 **What the check leaves out.** It runs `classify` and `decide` alone, so a change to any of these needs its own tests
 and a line in its decision amendment:
@@ -488,8 +518,13 @@ and a line in its decision amendment:
   secret root (`~/.exo/keys`, `~/.claude`) or on the run folder. The harvest keeps a literal folder a test passes to `classify`,
   not one the test builds as it runs, such as `cwd=str(tmp_path)`.
 - Names and keys outside those tables. A tool name, argument key or program the script does not read from one of the
-  tables above runs only where a test or a seed names it: the `patch`, `urls` and `code` keys, the `action` of
-  `cronjob_manage`, and programs such as `find -exec`, `xargs` or the `git` and `gh` subcommands.
+  tables above runs only where a test or a seed names it: the `urls` and `code` keys, and programs such as `find
+  -exec`, `xargs` or the `git` and `gh` subcommands.
+- Patterns and helper sets. Only the secret path, SQL and patch header patterns and the scrub patterns get a string
+  for each alternative. Any other alternative of a regex or a helper (the URL and host patterns, `_GH_URL`, the
+  option tables of `_VALUE_OPTS`) is seen only where a test or a seed names it.
+- Files and links in HOME. The HOME holds one key file, one grants file and the two links to them. Other file
+  contents, links and folders a real HOME has do not run.
 - Stores the environment moves: `EXO_HOME`, `EXO_PRINCIPAL_STORE`, `EXO_KEYS_FILE` and `EXO_BUS_*` (and their
   `DIVAN_*` names). Both trees run without them.
 - The hook steps after `decide`: standing grants and `NO_GRANT`, `binds_exact`, the registry risk floor, the required
