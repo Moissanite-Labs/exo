@@ -360,8 +360,9 @@ What the gate asks about, and why:
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always" covers
   it. So does a write into `~/.exo/plugins` (#435), because Exo loads and runs the code it finds there. To work on a
-  plugin, point `EXO_PLUGIN_DIRS` at your copy instead. Reading your policies or plugins does not ask. `config.json`
-  is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves symbolic links in an absolute
+  plugin, point `EXO_PLUGIN_DIRS` at your copy instead. Reading your policies or plugins with `cat`, `grep` or a read
+  tool does not ask. Some other commands that only read, such as `sed -n` or `sort`, do ask. `config.json` is not on
+  that list yet: a change in review (D-074, #125) adds it. The gate resolves symbolic links in an absolute
   path (#130), but otherwise goes by the path as the command spells it, so some writes are not seen as store writes
   yet: a relative name such as `gates.yaml` written by a tool whose working folder is `policies/`, a glob spelling, a
   hard link, and a store file opened on a numbered file descriptor and written back through `/dev/fd/3` (#217). A
