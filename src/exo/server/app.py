@@ -14,7 +14,8 @@ and Events (have ``seq``). ``events.subscribe`` starts the event feed.
 
 Every command runs with a caller the transport stamps (D-039, ``exo.principal``): ``principal`` only for an
 in-process client or a Unix socket request that carries the per-launch credential in ``X-Exo-Principal`` from a
-process that is not a descendant of the core; ``local`` for everything else, including stdio and TCP.
+process that is not a descendant of the core; ``channel`` for the channels exod runs (``ChannelLink``, in process);
+``local`` for everything else, including stdio and TCP.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from exo.protocol import schema as s
 from exo import principal as pr
 from exo.server.engine import Closed, CommandFailed, Engine, Hub
 
-SERVER_CAPABILITIES = ["sse", "replay", "stdio"]
+SERVER_CAPABILITIES = ["sse", "replay", "stdio"]  # hello adds "heartbeat" only on a transport that pings
 HEARTBEAT = 15.0
 MAX_BODY = 8 * 1024 * 1024
 
@@ -46,8 +47,14 @@ def _raw_id(raw: str | bytes) -> str:
     try:
         data = json.loads(raw)
         return data["id"] if isinstance(data, dict) and isinstance(data.get("id"), str) else ""
-    except ValueError:
+    except (ValueError, RecursionError):
         return ""
+
+
+def _count(raw: str) -> int | None:
+    """A number in a request: ASCII digits up to SQLite's largest integer, the event log's bound. Else None (400)."""
+    n = raw.lstrip("0") or "0"  # leading zeros are digits too: measure the rest before int() and its digit limit
+    return int(n) if raw.isascii() and raw.isdigit() and len(n) < 20 and int(n) < 2**63 else None
 
 
 class Dispatcher:
@@ -60,44 +67,95 @@ class Dispatcher:
         self.hub = hub or getattr(engine, "hub", None) or Hub()
         self.caller = caller  # D-039: who an in-process user of this dispatcher is; transports pass their own
 
-    async def dispatch(self, raw: str | bytes, caller: str | None = None) -> tuple[s.Command | None, s.Response]:
+    async def dispatch(self, raw: str | bytes, caller: str | None = None,
+                       heartbeat: float | None = None) -> tuple[s.Command | None, s.Response]:
         try:
             cmd = s.Command.from_json(raw)
         except s.ProtocolError as exc:
             return None, _fail(_raw_id(raw), exc.code, exc.message)
-        return cmd, await self.run(cmd, caller)
+        except Exception as exc:  # a decoder bug must not kill the connection or the stdio transport
+            return None, _fail(_raw_id(raw), "internal", f"{type(exc).__name__}: {exc}")
+        return cmd, await self.run(cmd, caller, heartbeat)
 
-    async def run(self, cmd: s.Command, caller: str | None = None) -> s.Response:
+    async def run(self, cmd: s.Command, caller: str | None = None, heartbeat: float | None = None) -> s.Response:
+        """``heartbeat``: seconds between the transport's ``: ping`` comments, for ``hello``; None where it sends
+        none (stdio, in process)."""
         who = pr.Caller(caller or self.caller)
         tok = pr.CALLER.set(who)
         try:
-            return await self._run(cmd)
+            return await self._run(cmd, heartbeat)
         finally:
             who.live = False  # a task the command started does not keep the caller's standing
             pr.CALLER.reset(tok)
 
-    async def _run(self, cmd: s.Command) -> s.Response:
+    async def _run(self, cmd: s.Command, heartbeat: float | None = None) -> s.Response:
         body = cmd.body
-        if isinstance(body, s.Hello):
-            if body.protocol != s.PROTOCOL_VERSION:
-                return _fail(cmd.id, "protocol_mismatch", f"server speaks {s.PROTOCOL_VERSION}, client {body.protocol}")
-            result = {"protocol": s.PROTOCOL_VERSION, "server": "exod",
-                      "capabilities": SERVER_CAPABILITIES, "seq": self.hub.seq}
-            return s.Response(id=cmd.id, result=result)
-        if isinstance(body, s.EventsSubscribe):
-            # Without a stream, subscribe is a one-shot replay; HTTP clients stream from GET /events.
-            events = self.hub.since(body.since, body.session)
-            return s.Response(id=cmd.id, result={"events": [e.to_dict() for e in events], "seq": self.hub.seq})
         try:
+            if isinstance(body, s.Hello):
+                if body.protocol != s.PROTOCOL_VERSION:
+                    return _fail(cmd.id, "protocol_mismatch", f"server speaks {s.PROTOCOL_VERSION}, client {body.protocol}")
+                # D-060: only a transport that pings names a heartbeat, with its own interval
+                hello: dict[str, Any] = {"protocol": s.PROTOCOL_VERSION, "server": "exod",
+                                         "capabilities": SERVER_CAPABILITIES + ["heartbeat"] * bool(heartbeat),
+                                         "seq": self.hub.head(), "instance": self.hub.instance}
+                if heartbeat:
+                    hello["heartbeat"] = heartbeat
+                return s.Response(id=cmd.id, result=hello)
+            if isinstance(body, s.EventsSubscribe):
+                # Without a stream, subscribe is a one-shot replay; HTTP clients stream from GET /events.
+                events = self.hub.since(body.since, body.session)
+                return s.Response(id=cmd.id, result={"events": [e.to_dict() for e in events], "seq": self.hub.head()})
             result = await self.engine.handle(cmd, self.hub)
         except CommandFailed as exc:
             return _fail(cmd.id, exc.code, exc.message, exc.retryable)
-        except Exception as exc:  # an engine bug must not kill the connection
+        except Exception as exc:  # an engine or replay bug (since past SQLite's 64 bits) must not kill the connection
             return _fail(cmd.id, "internal", f"{type(exc).__name__}: {exc}")
         return s.Response(id=cmd.id, result=to_dict(result or {}))
 
 
 # ---------------------------------------------------------------- HTTP + SSE
+
+
+class SocketBusy(ValueError):
+    """Another core owns, or is starting on, the socket. The only start failure `exo serve` reports as a plain line."""
+
+
+def _lock_path(sock: Path) -> Path:
+    return sock.with_name(sock.name + ".lock")
+
+
+def _take_start_lock(sock: Path) -> int:
+    """Exclusive, non-blocking ``flock`` on ``<sock>.lock`` (owner-only), with this pid written in it. A dead
+    holder's lock is gone with its fd, so a crash never blocks a start. The file is unlinked by its holder at
+    close, so a lock taken on an unlinked file is not the lock: re-open until the file we hold is the one named."""
+    import fcntl  # POSIX only: imported here so the module still loads where the lock is never taken
+
+    lock = _lock_path(sock)
+    while True:  # the folder is start_unix's; no private_dir here, which refuses a symlinked folder (macOS /tmp)
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            if os.fstat(fd).st_mode & 0o077:
+                os.fchmod(fd, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            try:
+                who = os.pread(fd, 32, 0).decode("ascii", "replace").strip()
+            finally:
+                os.close(fd)
+            raise SocketBusy(f"another exo core is starting or running on {sock}"
+                             f"{f' (pid {who})' if who.isdigit() else ''}; stop it, or give this one its own "
+                             "--socket") from None
+        except BaseException:
+            os.close(fd)
+            raise
+        try:
+            if os.fstat(fd).st_ino == os.stat(lock).st_ino:
+                os.ftruncate(fd, 0)
+                os.pwrite(fd, f"{os.getpid()}\n".encode(), 0)
+                return fd
+        except FileNotFoundError:
+            pass
+        os.close(fd)  # the holder unlinked it between our open and our lock: take the new file
 
 _REASONS = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found",
             405: "Method Not Allowed", 413: "Payload Too Large"}
@@ -112,28 +170,58 @@ class HttpServer:
         self.principal = principal  # D-039: issue a principal credential beside the Unix socket
         self._principal_token: str | None = None
         self._unix_path: Path | None = None
+        self._lock_fd: int | None = None  # the start lock, held from start_unix until close
         self._server: asyncio.base_events.Server | None = None
         self._streams: set[asyncio.Task] = set()
         self._writers: set[asyncio.StreamWriter] = set()
         self._closing = False
 
-    async def start_unix(self, path: str | os.PathLike) -> None:
+    async def start_unix(self, path: str | os.PathLike, claimed: Callable[[], None] | None = None) -> None:
+        """Bind the Unix socket as its one owner: probe, unlink and bind run under an exclusive ``flock`` on
+        ``<path>.lock``, which this server keeps until ``close``. ``claimed`` runs once the lock is held and the
+        socket is not another server's, before the socket is replaced (the pid file is written there)."""
         path = Path(path)
         if len(os.fsencode(str(path))) >= 104:  # macOS limit is 104 bytes, Linux 108; stay under both
             raise ValueError(f"socket path too long ({len(os.fsencode(str(path)))} bytes, max 103): {path}. "
                              "Use a shorter EXO_HOME.")
+        from exo.ensure_core import probe  # never take a live server's socket; only a stale file is replaced
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if path.exists():
-            path.unlink()
-        old = os.umask(0o177)
-        try:
-            self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
-        finally:
-            os.umask(old)
-        os.chmod(path, 0o600)
+        self._lock_fd = _take_start_lock(path)
         self._unix_path = path
-        if self.principal:
-            self._principal_token = pr.issue(path)
+        try:
+            if probe(path) == "alive":
+                raise SocketBusy(f"another server is listening on {path}; stop it, or give this one its own --socket")
+            if claimed is not None:
+                claimed()
+            if path.exists():
+                path.unlink()
+            if self.principal:  # before the socket accepts: no client may read a missing or a crashed core's record
+                self._principal_token = pr.issue(path, self.dispatcher.hub.instance)
+            old = os.umask(0o177)
+            try:
+                self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
+            except BaseException:
+                if self._principal_token:
+                    pr.revoke(path, self._principal_token)
+                    self._principal_token = None
+                raise
+            finally:
+                os.umask(old)
+            os.chmod(path, 0o600)
+        except BaseException:
+            self._release_start_lock(unlink_socket=False)
+            raise
+
+    def _release_start_lock(self, unlink_socket: bool) -> None:
+        fd, self._lock_fd = self._lock_fd, None
+        if fd is None or self._unix_path is None:
+            return
+        try:
+            if unlink_socket:  # while still locked, so a core that starts next is never unlinked by this one
+                self._unix_path.unlink(missing_ok=True)
+            _lock_path(self._unix_path).unlink(missing_ok=True)  # a waiter re-checks the inode it locked
+        finally:
+            os.close(fd)  # closing the fd drops the flock, as does the process dying
 
     async def start_tcp(self, host: str, port: int) -> int:
         if not self.token:
@@ -169,6 +257,7 @@ class HttpServer:
         self._writers.difference_update(writers)
         if self._server is not None:
             await self._server.wait_closed()
+        self._release_start_lock(unlink_socket=True)
 
     def _accept_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         # Registration must happen in the connection callback, before scheduling the async handler.
@@ -177,16 +266,14 @@ class HttpServer:
             writer.transport.abort()
             return
         self._writers.add(writer)
-        task = asyncio.create_task(self._client(reader, writer))
+        task = asyncio.create_task(self._client(reader, writer, pr.accepted(writer.get_extra_info("socket"))))
         self._streams.add(task)
         task.add_done_callback(self._streams.discard)
 
-    async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, peer: pr.Peer) -> None:
         try:
-            await self._request(reader, writer)
-        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError):
-            pass
-        except asyncio.CancelledError:
+            await self._request(reader, writer, peer)
+        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError, asyncio.CancelledError):
             pass
         finally:
             try:
@@ -197,14 +284,11 @@ class HttpServer:
             finally:
                 self._writers.discard(writer)
 
-    async def _request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, peer: pr.Peer) -> None:
         line = (await reader.readuntil(b"\r\n")).decode("latin-1").strip()
         method, target, _version = line.split(" ", 2)
         headers: dict[str, str] = {}
-        while True:
-            h = (await reader.readuntil(b"\r\n")).decode("latin-1").strip()
-            if not h:
-                break
+        while h := (await reader.readuntil(b"\r\n")).decode("latin-1").strip():
             k, _, v = h.partition(":")
             headers[k.strip().lower()] = v.strip()
         url = urlsplit(target)
@@ -213,28 +297,30 @@ class HttpServer:
         if url.path == "/command":
             if method != "POST":
                 return await self._json(writer, 405, {"error": "POST only"})
-            n = int(headers.get("content-length", "0"))
+            if (n := _count(headers.get("content-length", "0"))) is None:  # before the size check, which -1 passes
+                return await self._json(writer, 400, {"error": "bad Content-Length"})
             if n > MAX_BODY:
                 return await self._json(writer, 413, {"error": "body too large"})
             raw = await reader.readexactly(n)
-            _cmd, resp = await self.dispatcher.dispatch(raw, self._caller(headers, writer))
+            _cmd, resp = await self.dispatcher.dispatch(raw, self._caller(headers, peer), self.heartbeat)
             return await self._send(writer, 200, resp.to_json().encode())
         if url.path == "/events" and method == "GET":
             q = parse_qs(url.query)
-            since = int(q.get("since", ["0"])[0])
-            since = max(since, int(headers.get("last-event-id") or 0))
-            return await self._sse(writer, since, q.get("session", [None])[0])
+            since, last = _count(q.get("since", ["0"])[0]), _count(headers.get("last-event-id") or "0")
+            if since is None or last is None:
+                return await self._json(writer, 400, {"error": "bad since or Last-Event-ID"})
+            return await self._sse(writer, max(since, last), q.get("session", [None])[0])
         if url.path == "/health":
             return await self._json(writer, 200, {"ok": True, "protocol": s.PROTOCOL_VERSION,
-                                                  "seq": self.dispatcher.hub.seq})
+                                                  "seq": self.dispatcher.hub.head()})
         return await self._json(writer, 404, {"error": "not found"})
 
-    def _caller(self, headers: dict[str, str], writer: asyncio.StreamWriter) -> str:
-        """D-039: principal only on the Unix socket, with the credential, from a process outside the core's tree."""
+    def _caller(self, headers: dict[str, str], peer: pr.Peer) -> str:
+        """D-039, D-060: principal only on the Unix socket, with the credential, from this user's process outside
+        the core's tree, as the kernel named it when the connection was accepted (one request per connection)."""
         if self._unix_path is None or not self._principal_token:
             return pr.LOCAL
-        return pr.stamp(headers.get(pr.HEADER.lower()), self._principal_token, writer.get_extra_info("socket"),
-                        headers.get("x-exo-client", ""))
+        return pr.stamp(headers.get(pr.HEADER.lower()), self._principal_token, peer, headers.get("x-exo-client", ""))
 
     def _authorized(self, headers: dict[str, str]) -> bool:
         if not self.token:
@@ -254,7 +340,8 @@ class HttpServer:
 
     async def _sse(self, writer: asyncio.StreamWriter, since: int, session: str | None) -> None:
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
-                     b"Connection: close\r\n\r\n: exod\n\n")
+                     b"Connection: close\r\n\r\n" + f": exod instance={self.dispatcher.hub.instance} "
+                     f"heartbeat={self.heartbeat:g}\n\n".encode())
         await writer.drain()
         sub = self.dispatcher.hub.subscribe(since, session)
         try:
@@ -265,8 +352,11 @@ class HttpServer:
                     return
                 if ev is None:
                     writer.write(b": ping\n\n")
-                else:
-                    writer.write(f"id: {ev.seq}\nevent: {ev.type}\ndata: {ev.to_json()}\n\n".encode())
+                else:  # raw UTF-8 keeps a frame near the body that made it (D-060); escapes stay valid JSON
+                    data = json.dumps(ev.to_dict(), separators=(",", ":"), ensure_ascii=False)
+                    for ch in "\x85\u2028\u2029":  # line breaks to str.splitlines, so to httpx's line reader
+                        data = data.replace(ch, f"\\u{ord(ch):04x}")
+                    writer.write(f"id: {ev.seq}\nevent: {ev.type}\ndata: {data}\n\n".encode("utf-8", "backslashreplace"))
                 await writer.drain()
         finally:
             sub.close()
@@ -283,13 +373,14 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
 
     async def pump(since: int, session: str | None) -> None:
         cursor.update(seq=since, session=session)
-        sub = dispatcher.hub.subscribe(since, session)
-        try:
-            async for ev in sub:
-                write(ev.to_json())
-                cursor["seq"] = ev.seq
-        finally:
-            sub.close()
+        while not dispatcher.hub.closed:  # a stream ended for lag (D-079) resumes after the last event written
+            sub = dispatcher.hub.subscribe(cursor["seq"], session)
+            try:
+                async for ev in sub:
+                    write(ev.to_json())
+                    cursor["seq"] = ev.seq
+            finally:
+                sub.close()
 
     try:
         while (line := await lines()) is not None:
@@ -299,7 +390,7 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
             if cmd is not None and isinstance(cmd.body, s.EventsSubscribe) and resp.ok:
                 if feed:
                     feed.cancel()
-                resp = s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.seq})
+                resp = s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.head()})
                 write(resp.to_json())
                 feed = asyncio.create_task(pump(cmd.body.since, cmd.body.session))
                 await asyncio.sleep(0)  # start the replay before the next command
@@ -354,9 +445,32 @@ def load_engine(spec: str = DEFAULT_ENGINE) -> Engine:
     return engine
 
 
+class ChannelLink:
+    """The link exod gives the channels it runs: the same commands in process, as the caller ``channel``, which no
+    transport stamps. Only this caller may hand the core a bus message, which pins a seat's key (D-040)."""
+
+    def __init__(self, dispatcher: Dispatcher):
+        self.d = dispatcher
+
+    async def call(self, body: Any) -> dict[str, Any]:
+        resp = await self.d.run(s.Command.of(body), pr.CHANNEL)
+        if not resp.ok:
+            from exo.protocol.client import ClientError
+            raise ClientError(resp.error)
+        return resp.result
+
+    async def events(self, since: int = 0, session: str | None = None) -> Any:
+        sub = self.d.hub.subscribe(since, session)
+        try:
+            async for ev in sub:
+                yield ev
+        finally:
+            sub.close()
+
+
 async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tuple[str, int] | None = None,
                 token: str | None = None, stdio: bool = False, hub: Hub | None = None,
-                ready: Callable[[str], None] | None = None) -> None:
+                ready: Callable[[str], None] | None = None, claimed: Callable[[], None] | None = None) -> None:
     """Run exod until cancelled (or until stdin closes in stdio mode)."""
     dispatcher = Dispatcher(engine, hub)
     if stdio:
@@ -369,7 +483,7 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
     if socket:
         # The socket file is 0600, so only this user reaches it; the token guards TCP only.
         srv = HttpServer(dispatcher, principal=True)
-        await srv.start_unix(socket)
+        await srv.start_unix(socket, claimed)
         servers.append(srv)
         if (peers := getattr(engine, "peers", None)) is not None:
             await peers.start(socket)  # D-026: presence file so other daemons find this one
@@ -383,12 +497,9 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
             ready(f"http://{tcp[0]}:{port}")
     if not servers:
         raise ValueError("nothing to serve: give a socket, tcp or stdio")
-    link = None
     try:
-        if getattr(engine, "_channel_cfg", None):  # channels talk to the server over a real protocol Client
-            from exo.protocol.client import Client
-            link = Client(socket=str(socket)) if socket else Client(url=f"http://{tcp[0]}:{port}", token=token)
-            for name, err in (await engine.start_channels(link)).items():
+        if getattr(engine, "_channel_cfg", None):
+            for name, err in (await engine.start_channels(ChannelLink(dispatcher))).items():
                 if err:
                     print(f"exod: channel {name}: {err}", file=sys.stderr)
         await asyncio.gather(*(srv.serve_forever() for srv in servers))
@@ -396,9 +507,5 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
         dispatcher.hub.close()
         if (close := getattr(engine, "close", None)) is not None:
             await close()
-        if link is not None:
-            await link.aclose()
         for srv in servers:
             await srv.close()
-        if socket:
-            Path(socket).unlink(missing_ok=True)

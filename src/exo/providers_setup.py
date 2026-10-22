@@ -27,7 +27,6 @@ import socket
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -39,7 +38,8 @@ from .core.models import keys as keys_mod
 from .core.models import muse_cli
 from .core.models.keys import KEYCHAIN_SERVICE, keys_file_path, redact_secrets, remember_secret
 from .core.models.router import Router
-from .core.private import private_dir
+from .core.models.urls import display_url
+from .core.private import atomic_write, private_dir
 
 STORES = ("keychain", "secret-service", "file")
 MIN_KEY, MAX_KEY = keys_mod.MIN_SECRET_LEN, 4096
@@ -124,38 +124,15 @@ def load_state(home: str | os.PathLike | None = None) -> dict[str, Any]:
         return {}
 
 
-def _atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
-    """Write ``text`` to ``path`` atomically with ``mode``: a temp file in the same folder (created 0600),
-    flushed and fsynced, then renamed over the target. The folder is created 0700 if missing."""
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        os.fchmod(fd, mode)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-    try:
-        dfd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
-    except OSError:
-        pass
-
-
 def _save_state(home: str | os.PathLike | None, provider: str, record: dict[str, Any] | None) -> None:
     state = load_state(home)
     if record is None:
         state.pop(provider, None)
     else:
         state[provider] = record
-    _atomic_write(_state_path(home), json.dumps(state, indent=2, sort_keys=True) + "\n")
+    path = _state_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
 # --- key stores --------------------------------------------------------------------------------
@@ -201,7 +178,7 @@ def write_keys_file(name: str, value: str, path: Path | None = None) -> Path:
     path = path or keys_file_path()
     with _keys_file_lock(path):
         lines = _keyfile_lines(path, name) + [f"{name}={value}"]
-        _atomic_write(path, "\n".join(lines) + "\n")
+        atomic_write(path, "\n".join(lines) + "\n")
     return path
 
 
@@ -214,7 +191,7 @@ def remove_from_keys_file(name: str, path: Path | None = None) -> bool:
         after = _keyfile_lines(path, name)
         if before == after:
             return False
-        _atomic_write(path, "\n".join(after) + ("\n" if after else ""))
+        atomic_write(path, "\n".join(after) + ("\n" if after else ""))
     return True
 
 
@@ -353,7 +330,7 @@ def _model_count(home: Path, provider: str, spec: Mapping[str, Any]) -> int | No
 
 def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
          probe_local: bool = True, prober: Callable[[str], bool] = probe) -> list[dict[str, Any]]:
-    """Every catalog provider with its status. Never a key value."""
+    """Every catalog provider with its status. No key value or URL userinfo."""
     router = router or build_router(home)
     h = Path(home or exo_home())
     state = load_state(home)
@@ -381,7 +358,9 @@ def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
             needs, has = "cli", bool(installed) and logged_in is not False
         else:
             needs, has = "server", bool(reachable)
-        if last and not last.get("ok") and has:
+        if not cli and not spec.get("base_url") and name not in router.instances:  # the router gives it no route
+            status, has = "no base_url", False
+        elif last and not last.get("ok") and has:
             status = f"failed: {last.get('error_class') or 'error'}"
         elif last and last.get("ok") and has:
             status = "verified"
@@ -392,7 +371,7 @@ def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
         else:
             status = "running" if has else ("not running" if reachable is False else "local")
         out.append({
-            "provider": name, "transport": transport, "base_url": spec.get("base_url", ""), "local": local,
+            "provider": name, "transport": transport, "base_url": display_url(spec.get("base_url", "")), "local": local,
             "key_env": names, "needs": needs, "key": ("n/a" if not names else "found" if where else "missing"),
             "source": where, "reachable": reachable, "installed": installed, "ready": has,
             "verified": bool(last and last.get("ok") and has), "last_test": last, "status": status,

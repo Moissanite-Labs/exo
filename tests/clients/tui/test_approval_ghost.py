@@ -3,10 +3,16 @@ can be pulled back."""
 
 from __future__ import annotations
 
+import asyncio
 import time
 
+import pytest
+
+from exo.core.types import Message
 from exo.protocol import schema as s
+from exo_tui.widgets import ApprovalCard, Block
 from test_tui import pending_approval, run, send, until
+from test_ui import plain
 
 
 async def ask_over_a_draft(app, pilot, eng, draft="a draft"):
@@ -46,16 +52,22 @@ def test_card_is_reachable_by_tab_with_a_draft_in_the_composer(tmp_path):
     run(tmp_path, sc)
 
 
-def test_card_has_a_key_that_works_from_the_composer(tmp_path):
+@pytest.mark.parametrize("keys,decision", [(("o",), "allow"), (("a", "enter"), "allow_always"),
+                                          (("d", "enter"), "deny")])
+def test_card_has_a_key_that_works_from_the_composer(tmp_path, keys, decision):
     async def sc(app, pilot, client, eng):
         await ask_over_a_draft(app, pilot, eng)
+        hint = plain(app.card.body(), 120)
+        assert "Ctrl+F, then [o] once  [a, Enter] always  [d, Enter] deny" in hint
+        assert hint.index("Ctrl+F") < hint.index("run echo?")
         await pilot.press("ctrl+f")  # focus the card from anywhere
         await pilot.pause(0.05)
         assert app.card.has_focus
-        await pilot.press("d")
-        await pilot.press("enter")
+        await pilot.press(*keys)
         await until(lambda: responds(app), pilot)
-        assert responds(app)[0].decision == "deny"
+        assert responds(app)[0].decision == decision
+        await until(lambda: app.card is None and app.composer.has_focus, pilot)
+        assert app.composer.text == "a draft"
 
     run(tmp_path, sc)
 
@@ -87,6 +99,60 @@ def test_stopping_a_turn_closes_its_approval_card(tmp_path):
     run(tmp_path, sc)
 
 
+def test_after_an_answer_the_next_request_of_the_thread_gets_its_card(tmp_path):
+    """The removal hands the focus to the card's neighbour (the transcript here) at once; that is not the user moving
+    it, so the composer gets it back and the next prompt is sent and asked about (regression from #284)."""
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "ask")
+        await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
+        await pilot.press("o")
+        await until(lambda: app.card is None and "after ask" in app.transcript_text() and not app.busy, pilot)
+        await until(lambda: app.composer.has_focus, pilot)
+        await send(app, pilot, "ask again")
+        await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
+        await pilot.press("d")
+        await pilot.press("enter")  # from the deny note, inside the card
+        await until(lambda: len(responds(app)) == 2 and app.card is None, pilot)
+        await until(lambda: app.composer.has_focus, pilot)
+
+    run(tmp_path, sc)
+
+
+def test_answering_a_card_mounts_the_one_queued_behind_it(tmp_path):
+    """#276: the next card reuses the widget id, so it mounts once the answered one is gone. A request of no thread (a
+    held peer message) comes first here, as in the report."""
+    async def sc(app, pilot, client, eng):
+        for rid, session in (("r1", None), ("r2", app.session), ("r3", app.session)):
+            pending_approval(eng, session, s.ApprovalRequested(request_id=rid, summary=rid, options=["allow", "deny"]))
+        await until(lambda: len(app.approvals) == 3 and app.card is not None, pilot)
+        for rid in ("r1", "r2", "r3"):
+            await until(lambda: app.card is not None and app.card.req.request_id == rid, pilot)
+            assert len(app.query(ApprovalCard)) == 1
+            await pilot.press("ctrl+f")
+            await pilot.press("o")
+            await until(lambda: app.composer.has_focus, pilot)
+        await until(lambda: len(responds(app)) == 3 and app.card is None, pilot)
+        assert [r.request_id for r in responds(app)] == ["r1", "r2", "r3"]
+        assert "DuplicateIds" not in app.transcript_text()
+
+    run(tmp_path, sc)
+
+
+def test_reconciling_a_closed_card_mounts_the_one_queued_behind_it(tmp_path):
+    async def sc(app, pilot, client, eng):
+        for rid, session in (("r1", None), ("r2", app.session)):
+            pending_approval(eng, session, s.ApprovalRequested(request_id=rid, summary=rid, options=["allow", "deny"]))
+        await until(lambda: len(app.approvals) == 2 and app.card is not None, pilot)
+        del eng.approvals.open["r1"]  # closed behind the clients' backs: no approval.resolved goes out
+        app.reconcile_every = 0.05
+        await until(lambda: app.card is not None and app.card.req.request_id == "r2", pilot)
+        assert len(app.query(ApprovalCard)) == 1 and "DuplicateIds" not in app.transcript_text()
+
+    run(tmp_path, sc)
+
+
 def test_queued_steer_shows_pending_and_unsteer_pulls_it_back(tmp_path):
     async def sc(app, pilot, client, eng):
         await send(app, pilot, "ask")  # the gated call keeps the turn running
@@ -94,11 +160,13 @@ def test_queued_steer_shows_pending_and_unsteer_pulls_it_back(tmp_path):
         await steer(app, pilot, "change course")
         await until(lambda: app.pending_steers, pilot)
         assert "change course" in app.transcript_text()
+        assert "1 steer queued" in plain(app.query_one("#activity").render())
         await steer(app, pilot, "/unsteer")
         await until(lambda: not app.pending_steers, pilot)
         assert app.composer.text == "change course"  # back in the composer, to edit
         assert "change course" not in app.transcript_text()  # the queued line is gone from the transcript too
         assert not eng.loop.state(app.session).steer
+        assert "steer queued" not in plain(app.query_one("#activity").render())
 
     run(tmp_path, sc)
 
@@ -125,12 +193,228 @@ def test_delivered_steer_is_no_longer_pending(tmp_path):
         await until(lambda: app.card is not None, pilot)
         await steer(app, pilot, "late word")
         await until(lambda: app.pending_steers, pilot)
+        ((mid, block),) = app.pending_steers
+        assert "steer queued" in plain(block.shown)
+        assert "steer delivered" not in plain(block.shown)
+        app.composer.text = "another thought"
+        assert "1 steer queued (Up to edit)" in plain(app.query_one("#activity").render())
         await pilot.press("ctrl+f")
         await pilot.press("o")  # let the tool run; the steer lands at the next tool boundary
         await until(lambda: not app.pending_steers and not app.busy, pilot)
+        assert "steer delivered" in plain(block.shown)
+        assert "steer queued" not in plain(block.shown)
+        assert "steer queued" not in plain(app.query_one("#activity").render())
+        assert app.composer.text == "another thought"
         await steer(app, pilot, "/unsteer")
         await pilot.pause(0.1)
         assert app.composer.text == ""
         assert "nothing queued" in app.transcript_text()
+
+    run(tmp_path, sc)
+
+
+@pytest.mark.parametrize("early", [False, True], ids=["after-reply", "before-reply"])
+def test_steer_delivery_requires_the_matching_core_event(tmp_path, early):
+    """Both response/event orders must paint a delivery receipt, never a send response alone."""
+    async def sc(app, pilot, client, eng):
+        app.busy = True
+        real = client.send
+
+        async def completed(mid):
+            msg = Message.user("change course")
+            msg.id = mid
+            eng.hub.publish(s.MessageCompleted(message=msg), app.session)
+            await pilot.pause(0.05)
+
+        async def held_send(body):
+            if isinstance(body, s.TurnSend):
+                block = next(b for b in app.transcript.children if isinstance(b, Block) and b.steer)
+                await until(lambda: block.is_mounted, pilot)
+                assert "steer sending" in plain(block.shown)
+                assert "delivered" not in plain(block.shown)
+                if early:
+                    await completed("m_receipt")
+                return s.Response(id="r", result={"steered": True, "message_id": "m_receipt"})
+            return await real(body)
+
+        client.send = held_send
+        await steer(app, pilot, "change course")
+        await until(lambda: not app.sending_messages, pilot)
+        block = next(b for b in app.transcript.children if isinstance(b, Block) and b.steer)
+        if not early:
+            await until(lambda: app.pending_steers, pilot)
+            await completed("m_other")
+            assert "steer queued" in plain(block.shown)
+            await completed("m_receipt")
+        await until(lambda: "steer delivered" in plain(block.shown), pilot)
+        assert not app.pending_steers
+        assert not app.sending_messages
+
+    run(tmp_path, sc)
+
+
+@pytest.mark.parametrize("code,label", [("forbidden", "not sent"), ("connection_lost", "delivery unknown")])
+def test_failed_steer_is_never_labelled_delivered(tmp_path, code, label):
+    async def sc(app, pilot, client, eng):
+        app.busy = True
+        real = client.send
+
+        async def failed_send(body):
+            if isinstance(body, s.TurnSend):
+                return s.Response(id="r", ok=False, error=s.ErrorInfo(code=code, message="failed"))
+            return await real(body)
+
+        client.send = failed_send
+        await steer(app, pilot, "change course")
+        await until(lambda: any(isinstance(b, Block) and b.steer and label in plain(b.shown)
+                               for b in app.transcript.children), pilot)
+        block = next(b for b in app.transcript.children if isinstance(b, Block) and b.steer)
+        assert "delivered" not in plain(block.shown)
+        assert not app.pending_steers and not app.sending_messages
+        if code == "connection_lost":
+            assert app.composer.text == "change course"
+
+    run(tmp_path, sc)
+
+
+def test_steer_reply_after_a_thread_switch_leaves_the_new_composer_and_queue_alone(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.busy = True
+        entered, release = asyncio.Event(), asyncio.Event()
+        real = client.send
+
+        async def delayed_send(body):
+            if isinstance(body, s.TurnSend):
+                entered.set()
+                await release.wait()
+                return s.Response(id="r", result={"steered": True, "message_id": "m_old"})
+            return await real(body)
+
+        client.send = delayed_send
+        task = asyncio.create_task(app.submit("old thread steer"))
+        await entered.wait()
+        assert app.sending_messages
+        await app.new_session()
+        app.composer.text = "new thread draft"
+        release.set()
+        await task
+        assert not app.pending_steers and not app.sending_messages
+        assert "steer queued" not in plain(app.query_one("#activity").render())
+        assert "old thread steer" not in app.transcript_text()
+        assert app.composer.text == "new thread draft"
+
+    run(tmp_path, sc)
+
+
+def test_unsteer_reply_after_a_thread_switch_keeps_the_new_draft(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "ask")
+        await until(lambda: app.card is not None, pilot)
+        await steer(app, pilot, "old thread steer")
+        await until(lambda: app.pending_steers, pilot)
+        old_session = app.session
+        entered, release = asyncio.Event(), asyncio.Event()
+        real = client.send
+
+        async def delayed_unsteer(body):
+            if isinstance(body, s.CommandRun) and body.name == "unsteer":
+                entered.set()
+                await release.wait()
+            return await real(body)
+
+        client.send = delayed_unsteer
+        task = asyncio.create_task(app.unsteer())
+        await entered.wait()
+        await app.new_session()
+        app.composer.text = "new thread draft"
+        release.set()
+        assert not await task
+        assert not eng.loop.state(old_session).steer  # the pullback still applies to the original thread
+        assert not app.pending_steers
+        assert app.composer.text == "new thread draft"
+        assert "old thread steer" not in app.transcript_text()
+
+    run(tmp_path, sc)
+
+
+def test_a_send_the_core_steers_shows_pending_and_up_pulls_it_back(tmp_path):
+    """Typing into an opened running subagent: the window is not busy, so it sends, and the core steers the text into
+    the child (D-070) with a message id. The line shows as a queued steer, and up pulls it back."""
+    async def sc(app, pilot, client, eng):
+        plain = client.send
+
+        async def send_steered(body):  # the core's answer for a running child's session, whatever the mode
+            if isinstance(body, s.TurnSend):
+                return s.Response(id="r", result={"steered": True, "message_id": "m_held"})
+            if isinstance(body, s.CommandRun) and body.name == "unsteer":
+                return s.Response(id="r", result={"output": {"cancelled": [body.args]}})
+            return await plain(body)
+        client.send = send_steered
+        assert not app.busy
+        await send(app, pilot, "note for the child")
+        await until(lambda: app.pending_steers, pilot)
+        ((mid, block),) = app.pending_steers
+        assert mid == "m_held" and block.steer and block.pending
+        app.composer.focus()
+        await pilot.press("up")
+        await until(lambda: not app.pending_steers, pilot)
+        assert app.composer.text == "note for the child"
+
+    run(tmp_path, sc)
+
+
+def test_a_key_repeat_on_a_focused_card_answers_once(tmp_path):
+    """#297: three answer keys posted before the first is handled (a held key) send one ApprovalRespond for the
+    request, write one note, and leave the request queued behind it unanswered."""
+    from textual import events
+
+    async def sc(app, pilot, client, eng):
+        for rid in ("r1", "r2"):
+            pending_approval(eng, app.session, s.ApprovalRequested(request_id=rid, summary=rid,
+                                                                  options=["allow", "deny"]))
+        await until(lambda: len(app.approvals) == 2 and app.card is not None, pilot)
+        assert app.card.req.request_id == "r1"
+        await pilot.press("ctrl+f")
+        await until(lambda: app.card.has_focus, pilot)
+        for _ in range(3):
+            app.card.post_message(events.Key("o", "o"))
+        await until(lambda: app.card is not None and app.card.req.request_id == "r2", pilot)
+        await pilot.pause(0.3)
+        assert [b.request_id for b in responds(app)] == ["r1"]
+        assert app.transcript_text().count("approval: allow") == 1
+        assert app.card is not None and app.card.req.request_id == "r2"
+
+    run(tmp_path, sc)
+
+
+def test_a_panel_that_takes_the_focus_while_a_card_is_removed_keeps_it(tmp_path, monkeypatch):
+    """#297 part 2, #290's guard: removing a focused card moves the focus to a neighbour at once, and the close waits
+    for the removal. If something else takes the focus meanwhile (a choice panel here), the composer does not take it
+    back. A removal the test holds open makes the order fixed."""
+    import asyncio
+
+    async def sc(app, pilot, client, eng):
+        pending_approval(eng, app.session, s.ApprovalRequested(request_id="r1", summary="r1",
+                                                              options=["allow", "deny"]))
+        await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
+        await until(lambda: app.card.has_focus, pilot)
+        gone = asyncio.get_running_loop().create_future()
+        real = ApprovalCard.remove
+
+        def held_remove(card):
+            real(card)
+            return gone
+        monkeypatch.setattr(ApprovalCard, "remove", held_remove)
+        eng.approvals.open.pop("r1")
+        eng.hub.publish(s.ApprovalResolved(request_id="r1", decision="deny"), app.session)
+        await until(lambda: app.focused is app.transcript, pilot)  # the removal moved it; the close still waits
+        data = {"options": [{"id": "a", "label": "Alpha"}, "beta"]}
+        eng.hub.publish(s.UiPanel(panel_id="c1", action="open", kind="choice", text="pick", data=data), app.session)
+        await until(lambda: app.focused is not None and app.focused.id == "panel-choices", pilot)
+        gone.set_result(None)
+        await until(lambda: app.card is None, pilot)
+        await pilot.pause(0.2)  # a focus() from the close would land by now
+        assert app.focused is not None and app.focused.id == "panel-choices"
 
     run(tmp_path, sc)

@@ -4,7 +4,9 @@ Vendored from aska-digital/protean-sym2p, scripts/protean-sym2p/sym-validate.py
 at commit 2d93ed603e94ddd3e4ddcab4b1d5fc4227832a1b (MIT, Copyright (c) 2026 ASKA Digital).
 See NOTICE in this package. Changes from the source: the CLI, file iteration and
 module globals are gone; `now` and `verify_hashes` are parameters; a small driver
-(`validate_text`, `validate_doc`) replaces `validate_document`. Rules are unchanged.
+(`validate_text`, `validate_doc`) replaces `validate_document`. Rules are unchanged,
+except that the grammar patterns anchor at the very end of the value (`$` let a
+trailing newline through), so an id, ref or hash ending in a newline fails.
 
 Findings are dicts {"code", "field", "msg"}. Codes: ERR:SYN ERR:SEM ERR:REF ERR:VER
 ERR:EXP ERR:AUTH ERR:AMB ERR:POL, plus the validator-local ERR:DUP.
@@ -52,12 +54,12 @@ DISPUTE_CLASSES = [
 ]
 OPS = ["add", "remove", "set", "move"]
 
-ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
-REF_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}(:v[1-9][0-9]*)?$")
-REF_VERSIONED_RE = re.compile(r"^(?P<obj>[a-z][a-z0-9_-]{0,31}):v(?P<ver>[1-9][0-9]*)$")
-HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-APPROVAL_REF_RE = re.compile(r"^approval:[A-Za-z0-9_.:-]+$")
-ISO_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
+ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}\Z")
+REF_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}(:v[1-9][0-9]*)?\Z")
+REF_VERSIONED_RE = re.compile(r"^(?P<obj>[a-z][a-z0-9_-]{0,31}):v(?P<ver>[1-9][0-9]*)\Z")
+HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
+APPROVAL_REF_RE = re.compile(r"^approval:[A-Za-z0-9_.:-]+\Z")
+ISO_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\Z")
 
 # Acts whose subject ref is expected to already exist (resolvable), as opposed
 # to being created by the act (L194, L736).

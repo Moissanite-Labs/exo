@@ -73,3 +73,62 @@ def test_cli(capsys):
     assert xc.main(["get", "nope"]) == 1
     assert xc.Config.load().principal == "sam"
     assert xc.Config.load().path.parent == xc.exo_home()
+
+
+# --- #255 W1-3: load() caches on (size, mtime_ns) and hands out deep copies --------
+
+def _write(home, data):
+    import os
+    home.mkdir(parents=True, exist_ok=True)
+    p = home / "config.json"
+    p.write_text(json.dumps(data))
+    st = p.stat()
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))  # a distinct mtime, whatever the clock did
+    return p
+
+
+def test_load_reads_the_file_once_until_it_changes(tmp_path, monkeypatch):
+    home = tmp_path / "h"
+    _write(home, {"principal": "sam"})
+    real = type(home).read_text
+    reads = []
+
+    def counting(self, *a, **kw):
+        if self.name == "config.json":
+            reads.append(str(self))
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(type(home), "read_text", counting)
+    for _ in range(10):
+        assert xc.Config.load(home).principal == "sam"
+    assert len(reads) == 1
+
+
+def test_load_sees_an_external_edit(tmp_path):
+    home = tmp_path / "h"
+    _write(home, {"principal": "sam"})
+    assert xc.Config.load(home).principal == "sam"
+    _write(home, {"principal": "jo"})
+    assert xc.Config.load(home).principal == "jo"
+    (home / "config.json").unlink()
+    assert xc.Config.load(home).principal is None
+    _write(home, {"principal": "sam"})
+    assert xc.Config.load(home).principal == "sam"
+
+
+def test_a_failed_save_is_invisible_to_the_next_load(tmp_path, monkeypatch):
+    home = tmp_path / "h"
+    _write(home, {"principal": "sam"})
+    cfg = xc.Config.load(home)
+    cfg.set("principal", "jo")
+    monkeypatch.setattr(xc, "atomic_write", lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        cfg.save()
+    assert xc.Config.load(home).principal == "sam"
+
+
+def test_mutating_a_loaded_value_does_not_leak_into_the_next_load(tmp_path):
+    home = tmp_path / "h"
+    _write(home, {"models": {"roles": {"main": ["fake:x"]}}})
+    xc.Config.load(home).get("models")["roles"]["main"].append("evil:y")
+    assert xc.Config.load(home).get("models") == {"roles": {"main": ["fake:x"]}}

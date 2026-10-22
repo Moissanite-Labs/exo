@@ -2,11 +2,13 @@
 
 Under a second on a healthy core, any key skips it, and it never runs under reduced motion
 (the app decides; see ExoApp.boot_anim). It reports real steps: a check turns ok only when
-the app marks it, so a slow core shows a slow boot rather than a fake one.
+the app marks it, so a slow core shows a slow boot rather than a fake one. A step that finished
+but is not working (memory off with no principal store) gets a dim dash and its state, not a check.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from rich.console import Group
@@ -28,8 +30,9 @@ class BootScreen(ModalScreen):
     def __init__(self) -> None:
         super().__init__(id="boot")
         self.done: dict[str, str] = {}
+        self.short: set[str] = set()  # steps that finished but are not working (memory off): no green check
         self.t0 = time.monotonic()
-        self.closed = False
+        self.closed = asyncio.Event()  # set once dismissed: off the stack, so the app may push a screen
 
     def compose(self) -> ComposeResult:
         rows = hero_rows(self.app.size.height)
@@ -41,8 +44,10 @@ class BootScreen(ModalScreen):
         self.set_interval(0.05, self.draw)
         self.draw()
 
-    def mark(self, step: str, detail: str = "") -> None:
+    def mark(self, step: str, detail: str = "", ok: bool = True) -> None:
         self.done.setdefault(step, detail)
+        if not ok:
+            self.short.add(step)
 
     def draw(self) -> None:
         age = time.monotonic() - self.t0
@@ -56,7 +61,8 @@ class BootScreen(ModalScreen):
                 break
             line = Text(no_wrap=True)
             if key in self.done:
-                line.append("✓ ", style=rich_style("ok"))
+                short = key in self.short
+                line.append("– " if short else "✓ ", style=rich_style("fg3" if short else "ok"))
                 line.append(f"{key:<8}", style=rich_style("fg2"))
                 line.append(self.done[key] or what, style=rich_style("fg3"))
             else:
@@ -70,9 +76,9 @@ class BootScreen(ModalScreen):
             self.finish()
 
     def finish(self) -> None:
-        if not self.closed:
-            self.closed = True
-            self.dismiss(None)
+        if not self.closed.is_set():
+            self.closed.set()
+            self.dismiss(None)  # pops the top screen, whichever it is: the app pushes nothing until this ran
 
     def on_key(self, event: events.Key) -> None:
         event.stop()

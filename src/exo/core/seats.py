@@ -9,7 +9,7 @@ hand-written files both load::
     [models]  tier = "fast"            # a router role (fast, standard, deep): becomes the seat's main model
               roles = {main = ["anthropic:x"]}    # plus any router config keys (providers, local, fake)
     [tools]   toolsets = ["fs", "search", "skills"]   # or top-level toolsets; omit for every toolset
-              env_allow = ["GH_TOKEN"]   # secret-looking env vars bash and jobs may still see (default none)
+              env_allow = ["GH_TOKEN"]   # vars the scrub would drop (secrets, shell startup hooks) that bash and jobs keep
               env_deny = ["COMPANY_*"]   # more names or patterns bash, jobs and code_find never see (D-039)
     [skills]  folders = ["~/notes/skills"]   # also `pack`; `load = [names]` limits the index to those skills
     [mcp.files]  command = "uvx"  args = ["server"]      # see core/mcp_client.py

@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import Iterator, Mapping, Sequence
 
 log = logging.getLogger("exo.keys")
 KEYCHAIN_SERVICE = "exo"
@@ -58,9 +58,7 @@ def secret_service_get(name: str) -> str | None:
         return None
     import shutil
     exe = shutil.which("secret-tool")
-    if not exe:
-        return None
-    return _run_lookup([exe, "lookup", "service", KEYCHAIN_SERVICE, "account", name])
+    return _run_lookup([exe, "lookup", "service", KEYCHAIN_SERVICE, "account", name]) if exe else None
 
 
 def _file_pairs(text: str) -> Iterator[tuple[str, str]]:
@@ -94,10 +92,7 @@ def file_get(name: str, path: Path | None = None) -> str | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
-    for k, v in _file_pairs(text):
-        if k == name:
-            return v or None
-    return None
+    return next((v or None for k, v in _file_pairs(text) if k == name), None)
 
 
 _loaded: set[str] = set()   # values this process has looked up (Keychain ones included); never logged
@@ -145,8 +140,7 @@ def _keys_file_values(path: Path | None = None) -> list[str]:
         text = (path or keys_file_path()).read_text(encoding="utf-8")
     except OSError:
         return []
-    out = [v for _, v in _file_pairs(text)]
-    return [v for v in out if len(v) >= MIN_SECRET_LEN]
+    return [v for _, v in _file_pairs(text) if len(v) >= MIN_SECRET_LEN]
 
 
 def known_secret_values(env: Mapping[str, str] | None = None) -> list[str]:
@@ -158,12 +152,51 @@ def known_secret_values(env: Mapping[str, str] | None = None) -> list[str]:
     return sorted(vals, key=len, reverse=True)
 
 
-def redact_secrets(text: str, values: list[str] | None = None) -> str:
-    """``text`` with every known key value replaced by ``[redacted]``. Values are never logged."""
+REDACTED = "[redacted]"
+
+
+def secret_spans(text: str, values: Sequence[str], end: int | None = None) -> tuple[list[tuple[int, int]], int]:
+    """The ``(start, stop)`` spans of ``text`` that redaction replaces, in text order, and the cut point ``end``.
+
+    The values go in the order given. Each value's matches are found from the left, as ``str.replace`` finds them,
+    in ``text`` with the earlier values' spans blanked out, so no match overlaps a span taken before it. All matches
+    are found in ``text`` itself before any marker goes in, so no value can match across a ``[redacted]`` marker.
+
+    With ``end``, a span must stop at or before it. A value's matches end at its first match that stops after
+    ``end``, and ``end`` moves back to that match's start if it starts before ``end``. Each span that comes back
+    stops at or before the ``end`` that comes back. ``shell._safe_cut`` cuts the stream there."""
+    # masked is text with each span taken so far overwritten by pad, a character no value holds. So find never
+    # returns a match that overlaps a span, and the skipped matches cost no Python steps.
+    pad = next(c for c in map(chr, range(0x110000)) if not any(c in v for v in values))
+    spans, masked = [], text
+    for v in values:
+        n = len(v)
+        i, upto = (masked.find(v) if n else -1), len(text)
+        if i < 0:
+            continue
+        while i >= 0:
+            if end is not None and i + n > end:
+                end, upto = min(end, i), i
+                break
+            spans.append((i, i + n))
+            i = masked.find(v, i + n)
+        masked = masked[:upto].replace(v, pad * n) + masked[upto:]  # the same matches the loop took
+    return sorted(spans), len(text) if end is None else end
+
+
+def redact_secrets(text: str, values: Sequence[str] | None = None, *, keep_markers: bool = False) -> str:
+    """``text`` with every known key value replaced by ``[redacted]``. Values are never logged.
+
+    The spans come from ``secret_spans``. ``keep_markers`` treats each ``[redacted]`` already in ``text`` as taken
+    first, so no value matches across it, and text this function made with the same values comes back as it is."""
     if not text:
         return text
-    for v in (known_secret_values() if values is None else values):
-        if v in text:
-            text = text.replace(v, "[redacted]")
-    return text
+    values = known_secret_values() if values is None else values
+    spans, _ = secret_spans(text, [REDACTED, *values] if keep_markers else values)
+    parts: list[str] = []
+    at = 0
+    for a, b in spans:
+        parts += (text[at:a], REDACTED)
+        at = b
+    return "".join(parts) + text[at:] if spans else text
 

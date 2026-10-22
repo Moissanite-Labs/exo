@@ -2,18 +2,19 @@
 // composer, and the side panel area on the right. All state comes from /api/chat/* and the /api/events stream.
 import { h, api, short, when, partsText, tag, empty } from "./dom.js";
 import * as bus from "./bus.js";
+import { renderMarkdown } from "./markdown.js";
 import { renderPanel } from "./panels.js";
 import { createHero } from "./hero.js";
 import { attachComposer } from "./composer.js";
 import { attachApprovals } from "./approvals.js";
 import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
 
-import { contextMetrics, mergeTranscript, slashInput, commandUsage } from "./chat_state.js";
+import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
-  let capacity = null, capacities = {}, snapshotGeneration = 0;
+  let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
   const landed = new Set();   // user messages the core has added to a conversation
@@ -29,8 +30,10 @@ export function mount(root) {
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
   const stopBtn = h("button", { class: "xc-btn", onclick: () => interrupt() }, "Stop");
   const promptEl = h("span", { class: "xc-cp", "aria-hidden": "true" }, "\u203A");
+  const modelPicker = h("div", { class: "xc-model-picker", hidden: true, "aria-label": "Model picker" });
+  modelPicker.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closePicker(); } });
   const inputWrap = h("div", { class: "xc-inwrap" }, input);
-  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn));
+  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn), modelPicker);
   const help = attachComposer({ input, composer, getSession: () => current,
     reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
   const approvalView = attachApprovals({ root: apprEl, composer: input, answer });
@@ -76,13 +79,20 @@ export function mount(root) {
   function flash(msg) { notice = msg || ""; drawStatus(); }
   function fail(e) { flash(e && e.message ? e.message : String(e)); }
 
+  // A context note (meta.note: other threads' news) is for the model, not a message the user typed (D-028), so the
+  // transcript leaves it out, as the terminal client does.
+  function isNote(m) { return !!(m && m.meta && m.meta.note); }
+
   function fromMessages(msgs) {
+    for (const m of msgs) if (m.role === "user" && m.id) { landed.add(m.id); delete steers[m.id]; }
+    drawSteers();
     const out = [];
     const byCall = {};
     for (const m of msgs) {
+      if (isNote(m)) continue;
       if (m.role === "user" || m.role === "assistant") {
         const text = partsText(m.content);
-        if (text || m.role === "user") out.push({ kind: m.role, id: m.id || "m" + out.length, text, complete: true });
+        if (text || m.role === "user") out.push(ingressItem(m) || { kind: m.role, id: m.id || "m" + out.length, text, complete: true });
         for (const c of m.tool_calls || []) {
           const it = { kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" };
           byCall[c.id] = it;
@@ -99,6 +109,13 @@ export function mount(root) {
   }
 
   function find(id) { return items.find((i) => i.id === id); }
+  // One card per peer, bus or job message: peer.message and the stored message.completed share its msg_id and come
+  // in either order. The second adds what the first lacked: the stored kind (Bus, Job) or the delivery mode.
+  function card(it) {
+    const old = find(it.id);
+    if (!old) { push(it); return; }
+    old.label = old.label || it.label; old.mode = old.mode || it.mode; redraw(old);
+  }
 
   // ---------------------------------------------------------------- events
 
@@ -113,7 +130,6 @@ export function mount(root) {
       landed.add(b.message.id);   // the event can beat the reply to the send
       if (steers[b.message.id]) { delete steers[b.message.id]; drawSteers(); }
     }
-    if (ev.type === "turn.completed" && Object.keys(steers).length) { for (const k of Object.keys(steers)) if (steers[k].session === ev.session) delete steers[k]; drawSteers(); }
     switch (ev.type) {
       case "steer.cancelled": if (steers[b.message_id]) { delete steers[b.message_id]; drawSteers(); } return;
       case "session.created": case "session.updated": refreshSessions(); return;
@@ -160,10 +176,10 @@ export function mount(root) {
         sys("memory", "log " + b.start + "-" + b.end + " folded \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "context.compacted":
         sys("context", "compacted \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
-      case "peer.message": push({ kind: "peer", id: b.msg_id || "peer" + items.length, sender: b.sender, text: b.text, trust: b.trust, mode: b.mode }); break;
+      case "peer.message": card({ kind: "peer", id: b.msg_id || "peer" + items.length, sender: b.sender, text: b.text, trust: b.trust, mode: b.mode }); break;
       case "taste.updated": push({ kind: "taste", id: "taste-" + b.rule_id + "-" + ev.seq, action: b.action, text: b.text, path: b.path }); break;
       case "message.delta": delta(b); break;
-      case "message.completed": completed(b.message || {}); break;
+      case "message.completed": { const it = ingressItem(b.message); if (it) card(it); else completed(b.message || {}); break; }
       case "tool.started": if (!find(b.call.id)) push({ kind: "tool", id: b.call.id, name: b.call.name, args: b.call.arguments || {}, output: "", status: "running", risk: b.risk }); break;
       case "tool.output": { const t = find(b.call_id); if (t && t.status === "running") { t.output += b.text; redraw(t); } break; }
       case "tool.completed": {
@@ -186,11 +202,16 @@ export function mount(root) {
   }
 
   function completed(m) {
+    if (isNote(m)) return;
     if (m.role === "user") { if (!find(m.id)) push({ kind: "user", id: m.id, text: partsText(m.content) }); return; }
     if (m.role === "assistant") {
       const text = partsText(m.content);
       const it = find(m.id);
-      if (it) { it.text = text || it.text; it.streaming = false; it.complete = true; redraw(it); }
+      if (it) {
+        const keep = nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);   // judged before the redraw: a rendered table is taller than its streamed text
+        it.text = text || it.text; it.streaming = false; it.complete = true; redraw(it);
+        if (keep) { home(); requestAnimationFrame(home); }
+      }
       else if (text) push({ kind: "assistant", id: m.id, text, complete: true });
       for (const c of m.tool_calls || []) if (!find(c.id)) push({ kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" });
     } else if (m.role === "tool") {
@@ -287,7 +308,7 @@ export function mount(root) {
     if (it.kind === "user") {
       el = h("div", { class: "xc-msg xc-user" + fresh }, h("span", { class: "xc-prompt" }, "\u203A"), h("span", { class: "xc-text" }, it.text));
     } else if (it.kind === "assistant") {
-      it.textEl = h("div", { class: "xc-text" }, it.text);
+      it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : markdown(it.text));
       el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") + fresh }, it.textEl, it.streaming ? null : feedbackBar(it));
     } else if (it.kind === "sys") {
       el = h("div", { class: "xc-msg xc-sysline" + (it.tone === "tip" ? " xc-tip" : "") + fresh },
@@ -296,9 +317,9 @@ export function mount(root) {
       el = h("section", { class: "xc-msg xc-pn" + fresh }, h("div", { class: "xc-ph" }, it.title), h("pre", { class: "xc-report" }, it.text));
     } else if (it.kind === "peer") {
       el = h("section", { class: "xc-msg xc-pn xc-peer" + fresh },
-        h("div", { class: "xc-ph" }, "Peer \u00B7 " + (it.sender || "unknown"), it.trust ? tag(it.trust) : null, it.mode ? tag(it.mode) : null),
+        h("div", { class: "xc-ph" }, (it.label || "Peer") + " \u00B7 " + (it.sender || "unknown"), it.trust ? tag(it.trust) : null, it.mode ? tag(it.mode) : null),
         h("div", { class: "xc-pb xc-text" }, it.text),
-        h("div", { class: "xc-pm" }, "from another session, not from you"));
+        h("div", { class: "xc-pm" }, it.label === "Bus" ? "from another agent seat, not from you" : it.label === "Job" ? "an automatic notice about a background job, not from you" : "from another session, not from you"));
     } else if (it.kind === "taste") {
       el = h("section", { class: "xc-msg xc-pn" + fresh },
         h("div", { class: "xc-ph" }, "Taste \u00B7 " + (it.action || "updated")),
@@ -380,7 +401,7 @@ export function mount(root) {
   }
 
   function drawApprovals() {
-    const mine = Object.values(approvals).filter((a) => a.session === current);
+    const mine = Object.values(approvals).filter((a) => !a.session || a.session === current);   // no session: every thread, as in the terminal client
     approvalView.draw(mine);
   }
 
@@ -419,14 +440,17 @@ export function mount(root) {
   }
 
   async function open(id) {
-    const generation = ++snapshotGeneration;
+    modelPicker.hidden = true; ++pickerGeneration;
+    modelPicker.replaceChildren();
+    const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; steers = {}; flash("");
+    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
       if (current !== id || generation !== snapshotGeneration) return;
       items = fromMessages(d.messages || []);
+      dropSteers(id, had, d.steers);
       loadedSeq = d.seq || 0;
       const live = sessions.find((s) => s.id === id);
       busy = !!(live && live.status === "live");
@@ -440,7 +464,7 @@ export function mount(root) {
   }
 
   async function recover() {
-    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq();
+    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq(), had = Object.keys(steers);
     loading = true;
     try {
       const freshSessions = (await api("GET", "/api/chat/sessions")).sessions || [];
@@ -449,6 +473,7 @@ export function mount(root) {
       sessions = freshSessions;
       if (d) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
+        dropSteers(id, had, d.steers);
         loadedSeq = Math.min(cutoff, d.seq || 0);
         busy = sessions.some((s) => s.id === id && s.status === "live");
         model = d.session.model || model;
@@ -495,17 +520,81 @@ export function mount(root) {
     } catch (e) { fail(e); }
   }
 
+  function closePicker() { modelPicker.hidden = true; ++pickerGeneration; input.focus(); }
+
+  // One model change at a time: send() and the picker wait for it, so a second Enter is not a second models.set.
+  async function chooseModel(ref, defaults, sid) {
+    changingModel = true;
+    try {
+      if (defaults) await api("POST", "/api/providers/default", { ref, role: "main" });
+      else await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/model", { model: ref });
+    } catch (e) {   // D-034: provider settings answer the loopback page only; /model still works from here
+      const lan = defaults && e.status === 403 && !["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+      throw lan ? Error("/default saves provider settings, which only a page opened at 127.0.0.1 or localhost may change (D-034). /model works here.") : e;
+    } finally { changingModel = false; }
+    if (!defaults && current === sid) { model = ref; capacity = capacities[ref] || null; requested = ""; drawStatus(); }
+    closePicker();
+    await refreshSessions();
+    flash((defaults ? "Default model: " : "Main model: ") + ref);
+  }
+
+  async function modelCommand(args, defaults = false) {
+    const sid = current, generation = ++pickerGeneration;   // a later /model or /default replaces a slow list
+    if (!defaults && !sid) { flash("open a thread first for /model; /default sets the model for new threads"); return; }
+    try {
+      if (args) { await chooseModel(args, defaults, sid); return true; }
+      const d = await api("GET", "/api/chat/models");
+      if (sid !== current || generation !== pickerGeneration) return;
+      const rows = [...(Array.isArray(d.models) ? d.models : []), ...(Array.isArray(d.available) ? d.available : [])];
+      const routes = [...new Set(rows.map(m => m && m.route).filter(ref => typeof ref === "string" && ref))];
+      if (!routes.length) { flash("No models listed. Open Providers to set up a provider."); return; }
+      const select = h("select", { class: "xc-field", "aria-label": defaults ? "Default model" : "Main model" },
+        ...routes.map(ref => h("option", { value: ref, selected: ref === model }, ref)));
+      select.value = routes.includes(model) ? model : routes[0];
+      const apply = h("button", { class: "xc-btn", onclick: async () => {
+        if (sid !== current) { modelPicker.hidden = true; return; }
+        if (changingModel) return;
+        apply.disabled = true;
+        try { await chooseModel(select.value, defaults, sid); } catch (e) { fail(e); }
+        finally { apply.disabled = false; }
+      } }, defaults ? "Set default" : "Use model");
+      modelPicker.replaceChildren(h("label", null, defaults ? "Default model for new threads" : "Main model", select),
+        h("p", null, "Changes the shared main route; existing fallbacks remain."), apply,
+        h("button", { class: "xc-btn", onclick: closePicker }, "Cancel"));
+      modelPicker.hidden = false;
+      select.focus();
+      return true;
+    } catch (e) { if (args || generation === pickerGeneration) fail(e); return false; }   // a newer picker owns the strip
+  }
+
   async function send() {
     const text = input.value.trim();
     if (!text) return;
+    if (changingModel) { flash("changing the model; send again when it is done"); return; }
     const command = slashInput(text);
+    // Without the command names a /name line could be a command or a typo of one: kept until they load (#146).
+    if (command && !help.ready(command.name)) { flash("commands are still loading; the line is in the box, send it again in a moment"); return; }
     const typo = command && help.typo(text);
-    if (typo) {   // D-037: a mistyped command gets a suggestion, not a message to the agent
+    if (typo && typo.here) {   // D-037: a mistyped command gets a suggestion, not a message to the agent
       flash("unknown command " + text.split(/\s/)[0] + ". did you mean /" + typo.guess + "? It is in the box: Enter runs it.");
       input.value = typo.line; input.setSelectionRange(input.value.length, input.value.length); input.dispatchEvent(new Event("input"));
       return;
     }
+    const where = typo ? help.elsewhere(typo.guess) : command ? help.elsewhere(command.name) : "";
+    if (where) {   // a core or terminal-client command this page does not run, or a near typo of one (#146): kept
+      flash((typo ? "unknown command " + text.split(/\s/)[0] + ". did you mean /" + typo.guess + "? It" : "/" + command.name) +
+        (where === "core" ? " runs in exo tui or exo chat" : " runs in the terminal client (exo tui)") +
+        ", not here. Type / to see what runs here, or reword the line to send it as a message.");
+      return;
+    }
     if (command && commandUsage(command)) { flash(commandUsage(command)); return; }
+    if (command && ["model", "default"].includes(command.name)) {
+      let args = command.args, defaults = command.name === "default";
+      if (command.name === "model" && /^default(?:\s|$)/.test(args)) { defaults = true; args = args.slice(7).trim(); }
+      if (args && (args.startsWith("-") || /\s/.test(args))) { flash("usage: /model [provider:model] or /model default [provider:model]"); return; }
+      if (await modelCommand(args, defaults)) { if (input.value.trim() === text) input.value = ""; help.sent(text); }
+      return;
+    }
     const lay = command && command.name === "layout" ? [null, command.args] : null;
     if (lay) {
       input.value = ""; help.sent(text);
@@ -554,12 +643,19 @@ export function mount(root) {
       h("button", { class: "xc-btn xc-x", title: "Pull this back into the box (Up in an empty box does the same)", "aria-label": "Cancel queued steer",
         onclick: () => unsteer(x) }, "\u00D7"))));
   }
+  // A chip the core no longer queues (a restart lost the message, D-045) goes when the thread is read again. Only a
+  // chip drawn before the read was asked for can be judged by it; a core without the list leaves them all.
+  function dropSteers(sid, had, queued) {
+    if (!Array.isArray(queued)) return;
+    for (const k of had) if (steers[k] && steers[k].session === sid && !queued.includes(k)) delete steers[k];
+    drawSteers();
+  }
   async function unsteer(x) {
     try {
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(x.session) + "/unsteer", { message_id: x.id });
       delete steers[x.id]; drawSteers();
       if ((d.cancelled || []).length) { input.value = input.value.trim() ? x.text + "\n" + input.value : x.text; input.focus(); input.dispatchEvent(new Event("input")); }
-      else flash("that message already landed");
+      else flash("no longer queued");
     } catch (e) { fail(e); }
   }
 
@@ -589,6 +685,7 @@ export function mount(root) {
   function panelAct(p, value) { respondPanel(p, "acted", value); }
   async function panelDismiss(p) {
     await respondPanel(p, "dismissed", {});
+    bus.forget(p.panel_id);   // the core sends no ui.panel close for this, so the next panel event or tab would bring it back
     panelsOpen = panelsOpen.filter((x) => x.panel_id !== p.panel_id);
     drawSide();
   }
@@ -610,4 +707,9 @@ export function mount(root) {
   sessionStorage.removeItem("xc-open");
   refreshSessions().then(() => { if (!current && (asked || sessions.length)) open(asked || sessions[0].id); });
   return off;
+}
+
+// A completed reply as Markdown, or its plain text if the renderer fails: one reply must never blank the thread.
+function markdown(text) {
+  try { return renderMarkdown(text); } catch (e) { return text; }
 }

@@ -11,9 +11,9 @@ export function mergeTranscript(snapshot, previous) {
   return snapshot.concat(previous.filter((x) => !ids.has(x.id) && (x.streaming || x.status === "running")));
 }
 export function slashInput(text) {
-  const m = /^\/([a-z]+)(?:\s+(.*))?$/s.exec(text);
+  const m = /^\/([a-z][a-z0-9_-]*)(?:\s+(.*))?$/is.exec(text);
   if (!m) return null; // paths and punctuation are message text, not command typos
-  return { name: m[1], args: (m[2] || "").trim() };
+  return { name: m[1].toLowerCase(), args: (m[2] || "").trim() };
 }
 export function commandUsage({ name, args }) {
   if (name === "new" && !["", "private"].includes(args)) return "usage: /new [private]";
@@ -23,4 +23,16 @@ export function commandUsage({ name, args }) {
   if (name === "findings" && args && !["all", "open", "fixed", "verified", "reopened", "count"].includes(args)) return "usage: /findings [state]";
   if (name === "layout" && args && !["inverse", "classic"].includes(args)) return "usage: /layout inverse|classic";
   return "";
+}
+// A stored message that another session (meta.peer), a bus seat (meta.bus) or a background job (meta.job) wrote,
+// D-026 and D-040: a card with its real author, never the user's own line, as the terminal client draws it. It keys
+// on the ingress msg_id, so the live peer.message card and the stored message are one card. null for anything else.
+export function ingressItem(m) {
+  const meta = (m && m.role === "user" && m.meta) || {};
+  const kind = ["peer", "bus", "job"].find((k) => meta[k]);
+  if (!kind) return null;
+  const tags = typeof meta[kind] === "object" ? meta[kind] : { from: typeof meta[kind] === "string" ? meta[kind] : "" };
+  const text = (m.content || []).filter((p) => p.type === "text").map((p) => p.text || "").join("");
+  return { kind: "peer", id: tags.msg_id || m.id, label: { peer: "Peer", bus: "Bus", job: "Job" }[kind],
+    sender: kind === "job" ? tags.id : tags.from, trust: kind === "job" ? "" : tags.trust, text };
 }

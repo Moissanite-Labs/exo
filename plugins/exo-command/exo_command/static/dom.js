@@ -7,6 +7,7 @@ export function h(tag, attrs, ...kids) {
     if (k === "class") el.className = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else if (k === "value") el.value = v;
+    else if (k === "style") el.style.cssText = v;   // through the CSSOM: the CSP (#162) refuses style attributes
     else el.setAttribute(k, v === true ? "" : v);
   }
   add(el, kids);
@@ -39,6 +40,16 @@ export function token() { return sessionStorage.getItem("xc-token") || ""; }
 // An event stream with the token as a query parameter: a browser EventSource cannot send headers.
 export function stream(path) {
   return new EventSource(path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token()));
+}
+
+// Trade the one-time launch code `exo web` opened the browser on for the page token (#166). The only request without
+// the token; any failure gives no token, with the server's reason when it sent one.
+export async function redeem(code) {
+  try {
+    const r = await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+    const data = await r.json();
+    return r.ok && typeof data.token === "string" ? { token: data.token } : { error: String(data.error || "") };
+  } catch (e) { return { error: "" }; }
 }
 
 export async function api(method, path, body) {

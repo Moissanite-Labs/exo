@@ -92,9 +92,9 @@ product-market fit". A line count should not stand in the way of security, robus
 is a ratchet with headroom. The structural goal in point 5 is the aim, and the count is a signal for it.
 
 1. **Two recorded numbers.** `tests/integration/test_wave1_acceptance.py` holds `CORE_FLOOR = 14813` and
-   `CORE_HEADROOM = 1000`. The only assertion is `total < CORE_FLOOR + CORE_HEADROOM`, so the ceiling today is 15,813
-   counted lines. The floor is the count right after the last real reduction, #124 (D-067). That branch measured
-   14,812 before its last merge from main, and the count at the merge is 14,813.
+   `CORE_HEADROOM = 1000`. The only assertion is `total < CORE_FLOOR + CORE_HEADROOM`, so the ceiling today is
+   15,813 counted lines. The floor is the count right after the last real reduction, #124 (D-067). That branch measured 14,812
+   before its last merge from main, and the count at the merge is 14,813.
 2. **The floor ratchets down.** Every real reduction PR (deletions, simplification, real seams per this plan) sets
    `CORE_FLOOR` to its post-merge count in the same PR. The floor never goes up, so a reduction that ends above the
    current floor leaves it where it is.

@@ -52,6 +52,9 @@ def _write(topic: str, engine: Any) -> tuple[Path, hf.Signals]:
                             principal=getattr(engine, '_x_principal', None), signals=signals)
     if engine is not None:
         engine.__dict__['_x_last_handoff'] = path
+        handoffs = engine.__dict__.get('_x_handoffs') or {}
+        for sid in [k for k, v in handoffs.items() if v[0] == path]:
+            del handoffs[sid]  # the file now holds this window, not that automatic handoff: an undo must not link it
     return path, signals
 
 
