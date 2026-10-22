@@ -6,7 +6,7 @@ earlier local write can plant. #231 already asks on the assignment forms (`PATH=
 `opaque_exec` named in the summary. `unset -f` names functions, not variables, and stays read.
 A word the gate cannot read, a name or an option, may spell PATH or hide the options, so it
 asks too. Each line in the asks lists, but `unset -n PATH` and the side effects, was checked in
-bash 5.2 to run a planted `./ls`, with its variables set to fit (`V=PATH`, `x='x PATH='`).
+bash 5.2 to run a planted `./ls`, with its variables set to fit (`V=PATH`, `x=' PATH'`).
 
 Every command string here is data for exo.gate.classify/decide; none is run."""
 import pytest
@@ -78,6 +78,7 @@ def test_unset_path_asks_as_the_empty_assignment_does(cmd):
     "unset ${!PA*}; ls",
     'unset "${arr[@]}"; ls',  # arr=(PATH)
     "unset PAT?; ls",
+    "unset [P]ATH; ls",       # a leading [ is a glob the lexer does not mark: a file named PATH matches it
     "unset FOO=$x; ls",       # unset takes no assignment: x=' PATH' splits into a second name
     'unset "a["$i]; ls',      # the $ is outside the quotes: i='1] PATH [' splits off PATH
     # an option word the gate cannot read: bash may see -v, `-`, or more words
@@ -177,11 +178,39 @@ def test_mixed_category_policies_decide_unset_as_the_empty_assignment():
 
 def test_an_opaque_exec_allow_rule_allows_an_unquoted_subscript_as_export_does():
     """`unset a[$i]` asked on main for its subscript, as a read line. It is opaque_exec now, so an
-    allow rule that names opaque_exec allows it, as it allows `export a[$i]=1` on main (D-038)."""
+    allow rule that names opaque_exec allows it, as it allows `export a[$i]=1` on main (D-038). So
+    does a line that asked on main only for another word's indirection, once unset PATH makes it
+    opaque_exec: `PATH=; unset "arr[$k]"` was allowed on main too."""
     pol = {"gates": {"rules": [{"match": {"command": ".", "category": "opaque_exec"},
                                 "decision": "allow", "reason": "r"}]}}
-    for cmd in ("unset a[$i]", "export a[$i]=1", "read a[$i]"):
+    for cmd in ("unset a[$i]", "export a[$i]=1", "read a[$i]", 'unset "arr[$k]" PATH', 'unset $"PATH"',
+                'PATH=; unset "arr[$k]"'):
         c = _bash(cmd)
         assert (c.category, gate.decide(c).outcome, gate.decide(c, pol).outcome) == ("opaque_exec", "ask", "allow"), cmd
     c = _bash('unset "a[$i]"')       # wholly in double quotes: read, and the subscript still asks
     assert (c.category, gate.decide(c, pol).outcome) == ("read", "ask"), c
+
+
+def test_a_locale_word_beside_unset_path_decides_as_beside_the_empty_assignment():
+    """A line with a $".." word that is not opaque_exec is also decided as opaque_exec with no own
+    text (#136), so an allow rule cannot lower it, and `categories: {opaque_exec: deny}` denies it.
+    A line that is opaque_exec already is decided once, and the allow rule lowers it to the opaque
+    floor. unset PATH makes the line opaque_exec, so it asks there, as `export $"PATH"=; ls` and
+    `PATH=; echo $"x"; ls` do on main (D-038). A deny entry for opaque_exec still denies it."""
+    pol = {"gates": {"categories": {"opaque_exec": "deny"},
+                     "rules": [{"match": {"command": "."}, "decision": "allow", "reason": "r"}]}}
+    assert gate.decide(_bash('echo $"x"; ls'), pol).outcome == "deny"
+    for cmd in ('unset $"PATH"; ls', 'unset PATH; echo $"x"; ls', 'export $"PATH"=; ls', 'PATH=; echo $"x"; ls'):
+        assert gate.decide(_bash(cmd), pol).outcome == "ask", cmd
+    assert gate.decide(_bash('unset $"PATH"; ls'), {"gates": {"deny": ["opaque_exec"]}}).outcome == "deny"
+
+
+def test_readonly_reads_a_plus_word_and_the_words_after_it_as_names():
+    """readonly takes no `+x`. bash reads it, and a `-n` after it, as names, so `r=PATH` makes a
+    plain variable, not a nameref. Main took the `-n` as an option and asked. These are read now
+    (D-038). declare takes `+x`, so its `-n` is still an option and makes a nameref to PATH."""
+    for cmd in ("readonly +x -n r=PATH; ls", "readonly +x -n r; ls"):
+        c = _bash(cmd)
+        assert (c.category, gate.decide(c).outcome) == ("read", "allow"), c
+    c = _bash("declare +x -n r=PATH; ls")
+    assert (c.category, gate.decide(c).outcome) == ("opaque_exec", "ask"), c
