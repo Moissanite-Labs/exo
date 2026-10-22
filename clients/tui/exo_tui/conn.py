@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from exo.protocol import schema as s
+from exo.ensure_core import START_TIMEOUT, startup_lock
 
 
 class LocalClient:
@@ -36,7 +37,6 @@ class LocalClient:
 
         self._server = HttpServer(self.dispatcher, principal=True)  # joining windows prove themselves (D-039)
         self.serve_path.parent.mkdir(parents=True, exist_ok=True)
-        self.serve_path.unlink(missing_ok=True)  # this process holds the writer lock, so any old socket is stale
         try:
             await self._server.start_unix(self.serve_path)
         except Exception:  # joining is a convenience; this window works without it
@@ -56,21 +56,23 @@ class LocalClient:
 
     async def events(self, since: int = 0, session: str | None = None,
                      reconnect: bool = False, backoff: float = 0.5) -> AsyncIterator[s.Event]:
+        """Ends only when this core shuts down. A stream the core ended because this window fell MAX_LAG events
+        behind (D-079) resumes from the last event seen, so nothing is missed and the core keeps running."""
         await self._serve()
-        sub = self.dispatcher.hub.subscribe(since, session)
-        try:
-            async for ev in sub:
-                self.last_seq = ev.seq
-                yield ev
-        finally:
-            sub.close()
+        hub, last = self.dispatcher.hub, since
+        while not hub.closed:
+            sub = hub.subscribe(last, session)
+            try:
+                async for ev in sub:
+                    self.last_seq = last = ev.seq
+                    yield ev
+            finally:
+                sub.close()
 
     async def aclose(self) -> None:
         if self._server is not None:
             await self._server.close()
-            self._server = None
-            if self.serve_path is not None:
-                self.serve_path.unlink(missing_ok=True)
+            self._server = None  # close() removed the socket and the lock, in that order
         self.dispatcher.hub.close()
         close = getattr(self.engine, "close", None)
         if close:
@@ -91,27 +93,33 @@ def _alive(path: Path) -> bool:
         sock.close()
 
 
-def _open(home: Path, agent: str, wait: float = 5.0) -> Any:
+def _open(home: Path, agent: str, wait: float = START_TIMEOUT) -> Any:
     """A protocol Client on the window that runs this agent, or a LocalClient that runs it here."""
     from exo.core.agentlog import WriterBusy, socket_path
     from exo.protocol.client import Client
     from exo.server.app import load_engine
 
-    path = socket_path(home, agent)
-    exod = home / "run" / "exod.sock"
-    for p in (exod, path):
-        if _alive(p):
-            return Client(socket=str(p), principal="tui")
-    try:
-        return LocalClient(load_engine("exo.core.engine:create"), serve=path)
-    except WriterBusy:  # another window is starting it: wait for its socket
-        end = time.monotonic() + wait
-        while time.monotonic() < end:
-            for p in (exod, path):
-                if _alive(p):
-                    return Client(socket=str(p), principal="tui")
-            time.sleep(0.05)
-        raise
+    with startup_lock(home, wait):
+        path = socket_path(home, agent)
+        exod = home / "run" / "exod.sock"
+        for p in (exod, path):
+            if _alive(p):
+                return Client(socket=str(p), principal="tui")
+        try:
+            return LocalClient(load_engine("exo.compose:create"), serve=path)
+        except WriterBusy:  # another window is starting it: wait for its socket
+            end = time.monotonic() + wait
+            while time.monotonic() < end:
+                for p in (exod, path):
+                    if _alive(p):
+                        return Client(socket=str(p), principal="tui")
+                time.sleep(0.05)
+            raise
+
+
+SAFE_READS = frozenset({"hello", "session.list", "session.get", "approvals.list", "commands.list", "events.subscribe",
+                        "search", "config.get", "models.list", "tools.list", "skills.list", "tasks.list", "seat.list",
+                        "taste.list"})
 
 
 class SharedClient:
@@ -131,13 +139,20 @@ class SharedClient:
         self.inner = await asyncio.to_thread(_open, self.home, self.agent)
 
     async def send(self, body: Any) -> s.Response:
+        """After a lost connection, rejoin. Resend only what cannot have acted twice: a command that never left
+        (connect failed, so no byte was written) or a read. A turn, an approval answer or any other change whose
+        reply was lost is raised, not repeated (D-060): the window says it may not have been delivered, keeps the
+        typed text, and re-reads ``approvals.list`` to put back a card the core still holds (``ExoApp.post``)."""
         import httpx
 
         try:
             return await self.inner.send(body)
-        except (httpx.TransportError, OSError):
+        except (httpx.TransportError, OSError) as exc:
             await self._failover()
-            return await self.inner.send(body)
+            if isinstance(exc, (httpx.ConnectError, ConnectionRefusedError, FileNotFoundError)) \
+                    or getattr(type(body), "TYPE", "") in SAFE_READS:
+                return await self.inner.send(body)
+            raise
 
     async def call(self, body: Any) -> dict[str, Any]:
         from exo.protocol.client import ClientError
@@ -151,6 +166,7 @@ class SharedClient:
                      reconnect: bool = False, backoff: float = 0.5) -> AsyncIterator[s.Event]:
         import httpx
 
+        from exo.peerauth import FrameTooLarge
         from exo.protocol.client import ClientError
 
         self.last_seq = since
@@ -159,6 +175,10 @@ class SharedClient:
                 async for ev in self.inner.events(since=self.last_seq, session=session):
                     self.last_seq = ev.seq
                     yield ev
+                # the inner client moves past an event too large to read; resume after it, not at it
+                self.last_seq = max(self.last_seq, getattr(self.inner, "last_seq", 0))
+            except FrameTooLarge:  # no seq to resume past: replaying it would never end
+                raise
             except (httpx.TransportError, httpx.StreamError, OSError):
                 pass
             except ClientError:  # the new core answered with a refusal for now: back off and ask again

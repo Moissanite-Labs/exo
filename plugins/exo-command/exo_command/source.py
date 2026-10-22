@@ -14,6 +14,9 @@ from exo.protocol import schema as s
 def core_message(exc: BaseException) -> str:
     """A sentence for the page; never a raw ConnectError."""
     name = type(exc).__name__
+    if name == "PrincipalRefused":  # D-060: the core answers but failed the peer check; often a core from before it
+        return ("{}. If an older Exo core is still running, restart it: run `exo stop` (or close the Exo window "
+                "that runs it), then reopen this page.".format(str(exc).rstrip(".")))
     if isinstance(exc, (ConnectionError, FileNotFoundError)) or name in ("ConnectError", "ReadError", "RemoteProtocolError"):
         return ("Exo core is not reachable. `exo web` starts it for you; if this stays, run `exo serve` in a "
                 "terminal or check $EXO_HOME/logs/exod.log.")
@@ -38,6 +41,8 @@ class Source(Protocol):
 
 class ClientSource:
     """Over HTTP + SSE, through ``exo.protocol.client.Client``."""
+
+    executor_required = True  # remote completion has no authority to execute workspace Git
 
     def __init__(self, socket: Optional[str] = None, url: Optional[str] = None, token: Optional[str] = None):
         from exo.protocol.client import Client
@@ -65,6 +70,10 @@ class DispatcherSource:
 
     def __init__(self, dispatcher: Any):
         self.dispatcher = dispatcher
+
+    @property
+    def executor_required(self) -> bool:
+        return bool(getattr(self.dispatcher.engine, "executor_required", True))
 
     async def call(self, body: Any) -> Dict[str, Any]:
         resp = await self.dispatcher.run(s.Command.of(body), "principal:web")

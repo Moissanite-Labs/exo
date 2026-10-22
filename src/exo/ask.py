@@ -598,8 +598,8 @@ def seed_from_markdown(queue: QuestionQueue, text: str, source: str | None = Non
 
 
 # --- CLI hook ---------------------------------------------------------------------------------
-# Wire into exo.cli: in build_parser() call `ask.register(sp, common)`, and expose
-# `cmd_ask` in exo.cli's globals (e.g. `from .ask import cmd_ask`).
+# `exo.cli` lists `ask` in its LAZY table. It imports this module, calls `register(sp, common)` and runs
+# `cmd_ask` only when `exo ask` runs.
 
 def register(sp, common) -> None:
     p = sp.add_parser("ask", parents=[common], help="question queue and interruption budget")

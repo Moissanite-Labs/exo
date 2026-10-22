@@ -1,7 +1,8 @@
 // Providers view: where model keys go, per-provider status, key save/test/remove, and the default model.
+// Drawn as an instrument panel (D-061): one ruled row per provider, status in a pill whose led form carries it.
 // A key value only ever lives in the password field. It is read once to build the request body, the field is
 // cleared at once (also on error), and it is never logged, stored, put in a URL, or shown again.
-import { h, api, tag, empty, errorBox } from "./dom.js";
+import { h, api, errorBox, pageHead, readout, pill, emptyState } from "./dom.js";
 
 const STORE_TEXT = {
   keychain: "the macOS Keychain",
@@ -12,21 +13,24 @@ const STORE_TEXT = {
 function chip(r) {
   const st = r.status || "";
   const lt = r.last_test || {};
-  if (r.verified) return tag("verified" + (lt.latency_ms != null ? " · " + Math.round(lt.latency_ms) + " ms" : ""), "green");
-  if (st.startsWith("failed")) return tag(st, "red");
-  if (r.needs === "key") return tag(r.key === "found" ? "key found" : "no key", r.key === "found" ? "cyan" : "");
-  if (r.needs === "cli") return tag(r.ready ? "cli installed" : "cli not installed", r.ready ? "cyan" : "");
-  return tag(r.local ? (r.reachable ? "local · running" : "local · not running") : st, r.reachable ? "green" : "");
+  if (r.verified) return pill("verified" + (lt.latency_ms != null ? " · " + Math.round(lt.latency_ms) + " ms" : ""), "ok");
+  if (st.startsWith("failed")) return pill(st, "fail");
+  if (st === "no base_url") return pill(st, "off");  // nothing to call: the router skips it even with a key
+  if (r.needs === "key") return pill(r.key === "found" ? "key found" : "no key", r.key === "found" ? "known" : "off");
+  if (r.needs === "cli") return pill(r.ready ? "cli installed" : "cli not installed", r.ready ? "known" : "off");
+  return pill(r.local ? (r.reachable ? "local · running" : "local · not running") : st, r.reachable ? "ok" : "off");
 }
 
 export function mount(root) {
   const body = h("div", { class: "xc-prov" });
-  root.replaceChildren(body);
+  const counts = h("div", { class: "xc-phead-read" });
+  root.replaceChildren(h("div", { class: "xc-pg" }, pageHead({ eyebrow: "05 / Providers", title: "Providers",
+    lede: "Where model keys live, which providers answer, and the model the main role uses.", aside: counts }), body));
   let alive = true;
 
   if (!sessionStorage.getItem("xc-token")) {
-    body.replaceChildren(h("section", { class: "xc-panel" }, h("header", { class: "xc-panel-head" }, h("h2", null, "Providers")),
-      h("p", { class: "xc-prov-lead" }, "Open the link `exo web` printed in the terminal. It carries a page token that this page needs to set up providers.")));
+    body.replaceChildren(emptyState({ k: "Page token missing", title: "Open the link exo web printed.",
+      body: "It carries a page token that this page needs to set up providers. The bare address has none." }));
     return () => { alive = false; };
   }
 
@@ -78,13 +82,15 @@ export function mount(root) {
   }
 
   function row(r) {
-    const meta = [];
-    if (r.needs === "key") meta.push(r.key === "found" ? "key from " + (r.source || "?") : "key missing");
-    if (r.key_env && r.key_env.length) meta.push(r.key_env.join(" / "));
-    meta.push(r.models != null ? r.models + " models" : "models n/a");
-    if (r.serves && r.serves.length) meta.push("serves " + r.serves.join(", "));
-    const kids = [h("div", { class: "xc-prow-top" }, h("span", { class: "xc-prow-name" }, r.provider), chip(r),
-      h("span", { class: "xc-prow-meta" }, meta.map((m) => h("span", null, m))), r.default ? h("span", { class: "xc-defmark" }, "default") : null)];
+    const meta = [];   // [label, value]
+    if (r.needs === "key") meta.push(["key", r.key === "found" ? "from " + (r.source || "?") : "missing"]);
+    if (r.key_env && r.key_env.length) meta.push(["env", r.key_env.join(" / ")]);
+    meta.push(["models", r.models != null ? String(r.models) : "n/a"]);
+    if (r.serves && r.serves.length) meta.push(["serves", r.serves.join(", ")]);
+    const kids = [h("div", { class: "xc-prow-top" },
+      h("div", { class: "xc-prow-id" }, h("span", { class: "xc-prow-name" }, r.provider), r.default ? h("span", { class: "xc-defmark" }, "default") : null),
+      h("div", { class: "xc-prow-st" }, chip(r)),
+      h("dl", { class: "xc-prow-meta" }, meta.map((m) => h("div", null, h("dt", null, m[0]), h("dd", null, m[1])))))];
     if (r.needs === "key") {
       const input = h("input", { class: "xc-field", type: "password", autocomplete: "new-password", spellcheck: "false",
         autocapitalize: "off", placeholder: r.key === "found" ? "replace the key" : "paste the key", "aria-label": "API key for " + r.provider });
@@ -98,7 +104,7 @@ export function mount(root) {
     }
     const res = results[r.provider];
     if (res) kids.push(h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text));
-    return h("div", { class: "xc-prow" + (r.default ? " def" : "") }, kids);
+    return h("div", { class: "xc-prow" + (r.default ? " def" : ""), role: "listitem" }, kids);
   }
 
   async function saveDefault() {
@@ -121,8 +127,9 @@ export function mount(root) {
       routes.length ? h("optgroup", { label: "configured" }, routes.map(opt)) : null,
       more.length ? h("optgroup", { label: "available" }, more.map(opt)) : null);
     const res = results._default;
-    return h("div", { class: "xc-prov-def" }, h("h4", { style: "margin:0" }, "Default model"), sel,
-      h("button", { class: "xc-btn xc-primary", type: "button", onclick: saveDefault }, "Save default"),
+    return h("section", { class: "xc-prov-def", "aria-label": "Default model" },
+      h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"), h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
+      h("div", { class: "xc-prov-def-act" }, sel, h("button", { class: "xc-btn xc-primary", type: "button", onclick: saveDefault }, "Save default")),
       res ? h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text) : null);
   }
 
@@ -133,11 +140,19 @@ export function mount(root) {
     const active = document.activeElement;
     const keep = active && active.tagName === "INPUT" && active.type === "password" && active.value ? active : null;
     if (keep) return;   // never redraw while a key is being typed
+    const ready = rows.filter((r) => r.verified || r.ready).length;
+    const def = rows.find((r) => r.default);
+    counts.replaceChildren(readout([["Ready", ready + " / " + rows.length, ready ? "ok" : "off"],
+      ["Default", def ? def.provider : "not set", def ? "on" : "off"]]));
     body.replaceChildren(...[
-      h("p", { class: "xc-prov-lead" }, "Keys are stored in " + (STORE_TEXT[data.store] || data.store || "the local store") +
+      h("p", { class: "xc-prov-lead" }, h("span", { class: "xc-led", "data-s": "known", "aria-hidden": "true" }),
+        "Keys are stored in " + (STORE_TEXT[data.store] || data.store || "the local store") +
         ". They are sent to this local server once, never shown again, and never kept in the browser."),
-      data.ready ? null : h("div", { class: "xc-warn" }, "No model provider is ready yet. Add a key below."),
-      rows.length ? h("div", { class: "xc-prov-list" }, rows.map(row)) : empty("No providers known."),
+      data.ready || !rows.length ? null : h("div", { class: "xc-warn" }, "No model provider is ready yet. Add a key below."),
+      rows.length ? h("div", { class: "xc-prov-list", role: "list" }, rows.map(row)) : emptyState({ k: "No providers",
+        title: "This core knows no model provider yet.",
+        body: "Providers come from the core's router config: hosted APIs that need a key, command-line tools, and local servers.",
+        hint: "Add one to the config or start a local server such as Ollama, then open this tab again." }),
       picker()].filter(Boolean));
   }
 

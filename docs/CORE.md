@@ -19,7 +19,12 @@ the protocol and the running core in `docs/CORE-V2-INTERFACES.md`, the command l
 | `exo.cli` | The `exo` command. Every subcommand is in `docs/COMMANDS.md`. |
 
 The package holds much more than these four. `exo.core` is the loop, engine, tools and plugin loader.
-`exo.protocol` and `exo.server` carry the wire. `exo.learn`, `exo.consolidate`, `exo.ask`, `exo.eval` and
+`exo.compose` builds the engine `exo serve` runs and attaches `exo.peers` (the peer transport) and `exo.scheduler`
+(scheduled jobs), which sit outside the core since D-067 (`docs/ENGINE-SPLIT.md`). The counted core (`exo.core`,
+`exo.protocol`, `exo.server` and two command-line modules) is held by a test as a ratchet with headroom: the count
+stays under a recorded floor plus 1,000 lines, the floor only goes down, and a security or robustness fix is never
+blocked by it (D-077, `docs/ENGINE-SPLIT.md` "Budget policy"). `exo.protocol` and `exo.server` carry the wire.
+`exo.learn`, `exo.consolidate`, `exo.ask`, `exo.eval` and
 `exo.brief` are the learning side (`docs/LEARNING.md`, `docs/TOOLS-CLI.md`). `exo.bus` is the signed relay between
 seats. `exo.gate` is the action gate (`docs/GATE.md`). `exo.ingest` imports past conversations.
 
@@ -32,7 +37,9 @@ stale without a failing test. After a schema change, run `python -m exo.protocol
 ## Where things live
 
 - `EXO_HOME` defaults to `~/.exo`.
-- A principal store defaults to `$EXO_HOME/principals/<id>`. Any directory works with `--root`.
+- A principal store defaults to `$EXO_HOME/principals/<id>`. Any directory works with `--root`. `exo init --root`
+  and `exo import-store --root` record theirs in config `principals.<id>`, and `exo.store.principal_root` maps the
+  id to it for every reader (store commands, `exo memory verify`, exo-memory, learning, the gate).
 - Keys default to `$EXO_HOME/keys/<name>.key`, with the public key in `<name>.pub`.
 - The ledger of a store is `<store>/ledger.sqlite`.
 - The empty store template is `templates/principal-store/`. Wheels carry it inside the package.
@@ -79,16 +86,56 @@ The triggers stop a careless edit, not a deliberate one: drop the delete trigger
 back, and the shorter chain still links. So each append also writes the head (seq, row count, chain hash) to
 `<ledger>.head` beside the database and to `$EXO_HOME/keys/heads/<hash>.json`, both 0600.
 
+- The anchors are written after the append's COMMIT, from the committed head, in a second short transaction under
+  the write lock, so they only move forward. A writer killed in between (SIGKILL, out of memory, power loss) leaves
+  them one event behind, never ahead: verify still passes and the next append catches them up. If the anchor write
+  fails after the COMMIT, the event stands and a warning is logged.
+- When the anchor beside the ledger cannot be written, the copy under `keys/heads/` still is. Before it writes,
+  an append catches the anchors up when the beside anchor trails the head or no anchor is at the head. It refuses
+  ("cannot be written") when the beside anchor trails and cannot be written, or when no anchor is at the head and
+  none can be written. So appends never go on more than one event past every anchor. The refusal names the files
+  to make writable again. `exo log anchor` reports an anchor beside the ledger it cannot write in one line, with
+  exit code 1. A keys/heads copy it cannot write is a warning only.
+  `verify()` reports `anchored_seq`, the lowest seq an anchor holds, next to the head. When the anchors are more
+  than one event apart, the result also carries a `warning` that names the one not being written. It still passes.
+- The anchor check before an append counts the ledger once per anchor. The write after COMMIT takes indexed
+  lookups only, so an append costs what it did before the anchor moved after COMMIT.
+- The anchor under `keys/heads/` is named after the ledger's path with its folder resolved but not the file. A
+  ledger file swapped for a symlink to a truncated copy still meets that anchor. A ledger file that is a symlink
+  fails `verify()`, and `append()` and `anchor()` refuse it. A `Ledger` without an authority opens such a file
+  read-only (#277), and only when it is a regular file, so opening it writes nothing through the link: no WAL
+  switch, no tables, no file made at a dangling target. SQLite's `immutable` flag keeps it from making `-wal` and
+  `-shm` files beside a target in WAL mode. The one exception is a target that already has a `-wal` file (another
+  process has it open, or one crashed): SQLite reads it and may add or rewrite a `-shm` file. A target that is
+  missing, is not a regular file (a FIFO would block the open) or holds no ledger reads as empty. An authority-mode
+  ledger trusts its signed checkpoints: its appends skip the symlink refusal and write the projection through the
+  link.
+- An anchor is read only as a regular file: a symlink in its place is unreadable. Anchors are written through a
+  fresh temporary file (`mkstemp`, with `O_EXCL` and `O_NOFOLLOW`), so a symlink planted in the anchor's folder
+  cannot redirect the write.
 - `verify()` checks every anchor it finds: the ledger must reach that seq and the chain hash there must match. It also
   fails when an append-only trigger was missing when the ledger was opened (the open puts it back).
 - `append()` refuses to write when an anchor does not match, so the next event cannot hide a truncation.
+- `exo memory verify` also fails a store whose `ledger.sqlite` is gone while an anchor says it held events. It reads
+  the anchors without opening the database, so it does not put an empty one in its place. A store that never held
+  an event reports nothing.
 - With no anchor at all (a ledger from before D-040, or a copy without its `.head`), `verify()` is ok and says
   `anchored: false`. The next append anchors it. `exo log anchor` does it now.
-- `exo init` clears an anchor left at its path by a deleted store.
+- `exo log anchor` refuses to replace an anchor that does not match, since events may have been removed.
+  `--force` replaces it and lists what it replaced. It is for a store an older Exo left stuck, not for a
+  truncation: that version wrote the anchor just before COMMIT, so a writer killed in between left it one event
+  ahead, and every later append was refused with "events were removed".
+- `exo init` clears an anchor left at its path by a deleted store. `exo import-store` clears the one under
+  `keys/heads`. A ledger copied with `--include-private` keeps its own `.head`.
 
 What this does not protect against: a process running as the same user that rewrites the database and both anchor
 files together, or deletes both anchors. The gate is what stands in the way of that: `keys/` and the store are
-credentials to it.
+credentials to it. Nor a store folder deleted whole: `exo memory verify` lists only the stores that exist, so that
+store's anchor under `keys/heads/` is read only with `--principal <id>`. Nor a store folder replaced by a symlink to
+another folder: a crafted copy behind the link verifies clean, because the anchor under `keys/heads/` is named after
+the folder the link resolves to. A code fix is tracked with the deferred scan of `keys/heads/` (#277). It has to
+allow for the M1 migration in `docs/ARCHITECTURE.md` (symlink first, then move), where a legitimate move leaves its
+anchor under the old path.
 
 Kinds: `utterance`, `ruling`, `verdict`, `action`, `artifact`, `ingest`, `question`, `answer`,
 `belief_proposed`, `belief_accepted`, `note`.
@@ -120,6 +167,18 @@ store.find("posting rules", n=5)     # [(node_id, score), ...]
 store.ctx("posting rules", budget=1500).text
 assemble(store, "posting rules", 1500).node_ids
 ```
+
+## Find
+
+`find` ranks nodes with BM25. A node's title counts three times, its summary and `load_when` twice, and its tags,
+id and body once. The first `find` tokenizes every node and keeps the tables it builds: each node's word counts and
+length, how many nodes hold each word, and the average length. Later calls tokenize only the query (#254). `ctx`
+and the default ranker of `assemble` call `find`, so they share the tables.
+
+The tables belong to the node set they were built from. `reload()` makes a new set, and so does a `refresh()` that
+sees a node file added, edited or removed. The next `find` then builds the tables again. So `find` always ranks the
+nodes that `nodes` returns. Like `nodes`, it does not see a file written after the last read until a `refresh()` or
+a `reload()`. Callers treat the node dicts as read-only and change a node by writing its file.
 
 ## Store checks
 

@@ -37,6 +37,6 @@ export function nearHome(layout, scrollTop, scrollHeight, clientHeight, slack = 
 // The order of the parts of the chat column. The tab order follows the page, so it is the real DOM order.
 export function columnOrder(layout) {
   return layout === "inverse"
-    ? ["banner", "guide", "composer", "menu", "steer", "approvals", "stage", "status"]
+    ? ["banner", "status", "guide", "composer", "menu", "steer", "approvals", "stage"]
     : ["banner", "stage", "approvals", "status", "steer", "guide", "composer", "menu"];
 }

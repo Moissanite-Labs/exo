@@ -44,11 +44,12 @@ def reveal(widget: Widget) -> None:
 class Block(Static):
     """One transcript entry. ``text`` is the truth; ``flush`` paints it.
 
-    Kinds: user, assistant, error, warn, note, hint (a tip), memory (a cold one-liner), peer, taste, finding.
-    peer, taste and finding are panels: a coloured left rule (CSS) and a header line drawn here."""
+    Kinds: user, assistant, error, warn, note, hint (a tip), memory (a cold one-liner), peer, taste, finding, intro.
+    peer, taste, finding and intro (the short orientation) are panels: a coloured left rule (CSS) and a header line
+    drawn here."""
 
     PANELS = {"peer": ("cold", "PEER"), "taste": ("cold", "TASTE"), "finding": ("cold", "FINDING"),
-              "report": ("cold", "")}
+              "report": ("cold", ""), "intro": ("cold", "INTRO")}
     ROW = re.compile(r"^(\s+)(\S.*?)(\s{2,})(\d+)(\s*)(.*)$")  # `  recent tail   29   2 messages`
 
     def __init__(self, text: str = "", kind: str = "assistant", head: str = "", meta: str = "",
@@ -61,6 +62,7 @@ class Block(Static):
         self.meta = meta  # panel footer line, dim
         self.shown: Any = None
         self.steer = steer  # a user message sent while a turn was running
+        self.steer_state = "sending"  # delivered only after confirmation from the core
         self.pending = False  # a steer the core still holds: up or /unsteer pulls it back (D-045)
         self.streaming = False  # text still arriving: paint cheap plain text, Markdown once the block closes
 
@@ -102,7 +104,9 @@ class Block(Static):
             row = Table.grid(padding=(0, 1))
             lead = Text()
             if self.steer:
-                lead.append("steer queued " if self.pending else "steer ", style=rich_style("fg3"))
+                state = "queued" if self.pending else self.steer_state
+                role = "accent2" if self.pending else "ok" if state == "delivered" else "fg3"
+                lead.append(f"steer {state} ", style=rich_style(role))
             lead.append(PROMPT, style=rich_style("accent", "bold"))
             row.add_column(no_wrap=True)
             row.add_column(ratio=1)
@@ -482,8 +486,11 @@ class StatusStrip(Widget):
         frac = d["ctx"] / d["window"] if d["window"] else 0.0
         sep()
         label("MEM")
-        t.append_text(gauge(frac, 10, "accent2" if frac >= 0.85 else "cold"))
-        t.append(f" {min(999, round(100 * frac))}%", style=rich_style("fg2"))
+        if d["window"]:
+            t.append_text(gauge(frac, 10, "accent2" if frac >= 0.85 else "cold"))
+            t.append(f" {min(999, round(100 * frac))}%", style=rich_style("fg2"))
+        else:
+            t.append("capacity unknown", style=rich_style("fg2"))
         if w >= 70 and d["ctx"]:
             t.append(f" {human_tokens(d['ctx'])}", style=rich_style("fg3"))
         if w >= 56:
@@ -518,22 +525,22 @@ class ApprovalCard(Vertical, can_focus=True):
         r = self.req
         width = self.size.width or 60
         out: list[Any] = [header_rule(f"APPROVAL {DOT} {r.risk}", "accent", width)]
+        if not (self.noting or self.confirming):
+            pairs = [("o", "once")] if "allow" in r.options else []
+            if "allow_always" in r.options:
+                pairs.append(("a, Enter", "always"))
+            pairs.append(("d, Enter", "deny"))
+            keys = Text("Choose: " if self.has_focus else "Ctrl+F, then ", style=rich_style("accent2"))
+            keys.append_text(chips(pairs))
+            out.append(keys)
         out.append(Text(r.summary, style=rich_style("fg")))
         if r.call is not None:
             call = Text(f"{r.call.name} {r.call.arguments}", style=rich_style("fg3"), no_wrap=True, overflow="ellipsis")
             out.append(call)
-        pairs = [("o", "once")] if "allow" in r.options else []
-        if "allow_always" in r.options:
-            pairs.append(("a", "always"))
-        pairs.append(("d", "deny"))
         if self.noting:
             out.append(Text("why deny? enter sends, empty is fine", style=rich_style("fg3")))
         elif self.confirming:
             out.append(Text("allow always? enter confirms, any other key cancels", style=rich_style("accent2")))
-        else:
-            out.append(chips(pairs))
-            if not self.has_focus:
-                out.append(Text("tab, click or ctrl+f to answer; your typing is safe", style=rich_style("fg3")))
         return Group(*out)
 
     def compose(self) -> ComposeResult:
@@ -746,16 +753,17 @@ class PanelView(Vertical):
 class Welcome(Static):
     """The empty start: what to type and which keys matter. Gone with the first line of the transcript."""
 
-    def __init__(self, agent: str, model: str) -> None:
+    def __init__(self, agent: str, model: str, memory: str = "") -> None:
         super().__init__("", id="welcome")
-        self.agent, self.model = agent, model
+        self.agent, self.model, self.memory = agent, model, memory
         self.shown: Any = None
 
     def on_mount(self) -> None:
         head = Text()
         head.append("\u25e2 ", style=rich_style("accent"))
         head.append("E X O", style=rich_style("fg", "bold"))
-        info = Text(f"{self.agent}  {DOT}  {self.model or '-'}  {DOT}  memory ready", style=rich_style("fg3"))
+        bits = [self.agent, self.model or "-"] + ([f"memory {self.memory}"] if self.memory else [])
+        info = Text(f"  {DOT}  ".join(bits), style=rich_style("fg3"))
         keys = chips([("enter", "send"), ("@", "file"), ("!", "shell"), ("/", "commands"), ("ctrl+p", "palette"),
                       ("ctrl+c", "stop")])
         self.shown = Group(head, info, Text(""), keys)

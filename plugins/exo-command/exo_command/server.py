@@ -14,16 +14,26 @@ Routes:
                               or the Last-Event-ID header); the chat page streams text from here
   ...                         chat, feedback, ui.respond, tasks and schedule routes: see ``api.py``
   POST /api/approvals/<id>    body ``{"decision": "allow|deny|allow_always", "note": ""}``
+  POST /api/launch            body ``{"code": "..."}``: trade a one-time launch code for the page token (#166)
   *    /api/providers...       provider setup (D-034): see ``providers.py``; loopback peer, loopback Host,
                               same Origin and the per-launch token, or refused
 
 Access (D-039). The server binds to loopback by default. Every request must name this server in its Host header
 (``127.0.0.1:<port>``, ``localhost:<port>`` or ``[::1]:<port>``), so a DNS rebinding name gets nothing, not even the
-page. Every ``/api/`` route and both event streams also need the per-launch page token: ``X-Exo-Token`` on fetches,
-or ``?token=`` on the two event streams (a browser EventSource cannot set headers). An Origin, when sent, must be
-this same host, and Sec-Fetch-Site must be same-origin or none. Only the page shell (``/`` and ``/static/``) is
-served without the token: it is code, not data. `exo web` prints the page address with the token in the URL
-fragment (never sent to a server) and opens it in the browser; the page moves it to sessionStorage.
+page. Every ``/api/`` route except ``POST /api/launch`` (below) and both event streams also need the per-launch page
+token: ``X-Exo-Token`` on fetches, or ``?token=`` on the two event streams (a browser EventSource cannot set headers).
+An Origin, when sent, must be this same host, and Sec-Fetch-Site must be same-origin or none. Besides the launch
+route, only the page shell (``/`` and ``/static/``) is served without the token: it is code, not data. `exo web`
+prints the page address with the token in the URL fragment (never sent to a server); the page moves it to
+sessionStorage.
+
+Launch code (#166). The browser is opened on ``#code=<one-time code>``, never on the token: the launcher's argv is
+readable by other users of the host in /proc. ``/api/launch`` is the one ``/api/`` route without the token; it
+passes every other check of ``providers.guard``. A code answers the token once, for at most ``LAUNCH_TTL`` seconds.
+A code that comes back after it was used means two parties held it: the token is replaced, every request in flight
+ends (event streams, and requests that passed the token check but are still waiting for a body), and the terminal
+gets a warning and the new link. A body is checked against the current token again once it is read. Detection needs
+that second redemption: a launched browser that never runs the page's script never redeems, and then nothing warns.
 """
 from __future__ import annotations
 
@@ -32,6 +42,7 @@ import hmac
 import json
 import mimetypes
 import secrets
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
@@ -44,10 +55,19 @@ from .source import SourceError, core_message
 STATIC = Path(__file__).resolve().parent / "static"
 MAX_BODY = 64 * 1024
 HEARTBEAT = 15.0
+# One policy for every response (#162): script, style, images and requests from this server only. No inline script,
+# style attribute or eval, no plugins, no <base>, no native form posts (every form is handled in script), no framing.
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
+       "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+SECURITY_HEADERS = ("Content-Security-Policy: {}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+                    .format(CSP))
 REASONS = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
            501: "Not Implemented", 502: "Bad Gateway"}
 DECISIONS = ("allow", "deny", "allow_always")
 STREAMS = ("/api/events", "/api/stream")
+LAUNCH = "/api/launch"
+LAUNCH_TTL = 120.0
+BAD_TOKEN = {"error": "missing or wrong page token: open the link `exo web` printed"}
 
 
 class WebServer:
@@ -61,6 +81,9 @@ class WebServer:
         self._conns: set = set()
         self._feeds: list = []
         self._hosts: set = set()
+        self._codes: Dict[str, float] = {}   # unused launch codes -> monotonic deadline
+        self._spent: set = set()             # redeemed launch codes: one coming back means it leaked
+        self._shown: Optional[Tuple[str, int]] = None
 
     # ------------------------------------------------------------ lifecycle
 
@@ -71,6 +94,7 @@ class WebServer:
         if host and host not in ("0.0.0.0", "::", ""):
             names.add("[{}]".format(host) if ":" in host and not host.startswith("[") else host)
         self._hosts = {"{}:{}".format(n, bound).lower() for n in names}
+        self._shown = (host, bound)
         return bound
 
     def _refuse(self, headers: Dict[str, str], path: str, q: Dict[str, Any]) -> Optional[Tuple[int, Dict[str, Any]]]:
@@ -86,12 +110,17 @@ class WebServer:
         site = headers.get("sec-fetch-site")
         if site is not None and site not in ("same-origin", "none"):
             return 403, {"error": "cross-site request refused"}
+        if path == LAUNCH:   # no token yet: _launch runs providers.guard_peer instead
+            return None
         sent = headers.get(prov.TOKEN_HEADER, "")
         if not sent and path in STREAMS:
             sent = (q.get("token") or [""])[0]
-        if not sent or not hmac.compare_digest(sent.encode(), self.token.encode()):
-            return 403, {"error": "missing or wrong page token: open the link `exo web` printed"}
+        if not self._current(sent):
+            return 403, BAD_TOKEN
         return None
+
+    def _current(self, sent: str) -> bool:
+        return bool(sent) and hmac.compare_digest(sent.encode(), self.token.encode())
 
     async def run(self, host: str, port: int) -> None:
         """Connect to the core, then serve until cancelled. Keeps retrying the core in the background."""
@@ -107,10 +136,14 @@ class WebServer:
                       "or run: exo providers add <provider>", flush=True)
         except Exception:
             pass
-        if self.open_browser:
+        if self.open_browser and not _loopback_shown(host):
+            # /api/launch answers loopback only, and the token link must not go back into the launcher's argv
+            print("exo-command: not opening a browser: the one-time browser link works only when --host is "
+                  "127.0.0.1, localhost, ::1 or a wildcard bind. Open the link above.", flush=True)
+        elif self.open_browser:
             try:
                 import webbrowser
-                webbrowser.open(url)
+                webbrowser.open(self.launch_url(host, bound))
             except Exception:
                 pass
         feed = asyncio.create_task(self._feed())
@@ -139,10 +172,52 @@ class WebServer:
 
     def page_url(self, host: str, port: int) -> str:
         """The page address with the token in the fragment, so it never reaches a server or a log line."""
-        shown = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
-        if ":" in shown and not shown.startswith("["):
-            shown = "[{}]".format(shown)
-        return "http://{}:{}/#token={}".format(shown, port, self.token)
+        return "{}/#token={}".format(_origin(host, port), self.token)
+
+    def launch_url(self, host: str, port: int) -> str:
+        """The address the browser is opened on: a fresh one-time code, not the token (#166)."""
+        now = time.monotonic()
+        self._codes = {c: t for c, t in self._codes.items() if t > now}
+        code = secrets.token_urlsafe(32)
+        self._codes[code] = now + LAUNCH_TTL
+        return "{}/#code={}".format(_origin(host, port), code)
+
+    def redeem(self, code: Any) -> Tuple[int, Dict[str, Any]]:
+        """The page token for an unused, unexpired launch code, once. A used code coming back replaces the token."""
+        if not isinstance(code, str) or not code:
+            return 403, {"error": "no launch code"}
+        sent = code.encode()
+        for c in list(self._spent):
+            if hmac.compare_digest(sent, c.encode()):
+                self._spent.discard(c)   # one replacement per leaked code: its holder never saw the new token
+                self.rotate()
+                return 403, {"error": "launch code already used: the page token was replaced"}
+        for c, deadline in list(self._codes.items()):
+            if hmac.compare_digest(sent, c.encode()):
+                del self._codes[c]
+                if time.monotonic() >= deadline:
+                    return 403, {"error": "launch code expired"}
+                self._spent.add(c)
+                return 200, {"token": self.token}
+        return 403, {"error": "unknown launch code"}
+
+    def rotate(self) -> None:
+        """Replace the page token. Every open page must re-open. Every other connection ends now: streams opened with
+        the old token, and requests that passed the token check and still wait for their body."""
+        self.token = secrets.token_urlsafe(32)
+        try:
+            me = asyncio.current_task()
+        except RuntimeError:   # no running loop
+            me = None
+        for t in list(self._conns):
+            if t is not me:
+                t.cancel()
+        if self._shown is not None:
+            # paste, not click: a click from the terminal hands the token to the URL opener's argv again (#166)
+            print("exo-command: warning: a browser launch link was used twice, so someone else may have had it. "
+                  "The page token was replaced; paste the new link into the browser that is already open:",
+                  flush=True)
+            print("exo-command: {}".format(self.page_url(*self._shown)), flush=True)
 
     async def close(self) -> None:
         if self._server is not None:
@@ -219,6 +294,10 @@ class WebServer:
             raws = [(q.get("since") or ["0"])[0], headers.get("last-event-id") or "0"]
             since = max([int(r) for r in raws if r.isdigit()] or [0])
             return await self._events(writer, since, (q.get("session") or [None])[0])
+        if path == LAUNCH:
+            if method != "POST":
+                return await self._json(writer, 405, {"error": "POST only"})
+            return await self._launch(reader, writer, headers)
         if path == "/api/providers" or path.startswith("/api/providers/"):
             return await self._providers(reader, writer, headers, method, path)
         if path == "/api/complete/files":   # file names: same guard as the key routes (loopback, Host, token)
@@ -255,6 +334,20 @@ class WebServer:
         body.clear()
         return await self._json(writer, status, data)
 
+    async def _launch(self, reader, writer, headers: Dict[str, str]) -> None:
+        """Redeem a launch code (#166). Fails closed: any error answers 403 and no token."""
+        peer = writer.get_extra_info("peername")
+        refused = prov.guard_peer(headers, peer[0] if isinstance(peer, (tuple, list)) and peer else None)
+        if refused is not None:
+            return await self._json(writer, *refused)
+        try:
+            n = int(headers.get("content-length", "0"))
+            body = json.loads(await reader.readexactly(n)) if 0 < n <= 1024 else None
+            status, data = self.redeem(body.get("code") if isinstance(body, dict) else None)
+        except Exception:
+            status, data = 403, {"error": "launch code refused"}
+        return await self._json(writer, status, data)
+
     async def _body(self, reader, writer, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
         """Read a JSON object body from a same-origin POST; answer the error and return None otherwise."""
         origin, host = headers.get("origin"), headers.get("host", "")
@@ -272,6 +365,9 @@ class WebServer:
             body = json.loads(await reader.readexactly(n)) if n else {}
         except ValueError:
             body = None
+        if not self._current(headers.get(prov.TOKEN_HEADER, "")):   # replaced while the body was on its way
+            await self._json(writer, 403, BAD_TOKEN)
+            return None
         if not isinstance(body, dict):
             await self._json(writer, 400, {"error": "body must be a json object"})
             return None
@@ -280,13 +376,17 @@ class WebServer:
     async def _events(self, writer, since: int, session: Optional[str]) -> None:
         """Every protocol event after ``since`` as ``id: seq`` + ``data: <event json>``, then live ones."""
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
-                     b"Connection: close\r\n\r\n: exo-command events\n\n")
+                     + SECURITY_HEADERS.encode() + b"Connection: close\r\n\r\n: exo-command events\n\n")
         q = self.centre.subscribe_events()
         try:
-            sent = since
-            for ev in self.centre.events_since(since, session):
+            events, gap = await self.centre.replay_events(since, session)
+            sent = 0 if gap and gap["reset"] else since
+            if gap:
+                writer.write(b"event: gap\ndata: " + json.dumps(gap).encode() + b"\n\n")
+            for ev in events:
                 writer.write(_frame(ev))
                 sent = ev["seq"]
+            writer.write(b'event: synced\ndata: {}\n\n')
             await writer.drain()
             while True:
                 try:
@@ -316,6 +416,8 @@ class WebServer:
             body = json.loads(await reader.readexactly(n)) if n else {}
         except ValueError:
             return await self._json(writer, 400, {"error": "bad json"})
+        if not self._current(headers.get(prov.TOKEN_HEADER, "")):   # replaced while the body was on its way
+            return await self._json(writer, 403, BAD_TOKEN)
         decision = body.get("decision")
         if decision not in DECISIONS:
             return await self._json(writer, 400, {"error": "decision must be one of {}".format(", ".join(DECISIONS))})
@@ -330,7 +432,7 @@ class WebServer:
 
     async def _send(self, writer, status: int, body: bytes, ctype: str) -> None:
         head = ("HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n"
-                "Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n").format(status, REASONS.get(status, ""), ctype, len(body))
+                "{}Connection: close\r\n\r\n").format(status, REASONS.get(status, ""), ctype, len(body), SECURITY_HEADERS)
         writer.write(head.encode() + body)
         await writer.drain()
 
@@ -345,7 +447,7 @@ class WebServer:
 
     async def _sse(self, writer) -> None:
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
-                     b"Connection: close\r\n\r\n: exo-command\n\n")
+                     + SECURITY_HEADERS.encode() + b"Connection: close\r\n\r\n: exo-command\n\n")
         q = self.centre.subscribe()
         try:
             writer.write("data: {}\n\n".format(json.dumps({"seq": self.centre.state.seq})).encode())
@@ -359,6 +461,18 @@ class WebServer:
                 await writer.drain()
         finally:
             self.centre.unsubscribe(q)
+
+
+def _origin(host: str, port: int) -> str:
+    shown = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    if ":" in shown and not shown.startswith("["):
+        shown = "[{}]".format(shown)
+    return "http://{}:{}".format(shown, port)
+
+
+def _loopback_shown(host: str) -> bool:
+    """Whether the address `exo web` shows for this bind passes the loopback Host check of /api/launch."""
+    return prov._host_name(urlsplit(_origin(host, 0)).netloc) in prov.LOOPBACK_NAMES
 
 
 def _frame(ev: Dict[str, Any]) -> bytes:

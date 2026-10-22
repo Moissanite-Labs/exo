@@ -7,8 +7,11 @@ It holds the machine-level choices the installer and the plugins share:
     hermes_home   the HERMES_HOME Exo installed its plugins into
     venv          the Python environment that runs Hermes and Exo
     plugins       the Exo plugins installed into hermes_home
+    plugin_selection  the installer's `--plugins` list (or "all"), kept for re-runs and `exo update`
     plugin_config per-plugin settings, keyed by plugin name
     principals    optional explicit store roots, keyed by principal id
+    update        `exo update` settings: `update.require_signed` (default false) refuses a target
+                  commit not signed by a key in the pinned trust list (docs/INSTALL.md, D-073)
 
 Resolution for each value, first hit wins: the environment, then the file, then the default.
 The environment never leaks into the file: `save()` writes only what was set on the object.
@@ -23,10 +26,11 @@ import json
 import os
 import re
 import sys
-import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
+from .core.private import atomic_write
 from .store import ID_RE, exo_home
 
 VERSION = 1
@@ -104,6 +108,7 @@ def _defaults(home: Path) -> dict[str, Any]:
         'plugins': list(DEFAULT_PLUGINS),
         'plugin_config': {},
         'principals': {},
+        'update': {'require_signed': False},
     }
 
 
@@ -133,12 +138,43 @@ class Config:
     def path(self) -> Path:
         return self.home / FILENAME
 
+    # Parsed file contents per path, keyed on (size, mtime_ns); None means the file was missing.
+    # load() is on hot paths (every engine setup, every CLI call), and the file rarely changes.
+    _cache: dict[str, tuple[tuple[int, int] | None, dict]] = {}
+    _cache_lock = threading.Lock()
+
+    @staticmethod
+    def _stamp(path: Path) -> tuple[int, int] | None:
+        try:
+            st = path.stat()
+        except FileNotFoundError:
+            return None
+        return st.st_size, st.st_mtime_ns
+
+    @classmethod
+    def _cached(cls, path: Path, stamp: tuple[int, int] | None, data: dict) -> None:
+        with cls._cache_lock:
+            if len(cls._cache) > 64:  # test suites load many throwaway homes; drop, never grow
+                cls._cache.clear()
+            cls._cache[str(path)] = (stamp, copy.deepcopy(data))
+
     @classmethod
     def load(cls, home: str | os.PathLike | None = None) -> 'Config':
+        """Cached on the file's size and mtime_ns (#255 W1-3): an unchanged file is read and parsed
+        once, and each load hands out a deep copy, so mutating one load's values, or set() before a
+        save() that fails, never reaches the next load. An external edit that keeps the same size
+        and mtime_ns is not seen until one of them moves."""
         cfg = cls(home=home)
+        stamp = cls._stamp(cfg.path)
+        with cls._cache_lock:
+            hit = cls._cache.get(str(cfg.path))
+        if hit is not None and hit[0] == stamp:
+            cfg.data = copy.deepcopy(hit[1])
+            return cfg
         try:
             raw = cfg.path.read_text(encoding='utf-8')
         except FileNotFoundError:
+            cls._cached(cfg.path, None, {})
             return cfg
         try:
             data = json.loads(raw)
@@ -148,6 +184,8 @@ class Config:
             raise ConfigError(f'{cfg.path}: top level must be an object')
         if int(data.get('version', VERSION)) > VERSION:
             raise ConfigError(f'{cfg.path}: version {data["version"]} is newer than this exo ({VERSION})')
+        if cls._stamp(cfg.path) == stamp:  # unchanged while it was read; a changed file re-reads next load
+            cls._cached(cfg.path, stamp, data)
         cfg.data = data
         return cfg
 
@@ -155,17 +193,11 @@ class Config:
         """Atomic write, mode 0600. Unknown keys written by newer tools are kept."""
         self.home.mkdir(parents=True, exist_ok=True)
         out = {'version': VERSION, **{k: v for k, v in self.data.items() if k != 'version'}}
-        fd, tmp = tempfile.mkstemp(prefix='.config.', dir=self.home)
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(out, f, indent=2, sort_keys=True)
-                f.write('\n')
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self.path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
-        return self.path
+        path = atomic_write(self.path, json.dumps(out, indent=2, sort_keys=True) + '\n')
+        stamp = self._stamp(path)
+        if stamp is not None:  # the next load serves what was just written, without re-reading it
+            self._cached(path, stamp, out)
+        return path
 
     # --- generic access --------------------------------------------------------
 
@@ -247,18 +279,17 @@ class Config:
     def models(self, env: dict | None = None) -> dict:
         """The `models` table for the core Router, with a working default.
 
-        First hit wins: explicit `models.roles`; a scripted `models.fake`; a local
-        OpenAI-compatible server in `models.local` ({"base_url", "model"}); the catalog
-        (Anthropic) when ANTHROPIC_API_KEY is set; else the offline fake model.
+        Preserve explicit roles, an explicitly configured fake, or a local server.
+        Otherwise use the real catalog. Credential resolution belongs to runtime
+        setup, not this synchronous configuration view.
         Keys: environment, then macOS Keychain, Linux Secret Service when `secret-tool` is available, then
         `~/.config/exo/keys.env` (mode 0600; override with `EXO_KEYS_FILE`; see core/models/keys.py).
         """
-        env = os.environ if env is None else env
         m = copy.deepcopy(self.data.get('models') or {})
         if m.get('roles'):
             return m
         fake = {'roles': {'main': ['fake:scripted'], 'aux': ['fake:scripted'], 'decision': []}}
-        if m.get('fake'):
+        if isinstance(m.get('fake'), dict):
             return {**m, **fake}
         local = m.get('local')
         if isinstance(local, dict) and local.get('base_url') and local.get('model'):
@@ -268,10 +299,7 @@ class Config:
             ref = f"local:{local['model']}"
             return {**m, 'providers': {**(m.get('providers') or {}), 'local': prov},
                     'roles': {'main': [ref], 'aux': [ref], 'decision': []}}
-        from .core.models.keys import lookup_key
-        if lookup_key('ANTHROPIC_API_KEY', env, sources=env is os.environ):
-            return m
-        return {**m, **fake}
+        return m
 
     def plugin_config(self, name: str) -> dict:
         return copy.deepcopy((self.data.get('plugin_config') or {}).get(name) or {})

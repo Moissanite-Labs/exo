@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 import pytest
 
@@ -14,7 +15,7 @@ from exo.core.models.fake import FakeProvider
 from exo.core.models.router import Router
 from exo.core.sessions import SessionStore
 from exo.core.trace import Call, TaskRow, Thresholds, ToolRow, TurnTrace
-from exo.core.types import ProviderEvent, ToolCall, Usage
+from exo.core.types import Message, ProviderEvent, ToolCall, Usage
 from exo.protocol import schema as s
 
 TH = Thresholds()
@@ -112,6 +113,82 @@ def test_harness_errors_are_persisted_and_scrubbed(tmp_path):
     assert "sk-abc" not in text and "abcdef123456" not in text and "[redacted]" in text
     assert "RuntimeError" in errs[0].traceback
     assert any(f["signature"].startswith("harness.error:hook on_turn_start") for f in eng.findings.list())
+
+
+def test_a_setup_state_is_not_a_harness_error(tmp_path, caplog):
+    """A NotConfigured that reaches trace.report (from a hook, or a direct call) files nothing: no harness.error event,
+    no finding and no notice. The hook runner still logs its own warning with the traceback, a real fault beside it is
+    still an event and a finding, and a tool handler that raises it is still a tool error. Only the memory provider's
+    initialize turns it into a notice (docs/TRACE.md; that path is tested in
+    plugins/exo-memory/tests/test_exo_memory_no_principal.py)."""
+    from exo.core.plugins import PluginManager, ToolEntry
+    from exo.core.slots import NotConfigured
+    from exo.core.types import ToolSpec
+
+    def off(*args, **kw):  # a hook and a tool handler of a plugin that is off until set up
+        raise NotConfigured("the relay is off: no relay address is set yet")
+
+    pm = PluginManager(config={})
+    pm.tools["relay_send"] = ToolEntry(ToolSpec(name="relay_send", description="send", parameters={"type": "object"}),
+                                       off, plugin="relay")
+    eng = engine(tmp_path, [{"match": "hi", "steps": [{"tool": "relay_send", "args": {}}, "done"]}], plugins=pm)
+
+    def bad_hook(**kw):
+        raise KeyError("real fault")
+
+    eng.plugins.hooks.register("on_turn_start", off, plugin="setup")
+    eng.plugins.hooks.register("on_turn_start", bad_hook, plugin="broken")
+    assert issubclass(NotConfigured, RuntimeError)  # hosts that catch RuntimeError keep working
+
+    async def go():
+        info = await eng.loop.create_session(title="t")
+        await eng.handle(s.Command.of(s.TurnSend(session=info.id, text="hi")), eng.hub)
+        await asyncio.sleep(0.2)
+        trace.report("direct caller", NotConfigured("off until set up"), info.id)
+        return info.id
+
+    caplog.set_level(logging.INFO, logger="exo")
+    sid = run(go())
+    errs = [e.body for e in types(eng, sid) if isinstance(e.body, s.HarnessError)]
+    assert [e.where for e in errs] == ["hook on_turn_start (broken)"]
+    assert not [e for e in types(eng, sid) if isinstance(e.body, s.Notice) and "relay" in e.body.text]
+    assert [d.is_error for d in (e.body for e in types(eng, sid)) if isinstance(d, s.ToolCompleted)] == [True]
+    sigs = [f["signature"] for f in eng.findings.list()]
+    harness = [x for x in sigs if x.startswith("harness.error")]
+    assert harness and all("(broken)" in x for x in harness), sigs
+    assert [x for x in sigs if x.startswith("tool.error:relay_send") and "notconfigured" in x], sigs
+    logged = [(r.levelno, r.getMessage(), bool(r.exc_info)) for r in caplog.records]
+    assert (logging.WARNING, "hook on_turn_start from setup failed", True) in logged, logged  # the hook runner's own
+    assert (logging.INFO, "direct caller is off until set up: off until set up", False) in logged, logged
+    assert not [m for lv, m, _ in logged if lv >= logging.WARNING and m.startswith("harness error in hook on_turn_start "
+                                                                                   "(setup)")], logged
+
+
+def test_a_setup_state_in_a_tool_approval_hook_still_blocks(tmp_path):
+    """A pre_tool_call hook that raises NotConfigured fails like any approval hook (fail closed): the call is blocked,
+    with a tool.error finding for the block and no harness.error event or finding (docs/TRACE.md)."""
+    from exo.core.slots import NotConfigured
+
+    (tmp_path / "a.txt").write_text("x")
+    eng = engine(tmp_path, [{"match": "go", "steps": [{"tool": "read_file", "args": {"path": "a.txt"}}, "done"]}])
+
+    def off(**kw):
+        raise NotConfigured("the audit hook is off: no audit sink is set yet")
+
+    eng.plugins.hooks.register("pre_tool_call", off, plugin="audit")
+
+    async def go():
+        info = await eng.loop.create_session(title="t")
+        await eng.loop.send(info.id, "go")
+        return info.id
+
+    sid = run(go())
+    done = [e.body for e in types(eng, sid) if isinstance(e.body, s.ToolCompleted)]
+    assert [d.is_error for d in done] == [True] and "Blocked: Tool approval hook failed" in done[0].result.text()
+    assert not [e for e in types(eng, sid) if isinstance(e.body, s.HarnessError)]
+    sigs = [f["signature"] for f in eng.findings.list()]
+    assert [x for x in sigs if x.startswith("tool.error:read_file:blocked")], sigs
+    assert not [x for x in sigs if x.startswith("harness.error")], sigs
 
 
 def test_scrub_removes_secrets_and_cuts():
@@ -253,6 +330,15 @@ def test_rule_model_slow_flags_the_route_per_call():
     assert Thresholds.of({"model_call_s": 45, "model_call_routes": {"p:a": 200, "p:z": -1}}).model_call_routes == {"p:a": 200.0}
 
 
+def test_rule_model_slow_charges_no_route_for_a_call_whose_only_tries_timed_out():
+    """A call stopped on the fallback route keeps only the timeout before it: model.timeout names that route, and
+    the call's total (the timeout plus the fallback's stream) is not filed as model.slow against it."""
+    stopped = tt(calls=[Call(route="", total_ms=130_000, ttft_ms=70_500,
+                             attempts=[{"route": "p:a", "outcome": "timeout", "ms": 60_000}])])
+    got = sigs(stopped)
+    assert "model.timeout:p:a" in got and not [x for x in got if x.startswith("model.slow")]
+
+
 def test_turn_total_wall_is_a_separate_high_cap():
     long = tt(wall_ms=2_000_000, timing={"wall_ms": 2_000_000, "tool_ms": 1_990_000, "approval_ms": 0})
     got = sigs(long)
@@ -324,9 +410,8 @@ def test_cost_flows_from_catalog_price_through_router_and_trace(tmp_path):
     r = Router.from_config({"models": {"p:m": {"input": 2.0, "output": 10.0, "cache_read": 0.2}}}, env={})
     u = r.price(Route("p", "m"), Usage(input_tokens=1000, output_tokens=100, cache_read_tokens=5000))
     assert u.cost_usd == pytest.approx((1000 * 2.0 + 100 * 10.0 + 5000 * 0.2) / 1e6)  # cache read priced as such
-    # OpenAI-style counts include the cached tokens in input_tokens: they are not charged twice
-    o = r.price(Route("p", "m"), Usage(input_tokens=6000, output_tokens=100, cache_read_tokens=5000), True)
-    assert o.cost_usd == pytest.approx(u.cost_usd)
+    # input_tokens is the uncached input on every transport (D-080): the OpenAI transport splits the cached
+    # tokens out of prompt_tokens, so the router never subtracts them (tests/core/models/test_router.py)
     assert r.price(Route("p", "nope"), Usage(input_tokens=5)).cost_usd is None  # no price: None, never 0
 
 
@@ -423,24 +508,106 @@ def test_recurrence_on_an_older_harness_does_not_reopen(monkeypatch):
     monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: False)
     again = f.file("sig", "t")
     assert again["status"] == "fixed" and again["count"] == 2
-    assert f.sweep() == []  # quiet proves nothing when the fix is not running
+    assert f.observe(tt(tools=[ToolRow("bash")]), set()) == []  # quiet proves nothing when the fix is not running
 
 
-def test_quiet_for_n_turns_verifies():
+def bash_err(f, version="abc1234"):
+    """A fixed ``tool.error:bash`` finding (fixed in the running harness) and a turn that ran bash cleanly."""
+    return f.fix(f.file("tool.error:bash:exit-1", "t")["id"], version), tt(tools=[ToolRow("bash")])
+
+
+def days(monkeypatch, *dates):
+    import exo.core.findings as mod
+    it = iter(dates)
+    monkeypatch.setattr(mod, "now_ts", lambda: next(it) + "T12:00:00.000Z")
+
+
+def test_quiet_for_n_eligible_turns_verifies():
     f = fnd(version="abc1234", verify_turns=3)
-    row = f.fix(f.file("sig", "t")["id"], "abc1234")
-    assert f.sweep() == []
-    for i in range(3):
-        f.store.append_event(s.TurnCompleted(turn_id=f"t{i}"), "s")
-    assert f.sweep() == [row["id"]] and f.get(row["id"])["status"] == "verified"
-    assert f.file("sig", "t")["status"] == "reopened"  # verified findings are re-measured too
+    row, ran_bash = bash_err(f)
+    assert f.observe(ran_bash, set()) == [] and f.observe(ran_bash, set()) == []
+    assert f.observe(ran_bash, set()) == [row["id"]] and f.get(row["id"])["status"] == "verified"
+    assert f.file("tool.error:bash:exit-1", "t")["status"] == "reopened"  # verified findings are re-measured too
 
 
-def test_quiet_for_days_verifies():
+def test_unrelated_turns_do_not_count():
+    """D-025 as ruled: a turn that could not have tripped the signature is no evidence the fix held."""
+    f = fnd(version="abc1234", verify_turns=2)
+    row, ran_bash = bash_err(f)
+    for t in (tt(), tt(tools=[ToolRow("read_file")]), tt(calls=[Call(route="p:a")])) * 10:
+        assert f.observe(t, set()) == []
+    assert f.get(row["id"])["status"] == "fixed" and f.get(row["id"])["quiet"] is None
+    assert f.observe(ran_bash, set()) == [] and f.observe(ran_bash, set()) == [row["id"]]
+
+
+def test_a_tripped_or_not_live_turn_does_not_count(monkeypatch):
+    f = fnd(version="abc1234", verify_turns=1)
+    row, ran_bash = bash_err(f)
+    assert f.observe(ran_bash, {"tool.error:bash:exit-1"}) == []
+    import exo.core.findings as mod
+    monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: False)
+    assert f.observe(ran_bash, set()) == [] and f.get(row["id"])["status"] == "fixed"
+
+
+def test_quiet_on_three_days_of_activity_verifies(monkeypatch):
+    f = fnd(version="abc1234")  # 20 turns, 3 days
+    row, ran_bash = bash_err(f)
+    days(monkeypatch, "2026-10-01", "2026-10-01", "2026-10-02", "2026-10-09", "2026-10-09")
+    assert [f.observe(ran_bash, set()) for _ in range(3)] == [[], [], []]
+    assert f.observe(ran_bash, set()) == [row["id"]]
+
+
+def test_idle_days_do_not_count(monkeypatch):
+    """A fix marked long ago with one quiet day of activity since is not three days of activity."""
     f = fnd(version="abc1234")
-    row = f.fix(f.file("sig", "t")["id"], "abc1234")
+    row, ran_bash = bash_err(f)
     f.store._q("UPDATE findings SET fixed_at='2026-01-01T00:00:00.000Z' WHERE id=?", (row["id"],))
-    assert f.sweep() == [row["id"]]
+    days(monkeypatch, "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04")
+    assert f.observe(tt(), set()) == [] and f.observe(tt(), set()) == []  # unrelated turns mark no day
+    assert f.observe(ran_bash, set()) == [] and f.get(row["id"])["status"] == "fixed"
+
+
+def test_a_report_without_a_rule_verifies_by_days_only(monkeypatch):
+    f = fnd(version="abc1234", verify_turns=1)
+    row = f.fix(f.file("agent:slow-startup", "t", source="agent")["id"], "abc1234")
+    days(monkeypatch, "2026-10-01", "2026-10-01", "2026-10-02", "2026-10-03")
+    assert [f.observe(tt(), set()) for _ in range(3)] == [[], [], []]  # turns alone never verify it
+    assert f.observe(tt(), set()) == [row["id"]]
+
+
+def test_an_older_harness_recurrence_restarts_the_clock(monkeypatch):
+    f = fnd(version="abc1234", verify_turns=2)
+    row, ran_bash = bash_err(f)
+    assert f.observe(ran_bash, set()) == []
+    import exo.core.findings as mod
+    monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: False)
+    f.file("tool.error:bash:exit-1", "t")
+    assert f.get(row["id"])["quiet"] is None
+    monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: True)
+    assert f.observe(ran_bash, set()) == [] and f.observe(ran_bash, set()) == [row["id"]]
+
+
+@pytest.mark.parametrize("sig, yes, no", [
+    ("turn.slow", tt(), tt(complete=False)),
+    ("turn.wall", tt(), tt(complete=False)),
+    ("model.slow:p:a", tt(calls=[Call(route="p:a")]), tt(calls=[Call(route="p:b")])),
+    ("model.wait:p:a", tt(calls=[Call(route="")]), tt()),  # no route recorded: the shown model is the route
+    ("model.timeout:p:a", tt(calls=[Call(route="p:b", attempts=[{"route": "p:a", "outcome": "timeout"}])]),
+     tt(calls=[Call(route="p:b")])),
+    ("model.fallback:p:a", tt(children=[tt(calls=[Call(route="p:a")])]), tt(calls=[Call(route="p:b")])),
+    ("model.mismatch", tt(), tt(served=[])),
+    ("tool.error:read_file:not-found", tt(tools=[ToolRow("read_file")]), tt(tools=[ToolRow("bash")])),
+    ("tool.repeat:bash", tt(children=[tt(tools=[ToolRow("bash")])]), tt(tools=[ToolRow("read_file")])),
+    ("shell.masked_exit", tt(tools=[ToolRow("bash")]), tt()),
+    ("subagent.slow", tt(tasks=[TaskRow("k1")]), tt()),
+])
+def test_eligibility_rule(sig, yes, no):
+    assert trace.eligible(sig, yes) is True and trace.eligible(sig, no) is False
+
+
+def test_no_rule_can_tell_for_errors_and_reports():
+    assert trace.eligible("harness.error:hook:KeyError", tt()) is None
+    assert trace.eligible("agent:slow-startup", tt()) is None and trace.eligible("manual:x", tt()) is None
 
 
 def test_at_or_after_rules():
@@ -457,7 +624,8 @@ def test_export_groups_by_severity_newest_first():
 
 
 def test_loop_finding_cycle_through_the_engine(tmp_path):
-    eng = engine(tmp_path, [{"match": "go", "steps": [{"tool": "read_file", "args": {"path": "missing"}}, "ok"]}],
+    eng = engine(tmp_path, [{"match": "go", "steps": [{"tool": "read_file", "args": {"path": "missing"}}, "ok"]},
+                            {"match": "read there", "steps": [{"tool": "read_file", "args": {"path": "there"}}, "ok"]}],
                  trace_cfg={"verify_turns": 1})
     eng.findings.version = "abc1234"
 
@@ -470,7 +638,15 @@ def test_loop_finding_cycle_through_the_engine(tmp_path):
     (row,) = [r for r in eng.findings.list() if r["signature"].startswith("tool.error:read_file")]
     assert row["source"] == "anomaly" and row["session"] == sid and row["status"] == "open"
     eng.findings.fix(row["id"], "abc1234")
-    run(eng.loop.send(sid, "a quiet turn"))  # one clean turn after the fix is enough here
+    run(eng.loop.send(sid, "a quiet turn"))  # no read_file call: it could not have tripped the finding
+    assert eng.findings.get(row["id"])["status"] == "fixed"
+    (tmp_path / "there").write_text("x")
+
+    async def read():
+        info = await eng.loop.create_session(title="read")
+        await eng.loop.send(info.id, "read there")  # read_file ran and did not fail: with verify_turns 1, that verifies
+
+    run(read())
     assert eng.findings.get(row["id"])["status"] == "verified"
     sid2 = run(eng.loop.create_session(title="again")).id
     run(eng.loop.send(sid2, "go"))  # the same failure again: the fix did not hold
@@ -513,6 +689,34 @@ def test_agent_tools(tmp_path):
     assert "running on: fake:x" in out and "harness " in out and "findings 1: 1 open, 0 fixed (awaiting re-verification)" in out
 
 
+def test_trace_header_after_a_stop_names_the_route_that_served_the_last_call(tmp_path, monkeypatch):
+    """A call cut short by a stop names no route (usage comes at the end of a stream); the header skips it."""
+    eng = engine(tmp_path, [{"match": "go", "steps": ["ok"]}])
+    fake = eng.router.credentials("fake")[0].provider
+
+    async def stall(messages, tools, **opts):
+        yield ProviderEvent(kind="text", text="long answer")
+        await asyncio.Event().wait()
+
+    async def go():
+        sid = (await eng.loop.create_session(title="t")).id
+        await eng.loop.send(sid, "go")
+        monkeypatch.setattr(fake, "stream", stall)
+        task = asyncio.create_task(eng.loop.send(sid, "go on"))
+        while not any(e.type == "message.delta" and e.body.text == "long answer" for e in types(eng, sid)):
+            await asyncio.sleep(0.01)
+        assert eng.loop.interrupt(sid)
+        assert (await asyncio.wait_for(task, 5)).stop_reason == "interrupted"
+        return sid
+
+    sid = run(go())
+    calls = [e.body for e in types(eng, sid) if e.type == "model.call"]
+    assert [(c.route, c.stop_reason) for c in calls] == [("fake:x", "end"), ("", "interrupted")]
+    out = eng.trace_text(sid, 5)
+    assert "last call served by fake:x" in out.splitlines()[0]
+    assert "calls in turn 2" in out
+
+
 def test_trace_tools_are_not_for_subagents_and_seats_keep_them(tmp_path):
     from exo.core.agents import BLOCKED_TOOLS
 
@@ -532,6 +736,29 @@ def test_principal_reject_files_a_finding_and_accept_does_not(tmp_path):
     run(d.run(s.Command.of(s.FeedbackSend(session=sid, verdict="should_have_been", text="use X"))))
     rows = eng.findings.list()
     assert len(rows) == 2 and {r["source"] for r in rows} == {"principal"}
+
+
+def test_principal_reject_in_a_private_thread_files_no_finding(tmp_path):
+    """D-028: findings are global (exo_trace in every thread, /findings, /handoff), so a verdict on a private
+    thread's answer files none: its note would carry the private thread into the others. The same holds for its
+    delegate child and that child's child, which a client opens with /tasks and /open."""
+    eng = engine(tmp_path)
+    from exo.server.app import Dispatcher
+    d = Dispatcher(eng, caller="principal:tui")
+    priv = run(d.run(s.Command.of(s.SessionCreate(kind="private")))).result["session"]["id"]
+    normal = run(d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
+    kid = eng.store.create_session(title="researcher: zebracorn", parent=priv, agent=eng.agent, kind="subagent").id
+    grandkid = eng.store.create_session(title="checker: zebracorn", parent=kid, agent=eng.agent, kind="subagent").id
+    assert eng.store.thread(priv)[1] == "private"
+    for sid in (priv, kid, grandkid):
+        eng.store.append_message(sid, Message.assistant("Zebracorn: $40M, closes Friday."))
+        for verdict in ("reject", "should_have_been"):
+            out = run(d.run(s.Command.of(s.FeedbackSend(session=sid, verdict=verdict, text="zebracorn is $50M"))))
+            assert out.ok and out.result["recorded"] is False
+    assert eng.findings.list() == []
+    assert "zebracorn" not in call(eng, "exo_trace", {}, normal).text()
+    run(d.run(s.Command.of(s.FeedbackSend(session=normal, verdict="reject", text="wrong file"))))
+    assert [r["session"] for r in eng.findings.list()] == [normal]  # a normal thread still files one
 
 
 def test_trace_and_findings_commands_and_client_error_report(tmp_path):
@@ -712,3 +939,15 @@ def test_cli_findings_status_all_and_trace_counts(tmp_path, monkeypatch, capsys)
     assert "findings 2:" in capsys.readouterr().out
     assert cli.main(["trace", "s1", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["findings"]["fixed"] == 1
+
+
+def test_trace_text_lists_open_findings_by_default(tmp_path):
+    eng = engine(tmp_path)
+    eng.findings.version = "abc1234"
+    eng.findings.file("sig.open", "Open thing", severity="bug")
+    fixed = eng.findings.file("sig.fixed", "Fixed thing", severity="bug")
+    eng.findings.fix(fixed["id"], "abc1234")
+    out = eng.trace_text(None)
+    assert "open findings:" in out and "Open thing" in out
+    assert "Fixed thing" not in out  # fixed is counted, not listed
+    assert "1 open, 1 fixed" in out

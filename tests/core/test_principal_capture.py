@@ -6,7 +6,8 @@ from __future__ import annotations
 import asyncio
 
 from exo.core.context import (HISTORICAL_TASK_HEADING, AgentContext, is_principal, missing_directives, summary_prompt)
-from exo.core.engine import ContextAdapter, CoreEngine, render_compact, render_context
+from exo.core.engine import ContextAdapter, CoreEngine
+from exo.diagnostics import render_compact, render_context
 from exo.core.loop import Loop
 from exo.core.seats import Seat
 from exo.core.sessions import SessionStore
@@ -198,6 +199,29 @@ def test_context_shows_and_compact_captures_the_uncaptured_count():
     assert ctx.report(t.id)["capture"]["uncaptured"] == 0
     again = run(ctx.compact(t.id))
     assert again["captured"]["taken"] == 0 and len(mem.got) == 1  # nothing is offered twice
+
+
+def test_compact_never_offers_a_private_reply_with_a_correction():
+    """D-028: /compact offers each principal message with the agent log entry just before it. The log interleaves
+    every thread, so that entry can be a private thread's reply. It is never offered (exo-memory would write it to
+    the signed ledger as the output the correction judges): the log is read as the tree reads it, without private
+    entries, so the correction comes with the reply before the private span."""
+    store, ctx, loop, order, mem = setup(leaf_size=50)
+    fix = "No, I said the staging bucket, not production."
+
+    async def go():
+        a = await loop.create_session(agent="razi", title="main")
+        p = await loop.create_session(agent="razi", kind="private")
+        await loop.send(a.id, RULE)
+        await loop.send(p.id, "Tell me about zebracorn.")
+        store.append_message(p.id, Message.assistant("The zebracorn launch is Friday."))
+        await loop.send(a.id, fix)  # directly after the private reply in the agent log
+        return a
+    a = run(go())
+    res = run(ctx.compact(a.id))
+    assert res["captured"] == {"taken": 2, "uncaptured": 0, "store": True}
+    assert mem.got == [[RULE, fix]]
+    assert [(m["role"], m["content"]) for m in mem.full[0]] == [("user", RULE), ("assistant", "ok"), ("user", fix)]
 
 
 def test_compact_reports_what_it_could_not_capture():

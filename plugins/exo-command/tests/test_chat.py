@@ -108,6 +108,55 @@ def test_read_only_command_route():
     assert [(b.name, b.args, b.session) for b in src.calls] == [("context", "", "s1"), ("findings", "count", "s1")]
 
 
+def test_session_model_route_is_scoped_and_preserves_core_refusals():
+    src = FakeSource({"models.list": {"models": [{"route": "fake:x"}]}})
+    c = centre(src)
+    assert call(c, "GET", "/api/chat/models") == (200, {"models": [{"route": "fake:x"}]})
+    assert call(c, "POST", "/api/chat/sessions/s1/model", {"model": "fake:y", "role": "deep", "session": "s2"})[0] == 200
+    cmd = src.calls[-1]
+    assert isinstance(cmd, s.ModelsSet) and (cmd.model, cmd.session, cmd.role) == ("fake:y", "s1", "main")
+    assert call(c, "POST", "/api/chat/sessions/s1/model", {"model": ""})[0] == 400
+    assert call(c, "GET", "/api/chat/sessions/s1/model")[0] == 405
+    src.fail["models.set"] = "forbidden"
+    assert call(c, "POST", "/api/chat/sessions/s1/model", {"model": "fake:y"})[0] == 403
+    for code in ("bad_model", "bad_request"):   # the caller's mistake, as /api/providers/default says; 502 means the core is away
+        src.fail["models.set"] = code
+        assert call(c, "POST", "/api/chat/sessions/s1/model", {"model": "nosuch:m"}) == (400, {"error": "nope", "code": code})
+    src.fail["session.get"] = "not_found"
+    before = sum(isinstance(cmd, s.ModelsSet) for cmd in src.calls)
+    assert call(c, "POST", "/api/chat/sessions/missing/model", {"model": "fake:y"})[0] == 404
+    assert sum(isinstance(cmd, s.ModelsSet) for cmd in src.calls) == before
+    assert not any(isinstance(cmd, s.TurnSend) for cmd in src.calls)
+
+
+def test_model_change_http_requires_page_token_and_same_origin():
+    async def go():
+        src = FakeSource()
+        web = WebServer(centre(src), token="model-test-token")
+        port = await web.start("127.0.0.1", 0)
+        async def request(headers):
+            r, w = await asyncio.open_connection("127.0.0.1", port)
+            body = json.dumps({"model": "fake:y"})
+            h = {"Host": f"127.0.0.1:{port}", "Content-Length": str(len(body)), **headers}
+            w.write(("POST /api/chat/sessions/s1/model HTTP/1.1\r\n" +
+                     "".join(f"{k}: {v}\r\n" for k, v in h.items()) + "\r\n" + body).encode())
+            await w.drain()
+            response = await r.read()
+            w.close()
+            await w.wait_closed()
+            return int(response.split(b" ", 2)[1])
+        try:
+            assert await request({}) == 403
+            assert await request({"X-Exo-Token": "wrong"}) == 403
+            assert await request({"X-Exo-Token": "model-test-token", "Origin": "https://evil.example"}) == 403
+            assert src.calls == []
+            assert await request({"X-Exo-Token": "model-test-token"}) == 200
+            assert isinstance(src.calls[-1], s.ModelsSet) and src.calls[-1].session == "s1"
+        finally:
+            await web.close()
+    run(go())
+
+
 def test_methods_and_unknown_paths():
     c = centre()
     assert call(c, "GET", "/api/feedback")[0] == 405
@@ -132,6 +181,26 @@ def test_feedback_and_ui_respond_carry_the_schema_fields():
     assert "p1" not in c.panels
     r1, r2 = src.calls[2:]
     assert (r1.panel_id, r1.action, r1.value) == ("p1", "acted", {"choice": "b"}) and r2.action == "dismissed"
+
+
+def test_task_open_steer_stop_routes_use_the_subagent_builtin():
+    src = FakeSource({"command.run": {"output": {"task_id": "k_1", "steerable": True}}})
+    c = centre(src)
+    assert call(c, "GET", "/api/tasks/k_1") == (200, {"task_id": "k_1", "steerable": True})
+    assert call(c, "POST", "/api/tasks/k_1/steer", {"text": "use the other file"})[0] == 200
+    assert call(c, "POST", "/api/tasks/k_1/stop")[0] == 200
+    assert [(b.name, b.args) for b in src.calls] == [("subagent", "open k_1"), ("subagent", "send k_1 use the other file"),
+                                                     ("subagent", "stop k_1")]
+    assert call(c, "POST", "/api/tasks/k_1/steer", {})[0] == 400          # no text
+    assert call(c, "POST", "/api/tasks/bad id/stop")[0] == 400            # a ref cannot smuggle arguments
+    assert call(c, "GET", "/api/tasks/k_1/steer")[0] == 405
+    assert len(src.calls) == 3
+
+
+def test_task_routes_map_core_refusals():
+    for code, status in (("forbidden", 403), ("conflict", 409), ("not_found", 404)):
+        c = centre(FakeSource(fail={"command.run": code}))
+        assert call(c, "POST", "/api/tasks/k_1/stop")[0] == status
 
 
 def test_schedule_and_tasks():
@@ -254,6 +323,7 @@ def test_http_routes_origin_and_event_stream():
         await asyncio.wait_for(r.readuntil(b"\n\n"), 2)                 # headers + comment
         first = await asyncio.wait_for(r.readuntil(b"\n\n"), 2)
         assert first.startswith(b"id: 2\ndata: ")
+        assert (await asyncio.wait_for(r.readuntil(b"\n\n"), 2)).startswith(b"event: synced")
         c.record(ev(3, "message.delta", {"message_id": "m2", "text": "live"}, sid="s9"))
         c.record(ev(4, "message.delta", {"message_id": "m3", "text": "other"}, sid="s0"))
         c.record(ev(5, "task.updated", {"task_id": "t"}, sid=None))
@@ -299,7 +369,7 @@ def test_chat_through_a_real_core_streams_text():
         seen = []
         while "turn.completed" not in seen:
             frame = await asyncio.wait_for(r.readuntil(b"\n\n"), 5)
-            if b"data: " in frame:
+            if frame.startswith(b"id: "):
                 seen.append(json.loads(frame.split(b"data: ", 1)[1])["type"])
         assert "message.completed" in seen and "turn.started" in seen
         code, body = await http(port, "GET", "/api/chat/sessions/" + sid)

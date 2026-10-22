@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from pathlib import Path
 
-from test_tui import FAKE, FakeServerClient, make_engine, send, until
+import pytest
+
+from test_tui import FAKE, FakeServerClient, install_intro_skill, make_engine, send, until
 
 from exo.config import Config
 from exo.core.engine import TUTORIAL_LINE, CoreEngine
+from exo.core.types import Message
 from exo.protocol import schema as s
 from exo_tui import app as app_mod
+from exo_tui import onboarding as onb_mod
 from exo_tui.app import COMMANDS, ExoApp
 from exo_tui.onboarding import INTRO_PROMPT, Onboarding, load_catalog
 
@@ -19,7 +24,9 @@ SKILL = Path(__file__).resolve().parents[3] / "skills" / "exo-intro" / "SKILL.md
 FAKE["rules"].insert(0, {"match": "exo-intro", "steps": ["Welcome to Exo."]})
 
 
-def run_app(tmp_path, scenario, client_cls=FakeServerClient, **kw):
+def run_app(tmp_path, scenario, client_cls=FakeServerClient, intro_skill=True, **kw):
+    if intro_skill:
+        install_intro_skill(tmp_path)
     eng = make_engine(tmp_path)
     client = client_cls(eng)
 
@@ -55,6 +62,18 @@ def test_intro_and_tutorial_are_in_help(tmp_path):
     run_app(tmp_path, sc)
 
 
+def test_static_orientation_names_real_commands_from_the_skill(tmp_path):
+    """The short version shown without the skill teaches the same facts: its commands exist and the skill has them."""
+    text = SKILL.read_text(encoding="utf-8")
+    eng = make_engine(tmp_path)
+    names = set(COMMANDS) | {c["name"] for c in asyncio.run(eng._commands_list(s.CommandsList()))["commands"]}
+    used = set(re.findall(r"(?<![\w/])/([a-z][a-z-]*)", onb_mod.ORIENTATION))
+    assert {"help", "tutorial", "context"} <= used
+    assert used <= names, used - names
+    assert all(re.search(rf"/{re.escape(n)}\b", text) for n in used)
+    assert onb_mod.INTRO_SKILL == SKILL.parent.name
+
+
 def test_every_hint_has_text_and_a_real_command():
     cat = load_catalog()
     assert len(cat) == 12
@@ -74,7 +93,7 @@ class Probe(FakeServerClient):
         return await super().send(body)
 
 
-def test_first_run_intro_marks_only_after_the_turn_starts(tmp_path):
+def test_explicit_fake_intro_does_not_complete_real_onboarding(tmp_path):
     home = tmp_path / "exo-state"
     Probe.onboarded_at_send = []
     Probe.home = home
@@ -82,11 +101,10 @@ def test_first_run_intro_marks_only_after_the_turn_starts(tmp_path):
     async def sc(app, pilot, client, eng):
         await until(lambda: "Welcome to Exo." in app.transcript_text() and not app.busy, pilot)
         assert Probe.onboarded_at_send == [False]  # not written before the turn began
-        assert Onboarding(home).onboarded
+        assert not Onboarding(home).onboarded
         assert "/intro" in app.transcript_text().splitlines()[0]  # first line: a plain startup prints no "new thread" line
         assert INTRO_PROMPT.split("\n")[2][:30] not in app.transcript_text()  # the user sees "/intro", not the brief
-        await until(lambda: app.tutorial, pilot)
-        assert Config.load(eng.home).get("tutorial.enabled") is True
+        assert not app.tutorial
         sent = [b for b in app.sent if isinstance(b, s.TurnSend)]
         assert len(sent) == 1 and "exo-intro skill" in sent[0].text and "/tutorial" in sent[0].text
 
@@ -109,6 +127,229 @@ def test_first_run_not_marked_when_the_turn_never_starts(tmp_path):
     run_app(tmp_path, sc, client_cls=Refuse, auto_intro=True)
 
 
+def test_refused_intro_stays_due_for_the_next_launch(tmp_path):
+    class Refuse(FakeServerClient):
+        async def send(self, body):
+            if isinstance(body, s.TurnSend):
+                return s.Response(id="x", ok=False, error=s.ErrorBody(code="boom", message="no"))
+            return await super().send(body)
+
+    async def sc(app, pilot, client, eng):
+        await until(lambda: any(isinstance(b, s.TurnSend) for b in app.sent), pilot)
+        await pilot.pause(0.2)
+        assert Onboarding(tmp_path / "exo-state").intro_due  # never started, so the next launch tries again
+
+    run_app(tmp_path, sc, client_cls=Refuse, auto_intro=True)
+
+
+def test_started_intro_without_a_real_reply_is_not_resent_next_launch(tmp_path):
+    """A first intro that started but did not complete (here the fake model's reply) runs once, not at every launch;
+    later launches offer /intro in the composer instead."""
+    home = tmp_path / "exo-state"
+
+    async def first(app, pilot, client, eng):
+        await until(lambda: "Welcome to Exo." in app.transcript_text() and not app.busy, pilot)
+        assert not Onboarding(home).onboarded
+
+    run_app(tmp_path, first, auto_intro=True)
+
+    async def again(app, pilot, client, eng):
+        await pilot.pause(0.3)
+        assert not [b for b in app.sent if isinstance(b, s.TurnSend)]
+        assert app.tip is not None and app.tip.fill == "/intro"
+        await send(app, pilot, "/intro")  # still there on request
+        await until(lambda: "Welcome to Exo." in app.transcript_text() and not app.busy, pilot)
+
+    run_app(tmp_path, again, auto_intro=True)
+
+
+def test_the_intro_that_completes_after_an_interrupted_first_one_turns_tutorial_on(tmp_path):
+    """Launch 1 starts the intro but gets no real reply (quit on an approval card, say). On launch 2 the user takes
+    the composer's /intro; once it gets a real reply it is the first run, so tutorial mode turns on."""
+    async def first(app, pilot, client, eng):
+        await until(lambda: "Welcome to Exo." in app.transcript_text() and not app.busy, pilot)
+        assert not app.onb.onboarded and not app.tutorial
+
+    run_app(tmp_path, first, auto_intro=True)
+
+    async def again(app, pilot, client, eng):
+        handle = app.handle
+
+        def real_route(ev):  # the fake model stands in for a real provider's reply
+            m = getattr(ev.body, "message", None)
+            if isinstance(ev.body, s.MessageCompleted) and m.role == "assistant":
+                m.meta["model"] = "openai:chosen"
+            handle(ev)
+
+        app.handle = real_route
+        await pilot.pause(0.3)
+        assert not [b for b in app.sent if isinstance(b, s.TurnSend)]
+        assert app.tip is not None and app.tip.fill == "/intro"
+        await send(app, pilot, "/intro")
+        await until(lambda: app.onb.onboarded, pilot)
+        await until(lambda: app.tutorial, pilot)
+
+    run_app(tmp_path, again, auto_intro=True)
+
+
+def test_intro_started_marker_is_written_once_and_ends_the_automatic_intro(tmp_path):
+    ob = Onboarding(tmp_path / "h")
+    assert ob.intro_due
+    ob.mark_intro_started()
+    first = json.loads(ob.path.read_text())["intro_started"]
+    ob.mark_intro_started()
+    assert json.loads(ob.path.read_text())["intro_started"] == first and not ob.intro_due and not ob.onboarded
+    other = Onboarding(tmp_path / "h2")
+    other.mark_onboarded()
+    assert not other.intro_due
+
+
+def test_missing_intro_skill_shows_the_static_orientation_on_first_run(tmp_path):
+    """No exo-intro skill (a home without the installer's skill pack): no model turn that is bound to fail."""
+    def panels(app):
+        return [w for w in app.chrono() if getattr(w, "kind", "") == "intro"]
+
+    async def sc(app, pilot, client, eng):
+        await until(lambda: panels(app) or any(isinstance(b, s.TurnSend) for b in app.sent), pilot)
+        assert not [b for b in app.sent if isinstance(b, s.TurnSend)]
+        panel = panels(app)[0]
+        assert panel.text == onb_mod.ORIENTATION and panel.head == "Exo in brief"
+        assert panel.meta == onb_mod.ORIENTATION_NOTE and "scripts/install.sh" in panel.meta
+        assert app.onb.onboarded
+        await until(lambda: app.tutorial, pilot)  # a first run turns tips on, as a completed intro does
+        msgs = eng.store.messages(app.session)
+        assert not any("exo-intro" in m.text() for m in msgs)  # nothing reached the model or the log
+
+    run_app(tmp_path, sc, intro_skill=False, auto_intro=True)
+
+
+@pytest.mark.parametrize("listing,static", [
+    ([], True),
+    ([{"name": "other"}], True),
+    ([{"name": "exo-intro"}], False),
+    ([{"name": "exo-orchestra:exo-intro"}], False),  # a plugin-registered copy loads too
+    (None, False),  # the core could not answer: send the turn as before
+])
+def test_manual_intro_falls_back_only_when_the_core_lacks_the_skill(tmp_path, listing, static):
+    """/intro by hand. The home is not onboarded yet, so the short version is its first run and turns tips on."""
+    class Skills(FakeServerClient):
+        async def call(self, body):
+            if isinstance(body, s.SkillsList):
+                if listing is None:
+                    raise ConnectionError("core busy")
+                return {"skills": listing}
+            return await super().call(body)
+
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "/intro")
+        if static:
+            await until(lambda: onb_mod.ORIENTATION in app.transcript_text(), pilot)
+            assert not [b for b in app.sent if isinstance(b, s.TurnSend)]
+            assert app.onb.onboarded
+            await until(lambda: app.tutorial, pilot)
+        else:
+            await until(lambda: "Welcome to Exo." in app.transcript_text() and not app.busy, pilot)
+            assert onb_mod.ORIENTATION not in app.transcript_text()
+
+    run_app(tmp_path, sc, client_cls=Skills)
+
+
+@pytest.mark.parametrize("reason,route,text,interrupted,complete", [
+    ("end", "openai:chosen", "Welcome", False, True),
+    ("error", "openrouter:chosen", "partial", False, False),
+    ("interrupted", "claude-cli:sonnet", "partial", True, False),
+    ("end", "fake:scripted", "stub", False, False),
+    ("end", "openai:chosen", "", False, False),
+])
+def test_intro_completion_requires_its_successful_real_reply(tmp_path, reason, route, text, interrupted, complete):
+    async def sc(app, pilot, client, eng):
+        app.intro_pending = "first"
+
+        def fire(body):
+            app.handle(s.Event.of(body, 1, session=app.session))
+
+        user = Message.user(INTRO_PROMPT)
+        user.meta.update(author="principal", turn_id="intro")
+        fire(s.MessageCompleted(message=user))
+        fire(s.TurnStarted(turn_id="intro", model="anthropic:requested"))
+        assert not app.onb.onboarded
+        reply = Message.assistant(text)
+        reply.meta.update(turn_id="intro", model=route, interrupted=interrupted)
+        fire(s.MessageCompleted(message=reply))
+        assert not app.onb.onboarded  # a partial reply followed by an error cannot finish first run
+        fire(s.TurnCompleted(turn_id="scheduled", stop_reason="end"))
+        assert not app.onb.onboarded and app.intro_pending == "first"
+        fire(s.TurnCompleted(turn_id="intro", stop_reason=reason))
+        assert app.onb.onboarded is complete
+        assert not app.intro_pending and not app.intro_turn
+        if complete:
+            await until(lambda: app.tutorial, pilot)
+        else:
+            assert not app.tutorial
+            # Failure/cancellation leaves a retry eligible; an actual later reply can complete it.
+            app.intro_pending = "manual"
+            user = Message.user(INTRO_PROMPT)
+            user.meta.update(author="principal", turn_id="retry")
+            fire(s.MessageCompleted(message=user))
+            reply = Message.assistant("Ready now")
+            reply.meta.update(turn_id="retry", model="openai:chosen")
+            fire(s.MessageCompleted(message=reply))
+            fire(s.TurnCompleted(turn_id="intro", stop_reason="end"))
+            assert not app.onb.onboarded  # an old completion cannot complete the retry
+            fire(s.TurnCompleted(turn_id="retry", stop_reason="end"))
+            assert app.onb.onboarded
+
+    run_app(tmp_path, sc)
+
+
+def test_cancelled_queued_intro_cannot_complete_on_another_turn(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.intro_pending = "first"
+        app.handle(s.Event.of(s.SteerCancelled(message_id="intro", text=INTRO_PROMPT), 1, session=app.session))
+        app.handle(s.Event.of(s.TurnCompleted(turn_id="other"), 2, session=app.session))
+        assert not app.onb.onboarded and not app.intro_pending
+
+    run_app(tmp_path, sc)
+
+
+def test_scheduled_intro_text_does_not_claim_the_pending_principal_intro(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.intro_pending = "first"
+        user = Message.user(INTRO_PROMPT)
+        user.meta.update(author="schedule", turn_id="scheduled")
+        app.handle(s.Event.of(s.MessageCompleted(message=user), 1, session=app.session))
+        app.handle(s.Event.of(s.TurnStarted(turn_id="scheduled", model="openai:chosen"), 2, session=app.session))
+        reply = Message.assistant("Scheduled response")
+        reply.meta.update(turn_id="scheduled", model="openai:chosen")
+        app.handle(s.Event.of(s.MessageCompleted(message=reply), 3, session=app.session))
+        app.handle(s.Event.of(s.TurnCompleted(turn_id="scheduled"), 4, session=app.session))
+        assert not app.onb.onboarded and app.intro_pending == "first" and not app.intro_turn
+
+    run_app(tmp_path, sc)
+
+
+def test_intro_send_failure_clears_pending_for_retry(tmp_path):
+    class FailOnce(FakeServerClient):
+        failed = False
+
+        async def send(self, body):
+            if isinstance(body, s.TurnSend) and not self.failed:
+                self.failed = True
+                raise ConnectionError("core disconnected")
+            return await super().send(body)
+
+    async def sc(app, pilot, client, eng):
+        await app.intro("first")
+        assert not app.intro_pending and not app.onb.onboarded
+        assert "Could not start orientation" in app.transcript_text()
+        await app.intro("first")
+        await until(lambda: "Welcome to Exo." in app.transcript_text() and not app.intro_pending, pilot)
+        assert sum(isinstance(b, s.TurnSend) for b in app.sent) == 2
+        assert not app.onb.onboarded  # the retry reached the deliberately configured fake
+
+    run_app(tmp_path, sc, client_cls=FailOnce)
+
+
 def test_no_auto_intro_by_default_or_once_onboarded_or_resuming(tmp_path):
     async def plain(app, pilot, client, eng):
         await pilot.pause(0.2)
@@ -127,12 +368,26 @@ def test_no_auto_intro_by_default_or_once_onboarded_or_resuming(tmp_path):
 
 
 def test_slash_intro_runs_the_orientation_without_changing_tutorial(tmp_path):
+    Onboarding(tmp_path / "exo-state").mark_onboarded()
+
     async def sc(app, pilot, client, eng):
         await send(app, pilot, "/intro")
         await until(lambda: "Welcome to Exo." in app.transcript_text() and not app.busy, pilot)
         assert not app.tutorial  # only the first run turns tips on
 
     run_app(tmp_path, sc)
+
+
+def test_static_intro_on_an_onboarded_home_leaves_tutorial_alone(tmp_path):
+    Onboarding(tmp_path / "exo-state").mark_onboarded()
+
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "/intro")
+        await until(lambda: onb_mod.ORIENTATION in app.transcript_text(), pilot)
+        await pilot.pause(0.2)
+        assert not app.tutorial
+
+    run_app(tmp_path, sc, intro_skill=False)
 
 
 def test_no_intro_flag_skips_and_remembers(tmp_path, monkeypatch):

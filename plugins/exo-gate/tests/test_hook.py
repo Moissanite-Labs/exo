@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import sys
 
 import pytest
@@ -262,6 +263,22 @@ def test_settings_resolution(tmp_path):
     assert s.principal_store is None
 
 
+def test_settings_find_a_store_made_with_root(tmp_path):
+    """`exo init <id> --root DIR` records DIR in config `principals.<id>`: the gate reads that store's policies,
+    ledger and grants, as memory and the store commands do. Not a principal id: no store, the default policies."""
+    (tmp_path / "config.json").write_text(json.dumps({"principals": {"p1": str(tmp_path / "elsewhere")}}))
+    s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": "p1"})
+    assert s.principal_store == tmp_path / "elsewhere"
+    assert s.grants_path == tmp_path / "elsewhere" / "state" / "approval-grants.json"
+    s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": "../p1"})
+    assert s.principal_store is None and s.grants_path == tmp_path / "state" / "gate-grants.json"
+    # a recorded root that cannot be a store (unknown user, relative) is skipped: the default store, no crash
+    (tmp_path / "config.json").write_text(json.dumps({"principals": {"p1": "~nosuchuser-exo-test/x", "p2": "rel/x"}}))
+    for pid in ("p1", "p2"):
+        s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": pid})
+        assert s.principal_store == tmp_path / "principals" / pid
+
+
 def test_plugin_entry_point_imports(monkeypatch):
     spec = importlib.util.spec_from_file_location("exo_gate_plugin", PLUGIN / "__init__.py",
                                                   submodule_search_locations=[str(PLUGIN)])
@@ -370,6 +387,22 @@ def test_fallback_route_is_recorded_when_jev_fails(keyed_store):
     assert "decision_model" not in events(store)[-1]["body"]
 
 
+def test_malformed_model_answer_keeps_the_rule_outcome_and_the_main_role_working(keyed_store):
+    from exo.core.models import FakeProvider, Router
+
+    store, key = keyed_store
+    chat = FakeProvider(["I would say ask, to be safe.", "main reply"], name="chat")
+    router = Router(roles={"aux": ["chat:small"], "main": ["chat:m"]}, env={}, instances={"chat": chat},
+                    catalog={"providers": {}})
+    ctx = gated(store, key, router)  # the decision role falls back to aux on the main credential (never main, D-081)
+    assert call(ctx, "read_file", {"path": "x"}) is None  # no JSON verdict: the rule outcome stands
+    assert len(chat.calls) == 1 and "decision function" in chat.calls[0]["messages"][0].text()
+
+    async def main_turn():
+        return [e async for e in router.stream("main", [], [])][-1]
+    assert router.cooldowns == {} and asyncio.run(main_turn()).kind == "done"
+
+
 def test_credentials_always_ask_once_only_even_in_observe_mode(keyed_store):
     store, key = keyed_store
     for extra in ({}, {"mode": "observe"}):
@@ -423,3 +456,33 @@ def test_mode_is_read_once_at_load(keyed_store, monkeypatch):
     monkeypatch.setenv("EXO_GATE_MODE", "observe")
     assert g.settings.mode == "enforce"
     assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "approve"
+
+
+def test_spend_denial_never_falls_back_to_allow(keyed_store, monkeypatch):
+    from exo.model_spend import SpendDenied
+    from exo.core.models import decision
+    async def denied(*args, **kwargs):
+        raise SpendDenied('principal model-spend cap reached')
+    monkeypatch.setattr(decision, 'ask_choice_result', denied)
+    store, key = keyed_store
+    calls = []
+    ctx = gated(store, key, decision_router('allow', calls))
+    result = call(ctx, 'read_file', {'path': 'x'})
+    assert result['action'] == 'block' and 'spend' in result['message'] and not calls
+
+
+def test_relative_paths_are_read_from_the_session_folder(keyed_store, tmp_path, monkeypatch):
+    """#209: the core passes the session's folder as ``cwd``; a harmless name there that links into ~/.ssh asks."""
+    store, key = keyed_store
+    _, ctx = make_gate(store, key)
+    home, work = tmp_path / "h", tmp_path / "w"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_rsa").write_text("fake\n")
+    work.mkdir()
+    (work / "notes.txt").symlink_to(home / ".ssh" / "id_rsa")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)                       # the gate's own folder holds no such link
+    assert call(ctx, "read_file", {"path": "notes.txt"}) is None
+    for tool, args in (("read_file", {"path": "notes.txt"}), ("terminal", {"command": "cat notes.txt"})):
+        r = call(ctx, tool, args, cwd=str(work))
+        assert r["action"] == "approve" and "notes.txt" in r["message"]

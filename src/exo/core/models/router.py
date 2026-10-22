@@ -23,6 +23,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Mapping
+from urllib.parse import urlsplit
 
 from exo.core.models.anthropic import AnthropicProvider
 from exo.core.models.base import error_event
@@ -30,7 +31,11 @@ from exo.core.models.claude_cli import ClaudeCliProvider
 from exo.core.models.muse_cli import MuseCliProvider
 from exo.core.models.decision import DecisionProvider
 from exo.core.models.keys import lookup_key
+from exo.model_spend import SpendJournal, configured
+from exo.core.models.spend import admitted_stream
+from exo.model_spend import POLICY_ENV, required as spend_required, resolve_spend_policy
 from exo.core.models.openai_chat import OpenAIChatProvider
+from exo.core.models.urls import display_url
 from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
 
@@ -46,13 +51,29 @@ BREAKER_FAILURES = 2  # consecutive retryable failures of one route before it is
 BREAKER_COOLDOWN_S = 600.0  # first skip; doubles on each failed trial
 BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
+REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key or login: waiting will not fix it
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
+CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
 
 
 def load_catalog(path: Path | str = CATALOG_PATH) -> dict[str, Any]:
     with open(path, "rb") as f:
         return tomllib.load(f)
+
+
+def server_address(base_url: str | None) -> str:
+    """A server's host and port for text people or the model read. Never the netloc: it keeps any user:password@
+    in the URL. IPv6 keeps its brackets. Use the raw URL for the connection only."""
+    try:
+        u = urlsplit(base_url or "")
+        host, port = u.hostname, u.port
+    except ValueError:  # a bad IPv6 literal or port
+        return "its configured address"
+    if not host:
+        return "its configured address"
+    host = f"[{host}]" if ":" in host else host
+    return f"{host}:{port}" if port is not None else host
 
 
 @dataclass(frozen=True)
@@ -78,6 +99,7 @@ class Cooldown:
     strikes: int = 0
     reset_at: float | None = None
     status: int | None = None
+    error: str = ""  # the provider's text, so a later call that sends nothing can still say why
 
 
 @dataclass
@@ -87,6 +109,7 @@ class Breaker:
     level: int = 0
     until: float = 0.0
     trial: bool = False
+    last_failed: float = 0.0
 
 
 @dataclass
@@ -111,20 +134,42 @@ def cooldown_until(now: float, status: int | None, strikes: int, reset_at: float
     return reset_at or now + min(SOLE_TTL * 2 ** (strikes - 1), LONG_TTL)
 
 
+def merge_provider(base: Any, spec: Any) -> Any:
+    """A provider table over the entry it overrides (the catalog's, or config.json's under a seat): the keys it sets
+    win and the rest stay. A table that sets ``base_url`` uses only the ``key_env`` and ``headers`` it sets, so a key
+    or a header token never follows a new URL. A value that is not a table replaces the entry as given."""
+    if not isinstance(spec, dict):
+        return spec
+    base = base if isinstance(base, dict) else {}
+    if "base_url" in spec:
+        base = {k: v for k, v in base.items() if k not in ("key_env", "headers")}
+    return {**base, **spec}
+
+
 class Router:
     """Resolves roles to routes and streams with fallback.
 
-    ``roles`` and ``providers`` override the catalog tables. ``instances`` maps a
-    provider name to a ready Provider object (tests, plugins, the fake provider).
+    ``roles`` override the catalog roles; each ``providers`` table merges key by key over the catalog entry of
+    its name. ``instances`` maps a provider name to a ready Provider object (tests, plugins, the fake provider).
     """
 
     def __init__(self, roles: Mapping[str, list[str]] | None = None, providers: Mapping[str, dict] | None = None,
                  *, catalog: dict[str, Any] | None = None, instances: Mapping[str, Provider] | None = None,
                  env: Mapping[str, str] | None = None, clock: Callable[[], float] = time.time,
                  client: Any = None, key_sources: bool | None = None,
-                 breaker: Mapping[str, Any] | None = None) -> None:
+                 breaker: Mapping[str, Any] | None = None, spend: SpendJournal | None = None,
+                 spend_config: Mapping[str, Any] | None = None, principal: str | None = None) -> None:
+        selection = resolve_spend_policy(spend_config if spend is None else {"principal": spend.principal},
+                                         principal=principal)
+        if selection.source is not None and spend is not None:
+            from exo.model_spend import SpendDenied
+            raise SpendDenied("an injected journal cannot replace protected model-spend policy")
+        self.spend = spend if spend is not None else configured(selection.config, required=selection.required)
+        self._spend_required, self._spend_source = selection.required, selection.source
         cat = load_catalog() if catalog is None else catalog
-        self.providers: dict[str, dict] = {**cat.get("providers", {}), **(providers or {})}
+        self.providers: dict[str, dict] = dict(cat.get("providers", {}))
+        for name, spec in (providers or {}).items():  # a partial table keeps the catalog transport, key and roles
+            self.providers[name] = merge_provider(self.providers.get(name), spec)
         self.models: dict[str, dict] = dict(cat.get("models", {}))
         self.roles: dict[str, list[str]] = {**cat.get("roles", {}), **(roles or {})}
         self.instances = dict(instances or {})
@@ -135,6 +180,7 @@ class Router:
         self.client = client
         self.cooldowns: dict[str, Cooldown] = {}
         self.breakers: dict[str, Breaker] = {}  # route ref -> state; in memory, per process
+        self._forced_probes: set[str] = set()  # live last-resort probes, independent of the bounded trial lease
         b = breaker or {}
         self.breaker_failures = max(1, int(b.get("failures") or BREAKER_FAILURES))
         self.breaker_cooldown_s = float(b.get("cooldown_s") or BREAKER_COOLDOWN_S)
@@ -151,11 +197,33 @@ class Router:
         overrides of the catalog: ``input``, ``output``, ``cache_read``, ``cache_write`` USD per million tokens,
         ``context``)."""
         config = config or {}
+        kw.setdefault("spend_config", config.get("spend"))
         r = cls(roles=config.get("roles"), providers=config.get("providers"), breaker=config.get("breaker"), **kw)
         for ref, info in (config.get("models") or {}).items():  # prices and limits per "provider:model" (D-032)
             if isinstance(info, dict):
                 r.models[ref] = {**r.models.get(ref, {}), **info}
         return r
+
+    @property
+    def spend_enforced(self) -> bool:
+        return self.spend is not None or self._spend_required or spend_required()
+
+    def check_spend_policy(self) -> None:
+        from exo.model_spend import SpendDenied
+        if POLICY_ENV in os.environ and os.environ[POLICY_ENV] != self._spend_source:
+            raise SpendDenied("protected model-spend policy changed; restart the engine")
+        if self.spend_enforced and self.spend is None:
+            raise SpendDenied("required model-spend policy is missing; ask the principal to configure it")
+
+    def spend_status(self) -> dict[str, Any] | None:
+        try:
+            self.check_spend_policy()
+            if self.spend is None:
+                return None
+            return {**self.spend.status(), "policy_source": self._spend_source or "config"}
+        except Exception:
+            return {"state": "unavailable", "policy_source": self._spend_source or "config",
+                    "stop_reason": "Model-spend accounting is unavailable; ask the principal to review."}
 
     # --- resolution ----------------------------------------------------------
     def chain(self, role: str = "main") -> list[Route]:
@@ -223,23 +291,17 @@ class Router:
 
     def _load_credentials(self, provider: str) -> list[Credential]:
         creds: list[Credential] = []
+        spec = self.providers.get(provider)
+        timeout = {"read_timeout": float(spec["read_timeout"])} if spec and spec.get("read_timeout") else {}
         if provider in self.instances:
             creds = [Credential(provider, None, self.instances[provider])]
-        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "claude-cli":
-            # No key: the CLI's own OAuth login is the credential. Available only if the binary is on PATH.
-            exe = shutil.which(spec.get("command", "claude"), path=self.env.get("PATH", ""))
+        elif spec is not None and spec.get("transport") in CLI_TRANSPORTS:
+            # No key: the CLI's own login is the credential (D-051 for muse). Available only if the binary is on PATH.
+            cls = CLI_TRANSPORTS[spec["transport"]]
+            exe = shutil.which(spec.get("command", cls.default_command), path=self.env.get("PATH", ""))
             if exe:
-                prov = ClaudeCliProvider(exe, name=provider, env=self.env,
-                                         **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
-                creds = [Credential(provider, None, prov)]
-        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "muse-cli":
-            # No key: the muse CLI's own login is the credential (D-051). Available only if the binary is on PATH.
-            exe = shutil.which(spec.get("command", "muse"), path=self.env.get("PATH", ""))
-            if exe:
-                prov = MuseCliProvider(exe, name=provider, env=self.env,
-                                       **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
-                creds = [Credential(provider, None, prov)]
-        elif (spec := self.providers.get(provider)) is not None:
+                creds = [Credential(provider, None, cls(exe, name=provider, env=self.env, **timeout))]
+        elif spec is not None and spec.get("base_url") is not None:  # no base_url: no credential, the route is skipped
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
@@ -247,8 +309,7 @@ class Router:
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"), session_header=spec.get("session_header"),
-                                 **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout)
                 creds.append(Credential(cid, key, prov))
         return creds
 
@@ -275,28 +336,28 @@ class Router:
         cd = self.cooldowns.get(key)
         return cd is None or cd.until <= now
 
-    def _pick(self, route: Route, now: float) -> tuple[Credential, bool] | None:
-        creds = self.credentials(route.provider)
-        return self._choose(route, now, creds)
-
-    async def _pick_async(self, route: Route) -> tuple[Credential, bool] | None:
+    async def _pick_async(self, route: Route, *, failed: set[str] | None = None,
+                          attempted: set[tuple[str, str]] | None = None) -> tuple[Credential, bool] | None:
         creds = await asyncio.to_thread(self.credentials, route.provider)
-        return self._choose(route, self.clock(), creds)
+        return self._choose(route, self.clock(), creds, failed=failed, attempted=attempted)
 
-    def _choose(self, route: Route, now: float, creds: list[Credential]) -> tuple[Credential, bool] | None:
+    def _choose(self, route: Route, now: float, creds: list[Credential], *, failed: set[str] | None = None,
+                attempted: set[tuple[str, str]] | None = None) -> tuple[Credential, bool] | None:
         for c in creds:
+            if (failed and c.id in failed) or (attempted and (c.id, route.model) in attempted):
+                continue
             if self._available(c.id, now) and self._available(f"{c.id}|{route.model}", now):
                 return c, len(creds) == 1
         return None
 
     # --- outcome bookkeeping ---------------------------------------------------
     def record_failure(self, cred_id: str, model: str, status: int | None, retry_after: float | None,
-                       sole: bool, model_only: bool = False) -> Cooldown:
+                       sole: bool, model_only: bool = False, error: str = "") -> Cooldown:
         now = self.clock()
         key = f"{cred_id}|{model}" if status == 404 or model_only else cred_id
         cd = self.cooldowns.get(key) or Cooldown()
         cd.strikes += 1
-        cd.status = status
+        cd.status, cd.error = status, error
         if retry_after:
             cd.reset_at = now + retry_after
         elif cd.reset_at is not None and cd.reset_at <= now:
@@ -312,6 +373,8 @@ class Router:
     # --- route circuit breaker -----------------------------------------------------
     def route_open(self, ref: str, now: float) -> bool:
         """True while the route's breaker is open. After the cool-down one caller gets the trial call (a 60 s lease)."""
+        if ref in self._forced_probes:
+            return True
         b = self.breakers.get(ref)
         if b is None or b.level == 0:
             return False
@@ -323,6 +386,7 @@ class Router:
     def route_failed(self, ref: str, now: float) -> float | None:
         """Count a retryable failure; returns the cool-down in seconds if this one opens the breaker."""
         b = self.breakers.setdefault(ref, Breaker())
+        b.last_failed = now
         b.fails = self.breaker_failures if b.trial else b.fails + 1  # a failed trial reopens at once
         if b.fails < self.breaker_failures:
             return None
@@ -334,16 +398,15 @@ class Router:
     def route_ok(self, ref: str) -> None:
         self.breakers.pop(ref, None)
 
-    def price(self, route: Route, usage: Usage | None, input_includes_cache: bool = False) -> Usage | None:
+    def price(self, route: Route, usage: Usage | None) -> Usage | None:
         """Fill ``cost_usd`` from the catalog price of the route that served the call (USD per million tokens).
-        None stays None when the route has no price (never 0). ``input_includes_cache``: the provider counts cached
-        tokens inside ``input_tokens`` (OpenAI style), so they are charged at the cache-read rate only."""
+        None stays None when the route has no price (never 0). ``input_tokens`` is the uncached input on every
+        transport (D-080); cache reads and writes are charged at their own rates on top."""
         info = self.models.get(route.ref)
         if usage is None or usage.cost_usd is not None or not info or "input" not in info:
             return usage
         inp = info["input"]
-        fresh = usage.input_tokens - (usage.cache_read_tokens if input_includes_cache else 0)
-        cost = (max(fresh, 0) * inp + usage.output_tokens * info.get("output", 0)
+        cost = (max(usage.input_tokens, 0) * inp + usage.output_tokens * info.get("output", 0)
                 + usage.cache_read_tokens * info.get("cache_read", inp * 0.1)
                 + usage.cache_write_tokens * info.get("cache_write", inp * 1.25)) / 1e6
         return Usage(**{**vars(usage), "cost_usd": round(cost, 8)})
@@ -357,16 +420,46 @@ class Router:
         tried: list[str] = []
         attempts: list[dict[str, Any]] = []  # every try, for the model.call record (D-025)
         last: ProviderEvent | None = None
+        failed_credentials: set[str] = set()
+        attempted_credentials: set[tuple[str, str]] = set()
         chain = self.chain(role)
         # Breaker state is cheap; resolve credentials only when reaching a route, off the event loop.
         skip = {r.ref for r in chain if self.route_open(r.ref, self.clock())}
         pending_routes, i = chain, 0
+        last_resort = False
+        forced_pick = None
+        resort_notice = None
         while True:
             if i >= len(pending_routes):
-                if not tried and skip:
-                    # Preserve the existing all-open last resort without eagerly resolving fallback keys.
-                    pending_routes = [r for r in chain if r.ref in skip]
+                candidate = None
+                if skip and not last_resort and (last is None or last.retryable):
+                    # One last chance on the oldest failure. Credential cooldowns and attempts within this call
+                    # still apply: an open breaker does not make an auth/billing/rate-limited credential usable.
+                    skipped = sorted(((r, self.breakers.get(r.ref)) for r in chain if r.ref in skip),
+                                     key=lambda pair: pair[1].last_failed if pair[1] else float("inf"))
+                    for route, state in skipped:
+                        if state is None or route.ref in self._forced_probes:
+                            continue
+                        picked = await self._pick_async(route, failed=failed_credentials,
+                                                        attempted=attempted_credentials)
+                        now = self.clock()
+                        # Another stream can recover/reload the route, or claim its trial, during lookup.
+                        if self.breakers.get(route.ref) is not state or route.ref in self._forced_probes \
+                                or (state.trial and state.until > now):
+                            continue
+                        if picked is not None:
+                            state.trial, state.until = True, now + 60.0
+                            self._forced_probes.add(route.ref)
+                            forced_pick = picked
+                            candidate = route
+                            break
+                if candidate is not None:
+                    if last is not None:
+                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} failed ({(last.error or '')[:80]}); "
+                                                       f"trying {candidate.ref} as a last resort", attempts=attempts)
+                    pending_routes = [candidate]
                     skip.clear()
+                    last_resort = True
                     i = 0
                 else:
                     break
@@ -374,39 +467,73 @@ class Router:
             i += 1
             if route.ref in skip:
                 continue
-            while (picked := await self._pick_async(route)) is not None:
+            while (picked := forced_pick or await self._pick_async(route, failed=failed_credentials,
+                                                                  attempted=attempted_credentials)) is not None:
+                selected = forced_pick is not None
+                if last_resort and not selected and route.ref in self._forced_probes:
+                    break  # a later sibling lookup yielded while another caller claimed a probe
+                forced = last_resort
+                forced_pick = None
+                if forced:
+                    self._forced_probes.add(route.ref)
                 cred, sole = picked
+                attempted_credentials.add((cred.id, route.model))
                 tried.append(route.ref)
                 failed: list[ProviderEvent] = []
-                async for ev in self._attempt(route, cred, sole, messages, tools, opts, failed, attempts):
-                    yield ev
+                try:
+                    if resort_notice is not None:
+                        yield resort_notice
+                        resort_notice = None
+                    async for ev in self._attempt(route, cred, sole, messages, tools, opts, failed, attempts):
+                        yield ev
+                finally:
+                    if forced:
+                        self._forced_probes.discard(route.ref)
                 if not failed:
                     return
                 last = failed[0]
+                # A missing/unavailable model can fall back to another model on the same valid credential.
+                # Other failures exclude that credential for this call, even if its timer expires meanwhile.
+                if last.status != 404 and last.status not in NO_FALLBACK_STATUS:
+                    failed_credentials.add(cred.id)
                 nxt = None
                 for candidate in pending_routes[i - 1:]:
-                    if candidate.ref not in skip and await self._pick_async(candidate) is not None:
+                    if candidate.ref not in skip and await self._pick_async(
+                            candidate, failed=failed_credentials, attempted=attempted_credentials) is not None:
                         nxt = candidate
                         break
-                if nxt is None:
-                    if attempts[-1]["outcome"] == "fallback":
-                        attempts[-1]["outcome"] = "error"  # nothing left to fall back to
                 if nxt is not None:  # tell the user why the wait ended and where the call goes next
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
-                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}")
+                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
                 if attempts and (cs := attempts[-1].get("cooldown_s")):
                     yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
+        if attempts and attempts[-1]["outcome"] == "fallback":
+            attempts[-1]["outcome"] = "error"  # normal routes and the optional last resort are exhausted
         end = self._exhausted(role, tried, last)
         end.attempts = attempts
         yield end
 
     async def _attempt(self, route: Route, cred: Credential, sole: bool, messages: list[Message],
                        tools: list[ToolSpec], opts: dict[str, Any], failed: list[ProviderEvent],
-                       attempts: list[dict[str, Any]] | None = None) -> AsyncIterator[ProviderEvent]:
+                       attempts: list[dict[str, Any]] | None = None,
+                       model_only: bool = False) -> AsyncIterator[ProviderEvent]:
         """One call on one credential. A failure that may fall back is swallowed and
         appended to ``failed``; anything else (including a terminal error) is yielded.
-        Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``)."""
+        Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``).
+        ``model_only``: a failure cools this model on the credential, not the credential (a side call)."""
+        try:
+            self.check_spend_policy()
+        except RuntimeError as exc:
+            event = error_event(str(exc), None, retryable=False)
+            event.attempts = [{"route": route.ref, "outcome": "spend_refused"}]
+            yield event
+            return
+        if self.spend is not None:
+            async for event in admitted_stream(self.spend, route.ref, cred.provider, messages, tools,
+                                               {**opts, "model": route.model}):
+                yield event
+            return
         started, t0 = False, time.monotonic()
         attempts = [] if attempts is None else attempts
         cool: float | None = None  # set when this failure opens the route's breaker
@@ -422,9 +549,13 @@ class Router:
                 # 400, 413 and 422 do not fall back, unless the transport marked the upstream as down (retryable).
                 fallback = (ev.status not in NO_FALLBACK_STATUS or ev.retryable) if ev.status is not None else ev.retryable
                 if fallback:
-                    self.record_failure(cred.id, route.model, ev.status, retry_after, sole,
-                                        model_only=ev.status in NO_FALLBACK_STATUS)  # an upstream 400 is this model's
-                    if ev.retryable:
+                    self.record_failure(cred.id, route.model, ev.status, retry_after, sole, error=ev.error or "",
+                                        model_only=model_only or ev.status in NO_FALLBACK_STATUS)  # a 400: this model's
+                    if ev.status == 429:
+                        # A responding rate limiter is reachable. Retry-After belongs to the credential cooldown,
+                        # not the outage breaker (including a trial lease left over from an earlier outage).
+                        self.route_ok(route.ref)
+                    elif ev.retryable:
                         cool = self.route_failed(route.ref, self.clock())
                 if started or not fallback:
                     note("error", ev.error or "")
@@ -438,7 +569,7 @@ class Router:
             if ev.kind in ("text", "reasoning", "tool_call"):
                 started = True
             elif ev.kind in ("usage", "done"):
-                ev.usage = self.price(route, ev.usage, getattr(cred.provider, "input_includes_cache", False))
+                ev.usage = self.price(route, ev.usage)
                 ev.route = route.ref  # the route that served this call, after any fallback
                 if ev.kind == "done":
                     note("ok")
@@ -451,17 +582,56 @@ class Router:
 
     def _exhausted(self, role: str, tried: list[str], last: ProviderEvent | None) -> ProviderEvent:
         now = self.clock()
-        waits = [cd.until - now for cd in self.cooldowns.values() if cd.until > now]
+        waits = [until - now for until, _, _ in self._chain_cooldowns(role, now)]
         wait = min(waits) if waits else None
         if not self.chain(role):
-            return error_event(f"no model configured for role {role!r}", None, retryable=False)
-        if not tried and not waits:
-            return error_event(f"no credentials for role {role!r}: set the provider key_env variables",
+            return error_event(f"no model configured for role {role!r}; use /providers and choose a default model",
                                None, retryable=False)
+        if not tried and not waits:
+            return error_event(f"no credentials for role {role!r}: set the provider key_env variables, "
+                               "or use /providers to add a provider and choose its model",
+                               None, retryable=False)
+        if refused := self._refused(role, tried, last, now):  # no retry now, say what to fix; retry_after: it reopens
+            return error_event(refused[1], refused[0], retryable=False, retry_after=wait)
         why = f"; last error: {last.error}" if last is not None else ""
         hint = f"; next route reopens in {wait:.0f}s" if wait else ""
         return error_event(f"all routes for {role!r} failed or are cooling down{why}{hint}",
                            last.status if last is not None else 429, retryable=True, retry_after=wait)
+
+    def _chain_cooldowns(self, role: str, now: float) -> list[tuple[float, str, Cooldown]]:
+        """Live cooldowns that bear on ``role``: a credential of a chain provider, or a credential|model cooldown on a
+        model of the chain. A gate side call (D-081) cools a model this role never asks, and another provider's
+        cooldown says nothing about this role's routes, so neither moves the wait hint or the refusal."""
+        routes = {(r.provider, r.model) for r in self.chain(role)}
+        out: list[tuple[float, str, Cooldown]] = []
+        for key, cd in self.cooldowns.items():
+            cred, scoped, model = key.partition("|")
+            name = cred.partition("#")[0]
+            if cd.until > now and ((name, model) in routes if scoped else any(name == n for n, _ in routes)):
+                out.append((cd.until, name, cd))
+        return out
+
+    def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
+                 now: float) -> tuple[int | None, str] | None:
+        """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
+        later call too, while that credential, or a model of the chain on it, reopens first), or a local server is
+        not running."""
+        if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
+            cooling = self._chain_cooldowns(role, now)
+            _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
+            status, err = cd.status, cd.error or f"HTTP {cd.status}"
+        else:
+            name, status, err = tried[-1].partition(":")[0], last.status, last.error or ""
+        spec = self.providers.get(name) or {}
+        if status in REFUSED_STATUS:
+            envs = spec.get("key_env") or []
+            envs = [envs] if isinstance(envs, str) else envs
+            return status, (f"{name} rejected the key ({err}): fix {' or '.join(envs)} or add a key in /providers"
+                            if envs else f"{name} refused the login ({err}): log in again, then test it in /providers")
+        if last is not None and spec.get("local") and err.startswith("ConnectError"):
+            return None, (f"{name} is not running at {server_address(spec.get('base_url', ''))}: "
+                          "start it, then test it in /providers")
+        return None
 
     def provider(self, role: str = "main") -> RoleProvider:
         return RoleProvider(self, role)
@@ -473,19 +643,19 @@ class Router:
             for route in self.chain(role):
                 creds = self.credentials(route.provider)
                 out.append({"role": role, "route": route.ref, "configured": bool(creds),
-                            "available": self._pick(route, now) is not None,
+                            "available": self._choose(route, now, creds) is not None,
                             **{k: v for k, v in self.models.get(route.ref, {}).items() if k == "context"}})
         return out
 
-
     def providers_status(self) -> list[dict[str, Any]]:
-        """Each configured provider: base URL and whether a key was found (yes/no, never the value)."""
+        """Each configured provider: display URL without userinfo and key presence (never the value)."""
         out = []
         for name, spec in sorted(self.providers.items()):
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
             found = [e for e in envs if self._key(e)]
-            out.append({"provider": name, "base_url": spec.get("base_url", ""), "transport": spec.get("transport", "openai"),
+            out.append({"provider": name, "base_url": display_url(spec.get("base_url", "")),
+                        "transport": spec.get("transport", "openai"),
                         "local": bool(spec.get("local")), "key_env": envs,
                         "key": ("n/a" if not envs else "yes" if found else "no"),
                         "roles": list(spec.get("roles") or [])})
@@ -542,9 +712,6 @@ _BG: dict[str, Any] = {}
 def aux_sync(router: Router, prompt: str | list[Message], *, timeout: float | None = 120.0, **kw: Any) -> str:
     """Blocking ``aux`` for sync callers (plugin threads). Runs on one shared background event loop so the
     router's HTTP clients stay bound to a single loop. Never call it from that loop."""
-    import asyncio
-    import threading
-
     if "loop" not in _BG:
         loop = asyncio.new_event_loop()
         threading.Thread(target=loop.run_forever, name="exo-aux-loop", daemon=True).start()

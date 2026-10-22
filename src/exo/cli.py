@@ -30,7 +30,7 @@
   exo index                                refresh the node table in INDEX.md
   exo log append <kind> ...                append a signed event
   exo log verify                           check chain, signatures against pinned keys, head anchor (D-040)
-  exo log anchor                           anchor the current head (a store made before D-040)
+  exo log anchor [--force]                 anchor the current head (a store made before D-040)
   exo log tail [-n 10] [--kind K]          last events
   exo keygen <name> [--out PATH]           create an Ed25519 key (0600); pinned when made in $EXO_HOME/keys
   exo keys [list|pin NAME PUB|principal ID] the key registry: pinned signers, bus seats, principal ids (D-040)
@@ -44,39 +44,91 @@ import argparse
 import json
 import os
 import sys
+from importlib import import_module
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from . import crypto, display_version
-from .ledger import KINDS, Ledger, LedgerError
-from .store import PrincipalStore, exo_home, principal_root
-from .ingest.cli import register as register_ingest, cmd_ingest  # noqa: F401  (dispatched via globals)
-from .ask import register as register_ask, cmd_ask  # noqa: F401
-from .eval import register as register_eval, cmd_eval  # noqa: F401
-from .brief import register as register_brief, cmd_brief  # noqa: F401
-from .consolidate import register as register_consolidate, cmd_consolidate, cmd_proposals  # noqa: F401
-from .onboard import (register as register_onboard, add_init_args, cmd_init as onboard_init,  # noqa: F401
-                      cmd_interview, cmd_import_store, cmd_config)
-from .upstream import register as register_upstream, cmd_upstream  # noqa: F401
-from .cli_chat import register as register_chat
-from .models_cmd import register as register_models, cmd_models
-from .providers_cmd import register as register_providers
-from .decide_cmd import register as register_decide, cmd_decide
-from .trace_cmd import register as register_trace, cmd_trace, cmd_findings
-from .memory_cmd import register as register_memory, cmd_memory
-from .baseline.cli import register as register_taste, cmd_taste
+from . import display_version
+
+if TYPE_CHECKING:
+    from .store import PrincipalStore
+
+STOP_HELP = 'stop the background core that exo web / exo serve started'
+
+# Commands that other modules add, in `exo --help` order: name -> (module, handler, help line).
+# A module is imported only when its command runs (#260), so `exo --version`, `exo --help` and bare
+# `exo` load none of them. The help line repeats the one the module's register() gives, so
+# `exo --help` needs no import. tests/test_cli_lazy.py checks that the two agree.
+LAZY = {
+    'ingest': ('ingest.cli', 'cmd_ingest', 'import conversations into the ledger'),
+    'ask': ('ask', 'cmd_ask', 'question queue and interruption budget'),
+    'eval': ('eval', 'cmd_eval', 'n=1 evaluation report'),
+    'brief': ('brief', 'cmd_brief', 'morning brief (Markdown and HTML)'),
+    'consolidate': ('consolidate', 'cmd_consolidate', 'turn new ledger events into belief proposals'),
+    'proposals': ('consolidate', 'cmd_proposals', 'review belief proposals'),
+    'interview': ('onboard', 'cmd_interview', 'ask the onboarding questions for an existing store'),
+    'import-store': ('onboard', 'cmd_import_store', 'adopt an existing hafiz-format store as a principal (copy)'),
+    'config': ('onboard', 'cmd_config', 'read and write $EXO_HOME/config.json'),
+    'upstream': ('upstream', 'cmd_upstream', 'track lifted upstream code (PROVENANCE.toml)'),
+    'serve': ('cli_chat', 'cmd_serve', 'run exod, the core protocol server'),
+    'chat': ('cli_chat', 'cmd_chat', 'chat with exod from the terminal'),
+    'models': ('models_cmd', 'cmd_models', 'configured providers, keys found, and the route for each role'),
+    'providers': ('providers_cmd', 'cmd_providers',
+                  'set up model providers: status, add or remove a key, test, default model'),
+    'decide': ('decide_cmd', 'cmd_decide',
+               'ask the decision model one question; prints probabilities and the route'),
+    'trace': ('trace_cmd', 'cmd_trace', 'how the harness performed in a session: per turn timing, routes, flags'),
+    'findings': ('trace_cmd', 'cmd_findings', 'what the harness found wrong with itself'),
+    'memory': ('memory_cmd', 'cmd_memory', "each agent's one log and the signed ledger: verify, threads"),
+    'taste': ('baseline.cli', 'cmd_taste', 'the taste layers: house, learned, pins (D-044)'),
+}
+# Commands whose handler also takes the principal store.
+STORE_CMDS = {'find', 'get', 'ctx', 'links', 'lint', 'graph', 'index', 'log',
+              'ingest', 'ask', 'eval', 'brief', 'consolidate', 'proposals', 'interview'}
+
+# Names this module imported at the top before #260, for code that still reads them from here.
+_MOVED = {'crypto': 'crypto', 'KINDS': 'ledger', 'Ledger': 'ledger', 'LedgerError': 'ledger',
+          'PrincipalStore': 'store', 'exo_home': 'store', 'principal_root': 'store',
+          'add_init_args': 'onboard', 'onboard_init': 'onboard', 'register_ingest': 'ingest.cli',
+          'register_ask': 'ask', 'register_eval': 'eval', 'register_brief': 'brief',
+          'register_consolidate': 'consolidate', 'register_onboard': 'onboard', 'register_upstream': 'upstream',
+          'register_chat': 'cli_chat', 'register_models': 'models_cmd', 'register_providers': 'providers_cmd',
+          'register_decide': 'decide_cmd', 'register_trace': 'trace_cmd', 'register_memory': 'memory_cmd',
+          'register_taste': 'baseline.cli', **{handler: mod for mod, handler, _ in LAZY.values()}}
+
+
+def __getattr__(name: str) -> Any:
+    """A name from `_MOVED`, imported on first use."""
+    if name not in _MOVED:
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+    mod = import_module(f'.{_MOVED[name]}', __package__)
+    if name == 'crypto':
+        return mod
+    if name.startswith('register_'):
+        return mod.register
+    return getattr(mod, 'cmd_init' if name == 'onboard_init' else name)
 
 
 def key_path(name: str) -> Path:
+    from .store import exo_home
     return exo_home() / 'keys' / f'{name}.key'
 
 
 def resolve_store(a) -> PrincipalStore:
+    from .store import PrincipalStore
     if a.root:
         store = PrincipalStore(a.root)
     else:
         pid = a.principal or os.environ.get('EXO_PRINCIPAL')
         if not pid:
-            sys.exit('no active principal: pass --principal <id> or --root <dir>, or set EXO_PRINCIPAL')
+            try:
+                from .config import Config
+                pid = Config.load().principal
+            except Exception:
+                pid = None
+        if not pid:
+            sys.exit('no active principal: pass --principal <id> or --root <dir>, set EXO_PRINCIPAL, '
+                     'or `exo config set principal <id>`')
         store = PrincipalStore.for_principal(pid)
     if not store.exists():
         sys.exit(f'no principal store at {store.root}; run: exo init <id>')
@@ -86,6 +138,8 @@ def resolve_store(a) -> PrincipalStore:
 # --- commands -----------------------------------------------------------------
 
 def cmd_init(a) -> int:
+    from .ledger import Ledger
+    from .store import PrincipalStore, principal_root
     root = Path(a.root) if a.root else principal_root(a.id)
     template = a.from_template or None
     try:
@@ -147,6 +201,7 @@ def cmd_index(a, store) -> int:
 
 
 def cmd_keygen(a) -> int:
+    from . import crypto
     out = Path(a.out) if a.out else key_path(a.name)
     if out.exists():
         sys.exit(f'{out} exists; refusing to overwrite')
@@ -158,6 +213,7 @@ def cmd_keygen(a) -> int:
 
 def cmd_keys(a) -> int:
     """`exo keys [list]`, `exo keys pin NAME PUB [--seat] [--replace]`, `exo keys principal ID` (D-040)."""
+    from . import crypto
     from .keyring import KeyRegistry
     reg = KeyRegistry.load()
     if a.keys_cmd == 'pin':
@@ -186,6 +242,7 @@ def cmd_keys(a) -> int:
 
 
 def cmd_log(a, store) -> int:
+    from .ledger import Ledger, LedgerError
     from .ledger_authority.factory import configured
     if a.log_cmd == 'verify' and configured():
         from .ledger_authority.verify import verify_configured
@@ -218,7 +275,11 @@ def cmd_log(a, store) -> int:
             print(json.dumps(res))
             return 0 if res['ok'] else 1
         if a.log_cmd == 'anchor':
-            print(json.dumps(led.anchor()))
+            try:
+                print(json.dumps(led.anchor(force=a.force)))
+            except LedgerError as e:
+                print(e, file=sys.stderr)
+                return 1
             return 0
         events = list(led.iter(kind=a.kind))[-a.n:]
         for ev in events:
@@ -252,7 +313,10 @@ def cmd_wire(a) -> int:
     return 1 if bad else 0
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(cmd: str | None = None) -> argparse.ArgumentParser:
+    """The `exo` parser. Given the command word, only that command gets its full parser and only its module is
+    imported. The others keep their name and help line, so usage, errors and `exo --help` read the same (#260).
+    With no command word, every command is built and every module imported."""
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument('--principal', help='principal id (default: $EXO_PRINCIPAL)')
     common.add_argument('--root', help='store directory; overrides --principal')
@@ -265,7 +329,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('id')
     p.add_argument('--from-template', nargs='?', const='', default='', metavar='PATH',
                    help='template directory (default: the bundled empty store)')
-    add_init_args(p)
+    if cmd in (None, 'init'):
+        from .onboard import add_init_args
+        add_init_args(p)
 
     p = sp.add_parser('find', parents=[common]); p.add_argument('words', nargs='+'); p.add_argument('-n', type=int, default=8)
     p = sp.add_parser('get', parents=[common]); p.add_argument('id'); p.add_argument('--body-only', action='store_true')
@@ -291,38 +357,35 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument('name')
 
     p = sp.add_parser('log', help='the event ledger')
-    lp = p.add_subparsers(dest='log_cmd', required=True)
-    q = lp.add_parser('append', parents=[common])
-    q.add_argument('kind', choices=sorted(KINDS))
-    q.add_argument('--author', required=True)
-    q.add_argument('--key', help='signing key (default: $EXO_HOME/keys/<author>.key)')
-    g = q.add_mutually_exclusive_group()
-    g.add_argument('--body', help='event body as a JSON object')
-    g.add_argument('--text', help='shorthand for --body {"text": TEXT}; stdin if neither is given')
-    q.add_argument('--session')
-    q.add_argument('--ref', action='append', help='referenced event id (repeatable)')
-    lp.add_parser('verify', parents=[common])
-    lp.add_parser('anchor', parents=[common], help='write the current head to its anchor files (a store from before D-040)')
-    q = lp.add_parser('tail', parents=[common])
-    q.add_argument('-n', type=int, default=10)
-    q.add_argument('--kind')
-    register_ingest(sp, common)
-    register_ask(sp, common)
-    register_eval(sp, common)
-    register_brief(sp, common)
-    register_consolidate(sp, common)
-    register_onboard(sp, common)
-    register_upstream(sp, common)
-    register_chat(sp, common)
-    register_models(sp, common)
-    register_providers(sp, common)
-    register_decide(sp, common)
-    register_trace(sp, common)
-    register_memory(sp, common)
-    register_taste(sp, common)
+    if cmd in (None, 'log'):  # `log append` lists the ledger kinds
+        from .ledger import KINDS
+        lp = p.add_subparsers(dest='log_cmd', required=True)
+        q = lp.add_parser('append', parents=[common])
+        q.add_argument('kind', choices=sorted(KINDS))
+        q.add_argument('--author', required=True)
+        q.add_argument('--key', help='signing key (default: $EXO_HOME/keys/<author>.key)')
+        g = q.add_mutually_exclusive_group()
+        g.add_argument('--body', help='event body as a JSON object')
+        g.add_argument('--text', help='shorthand for --body {"text": TEXT}; stdin if neither is given')
+        q.add_argument('--session')
+        q.add_argument('--ref', action='append', help='referenced event id (repeatable)')
+        lp.add_parser('verify', parents=[common])
+        q = lp.add_parser('anchor', parents=[common], help='write the current head to its anchor files (a store from before D-040)')
+        q.add_argument('--force', action='store_true', help='replace an anchor that disagrees with the ledger')
+        q = lp.add_parser('tail', parents=[common])
+        q.add_argument('-n', type=int, default=10)
+        q.add_argument('--kind')
+    want = LAZY[cmd][0] if cmd in LAZY else None
+    for name, (mod, _, help_line) in LAZY.items():
+        if name in sp.choices:  # added with an earlier command by the same register()
+            continue
+        if cmd is None or mod == want:
+            import_module(f'.{mod}', __package__).register(sp, common)
+        else:
+            sp.add_parser(name, help=help_line)
     p = sp.add_parser('web', add_help=False, help='serve the command centre web client (exo-command)')
     p.add_argument('rest', nargs=argparse.REMAINDER, help='passed to exo-command: --socket, --url, --port ...')
-    sp.add_parser('stop', add_help=False, help='stop the background core that exo web / exo serve started')
+    sp.add_parser('stop', add_help=False, help=STOP_HELP)
     sp.add_parser('resume', add_help=False, help='reopen the last session in the terminal client (exo --resume)')
     p = sp.add_parser('tui', add_help=False, help='the terminal client (Textual); runs the core in-process if no exod')
     p.add_argument('rest', nargs=argparse.REMAINDER, help='passed to exo_tui: --resume, --session, --seat ...')
@@ -335,6 +398,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def cmd_web(a) -> int:
     """Run exo-command's main(). Its package lives in the plugins folder, which is not on sys.path."""
+    from .store import exo_home
     dirs = [Path(d) for d in os.environ.get('EXO_PLUGIN_DIRS', '').split(os.pathsep) if d]
     dirs += [exo_home() / 'plugins', Path(__file__).resolve().parents[2] / 'plugins']
     for d in dirs:
@@ -377,7 +441,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_tui(args)
     if args[0] == 'tui':
         return cmd_tui(args[1:])
-    if args[0] == 'stop':
+    if args[0] == 'stop':  # -h prints help and an unknown word is an error: neither stops the core
+        argparse.ArgumentParser(prog='exo stop', description=STOP_HELP).parse_args(args[1:])
         from .ensure_core import stop_core
         print(stop_core())
         return 0
@@ -391,37 +456,16 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == 'providers':  # its own quiet parser: an error must never echo a pasted key
         from .providers_cmd import main as providers_main
         return providers_main(args[1:])
-    a = build_parser().parse_args(argv)
+    a = build_parser(args[0]).parse_args(argv)
     if a.cmd == 'init':
+        from .onboard import cmd_init as onboard_init
         return onboard_init(a)
-    if a.cmd == 'import-store':
-        return cmd_import_store(a)
-    if a.cmd == 'config':
-        return cmd_config(a)
-    if a.cmd == 'models':
-        return cmd_models(a)
-    if a.cmd == 'decide':
-        return cmd_decide(a)
-    if a.cmd == 'trace':
-        return cmd_trace(a)
-    if a.cmd == 'memory':
-        return cmd_memory(a)
-    if a.cmd == 'taste':
-        return cmd_taste(a)
-    if a.cmd == 'findings':
-        return cmd_findings(a)
-    if a.cmd == 'upstream':
-        return cmd_upstream(a)
-    if a.cmd in ('serve', 'chat'):
-        return a.func(a)
-    if a.cmd == 'wire':
-        return cmd_wire(a)
-    if a.cmd == 'keygen':
-        return cmd_keygen(a)
-    if a.cmd == 'keys':
-        return cmd_keys(a)
-    store = resolve_store(a)
-    return globals()['cmd_' + a.cmd](a, store)
+    if a.cmd in LAZY:
+        mod, handler, _ = LAZY[a.cmd]
+        fn = getattr(import_module(f'.{mod}', __package__), handler)
+    else:
+        fn = globals()['cmd_' + a.cmd]
+    return fn(a, resolve_store(a)) if a.cmd in STORE_CMDS else fn(a)
 
 
 if __name__ == '__main__':

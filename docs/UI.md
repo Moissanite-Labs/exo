@@ -39,19 +39,25 @@ the middle dot as separator come straight from the site.
 
 ## What is on screen
 
-1. Brand bar: `E X O`, agent, thread, and `LIVE` with a pulsing dot while a turn runs (`IDLE` otherwise).
-2. Transcript: `›` and your text for a prompt (`steer ›` when sent mid-turn); agent text in fg-2 as Markdown;
+1. Brand bar: `E X O`, agent, thread, and `LIVE` with a pulsing dot while a turn runs (`IDLE` otherwise). It shows
+   the open thread's turn: after a switch it shows the new thread's state.
+2. Transcript: `›` and your text for a prompt (`steer sending ›`, then `steer queued ›` or `steer delivered ›` when sent mid-turn); agent text in fg-2 as Markdown;
    one line per tool with state glyph, name, short args, line count and elapsed time (ctrl+o expands); system
    lines dim; tips as `tip · ...` in dim italic; `memory · log 1-16 folded · 1781 → 153 tok` as a cold line.
-3. Panels: approval (orange rule, `APPROVAL · <risk>`, key chips `[o] once [a] always [d] deny`; both `a` and `A` wait for Enter; the card never takes focus automatically and says "tab, click or ctrl+f to answer"; it is removed when the core closes the request, when the turn is stopped, and by a check against `approvals.list` every few seconds), taste,
-   finding and `/context` report (cold rule), peer message (double cold rule, sender and trust in the header,
+3. Panels: approval (orange rule, `APPROVAL · <risk>`, followed by `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny` before the request details; both `a` and `A` wait for Enter; the card never takes focus automatically, and Ctrl+F keeps the composer draft; it is removed when the core closes the request, when the turn is stopped, and by a check against `approvals.list` every few seconds), taste,
+   finding, `/context` report and the short orientation `INTRO` shows when the `exo-intro` skill is missing
+   (cold rule), peer message (double cold rule, sender and trust in the header,
    never styled as you). The side panel for `ui.panel` uses the same header and rule.
-4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`.
-5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question. A steer sent mid-turn shows `steer queued ›` until it lands (its `message.completed`); `Up` in an empty composer or `/unsteer` sends `command.run unsteer` and puts the text back in the composer (D-045). Esc is not used for this.
+   The terminal waits for an approval card's removal before mounting the next queued card under the same widget id.
+   Answers and close events name their request, so a late event cannot close its replacement. Thread switches and
+   restoration share this transition. A request with no thread still stays across thread switches (#276, D-045).
+4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`. A queued steer count leads this line (`1 steer queued (Up to edit)`), visible even with a draft in the composer.
+5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question. A steer sent mid-turn shows `steer sending ›` while its reply is pending, `steer queued ›` after the core queues it, then `steer delivered ›` on its matching `message.completed` or a successful `unsteer` reply confirming it already left the queue. Delivery means the text reached the conversation, not that the model has acted on it. Delivery events received before the send reply are retained only for in-flight sends. A send reply alone never proves delivery. A lost reply says `steer delivery unknown`; a refused send says `steer not sent`. `Up` in an empty composer or `/unsteer` sends `command.run unsteer` and puts queued text back in the composer (D-045). Esc is not used for this.
    Under it, when you type `/`, `@` or `!`, the completion menu (D-037): a hairline above, mono rows, an orange rule on
    the selected row, a dim argument shape, up to eight rows then `N matches`. Ghost text is drawn dim after the caret.
    The placeholder doubles as the one-line guidance (`job j1 finished: ask for its job_output · tab fills it in`).
    No animation: the menu and the line change only on keys and events, so reduced motion needs no special case.
+   Subagent commands (D-070): `/tasks` lists the tasks this session handed out, `/open <task>` shows the child's session (a read-only look: the child's loop is not resumed, and typing there steers the running child without a receipt note, as a queued steer that up pulls back), `/steer <task> <text>` sends a running child a note and `/stop <task>` stops it. A bare `/stop` still stops the running turn.
 6. Status strip: `MODEL` (the route that served, in orange with `← requested` when it fell back), `MEM` gauge,
    `CACHE` share of the last call, `COST`, open findings.
 7. Start: the site's hero motif in braille (`exo_tui/hero.py`): a shell of linked nodes around an orange core,
@@ -59,22 +65,54 @@ the middle dot as separator come straight from the site.
    30), one still frame under reduced motion or `NO_COLOR`, gone with the first message. Idle cost measured with
    `scripts/idle_cpu.py`: about 1.3% of one core (0.5% without it). A plain startup prints no `new thread` line; `/new` does.
    Before that, a boot sequence (under a second, any key skips it) that marks `core`, `agent`, `memory`, `model` as
-   each real step finishes, then an empty-start card with the keys.
+   each real step finishes, then an empty-start card with the keys. The boot screen is gone before anything opens
+   over the start (the first-run providers panel or model picker): its dismiss closes the top screen. The `memory`
+   line and the card read the core's `memory_status` built-in: `ready`, `off, no principal store` (no store yet:
+   a dim dash, not a green check, and a notice naming `exo init <id>`), `did not start` (also a dash), or `log only`
+   (no memory plugin: the agent log and summary tree still run). An older core that cannot say leaves the plain label.
 
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,
 `peer.message`, `taste.updated`, `tool.completed` (`duration_ms`), and the findings count the client polls.
+Context tokens are the last call's whole prompt, input plus cache read and cache write. The cache share is cache
+read over that prompt. Input is the uncached part on every provider (D-080), so the sum counts each token once.
+
+Switching threads (`/new`, `/sessions`, `/resume`, `/fork`, `/open`): the old thread's events stop reaching the
+window, so it drops that thread's turn state (`LIVE`, the activity line, steer mode, a queued steer, an open
+question), its approval card and its numbers. A card with no thread stays (a held peer message that no live session
+could take, D-026): it belongs to every thread, so the window asks `approvals.list` with no session filter and keeps
+those cards. A new thread, and a window started on one, show them too. `MEM` and `CACHE` are empty until the new thread's next model call.
+`COST` is kept per thread. The core's total for a thread counts all of it, so a thread the window showed before gets
+back what the window saw of it, and the `+` for an unpriced call stays on its next total (D-032). A thread the
+window never showed reads `–` until its next model call, and its `+` is a lower bound, as in a fresh window. So is
+the `+` for an unpriced call made there while another thread was open. The thread that opens gets its state from the
+core. `session.resume` and `session.get` report `status`: `live` while a turn runs, so the bar says `LIVE` and
+ctrl+c stops it. `approvals.list` gives back the card of a request still waiting there (D-045). The same check runs
+when the window starts with `--session` or `--resume`, and after the core refuses an answer. A finished subagent's
+roll-up is a `usage.updated` with no `model.call` before it. It adds to `COST`, adds the `+` when the child's calls
+had no price, and leaves `MEM`, `CACHE` and `MODEL` alone.
+
+The event feed starts once `hello` answers, whatever the rest of the boot does. When a later step fails, the window
+says `cannot start: ...` and still streams, so `/new` and a message work and their replies and approval cards show.
+A `--session ID` the core does not know (a typo, a deleted thread) opens a new thread with the note
+`no thread ID; started a new one`. One event the window cannot read does not end the feed. A value it does not
+know, such as a newer core's panel kind, is kept, and the panel shows its text fallback. An event that still fails
+to decode is skipped and logged under `exo.protocol.client`. If the feed itself dies, the window says
+`event feed stopped: ...` and tells the harness (D-025). `/restart` reopens the thread.
 
 ## The /providers panel
 
 `/providers` opens a modal in the same language: a cold `PROVIDERS` header rule, then one row per provider with a
-status chip (green `verified` with latency, grey `key found`, dim `no key`, orange `failed: <class>`, cold `running`
+status chip (green `verified` with latency, grey `key found`, dim `no key` or `no base_url`, orange `failed: <class>`, cold `running`
 for a local server), where the key comes from (env, keychain, secret-service or file, never a value), the model count
 and an orange default mark. Key chips: `[a]` add or replace a key, `[t]` test, `[r]` remove (asks y or n), `[d]` pick
 the default model, `[esc]` close (leaving a panel is soft; Esc never stops a turn, ctrl+c or `/stop` does). `[a]` opens a small modal with one masked field; the key never goes through the
 composer, the transcript or any log, and a key typed after `/providers add <name>` in the composer is refused and
-not echoed. After a change the client tells a running core to read keys again. At start, if no provider is ready,
-one note says to type `/providers`.
+not echoed. After a key change, or a test that passes, the client tells a running core to read keys again. That
+also clears the provider's cooldown and route breaker, so the next message reaches it. At start, if no provider is
+ready, one note says what the default needs: a key, a running local server (its host and port only, never a login
+in its URL), or a CLI that is installed and logged in, and the panel opens. If providers are ready but no main
+route uses one, the panel opens too, or the default-model picker when only one provider is ready.
 
 ## Focus, the big composer and the inverse layout (D-046)
 
@@ -87,10 +125,10 @@ one note says to type `/providers`.
   it), Esc to close with the draft kept (the menu and ghost text close first; Esc never stops a turn), `ctrl+l` line numbers,
   `ctrl+t` or `/compose edit` for `$VISUAL`/`$EDITOR`, `/compose task` for the four headings. A long paste stays whole.
   Slash, argument and `@` completion work as in the one-line composer; up and down move the caret and do not recall history.
-- **Inverse layout** (`docs/media/tui-11-inverse.png`): input under the brand bar, then the menu, approval card and activity
-  line, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
-  its newest item at the top. `/layout classic` restores the usual order (`docs/media/tui-12-classic-bottom.png`: a long
-  thread opens at the bottom). The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
+- **Inverse layout** (`docs/media/tui-11-inverse.png`): the status strip under the brand bar, then the input, the menu,
+  approval card and activity line, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
+  its newest item at the top. `/layout classic` restores the usual order with the status strip at the bottom
+  (`docs/media/tui-12-classic-bottom.png`: a long thread opens at the bottom). `/layout` moves the strip live. The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
   Inverse is the default only for the experiment: set `DEFAULT_LAYOUT = "classic"` in `exo_tui/prefs.py` to flip it back.
 
 ## Switches

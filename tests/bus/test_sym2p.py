@@ -112,6 +112,71 @@ def test_every_fixture_file_is_covered():
         assert f"invalid/{p.name}" in covered
 
 
+# --- a trailing newline is never part of a grammar token ---------------------
+# Python's `$` also matches before a final "\n"; the patterns anchor with `\Z`.
+
+NL_PATTERNS = [
+    (v1, "ID_RE", "builder"),
+    (v1, "REF_RE", "e3:v3"),
+    (v1, "REF_VERSIONED_RE", "c7:v2"),
+    (v1, "HASH_RE", "sha256:" + "0" * 64),
+    (v1, "APPROVAL_REF_RE", "approval:a881"),
+    (v1, "ISO_Z_RE", "2026-09-17T02:00:00Z"),
+    (v2, "TOKEN", "b441"),
+    (v2, "BASE", "mr1:v1"),
+    (v2, "SYM", "validator"),
+    (v2, "REF", "$cov"),
+    (v2, "SUM", "0123456789abcdef"),
+]
+
+
+@pytest.mark.parametrize("mod,name,good", NL_PATTERNS,
+                         ids=[f"{m.__name__.rsplit('.', 1)[1]}.{n}" for m, n, _ in NL_PATTERNS])
+def test_grammar_pattern_rejects_a_trailing_newline(mod, name, good):
+    pattern = getattr(mod, name)
+    assert pattern.match(good)
+    assert not pattern.match(good + "\n")
+
+
+def _doc(name, line=0):
+    return json.loads(docs(FIX / name)[line])
+
+
+@pytest.mark.parametrize("name,line,path,code,needle", [
+    ("brief-packet.json", 0, ("id",), "ERR:SYN", "ID grammar"),
+    ("brief-packet.json", 0, ("tk",), "ERR:SYN", "ID grammar"),
+    ("brief-packet.json", 0, ("prj",), "ERR:SYN", "ID grammar"),
+    ("brief-packet.json", 0, ("f",), "ERR:SYN", "ID grammar"),
+    ("brief-packet.json", 0, ("t",), "ERR:SYN", "ID grammar"),
+    ("brief-packet.json", 0, ("s",), "ERR:SYN", "REF"),
+    ("brief-packet.json", 0, ("base",), "ERR:SYN", "REF"),
+    ("valid/packet-assert.json", 0, ("ev", 0), "ERR:SYN", "REF"),
+    ("valid/packet-assert.json", 0, ("ce", 0), "ERR:SYN", "REF"),
+    ("valid/object-dispute-open.json", 0, ("id",), "ERR:SYN", "ID grammar"),
+    ("valid/object-dispute-open.json", 0, ("hash",), "ERR:SYN", "sha256"),
+    ("review-fix-verify-merge.jsonl", 1, ("auth", "ref"), "ERR:AUTH", "approval:"),
+    ("review-fix-verify-merge.jsonl", 1, ("auth", "scope"), "ERR:AUTH", "REF"),
+    ("review-fix-verify-merge.jsonl", 1, ("auth", "approved_at"), "ERR:SYN", "ISO-8601"),
+], ids=lambda v: ".".join(map(str, v)) if isinstance(v, tuple) else None)
+def test_v1_value_with_a_trailing_newline_is_rejected(name, line, path, code, needle):
+    doc = _doc(name, line)
+    assert v1.validate_text(json.dumps(doc))[0] == []
+    node = doc
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] += "\n"
+    findings, _ = v1.validate_text(json.dumps(doc))
+    assert any(f["code"] == code and needle in f["msg"] for f in findings), findings
+
+
+def test_v1_sender_with_a_trailing_newline_does_not_dodge_dedupe():
+    pkt = _doc("valid/packet-assert.json")
+    rs = v1.RunState()
+    assert v1.validate_text(json.dumps(pkt), run_state=rs)[0] == []
+    findings, _ = v1.validate_text(json.dumps(dict(pkt, f=pkt["f"] + "\n")), run_state=rs)
+    assert "ERR:SYN" in codes(findings), findings
+
+
 # --- ported v2 cases (source tests/test_sym2.py) ------------------------------
 
 def test_v2_templates_validate_and_render_as_published():
@@ -132,6 +197,9 @@ def test_v2_templates_validate_and_render_as_published():
     (lambda s: s.replace("(10 sym-2p/1.0", "(10  sym-2p/1.0"), "ERR:CANON"),
     (lambda s: s + "|0000000000000000", "ERR:RCP"),
     (lambda s: s.replace("(12 (22 validator 0 1))", "(31 (34 $cov 70) (20 sec 6) ())"), "ERR:SCOPE"),
+    (lambda s: s.replace("2|b441|", "2|b441\n|", 1), "ERR:TOKEN line 1: ID"),  # `$` let these through
+    (lambda s: s.replace("|mr1|1|", "|mr1\n|1|", 1), "ERR:TOKEN line 1: TK"),
+    (lambda s: s.replace("|mr1:v1|", "|mr1:v1\n|", 1), "ERR:TOKEN line 1: BASE"),
 ])
 def test_v2_rejections(mutate, needle):
     errs = sym2p.validate(mutate(BRIEF_V2))

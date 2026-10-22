@@ -101,7 +101,7 @@ class Limits:
     max_children: int = 10      # tasks per delegate call
     max_concurrent: int = 4     # running children per depth level, engine-wide
     max_turns: int = 24         # tool rounds per child
-    max_tokens: int = 200_000   # input plus output tokens per child
+    max_tokens: int = 200_000   # new tokens per child: uncached input, cache writes, output; not cache reads (D-080)
     timeout_s: int = 900        # wall time per child
     max_summary_chars: int = 6000
 
@@ -122,7 +122,7 @@ class _Bus:
         lim = self.d.limits.max_tokens
         if isinstance(body, s.UsageUpdated) and session in self.d.loops and lim:
             tot = body.session_total or body.usage
-            if tot.input_tokens + tot.output_tokens > lim and session not in self.d.over:
+            if tot.input_tokens + tot.cache_write_tokens + tot.output_tokens > lim and session not in self.d.over:
                 self.d.over.add(session)
                 self.d.loops[session].interrupt(session)
         return ev
@@ -142,11 +142,17 @@ class Delegator:
         self.allow: dict[str, set[str]] = {}  # child session -> tool names it may call
         self.loops: dict[str, Loop] = {}      # running child sessions
         self.over: set[str] = set()           # children stopped for their token budget
+        self.marks: dict[str, list[str]] = {}  # child -> "steered by ..." notes for its receipt (exo.subagents, #97)
         self.sems: dict[int, asyncio.Semaphore] = {}
-        db = engine.store
-        db._q(TABLE)
-        db._q("UPDATE tasks SET status='failed', updated=? WHERE status IN ('queued','running') "
-              "AND (child IS NULL OR child NOT LIKE 'bus:%')", (s.now_ts(),))
+        engine.store._q(TABLE)
+
+    def fail_stale(self) -> None:
+        """Fail this agent's tasks a dead process left queued or running. ``claim_writer`` calls it, so another
+        seat's core, or a second core of this seat that fails the lock, never touches live tasks."""
+        a = getattr(self.engine, "agent", "default")
+        self.engine.store._q("UPDATE tasks SET status='failed', updated=? WHERE status IN ('queued','running') AND "
+                             "(child IS NULL OR child NOT LIKE 'bus:%') AND (parent IN (SELECT id FROM sessions WHERE "
+                             "agent=?) OR child IN (SELECT id FROM sessions WHERE agent=?))", (s.now_ts(), a, a))
 
     def install(self) -> None:
         self.engine.registry.register(SPEC, self.tool, replace=True)
@@ -231,11 +237,9 @@ class Delegator:
 
     def _cap(self, parent: str, tier: str) -> str:
         top = self._ceiling(parent)
-        if self.allow_upgrade or TIERS.index(tier) <= TIERS.index(top):
-            return tier
-        return top
+        return tier if self.allow_upgrade or TIERS.index(tier) <= TIERS.index(top) else top
 
-    def _route(self, tier: str) -> tuple[Any, str]:
+    def route(self, tier: str) -> tuple[Any, str]:
         """(provider, "provider:model") for a tier. No usable tier route means the parent's own model."""
         e = self.engine
         if e.router.roles.get("delegate"):  # an explicit delegate role still wins
@@ -253,7 +257,7 @@ class Delegator:
         if r.status != "failed" or not self.escalate_on_fail or b.tier not in TIERS:
             return r
         nxt = self._cap(parent, TIERS[min(TIERS.index(b.tier) + 1, len(TIERS) - 1)])
-        if nxt == b.tier or self._route(nxt)[1] == self._route(b.tier)[1]:
+        if nxt == b.tier or self.route(nxt)[1] == self.route(b.tier)[1]:
             return r
         return await self.run(parent, replace(b, id=new_id("k"), tier=nxt), escalated=True)
 
@@ -306,13 +310,13 @@ class Delegator:
         prompt = CHILD_PROMPT + (ORCHESTRATOR_NOTE if "delegate" in names else "")
         if "code_find" in names:
             prompt += CODE_FIND_NOTE
-        if b.cwd:
-            prompt += f"\n\nWorking directory: {b.cwd}"
+        # no cwd line here: the loop names the child session's cwd (b.cwd) in the system text
         child = Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
                      e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
                      run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
                      max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
         child.approval_ms = e.loop.approval_ms  # engine.ask adds to one table; the parent turn reads it
+        child._state = e.loop._state  # one lock, steer queue and running flag per session, whichever loop runs it
         return child
 
     def _emit(self, parent: str, b: Brief, status: str, child: str | None, packet: str) -> None:
@@ -334,7 +338,7 @@ class Delegator:
                                       s.now_ts(), s.now_ts()))
         self._emit(parent, b, "queued", None, line)
         sid, code, why, result, loop, turn = "", "", "", None, None, None
-        provider, model = self._route(b.tier)
+        provider, model = self.route(b.tier)
         try:
             async with self.sems.setdefault(b.depth, asyncio.Semaphore(self.limits.max_concurrent)):
                 loop = self._loop(b, provider, model)
@@ -412,9 +416,10 @@ class Delegator:
         cap = self.limits.max_summary_chars
         if len(text) > cap:
             text = text[:cap] + f" [cut {len(text) - cap} chars]"
+        text += "".join(f"\n[{m}]" for m in self.marks.pop(sid, []))
         total = loop.state(sid).total if loop is not None and sid else Usage()
         return Receipt(id="r" + b.id[1:], thread=b.thread, brief=b.id, status=status, role=b.role, summary=text,
-                       input_tokens=total.input_tokens, output_tokens=total.output_tokens,
+                       input_tokens=total.input_tokens + total.cache_write_tokens, output_tokens=total.output_tokens,
                        cost_usd=total.cost_usd or 0.0, duration_ms=int((time.monotonic() - t0) * 1000),
                        rounds=sum(1 for m in msgs if m.role == "assistant" and m.tool_calls), tool_calls=len(calls),
                        files=sorted(files), error_code=code, error=why, child_session=sid, tier=b.tier)

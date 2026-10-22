@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 import subprocess
+from types import SimpleNamespace
 
 from exo import complete as cm
 from exo.protocol import schema as s
+from exo_tui.app import ExoApp
 from exo_tui.widgets import IDLE_HINT
 from test_tui import run, until
+
+
+def test_completion_honors_explicit_local_engine_required_mode(tmp_path, monkeypatch):
+    monkeypatch.delenv('EXO_TOOL_EXECUTOR_REQUIRED', raising=False)
+    client = SimpleNamespace(engine=SimpleNamespace(executor_required=True))
+    app = ExoApp(client, home=tmp_path)
+    (tmp_path / 'safe.txt').write_text('safe')
+    app.files.cwd = tmp_path
+    monkeypatch.setattr(cm.subprocess, 'run', lambda *a, **k: (_ for _ in ()).throw(AssertionError('host Git')))
+    assert app.files.executor_required
+    assert [i.value for i in app.files.query('')] == ['@safe.txt']
 
 
 async def send(app, pilot, text):
@@ -188,10 +201,14 @@ def test_unknown_command_suggests_instead_of_erroring(tmp_path):
     run(tmp_path, sc)
 
 
-def test_unknown_with_nothing_close_still_goes_to_the_core(tmp_path):
+def test_unknown_without_a_close_command_match_is_sent_as_literal_message(tmp_path):
     async def sc(app, pilot, client, eng):
-        await send(app, pilot, "/qqqqqqq")
-        await until(lambda: any(isinstance(b, s.CommandRun) and b.name == "qqqqqqq" for b in app.sent), pilot)
+        text = "/qqqqqqq"
+        await send(app, pilot, text)
+        await until(lambda: any(isinstance(b, s.TurnSend) and b.text == text for b in app.sent), pilot)
+        sent = next(b for b in app.sent if isinstance(b, s.TurnSend) and b.text == text)
+        assert sent.session == app.session and sent.mode == "send"
+        assert not any(isinstance(b, s.CommandRun) and b.name == "qqqqqqq" for b in app.sent)
 
     run(tmp_path, sc)
 

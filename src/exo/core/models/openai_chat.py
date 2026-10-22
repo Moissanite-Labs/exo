@@ -69,7 +69,6 @@ class OpenAIChatProvider(HttpTransport):
     """``POST {base_url}/chat/completions`` with ``stream: true``. ``base_url`` includes ``/v1``."""
 
     name = "openai"
-    input_includes_cache = True  # prompt_tokens counts the cached tokens too; pricing must not charge them twice
     path = "/chat/completions"
 
     def headers(self) -> dict[str, str]:
@@ -86,8 +85,8 @@ class OpenAIChatProvider(HttpTransport):
         return (self.name.startswith(("opencode-go", "nous")) and status in (400, 429, 502, 503)
                 and any(m in text.lower() for m in self._UPSTREAM_MARKS))
 
-    def explain_error(self, status: int, text: str) -> str:
-        low, model = text.lower(), self.model or "this model"
+    def explain_request_error(self, status: int, text: str, *, model: str | None) -> str:
+        low, model = text.lower(), model or "this model"
         if self.name.startswith("opencode-go"):
             if "does not support this protocol" in low or "requires a credential" in low:
                 return (f"model {model} is not served by Exo's OpenCode Go adapter yet "
@@ -103,6 +102,8 @@ class OpenAIChatProvider(HttpTransport):
                                 "stream": True, "stream_options": {"include_usage": True}}
         if tools:
             body["tools"] = convert_tools(tools)
+            if opts.get("tool_choice"):
+                body["tool_choice"] = opts["tool_choice"]
         if opts.get("max_tokens"):
             key = "max_completion_tokens" if "api.openai.com" in self.base_url else "max_tokens"
             body[key] = int(opts["max_tokens"])
@@ -136,9 +137,13 @@ class OpenAIChatProvider(HttpTransport):
             yield error_event(f"provider error: {err.get('message', err)}", status)
             return
         if u := d.get("usage"):
-            st.usage = Usage(
-                input_tokens=u.get("prompt_tokens") or 0, output_tokens=u.get("completion_tokens") or 0,
-                cache_read_tokens=(u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0,
+            prompt, cached = u.get("prompt_tokens") or 0, (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+            split = type(prompt) is int and type(cached) is int and 0 <= cached <= prompt  # cached is inside prompt
+            st.meta["_usage_complete"] = split and all(type(u.get(k)) is int and u[k] >= 0
+                                                       for k in ("prompt_tokens", "completion_tokens"))
+            st.usage = Usage(  # input_tokens is the uncached part, as on Anthropic (D-080)
+                input_tokens=prompt - cached if split else prompt, output_tokens=u.get("completion_tokens") or 0,
+                cache_read_tokens=cached if split else 0,
                 reasoning_tokens=(u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0,
                 cost_usd=u.get("cost") if isinstance(u.get("cost"), (int, float)) else None)
             yield ProviderEvent(kind="usage", usage=Usage(**vars(st.usage)))

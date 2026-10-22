@@ -10,7 +10,7 @@ from exo.core.agents import BLOCKED_TOOLS, Delegator
 from exo.core.agents.delegate import CHILD_PROMPT
 from exo.core.engine import CoreEngine
 from exo.core.models.fake import FakeProvider, tool_turn
-from exo.core.types import ToolSpec
+from exo.core.types import ToolSpec, Usage
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher
 from exo.wire import Receipt, decode, verify
@@ -104,6 +104,7 @@ def test_single_child_round_trip(tmp_path):
     first = next(c for c in fake.calls if "CHILD-A" in c["user"])
     assert [t for t in first["tools"] if t != "code_find"] == ["glob", "grep", "read_file"]  # scout (code_find is low risk, present when jg runs): low risk only, no delegate, no bash
     assert first["system"].startswith(CHILD_PROMPT) and str(tmp_path) in first["system"]
+    assert first["system"].count(str(tmp_path)) == 1 and f"Your working directory is {child.cwd}." in first["system"]
     assert "Done when: name the file." in first["user"] and "Context: Python repo" in first["user"]
 
     async def listed():
@@ -206,6 +207,40 @@ def test_timeout_turn_and_token_limits(tmp_path):
     assert "Reason: budget" in tool_text(eng2, sid)
 
 
+
+class Metered(Keyed):
+    """Keyed, but every call reports the same fixed usage, as a provider with prompt caching would."""
+
+    def __init__(self, rules, usage):
+        super().__init__(rules)
+        self.usage = usage
+
+    async def stream(self, messages, tools, **opts):
+        async for ev in super().stream(messages, tools, **opts):
+            if ev.usage is not None:
+                ev.usage = Usage(**vars(self.usage))
+            yield ev
+
+
+def test_child_budget_counts_new_tokens_not_cache_reads(tmp_path):
+    """D-080: the per-child budget counts what each call newly processes (uncached input, cache writes, output),
+    the same on every transport. Re-reading a cached context does not spend it; writing one to the cache does."""
+    busy = [tool_turn("glob", {"pattern": "*.none"})]
+    rules = [("PARENT", [tool_turn("delegate", {"goal": "BUSY"}), "ok"]), ("BUSY", busy)]
+
+    def child(home, usage):
+        eng, _ = engine(tmp_path / home, rules, max_turns=3, max_tokens=100_000)
+        eng.loop.provider = Metered(rules, usage)
+        asyncio.run(parent_turn(eng, "PARENT go"))
+        return decode(task_events(eng)[-1].body.packet)
+
+    reads = child("reads", Usage(input_tokens=10, cache_read_tokens=500_000, output_tokens=10))
+    # three rounds and the wrap-up call at the round cap (#173); the cache reads are free
+    assert reads.error_code == "turns" and reads.rounds == 3 and reads.input_tokens == 4 * 10
+    writes = child("writes", Usage(input_tokens=10, cache_write_tokens=150_000, output_tokens=10))
+    assert writes.status == "failed" and writes.error_code == "budget" and writes.rounds == 1
+    assert writes.input_tokens == 150_010 and writes.output_tokens == 10  # the receipt says what the budget counted
+
 def test_toolsets_narrow_and_never_widen(tmp_path):
     eng, _ = engine(tmp_path, [], max_depth=2)
     eng.registry.register(ToolSpec(name="memory", description="", toolset="memory"), lambda a, c: "")
@@ -267,7 +302,10 @@ def test_receipts_are_signed_and_restart_fails_stale_tasks(tmp_path):
 
     eng.store._q("UPDATE tasks SET status='running', receipt=NULL")
     again = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path))
+    assert [r["status"] for r in again.agents.list()] == ["running"]  # building a core is not owning the agent
+    again.claim_writer()  # the writer sweeps the agent's leftover tasks
     assert [r["status"] for r in again.agents.list()] == ["failed"]
+    asyncio.run(again.close())
 
 
 def test_task_events_render_for_clients(tmp_path):

@@ -48,7 +48,7 @@ for _ in range(400):  # a background job: wait for the turn to reach its gated c
     time.sleep(0.05)
 rid = pending[0]["request_id"]
 try:
-    stolen = open(sock[:-len(".sock")] + ".principal.key").read().strip()
+    stolen = json.loads(open(sock[:-len(".sock")] + ".principal.key").read())["token"]  # the D-060 launch record
 except OSError:
     stolen = ""
 tries = {}
@@ -125,11 +125,11 @@ def test_bash_tool_subprocess_cannot_answer_its_own_approval(tmp_path, sock_dir)
                                                  and e.body.call and e.body.call.name == "send_message"), None))
                 await _until(out.exists)
                 await asyncio.sleep(0.1)
-                assert req.request_id in eng._approvals and not eng._approvals[req.request_id][0].done()
+                assert req.request_id in eng.approvals.open and not eng.approvals.open[req.request_id].future.done()
                 # the real principal, a separate client outside the core's process tree, still can
                 while eng._tasks:
-                    for rid, (fut, _sid) in list(eng._approvals.items()):
-                        if not fut.done():
+                    for rid, p in list(eng.approvals.open.items()):
+                        if not p.future.done():
                             await me.call(s.ApprovalRespond(request_id=rid, decision="deny", client="exo-tui"))
                     await asyncio.sleep(0.02)
         finally:
@@ -230,7 +230,7 @@ def test_principal_credential_file_is_private_per_launch_and_a_credential_path(s
         srv = HttpServer(Dispatcher(object()), principal=True)
         await srv.start_unix(sock)
         path = pr.token_path(sock)
-        token = path.read_text().strip()
+        token = json.loads(path.read_text())["token"]
         mode = stat.S_IMODE(path.stat().st_mode)
         await srv.close()
         return path, token, mode, path.exists()

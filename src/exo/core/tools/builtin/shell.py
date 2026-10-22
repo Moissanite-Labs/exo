@@ -11,12 +11,12 @@ PID-reuse fingerprint guard, snapshots and the Windows path.
 
 from __future__ import annotations
 
+import codecs
 import contextlib
 import os
 import shutil
 import signal
 import subprocess
-import sys
 import threading
 import tempfile
 import time
@@ -54,13 +54,60 @@ class _Capped:
 
 
 def _drain(proc: subprocess.Popen, out: _Capped, emit: Callable[[str], None] | None) -> None:
+    """Read the output as one UTF-8 stream, so a character split across reads stays whole. ``emit`` gets it with
+    known key values cut out across reads too: a tail that could start a key waits for the next read or the end."""
+    from exo.core.models.keys import known_secret_values, redact_secrets
     assert proc.stdout is not None
-    for chunk in iter(lambda: proc.stdout.read1(65536), b""):  # type: ignore[union-attr]
-        text = chunk.decode("utf-8", errors="replace")
+    vals: list[str] = []
+    with contextlib.suppress(Exception):  # redaction never stops the drain: an unread pipe would stall the command
+        vals = known_secret_values() if emit else []
+    dec, held, eof = codecs.getincrementaldecoder("utf-8")("replace"), "", False
+    while not eof:
+        chunk = proc.stdout.read1(65536)  # type: ignore[union-attr]
+        eof = not chunk
+        text = dec.decode(chunk, final=eof)
         out.add(text)
-        if emit:
-            with contextlib.suppress(Exception):
-                emit(text)
+        if emit:  # cut the raw text, then redact what goes out: a key inside a longer key is not cut out first
+            raw = held + text
+            cut = len(raw) if eof else _safe_cut(raw, vals)
+            held, text = raw[cut:], redact_secrets(raw[:cut], vals)
+            if text:
+                with contextlib.suppress(Exception):
+                    emit(text)
+
+
+def _safe_cut(raw: str, vals: list[str]) -> int:
+    """Where ``raw`` may split so the stream equals whole-output redaction, whatever output follows.
+
+    The stream and the whole output take their spans from the same ``secret_spans``, which finds each value's
+    matches in the output itself, never across a ``[redacted]`` marker. When no span of the whole output crosses
+    the cut, the text before the cut gives the same spans alone, and so does the text after it. So the cut must be
+    a point that no span can cross, whatever output follows.
+
+    The cut starts before a tail that could start a key, so every match that later output adds starts at or after
+    it. Then ``secret_spans`` runs with the cut as ``end``, value by value in redaction order. Before each value,
+    the earlier values' spans in the whole output that start before the cut are the ones taken here, and they stop
+    at or before it. So a match that stops at or before the cut is taken or skipped as in the whole output. A
+    value's first match that stops after the cut moves the cut back to its start, if it starts before it, and the
+    value's later matches start after that. That keeps the rule true for the next value. Each value moves the cut at
+    most once, by less than its length, so the held text stays under twice the length of all values together."""
+    from exo.core.models.keys import secret_spans
+    return secret_spans(raw, vals, len(raw) - _key_start(raw, vals))[1]
+
+
+def _key_start(text: str, vals: list[str]) -> int:
+    """Length of the longest tail of ``text`` that is the start of a value in ``vals``, and shorter than it.
+
+    Only a place that holds a value's first character can start such a tail. So ``find`` steps through those places
+    alone, and only through the ones that would give a longer tail than the best so far. A read then costs a few
+    ``find`` calls per value, not one test per place in the last ``len(v)`` characters."""
+    n, best = len(text), 0
+    for v in vals:
+        i = text.find(v[:1], max(n - len(v) + 1, 0), n - best)
+        while i >= 0 and not v.startswith(text[i:]):
+            i = text.find(v[:1], i + 1, n - best)
+        best = n - i if i >= 0 else best
+    return best
 
 
 def _wait_for_group_exit(proc: subprocess.Popen, pgid: int, timeout: float) -> bool:
@@ -82,20 +129,7 @@ def _wait_for_group_exit(proc: subprocess.Popen, pgid: int, timeout: float) -> b
 
 def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> None:
     """TERM the child's process group, wait ``grace`` seconds, then KILL it."""
-    if sys.platform == "win32":
-        proc.kill()
-        return
-    pgid = getattr(proc, "_exo_pgid", None)
-    if pgid is None:
-        try:
-            pgid = os.getpgid(proc.pid)
-        except ProcessLookupError:
-            return
-    if pgid == os.getpgrp():
-        # Child shares our group (spawner skipped setsid): killpg would hit us. Kill by PID.
-        with contextlib.suppress(Exception):
-            proc.kill()
-        return
+    pgid = proc.pid  # every spawner uses start_new_session, so the child leads its own group
     try:
         os.killpg(pgid, signal.SIGTERM)
         if not _wait_for_group_exit(proc, pgid, grace):
@@ -112,9 +146,10 @@ def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> Non
 
 def tool_env(base: dict[str, str] | None = None, allow: Iterable[str] = (), deny: Iterable[str] = ()) -> dict[str, str]:
     """The environment a tool subprocess gets (bash and background jobs): ``exo.envscrub.scrub_env`` (D-039),
-    so no provider key, token, cloud credential, bus identity or core socket/credential variable. ``allow`` and
-    ``deny`` are the seat's ``[tools] env_allow`` and ``env_deny``. Only a copy is filtered: model providers read
-    the real environment and keep their keys."""
+    so no provider key, token, cloud credential, bus identity or core socket/credential, and none of the shell startup
+    hooks ``envscrub.EXEC_HOOKS`` names (``BASH_ENV``, ``ENV``, exported functions, ``SHELLOPTS``, ``BASHOPTS``, ``PS4``);
+    loader and interpreter hooks pass (docs/TOOLS.md). ``allow`` and ``deny`` are the seat's ``[tools] env_allow`` and
+    ``env_deny``. Only a copy is filtered: model providers read the real environment and keep their keys."""
     from exo.envscrub import scrub_env
 
     out = scrub_env(base, allow, deny)
@@ -134,9 +169,12 @@ _TRAP = ('case ${#PIPESTATUS[@]} in 1) ;; *) printf "%s\\n" "${PIPESTATUS[*]}" 2
 def wrap_pipestatus(command: str, fd: int, env: dict[str, str]) -> list[str]:
     """The argv that runs ``command`` under bash with an EXIT trap writing PIPESTATUS to ``fd`` (pass it in
     pass_fds). The trap text travels in ``env`` (EXO_PIPE_TRAP) so the prefix stays short in bash's own syntax-error
-    messages. (An ``eval`` wrapper would hide the command's PIPESTATUS from the trap.)"""
+    messages. (An ``eval`` wrapper would hide the command's PIPESTATUS from the trap.) bash gets ``--norc``: with
+    SSH_CLIENT or SSH2_CLIENT set and SHLVL unset or 0, ``bash -c`` would source ~/.bashrc and skip an allowed
+    BASH_ENV (#135); ``--norc`` still honours BASH_ENV. The /bin/sh fallback reads no rc file."""
     env["EXO_PIPE_TRAP"] = _TRAP.replace("FD", str(fd))
-    return [shutil.which("bash") or "/bin/sh", "-c", 'trap "$EXO_PIPE_TRAP" EXIT; ' + command]
+    bash = shutil.which("bash")
+    return [*([bash, "--norc"] if bash else ["/bin/sh"]), "-c", 'trap "$EXO_PIPE_TRAP" EXIT; ' + command]
 
 
 def open_side() -> tuple[int, str]:
@@ -205,9 +243,6 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
             os.unlink(side_path)
         raise
     os.close(side_fd)
-    if sys.platform != "win32":
-        with contextlib.suppress(ProcessLookupError):
-            proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
     out = _Capped(cap)
     drain = threading.Thread(target=_drain, args=(proc, out, emit), daemon=True)
     drain.start()
@@ -257,11 +292,17 @@ def _start_job(args: dict[str, Any], ctx: ToolContext, cwd: Any) -> str:
             "with other work. `jobs` lists jobs, `job_output` reads output.")
 
 
+def timeout_arg(args: dict[str, Any], check: bool = True) -> float:
+    """The ``timeout`` argument in seconds (default DEFAULT_TIMEOUT); rejected outside 1..MAX_TIMEOUT when ``check``."""
+    timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
+    if check and not 0 < timeout <= MAX_TIMEOUT:
+        raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
+    return timeout
+
+
 def bash(args: dict[str, Any], ctx: ToolContext) -> str:
     background = args.get("background") is True
-    timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
-    if not background and not 0 < timeout <= MAX_TIMEOUT:
-        raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
+    timeout = timeout_arg(args, check=not background)
     cwd = ctx.resolve(args.get("cwd") or ".")
     if not cwd.is_dir():
         raise ToolError(f"cwd is not a folder: {cwd}")

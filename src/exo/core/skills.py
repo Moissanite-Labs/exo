@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -29,8 +29,6 @@ class Skill:
     name: str
     description: str
     path: Path
-    source: str = ""  # folder, "plugin:<name>"
-    frontmatter: dict[str, Any] = field(default_factory=dict)
 
     def body(self) -> str:
         m = _FM.match(text := self.path.read_text(encoding="utf-8", errors="replace"))
@@ -73,7 +71,7 @@ def parse_frontmatter(text: str) -> dict[str, Any]:
     return out
 
 
-def read_skill(path: Path, source: str = "", name: str | None = None) -> Skill | None:
+def read_skill(path: Path, name: str | None = None) -> Skill | None:
     try:
         fm = parse_frontmatter(path.read_text(encoding="utf-8", errors="replace"))
     except OSError:
@@ -81,7 +79,7 @@ def read_skill(path: Path, source: str = "", name: str | None = None) -> Skill |
     nm = str(name or fm.get("name") or path.parent.name).strip()
     if not nm:
         return None
-    return Skill(nm, str(fm.get("description") or "").strip(), path, source, fm)
+    return Skill(nm, str(fm.get("description") or "").strip(), path)
 
 
 def pack_dir(env: dict[str, str] | None = None) -> Path | None:
@@ -99,12 +97,7 @@ def scan(folder: Path) -> list[Skill]:
         found.append(folder / "SKILL.md")
     if folder.is_dir():
         found += sorted(p for p in folder.glob("*/SKILL.md") if p.is_file())
-    out = []
-    for p in found:
-        sk = read_skill(p, str(folder))
-        if sk:
-            out.append(sk)
-    return out
+    return [sk for p in found if (sk := read_skill(p))]
 
 
 class SkillIndex:
@@ -113,11 +106,8 @@ class SkillIndex:
     def __init__(self) -> None:
         self.skills: dict[str, Skill] = {}
 
-    def add(self, sk: Skill) -> bool:
-        if sk.name in self.skills:
-            return False
-        self.skills[sk.name] = sk
-        return True
+    def add(self, sk: Skill) -> None:
+        self.skills.setdefault(sk.name, sk)
 
     def add_folders(self, folders: Iterable[str | os.PathLike]) -> None:
         for f in folders:
@@ -125,9 +115,13 @@ class SkillIndex:
                 self.add(sk)
 
     def add_plugin_skills(self, entries: Iterable[Any]) -> None:
-        """``entries``: PluginManager.skills values (name, path, description, frontmatter, plugin)."""
+        """``entries``: PluginManager.skills values (name, path, description, frontmatter, plugin). A plugin
+        entry for a file a folder already gave (an installed pack under $EXO_HOME/skills) is skipped."""
+        seen = {s.path.resolve() for s in self.skills.values()}
         for e in entries:
-            sk = read_skill(Path(e.path), f"plugin:{e.plugin}", name=e.name)
+            if Path(e.path).resolve() in seen:
+                continue
+            sk = read_skill(Path(e.path), name=e.name)
             if sk:
                 sk.description = e.description or sk.description
                 self.add(sk)
@@ -164,6 +158,9 @@ class SkillIndex:
         if sk is None:
             low = {k.lower(): k for k in self.skills}
             sk = self.skills.get(low.get(name.lower(), ""))
+        if sk is None:  # a bare name for one plugin skill, e.g. exo-intro for exo-orchestra:exo-intro
+            tail = [s for k, s in self.skills.items() if k.split(":")[-1].lower() == name.lower()]
+            sk = tail[0] if len(tail) == 1 else None
         if sk is None:
             raise ToolError(f"no skill {name!r}. Known: {', '.join(sorted(self.skills)) or 'none'}")
         return f"# Skill: {sk.name}\n(folder: {sk.path.parent})\n\n{sk.body()}"

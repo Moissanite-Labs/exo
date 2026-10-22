@@ -82,7 +82,7 @@ the macOS Keychain, or `~/.config/exo/keys.env`, and are never printed.
 ## Seats and SOUL.md
 A seat is one named agent: its models, tools, skills, plugins and MCP servers. It lives under
 `$EXO_HOME/seats/`. A `SOUL.md` beside the seat file is text added to the agent's system prompt: who it
-is, what it owns, how it should behave. Run one with `exo serve --seat <name>` or `exo-tui --seat <name>`.
+is, what it owns, how it should behave. Run one with `exo serve --seat <name>` or `exo --seat <name>`.
 
 ## Peers and the bus
 `/peers` lists other live sessions you can message (other Exo seats and Hermes agents). `/send <peer>
@@ -118,7 +118,7 @@ smaller: a folder with a SKILL.md the agent loads when its description matches t
 
 ## Slash command index
 Every command `/help` lists, in one line each, so you can answer "what does /x do":
-- `/new`, `/sessions`, `/resume`, `/fork`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
+- `/new`, `/sessions`, `/resume`, `/fork`, `/rename`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
   and the window, above.
 - `/context`, `/compact`, `/usage`: memory and cost, above.
 - `/copy` puts the last answer on the clipboard; `/copy error` the last error; `/copy all` the transcript.
@@ -128,6 +128,7 @@ Every command `/help` lists, in one line each, so you can answer "what does /x d
 - `/providers` sets up a model key: add or replace it (typed in a hidden field), test it, remove it, pick the default.
 - `/panel` reopens the last panel (an approval or a choice the agent showed you).
 - `/peers`, `/send`: peers, above.
+- `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>`: watch, steer and stop a subagent that is working for you.
 - `/trace`, `/findings`: trace and findings, above.
 - `/handoff [path]` has the agent write a structured handoff note (goal, state, done, next, blockers,
   paths) to `$EXO_HOME/handoffs/<seat>-<date>.md` (or `$EXO_HANDOFF_DIR`, or `handoff_dir` in `config.json`), or to the path you give. It uses the exo-handoff skill and the

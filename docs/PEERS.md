@@ -7,6 +7,7 @@ the other changes course at its next step. In Exo this works between Exo session
 
 - `/peers` (TUI) or the `peers` tool lists live sessions on the machine: name, running or idle, folder.
   A seat with one session is just its name (`razi`); with several it is `razi/3fa91c2b`.
+  Subagents and scheduled runs are not listed, and a message to a bare seat name never lands in one.
 - `/send <peer> <text>` (you typing) or the `peer_send` tool (an agent) sends a message.
 - A running target takes it at its next tool round. An idle target queues it for its next turn, and wakes
   only if its seat allows (`wake`).
@@ -25,7 +26,10 @@ the other changes course at its next step. In Exo this works between Exo session
 | bad or missing signature, or a bus seat whose key changed | deny (cannot be changed) |
 
 Hold means an approval card (TUI and web) shows the sender and text. Allow delivers it; deny drops it;
-nothing happens in 30 minutes and it expires. A held message never enters the model's context.
+nothing happens in 30 minutes and it expires. A held message never enters the model's context. When the sender
+named no session and none is live (running, or used within `active_hours`, 12 by default), the card belongs to no
+thread: both clients show it in every thread, and allow opens a new thread of the seat for the message. If that
+thread cannot open, the message closes as not delivered and a notice says why.
 
 Change it per seat in the seat file (or `peers` in config.json):
 
@@ -40,9 +44,17 @@ enabled = true
 
 ## Bus seats (D-040)
 
+The relay's message and inbox HTTP reads accept `since` from 0 to 2^63 - 1 and `limit` from 1 to 1,000
+(defaults: 0 and 200). Public `/v1/verify` accepts `from` from 1 to 2^63 - 1 and `to` from 0 to 2^63 - 1;
+omitting `to` verifies through the current head. Out-of-range or malformed numbers answer 422 (#455).
+`to=0` remains valid for an empty log. These bounds match SQLite's integer range and keep read pages bounded.
+
 The exo-bus channel brings messages from other seats on the Exo Bus. It does not start turns itself. For each
 inbox envelope it calls the `peers` command with action `bus`, and the core takes it from there
-(`src/exo/bus/ingress.py`):
+(`src/exo/bus/ingress.py`). Only a channel exod runs can do this: exod gives its channels an in-process link
+stamped with the caller `channel`, which no socket, stdio or TCP connection ever gets (`docs/GATE.md` "Who
+answered"). Any other caller, a tool subprocess on the socket or the principal's own client, is refused as
+`forbidden`, so it cannot pin a seat's key or speak as a seat.
 
 1. **Check the signature against the seat's pinned key.** The first message from a seat pins the key the bus
    registry lists for it (in `$EXO_HOME/keys/registry.json`). Every later message must verify against that pinned
@@ -55,9 +67,13 @@ inbox envelope it calls the `peers` command with action `bus`, and the core take
 3. **Deliver it as the seat, not as you.** It lands in the bus session for that chat, framed as `[bus message from
    <seat> ...]`, with author `bus:<seat>`. Memory capture and learning never read it as your words.
 4. **Reply only when the policy said auto.** The channel posts the turn's final answer back to the bus only for a
-   turn that a message the policy delivered on its own started. A held message you released, a denied one, and your
-   own typing in a bus session post nothing. The agent can still answer with the `bus_post` tool, which the gate
-   checks like any post.
+   turn that a message the policy delivered on its own opened: the turn's first message is that envelope. A held
+   message you released, a denied one, and your own typing in a bus session post nothing. Neither does a message
+   steered or queued into a turn that was already running (yours included), nor an auto turn that you or a job
+   typed into. The agent can still answer with the `bus_post` tool, which the gate checks like any post.
+
+A body sealed to this seat that cannot be opened (malformed, or sealed to a key this seat no longer holds) arrives
+as `<encrypted body could not be opened>`. It is checked and held like any message, and the inbox moves past it.
 
 ## What a peer cannot do
 
@@ -69,7 +85,10 @@ peer client is refused. The system prompt carries a standing line saying the sam
 
 - Each exod writes a presence file in `$EXO_PEERS_DIR`, else `$XDG_RUNTIME_DIR/exo/peers`, else
   `~/.exo-peers` (mode 0600, removed on exit, pruned when its pid is gone). `exo serve` with no running
-  daemon in the TUI starts a small socket of its own so the TUI is also reachable.
+  daemon in the TUI starts a small socket of its own so the TUI is also reachable. A Unix socket path must stay
+  under 104 bytes: when a long `HOME` would push `exo-<pid>.sock` past that, the core uses
+  `<tmp>/exo-<uid>/peers` (mode 0700) instead, and says nothing is lost but discovery by peers that use the default
+  folder; set `EXO_PEERS_DIR` to a short path to share one.
 - A message is a bus-format envelope signed with the sender seat's key. Sender session, target session,
   who wrote it and a nonce are inside the signed `attach`. The receiver checks id, signature (key from the
   sender's presence file), age and replay.
@@ -78,8 +97,9 @@ peer client is refused. The system prompt carries a standing line saying the sam
   left). Events:
   `peer.message` and `peer.delivery`. Both land in the events table and in `exo trace`.
 - Code: `core/ingress.py` (one path for anything outside your keyboard: policy, hold, deliver, receipt; peers, job
-  notices and the bus channel use it, the scheduler and MCP Events can plug in later), `core/peers.py`,
-  `core/peer_target.py`, `bus/ingress.py`, `gate.decide_peer`. Every message delivered this way carries its author
+  notices and the bus channel use it, the scheduler and MCP Events can plug in later), `exo/peers.py` (the
+  transport and `PeerService`, outside the core since D-067), `core/peer_target.py` (`EngineTarget`, the engine's
+  ingress target), `bus/ingress.py`, `gate.decide_peer`. Every message delivered this way carries its author
   (`peer:<name>`, `bus:<seat>`, `job`; MEMORY-MODEL.md "Who wrote it").
 
 ## Hermes
@@ -106,4 +126,6 @@ The `exo-bus` plugin carries a peers module. Turn it on per profile with `EXO_PE
 
 Held messages live in memory: a restart drops them. The web client gets the events through the protocol but
 has no `/peers` view yet. Bus sends are posted and not receipted. A bus seat's first key is trusted as the registry
-serves it (trust on first use); pin it by hand first if the relay is not yours.
+serves it (trust on first use); pin it by hand first if the relay is not yours. On the machine itself the gate
+guards where those keys come from: a tool call that writes `$EXO_HOME/bus/` or the keys folder asks the principal
+(`docs/GATE.md` "The store is credentials", #210).

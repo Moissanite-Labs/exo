@@ -9,8 +9,10 @@ from pathlib import Path
 import pytest
 
 from exo.core.engine import CoreEngine
+from exo.core.hooks import HookError, HookRegistry
 from exo.core.models.fake import FakeProvider
 from exo.core.seats import Seat
+from exo.peers import attach
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher, HttpServer
 from exo_bus_hermes import peers as hp
@@ -91,11 +93,12 @@ class Quiet:
 
 async def exo_daemon(d, peers=None):
     eng = CoreEngine(d / "exo", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(d), env={},
-                     seat=Seat(name="exo-test"), peers=peers or {}, peers_dir=d / "peers")
+                     seat=Seat(name="exo-test"), peers=peers or {}, peers_dir=d / "peers",
+                     attach_peers=attach)
     eng.loop.provider = Quiet()
     srv = HttpServer(Dispatcher(eng, eng.hub))
     await srv.start_unix(str(d / "exo.sock"))
-    await eng.start_peers(str(d / "exo.sock"))
+    await eng.peers.start(str(d / "exo.sock"))
     return eng, srv
 
 
@@ -105,6 +108,24 @@ def start_hermes(cfg=None, host=None):
     rt = hp.register_peers(ctx, host)
     assert rt is not None
     return ctx, rt, host
+
+
+def test_peer_lifecycle_hooks_are_rejected_by_exo_without_starting_network(env, monkeypatch):
+    class ExoCtx(FakeCtx):
+        def __init__(self):
+            super().__init__()
+            self.registry = HookRegistry()
+
+        def register_hook(self, name, fn):
+            self.registry.register(name, fn, plugin="exo-bus")
+
+    # Exercise the enabled registration path without opening a socket or starting a listener.
+    monkeypatch.setattr(hp.Runtime, "start", lambda self, *a, **kw: True)
+    ctx = ExoCtx()
+    with pytest.raises(HookError, match="on_session_start.*not fired by the Exo core"):
+        hp.register_peers(ctx, FakeHost())
+    assert ctx.tools  # the peer adapter registers these before requesting its lifecycle hooks
+    assert not ctx.registry.names()
 
 
 def test_off_by_default(env, monkeypatch):

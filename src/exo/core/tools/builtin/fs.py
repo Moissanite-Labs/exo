@@ -6,10 +6,12 @@ Relative paths resolve against ``ToolContext.cwd``.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 from exo.core.tools.builtin.fuzzy import format_no_match_hint, fuzzy_find_and_replace
-from exo.core.tools.builtin.patch import apply_patch, read_text, write_atomic
+from exo.core.tools.builtin.patch import MAX_READ_BYTES, apply_patch, read_regular, write_atomic
 from exo.core.tools.registry import Registry, ToolContext, ToolError
 
 DEFAULT_LIMIT = 2000
@@ -22,11 +24,11 @@ def _read_existing(ctx: ToolContext, path: str) -> str:
         raise ToolError(f"File not found: {path}")
     if p.is_dir():
         raise ToolError(f"{path} is a directory; use glob to list it")
-    raw = p.read_bytes()
+    raw = read_regular(p, MAX_READ_BYTES)
     if b"\x00" in raw[:8192]:
         raise ToolError(f"{path} looks like a binary file")
     try:
-        return read_text(p)
+        return raw.decode("utf-8")
     except UnicodeDecodeError:
         raise ToolError(f"{path} is not valid UTF-8 text") from None
 
@@ -52,24 +54,32 @@ def read_file(args: dict[str, Any], ctx: ToolContext) -> str:
     return "\n".join(out)
 
 
+def _target(ctx: ToolContext, path: str) -> Path:
+    """The path a write replaces; a symlink is refused, since the rename would replace the link, not its target."""
+    p = ctx.resolve(path)
+    if p.is_symlink():
+        raise ToolError(f"{path} is a symlink to {os.path.realpath(p)}; edit that path instead so the link is kept")
+    return p
+
+
 def write_file(args: dict[str, Any], ctx: ToolContext) -> str:
-    p = ctx.resolve(args["path"])
+    p = _target(ctx, args["path"])
     if p.is_dir():
         raise ToolError(f"{args['path']} is a directory")
     existed = p.exists()
     write_atomic(p, args["content"])
-    verb = "Overwrote" if existed else "Created"
-    return f"{verb} {args['path']} ({len(args['content'])} chars)"
+    return f"{'Overwrote' if existed else 'Created'} {args['path']} ({len(args['content'])} chars)"
 
 
 def edit_file(args: dict[str, Any], ctx: ToolContext) -> str:
     path, old, new = args["path"], args["old_string"], args["new_string"]
+    p = _target(ctx, path)
     content = _read_existing(ctx, path)
     updated, count, strategy, err = fuzzy_find_and_replace(
         content, old, new, replace_all=bool(args.get("replace_all", False)))
     if err:
-        raise ToolError(err + format_no_match_hint(err, count, old, content))
-    write_atomic(ctx.resolve(path), updated)
+        raise ToolError(err + format_no_match_hint(err, old, content))
+    write_atomic(p, updated)
     how = "" if strategy == "exact" else f" (matched via {strategy})"
     return f"Edited {path}: {count} replacement{'s' if count != 1 else ''}{how}"
 

@@ -10,6 +10,10 @@ is replayed as stream-json frames, so tool turns work.
 Differences from Hermes: no local admission relay (so no cache-breakpoint control and no upstream
 status capture, usage comes from the CLI's result line); native thinking blocks are not replayed;
 conflicting API credentials are stripped from the child's environment instead of refused.
+
+Compatibility evidence: ``tests/core/models/test_claude_cli.py`` pins a synthetic stream-json fixture contract
+(v1), including ``shouldQuery: false`` replay and ``error_max_turns`` with exit 1. It does not certify a real
+installed CLI version or authenticated wire exchange. See ``docs/PROVIDERS.md`` for the assumed envelopes.
 """
 
 from __future__ import annotations
@@ -17,17 +21,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
+from contextlib import aclosing
 from pathlib import Path
-from typing import Any, AsyncIterator, Mapping
+from typing import Any, AsyncGenerator, AsyncIterator, Mapping, cast
 
 import httpx
 
 from exo.core.models.base import StreamState, error_event
-from exo.core.models.anthropic import sanitize_tool_id
+from exo.core.models.anthropic import normalize_schema, sanitize_tool_id
+from exo.core.trace import scrub
 from exo.core.types import Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
 PREFIX = "mcp__hermes__"  # the inert server is named "hermes" so tool names match the proven plugin
@@ -41,25 +49,48 @@ NATIVE_ERROR_STATUS = {"rate_limit": 429, "billing_error": 402, "authentication_
                        "overloaded": 529, "server_error": 503}
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MCP_SERVER = Path(__file__).with_name("claude_cli_mcp.py")
+CLEANUP_TIMEOUT = 2.0
+STDERR_BYTES = 4096
+# The CLI reads user text as its own input, even with --disable-slash-commands and --tools "": a block that starts
+# with "/" runs as its command (a built-in gets a local "isn't available" reply, no model call), and an "@path" at
+# the start, after JS \s (U+FEFF too) or after CJK punctuation attaches that file, keys too, with no gate ask. The
+# CLI resolves the path from its cwd, Exo's empty folder (workdir), folding ".." as text, so only a path that leaves
+# that folder reaches a file: "/", "~", "." or '"' after the "@", or a "/.." step later in the token (2.1.303).
+TEXT_GUARD = "\u200b"  # a zero-width space in front keeps both plain text
+MENTION_AT = re.compile(r"(?<![^\s\ufeff\u3002\u3001\uff1f\uff01])@")  # Python's \s holds JS \s, except U+FEFF
+JS_SPACE = re.compile("[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]")  # ends a token
+PATH_START = ("/", "~", ".", '"')
 
 
-def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
+def guard_text(text: str) -> str:
+    """A user text block as the CLI gets it: U+200B before a leading "/" and before each "@" whose path can leave the
+    CLI's empty folder. A decorator, "@media", a "@@" hunk header and "a@b.c" pass as typed, so code the model copies
+    carries no hidden character. Linear: each token's last "/.." is found once, not once per "@"."""
+    out = [TEXT_GUARD] if text.startswith("/") else []
+    done, end, up = 0, -1, -1
+    for m in MENTION_AT.finditer(text):
+        at = m.start()
+        if at >= end:  # the first "@" in this token
+            space = JS_SPACE.search(text, at)
+            end = space.start() if space else len(text)
+            up = text.rfind("/..", at, end)
+        if text.startswith(PATH_START, at + 1) or up > at:
+            out += [text[done:at], TEXT_GUARD]
+            done = at
+    out.append(text[done:])
+    return "".join(out)
+
+
+def child_env(env: Mapping[str, str] | None = None, *, drop: tuple[str, ...] = DROP_ENV,
+              extra: Mapping[str, str] = CHILD_ENV) -> dict[str, str]:
     """The CLI's environment (D-039): an explicit minimal set from the caller's (``exo.envscrub.minimal_env``:
     PATH, HOME, locale, terminal, CLAUDE_CONFIG_DIR, proxies, CA bundles), never an API credential (OAuth login
-    only, so nothing in DROP_ENV), plus fixed switches. The parent's other variables never reach the CLI."""
+    only, so nothing in DROP_ENV), plus fixed switches. The parent's other variables never reach the CLI.
+    ``drop`` and ``extra`` let another CLI provider reuse this with its own credential names and switches."""
     from exo.envscrub import minimal_env
 
-    out = {k: v for k, v in minimal_env(os.environ if env is None else env).items() if k not in DROP_ENV}
-    out.update(CHILD_ENV)
-    return out
-
-
-def _schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Anthropic rejects top-level oneOf/allOf/anyOf and an object without properties."""
-    out = {k: v for k, v in (schema or {}).items() if k not in ("oneOf", "allOf", "anyOf")}
-    out.setdefault("type", "object")
-    if out["type"] == "object" and not isinstance(out.get("properties"), dict):
-        out["properties"] = {}
+    out = {k: v for k, v in minimal_env(os.environ if env is None else env).items() if k not in drop}
+    out.update(extra)
     return out
 
 
@@ -94,7 +125,8 @@ def build_frames(messages: list[Message], names: set[str]) -> tuple[str, list[di
             blocks += [{"type": "tool_use", "id": sanitize_tool_id(tc.id), "name": PREFIX + tc.name if tc.name in names else tc.name,
                         "input": tc.arguments} for tc in m.tool_calls]
         else:
-            role, blocks = "user", _blocks(m)
+            role, blocks = "user", [{**b, "text": guard_text(b["text"])} if b["type"] == "text" else b
+                                    for b in _blocks(m)]
         if not blocks:  # an empty frame (a tool message with no results, a blank turn) carries nothing
             continue
         if frames and frames[-1]["type"] == role:
@@ -115,18 +147,20 @@ def _private_dir(path: str) -> bool:
 
 def workdir() -> str:
     """A stable private cwd for the CLI (it writes the cwd into the prompt, so a changing one breaks
-    prompt caching). Our own 0700 directory in the tempdir; a fresh mkdtemp if that is not trustworthy."""
+    prompt caching). Our own 0700 directory in the tempdir; a fresh mkdtemp if that is not trustworthy.
+    guard_text lets "@word" through because the CLI resolves it here, so the folder must hold no name such a word
+    reaches: any entry without a leading "." sends the call to a fresh empty folder. The CLI writes nothing here."""
     path = os.path.join(tempfile.gettempdir(), f"claude-cli-cwd-{os.getuid()}")
     try:
         os.makedirs(path, mode=0o700, exist_ok=True)
-        if _private_dir(path):
+        if _private_dir(path) and all(n.startswith(".") for n in os.listdir(path)):
             return path
     except OSError:
         pass
     return tempfile.mkdtemp(prefix="claude-cli-cwd-")
 
 
-def kill_group(proc: asyncio.subprocess.Process) -> None:
+def kill_group(proc: asyncio.subprocess.Process | subprocess.Popen) -> None:
     """SIGKILL the CLI's whole process group (node and MCP children); it leads its own session."""
     try:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -134,21 +168,65 @@ def kill_group(proc: asyncio.subprocess.Process) -> None:
         pass
 
 
-class ClaudeCliProvider:
-    """Provider over a ``claude`` executable. ``command`` is its path; the model is an alias (sonnet, opus, haiku)."""
+async def exited(proc: asyncio.subprocess.Process) -> int:
+    """The leader's exit code. ``proc.wait()`` also waits for every pipe to close, so a descendant that keeps
+    stderr open would hold it until the read timeout; the return code is set as soon as the leader exits."""
+    while proc.returncode is None:
+        await asyncio.sleep(0.02)
+    return proc.returncode
 
-    name = "claude-cli"
 
-    def __init__(self, command: str = "claude", *, name: str | None = None, model: str | None = None,
-                 env: Mapping[str, str] | None = None, read_timeout: float | None = 60.0,
+async def stop_group(proc: asyncio.subprocess.Process) -> None:
+    """The leader may have exited while a child still holds a pipe; always stop the owned group."""
+    kill_group(proc)
+    try:
+        await asyncio.wait_for(proc.wait(), CLEANUP_TIMEOUT)
+    except asyncio.TimeoutError:
+        # CPython's Process owns this transport, but typeshed does not expose the private attribute.
+        transport = cast(asyncio.SubprocessTransport, getattr(proc, "_transport"))
+        transport.close()  # bound cleanup if a detached descendant retains the captured pipes
+
+
+_UNSET: Any = object()
+
+
+class CliProvider:
+    """Shared constructor of the CLI providers. ``command`` is the executable; ``model`` is optional.
+    Subclasses set ``name``, ``default_command`` and ``default_read`` (the per-line read timeout)."""
+
+    name = "cli"
+    default_command = ""
+    default_read = 60.0
+
+    def __init__(self, command: str | None = None, *, name: str | None = None, model: str | None = None,
+                 env: Mapping[str, str] | None = None, read_timeout: float | None = _UNSET,
                  timeout: float = 600.0) -> None:
-        self.command = command
+        if read_timeout is _UNSET:
+            read_timeout = self.default_read
+        self.command = self.default_command if command is None else command
         self.model = model
         self.env = env
         self._timeout = httpx.Timeout(timeout, read=read_timeout or timeout)  # the router quotes ``_timeout.read``
         self._read = read_timeout or timeout
         if name:
             self.name = name
+
+
+class ClaudeCliProvider(CliProvider):
+    """Provider over a ``claude`` executable. ``command`` is its path; the model is an alias (sonnet, opus, haiku)."""
+
+    name = "claude-cli"
+    default_command = "claude"
+
+    def _diagnostic(self, text: Any, limit: int = 300) -> str:
+        # Scrub token/header patterns and credentials already in the caller's environment. Do not read a key
+        # store just to redact diagnostics from a CLI that owns its own OAuth login.
+        from exo.envscrub import is_secret_name
+        from exo.core.models.keys import redact_secrets
+
+        env = os.environ if self.env is None else self.env
+        values = sorted((v for k, v in env.items() if v and is_secret_name(k)), key=len, reverse=True)
+        return scrub(redact_secrets(str(text), values=values), limit)
 
     async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
         names = {t.name for t in tools or []}
@@ -157,7 +235,7 @@ class ClaudeCliProvider:
         except ValueError as exc:
             yield error_event(f"claude-cli: {exc}", 400, retryable=False)
             return
-        manifest = [{"name": t.name, "description": t.description, "inputSchema": _schema(t.parameters)}
+        manifest = [{"name": t.name, "description": t.description, "inputSchema": normalize_schema(t.parameters)}
                     for t in tools or []]
         body: dict[str, Any] = {"tools": [{"name": PREFIX + t["name"], "description": t["description"],
                                            "input_schema": t["inputSchema"]} for t in manifest]}
@@ -192,26 +270,56 @@ class ClaudeCliProvider:
                     stderr=asyncio.subprocess.PIPE, env=env, cwd=workdir(), start_new_session=True,
                     limit=1 << 24)  # one stream-json line can carry a whole message
             except OSError as exc:
-                yield error_event(f"cannot run {self.command}: {exc}", None, retryable=True)
+                yield error_event(f"cannot run {self.command}: {self._diagnostic(exc)}", None, retryable=True)
                 return
+            terminal = None
             try:
-                async for ev in self._run(proc, frames, names, st):
-                    yield ev
+                async with aclosing(self._run(proc, frames, names, st)) as events:
+                    async for ev in events:
+                        if ev.kind in ("done", "error"):
+                            terminal = ev
+                            break
+                        yield ev
             finally:  # also runs on cancel (a stop) and on a closed generator: leave no claude behind
-                if proc.returncode is None:
-                    kill_group(proc)
-                    await asyncio.shield(proc.wait())
+                await asyncio.shield(stop_group(proc))
+            if terminal is not None:
+                yield terminal  # the router sees terminal output only after reader/process cleanup
 
     async def _read_line(self, proc: asyncio.subprocess.Process) -> bytes:
-        """One stdout line; a stall longer than the read timeout raises TimeoutError (the clock restarts per line)."""
+        """One stdout line; a stall longer than the read timeout raises TimeoutError (the clock restarts per line).
+        Not ``wait_for``: on Python 3.11 it drops a cancel (Esc) that lands as the line arrives (#163)."""
         assert proc.stdout
-        return await asyncio.wait_for(proc.stdout.readline(), self._read)
+        async with asyncio.timeout(self._read):
+            return await proc.stdout.readline()
 
     async def _run(self, proc: asyncio.subprocess.Process, frames: list[dict[str, Any]], names: set[str],
-                   st: StreamState) -> AsyncIterator[ProviderEvent]:
+                   st: StreamState) -> AsyncGenerator[ProviderEvent, None]:
+        stderr = proc.stderr
+        assert stderr
+        tail = bytearray()
+
+        async def drain_stderr() -> None:
+            while chunk := await stderr.read(STDERR_BYTES):
+                tail.extend(chunk)
+                del tail[:-STDERR_BYTES]
+
+        stderr_task = asyncio.create_task(drain_stderr())
+        try:
+            async with aclosing(self._exchange(proc, frames, names, st, tail)) as events:
+                async for ev in events:
+                    yield ev
+        finally:
+            stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
+
+    async def _exchange(self, proc: asyncio.subprocess.Process, frames: list[dict[str, Any]], names: set[str],
+                        st: StreamState, stderr_tail: bytearray) -> AsyncGenerator[ProviderEvent, None]:
         assert proc.stdin and proc.stdout and proc.stderr
-        stderr_task = asyncio.create_task(proc.stderr.read())  # drain so a chatty CLI cannot block
         timeout_msg = f"ReadTimeout: claude sent nothing for {self._read:.0f} s"
+
+        def tail() -> str:
+            text = self._diagnostic(stderr_tail.decode("utf-8", "replace").strip(), STDERR_BYTES)[-300:]
+            return f": {text}" if text else ""
 
         async def event() -> dict[str, Any] | None:
             while True:
@@ -219,9 +327,11 @@ class ClaudeCliProvider:
                 if not line:
                     return None
                 try:
-                    return json.loads(line)
+                    row = json.loads(line)
                 except ValueError:
                     continue  # a banner or stray print: not an event
+                if isinstance(row, dict):
+                    return row
 
         try:
             for i, frame in enumerate(frames):
@@ -266,25 +376,24 @@ class ClaudeCliProvider:
                     elif delta.get("type") == "thinking_delta" and (out := st.add_text("reasoning", delta.get("thinking", ""))):
                         yield out
         except asyncio.TimeoutError:
-            yield error_event(timeout_msg, None, retryable=True)
+            yield error_event(timeout_msg + tail(), None, retryable=True)
             return
         except (OSError, ConnectionError) as exc:
-            yield error_event(f"claude pipe failed: {exc}", None, retryable=True)
+            yield error_event(f"claude pipe failed: {self._diagnostic(exc)}" + tail(), None, retryable=True)
             return
         try:
-            rc = await asyncio.wait_for(proc.wait(), self._read)
+            rc = await asyncio.wait_for(exited(proc), self._read)
         except asyncio.TimeoutError:
-            yield error_event(timeout_msg, None, retryable=True)
+            yield error_event(timeout_msg + tail(), None, retryable=True)
             return
-        err_text = (await stderr_task).decode("utf-8", "replace").strip()
+        await asyncio.sleep(0)  # let the reader collect already-available bytes; never wait for a child's EOF
         if native_error is not None:
             status = NATIVE_ERROR_STATUS.get(str(native_code))
             hint = " (run `claude` and log in)" if status == 401 else ""
-            yield error_event(f"claude: {native_error[:500] or native_code}{hint}", status, retryable=True)
+            yield error_event(f"claude: {self._diagnostic(native_error or native_code, 500)}{hint}", status, retryable=True)
             return
         if len(results) != 1 or not assistants or not stopped:
-            tail = f": {err_text[-300:]}" if err_text else ""
-            yield error_event(f"claude exited {rc} with an incomplete response{tail}", None, retryable=True)
+            yield error_event(f"claude exited {rc} with an incomplete response" + tail(), None, retryable=True)
             return
         final = results[0]
         blocks = [b for a in assistants for b in a.get("content") or []]
@@ -294,7 +403,7 @@ class ClaudeCliProvider:
         boundary = bool(calls) and final.get("subtype") == "error_max_turns" and rc == 1
         if not boundary and (rc != 0 or final.get("is_error") or final.get("subtype") != "success"):
             yield error_event(f"claude request failed ({final.get('subtype')}, exit {rc})"
-                              + (f": {err_text[-300:]}" if err_text else ""), None, retryable=True)
+                              + tail(), None, retryable=True)
             return
         text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
         if text.startswith(emitted) and (rest := text[len(emitted):]):

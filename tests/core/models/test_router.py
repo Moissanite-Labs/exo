@@ -267,7 +267,8 @@ def test_set_role_rejects_flag_text_and_unknown_provider():
 
 
 def _flaky_pair(n_fail, **cfg):
-    primary = FakeProvider([rate_limited()] * n_fail + ["primary back"] * 5, name="p")
+    outage = ProviderEvent(kind="error", error="HTTP 503: unavailable", status=503, retryable=True)
+    primary = FakeProvider([outage] * n_fail + ["primary back"] * 5, name="p")
     backup = FakeProvider(["from backup"] * 20, name="b")
     clock = Clock()
     r = Router(roles={"main": ["p:free", "b:small"]}, catalog={"providers": {}, "models": {}, "roles": {}},
@@ -322,3 +323,197 @@ def test_nonretryable_errors_do_not_count():
     for _ in range(3):
         run(r)
     assert "p:free" not in r.breakers
+
+
+def test_rate_limits_follow_retry_after_without_opening_breaker():
+    clock = Clock()
+    p = FakeProvider([rate_limited(retry_after=30), rate_limited(retry_after=30), "recovered"], name="p")
+    b = FakeProvider(["fallback"] * 3, name="b")
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=b)
+    for _ in range(2):
+        assert run(r)[-1].route == "b:m"
+        assert r.cooldowns["p"].until == clock.t + 30
+        assert "p:m" not in r.breakers
+        clock.t += 31
+    assert run(r)[-1].message.text() == "recovered"
+
+
+def test_rate_limit_during_breaker_trial_uses_only_credential_timer():
+    clock = Clock()
+    p = FakeProvider([rate_limited(retry_after=30), "recovered"], name="p")
+    r = make({"main": ["p:m"]}, clock, p=p)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t - 1)
+    assert run(r)[-1].status == 429 and "p:m" not in r.breakers
+    clock.t += 31
+    assert run(r)[-1].kind == "done"
+
+
+def test_skipped_open_route_is_last_resort_after_normal_fallback_failure():
+    clock = Clock()
+    p = FakeProvider(["primary recovered"], name="p")
+    b = FakeProvider([ProviderEvent(kind="error", error="down", status=503, retryable=True)], name="b")
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=b)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 100)
+    events = run(r)
+    assert events[-1].kind == "done" and events[-1].route == "p:m"
+    assert [a["route"] for a in events[-1].attempts] == ["b:m", "p:m"]
+    assert events[-1].attempts[0]["outcome"] == "fallback"
+    assert any(e.kind == "notice" and "last resort" in e.text for e in events)
+    assert "p:m" not in r.breakers
+
+
+def test_last_resort_selects_oldest_failure_and_attempts_only_one_skipped_route():
+    clock = Clock()
+    down = ProviderEvent(kind="error", error="down", status=503, retryable=True)
+    p, q, b = FakeProvider(["unused"], name="p"), FakeProvider([down], name="q"), FakeProvider([down], name="b")
+    r = make({"main": ["p:m", "q:m", "b:m"]}, clock, p=p, q=q, b=b)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 10)
+    r.breakers["q:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 100)
+    events = run(r)
+    assert [a["route"] for a in events[-1].attempts] == ["b:m", "q:m"]
+    assert events[-1].kind == "error" and events[-1].attempts[-1]["outcome"] == "error"
+    assert not p.calls and len(q.calls) == len(b.calls) == 1
+    assert len([e for e in events if e.kind in ("done", "error")]) == 1
+
+
+def test_all_open_uses_oldest_credential_eligible_route():
+    clock = Clock()
+    p, q = FakeProvider(["unused"], name="p"), FakeProvider(["oldest recovered"], name="q")
+    r = make({"main": ["p:m", "q:m"]}, clock, p=p, q=q)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 10)
+    r.breakers["q:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 100)
+    assert run(r)[-1].route == "q:m" and not p.calls
+
+
+@pytest.mark.parametrize("status", [401, 402])
+def test_last_resort_does_not_bypass_auth_or_billing_cooldown(status):
+    clock = Clock()
+    p = FakeProvider(["must stay unused"], name="p")
+    b = FakeProvider([ProviderEvent(kind="error", error="down", status=503, retryable=True)], name="b")
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=b)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+    r.record_failure("p", "m", status, None, True)
+    assert run(r)[-1].kind == "error" and not p.calls
+
+
+@pytest.mark.parametrize("status", [400, 413, 422])
+def test_request_invalid_response_stops_before_last_resort(status):
+    clock = Clock()
+    p = FakeProvider(["must stay unused"], name="p")
+    b = FakeProvider([ProviderEvent(kind="error", error="bad request", status=status, retryable=False)], name="b")
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=b)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+    events = run(r)
+    assert events[-1].status == status and not p.calls
+    assert len([e for e in events if e.kind in ("done", "error")]) == 1
+
+
+def test_last_resort_is_not_used_after_output_has_started():
+    clock = Clock()
+    p = FakeProvider(["unused"], name="p")
+    partial = [ProviderEvent(kind="text", text="partial"),
+               ProviderEvent(kind="error", error="down", status=503, retryable=True)]
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=FakeProvider([partial], name="b"))
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+    assert [e.kind for e in run(r)] == ["text", "error"] and not p.calls
+
+
+def test_failed_credential_is_not_retried_when_its_timer_expires_during_call():
+    class AdvancingClock(Clock):
+        def __call__(self):
+            self.t += 100
+            return self.t
+    p = FakeProvider([rate_limited(), "must not retry"], name="p")
+    b = FakeProvider(["fallback"], name="b")
+    r = make({"main": ["p:m", "p:another-model", "b:m"]}, AdvancingClock(), p=p, b=b)
+    assert run(r)[-1].route == "b:m" and len(p.calls) == 1
+
+
+def test_concurrent_exhausted_calls_share_at_most_one_live_forced_probe():
+    async def go():
+        entered, release = asyncio.Event(), asyncio.Event()
+        class Blocked(FakeProvider):
+            async def stream(self, messages, tools, **opts):
+                entered.set()
+                await release.wait()
+                async for ev in super().stream(messages, tools, **opts):
+                    yield ev
+        clock = Clock()
+        p = Blocked(["recovered"], name="p")
+        down = ProviderEvent(kind="error", error="down", status=503, retryable=True)
+        r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=FakeProvider([down, down], name="b"))
+        r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+        async def call():
+            return [e async for e in r.stream("main", [Message.user("hi")], [])]
+        first = asyncio.create_task(call())
+        await asyncio.wait_for(entered.wait(), 1)
+        clock.t += 61  # the lease is bounded, but a still-live forced probe must remain exclusive
+        second = await asyncio.wait_for(call(), 2)
+        assert second[-1].kind == "error"
+        release.set()
+        assert (await first)[-1].kind == "done"
+        assert len(p.calls) == 1 and not r._forced_probes
+    asyncio.run(go())
+
+
+def test_last_resort_does_not_resurrect_breaker_removed_during_lookup(monkeypatch):
+    async def go():
+        resolving, release = asyncio.Event(), asyncio.Event()
+        clock = Clock()
+        down = ProviderEvent(kind="error", error="down", status=503, retryable=True)
+        p = FakeProvider(["unused"], name="p")
+        r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=FakeProvider([down], name="b"))
+        r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+        pick = r._pick_async
+        async def paused(route, **kwargs):
+            result = await pick(route, **kwargs)
+            if route.provider == "p":
+                resolving.set()
+                await release.wait()
+            return result
+        monkeypatch.setattr(r, "_pick_async", paused)
+        async def call():
+            return [e async for e in r.stream("main", [Message.user("hi")], [])]
+        task = asyncio.create_task(call())
+        await asyncio.wait_for(resolving.wait(), 1)
+        r.route_ok("p:m")
+        release.set()
+        events = await task
+        assert events[-1].kind == "error" and not p.calls
+        assert "p:m" not in r.breakers and not r._forced_probes
+    asyncio.run(go())
+
+
+def test_cached_calls_have_one_usage_shape_and_unchanged_cost():
+    """D-080: one Anthropic and one OpenAI-chat call over the same prompt, 12 tokens uncached and 900 read from the
+    cache (the Anthropic call also writes 200), 30 out. Both reach the router with the uncached input in
+    input_tokens, and each is priced as before the change: uncached, cache-read and cache-write tokens once each."""
+    import json
+
+    from exo.core.types import Usage
+
+    ant = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in [
+        {"type": "message_start", "message": {"usage": {"input_tokens": 12, "cache_read_input_tokens": 900,
+                                                        "cache_creation_input_tokens": 200, "output_tokens": 1}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": "ok"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 30}},
+        {"type": "message_stop"}])
+    oai = "".join(f"data: {json.dumps(c)}\n\n" for c in [
+        {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 912, "completion_tokens": 30,
+                                  "prompt_tokens_details": {"cached_tokens": 900}}}]) + "data: [DONE]\n\n"
+    rec = Recorder((200, ant.encode(), {}), (200, oai.encode(), {}))
+    price = {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75}
+    r = Router.from_config({"roles": {"main": ["an:m"], "aux": ["oa:m"]}, "models": {"an:m": price, "oa:m": price},
+                            "providers": {"an": {"transport": "anthropic", "base_url": "https://api.anthropic.com",
+                                                 "api_key": "k"},
+                                          "oa": {"transport": "openai", "base_url": "https://api.openai.com/v1",
+                                                 "api_key": "k"}}},
+                           catalog={}, env={}, client=rec.client())
+    a, o = run(r, "main")[-1], run(r, "aux")[-1]
+    assert a.usage == Usage(input_tokens=12, output_tokens=30, cache_read_tokens=900, cache_write_tokens=200,
+                            cost_usd=pytest.approx((12 * 3.0 + 30 * 15.0 + 900 * 0.3 + 200 * 3.75) / 1e6))
+    assert o.usage == Usage(input_tokens=12, output_tokens=30, cache_read_tokens=900,
+                            cost_usd=pytest.approx((12 * 3.0 + 30 * 15.0 + 900 * 0.3) / 1e6))
+    assert (a.usage.cost_usd, o.usage.cost_usd) == (pytest.approx(0.001506), pytest.approx(0.000756))  # as on main

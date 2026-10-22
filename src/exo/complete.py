@@ -17,12 +17,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
+from .core.private import atomic_write
+
 # ---------------------------------------------------------------- the command table
 # name -> argument shape shown after the name. Descriptions live with each client's own table (the TUI COMMANDS
 # dict) and in commands.list; this table only adds the shape and the group for commands every client may meet.
 ARG_HINTS: dict[str, str] = {
-    "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "undo": "", "clear": "",
-    "cwd": "", "context": "", "compact": "", "restart": "", "stop": "", "unsteer": "", "exit": "", "quit": "",
+    "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "rename": "<title>", "undo": "", "clear": "",
+    "cwd": "", "context": "", "compact": "", "restart": "", "stop": "[task]", "tasks": "", "open": "<task>", "steer": "<task> <text>", "unsteer": "", "exit": "", "quit": "",
     "model": "[default] <model>", "default": "[model]", "providers": "[add] [name]", "usage": "",
     "panel": "", "peers": "", "send": "<peer> <text>", "handoff": "[path]", "intro": "",
     "tutorial": "[on|off|reset]", "copy": "[last|error|all]", "help": "",
@@ -105,6 +107,8 @@ def plan(cmd: str, done: Sequence[str]) -> Slot | None:
         return Slot("<peer> <text>", "peers") if n == 0 else (Slot("<text>") if n == 1 else None)
     elif cmd == "fork":
         return Slot("[title]") if n == 0 else None
+    elif cmd == "rename":
+        return Slot("<title>") if n == 0 else None
     elif cmd == "exo":
         if n == 0:
             return Slot("<subcommand>", "", _c("help|list the subcommands", "branch|write a handoff and a fresh-session line",
@@ -402,11 +406,7 @@ class History:
         if self.path:
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                tmp = self.path.with_suffix(".tmp")
-                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write("".join(json.dumps(e) + "\n" for e in self.entries))
-                os.replace(tmp, self.path)
+                atomic_write(self.path, "".join(json.dumps(e) + "\n" for e in self.entries))
             except OSError:
                 pass  # history is a convenience; never break a send over it
 
@@ -482,7 +482,8 @@ class Guide:
         if st.first_run:
             out.append(Tip("intro", "first time here? /intro explains what Exo is and how to use it", "/intro"))
         if st.provider_error:
-            out.append(Tip("providers", "that model call failed: /providers to check keys", "/providers"))
+            out.append(Tip("providers", "that model call failed: /providers checks keys, servers and logins",
+                           "/providers"))
         if st.job_done:
             out.append(Tip("job:" + st.job_done, f"job {st.job_done} finished: ask for its job_output",
                            f"show me the job_output for {st.job_done}"))

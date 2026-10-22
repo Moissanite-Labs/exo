@@ -21,7 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from exo.core.hooks import HookRegistry
+from exo.core import trace
+from exo.core.hooks import HookRegistry, accepted
 from exo.core.slots import Slots
 from exo.core.types import Risk, ToolSpec
 
@@ -29,6 +30,20 @@ logger = logging.getLogger(__name__)
 
 ENTRY_POINT_GROUP = "exo.plugins"
 MANIFEST = "plugin.yaml"
+
+
+def call_plugin(fn: Any, *args: Any, **kw: Any) -> Any:
+    """Call a plugin hook with the keyword arguments it accepts (all of them when it takes **kwargs)."""
+    return fn(*args, **accepted(fn, kw))
+
+
+def safe_plugin_call(obj: Any, method: str, *args: Any, **kw: Any) -> Any:
+    fn = getattr(obj, method, None)
+    try:
+        return call_plugin(fn, *args, **kw) if fn else None
+    except Exception as exc:  # a plugin failure never breaks a turn, but it is recorded
+        trace.report(f"{type(obj).__name__}.{method}", exc, kw.get("session_id"))
+        return None
 
 
 class PluginError(RuntimeError):
@@ -111,16 +126,12 @@ class LoadedPlugin:
         return self.error is None
 
 
-def _parse_yaml(text: str) -> Any:
-    from exo.gate import parse_yaml  # stdlib YAML subset already used for policies
-    return parse_yaml(text)
-
-
 def read_manifest(folder: Path) -> Manifest:
+    from exo.gate import parse_yaml  # stdlib YAML subset already used for policies
     folder = Path(folder)
     f = folder / MANIFEST
     try:
-        raw = _parse_yaml(f.read_text(encoding="utf-8")) or {}
+        raw = parse_yaml(f.read_text(encoding="utf-8")) or {}
     except Exception as e:
         raise PluginError(f"{f}: {e}") from None
     if not isinstance(raw, dict) or not raw.get("name"):
@@ -282,17 +293,16 @@ class PluginContext:
         self._track("command", clean, lambda: cmds.pop(clean, None))
         return entry
 
-    def register_memory_provider(self, provider: Any) -> bool:
-        active = self.manager.slots.fill("memory", provider, self.plugin)
-        self._track("memory_provider", str(provider.name),
-                    lambda: self.manager.slots.release("memory", provider))
+    def _fill(self, slot: str, kind: str, obj: Any) -> bool:
+        active = self.manager.slots.fill(slot, obj, self.plugin)
+        self._track(kind, str(obj.name), lambda: self.manager.slots.release(slot, obj))
         return active
 
+    def register_memory_provider(self, provider: Any) -> bool:
+        return self._fill("memory", "memory_provider", provider)
+
     def register_context_engine(self, engine: Any) -> bool:
-        active = self.manager.slots.fill("context", engine, self.plugin)
-        self._track("context_engine", str(engine.name),
-                    lambda: self.manager.slots.release("context", engine))
-        return active
+        return self._fill("context", "context_engine", engine)
 
     def register_channel(self, name: str, factory: Callable[..., Any], description: str = "",
                          **meta: Any) -> ChannelEntry:
@@ -324,17 +334,26 @@ class PluginManager:
 
     def __init__(self, config: dict[str, dict[str, Any]] | None = None,
                  memory_choice: str | None = None, context_choice: str | None = None,
-                 hooks: HookRegistry | None = None) -> None:
+                 hooks: HookRegistry | None = None, executor_required: bool = False) -> None:
         self.config = dict(config or {})
         self.hooks = hooks or HookRegistry()
         self.router: Any = None  # set by the engine: the model Router, for plugins that make side calls
-        self.executor_required = False  # trusted engine mode, not tool arguments or plugin settings
+        self._executor_required = executor_required
         self.slots = Slots(memory_choice=memory_choice, context_choice=context_choice)
         self.tools: dict[str, ToolEntry] = {}
         self.commands: dict[str, CommandEntry] = {}
         self.channels: dict[str, ChannelEntry] = {}
         self.skills: dict[str, SkillEntry] = {}
         self.plugins: dict[str, LoadedPlugin] = {}
+
+    @property
+    def executor_required(self) -> bool:
+        return self._executor_required
+
+    @executor_required.setter
+    def executor_required(self, value: bool) -> None:
+        # A manager already attached to a required engine cannot downgrade its security hooks.
+        self._executor_required = self._executor_required or bool(value)
 
     def _run_register(self, manifest: Manifest, source: str, register: Any) -> LoadedPlugin:
         rec = LoadedPlugin(manifest, source)

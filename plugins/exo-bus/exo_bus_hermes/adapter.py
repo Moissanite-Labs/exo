@@ -8,13 +8,16 @@ seat's pinned key (never the relay's), stamps the author ``bus:<seat>``, and app
 peer policy (a remote seat is held for the principal unless a rule says auto).
 Outbound: the channel follows the core's event stream and, when a turn on a bus session completes, posts the
 final assistant text back as a signed envelope in the same thread, but only for a turn that a message the
-policy delivered on its own started. A held message the principal released, a refused one, or the principal
-typing in a bus session posts nothing; the agent can still reply with the bus_post tool, which the gate sees.
+policy delivered on its own opened (the turn's first message is that envelope). A held message the principal
+released, a refused one, a message steered or queued into another turn, the principal typing in a bus session, and
+a turn anyone but a bus seat typed into post nothing; the agent can still reply with the bus_post tool, which the
+gate sees.
 
 The channel needs only a ``link``: an object with ``async call(body) -> dict`` (a protocol command,
 as ``exo.protocol.client.Client.call``) and ``events(since, session)`` (an async iterator of
-protocol events). A real deployment passes an ``exo.protocol.client.Client``; ``InProcessLink``
-wraps a running engine for tests and for an embedded core.
+protocol events). exod passes its ``ChannelLink`` (exo.server.app), which runs commands in process as the
+caller ``channel``: the core takes a bus message (``peers`` action ``bus``) from no other caller. ``InProcessLink``
+wraps a running engine the same way, for tests and for an embedded core.
 
 Peer input is not the principal: bus text is framed as coming from another seat (by the core), it never counts
 as the principal's words in memory capture, and a bus peer cannot answer ``approval.requested``.
@@ -28,6 +31,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from exo.bus import BusError
+from exo.core.private import atomic_write
 from exo.protocol import schema as s
 
 from .settings import Cursor, configured, make_client, setting
@@ -62,9 +66,10 @@ class InProcessLink:
     """Link to an engine in the same process (``CoreEngine`` or any exod Engine)."""
 
     def __init__(self, engine: Any):
+        from exo.principal import CHANNEL
         from exo.server.app import Dispatcher
         self.engine = engine
-        self.dispatcher = Dispatcher(engine)
+        self.dispatcher = Dispatcher(engine, caller=CHANNEL)  # as exod's ChannelLink: only a channel hands in bus mail
 
     async def call(self, body: Any) -> dict[str, Any]:
         resp = await self.dispatcher.run(s.Command.of(body))
@@ -97,7 +102,8 @@ class BusChannel:
         self._by_session: dict[str, str] = {}         # session id -> chat_id
         self._thread: dict[str, str] = {}             # chat_id -> thread of the last inbound message
         self._reply: dict[str, str] = {}              # session id -> last assistant text this turn
-        self._may_reply: dict[str, int] = {}          # session id -> auto-delivered messages not yet answered
+        self._auto: dict[str, None] = {}              # envelope ids that started a turn on their own, until it opens
+        self._turn: dict[str, tuple[str, bool]] = {}  # session id -> (its latest turn id, whether that turn may reply)
         self._reg: Optional[dict] = None              # the bus registry, cached; refreshed for an unknown seat
         self._map_path: Optional[Path] = None
         self.running = False
@@ -147,9 +153,7 @@ class BusChannel:
     def _save_map(self) -> None:
         try:
             self._map_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._map_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._by_chat))
-            tmp.replace(self._map_path)
+            atomic_write(self._map_path, json.dumps(self._by_chat), mode=None)
         except OSError:
             logger.warning("[exo-bus] cannot save the session map", exc_info=True)
 
@@ -209,15 +213,17 @@ class BusChannel:
         self._thread[chat_id] = env["thread"] or env["id"]
         sid = await self._session_for(chat_id)
         pub = await self._registry_pub(env["from"])
-        # Counted before the call: an auto-delivered message may start and finish its turn before the receipt is back.
-        self._may_reply[sid] = self._may_reply.get(sid, 0) + 1
+        # Marked before the call: an auto-delivered message may open its turn before the receipt is back.
+        self._auto[env["id"]] = None
         receipt: dict = {}
         try:
             receipt = await self.link.call(s.Peers(action="bus", session=sid, to=chat_id, text=text,
                                                    envelope=dict(env), pub=pub)) or {}
         finally:
-            if receipt.get("state") != "delivered" and self._may_reply.get(sid):
-                self._may_reply[sid] -= 1
+            if (receipt.get("state"), receipt.get("mode")) != ("delivered", "started"):
+                self._auto.pop(env["id"], None)  # held, refused, or steered or queued into another turn: no reply
+            while len(self._auto) > 2000:
+                self._auto.pop(next(iter(self._auto)))
         if receipt.get("state") != "delivered":
             logger.info("[exo-bus] message %s from %s: %s (%s)", env["id"][:12], env["from"], receipt.get("state"),
                         receipt.get("detail", ""))
@@ -250,11 +256,18 @@ class BusChannel:
             m = body.message
             if m.role == "assistant" and m.text().strip():
                 self._reply[sid] = m.text()
+            elif m.role == "user" and (tid := str(m.meta.get("turn_id") or "")):
+                if self._turn.get(sid, ("", False))[0] != tid:  # the first message of a turn: the one that opened it
+                    envelope = str((m.meta.get("bus") or {}).get("envelope") or "")
+                    self._turn[sid] = (tid, bool(envelope) and envelope in self._auto)
+                    self._auto.pop(envelope, None)
+                elif not str(m.meta.get("author") or "").startswith("bus:"):  # the principal (or anyone) typed into it
+                    self._turn[sid] = (tid, False)
         elif isinstance(body, s.TurnCompleted):
             text = self._reply.pop(sid, "")
-            if not self._may_reply.get(sid):
-                return  # D-040: no message the policy delivered on its own started this turn: post nothing
-            self._may_reply[sid] = 0
+            tid, may = self._turn.pop(sid, ("", False))
+            if not may or tid != body.turn_id:
+                return  # D-040: no message the policy delivered on its own opened this turn: post nothing
             if text and body.stop_reason != "interrupted":
                 await self.send(self._by_session[sid], text)
 

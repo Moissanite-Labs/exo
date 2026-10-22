@@ -3,7 +3,8 @@
 ``CommandCentre`` holds a ``State`` and keeps it current from a ``Source``:
 
 * ``bootstrap()`` asks the core for the picture (``hello``, ``session.list``, ``tasks.list``) and
-  replays recent events so approvals and usage are not missed.
+  replays recent events so approvals and usage are not missed; after a reconnect, every event since the last one
+  applied, up to ``RESUME_GAP`` events back.
 * ``follow()`` then folds the live event stream; ``sync()`` does one poll through
   ``events.subscribe`` for callers with no stream (tests, a one-shot digest).
 
@@ -19,6 +20,7 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 from exo.protocol import schema as s
+from exo.server.engine import MAX_LAG
 
 from . import costs, decisions, projects
 from .config import Settings, load_settings
@@ -28,6 +30,7 @@ from .state import TASK_ORDER, TERMINAL_TASK, State
 SECTIONS = ("projects", "sessions", "tasks", "approvals", "decisions", "costs")
 PROJECTS_CACHE_FLOOR = 120
 REPLAY_WINDOW = 5000      # events replayed on start, newest first-seq minus this
+RESUME_GAP = 4 * MAX_LAG  # a reconnect replays every missed event up to this many; a longer gap gets the window
 SESSION_LIMIT = 200
 EVENT_RING = 3000         # recent events kept for the chat stream (late browsers, reconnects)
 
@@ -52,8 +55,15 @@ class CommandCentre:
     async def bootstrap(self) -> None:
         src = self._need_source()
         hello = await src.call(s.Hello(client="exo-command"))
-        since = max(0, int(hello.get("seq") or 0) - REPLAY_WINDOW)
+        seq = int(hello.get("seq") or 0)
+        # A reconnect resumes where this page stopped, so every event published while the stream was down applies
+        # (the core ends a stream that falls behind, D-079). A first start, a newer core whose log is behind this
+        # page, or a gap above RESUME_GAP (a long outage, one large reply) replays only the newest window.
+        resume = 0 < self.state.seq <= seq <= self.state.seq + RESUME_GAP
+        since = self.state.seq if resume else max(0, seq - REPLAY_WINDOW)
         replay = await src.call(s.EventsSubscribe(since=since))
+        if int(hello.get("seq") or 0) < self.state.seq:
+            self._start_over()
         self.state.apply_all(replay.get("events") or [])
         for ev in replay.get("events") or []:
             self.record(ev)
@@ -67,18 +77,23 @@ class CommandCentre:
 
     async def reconcile_approvals(self) -> None:
         """D-045: the core's open list is the truth. A request replayed from the log whose answer was never
-        announced (a restarted core, a cancelled turn on an older core) must not stay on the page as a card."""
+        announced (a restarted core, a cancelled turn on an older core) must not stay on the page as a card.
+        The same list also adds each open request the page lacks: one asked before the replay window shows once."""
         seq0 = self.state.seq
         try:
             res = await self._need_source().call(s.ApprovalsList())
         except Exception:
             return  # an older core without the command, or down: the events still apply
-        live = {a.get("request_id") for a in res.get("approvals") or []}
+        listed = res.get("approvals") or []
+        live = {a.get("request_id") for a in listed}
         stale = [rid for rid, a in self.state.approvals.items()
                  if rid not in live and int(a.get("seq") or 0) <= seq0]
         for rid in stale:
             self.state.forget_approval(rid)
-        if stale:
+        # A request resolved while the listing was in flight is in that (older) listing: never re-add it.
+        gone = self.state.resolved_since(seq0)
+        added = [self.state.add_open_approval(a) for a in listed if a.get("request_id") not in gone]
+        if stale or any(added):
             self._notify()
 
     async def _optional(self, body: Any) -> Dict[str, Any]:
@@ -131,12 +146,39 @@ class CommandCentre:
             try:
                 q.put_nowait(ev)
             except asyncio.QueueFull:   # a slow reader: end its stream, it resumes from Last-Event-ID
-                self._event_subs.remove(q)
-                q.get_nowait()
-                q.put_nowait(None)
+                self._end_stream(q)
+
+    def _end_stream(self, q: asyncio.Queue) -> None:
+        """End one reader's stream. Everything still queued is newer than the last id it wrote, so it is dropped
+        and not written: the reader reconnects from that id and replays it from the ring or the core's log."""
+        self.unsubscribe_events(q)
+        while not q.empty():
+            q.get_nowait()
+        q.put_nowait(None)
+
+    def _start_over(self) -> None:
+        """The core's log is behind what this page holds (a new home, a wiped log): that picture is another log's.
+        Start from nothing, and end every chat stream so it reconnects and gets the reset from ``replay_events``."""
+        self.state, self.panels, self._ring_seq = State(), {}, 0
+        self.ring.clear()
+        self._cache.clear()
+        for q in list(self._event_subs):
+            self._end_stream(q)
 
     def events_since(self, since: int = 0, session: Optional[str] = None) -> List[Dict[str, Any]]:
         return [e for e in self.ring if e["seq"] > since and (session is None or e.get("session") in (None, session))]
+
+    async def replay_events(self, since: int, session: Optional[str] = None):
+        """The ring is a cache; an expired cursor resumes from the core's durable event log."""
+        gap = bool((self.ring and since < self.ring[0]["seq"] - 1) or since > self._ring_seq)
+        if not gap:
+            return self.events_since(since, session), None
+        res = await self._need_source().call(s.EventsSubscribe(since=since, session=session))
+        frontier = int(res.get("seq") or 0)
+        reset = since > frontier
+        if reset:
+            res = await self._need_source().call(s.EventsSubscribe(since=0, session=session))
+        return res.get("events") or [], {"since": since, "reset": reset}
 
     def subscribe_events(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=1000)

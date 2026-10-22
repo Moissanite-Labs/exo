@@ -15,7 +15,7 @@ from typing import Any
 DEFAULTS: dict[str, Any] = {
     "exo_home": "",            # default $EXO_HOME, else ~/.exo
     "principal": "",           # principal id; default $EXO_PRINCIPAL
-    "store_root": "",          # explicit store dir; default $EXO_STORE, else <exo_home>/principals/<principal>
+    "store_root": "",          # explicit store dir; default $EXO_STORE, else exo.store.principal_root(principal)
     "agent_id": "",            # ledger author for agent turns; default the seat identity
     "key_path": "",            # Ed25519 key; default <exo_home>/keys/<agent_id>.key
     "auto_keygen": True,       # create the agent key on first use if missing
@@ -59,6 +59,14 @@ def load(home: str | os.PathLike | None, overrides: dict | None = None) -> dict:
         except (OSError, ValueError):
             pass
     cfg.update({k: v for k, v in (overrides or {}).items() if k in DEFAULTS})
+    if not cfg.get("principal") and not cfg.get("store_root"):
+        # Fall back to the principal the core config names (`exo config set principal <id>`).
+        try:
+            core = json.loads((exo_home(cfg) / "config.json").read_text("utf-8"))
+            if isinstance(core, dict) and isinstance(core.get("principal"), str):
+                cfg["principal"] = core["principal"]
+        except (OSError, ValueError):
+            pass
     for k in INTS:
         cfg[k] = int(cfg[k])
     for k in BOOLS:
@@ -92,7 +100,8 @@ def store_root(cfg: dict) -> Path | None:
         return None
     if not PID_RE.match(pid):
         raise ValueError(f"bad principal id {pid!r}: use lowercase letters, digits, - and _")
-    return exo_home(cfg) / "principals" / pid
+    from exo.store import principal_root  # the core's rule: config principals.<id>, else <exo_home>/principals/<id>
+    return principal_root(pid, exo_home(cfg))
 
 
 def principal_id(cfg: dict) -> str:
@@ -113,7 +122,7 @@ def principal_user_ids(cfg: dict) -> set[str]:
 
 
 SCHEMA = [
-    {"key": "principal", "description": "Principal id (store at <exo_home>/principals/<id>).",
+    {"key": "principal", "description": "Principal id (store: config principals.<id> or <exo_home>/principals/<id>).",
      "env_var": "EXO_PRINCIPAL", "required": True},
     {"key": "exo_home", "description": "Exo home directory (default ~/.exo).", "env_var": "EXO_HOME"},
     {"key": "store_root", "description": "Explicit principal store directory (overrides principal).",

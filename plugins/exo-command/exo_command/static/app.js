@@ -1,6 +1,6 @@
 // exo-command web UI. Plain ES modules, no build step, no dependencies, no network beyond this server.
 // Chat is the default page; Tasks, Schedule and Command (the read-mostly overview) are the other views.
-import { h, api } from "./dom.js";
+import { h, api, token, redeem } from "./dom.js";
 import * as bus from "./bus.js";
 import * as chat from "./chat.js";
 import * as tasks from "./tasks.js";
@@ -10,18 +10,42 @@ import * as providers from "./providers.js";
 
 const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers]];
 
-// The page token arrives in the URL fragment (`exo web` prints and opens it); every request needs it (D-039). Keep it in this tab's
+// The page token arrives in the URL fragment of the link `exo web` prints; every request needs it (D-039). Keep it in this tab's
 // sessionStorage only, then take it out of the address bar and history.
+let launchRefused = "";   // why a #code= link gave no token: shown instead of a view
 function takeToken() {
   const parts = (location.hash || "").slice(1).split("&").filter(Boolean);
   const t = parts.find((x) => x.startsWith("token="));
   if (!t) return;
-  const value = decodeURIComponent(t.slice(6));
-  if (value) sessionStorage.setItem("xc-token", value);
+  let value;
+  try { value = decodeURIComponent(t.slice(6)); } catch (e) { return false; }
+  if (value) { sessionStorage.setItem("xc-token", value); launchRefused = ""; }
   const view = parts.find((x) => !x.startsWith("token=")) || "chat";
   history.replaceState(null, "", location.pathname + location.search + "#" + view);
+  return !!value;
+}
+
+// The browser `exo web` opens gets a one-time #code= instead, since a launcher's argv is readable on the host (#166).
+// Out of the address bar before the request, so a reload cannot send it twice; then traded for the token once.
+async function takeCode() {
+  const parts = (location.hash || "").slice(1).split("&").filter(Boolean);
+  const c = parts.find((x) => x.startsWith("code="));
+  if (!c) return false;
+  const view = parts.find((x) => !x.startsWith("code=")) || "chat";
+  history.replaceState(null, "", location.pathname + location.search + "#" + view);
+  let got = {};
+  try { got = await redeem(decodeURIComponent(c.slice(5))); } catch (e) { got = {}; }
+  const value = got.token || "";
+  const why = got.error || "";
+  // paste, not click: a click in the terminal hands the #token= link to the URL opener's argv again (#166)
+  launchRefused = value ? "" : (!why || why.includes("launch code")
+    ? "This browser link was already used or has expired. Paste the link exo web printed in the terminal into this tab."
+    : "This browser link was refused (" + why + "). Paste the link exo web printed in the terminal into this tab.");
+  if (value) sessionStorage.setItem("xc-token", value);
+  return !!value;
 }
 takeToken();
+await takeCode();
 const app = document.getElementById("app");
 const main = h("div", { class: "xc-main" });
 const nav = h("nav", { class: "xc-nav", role: "tablist" });
@@ -34,6 +58,11 @@ let unmount = null, current = null;
 const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function show(id) {
+  if (!token()) {
+    main.replaceChildren(h("p", { role: "status" }, launchRefused
+      || "Open the complete link printed by exo web, including #token=… . The bare address has no page token."));
+    return;
+  }
   const v = VIEWS.find((x) => x[0] === id) || VIEWS[0];
   if (unmount) { try { unmount(); } catch (e) { console.error(e); } }
   current = v[0];
@@ -41,13 +70,14 @@ function show(id) {
   where.textContent = "";
   dot.classList.remove("on");
   nav.replaceChildren(h("strong", { class: "xc-brand" }, dot, "E X O"), where,
-    ...VIEWS.map((x) => h("button", { class: x[0] === current ? "on" : "", role: "tab", onclick: () => show(x[0]) }, x[1])), conn);
+    ...VIEWS.map((x) => h("button", { class: x[0] === current ? "on" : "", role: "tab", "aria-selected": x[0] === current ? "true" : "false",
+      onclick: () => show(x[0]) }, x[1])), conn);
   main.replaceChildren();
   unmount = v[2].mount(main) || null;
 }
 
 bus.onState((s) => {
-  connText.textContent = s.connected ? "live" : s.denied ? "page link expired: reopen the link exo web printed" : "reconnecting";
+  connText.textContent = s.connected ? "live" : s.denied ? "page link expired: open the latest complete link printed by exo web" : !token() ? "page token missing" : "reconnecting";
   led.className = "xc-dot " + (s.connected ? "ok" : "");
 });
 
@@ -77,12 +107,17 @@ function boot(checks) {
 }
 
 app.replaceChildren(nav, main);
-boot([
+if (token()) boot([
   ["core", async () => ((await api("GET", "/api/health")).connected ? "connected" : null)],
   ["agent", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return s.length ? (s[0].agent || s[0].seat || "exo") + " · " + s.length + " thread" + (s.length > 1 ? "s" : "") : null; }],
   ["memory", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return s.length ? s.reduce((n, x) => n + (x.message_count || 0), 0) + " messages on record" : null; }],
   ["model route", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return (s[0] && s[0].model) || null; }],
 ]);
-await bus.start();   // loads open panels, then follows the event stream
+if (token()) await bus.start();   // loads open panels, then follows the event stream
 show((location.hash || "").slice(1));
-window.addEventListener("hashchange", () => { const id = (location.hash || "").slice(1); if (id !== current) show(id); });
+window.addEventListener("hashchange", async () => {
+  const fresh = takeToken() || await takeCode();
+  if (fresh) await bus.restart();
+  const id = (location.hash || "").slice(1);
+  if (fresh || launchRefused || id !== current) show(id);
+});

@@ -1,9 +1,11 @@
 # Exo model catalog: providers, model metadata and default role routes.
 # Data, not code (docs/STANDALONE.md 1.2, "provider plugins: lift as data").
-# User config overrides any table here. A key is looked up by the name in `key_env`: the
-# environment, then the macOS Keychain (service "exo"), Linux Secret Service when `secret-tool` is
-# available, then ~/.config/exo/keys.env (0600; override with EXO_KEYS_FILE).
-# `key_env` may be a list (one credential per variable, rotated in order).
+# User config overrides any table here (a provider table merges over its entry key by key). A key is
+# looked up by the name in `key_env`: the environment, then the macOS Keychain (service "exo"), Linux
+# Secret Service when `secret-tool` is available, then ~/.config/exo/keys.env (0600; override with
+# EXO_KEYS_FILE).
+# `key_env` may be a list (one credential per variable, rotated in order). A config table that sets
+# `base_url` does not take this `key_env`: it uses only the `key_env` it sets, or none.
 # `roles = [...]` limits a provider to those roles.
 # Prices are USD per million tokens (Anthropic first-party list prices, cached 2026-10-06).
 # cache_write defaults to 1.25 x input when omitted.
@@ -85,6 +87,7 @@ models = ["sonnet", "opus", "haiku"]
 transport = "muse-cli"
 command = "muse"
 models = ["default"]
+roles = ["aux"]
 
 # TypeSafe Jev: a decision model (probabilities, not text), so decision role only.
 # Verified https://docs.typesafe.ai/api.md : POST https://api.typesafe.ai/v1/systemone,

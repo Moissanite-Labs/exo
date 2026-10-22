@@ -35,7 +35,7 @@ class Listing(FakeSource):
         if type(body).TYPE == "approvals.list":
             if self.before:
                 self.before()
-            return {"approvals": [{"request_id": r, "summary": "x"} for r in self.open_ids]}
+            return {"approvals": [{"request_id": r, "summary": "x", "session": "s1"} for r in self.open_ids]}
         return await super().call(body)
 
 
@@ -72,6 +72,44 @@ def test_bootstrap_replays_an_old_request_and_then_drops_it():
         c = CommandCentre(load_settings({}), src)
         await c.bootstrap()
         assert pending(c) == []
+
+    asyncio.run(go())
+
+
+def test_reconcile_adds_an_open_approval_older_than_the_replay_window():
+    async def go():
+        src = Listing(open_ids=["old"])
+        src.answers["events.subscribe"] = {"events": [], "seq": 9}
+        c = CommandCentre(load_settings({}), src)
+        await c.bootstrap()
+        assert pending(c) == ["old"]
+        assert c.section("approvals")["pending"][0]["requested_at"] is None
+        # follow() replays the same request later: still one card, one count
+        c.state.apply(asks(10, "old"))
+        assert pending(c) == ["old"]
+        assert c.state.sessions["s1"]["pending_approvals"] == 1
+        c.state.apply(ev(11, "approval.resolved", {"request_id": "old", "decision": "allow"}, "s1"))
+        assert pending(c) == []
+        assert c.state.sessions["s1"]["pending_approvals"] == 0
+
+    asyncio.run(go())
+
+
+def test_a_replayed_request_is_not_counted_twice():
+    c = CommandCentre(load_settings({}), Listing())
+    c.state.apply(asks(5))
+    c.state.apply(asks(6))
+    assert pending(c) == ["r1"]
+    assert c.state.sessions["s1"]["pending_approvals"] == 1
+
+
+def test_reconcile_does_not_re_add_a_request_resolved_while_the_list_was_in_flight():
+    async def go():
+        resolve = ev(9, "approval.resolved", {"request_id": "old", "decision": "allow"}, "s1")
+        c = CommandCentre(load_settings({}), Listing(open_ids=["old", "kept"], before=lambda: c.state.apply(resolve)))
+        await c.reconcile_approvals()
+        assert pending(c) == ["kept"]  # "old" was open when the core listed it, resolved before the page applied it
+        assert c.state.sessions["s1"]["pending_approvals"] == 1
 
     asyncio.run(go())
 
@@ -157,7 +195,7 @@ def test_bus_reopens_a_closed_stream_from_the_last_seq(tmp_path):
     (tmp_path / "bus.mjs").write_text(text("bus.js").replace("./dom.js", "./dom.mjs"))
     (tmp_path / "t.mjs").write_text('''
 const made = [];
-class ES { constructor(url) { this.url = url; this.readyState = 1; made.push(this); } close() { this.readyState = 2; } }
+class ES { addEventListener(type, fn) { this[type] = fn; } constructor(url) { this.url = url; this.readyState = 1; made.push(this); } close() { this.readyState = 2; } }
 globalThis.EventSource = ES;
 globalThis.sessionStorage = { getItem: () => "tok" };
 globalThis.fetch = async (path) => ({ ok: true, status: 200, json: async () => (path.includes("panels") ? { panels: [], seq: 5 } : { ok: true }) });
@@ -181,3 +219,14 @@ process.exit(0);
     res = json.loads(out.stdout)
     assert len(res["urls"]) == 2 and "since=6" in res["urls"][1] and "token=tok" in res["urls"][1]
     assert res["got"] == [6, 7]  # 5 and 6 are replays the page already handled
+
+
+def test_rename_route_runs_the_core_rename_command():
+    src = FakeSource({"command.run": {"output": {"session": {"id": "s1", "title": "New name"}}}})
+    c = CommandCentre(load_settings({}), src)
+    code, out = asyncio.run(api.dispatch(c, "POST", "/api/chat/sessions/s1/rename", {}, {"title": "New name"}))
+    assert code == 200 and out["session"]["title"] == "New name"
+    cmd = src.calls[-1]
+    assert isinstance(cmd, s.CommandRun) and (cmd.name, cmd.args, cmd.session) == ("rename", "New name", "s1")
+    assert asyncio.run(api.dispatch(c, "POST", "/api/chat/sessions/s1/rename", {}, {}))[0] == 400
+    assert "/rename" in text("chat.js") and "dblclick" in text("chat.js")

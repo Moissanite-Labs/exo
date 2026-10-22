@@ -1,7 +1,24 @@
 import pytest
+from pathlib import Path
 
 from exo import crypto
 from exo.store import PrincipalStore
+
+
+def pytest_configure(config):
+    """Raise the soft open-file limit: macOS Terminal sessions start at 256, and the suite opens many
+    SQLite files (sessions, schedule, ledger) across thousands of tests."""
+    try:
+        import resource
+    except ImportError:  # not on Windows
+        return
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    want = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
+    if soft != resource.RLIM_INFINITY and soft < want:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+        except (ValueError, OSError):  # a platform that refuses: run with the limit it gives
+            pass
 
 
 @pytest.fixture
@@ -12,6 +29,17 @@ def signer():
 @pytest.fixture
 def template_store(tmp_path):
     return PrincipalStore.create(tmp_path / "store")
+
+
+@pytest.fixture
+def trusted_gate(tmp_path):
+    from exo.core.plugins import PluginManager
+    root = tmp_path / 'gate-store'
+    root.mkdir()
+    manager = PluginManager(config={'exo-gate': {'principal_store': str(root),
+        'key_path': str(tmp_path / 'gate.key'), 'decision_model': False}}, executor_required=True)
+    assert manager.load_folder(Path(__file__).resolve().parents[1] / 'plugins/exo-gate').ok
+    return manager
 
 
 @pytest.fixture(autouse=True)
