@@ -1801,9 +1801,16 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
     return (f"hash -p makes {', '.join(names)} run {path}", path) if path and names else None
 
 
-def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection") -> Classification:
+# The signal of a part that only records a path for a later program name to run: `hash -p`, or setting BASH_CMDS or
+# BASH_ALIASES (#330). It opens nothing, so the store check takes the part as the read it was (_store_quiet).
+_REBINDS = "rebinds a name"
+_REBIND_VARS = ("BASH_CMDS", "BASH_ALIASES")
+
+
+def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection",
+            rebinds: bool = False) -> Classification:
     c = _make("opaque_exec", summary=summary[:120], target=target, command=cmd)
-    c.signals.append(signal)
+    c.signals += [signal, _REBINDS] if rebinds else [signal]
     return c
 
 
@@ -3128,7 +3135,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             return [_make("shell", summary=f"{prog} {sub}".strip(), command=cmd)]
         return [_opaque(f"{prog} {sub} runs project scripts or code the gate cannot see".strip(), cmd)]
     if prog == "hash" and (rebind := _hash_rebind(words)):     # `hash -p` rebinds a name to another file (#330)
-        return [_opaque(rebind[0], cmd, target=rebind[1])]
+        return [_opaque(rebind[0], cmd, target=rebind[1], rebinds=True)]
     if prog in READ_PROGRAMS:
         return [_make("read", summary=prog, command=cmd)]
     if prog in SHELL_PROGRAMS:
@@ -3300,8 +3307,8 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
         if _unreadable_name(w):
             parts.append(_opaque(f"{prog} sets a variable whose name the gate cannot read", cmd))
         elif why := _env_hazard(name):
-            parts.append(_opaque(f"{name} {why} (set by {prog})", cmd))
-        parts += [_opaque(f"{n} {why} (set in a subscript)", cmd)    # `read 'a[PATH=1]'` sets PATH too
+            parts.append(_opaque(f"{name} {why} (set by {prog})", cmd, rebinds=name in _REBIND_VARS))
+        parts += [_opaque(f"{n} {why} (set in a subscript)", cmd, rebinds=n in _REBIND_VARS)  # `read 'a[PATH=1]'`
                   for n in _subscript_sets(w.text) if (why := _env_hazard(n))]
     return parts
 
@@ -3411,7 +3418,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         elif name == "PYTHONPATH" and not runs_nothing and runner:
             pass                                         # a test runner already runs the project's code
         elif why := _env_hazard(name, value, literal):   # _EXEC_ENV_OPAQUE, and LESS with a `+` command
-            parts.append(_opaque(f"{name} {why}", cmd))
+            parts.append(_opaque(f"{name} {why}", cmd, rebinds=name in _REBIND_VARS))
     parts += _indirect_sets(prog, words, cmd)
     for (kind, num), value in git_env.items():
         if kind == "KEY":
@@ -3685,14 +3692,13 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             if targets is None or any(_store_word(x) for x in targets) or held and n in ("1", "2") and (
                     t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 return t.text
-    prog = words[0].text.rsplit("/", 1)[-1] if words else ""
-    # `hash -p` only records a path for a later name to run (#330), so the builtin's own part counts as the read it
-    # was: a store path in its words alone is no store write that outranks a post on the line. A redirect or a cd
-    # into the store is still checked, and so is a program named hash run by path (./hash), which is no builtin.
-    own = parts[0] if prog == "hash" and not words[0].dynamic and (
-        "/" not in words[0].text or _trusted_path(words[0].text)) else None
-    if all(p.category == "read" or p is own for p in parts):
+    # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
+    # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
+    # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
+    # program named hash run by path (./hash), which is no builtin and rebinds nothing.
+    if all(_store_quiet(p) for p in parts):
         return ""
+    prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
         p.category == "delete" for p in parts) or (prog == "cp" and (_has(argv, "-s", "-l") or any(
@@ -3712,6 +3718,16 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     if ctx.get("store_cwd"):
         return ctx.get("fd_cwd") or "a path inside the store (after cd)"
     return ""
+
+
+def _store_quiet(p: Classification) -> bool:
+    """A part the store check takes as a read: a read, or an opaque part that only records a path for a later name
+    to run (_REBINDS) and was built from such parts and plain shell ones alone (`ssh host 'hash -p /x ls; sort x'`
+    and its hop). A shell part made costly (`sudo make`) outranked the read the rebind was, so it keeps the check. The
+    category is checked too: a credentials floor carries every signal of the line as its own."""
+    own = p.signals if p.own_signals is None else p.own_signals
+    return p.category == "read" or p.category == "opaque_exec" and _REBINDS in own and all(
+        q.category == "shell" and q.reversibility == "reversible" or _store_quiet(q) for q in p.parts)
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:

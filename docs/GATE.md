@@ -1025,11 +1025,17 @@ gate does not read:
   bash skips.
   Setting `BASH_CMDS`, the table `hash -p` fills, is opaque in any of the forms above
   (`BASH_CMDS[ls]=/tmp/x`, `read 'BASH_CMDS[ls]'`), and so is `BASH_ALIASES`, which defines an
-  alias. `hash -p` only records the path, so for the store check its part is the read it was.
-  A store or descriptor path in it alone is no store write, and a post on the line keeps its
-  matrix cell and posting rules (`hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`). A
-  redirect on the same command is still checked as for any read, also after a `cd` into the
-  store (`cd ~/.exo/state && hash > notes`). A program named `hash` run by path
+  alias. `hash -p` and these values only record a path, so for the store check their part is the
+  read it was, whatever runs it: the shell, sudo, ssh, mosh, an ssh `ProxyCommand`, `man -P`,
+  `printf -v` or `declare`. A line that ssh, mosh or `man -P` runs counts as a read when its other
+  commands are reads, such parts or plain shell commands. A shell command run with sudo is more
+  than the read, as before. A store or descriptor path in these words alone is no store write,
+  and a post on the line keeps its matrix cell and posting rules
+  (`hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`,
+  `ssh host 'hash -p /dev/fd/3 ls'; gh pr comment 1 --body hi`,
+  `printf -v 'BASH_CMDS[ls]' /dev/fd/3; gh pr comment 1 --body hi`). A redirect on the same
+  command is still checked as for any read, also after a `cd` into the store
+  (`cd ~/.exo/state && hash > notes`). A program named `hash` run by path
   (`./hash ~/.exo/state/x`) is no builtin, and its words are checked as before.
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
@@ -1190,8 +1196,13 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   logs, while the second post alone asks. A `store_write` part outranks every part but
   `credentials`, so a post beside a store write takes the store write's matrix cell: a matrix deny
   on the post becomes an ask (`echo x > ~/.exo/state/x; gh pr comment 1 --body hi`,
-  `eval /proc/self/fd/3; gh pr comment 1 --body hi`). A `hash -p` path alone makes no store
-  write, so it is kept out of this (#330). Since #394 a rule that
+  `eval /proc/self/fd/3; gh pr comment 1 --body hi`). A path that `hash -p` or a `BASH_CMDS`
+  value records makes no store write, whatever runs it, so it is kept out of this (#330). The
+  same check reads ssh's own options, such as its log file (`-E`), only when the line ssh runs
+  is more than reads: `ssh -E ~/.exo/state/log host ls` is allowed. A rebind in that line counts
+  as a read, and so does a plain shell command beside it, so
+  `ssh -E ~/.exo/state/log host 'sort x; hash -p /x ls'` asks as `opaque_exec`, not as a store
+  write. Since #394 a rule that
   would lower a compound line must also name its deciding command and every command that would get
   a stricter outcome alone, but a command allowed alone still rides on the outcome the rule gives,
   as before: `cd /tmp/other && git push --force origin main` and
