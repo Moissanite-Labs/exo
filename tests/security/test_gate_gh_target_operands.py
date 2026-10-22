@@ -377,7 +377,7 @@ def test_r_as_gh_reads_it(line, target):
 
 
 def test_r_on_another_host_keeps_the_value_as_written():
-    # A scope names repos on github.com. On another host the gate cannot tell, so the value as written counts too.
+    # A scope names repos on github.com. On another instance the gate cannot tell, so the value as written counts too.
     c, d = run("gh pr comment 5 -R ghe.corp/myorg/app -b $'x\\nF'")
     assert c.target == "myorg/app#5" and "ghe.corp/myorg/app#5" in c.alt_targets, c
     assert d.exposure == "public", d
@@ -577,7 +577,7 @@ def test_each_github_com_host_names_the_repo(host):
 
 # A host gh treats as another instance: gh calls that host's API (ghinstance.IsEnterprise, a ghe.com tenancy,
 # garage.github.com), or the host only looks like GitHub's. The URL's repo there is another target, as a `-R` on
-# another host is, never pub/repo on github.com. So a deny on pub/* does not fire, and the line asks as public.
+# another instance is, never pub/repo on github.com. So a deny on pub/* does not fire, and the line asks as public.
 @pytest.mark.parametrize("host", ["ghe.corp", "x.ghe.com", "garage.github.com", "github.com.", "api.github.com.",
                                   "github.com.evil.io", "evilgithub.com", "github.localhost", "api.github.localhost"])
 def test_a_url_on_another_instance_is_another_target(host):
@@ -609,6 +609,48 @@ def test_a_label_clone_source_on_another_instance_is_another_target(source):
     c, d = run(f"gh label clone {source} -R myorg/app", pol)
     assert (c.target, c.alt_targets) == ("myorg/app", ["ghe.corp/pub/x"]), c
     assert d.exposure != "private", d
+
+
+# Round 8: gh reads `-R` and gh repo's first word with ghrepo.FromFullName. For a URL, go-gh's RepoInfoFromURL drops
+# a leading `www.` and lowers the host, then ghrepo.NewWithHost does both again. So `WWW.garage.github.com` and
+# `www.www.garage.github.com` are garage.github.com there, another instance. The gate read them with one strip, as
+# pub/x on github.com. A pull request URL's host gets one strip (finder.go's ParseURL), so there they stay github.com.
+@pytest.mark.parametrize("word", ["https://WWW.garage.github.com/pub/x", "https://www.www.garage.github.com/pub/x",
+                                  "https://www.WWW.garage.github.com/pub/x", f"git{GIT_AT[3:4]}WWW.garage.github.com:pub/x.git"])
+def test_a_repo_word_drops_www_twice_as_gh_does(word):
+    c, d = run(f"gh repo delete {word} --yes", DENY_PUB)
+    assert (c.target, c.alt_targets) == ("", ["garage.github.com/pub/x"]), c
+    assert (d.outcome, d.exposure) == ("ask", "public"), d
+    c, _ = run(f"gh pr comment 5 -R {word} -b x", DENY_PUB)
+    assert c.target == "pub/x#5" and f"{word}#5" in c.alt_targets, c
+
+
+@pytest.mark.parametrize("line,target", [("gh repo delete https://www.www.github.com/pub/x --yes", "pub/x"),
+                                         ("gh repo delete https://WWW.github.com/pub/x --yes", "pub/x"),
+                                         ("gh pr comment https://WWW.garage.github.com/pub/x/pull/5 -b x", "pub/x#5")])
+def test_a_host_that_stays_github_com_after_its_www_strips_names_the_repo(line, target):
+    c, d = run(line, DENY_PUB)
+    assert c.target == target, c
+    assert d.outcome == "deny", (line, d)
+
+
+# Round 8: gh gist takes a gist's URL or id, never a repo (GistIDFromURL takes the id from the path), so a gist URL
+# names no repo. Round 6 read `https://gist.github.com/pub/abc` as the repo pub/abc, since its host ends in
+# `.github.com`. A URL that main read (`https://github.com/pub/abc`) keeps that reading.
+@pytest.mark.parametrize("line", ["gh gist delete https://gist.github.com/pub/abc --yes",
+                                  "gh gist view https://gist.github.com/pub/abc",
+                                  "gh gist edit https://gist.github.com/pub/abc -a f.txt",
+                                  "gh gist rename https://gist.github.com/pub/abc a.txt b.txt",
+                                  "gh gist clone https://gist.github.com/pub/abc"])
+def test_a_gist_url_names_no_repo(line):
+    c, d = run(line, DENY_PUB)
+    assert (c.target, c.alt_targets) == ("", []), (line, c)
+    assert d.outcome != "deny", (line, d)
+
+
+def test_a_gist_url_keeps_the_reading_before():
+    c, d = run("gh gist view https://github.com/pub/abc", DENY_PUB)
+    assert (c.target, c.alt_targets, d.outcome) == ("", ["pub/abc"], "deny"), (c, d)
 
 
 # Round 7: gh reads a repo from an operand only in a few places: a pull request URL in gh pr (ParseURL), an issue or
