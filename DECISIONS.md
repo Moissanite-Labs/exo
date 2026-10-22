@@ -1620,6 +1620,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   automatic handoff that may quote them.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
+- **Amendment 2026-10-22 (#278):** decision titles in `docs/DOCS-MAP.md` stay stable; dated amendment histories
+  live only under their decision in this file. An amendment updates the map's documentation cells when coverage
+  changes, without appending its history to the title. A separate coverage row may still index new links or
+  guide sections. This applies to every decision. The owner authorized this repo upkeep in the current issue
+  triage task. Rejected: repeating the history in the map, which makes unrelated parallel gate fixes conflict
+  on one long line. Existing documentation cells and historical decision paragraphs are retained.
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
   or lint ran, that the wheel left out a licence, that some imports were undeclared, that the plugin tests could
   not be collected together, and that the site and docs claimed things the code does not do.
