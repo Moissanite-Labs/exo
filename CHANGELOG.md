@@ -6,6 +6,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- The default word of an unknown variable no longer hides a store name (#341). A `${name OP word}` form of
+  a variable other than the four store variables was read as empty, so `cat ${x:-.env}`,
+  `cat ${x:-~/.kube}/config` and `cp x ${x:-$HOME/.exo}/policies/a` read and wrote stores without asking,
+  though the word stands in the command text. For OP `-`, `:-`, `=`, `:=`, `+` and `:+` the word is now
+  read in place too, quotes dropped and spelt out as a store variable's word is, for the secret-store
+  checks and the Exo-store write checks alike. A legacy `$[...]` counts as an expansion, and a plain
+  number in it reads as itself, so `cat id_ed$[25519]` asks as `cat id_ed25519` does.
 - Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
   verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
   Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.
