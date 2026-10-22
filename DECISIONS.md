@@ -715,7 +715,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   issue reopen rows from #397, which `_GH_TAKES_BEFORE_399` leaves out since they are main's rows. gh keeps the
   last `-R`. A URL operand names the repo even beside `-R`, because gh does that (`pr/shared/finder.go` and
   `issue/shared/lookup.go` in gh 2.89). `_gh_url` reads the scheme and the host in any case, without a user, a port
-  or a leading `www.`, and the path decoded, close to what Go's url.Parse and `ghrepo.NewWithHost` give gh. gh's
+  or a leading `www.`, and the path decoded, close to what Go's url.Parse and `ghrepo.NewWithHost` give gh, and
+  takes github.com and any host that ends in `.github.com` (2026-10-22, below). gh's
   readers take a pull request URL (`ParseURL`) or an issue or pull request URL (the issue lookup). `_gh_url` takes a
   discussion URL and a repo URL too, which only adds a reading, since `-R` stays an other target. `gh repo` drops a
   repo URL's `.git`. The reading before #399 keeps `_GH_URL` as it was, so the URL as written still counts. The
@@ -775,12 +776,37 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   deletes.
   `-R` reads as pflag and gh read it: one `=` after a short option goes (`-R=x`, `-wR=x`), and `_gh_repo` reads
   `[HOST/]owner/name` and a repo URL as `ghrepo.FromFullName` does, the URL's path decoded as Go's url.Parse
-  decodes it. On a host other than github.com the value as
+  decodes it. On a host gh does not send to github.com the value as
   written is an other target, since a scope names repos on github.com. An operand from an expansion adds the empty
   target, a repo the line does not name, since `-R` does not rule out the repo of a URL in it. Rejected: letting `-R`
   win over a URL operand, since gh posts on the URL's repo and lines that asked as public would log. Also rejected:
   dropping the earlier reading, since a deny or a rule naming the repo a body links to would stop firing on a line it
   caught before.
+  2026-10-22, round 6 of the review: gh sends its request for a repo on any host that ends in `.github.com` to
+  github.com, with the github.com token. go-gh 2.13's `auth.NormalizeHostname` reads such a host as github.com, and
+  its GraphQL and REST clients (`graphQLEndpoint`, `restPrefix`) call github.com's API for it. The one exception is
+  garage.github.com, which they call at itself. `_gh_url` took only github.com and `www.github.com`, so
+  `gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app` read as a post on myorg/app and logged under
+  `internal: [myorg/*]`, with no scrub and no third-party check. `_gh_on_github` now decides the host for `_gh_url`
+  and for `_gh_repo`'s sure, after the case, a user, a port and a leading `www.` go as gh drops them, so a `gh repo`
+  operand such as `api.github.com/pub/x` names pub/x. A host gh treats as another instance (`ghe.corp`, a ghe.com
+  tenancy, `github.com.`, a look-alike) names that instance's repo: a URL operand there, or `gh repo`'s first word, is
+  an other target (`_gh_elsewhere`), as a `-R` on another host is. The gate read such a URL as no repo before. gh
+  also finds the command past the options before it (cobra's `stripFlags` with gh's root flags, where `--help` and
+  `--version` stand alone), and `-R` is a persistent flag of the groups (`cmdutil.EnableRepoOverride`), so
+  `gh -R pub/repo pr comment 5` posts on pub/repo#5. The gate read `-R` there as an alias or extension, so under
+  `opaque_exec: allow` the post ran with no posting checks. `_gh_command_at` finds the command as cobra does, and
+  the line as read before stays the floor. An option's value before the subcommand that bash may split (`_gh_splits`:
+  an expansion outside quotes, a glob, a brace expansion, `"$@"`) may put a word where gh looks for the subcommand, so
+  the line counts as `opaque_exec`, as with a word from an expansion in the subcommand's place (`gh pr -R $R view 5`).
+  A quoted value is one word. The reading before #399 and the floor keep what main read.
+  A differential against main 2ef1a81f found no line lower. gate_diff read 69,792 actions (its built-in
+  corpus and round 3's 40,000 lines) under its 76 policies, and 66,310 targeted lines (the review's lines, each host
+  form, options before the command and expansions before the subcommand, each also behind ssh, sudo, `bash -c` and
+  xargs and in compound lines) under those and 8 of the review's policies. The decide harness read the targeted lines
+  and 20,000 lines sampled from the round 5 corpus under 124 policies, and the exo-gate hook harness in 13 setups.
+  On 5,500 of them the line as read drops a signal (`indirection` mostly) or a body the executor checks, and the line
+  as read before keeps it, so the decision and the hook stand.
   Limits: `docs/GATE.md` "Where a gh command lands".
 
 - **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.

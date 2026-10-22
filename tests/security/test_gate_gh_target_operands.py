@@ -501,11 +501,80 @@ def test_a_url_operand_keeps_the_reading_before():
     assert (c.target, c.alt_targets, d.outcome) == ("pub/repo", ["pub/repo.git"], "deny"), (c, d)
 
 
-@pytest.mark.parametrize("url", ["https://github.com:x/pub/repo/pull/5", "https://ghe.corp/pub/repo/pull/5",
-                                 "ftp://github.com/pub/repo/pull/5", "https://github.com.evil.io/pub/repo/pull/5"])
-def test_a_url_gh_refuses_or_on_another_host_names_no_repo(url):
+@pytest.mark.parametrize("url", ["https://github.com:x/pub/repo/pull/5", "ftp://github.com/pub/repo/pull/5"])
+def test_a_url_gh_refuses_names_no_repo(url):
     c, _ = run(f"gh pr merge {url} -R myorg/app")
     assert (c.target, c.alt_targets) == ("myorg/app", []), c
+
+
+# Round 6, blocking item. gh sends a pull request or issue lookup for a URL on any host that ends in `.github.com` to
+# github.com, with the github.com token: go-gh 2.13's NormalizeHostname reads such a host as github.com, and its
+# GraphQL client calls https://api.github.com/graphql for it. The gate read only github.com and www.github.com, so
+# these lines landed on pub/repo#9 and logged as internal, with no scrub and no third-party check. The review's
+# rows, with `internal: [myorg/*]` and the footer F.
+REVIEW = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "posting": {"footer": "F"}})
+
+
+@pytest.mark.parametrize("line", [
+    "gh pr comment https://www.github.com/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'",
+    "gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'",
+    "gh issue comment https://gist.github.com/pub/repo/issues/9 -R myorg/app -b $'Note\\nF'",
+])
+def test_a_url_on_a_github_com_host_names_the_repo(line):
+    c, d = run(line, REVIEW)
+    assert (c.target, c.alt_targets) == ("pub/repo#9", ["myorg/app#9", "myorg/app"]), c
+    assert (d.outcome, d.exposure, d.third_party) == ("ask", "public", True), (line, d)
+
+
+def test_an_allow_rule_on_the_r_repo_does_not_cover_the_url_s_repo():
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "rules": [
+        {"match": {"category": "github_post", "target": "myorg/*"}, "decision": "allow"}]}, "posting": {"footer": "F"}})
+    c, d = run("gh pr review https://api.github.com/pub/x/pull/9 -R myorg/app --approve -b $'hi\\nF'", pol)
+    assert c.target == "pub/x#9", c
+    assert d.outcome == "ask", d
+
+
+@pytest.mark.parametrize("line", ["gh repo archive https://api.github.com/pub/x --yes",
+                                  "gh repo archive api.github.com/pub/x --yes",
+                                  f"gh repo archive git{GIT_AT[3:4]}api.github.com:pub/x.git --yes",
+                                  "gh pr comment 5 -R api.github.com/pub/x -b x"])
+def test_a_repo_on_a_github_com_host_meets_a_deny(line):
+    c, d = run(line, normalize_policies({"gates": {"deny": ["target:pub/*"]}}))
+    assert c.target.startswith("pub/x"), c
+    assert d.outcome == "deny", (line, d)
+
+
+# Every host gh sends to github.com, in the forms gh reads: the case, a user, a port and a leading `www.` go first.
+@pytest.mark.parametrize("host", ["api.github.com", "gist.github.com", "uploads.github.com", "codeload.github.com",
+                                  "raw.github.com", "www.github.com", "API.GitHub.COM", "WWW.api.github.com",
+                                  "u:p" + "@api.github.com", "api.github.com:443", "a.b.github.com"])
+def test_each_github_com_host_names_the_repo(host):
+    c, d = run(f"gh pr comment https://{host}/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'", REVIEW)
+    assert c.target == "pub/repo#9" and "myorg/app#9" in c.alt_targets, c
+    assert (d.outcome, d.exposure) == ("ask", "public"), d
+
+
+# A host gh treats as another instance: gh calls that host's API (ghinstance.IsEnterprise, a ghe.com tenancy,
+# garage.github.com), or the host only looks like GitHub's. The URL's repo there is another target, as a `-R` on
+# another host is, never pub/repo on github.com. So a deny on pub/* does not fire, and the line asks as public.
+@pytest.mark.parametrize("host", ["ghe.corp", "x.ghe.com", "garage.github.com", "github.com.", "api.github.com.",
+                                  "github.com.evil.io", "evilgithub.com", "github.localhost", "api.github.localhost"])
+def test_a_url_on_another_instance_is_another_target(host):
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "deny": ["target:pub/*"]},
+                              "posting": {"footer": "F"}})
+    c, d = run(f"gh pr comment https://{host}/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'", pol)
+    other = f"{host.lower()}/pub/repo#9"
+    assert (c.target, c.alt_targets) == ("myorg/app", [other]), c
+    assert (d.outcome, d.exposure) == ("ask", "public"), d
+
+
+def test_a_repo_operand_on_another_instance_is_another_target():
+    for line, other in [("gh repo delete ghe.corp/myorg/app --yes", "ghe.corp/myorg/app"),
+                        ("gh repo delete https://ghe.corp/myorg/app --yes", "ghe.corp/myorg/app"),
+                        ("gh issue close https://x.ghe.com/pub/repo/issues/3 -R myorg/app", "x.ghe.com/pub/repo#3")]:
+        c, d = run(line)
+        assert other in c.alt_targets, (line, c)
+        assert d.exposure == "public", (line, d)
 
 
 # Round 5, item 4: one test for each safety mutant the review found alive.
