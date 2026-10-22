@@ -72,7 +72,7 @@ test reports its own headroom (D-077). Read it before sizing any CORE unit.
 | #257 | Split `gate.py` (rank 4) | Open, no split. `gate.py` is 4,700 LOC and six open PRs change it (section 1b) | none |
 | #258 | Site asset pipeline (rank 5) | Open, no PR. No `vercel.json`; media unchanged | none |
 | #259 | Monolith splits (rank 6) | Open, no PR. Sizes in the header of this section | none |
-| #260 | CLI eager imports (rank 7) | Open, no PR. `cli.py` imports unchanged | none |
+| #260 | CLI eager imports (rank 7) | W2-6 done: `cli.py` imports a command's module only when it runs (`LAZY` table, D-035 amendment). Best of 5: `import exo.cli` 190 to 14 ms, `exo --help` 251 to 42 ms, `exo --version` 240 to 73 ms. Every `--help`, usage line and parse error byte-identical (65 outputs compared with the old parser). `tests/test_cli_lazy.py` keeps the lazy and full parsers equal | W2-6 this PR |
 | #261 | Core coupling (rank 8) | Open, no PR. `core/engine.py` still imports `exo.server.engine` | none |
 | #262 | Context/loop repeated work (rank 9) | Open, no PR. `context.py` changed for privacy (#216 merged), not for these paths | none |
 | #263 | Learn/signals, HTTP clients, bus store (rank 10) | Open, no PR. `core/models/base.py` and `bus/store.py` untouched since the audit | none |
