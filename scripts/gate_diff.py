@@ -14,21 +14,22 @@ the same way in both. The HOME is kept out of /tmp (work_dir).
 
 A pair (action, policy) is lowered when the head's outcome ranks below the base's (allow < log < ask < deny), when
 the head keeps the outcome but has fewer reserved hits than the base (or loses a reserved category), or when any of
-the base's posting violations is missing from the head's (compared by text, so a reworded violation counts too). At
-an equal deny, lost reserved hits and violations are not counted: the hook blocks the call, and both only matter
-for an ask (a reserved hit keeps a standing grant from covering it, a violation is named in its message). A classify
-or decide exception counts as the outcome the hook gives on an error: ask, or allow for a read tool whose arguments
-name no secret. Tightenings are counted only. Actions whose category or target changed while every decision stayed
-the same are counted with a few examples.
+the base's posting violations is missing from the head's (compared by text, so one the head words otherwise counts
+too). A base violation the head names after its post, as `<post>: v`, is kept. Such pairs are counted apart as
+reworded, not lowered. At an equal deny, lost reserved hits and violations are not counted: the hook blocks the call,
+and both only matter for an ask (a reserved hit keeps a standing grant from covering it, a violation is named in its
+message). A classify or decide exception counts as the outcome the hook gives on an error: ask, or allow for a read
+tool whose arguments name no secret. Tightenings are counted only. Actions whose category or target changed while
+every decision stayed the same are counted with a few examples.
 
 An action is {"tool", "args"}, with an optional "cwd": the session folder the hook passes to classify (#209). Each
 action runs as written. A plain command line is the terminal call {"tool": "terminal", "args": {"command": line}}.
 
 The built-in corpus is harvested from the gate tests of both trees (tests/security/test_gate*.py and
-plugins/exo-gate/tests/*.py, read with `ast`, never run), so a head that deletes a test row still runs its line.
-The tables of both gates (GATE_TABLES, gate_tables) are read the same way, a pattern as its text. A table a tree
-holds in another form, or as another kind of value than the other tree, is named on stderr and in the summary
-(unread_tables). To that come the generated forms:
+plugins/exo-gate/tests/*.py, read with `ast`, never run), so a head that deletes a test row still runs its line. The
+tables of both gates (GATE_TABLES, gate_tables) are read the same way, a pattern as its text. A table a tree holds in
+another form, or as another kind of value than the other tree and one the forms do not read, is named on stderr and
+in the summary (unread_tables). To that come the generated forms:
 - a line or call for each entry of the tables (table_forms): each PROGRAMS key, SUBCOMMANDS pair, prefix, wrapper,
   tmux command, shell and interpreter flag, each program and subcommand of the allowlists and each module of
   _SAFE_PY_MODULES, each value option of a prefix, wrapper, tmux command, interpreter and run wrapper, each exec
@@ -1160,17 +1161,29 @@ def _kind(v: Any) -> str:
             else "a collection" if isinstance(v, (list, tuple, set, frozenset)) else f"a {type(v).__name__}")
 
 
+# The kinds of value the forms read a table as. Any other table is read with _names or _pairs, which take a mapping's
+# keys and a collection's items alike.
+_TABLE_KINDS: dict[str, tuple[type, ...]] = {
+    **dict.fromkeys(("TOOLS", "TOOL_SUBCOMMANDS", "_PREFIXES", "_WRAPPERS", "_WRAPPER_OPERANDS", "_TMUX_RUNS",
+                     "_INTERPRETERS", "_INTERP_VALUE_FLAGS", "_EXEC_OPTS", "_GIT_EXEC_OPTS", "_EXEC_FILE_OPTS",
+                     "DEFAULT_SCRUB"), (dict,)),
+    **dict.fromkeys(("NAME_HINTS", "_HOME_PATTERNS"), (list, tuple)),
+    **dict.fromkeys(("_SENSITIVE_PATH", "_SQL_DESTRUCTIVE", "_PATCH_PATHS", "_INTERNAL_ID"), (str,))}
+
+
 def unread_tables(trees: dict[str, Path]) -> dict[str, dict[str, str]]:
     """For each labelled tree, the tables gate_tables could not read and why (empty when it read them all). A table
-    both trees hold as different kinds of value (a mapping in one, a list or a string in the other) counts too: the
-    forms read it as the kind main has, so the other tree's entries may get none."""
+    both trees hold as different kinds of value counts too, for each tree whose value is not a kind the forms read
+    (_TABLE_KINDS), such as a string where they read a set of names or a list where they read a mapping. Its entries
+    may get no lines."""
     tables = {label: gate_tables(tree) for label, tree in trees.items()}
     out = {label: dict(t.get("unread", {})) for label, t in tables.items()}
     for name in GATE_TABLES:
         kinds = {label: _kind(t[name]) for label, t in tables.items() if name in t}
         for label, kind in kinds.items():
             other = next(((o, k) for o, k in kinds.items() if k != kind), None)
-            if other and name not in out[label]:
+            readable = isinstance(tables[label][name], _TABLE_KINDS.get(name, (dict, list, tuple, set, frozenset)))
+            if other and not readable and name not in out[label]:
                 out[label][name] = f"{kind} here, {other[1]} in the {other[0]}"
     return out
 
@@ -2089,20 +2102,23 @@ def show_action(a: dict, width: int = 160) -> str:
 def _lost(db: list, dh: list) -> list[str]:
     """What the head lost at the same outcome (never called for a deny: see the module docstring). A reserved hit
     holds a target the head may name differently, so fewer hits or a lost category counts. A violation is its
-    text, so any of the base's that the head lacks counts, also when the head words it otherwise."""
+    text, so any of the base's that the head lacks counts, also when the head words it otherwise. A base violation
+    the head names after its post (`<post>: v`, as a line of several posts lists them) is kept: "reworded" says so,
+    and the caller does not count it as lowered."""
     kinds = []
     rb, rh = {tuple(x) for x in db[3]}, {tuple(x) for x in dh[3]}
     if rb and (len(rh) < len(rb) or not {c for c, _ in rb} <= {c for c, _ in rh}):
         kinds.append("reserved")
-    if set(db[4]) - set(dh[4]):
-        kinds.append("violations")
+    if gone := set(db[4]) - set(dh[4]):
+        kept = all(any(h.endswith(": " + v) for h in dh[4]) for v in gone)
+        kinds.append("reworded" if kept else "violations")
     return kinds
 
 
 COUNT_KEYS = ("actions", "pairs_same", "lowered_pairs", "lowered_actions", "lowered_outcome", "lowered_reserved",
-              "lowered_violations", "tightened_pairs", "tightened_actions", "pairs_detail_changed",
-              "classification_only_actions", "base_classify_errors", "base_decide_errors", "head_classify_errors",
-              "head_decide_errors")
+              "lowered_violations", "violations_reworded", "tightened_pairs", "tightened_actions",
+              "pairs_detail_changed", "classification_only_actions", "base_classify_errors", "base_decide_errors",
+              "head_classify_errors", "head_decide_errors")
 
 
 def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: int = 3, json_limit: int = 5000
@@ -2153,6 +2169,9 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
                 continue
             rkb, rkh = RANK.get(db[0], RANK["ask"]), RANK.get(dh[0], RANK["ask"])
             kinds = ["outcome"] if rkh < rkb else (_lost(db, dh) if rkh == rkb and db[0] != "deny" else [])
+            if "reworded" in kinds:
+                counts["violations_reworded"] += 1
+                kinds.remove("reworded")
             if kinds:
                 low_here += 1
                 counts["lowered_pairs"] += 1
@@ -2222,6 +2241,8 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
            f"  lowered: {c.get('lowered_pairs', 0)} pairs on {c.get('lowered_actions', 0)} actions "
            f"(outcome {c.get('lowered_outcome', 0)}, reserved lost {c.get('lowered_reserved', 0)}, "
            f"violations lost {c.get('lowered_violations', 0)})",
+           f"  violations reworded (each lost one named after its post, not lowered): "
+           f"{c.get('violations_reworded', 0)} pairs",
            f"  tightened: {c.get('tightened_pairs', 0)} pairs on {c.get('tightened_actions', 0)} actions",
            f"  same outcome, other detail changed: {c.get('pairs_detail_changed', 0)} pairs",
            f"  classification only (category or target changed, same decisions): "
