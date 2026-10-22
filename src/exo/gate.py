@@ -347,28 +347,6 @@ class _Word:
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
     exps: list = field(default_factory=list)  # (scan text, source, ${ frames) per ${..} and $((..)) bash expands
     fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
-    cuts: list = field(default_factory=list)     # (start, end) in text of each $( ), ` ` and $(( )) (#225)
-
-
-def _wild(w: _Word, start: int = 0, dot: bool = True) -> list[str]:
-    """The word (from ``start``) as bash may run it, with each $( ), ` ` and $(( )) in it as `*` (its output can be
-    any text: `.e$(printf n)v` is `.env`) and removed (an empty output, for the names a pattern matches and a glob
-    is not tried against: `.e$(:)nv.local` is `.env.local`, `r$(:)un` is `run`); none for a word without one
-    (#225). With ``dot``, also with one that starts a name part as `.*`: its output may start the name with the dot
-    a glob's `*` does not match (`$(printf .e)nv` is `.*nv`). One pass over the word."""
-    cuts = [c for c in w.cuts if c[0] >= start]
-    if not cuts:
-        return []
-    out, at, lead = [], start, []
-    for a, b in cuts:
-        out.append(w.text[at:a])
-        lead.append(a == start or w.text[a - 1] in "/=")
-        at = b
-    out.append(w.text[at:])
-    forms = ["*".join(out), "".join(out)]
-    if dot and any(lead):
-        forms.append(out[0] + "".join((".*" if d else "*") + o for d, o in zip(lead, out[1:])))
-    return forms
 
 
 @dataclass
@@ -605,7 +583,6 @@ class _Lexer:
         inner = "".join(out)
         self.subs.append(inner)
         self.i = j + 1
-        w.cuts.append((len(w.text), len(w.text) + len(inner) + 2))
         w.text += "`" + inner + "`"
         w.dynamic = w.started = True
 
@@ -629,7 +606,6 @@ class _Lexer:
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
                 self.cuts += [(x + i + 3, y + i + 3, stand_in) for x, y, stand_in in sub.cuts]
-            w.cuts.append((len(w.text), len(w.text) + len(body)))
             if self.scan and i >= self.covered:
                 w.exps.append((body, body, None))
             w.text += body
@@ -650,7 +626,6 @@ class _Lexer:
                 w.text += lit          # $(cat <<'EOF' ... EOF) is plain text
             else:
                 self.subs.append(self._source(start, max(start, self.i - 1)))
-                w.cuts.append((len(w.text), len(w.text) + len(inner) + 3))
                 w.text += "$(" + inner + ")"
                 w.dynamic = True
         elif nxt == "{":
@@ -2656,8 +2631,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog in ("cd", "pushd"):
         target = next((w for w in words[1:] if not w.text.startswith("-")), None)
         dest = target.text if target else ""
-        if target and (_in_store_dir_words(_shell_words(target, ctx.setdefault("store_braces", {}), "dir")) or
-                       _wild_store(target, inside=True)):
+        seen = ctx.setdefault("store_braces", {})
+        if target and (_in_store_dir_words(_shell_words(target, seen, "dir")) or _unknown_store(target, seen, inside=True)):
             ctx["store_cwd"] = True
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
@@ -3363,19 +3338,25 @@ def _in_store_dir_words(words: list[str] | None) -> bool:
     return words is None or any(_in_store_dir(x) for x in words)
 
 
-def _wild_store(w: _Word, ancestors: bool = False, inside: bool = False) -> bool:
-    """Is shell word ``w`` a store path (``inside``: a folder in the store) when each substitution in it prints any
-    text or none (#225)? The word without them is checked as a path, with them as `*` as a glob (_store_glob); each
-    piece an option value may hold too (`of=~/.exo/pol$(:)icies/x`). Past the brace cap counts."""
-    for n, form in enumerate(_wild(w)):
-        words = _brace_words(form, pool=1) if w.brace else [form]
-        if words is None:
-            return True
-        for piece in dict.fromkeys(p for e in words for p in [e] + re.split(r"[:=,]", e)):
-            if piece and (_store_glob(piece, ancestors, inside) if n != 1 else
-                          _in_store_dir(piece) if inside else _store_word(piece, ancestors)):
-                return True
-    return False
+def _unknown_store(w: _Word, seen: dict, ancestors: bool = False, inside: bool = False) -> bool:
+    """Is shell word ``w`` a store path (``inside``: a folder in the store) when each expansion in it that the gate
+    cannot spell out prints what _unknown_forms reads: nothing, any text, or a default word (#225, #309, #341)? Each
+    form is checked as a path and, with a `*`, as a glob (_store_glob), after its brace sets, and so is each piece an
+    option value may hold (`of=~/.exo/pol$(:)icies/x`). A form with no named part (`mv x "$d/"` is `/`) is not an
+    ancestor of the store. ``seen`` keeps each spelling's forms for the line. Past the brace cap counts."""
+    src = w.raw.replace("\\\n", "")
+    if "$" not in src and "`" not in src:
+        return False
+    key = ("unknown", src)
+    if key not in seen:
+        alts = _brace_words(src, pool=1) if w.brace else [src]
+        seen[key] = None if alts is None else list(dict.fromkeys(
+            p for a in alts[1:] or alts for e in _unknown_words(a) for p in [e] + re.split(r"[:=,]", e) if p))
+    pieces = seen[key]
+    if pieces is None:
+        return True
+    return any((_in_store_dir(p) if inside else _store_word(p, ancestors and bool(p.strip("/")))) or
+               "*" in p and _store_glob(p, ancestors, inside) for p in pieces)
 
 
 def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
@@ -3390,7 +3371,7 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         held = op == "<" and n != ""
         if op in _WRITE_REDIRS or held:
             targets = _shell_words(t, seen, "target")
-            if targets is None or any(_store_word(x) for x in targets) or _wild_store(t) or \
+            if targets is None or any(_store_word(x) for x in targets) or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 return t.text
     if all(p.category == "read" for p in parts):
@@ -3409,10 +3390,11 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
             if piece and _store_word(piece, ancestors=wide):
                 return piece
-        if _wild_store(w, ancestors=wide):      # `cp x ~/.exo/polic$(:)ies/` (#225)
+        if _unknown_store(w, seen, ancestors=wide):    # `cp x ~/.exo/polic$(:)ies/`, `polic${u}ies` (#309)
             return w.text
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and (
-                _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")) or _wild_store(words[i + 1], inside=True)):
+                _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")) or
+                _unknown_store(words[i + 1], seen, inside=True)):
             return words[i + 1].text            # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
         return ctx.get("fd_cwd") or "a path inside the store (after cd)"
@@ -3607,13 +3589,11 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
         skip: set = set()                           # the targets' own words: entering a folder reads nothing
 
         def target(j: int, start: int = 0) -> None:
-            """Word j (from ``start``) is a target, also as _wild gives it (`~/.k$(:)ube` is ~/.k*ube and ~/.kube;
-            #225). A leading dot only where text follows in its part (`~/$(printf .k)ube` is ~/.*ube): a bare `.*`
-            part, `cd $(git rev-parse --show-toplevel)`, would be every dot folder, so it is dropped from that form
-            as output that may be empty (`~/$(printf .k)ube/$(:)` is ~/.*ube too)."""
-            forms = [ws[j][start:]] + ["/".join(p for p in t.split("/") if p != ".*") if n == 2 else t
-                                       for n, t in enumerate(_wild(k.words[j], start)) if t]
-            targets.extend(f for f in forms if f)
+            """Word j (from ``start``, past an option written into it) is a target, also as _unknown_forms reads it
+            (`~/.k$(:)ube` is ~/.kube and ~/.k*ube, `~/$(printf .k)ube` is ~/.*ube; #225)."""
+            pre = ws[j][:start]
+            targets.extend([ws[j][start:]] + [t[start:] for t in _unknown_words(k.words[j].raw)
+                                              if t.startswith(pre) and t[start:]])
             skip.add(j)
 
         while i < len(ws) and (ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) or ws[i].rsplit("/", 1)[-1] in _PREFIXES):
@@ -3688,11 +3668,21 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
             [t for _, t in k.redirs]
         # (text, has an unquoted {); a word with a space is prose (a commit message, an echo, awk's '{print $1}'),
         # not a path, unless bash expands a brace set in it ({config,"a b"})
-        # and a word with a substitution as _wild gives it (`c$(:)onfig` is `c*onfig` and `config`; #225)
-        pieces += [(t, w.brace) for w in words for t in [w.text] + _wild(w) if w.brace or not re.search(r"\s", t)]
+        # and a word with an expansion as _unknown_forms reads it (`c$(:)onfig` is `config` and `c*onfig`; #225)
+        pieces += [(t, w.brace) for w in words for t in [w.text] + _unknown_words(w.raw)
+                   if w.brace or not re.search(r"\s", t)]
 
 
 _ANY = object()                                     # any path, in _cd_store_read's index of levels up
+
+
+def _could_be(s: str, name: str) -> bool:
+    """Could the path part ``s`` be ``name`` (`..`, `run`, `.exo`) as bash matches it: the same text, or a glob
+    (`.?`, `ru[n]`, `.*xo`) that spells a leading dot the same way."""
+    if s == name or not _GLOBBY.search(s) or (s[:1] == ".") != (name[:1] == "."):
+        return s == name
+    pat = _fn_glob(s)
+    return pat is None or fnmatch.fnmatchcase(name, pat)
 
 
 def _cd_store_read(cmds: list, subs: list) -> str:
@@ -3730,14 +3720,6 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     for (a, b), path in pairs.items():
         kin.setdefault(b, []).append((a, path))
     deep = max(len(p.split("/")) for p in pairs.values())       # the parts of the deepest sample store folder
-
-    def maybe(s: str, name: str) -> bool:
-        """Could the part ``s`` be ``name`` (`..`, `run`) as bash matches it: a glob (`.?`, `ru[n]`; `r$(:)un` is
-        `r*un`) when it spells a leading dot the same way."""
-        if s == name or not _GLOBBY.search(s) or (s[:1] == ".") != (name[:1] == "."):
-            return s == name
-        pat = _fn_glob(s)
-        return pat is None or fnmatch.fnmatchcase(name, pat)
 
     def here(t: str) -> str:                        # the current folder as `.`, ${PWD%/*/*} as `../..`
         return _HERE.sub(lambda m: "/".join([".."] * m.group(0).count("/*")) if "%" in m.group(0) else ".", t)
@@ -3791,7 +3773,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     # `cd ..`, `cd ../..`, `cd .. && cd ..`: every number of levels up to all of them together (order is not
     # followed); past 64, any number. A part counts when it could be `..` (`.?`, and `.$(:).` read as `.*.` and `..`)
     total = sum(len(parts) for t in targets if "." in here(t) for alt in _brace_alts(t) for _, parts in [folders(alt)]
-                if all(maybe(s, "..") for s in parts))
+                if all(_could_be(s, "..") for s in parts))
     ups = set(range(min(total, 65) + 1))
 
     def reach(n: int, a: str, need) -> bool:
@@ -3879,59 +3861,6 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered) or any(map(is_store, roots))
     hints = names | singles | nxt
     held = any(k == len(parts) - 1 for _, parts, k in entered)     # a target is itself a store folder (~/.kube)
-    # #269: the run folder by a relative name. runs holds (levels up, what is there): RUN the run folder, HOLDS a
-    # folder that holds one (EXO_HOME, a .exo folder or a principal's store below one), PRINCIPALS the principals
-    # folder in one. `..` from ~/.exo/run/jobs is (1, RUN), `run` from ~/.exo (`tar -C ~/.exo -czf - run`) is
-    # (0, HOLDS) and `me/run` from ~/.exo/principals is (0, PRINCIPALS). A relative target moves them, in line order
-    # (`cd ~/.exo && cd run/jobs`, `tar -C ~/.exo -C run/jobs`), and a `cd ..` on the line by each of its levels
-    # (`cd ~/.exo/run/jobs && cd .. && grep -r .`). Each part of each target is looked at once; past 64 levels up
-    # or 64 places, any number (`wide`).
-    RUN, HOLDS, PRINCIPALS = 0, 1, 2
-    ex = folders(_exo_home())[1]
-    runs: set = set()
-
-    def step(at: set, s: str) -> set:
-        """What the part ``s`` below folders that are ``at`` could be."""
-        return ({RUN} if HOLDS in at and maybe(s, "run") else set()) | \
-            ({PRINCIPALS} if HOLDS in at and maybe(s, "principals") else set()) | \
-            ({HOLDS} if PRINCIPALS in at or maybe(s, ".exo") else set())
-
-    def down(f: int, rest: list) -> set:
-        """From a folder that is ``f``, down through ``rest``: what is then how many levels up."""
-        out, at = {(len(rest), f)}, {f}
-        for d, s in enumerate(rest, 1):
-            at = step(at, s)
-            out |= {(len(rest) - d, x) for x in at}
-        return out
-
-    for _, parts, _ in entered:
-        for j, part in enumerate(parts):
-            if maybe(part, ".exo") or j == len(ex) - 1 and all(map(maybe, parts[:j + 1], ex)) or j > 1 and maybe(
-                    parts[j - 1], "principals") and (maybe(parts[j - 2], ".exo") or j == len(ex) + 1 and all(
-                    map(maybe, parts[:j - 1], ex))):
-                runs.add((len(parts) - 1 - j, HOLDS))
-                below = parts[j + 1] if j + 1 < len(parts) else ""
-                runs |= {(len(parts) - 2 - j, x) for x, name in ((RUN, "run"), (PRINCIPALS, "principals"))
-                         if below and maybe(below, name)}
-    wide = bool(runs) and len(ups) > 64
-    runs = runs if wide else {(k - u, f) for k, f in runs for u in ups if u <= k}
-    for _, parts, _ in split:                       # relative targets in line order, from the places so far
-        if wide or not runs or parts[0] in ("", "~"):
-            continue
-        n = next((j for j, s in enumerate(parts) if not maybe(s, "..")), len(parts))
-        rest = [s for s in parts[n:] if s != "."]
-        if rest and len(runs) > 64:
-            wide = True
-        elif rest:
-            old = list(runs)
-            runs |= {(k - n + len(rest), f) for k, f in old if k > n}
-            runs |= {x for k, f in old if k == n for x in down(f, rest)}
-    runs = runs if wide else {(k - u, f) for k, f in runs for u in ups if u <= k}
-
-    lv: dict = {}                                   # levels up -> what is there
-    for k, f in runs:
-        lv.setdefault(k, set()).add(f)
-
     for q, parts, globbed in candidates():
         if every or not parts and held:             # `tar czf - .` in a store, or in a store folder
             return q
@@ -3942,20 +3871,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 not pairs.keys().isdisjoint(zip(inner, inner[1:])) or globbed and any(
                     _could_name(s, hints) for s in parts if _GLOBBY.search(s)):
             return q
-    hit = _exo_relative(split, max(ups), candidates)
-    if hit or not runs:
-        return hit
-    for q, parts, _ in candidates():
-        # A name counts when it could be the run folder or a folder that holds one: up its leading `..`, then
-        # down its other parts (`../..` and `../../principals/me/run` from run/jobs, `principals/me` from
-        # EXO_HOME, `.` in a principal's store). Each part once.
-        n = next((j for j, s in enumerate(parts) if not maybe(s, "..")), len(parts))
-        at = {RUN, HOLDS, PRINCIPALS} if wide else lv.get(n, set())
-        for s in parts[n:]:
-            at = step(at, s)
-        if at:
-            return "a path in the Exo store (too many to resolve)" if wide else q
-    return ""
+    return _exo_relative(split, max(ups), candidates)
 
 
 _EXO_PARTS = 65536   # path parts of the folders and paths _exo_relative may build in one classify call (#269)
@@ -3970,7 +3886,7 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     from it are checked as the paths they are, as the kernel resolves them, `..` included, so `cd ~/.exo/run/jobs &&
     grep -r . ..`, `cat ../exod*` there, `cd ~/.exo/run/jobs && cd .. && ls` and `tar -C ~/.exo -czf - run` reach the
     run folder and its secrets as the absolute path would (is_sensitive_path, a glob in it). The folders are the
-    targets (``split``, as _cd_store_read reads them; one with a glob is left to the store-folder check), each
+    targets (``split``, as _cd_store_read reads them; one with a glob as the folders it could be, below), each
     relative target joined to each of them, and every folder up to ``up`` levels above them (`cd ..`, counted once:
     a `..` target is not joined too); an absolute target is also resolved (a link into the store). From a folder above the store only a target or name with the
     store's folder name as a part (`.exo`, `exo-home`) is joined, so `cd /srv && tar cf -
@@ -3978,10 +3894,15 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     as it is made, the path parts of what it builds (its checks cost about that much: a deep glob name costs more than a
     short one) to one budget of _EXO_PARTS shared by the whole classify call (each `$( )` is classified again, nested
     ones too), so the work stays linear in the line; past it, or past 64 store folders, the line counts (fails
-    closed). The name or folder, or ''."""
+    closed). A target with a glob is read as the folders in the store it could be (`~/.e*o/run/jobs`, `r?n/jobs`,
+    and `~/.exo/r$(printf u)n/jobs` read as `.../r*n/jobs`; settle), a name's leading parts that could be `..` as
+    `..` (`.?`), and a name counts too when it could be a folder that holds a run folder (the store's own, its
+    principals folder or a principal's store: `../..` from run/jobs, `principals/me`, `.` there) or, by a glob, a
+    run folder (`ru?`), since a recursive read of it reads the secrets. The name or folder, or ''."""
     home = os.path.normpath(_home())
     exo = os.path.normpath(_exo_home())
     roots = _path_forms(exo)
+    tops = [r.rstrip("/").split("/") for r in roots]
     marks = {".exo", os.path.basename(exo)} - {""}
     memo = _call_memo.get()
     left = [_EXO_PARTS] if memo is None else memo.setdefault("exo_parts", [_EXO_PARTS])
@@ -4010,10 +3931,52 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
         if len(bases) > 64:
             raise _Spent
 
+    def settle(p: str) -> list:
+        """A target with a glob as the folders in the store it could be: its parts up to the store's own folder (or
+        a `.exo` one; none for a relative one) as that folder, and a glob below it read along each tail of a
+        principal's run/jobs path that it fits (`r?n/jobs`, `p*/me/run/jobs`, `*/*/run/jobs`, `j?bs` from run):
+        each glob part as the part it could be (after `principals`, a principal's store), and past that tail as
+        `..` when it could be one (`run/jobs/.?`). [] when it cannot be one."""
+        parts = p.split("/")
+        top = next((t for t in tops if len(parts) >= len(t) and all(map(_could_be, parts, t))), None)
+        if top is None:
+            j = next((j for j, s in enumerate(parts) if _could_be(s, ".exo")), -1)
+            if j < 0 and p[:1] == "/" or j >= 0 and _GLOBBY.search("/".join(parts[:j])):
+                return []
+            top = parts[:j] + [".exo"] if j >= 0 else []
+        rest = parts[len(top):]
+        if not _GLOBBY.search("/".join(rest)):
+            return ["/".join(top + rest)]
+        n = next((k for k, s in enumerate(rest) if not _could_be(s, "..")), len(rest))   # leading `..` parts
+        out = []
+        for shape in (["principals", None, "run", "jobs"][i:] for i in range(4)):
+            got = [".."] * n
+            for k, s in enumerate(rest[n:]):
+                want, g = shape[k] if k < len(shape) else "", _GLOBBY.search(s)
+                if want and s != want and not (g and _could_be(s, want)):
+                    break
+                got.append(want or ("me" if want is None else ".." if _could_be(s, "..") else "x") if g else want or s)
+            else:
+                out.append(os.path.normpath("/".join(top + got)))
+        return out
+
+    def holds(w: str) -> bool:
+        """Could the path ``w`` be a folder that holds a run folder, or by a glob a run folder itself?"""
+        parts = os.path.normpath(w).split("/")
+        ends = [len(t) for t in tops if len(t) <= len(parts) <= len(t) + 3 and all(map(_could_be, parts, t))]
+        ends += [j + 1 for j in range(max(len(parts) - 4, 0), len(parts)) if _could_be(parts[j], ".exo")]
+        for n in ends:
+            rest = parts[n:]
+            if not rest or len(rest) == 1 and (_could_be(rest[0], "run") or _could_be(rest[0], "principals")) or \
+                    _could_be(rest[0], "principals") and (len(rest) == 2 or len(rest) == 3 and _could_be(rest[2], "run")):
+                return True
+        return False
+
     folders = []
     for p, _, _ in split:
-        if not (_GLOBBY.search(p) or "$" in p):
-            folders.append(os.path.join(home, p[2:]) if p.startswith("~/") else home if p == "~" else p)
+        f = os.path.join(home, p[2:]) if p.startswith("~/") else home if p == "~" else p
+        if f:
+            folders += [f] if not (_GLOBBY.search(f) or "$" in f) else [] if "$" in f else settle(f)
     folders = list(dict.fromkeys(folders))
     # a `cd ..` is the level-up walk below (``up`` counts every one on the line), not a join as well
     relative = [r for r in folders if not r.startswith("/") and set(r.split("/")) != {".."}]
@@ -4048,13 +4011,17 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
         if hit:
             return hit
         names = list(dict.fromkeys(q for q, _, _ in candidates()))
-        words = [(q, join(b, q)) for b in sorted(bases) for q in names]
-        toward = [q for q in names if near(q)]
-        words += [(q, w) for b in outer for q in toward for w in [join(b, q)] if inside(w)]
+        # a name whose leading parts could be `..` (`.?`, `.*.`) is read with them as `..` too
+        ups = [(q, "/".join([".."] * n + qs[n:])) for q in names if _GLOBBY.search(q) for qs in [q.split("/")]
+               for n in [next((j for j, x in enumerate(qs) if not _could_be(x, "..")), len(qs))] if n]
+        read = [(q, q) for q in names] + ups          # (the name, how it is read)
+        words = [(q, join(b, r)) for b in sorted(bases) for q, r in read]
+        words += [(q, w) for b in outer for q, r in read if near(r) for w in [join(b, r)] if inside(w)]
     except _Spent:
         return "a path in the Exo store (too many to resolve)"
-    if not words or not (_sensitive_words([w for _, w in words]) or _glob_words([w for _, w in words])):
-        return ""
+    hit = next((q for q, w in words if holds(w)), "")
+    if hit or not words or not (_sensitive_words([w for _, w in words]) or _glob_words([w for _, w in words])):
+        return hit
     return next((q for q, w in words if _sensitive_words([w]) or _glob_words([w])), words[0][0])
 
 
@@ -4118,8 +4085,7 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     if c.category == "credentials":  # a secret beside an irreversible command keeps that command's weight
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
-    every = [w for k in cmds for w in k.words + [t for _, t in k.redirs]]
-    hit = _shell_credential_hit(cmd, segs, [w.raw for w in every], [t for w in every for t in _wild(w)])
+    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
     if hit and c.category != "credentials":
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
         signals = c.signals
@@ -4899,8 +4865,8 @@ _STORE_GLOB_FILES = tuple(x.split("/") for x in [f"policies/{n}.{e}" for n in (
 
 
 def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> bool:
-    """Could ``glob``, a word read with its substitutions as `*` (_wild), name a protected part of the Exo store, as
-    _store_word would the text they print (#225)? Matched one part at a time, a `*` within its part, against the
+    """Could ``glob``, a word read with its expansions as `*` (_unknown_forms), name a protected part of the Exo store,
+    as _store_word would the text they print (#225, #309)? Matched one part at a time, a `*` within its part, against the
     store roots' protected folders (with ``inside``: the roots, as _in_store_dir) and the names _STORE_NAMES matches
     anywhere. As for a read (_glob_word), a match needs a part with three characters of its own before its
     extension (`$(date).json` could be `seat.json` too), so `cp x ~/.exo/$(printf policies)/a` counts and
@@ -5043,11 +5009,10 @@ def _env_dump(argv: list[str]) -> bool:
     return False
 
 
-def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None,
-                          wild: list[str] | None = None) -> str:
+def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None) -> str:
     """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a brace set
-    in the source text ``raws`` of a word or redirection target, a word in ``wild`` with each substitution as
-    `*` or removed (_wild), or a quoted `bash -c` string), the Keychain, or a bare environment dump. '' if nothing."""
+    in the source text ``raws`` of a word or redirection target, or a quoted `bash -c` string), the Keychain,
+    or a bare environment dump. '' if nothing."""
     text = _expand_text(cmd)
     if _KEYCHAIN.search(text):
         return "keychain access"
@@ -5064,7 +5029,6 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
         if flat and flat[0].rsplit("/", 1)[-1] == "security" and any(
                 a in ("-w", "-g", "-gs", "-wg") for a in flat[1:]) and len(flat) > 1 and flat[1].startswith("find"):
             return "keychain access"
-    pieces += [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)", "", t) for t in wild or []]
     for p in pieces:
         p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
         if p and (_sensitive_words([p]) or _glob_words([p])):
@@ -5075,8 +5039,8 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
         if words is None:
             return raw
         alts = words[1:] or words
-        found = [d for w in alts for d in _dequote(w, wild=True)] if len(words) > 1 or '$"' in raw else []
-        found += [d for w in alts for f in _unknown_forms(w) for d in _dequote(f)]   # what an expansion may print
+        found = [d for w in alts for d in _dequote(w)] if len(words) > 1 or '$"' in raw else []
+        found += [d for w in alts for d in _unknown_words(w)]   # what an expansion may print
         if found:
             groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for d in found]
     words = [w for ws in groups.values() for w in ws]
@@ -5087,55 +5051,101 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
 
 _PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
 _KNOWN_PARAM = re.compile(r"\$\{?(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?!\w)")
+_DEFAULT_WORD = re.compile(r"\$\{(?:[A-Za-z_]\w*|\d+|[@*]):?[-=+]([^{}]*)\}")   # ${x:-word}, ${x+word}...: the word
 
 
 def _unknown_forms(src: str) -> list[str]:
     """Spellings of a shell word whose source text ``src`` (quotes kept) holds an expansion the gate cannot spell
-    out (#225): a $( ) or ` `, or a ${..} or $name other than the store variables _expand_text spells out. Each is
-    read as empty, which joins the text around it (`.e$(:)nv` is `.env`, `${x}.env` is `.env`), and, where literal
-    text stands on both sides of it, as `*` for any output (`.e$(echo n)v` is the glob `.e*v`, which then asks where
-    that glob would). [] when the word holds none."""
+    out (#225): a $( ), ` `, $(( )) or $[ ], or a ${..} or $name other than the store variables _expand_text spells
+    out. Each is read as empty, which joins the text around it (`.e$(:)nv` is `.env`, `${x}.env` is `.env`), and as
+    `*` for any output (`.e$(echo n)v` is the glob `.e*v`, which then asks where that glob would): a substitution
+    anywhere but at the start of the word before text (`~/.config/gh/$(printf hosts.yml)`, `id_ed$((25519))` and
+    `$(ls)`; `$(pwd)/config` is not `*/config`), a variable only where literal text stands on both sides of it
+    (`$OUT/config`, `~/.config/$f`). One that starts a name part with text after it in the part is also read as `.*`,
+    as its output may start the name with the dot a `*` does not match (`$(printf .e)nv` is `.*nv`); in that form a
+    part that is only an expansion is empty (`~/$(printf .k)ube/$(:)` is `~/.*ube/`). The word of `${x:-word}`,
+    `${x-word}`, `${x:=word}`, `${x=word}`, `${x:+word}` or `${x+word}` may be the value: one form has each such word
+    in place (#341). [] when the word holds none. One pass over the word."""
     if "$" not in src and "`" not in src:
         return []
-    lx, q = _Lexer(src), ""
-    parts: list[str | None] = []                      # literal source text, None for an expansion
+    lx, q, close = _Lexer(src), "", 0
+    lits: list[str] = []                              # the literal source text before each expansion, and after
+    exps: list[tuple[bool, str | None]] = []          # per expansion: is it a substitution, its default word
     lit: list[str] = []
     while lx.i < len(src):
-        ch = src[lx.i]
-        if q != "'" and (ch == "`" or src.startswith("$(", lx.i) and not src.startswith("$((", lx.i)):
-            parts += ["".join(lit), None]
+        ch, at = src[lx.i], lx.i
+        m: re.Match | None = None
+        exp: tuple[bool, str | None] | None = None
+        if q != "'" and (ch == "`" or src.startswith("$(", at)):
+            _SCANS[ch](lx, _Word())                   # past the substitution, $(( )) too, read as the lexer reads it
+            exp = (True, None)
+        elif q != "'" and src.startswith("$[", at) and close >= 0:
+            close = src.find("]", at)                 # legacy arithmetic, to its first ]
+            if close >= 0:
+                lx.i, exp = close + 1, (True, None)
+        elif ch == "$" and q != "'":
+            m = _PARAM.match(src, at)
+            if m and not _KNOWN_PARAM.match(m[0]):
+                d = _DEFAULT_WORD.fullmatch(m[0])
+                lx.i, exp = m.end(), (False, d[1] if d else None)
+        if exp:
+            lits.append("".join(lit))
+            exps.append(exp)
             lit = []
-            _SCANS[ch](lx, _Word())                   # past the substitution, read as the lexer reads it
-            continue
-        m = _PARAM.match(src, lx.i) if ch == "$" and q != "'" else None
-        if m and not _KNOWN_PARAM.match(m[0]):
-            parts += ["".join(lit), None]
-            lit = []
-            lx.i = m.end()
             continue
         step = len(m[0]) if m else 2 if ch == "\\" and q != "'" else 1
         if ch in "'\"" and q in ("", ch):
             q = "" if q else ch
         lit.append(src[lx.i:lx.i + step])
         lx.i += step
-    parts.append("".join(lit))
-    if len(parts) == 1:
+    lits.append("".join(lit))
+    if not exps:
         return []
-    text = [k for k, p in enumerate(parts) if p and p.strip("'\"")]   # parts with literal text, not only quotes
-    star = "".join(p if p is not None else "*" if text and text[0] < k < text[-1] else "" for k, p in enumerate(parts))
-    return list(dict.fromkeys(["".join(p or "" for p in parts), star]))
+    text = [j for j, p in enumerate(lits) if p.strip("'\"")]     # the literal parts with text, not only quotes
+    plain = [re.sub("['\"]", "", p) for p in lits]
+
+    def star(j: int, sub: bool) -> str:             # expansion j stands between lits[j] and lits[j + 1]
+        lead = j == 0 and not plain[0] and bool(text)       # starts the word, with text after it
+        return "*" if sub and not lead or text and text[0] <= j < text[-1] else ""
+
+    def dot(j: int, sub: bool) -> str:
+        """`.*` where it starts a name part with text after it, empty where it is a part of its own."""
+        if not (plain[j].endswith(("/", "=")) or j == 0 and not plain[0]):
+            return star(j, sub)
+        after = plain[j + 1][:1]
+        return ".*" if after not in ("", "/") else "" if after or j + 1 == len(exps) else star(j, sub)
+
+    def spell(pick: Callable[[int, bool, str | None], str]) -> str:
+        return lits[0] + "".join(pick(j, sub, word) + lits[j + 1] for j, (sub, word) in enumerate(exps))
+
+    forms = [spell(lambda j, sub, word: ""), spell(lambda j, sub, word: star(j, sub))]
+    if any(dot(j, sub) == ".*" for j, (sub, _) in enumerate(exps)):
+        forms.append(spell(lambda j, sub, word: dot(j, sub)))
+    if any(word is not None for _, word in exps):
+        forms.append(spell(lambda j, sub, word: word or ""))
+    return list(dict.fromkeys(forms))
 
 
-def _dequote(word: str, wild: bool = False) -> list[str]:
+def _unknown_words(src: str) -> list[str]:
+    """The words bash may make of the source text ``src`` of one shell word as _unknown_forms reads the expansions
+    in it, quotes removed (brace sets stay as written); [] when it holds none. Once per spelling in a classify call,
+    which reads a nested text again at each depth."""
+    memo = _call_memo.get()
+    seen = {} if memo is None else memo.setdefault("unknown_words", {})
+    if src not in seen:
+        seen[src] = list(dict.fromkeys(d for f in _unknown_forms(src) for d in _dequote(f)))
+    return seen[src]
+
+
+def _dequote(word: str) -> list[str]:
     """The words the lexer reads from one brace-expanded source word, quotes removed. A `$"..."` is also read
-    as the plain "..." bash gives it without a message catalog. With ``wild``, a word with a substitution is
-    also read in the two ways _wild gives it."""
+    as the plain "..." bash gives it without a message catalog."""
     if not re.search(r"[\\'\"$`<>#]", word):
         return [word]
     out: list[str] = []
     for src in dict.fromkeys((word, word.replace('$"', '"'))):
         toks = _Lexer("\\" + src if src.startswith("#") else src, scan=False).run()
-        out += [x for kind, w in toks if kind == "w" for x in [w.text] + (_wild(w) if wild else [])]
+        out += [w.text for kind, w in toks if kind == "w"]
     return out
 
 

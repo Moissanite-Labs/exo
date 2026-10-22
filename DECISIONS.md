@@ -872,32 +872,6 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   and every word its comma groups and `{x..y}` sequences make are checked, and a hit on any counts; past 1,024
   words or 32 levels of nesting, or past 4,096 expanded words in one tool call, the word counts as a store path
   (fails closed, no grant). `cat ~/.config/gh/{hosts,x}.yml` was an allowed read.
-  *Amendment 2026-10-18 (issue #225):* a `$( )`, backtick pair or `$(( ))` inside a word split a store name into
-  pieces that matched nothing, so `cat .e$(:)nv`, `cat ~/.n$(:)etrc` and `cat ~/.config/gh/ho$(:)sts.yml` were
-  allowed reads of the store bash runs them as. A shell word with one is now also matched, by the path checks and
-  by the #192 working-folder check, in more forms: with each of them as `*` (output, so `.e$(printf n)v` is
-  covered), with each of them removed (no output) and, where one starts a name, as `.*` (output that starts with
-  the dot a glob's `*` does not match: `$(printf .e)nv`). Removed and `*` are both needed: a glob is tried only
-  against fixed sample names, so `.e*nv.local` misses the `.env.*` pattern that the removed form `.env.local`
-  matches (likewise `server.k$(:)ey`, `cert.p$(:)em`, and `r$(:)un` or `.$(:).` for the #269 run folder). A
-  working-folder target (cd, pushd, `tar -C`, `git -C`, `env -C`) is read as `*` and removed too, and as `.*`
-  only where text follows it in its part (`cd ~/$(printf .k)ube`, also with `/$(:)` after it): a bare `.*`, from `cd
-  $(git rev-parse --show-toplevel)`, would enter every dot folder, so that part is dropped from the dot form. The
-  store-write checks (`store_write`) read a word, a redirection target too, the same way: the removed form as a path,
-  the others as a glob matched one part at a time against the protected folders and names, so `cp x
-  ~/.exo/polic$(:)ies/` and `cp x ~/.exo/$(printf policies)/x` ask as the store. As for a glob read, a match needs a
-  part with three characters of its own before its extension, so `cp x out/$(date +%F).json` stays a `shell` write.
-  Removal alone was rejected as unsound (the agent picks the output), and asking for every substitution in a path-like
-  word as too broad (`cat notes$(date +%F).txt` would ask). A few strings per word, no splitting, so the work stays
-  linear. The cost, failing closed: a substitution beside a store file name that needs its folder asks like the same
-  glob (`cat "$(pwd -P)/config"`); the #192 limits `cat $(ls)` and `"$(pwd -P)/config"` now ask on a line that enters
-  a store folder. `<( )` is a `/dev/fd` path and stays out. Not covered: a variable inside a name (`${X}`), a name
-  left with fewer than three characters of its own (`.$(printf env)`, the glob rule), a name that a pattern matches
-  rather than a sample, split by a substitution that prints text (`server.k$(printf e)y`, `.e$(printf n)v.local`: the
-  `*` form is a glob and a glob is tried only against the samples, as for `server.k*y`), and a store write whose
-  output has a `/` in it, which fills one part there (`cp x ~/$(printf .exo/policies)/x`). A hit is `credentials` in
-  place of the line's own category, as for an unsplit name, so under a policy that denies that category the line asks
-  rather than being denied (`echo x > ~/.n$(:)etrc` with `opaque_exec: deny`, as `echo x > ~/.netrc` already did).
 - **Decision, store:** `policies/`, `state/`, `ledger.sqlite*`, `keys/`, seat files and the sockets under `$EXO_HOME`
   or the principal store are on a protected list. Any write is `store_write`: a floor like credentials, no standing
   grant, principal-only (`approvals.yaml` cannot add seats), enforced in observe mode. Reads stay `read`; `keys/`
@@ -1063,29 +1037,6 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   store folder (`cd /sr?/exo-home && cd keys`), a plain store folder reached from more than one level above its parent
   (`cd / && cd srv/exo-home/keys`), other `${PWD...}` forms, the text `eval` runs, `cd -` and `OLDPWD`, `CDPATH`,
   `HOME` set on the line, `dotglob`, and a store reached through a folder link whose name does not say so.
-  *Amendment 2026-10-18 (issue #269):* the store file names did not include the run folder's secrets (#169), so
-  from inside `~/.exo/run/jobs` `cat ../exod*` and `cat ../agent-default*` read the principal key unasked, and
-  neither `..` from there (`grep -r . ..`) nor `run` beside it (`tar -C ~/.exo -czf - run`) was the run folder.
-  The run secrets (`_run_secrets`) are now store file names, and on a line that enters a store folder the run
-  folder has relative names: as many `..` as a target is below it, `run` (after as many `..`) from the folder
-  that holds it, which is `$EXO_HOME`, a `.exo` folder or a principal's store below either, and `<name>/run` from
-  a `principals` folder. A relative target moves them, in line order and each target once
-  (`cd ~/.exo && cd run/jobs && grep -r x ..`, `tar -C ~/.exo -C run/jobs -czf - ..`); a `cd ..` on the line
-  moves them up by its levels (order not followed; any number past 64), so
-  `cd ~/.exo/run/jobs && cd .. && grep -r .` asks; and a part that is a glob counts, as a name or a `cd` target,
-  when bash could match it to `..` (spelling the dot: `.?`) or `run` (`ru?`, `ru[n]`, and `r$(:)un` read as
-  `r*un`). A name is followed down from where its leading `..` land, part by part, so `principals/me/run` from
-  `$EXO_HOME` and `../../principals/me/run` from `run/jobs` are the run folder, and a name that ends at a folder
-  that holds a run folder asks too, as `.` in `$EXO_HOME` already did (`../..` from `run/jobs`, `principals/me`,
-  `.` in a principal's store). Each part of each target and name is looked at once, and past 64 places a
-  relative target could move the run folder to, any number of levels counts, so the work stays linear. Making
-  `run` a store folder was rejected: it would make `cat 1.log` in `run/jobs` credentials. The cost, failing
-  closed: `run` as any word after `cd ~/.exo` asks (`cd ~/.exo && gh run list`, `cd ~/.exo && ls r*`), and so
-  does a name in `run/jobs` that could be `..` or a store file (`cd ~/.exo/run/jobs && tail -f $(ls -t | head -1)`,
-  `ls ..`, `ls ../..`) and a listing of `principals` or a principal's store (`cd ~/.exo && ls principals`). Not
-  covered: a tool that reads its working folder without naming it, after a `cd ..` (`grep -r x`, `rg x`), and a
-  recursive read of `$EXO_HOME` or a principal's store by its full path (`grep -r x ~/.exo`), as before.
-  `_run_secrets` reads `seats/` once per gate call, not once per glob word.
   *Amendment 2026-10-16 (issue #136):* a `command:` regex in `deny` and `reserved` matched the command text
   only, so `'git' push`, `g\it push`, `git pu''sh` and `$'rm' -rf` walked past a veto the lexer had already
   decoded. Those regexes now also match a literal-word view (`_policy_command_view`: the lexer's decoded words,
@@ -1311,6 +1262,27 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
   rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
   here-doc body leads past the end, past a deny-listed command.
+  *Amendment 2026-10-20 (issues #225, #269, #309, #341):* #307 and #305 left store names an expansion still hid,
+  and relative names that still reached the run folder. *One reading of an expansion.* `_unknown_forms` (#307) is
+  the one place a word's expansions are read, and it now reads more: `$(( ))` and `$[ ]` as substitutions; a
+  substitution as `*` at either end of a word too, except at its start with text after it (`$(pwd)/config` is not
+  `*/config`), while a variable stays `*` only between literal text, as #307 had it (`cat $f` stays a read); one that
+  starts a name part as `.*`, since output may start with the dot a glob's `*` does not match; and the default word
+  of an unknown variable (`${x:-word}`, `-`, `=`, `:=`, `+`, `:+`) as its value (#341). Its forms (`_unknown_words`,
+  once per spelling per call) feed the secret-store checks as before, the #192 working-folder targets and names, and
+  the Exo-store write checks (#309: `_unknown_store`, each form as a path and, with a `*`, as a glob matched one part
+  at a time against the protected folders and names, `_store_glob`, which needs three characters of a part's own as
+  a glob read does). *Relative names from `$EXO_HOME`.* `_exo_relative` (#305) now reads a target spelt with a glob
+  or an expansion as the store folders it could be, below the store's own folder too, along each tail of a
+  principal's `principals/<name>/run/jobs` path it fits (`~/.exo/r?n/jobs`, `~/.exo/r$(printf u)n/jobs`, `cd r?n/jobs`
+  from the store; a target that fits none is left out), a part that could be `..` as `..` (`.?`, `.$(:).`), and a name
+  that could be the run folder by a glob (`ru?`) or a folder that holds one (`$EXO_HOME` or a `.exo` folder, its
+  `principals`, a principal's store), as `.` in `$EXO_HOME` already asked. Rejected: keeping the first draft's second
+  reading of substitutions (a `cuts` list on each lexed word, and a run-folder state machine in `_cd_store_read`)
+  beside #307's and #305's, which would have been two mechanisms for each thing; and asking for any expansion in a
+  path-like word, which would ask on `cat notes$(date +%F).txt`. The cost, failing closed:
+  `cd ~/.kube && echo $(date)`, `cd ~/.exo && ls principals` and, in `run/jobs`, `ls ../..` and `cat $(ls)` ask.
+  Limits in `docs/GATE.md` "Other spellings of a store path", "In `$EXO_HOME`" and "The store is credentials".
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

@@ -113,6 +113,31 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#225, #269, #309, #341, D-038): store names an expansion hides, and relative names that reach the run
+  folder, now ask. #307 read an expansion inside a secret-store name as empty and, between literal text, as `*`.
+  That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,
+  `cd ~/.kube && cat $(ls)`), `$(( ))` and `$[ ]` as substitutions (`cat id_ed$((25519))`, `cat id_ed$[25519]`),
+  one that starts a name as `.*` (`cat $(printf .e)nv`), and the default word of an unknown variable as its value
+  (`cat ${x-.env}`, `cat ${x:-~/.kube}/config`, `cat ${x:-$HOME/.exo}/keys/seat`). These were allowed reads. The
+  same reading reaches working-folder targets (`cd ~/.k$(:)ube && cat config`, `tar -C ~/.k$(:)ube -czf - .`,
+  `cd ~/.k${u}ube && cat config`) and the Exo-store write checks (#309), so `cp x ~/.exo/polic$(:)ies/gates.yaml`,
+  `mv x ~/.exo/polic${u}ies/gates.yaml`, `tee ~/.exo/polic$(:)ies/gates.yaml < x`,
+  `cp x ~/.exo/$(printf policies)/default.yaml` and `cp x ${x:-$HOME/.exo}/policies/a` are `store_write`; they
+  were allowed `shell` writes. #305's resolution of names from a folder in `$EXO_HOME` now reads a target spelt
+  with a glob or an expansion, in the store's own folder or below it (`cd ~/.e*o/run/jobs && grep -r x ..`,
+  `cd ~/.exo/r?n/jobs && grep -r x ..`, `cd ~/.exo/r$(printf u)n/jobs && ls ..`, `cd ~/.exo && cd r$(:)un/jobs`,
+  `cd ~/.exo/principals/m?/run/jobs && ls ..`), a part that
+  could be `..` (`cd .? && grep -r .`, `grep -r . .$(:).`), a glob that could be the run folder
+  (`tar -C ~/.exo -czf - ru?`), and a folder that holds a run folder (`cd ~/.exo/run/jobs && grep -r x ../..`,
+  `cd ~/.exo && grep -r x principals/me`, `tar -C ~/.exo/principals/me -czf - .`). Each spelling is read once per
+  tool call, so the work stays linear. Words that cannot spell a store name keep their class
+  (`cat notes$(date +%F).txt`, `cat $f`, `cat ${OUT:-/tmp/out}/report.txt`, `cp x out/$(date +%F).json`). This
+  fails closed on a few lines: `cd ~/.kube && echo $(date)`, `cd ~/.exo && ls principals`, and in `run/jobs`
+  `ls ../..`, `cat $(ls)` and `tail -f $(ls -t | head -1)` ask. Not covered: a name left with fewer than three
+  characters of its own (`cat .$(printf env)`), a pattern-matched name split by output (`cat server.k$(printf e)y`),
+  output with a `/` in it (`cp x ~/$(printf .exo/policies)/x`), an expansion that ends a store write's word
+  (`cp x ~/.exo/$name`), a default word with a `}` in it (`${x:-${HOME}/.kube}`), and a folder by its full path
+  (`tar czf - ${x:-$HOME/.kube}`, as `tar czf - ~/.kube`; `grep -r x ~/.exo`).
 - Gate (#334, follow-up to #231, D-038): a deep `$( )` nest in a value #231 reads no longer stalls the gate hook or
   drops a deny. A single-quoted `PROMPT_COMMAND`, `PS4`, `BROWSER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `GIT_PROXY_COMMAND`,
   `GIT_PAGER`, `git -c core.sshCommand` or `GIT_CONFIG_*` value with n levels of `$(` cost about n**4 (15 s at 40
@@ -158,49 +183,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `scripts/deploy-site.sh` pins the Vercel CLI (64.1.0, was `vercel@latest`) and refuses any deploy, versioned or
   not, when `site/` has untracked files. An unversioned staging deploy used to copy the whole folder, so an untracked
   private `site/pitch/` would have shipped. `.DS_Store` is skipped. `EXO_VERCEL_CLI` must be an exact `X.Y.Z`.
-- Gate (#225, D-038): a `$( )`, backtick pair or `$(( ))` inside a word no longer hides a secret-store name. Bash
-  drops an empty substitution, so `cat .e$(:)nv`, `cat ~/.n$(:)etrc`, `cat ~/.config/gh/ho$(:)sts.yml`,
-  `cat $HOME/.kube/c$(:)onfig`, `cat ~/.config/gh/$(:)*` and `cat` of `.env` split by an empty backtick pair
-  read the store; they were allowed reads. The store checks now also read the word with each one removed (no
-  output: `cat .e$(:)nv.local`, `cat server.k$(:)ey`, `cat cert.p$(:)em`), with each one as `*` (output:
-  `cat .e$(printf n)v`, `cat ~/.config/gh/$(printf hosts.yml)`, `cat id_ed$((25519))`) and, where one starts a
-  name, as `.*` (output that starts with a dot: `cat $(printf .e)nv`, `cat ~/$(printf .n)etrc`), and
-  `cd ~/.kube && cat c$(:)onfig` and `cd ~/.kube && cat $(ls)` ask too. Working-folder targets are read the same
-  way (as `.*` only with text after it in its part), so `cd ~/.k$(:)ube && cat config`,
-  `cd ~/$(printf .k)ube && cat config`, `env -C ~/.k$(:)ube cat config` and `tar -C ~/.k$(:)ube -czf - .` ask,
-  while `cd $(git rev-parse --show-toplevel)` enters no dot folder. The store-write checks read a word the same
-  way, so `cp x ~/.exo/polic$(:)ies/`, `tee ~/.e$(:)xo/policies/default.yaml`, `ln -s x ~/.exo/polic$(:)ies/y`,
-  `rm -rf ~/.exo/pol$(:)icies` and `cp x ~/.exo/$(printf policies)/default.yaml` are `store_write` (a write to
-  `keys/`, `tee ~/.exo/key$(:)s/a`, is `credentials` as unsplit); they were allowed `shell` writes (or `delete`).
-  One pass per word, so the work stays linear. Words that cannot spell a store name keep their class
-  (`cat notes$(date +%F).txt`, `ls $(git rev-parse --show-toplevel)/src`, `cp x ~/report-$(date +%F).txt`,
-  `cp x out/$(date +%F).json`); a substitution beside a store file name that needs its folder asks, as the same
-  glob would (`cat "$(pwd -P)/config"`, `cat $(git rev-parse --show-toplevel)/config.json`). `<( )` is a
-  `/dev/fd` path and is not read this way. Not covered: a variable in a store name (`cat ~/.n${X}etrc`), a name
-  left with fewer than three characters of its own (`cat .$(printf env)`, as for a glob), a name that a pattern
-  matches rather than a sample, split by a substitution that prints text (`cat server.k$(printf e)y`,
-  `cat .e$(printf n)v.local`, as for the glob `cat server.k*y`; `cat server.k$(:)ey` asks) and a store write whose
-  output has a `/` in it (`cp x ~/$(printf .exo/policies)/x`).
-- Gate (#269, D-038): from inside `~/.exo/run/jobs`, `cat ../exod.principal.k*`, `cat ../exod*`,
-  `cat ../agent-default*` and `grep -r x ..` read the principal credential and were allowed reads, and
-  `tar -C ~/.exo -czf - run` was an allowed `shell`. The run folder's secrets are now store file names for a line
-  that enters a store folder, and on such a line `..` from below the run folder, `run` from the folder that holds
-  it (EXO_HOME, a `.exo` folder or a principal's store) and `<name>/run` from a `principals` folder are the run
-  folder: they ask as `credentials`, also after a relative target (`cd ~/.exo && cd run/jobs && grep -r x ..`,
-  `tar -C ~/.exo -C run/jobs -czf - ..`), after a `cd ..` on the line (`cd ~/.exo/run/jobs && cd .. && grep -r .`)
-  and as a glob or substitution that could be the name, also as a `cd` target (`tar -C ~/.exo -czf - ru?`,
-  `tar -C ~/.exo -czf - r$(:)un`, `grep -r x .$(:).`, `cd .? && grep -r .`). A name is followed down from where
-  its `..` land, and one that ends at a folder holding a run folder asks as `.` in `~/.exo` did:
-  `cd ~/.exo && grep -r x principals/me/run`, `cd ~/.exo/run/jobs && grep -r x ../../principals/me/run`,
-  `cd ~/.exo/run/jobs && grep -r x ../..`, `cd ~/.exo/principals/me && grep -r x .` and
-  `tar -C ~/.exo/principals/me -czf - .`. `cd ~/.exo/run/jobs && cat 1.log`, `tail -f 3.log` and
-  `cd ~/.exo && cd run/jobs && cat 1.log` stay `read`. This fails closed on a line that enters `~/.exo`:
-  `cd ~/.exo && gh run list`, `cd ~/.exo && ls r*`, `cd ~/.exo && ls principals`,
-  `cd ~/.exo/run/jobs && tail -f $(ls -t | head -1)`, `cd ~/.exo/run/jobs && cat $(ls)`,
-  `cd ~/.exo/run/jobs && ls ..` and `ls ../..` ask. Not covered: a tool that reads its working folder without
-  naming it after a `cd ..` (`cd ~/.exo/run/jobs && cd .. && grep -r x`), and a recursive read of `~/.exo` or a
-  principal's store by its full path (`grep -r x ~/.exo`, as before). The `seats/` folder is read once per gate
-  call, not once per glob word (a line of 1,000 globs with 4,096 seat files took 10 s).
 - Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
   ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
   answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the
