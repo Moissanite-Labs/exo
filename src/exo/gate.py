@@ -733,38 +733,38 @@ class _Lexer:
 def _heredoc_body(s: str, i: int, hd: _Heredoc) -> tuple[int, int]:
     """Read the body of ``hd`` from s[i] on, as bash ends it: at a line that is its delimiter. Sets hd.body and
     returns where the lexer goes on and where the line that ended the body starts (len(s) when none did)."""
-        start = len(s)
+    start = len(s)
     lines: list[str] = []
-        found = False
-        while i < len(s):
-            j = s.find("\n", i)
-            end = len(s) if j < 0 else j
-            line, start = s[i:end], i
-            i = len(s) if j < 0 else j + 1
-            cand = line.lstrip("\t") if hd.strip else line   # bash drops leading tabs for <<- here too
-            if cand == hd.delim:
-                # bash ends the body on the line that equals the delimiter exactly (#328). The delimiter
-                # is the word after quote removal, so a space, tab or other character in it (`EOF `, ` EOF`,
-                # `EOF\ `, `E"O"F`) is part of it: `cat <<'EOF '` ends on `EOF `, never on bare `EOF`.
-                found = True
-                break
-            if cand.startswith(hd.delim) and ")" in cand[len(hd.delim):] \
-                    and cand[len(hd.delim):].strip(" )") == "":
-                i = start + line.index(")", line.index(hd.delim))  # `EOF)` closes a $( ) too
-                found = True
-                break
-            if cand.strip() == hd.delim.strip():
-                # the line ends the body only once surrounding whitespace is dropped (a trailing CR, stray
-                # spaces, a tab, or dash's rules for a $'..'/$".." delimiter): bash may end elsewhere, so
-                # fail closed -- end here and read the body as commands too (#208, #328).
-                hd.ambiguous = True
-                found = True
-                break
-            lines.append(line.lstrip("\t") if hd.strip else line)
-        hd.body = "\n".join(lines)
-        if not found:
+    found = False
+    while i < len(s):
+        j = s.find("\n", i)
+        end = len(s) if j < 0 else j
+        line, start = s[i:end], i
+        i = len(s) if j < 0 else j + 1
+        cand = line.lstrip("\t") if hd.strip else line   # bash drops leading tabs for <<- here too
+        if cand == hd.delim:
+            # bash ends the body on the line that equals the delimiter exactly (#328). The delimiter
+            # is the word after quote removal, so a space, tab or other character in it (`EOF `, ` EOF`,
+            # `EOF\ `, `E"O"F`) is part of it: `cat <<'EOF '` ends on `EOF `, never on bare `EOF`.
+            found = True
+            break
+        if cand.startswith(hd.delim) and ")" in cand[len(hd.delim):] \
+                and cand[len(hd.delim):].strip(" )") == "":
+            i = start + line.index(")", line.index(hd.delim))  # `EOF)` closes a $( ) too
+            found = True
+            break
+        if cand.strip() == hd.delim.strip():
+            # the line ends the body only once surrounding whitespace is dropped (a trailing CR, stray
+            # spaces, a tab, or dash's rules for a $'..'/$".." delimiter): bash may end elsewhere, so
+            # fail closed -- end here and read the body as commands too (#208, #328).
+            hd.ambiguous = True
+            found = True
+            break
+        lines.append(line.lstrip("\t") if hd.strip else line)
+    hd.body = "\n".join(lines)
+    if not found:
         start = len(s)
-            hd.ambiguous = True   # no terminator at all: fail closed and read the body as commands (#328)
+        hd.ambiguous = True   # no terminator at all: fail closed and read the body as commands (#328)
     return i, start
 
 # For _nest_end: runs of characters an unquoted word and double-quoted text take as they stand, a backquoted body, a
