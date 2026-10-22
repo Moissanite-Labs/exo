@@ -514,6 +514,15 @@ def test_a_url_gh_refuses_names_no_repo(url):
     assert (c.target, c.alt_targets) == ("myorg/app", []), c
 
 
+# Go refuses a `[` in a host outside a bracketed IPv6 literal, and anything after its closing `]` but a port. Read
+# without that check, these hosts end in `.github.com` or parse as one, and the URL would name pub/x#9.
+@pytest.mark.parametrize("url", ["https://a[b.github.com/pub/x/pull/9", "https://[::1][/pub/x/pull/9",
+                                 "https://a]b.github.com[/pub/x/pull/9", "https://[x[.github.com]/pub/x/pull/9"])
+def test_a_host_with_a_stray_bracket_names_no_repo(url):
+    c, _ = run(f"gh pr merge {url} -R myorg/app")
+    assert c.target == "myorg/app" and not any(t.startswith("pub/x") for t in c.alt_targets), c
+
+
 # Round 6, blocking item. gh sends a pull request or issue lookup for a URL on any host that ends in `.github.com` to
 # github.com, with the github.com token: go-gh 2.13's NormalizeHostname reads such a host as github.com, and its
 # GraphQL client calls https://api.github.com/graphql for it. The gate read only github.com and www.github.com, so

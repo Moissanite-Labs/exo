@@ -794,7 +794,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   an other target (`_gh_elsewhere`), as a `-R` on another instance is. The gate read such a URL as no repo before. gh
   also finds the command past the options before it (cobra's `stripFlags` with gh's root flags, where `--help` and
   `--version` stand alone). `-R` is a persistent flag of each group that calls `cmdutil.EnableRepoOverride`: pr,
-  issue, release, secret, variable and others, but not repo, where only some subgroups call it. So
+  issue, release, secret, variable and others. gh repo itself does not, only `gh repo rename` and its deploy-key and
+  autolink groups. So
   `gh -R pub/repo pr comment 5` posts on pub/repo#5. The gate read `-R` there as an alias or extension, so under
   `opaque_exec: allow` the post ran with no posting checks. `_gh_command_at` finds the command as cobra does, and the
   line as read before stays the floor. An option's value before the subcommand that bash may split (`_gh_splits`: an
@@ -846,12 +847,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `https://gist.github.com/pub/abc` as the repo pub/abc, since its host ends in `.github.com`, so `_gh_read` no longer
   reads a URL in gh gist. The reading before #399 keeps a github.com URL there, as main read it. The docs now say
   which groups take `-R`: those that call `cmdutil.EnableRepoOverride`, such as pr, issue, release, secret and
-  variable, and not repo. GATE.md's limits name `GH_COBRA`, under which gh's root has no `--version` flag. A
-  differential against main 2ef1a81f found no line lower. gate_diff read 34,440 targeted lines (each `www.` form of a
-  repo word, `-R` and a pull request URL, gist URLs and ids, `--version` before the command with and without
-  `GH_COBRA`, each also behind ssh and `bash -c` and in compound lines) under 106 policies. The 3,822 of them that
-  classify differently from round 7 went through the decide harness under 119 policies and the exo-gate hook harness
-  in 13 setups, and none is lower on any axis.
+  variable, and not gh repo itself. GATE.md's limits name `GH_COBRA`, under which gh's root has no `--version` flag,
+  and `GODEBUG=urlstrictcolons=0`. A differential against main 2ef1a81f found no line lower. gate_diff read 34,440
+  targeted lines (each `www.` form of a repo word, `-R` and a pull request URL, gist URLs and ids, `--version`
+  before the command with and without `GH_COBRA`, each also behind ssh and `bash -c` and in compound lines) under
+  106 policies. The 3,822 of them that classify differently from round 7 went through the decide harness under 119
+  policies and the exo-gate hook harness in 13 setups, and none is lower on any axis.
   2026-10-22, round 9 of the review: Go's url.Parse cuts the fragment off before it looks for a control character,
   and keeps a fragment that has one (Go 1.26's `Parse` and `setFragment`). `_gh_url_parts` and `_gh_repo_parts`
   refused a URL with a control character anywhere in it, so with `-R myorg/app` the line

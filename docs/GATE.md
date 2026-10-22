@@ -158,7 +158,7 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   look-alike such as `github.com.evil.io`) names that instance's repo, which a scope may not mean.
   So `https://ghe.corp/pub/repo/pull/5` is the other target `ghe.corp/pub/repo#5`, as a `-R` on
   another instance is. That holds where gh reads a repo from an operand: a pull request URL in
-  `gh pr`, an issue or pull request URL in `gh issue`, a discussion URL in `gh discussion`, and the
+  `gh pr`, an issue or pull request URL in `gh issue`, a discussion URL in the gate's discussion group, and the
   first word of `gh repo` and of `gh label clone`, its source (`ghe.corp/pub/repo`). Another URL on
   another host names no target. Nor does an option's value that the reading with every option a
   flag takes for an operand (`gh repo edit myorg/app --homepage https://myorg.github.io/app/docs`).
@@ -180,7 +180,7 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   `--version` stand alone. So does an option word with its `=` before any expansion
   (`--repo="$R"`), whatever bash puts after the `=`, unless bash may split it. `-R` is then an
   option of each group that calls gh's `EnableRepoOverride`: pr, issue, release, secret, variable
-  and others. gh repo does not call it, only some of its subgroups. So
+  and others. gh repo itself does not, only `gh repo rename` and its deploy-key and autolink groups. So
   `gh -R pub/repo pr comment 5`, `gh --repo pub/repo pr comment 5`
   and `gh -b x pr comment 5 -R pub/repo` are comments on `pub/repo#5` too, and the gate reads them
   so. An alias reads as the subcommand it names, from the aliases in gh 2.89's help: `new` is
@@ -263,7 +263,9 @@ which gh takes for `-R` when the line has none, so such a line counts as one on 
 With `GH_COBRA` set, gh's root has no `--version` flag, so `--version` takes the next word as its
 value there. The gate reads it alone, as gh does without `GH_COBRA`. So in
 `GH_COBRA=1 gh --version x pr comment 5 -R pub/repo -b hi` the gate takes `x` for the command and
-counts the line as `opaque_exec`, while gh posts on `pub/repo#5`.
+counts the line as `opaque_exec`, while gh posts on `pub/repo#5`. With `GODEBUG=urlstrictcolons=0`,
+gh's URL parser splits a host from its port at the last colon, as Go before 1.26 did. The gate reads
+a URL with Go 1.26's default, so a host with a second colon names no repo there.
 
 A differential against main with #397 read 270,394 distinct gh lines, every corpus of the #399
 rounds and reviews, in both trees, and found none lower than on main. The 183,611 lines that
