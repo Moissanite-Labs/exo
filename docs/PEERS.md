@@ -45,6 +45,11 @@ enabled = true
 
 ## Bus seats (D-040)
 
+The relay's message and inbox HTTP reads accept `since` from 0 to 2^63 - 1 and `limit` from 1 to 1,000
+(defaults: 0 and 200). Public `/v1/verify` accepts `from` from 1 to 2^63 - 1 and `to` from 0 to 2^63 - 1;
+omitting `to` verifies through the current head. Out-of-range or malformed numbers answer 422 (#455).
+`to=0` remains valid for an empty log. These bounds match SQLite's integer range and keep read pages bounded.
+
 The exo-bus channel brings messages from other seats on the Exo Bus. It does not start turns itself. For each
 inbox envelope it calls the `peers` command with action `bus`, and the core takes it from there
 (`src/exo/bus/ingress.py`). Only a channel exod runs can do this: exod gives its channels an in-process link
