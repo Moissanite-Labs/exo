@@ -329,7 +329,16 @@ def test_gh_s_own_flags_alone_stay_as_they_were(line, category):
 @pytest.mark.parametrize("line", ["gh pr -R $R view 5", "gh pr -R ${R} view 5", "gh pr -R $(cat r) view 5",
                                   "gh pr -R {pub/repo,comment} view 5", "gh pr -R pub/* view 5",
                                   'gh pr -R "$R"$S view 5', 'gh pr -R "$@" view 5', "gh -R $R pr view 5",
-                                  "gh pr -b $B view 5 -R pub/repo", "gh -R pub/repo pr -R $R view 5"])
+                                  "gh pr -b $B view 5 -R pub/repo", "gh -R pub/repo pr -R $R view 5",
+                                  # Round 7: the lexer reads quotes in a $( ) or backtick body as bash does, so the
+                                  # $R after it is outside quotes, and bash splits it.
+                                  'gh pr -R "$(: "(")"$R view 5', 'gh pr -R "$(: ")")"$R view 5',
+                                  """gh pr -R "$(: '(')"$R view 5""", 'gh pr -R "`echo "a"`"$R view 5',
+                                  # A quote before the first } of a ${ }: bash reads past that }.
+                                  'gh pr -R "${X:-"}"}"$R view 5',
+                                  # bash splits a $( ) outside quotes, a here-doc in it with a quoted delimiter too.
+                                  "gh pr -R $(cat <<'EOF'\npub/repo comment -F\nEOF\n) view 5",
+                                  'gh pr -R "${A[@]}" view 5', "gh pr -R $((1+2)) view 5", "gh pr -R `cat r` view 5"])
 def test_an_unquoted_expansion_before_the_subcommand(line):
     c, d = run(line)
     assert c.category == "opaque_exec" and c.floor is not None, (line, c)
@@ -338,7 +347,41 @@ def test_an_unquoted_expansion_before_the_subcommand(line):
 
 @pytest.mark.parametrize("line,category", [('gh pr -R "$R" view 5', "read"), ('gh pr -R "${R}" view 5', "read"),
                                            ('gh -R "$R" pr view 5', "read"), ('gh -R "$R" pr comment 5 -b x', "github_post"),
-                                           ('gh pr -R "$(cat r)" view 5', "read"), ('gh pr view 5 -R $R', "read")])
+                                           ('gh pr -R "$(cat r)" view 5', "read"), ('gh pr view 5 -R $R', "read"),
+                                           ('gh pr -R "$(: ")")" view 5', "read"),
+                                           ('gh pr -R "$(git -C "$d" remote get-url origin)" view 5', "read"),
+                                           ('gh pr -R "`echo "a"`" view 5', "read"), ('gh pr -R "$*" view 5', "read"),
+                                           ('gh pr -R "$((1+2))" view 5', "read"), ('gh pr -R "${A[*]}" view 5', "read"),
+                                           ("gh pr -R \"$(cat <<'EOF'\npub/repo\nEOF\n)\" comment 5 -b x",
+                                            "github_post")])
 def test_a_quoted_expansion_before_the_subcommand_is_one_word(line, category):
     c, _ = run(line)
     assert c.category == category, (line, c)
+
+
+# Round 7: bash splits `$(cat <<'EOF' .. EOF)` outside quotes like any other $( ). In the subcommand's place it
+# makes `gh pr comment 5 -b hi`, which the gate read as one subcommand word and so as a read.
+def test_an_unquoted_here_doc_substitution_in_the_subcommand_s_place():
+    c, d = run("gh pr $(cat <<'EOF'\ncomment 5 -b hi\nEOF\n)")
+    assert c.category == "opaque_exec" and c.floor is not None, c
+    assert d.outcome == "ask", d
+
+
+# Round 7: an option's value before the command that bash may split puts gh's command word in doubt, but with
+# R=pub/repo `gh -R $R secret set X` sets a secret on pub/repo (gh secret takes -R, cmdutil.EnableRepoOverride in
+# gh 2.89). The line read with the value as one word stands when it holds credentials, as for the quoted forms, so
+# `opaque_exec: allow` does not run it and a deny on credentials fires.
+@pytest.mark.parametrize("line", ['gh -R pub/repo secret "$V"', "gh -R pub/repo secret set X",
+                                  "gh -R $R secret set X", "gh -R $R secret set X -b v", 'gh -R $R secret "$V"',
+                                  "gh -R $R auth token", 'gh -R "$R" secret set X -b v', "gh secret -R $R set X -b v"])
+def test_credentials_past_an_option_before_the_command(line):
+    c, _ = run(line)
+    assert c.category == "credentials", (line, c)
+    allow = normalize_policies({"gates": {"categories": {"opaque_exec": "allow"}}})
+    assert decide(c, allow).outcome == "ask", line
+    assert decide(c, normalize_policies({"gates": {"deny": ["credentials"]}})).outcome == "deny", line
+
+
+def test_a_split_value_before_a_command_that_holds_no_credentials_stays_opaque():
+    c, _ = run("gh -R $R pr comment 5 -b x")
+    assert c.category == "opaque_exec" and c.floor is not None, c

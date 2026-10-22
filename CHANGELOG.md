@@ -155,10 +155,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   A number in an option value (`-b 7`) became the target's number too. The target now comes from `-R` and the operands
   only, read with the table of options that take a value that the unseen check uses. gh keeps the last `-R`, and a URL
   operand still names the repo, as in gh. It reads as gh reads it, also with `www.`, a port, a user or a host in
-  capitals (`https://www.github.com/pub/repo/pull/5`), and `gh repo` drops a repo URL's `.git`. A host that ends in
+  capitals (`https://www.github.com/pub/repo/pull/5`), and `gh repo` drops a repo URL's `.git`. A port past 65535
+  counts, and the host reads decoded and lowered as gh reads it (`https://g%C4%B0thub.com/pub/repo/pull/5` is on
+  github.com). A host that ends in
   `.github.com` names a repo on github.com too, since gh sends the request there
   (`https://api.github.com/pub/repo/pull/5`), and a URL on another instance (`https://ghe.corp/pub/repo/pull/5`) is
-  another target. The gate also decides the line on every other repo it cannot rule out (`-R` beside a URL operand
+  another target where gh reads a repo from it. The gate also decides the line on every other repo it cannot rule out (`-R` beside a URL operand
   for another repo, and the reading before this change) and keeps the strictest decision, so no line decides lower
   than before. Such a line
   binds its approval to the exact command, so a standing grant on one of its targets does not run it, and its
@@ -189,7 +191,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   as the subcommand it names, so `gh pr new`, `gh issue new`, `gh repo new`, `gh release new`, `gh gist new` and
   `gh variable remove` are no longer reads. A command alias (`gh co`), a user alias and an extension still ask. A word
   from an expansion where the subcommand may stand (`gh pr "$V" 5`) counts as code the gate cannot read. So does an
-  option's value before the subcommand that bash may split (`gh pr -R $R view 5`). gh finds the command past the
+  option's value before the subcommand that bash may split (`gh pr -R $R view 5`, also
+  `gh pr -R "$(: ")")"$R view 5`). `gh -R $R secret set X` stays credentials. gh finds the command past the
   options before it too, so `gh -R pub/repo pr comment 5 -b x` is a post on `pub/repo#5`. The gate read that line as
   an alias or extension, and under `opaque_exec: allow` it ran with no posting checks. The line as read before is
   decided too, and the stricter decision stands, so no line decides lower than it did. A required

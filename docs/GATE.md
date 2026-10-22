@@ -121,8 +121,9 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
 - `-R` reads as gh reads it. A short option drops one `=` before its value, also at the end of a
   cluster, so `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`. `github.com/pub/repo`,
   `https://github.com/pub/repo.git` and an ssh remote URL for it name `pub/repo` too, and so do
-  those forms as the first word of `gh repo`. A URL's path reads decoded, as gh reads it
-  (`https://github.com/pub/re%70o`). gh sends a repo on any host that ends in `.github.com` to
+  those forms as the first word of `gh repo`. A URL's path reads decoded, without a query or a
+  fragment, as gh reads it (`https://github.com/pub/re%70o`). Its host reads as gh reads it too
+  (below). gh sends a repo on any host that ends in `.github.com` to
   github.com, so `-R api.github.com/pub/repo` names `pub/repo` too. On another instance
   (`-R ghe.corp/myorg/app`) the gate cannot tell whether a scope means that repo, so the value as
   written is another target.
@@ -133,14 +134,24 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   `.github.com` to github.com, with the github.com token (go-gh's `NormalizeHostname`). So
   `https://www.github.com/pub/repo/pull/5`, `https://GitHub.com/pub/repo/pull/5`,
   `https://api.github.com/pub/repo/pull/5` and `https://gist.github.com/pub/repo/issues/5` name
-  `pub/repo#5`. The one such host gh calls at itself is `garage.github.com`. gh takes a pull
+  `pub/repo#5`. The one such host gh calls at itself is `garage.github.com`. Go's url.Parse, which
+  gh uses, checks only that a port is digits, with no range check, so
+  `https://github.com:99999/pub/repo/pull/5` names `pub/repo#5` too. It decodes the host, and Go
+  lowers `İ` (U+0130) to `i`, so `https://g%C4%B0thub.com/pub/repo/pull/5` and
+  `https://gİthub.com/pub/repo/pull/5` are on github.com. gh takes a pull
   request or issue URL there. The gate takes a discussion URL and a repo URL too, which only adds
   a reading, since `-R` stays another target. For `gh repo` a repo URL drops its `.git`, as `-R`
-  does. A port that is not a number names no repo here. A URL on another instance (`ghe.corp`,
+  does. A URL that url.Parse refuses names no repo here: a port that is not digits, a second
+  colon (`github.com:80:80`), or an escape below `%80` other than `%25` in the host
+  (`g%69thub.com`). A URL on another instance (`ghe.corp`,
   `x.ghe.com`, `github.com.`, a look-alike such as `github.com.evil.io`) names that instance's
   repo, which a scope may not mean. So `https://ghe.corp/pub/repo/pull/5` is the other target
-  `ghe.corp/pub/repo#5`, as a `-R` on another host is. So is `gh repo`'s first word on another
-  instance, as written.
+  `ghe.corp/pub/repo#5`, as a `-R` on another host is. That holds where gh reads a repo from an
+  operand: a pull request URL in `gh pr`, an issue or pull request URL in `gh issue`, a
+  discussion URL in `gh discussion`, and the first word of `gh repo` and of `gh label clone`, its
+  source (`ghe.corp/pub/repo`). Another URL on another host names no target. Nor does an option's
+  value that the reading with every option a flag takes for an operand
+  (`gh repo edit myorg/app --homepage https://myorg.github.io/app/docs`).
 - `gh api` takes its target from its endpoint, its one operand, read with gh api's options that
   take a value. A path in a header, a jq query, a template or a host names nothing. So
   `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` is a post
@@ -168,9 +179,14 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   gate cannot tell what gh runs. So does an option's value before the subcommand that bash may
   split into several words: an expansion outside quotes, a glob or a brace expansion. With
   `R='pub/repo comment -F'` and a file named `view`, `gh pr -R $R view 5` comments on
-  `pub/repo#5`. A quoted value (`-R "$R"`) is one word, only that value. `gh auth` and
+  `pub/repo#5`. A quoted value (`-R "$R"`) is one word, only that value. The gate reads the
+  quotes in a `$( )` or backtick body as bash does, so in `gh pr -R "$(: ")")"$R view 5` the
+  `$R` is outside quotes. bash splits `$(cat <<'EOF' .. EOF)` outside quotes too. bash may read
+  a `${ }` past its first `}` when a quote, a backslash or a `$(` comes before it, so the gate
+  cannot tell what is quoted after it, and such a value counts as one that may split. `gh auth` and
   `gh secret` stay credentials, also past an empty word or an option (`gh "" secret "$V"`,
-  `gh -R pub/repo secret "$V"`). The line as the gate read it before, with each gh command's
+  `gh -R pub/repo secret "$V"`), and past an option's value bash may split
+  (`gh -R $R secret set X`). The line as the gate read it before, with each gh command's
   words where they are written, is decided too, and
   the stricter decision stands on each axis. Without that a compound line could decide lower: in
   `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the push, and
@@ -197,8 +213,8 @@ reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readin
   fires. For `gh api` it is the first word after `api` with a `/` and no `=`.
 - The empty target, a repo the line does not name, when an operand comes from an expansion. In
   `gh pr merge "$U" -R myorg/app` the URL in `$U` may name any repo, and gh merges there.
-- The repo on another instance that a URL operand or `gh repo`'s first word names
-  (`ghe.corp/pub/repo#5`), as above.
+- The repo on another instance that a URL operand, `gh repo`'s first word or `gh label clone`'s
+  source names (`ghe.corp/pub/repo#5`), as above.
 - For a gh command outside the table, whose options the gate cannot tell from their values: the
   operands read with every option a flag, and with every option taking a value. A URL that only
   the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
