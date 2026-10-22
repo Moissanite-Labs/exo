@@ -1,9 +1,11 @@
 import json
 import logging
+import threading
+import time
 
 import pytest
 
-from exo import capture
+from exo import capture, provenance
 from exo.learn import handle_feedback, handle_ui_respond
 from exo.learn.learner import Learner
 from exo.learn.runtime import resolve_store
@@ -314,3 +316,49 @@ def test_known_capture_keys_match_a_full_scan_through_every_change(engine, learn
     assert len(calls) == 5
     first.close()
     longer.close()
+
+
+def test_threads_capturing_at_once_write_each_key_once(engine, learner):
+    """#263: `record_chat_signals` reads its known keys under `rt.lock`. Eight threads capture the same chat on one
+    runtime, and each key is written once. The threads reach the lock one at a time and wait there until all eight
+    have come, so a read made before taking the lock would find no key in any thread, and each would write every
+    key again."""
+    from exo.learn.signals import record_chat_signals
+    rt, threads, errors = learner.runtime, 8, []
+    sid, _ = new_session(engine, ("user", "Summarise"), ("assistant", "- a\n- b"),
+                         ("user", "Important correction: use a table, NOT bullet lists."),
+                         ("user", "From now on always run the tests before a push."))
+    messages = [provenance.flat(m) for m in learner.messages(sid)]
+    gate, real, waiting, arrived = threading.Barrier(threads), rt.lock, set(), []
+
+    class HeldLock:
+        def __enter__(self):
+            if threading.current_thread() in waiting:
+                waiting.discard(threading.current_thread())
+                arrived.append(threading.current_thread())
+                gate.wait(timeout=30)
+            return real.__enter__()
+
+        def __exit__(self, *exc):
+            return real.__exit__(*exc)
+
+    def capture_once():
+        try:
+            record_chat_signals(learner, sid, messages)
+        except Exception as e:
+            errors.append(e)
+    workers = [threading.Thread(target=capture_once) for _ in range(threads)]
+    waiting.update(workers)
+    rt.lock = HeldLock()
+    try:
+        for i, t in enumerate(workers, 1):  # the next thread starts once this one is at the lock
+            t.start()
+            while len(arrived) < i and t.is_alive():
+                time.sleep(0.001)
+        for t in workers:
+            t.join(timeout=60)
+    finally:
+        rt.lock = real
+    assert errors == [] and not any(t.is_alive() for t in workers)
+    keys = [(e["body"] or {}).get("capture_key") for e in rt.ledger.iter(kind=CAPTURED)]
+    assert len(keys) == 2 and len(set(keys)) == 2
