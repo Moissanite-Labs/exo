@@ -604,7 +604,7 @@ def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, cr
          f'- In a fresh session: `/exo resume {slugify(topic)}`',
          f'- From a shell: `{launch_line(topic, path or "")}`']
     if path:
-        L.append(f'- This file: {_one_line(path)}')
+        L.append(f'- This file: {_one_line(str(path))}')
     L.append('- Treat the quoted rulings and corrections below as standing instructions.')
 
     if signals.brief:
