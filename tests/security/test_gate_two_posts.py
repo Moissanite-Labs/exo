@@ -3,13 +3,14 @@
 `decide` ran `check_post` and `check_scrub` on the combined classification's text, which a
 compound line takes from its dominant part. A post that passed, put first, carried any second
 post on the line past the footer, the forbidden words and the scrub (D-033). The checks now
-run on every part whose category is under `posting.applies_to` and that carries text or an
-unseen body; another part's violations are named after that part. Classification and decision
-only; nothing is executed.
+run on every part whose category is under `posting.applies_to`, and on a close or merge
+carrying text (#326, #397), when it carries text, a title or an unseen body. Another part's
+violations are named after that part. Classification and decision only; nothing is executed.
 """
 import pytest
 
-from exo.gate import UNSEEN_BODY, approval_binding, classify, decide, normalize_policies
+from exo.gate import (UNSEEN_BODY, _scrub_compiled, approval_binding, classify, decide,
+                      normalize_policies)
 
 POLICY = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}},
                              "posting": {"footer": "F", "forbid_words": ["Zork"]}})
@@ -30,12 +31,19 @@ def sh(command):
 
 
 # The issue's rows: a passing first post no longer shields a forbidden second one, in either
-# order, and a close's comment on the same line is checked too (#326).
+# order, and a close's comment on the same line is checked too (#326). So are a reopen's comment
+# and a merge's subject and body (#397), which the posting rules check on a line of their own.
 ASK = [
     f"{CLEAN} && {DIRTY}",
     f"{DIRTY} && {CLEAN}",
     f"{CLEAN} && gh issue close 5 {R} -c 'Zork leaked'",
     f"gh pr comment 5 {R} --body 'Zork one' && gh pr comment 6 {R} --body 'Zork two'",
+    f"{CLEAN} && gh pr merge 6 {R} --squash --body 'Zork leaked'",
+    f"gh pr merge 6 {R} --squash --body 'Zork leaked' && {CLEAN}",
+    f"{CLEAN} && gh pr merge 6 {R} --squash --subject 'Zork leaked'",
+    f"{CLEAN} && gh pr merge 6 {R} --squash -t 'Zork leaked'",
+    f"{CLEAN} && gh pr reopen 6 {R} -c 'Zork leaked'",
+    f"{CLEAN} && gh issue reopen 6 {R} --comment 'Zork leaked'",
 ]
 
 # Both posts pass, or the second command posts nothing: these log.
@@ -43,6 +51,9 @@ LOG = [
     f"{CLEAN} && gh pr comment 6 {R} --body $'ok too\\nF'",
     f"{CLEAN} && ls",
     f"{CLEAN} && gh issue close 5 {R}",
+    f"{CLEAN} && gh pr merge 6 {R} --squash",
+    f"{CLEAN} && gh pr merge 6 {R} --squash --body $'Done.\\nF'",
+    f"{CLEAN} && gh pr reopen 6 {R}",
 ]
 
 # A second post whose body the gate cannot read asks as unseen, named after that part.
@@ -50,6 +61,8 @@ UNSEEN = [
     f"{CLEAN} && gh pr comment 6 {R} --body \"$X\"",
     f"{CLEAN} && gh pr comment 6 {R} --body-file notes.md",
     f"{CLEAN} && gh pr comment 6 {R} --body \"$(cat notes.md)\"",
+    f"{CLEAN} && gh pr merge 6 {R} --squash --body-file notes.md",     # a file the gate did not read
+    f"{CLEAN} && gh pr merge 6 {R} --squash --body \"$X\"",
 ]
 
 
@@ -102,3 +115,46 @@ def test_an_approval_binds_the_second_body():
     two = classify(sh(f"{CLEAN} && gh pr comment 6 {R} --body 'a changed body'"))
     assert approval_binding(one) != approval_binding(two)
     assert approval_binding(one) == approval_binding(classify(sh(f"{CLEAN} && {DIRTY}")))
+
+
+def test_a_merge_is_named_after_its_part():
+    d = decide(classify(sh(f"{CLEAN} && gh pr merge 6 {R} --squash --body 'Zork leaked'")), POLICY)
+    assert d.violations == ["merge PR on myorg/app#6: missing footer: F",
+                            "merge PR on myorg/app#6: forbidden word: Zork"], d
+    d = decide(classify(sh(f"{CLEAN} && gh pr merge 6 {R} --squash --body-file notes.md")), POLICY)
+    assert d.violations == [f"merge PR on myorg/app#6: {UNSEEN_BODY}"], d
+
+
+@pytest.mark.parametrize("first", [f"gh pr comment 5 {R} --body \"$A\"",
+                                   f"gh pr comment 5 {R} --body $'ok\\nF' --body \"$A\""])
+def test_two_unseen_bodies_are_both_named(first):
+    # _combine gives the dominant post the other post's unseen_body signal. Each post's own
+    # signals are kept, so the first post's unseen body is not taken for the second's.
+    c = classify(sh(f"{first} && gh pr comment 6 {R} --body \"$B\""))
+    d = decide(c, POLICY)
+    assert d.outcome == "ask", d
+    assert UNSEEN_BODY in d.violations, d
+    assert f"GitHub PR comment on myorg/app#6: {UNSEEN_BODY}" in d.violations, d
+    assert "own_signals" not in c.as_dict()
+
+
+def test_many_posts_list_twenty_violations():
+    line = " && ".join(f"gh pr comment {n} {R} --body 'Zork {n}'" for n in range(5, 35))
+    d = decide(classify(sh(line)), POLICY)
+    assert d.outcome == "ask", d
+    assert d.violations[:2] == ["missing footer: F", "forbidden word: Zork"], d
+    assert len(d.violations) == 21 and d.violations[-1] == "and 40 more on other posts", d
+    assert len(d.reason) < 2000, d.reason
+
+
+def test_many_posts_compile_the_scrub_once():
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}},
+                              "posting": {"footer": "F",
+                                          "scrub": {"names": [f"name{n:04d}" for n in range(600)],
+                                                    "exposures": ["internal", "public"]}}})
+    posts = [f"gh pr comment {n} {R} --body $'ok\\nF'" for n in range(5, 45)]
+    line = " && ".join(posts + [f"gh pr comment 99 {R} --body $'name0599 here\\nF'"])
+    _scrub_compiled.cache_clear()
+    d = decide(classify(sh(line)), pol)
+    assert d.violations == ["GitHub PR comment on myorg/app#99: internal name: name0599"], d
+    assert _scrub_compiled.cache_info().misses == 1
