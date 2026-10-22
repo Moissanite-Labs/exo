@@ -1757,6 +1757,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
+  alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
+  reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
+  event receipts are held only while sends are in flight. A lost reply shows delivery unknown; a refused
+  send shows not sent. The activity line leads with the queued count while a draft is typed. Approval cards lead
+  with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`, before request details. Ctrl+F still deliberately
+  focuses the card, preserves the draft and keeps the existing answer confirmation. No binding or authority changes.
+  Send and unsteer replies received after a thread switch never update the new thread's draft or queued count.
 - **Amendment 2026-10-19 (#276):** the terminal serializes approval-card removal with thread switching and restoration,
   and waits for removal before mounting the next card under the same widget id. A close or answer names its request,
   so a stale event cannot remove its replacement. Threadless requests still survive thread switches. The response
