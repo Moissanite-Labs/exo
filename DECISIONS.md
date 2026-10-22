@@ -1270,6 +1270,21 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
   rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
   here-doc body leads past the end, past a deny-listed command.
+  *Amendment 2026-10-22 (issue #423):* a change to the gate's classifier or to `decide` is checked against main with
+  `scripts/gate_diff.py`. Each line it decides lower than main is fixed or named in the change's decision amendment,
+  with the reason it is safe. The script runs `classify` and `decide` of both trees, each in a process of its own with
+  the same temp HOME, under more than 70 policies. The actions are the lines and calls the gate suites of both trees
+  test, kept as written, and generated forms of them: compound wrappers of each simple line (`timeout`, a heredoc and
+  a here-string among them), the lines under the other shell tool names and keys the gate reads, and two session
+  folders. A pair is lower when its outcome ranks lower in allow, log, ask, deny. At the same outcome below deny it is
+  also lower when it loses a reserved hit or category, or a posting violation main lists. At an equal deny neither
+  counts, since the call is blocked. Reviewers run main's copy of the script against the PR head and read any change a
+  gate PR makes to it, so a PR cannot weaken the check that judges it. Left out, so a change there needs its own
+  tests: the session folders of real sessions (only those a corpus action names, and two seed folders, run), the
+  stores the environment moves (`EXO_HOME`, `EXO_PRINCIPAL_STORE`, `EXO_KEYS_FILE`, `EXO_BUS_*`), and the hook steps
+  after `decide` (grants and `NO_GRANT`, `binds_exact`, the registry risk floor, the required executor). Chosen over a
+  fixed table of expected outcomes, which a change can edit along with the gate: the corpus comes from the tests of
+  both trees, so deleting a row does not hide its line.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

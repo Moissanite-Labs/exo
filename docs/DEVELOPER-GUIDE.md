@@ -404,34 +404,68 @@ Check your prose before you commit docs:
 
 ### Checking a gate change against main
 
-A change to `src/exo/gate.py` must not decide anything lower than main does, unless the change says so.
-`scripts/gate_diff.py` checks this (#423). Make a worktree of main next to your branch and compare the two:
+A change to `src/exo/gate.py` must not decide anything lower than main does, unless the change says so (D-038,
+amendment of 2026-10-22). `scripts/gate_diff.py` checks this (#423). Make a worktree of main next to your branch and
+run main's copy of the script on both trees:
 
     git worktree add ../exo-main origin/main
-    .venv/bin/python scripts/gate_diff.py --base ../exo-main --head . --json /tmp/gate-diff.json
+    .venv/bin/python ../exo-main/scripts/gate_diff.py --base ../exo-main --head . --json /tmp/gate-diff.json
+
+Run main's copy, not the branch's. The script holds the seeds, the generated forms and the policies, so a branch
+that edits it would check itself with its own copy. A reviewer of a gate PR runs main's copy against the PR head and
+reads any change the PR makes to `scripts/gate_diff.py`. Until #434 lands, main has no copy: use the PR's copy then,
+and read it as part of the PR.
 
 The script compares two trees, not a diff. If main moved after your branch began, merge main into the branch
 first. Otherwise each line a later main change made stricter shows up as lowered.
 
 The script runs `gate.classify` and `gate.decide` of each tree in a process of its own, with the same HOME and no
 `EXO_*` variables. That HOME is a temp folder under /var/tmp, outside /tmp, so a line that names /tmp does not touch the
-store. `--home` sets another. The script never imports either gate itself. The actions are the lines and tool calls the
-gate suites test, read from the test files of both trees, so a line still runs when the head deletes its test. To these
-come compound forms of each simple line (about 24,000 actions in all). The policies are built into the script (more than
-70). A full run takes a few minutes on four cores. `--jobs` sets the workers in each tree. Add actions with
-`--corpus lines.txt` (one command per line, or a JSON list) and policies with `--policies more.py` (a `POLICIES`
-mapping).
+store. `--home` sets another. The script never imports either gate itself.
+
+The actions are the lines and tool calls the gate suites test, read from the test files of both trees, so a line still
+runs when the head deletes its test. Each call runs as written: a `bash` call stays a `bash` call, and a line under
+`cmd` stays there. To these come generated forms:
+
+- compound forms of each simple line: in a list or a pipe, in `$( )`, after `bash -c`, `sudo`, `env`, `timeout` or
+  `ssh`, fed to `bash` by a heredoc or a here-string, and after a `cd` into the store or `/dev`
+- each line under the other tool names and keys the gate reads as a shell line (`shell`, `bash`, `run_command`,
+  `exec_command`, a name that ends in `terminal` or `shell`, and the `cmd` key): every seed line under each of them,
+  every other line under one
+- the seed lines with the session folders `~/.exo/state` and `~/.ssh`
+
+That is about 43,000 actions. The policies are built into the script (more than 70). A full run takes about two
+minutes on four cores. `--jobs` sets the workers in each tree (half the cores by default).
+
+Add actions with `--corpus lines.txt`: one command per line, or a JSON list of commands and `{"tool", "args"}`
+actions. An action may also hold `"cwd"`, the session folder the hook passes to `classify` (#209). The `--corpus`
+lines get the same generated forms as the harvested ones. `--only-corpus` skips the harvest and the seeds, and
+`--no-variants` skips every generated form. Add policies with `--policies more.py` (a `POLICIES` mapping).
 
 Exit status 0 means nothing is lower. Exit 1 means at least one pair of action and policy is lower: an outcome below
-main's in the order allow, log, ask, deny, a reserved hit lost, or posting violations lost. A classify or decide that
-raises counts as the hook's answer to an error: ask, or allow for a read tool. The summary groups the lowered pairs by
-transition, such as `store_write ask -> read allow`, and by policy. Tightenings are only counted. `--json` writes the
-lowered actions and pairs, the first 5,000 of each in corpus order. The `--corpus` lines come first in that order, so
-the cap keeps them before the built-in lines. Fix each lowered line, or name it in the decision amendment the change
-records, with the reason it is safe.
+main's in the order allow, log, ask, deny, a reserved hit lost, or a posting violation main lists that the head does
+not (a reworded one counts too). At an equal deny, lost reserved hits and violations are not counted. The call is
+blocked, and both only matter for an ask: a reserved hit keeps a standing grant from covering it, and a violation is
+named in its message. A classify or decide that raises counts as the hook's answer to an error: ask, or allow for a
+read tool. The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
+Tightenings are only counted. `--json` writes the lowered actions and pairs, the first 5,000 of each in corpus order.
+The `--corpus` lines come first in that order, so the cap keeps them before the built-in lines. Fix each lowered
+line, or name it in the decision amendment the change records, with the reason it is safe.
 
 Exit 2 means a tree could not run or the script failed, such as on a folder that does not exist or a policy file
-that raises. A tree that dies or runs past `--timeout` (an hour by default) is stopped with exit 2 too.
+that raises. A tree that dies or runs past `--timeout` (an hour by default) is stopped with exit 2 too. So is a run
+stopped by SIGTERM or SIGHUP, such as a CI cancel. The script stops both trees and removes the temp folder first.
+
+**What the check leaves out.** It runs `classify` and `decide` alone, so a change to any of these needs its own tests
+and a line in its decision amendment:
+
+- Session folders. The hook passes `classify` the session's folder (#209). Only the corpus's own `"cwd"` values and
+  the two seed folders run here. The harvest keeps a literal folder a test passes to `classify`, not one the test
+  builds as it runs, such as `cwd=str(tmp_path)`.
+- Stores the environment moves: `EXO_HOME`, `EXO_PRINCIPAL_STORE`, `EXO_KEYS_FILE` and `EXO_BUS_*` (and their
+  `DIVAN_*` names). Both trees run without them.
+- The hook steps after `decide`: standing grants and `NO_GRANT`, `binds_exact`, the registry risk floor, the required
+  executor, a policy file changed mid-session, and the decision model.
 
 ### CI, lint, lockfile and the privacy deny-list (D-042)
 
