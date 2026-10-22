@@ -210,6 +210,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   as a source asks too, as for the rest of the store. Not covered: the folders in `$EXO_PLUGIN_DIRS`, which developers
   point at a checkout, and, as for the rest of the store, a relative path written by a tool whose working folder is in
   the plugins folder.
+- Gate (#436, D-038 amendment): `for NAME do LIST; done` and `select NAME do LIST; done`, with no `in` list and no
+  `;` before `do`, are read as `for NAME; do LIST; done`. Bash and POSIX accept that form and run the loop over the
+  positional parameters, but the gate read the body as words of the `for` command and classified nothing in it, so
+  `for x do git push --force origin main; done` was allowed under every policy, `deny: [force_push]` included. A
+  force push, delete, post or store write in such a body now gets its own category, and a `deny:` entry for it
+  denies the line, also inside `$( )`, `bash -c`, `eval`, a function body (`function f { for x do ...`) or another
+  compound.
 - Gate store protection (#133, D-038 amendment): the signed-update trust pin is a store path. With
   `update.require_signed` on, `exo update` installs the upstream tip only when it verifies against
   `$EXO_HOME/update/allowed_signers` (D-073), and a tool could rewrite that file with no ask: `cp /tmp/evil
