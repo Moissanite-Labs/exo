@@ -75,7 +75,7 @@ picks the seat, `--title TEXT` names a new thread. Keys:
 |---|---|
 | `ctrl+c` | Stops the running turn. Your draft stays. With nothing running it only shows a hint that `ctrl+q` quits; a single press never quits. `/stop` does the same. |
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
-| typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
+| typing while a turn runs | Steers it: the text lands at the next tool step. The line shows `steer sending`, then `steer queued` while waiting and `steer delivered` when it reaches the conversation. The queued count stays beside the composer while you type. Delivered means received, not yet acted on. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
 | `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>` | List the subagents your session handed work to, watch one's session, send a running one a note (it lands at its next tool step) or stop it. A finished subagent answers with a clear error and nothing changes. The parent's receipt says it was steered or stopped. On the web page the Tasks cards have Open, Steer and Stop. |
 | `F6` | Loads 60 earlier messages when the top of the transcript says "N earlier messages" (with `/layout inverse` it is the bottom). Scrolling to that end does the same. |
@@ -298,7 +298,8 @@ Both clients use `o` to allow once, `a` to choose always, and `d` to deny with a
 including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
 it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
 even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
-`ctrl+f` to move to it. A card goes away the moment the request is closed, whoever closed it, and also when you stop
+`ctrl+f` to move to it. In the terminal, the card leads with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`:
+press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
