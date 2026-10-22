@@ -12,19 +12,32 @@ imports either gate. Both children get the same small environment (a shared temp
 store and secret paths classify the same way in both. The HOME is kept out of /tmp (work_dir).
 
 A pair (action, policy) is lowered when the head's outcome ranks below the base's (allow < log < ask < deny), when
-the head keeps the outcome but has fewer reserved hits than the base (or loses a reserved category), or when the
-head's posting violations are a strict subset of the base's. A classify or decide exception counts as the outcome
-the hook gives on an error: ask, or allow for a read tool whose arguments name no secret. Tightenings are counted
-only. Actions whose category or target changed while every decision stayed the same are counted with a few
-examples.
+the head keeps the outcome but has fewer reserved hits than the base (or loses a reserved category), or when any of
+the base's posting violations is missing from the head's (compared by text, so a reworded violation counts too). At
+an equal deny, lost reserved hits and violations are not counted: the hook blocks the call, and both only matter
+for an ask (a reserved hit keeps a standing grant from covering it, a violation is named in its message). A classify
+or decide exception counts as the outcome the hook gives on an error: ask, or allow for a read tool whose arguments
+name no secret. Tightenings are counted only. Actions whose category or target changed while every decision stayed
+the same are counted with a few examples.
+
+An action is {"tool", "args"}, with an optional "cwd": the session folder the hook passes to classify (#209). Each
+action runs as written. A plain command line is the terminal call {"tool": "terminal", "args": {"command": line}}.
 
 The built-in corpus is harvested from the gate tests of both trees (tests/security/test_gate*.py and
 plugins/exo-gate/tests/*.py, read with `ast`, never run), so a head that deletes a test row still runs its line.
-To that come compound variants of each simple command, and the files given with --corpus. The built-in policies
-are below (BUILTIN_POLICIES).
+To that come the generated forms: compound variants (VARIANTS) of each simple line of the harvest, of the --corpus
+files and of SEED_COMMANDS, each line under the other shell tool names and keys the gate reads (SHELL_FORMS: every
+seed under each, every other line under one in turn), and the seeds in two session folders (SESSION_CWDS). The
+built-in policies are below (BUILTIN_POLICIES).
 
-Exit status: 0 when nothing is lowered, 1 when anything is lowered, 2 when a tree could not be run or the script
-itself failed (a bad flag or path, a policy file that raises or holds no plain data).
+Left out: the environment of a real seat (EXO_HOME, EXO_PRINCIPAL_STORE, EXO_KEYS_FILE and EXO_BUS_* move the
+stores, and both trees run without them), the session folders of real sessions (only the corpus's own "cwd" values
+and SESSION_CWDS run), and every hook step after decide: standing grants and NO_GRANT, binds_exact, the registry risk
+floor, the required executor, a policy changed mid-session and the decision model.
+
+Exit status: 0 when nothing is lowered, 1 when anything is lowered, 2 when a tree could not be run, the script
+itself failed (a bad flag or path, a policy file that raises or holds no plain data) or a SIGTERM or SIGHUP stopped
+it. Both tree processes and the work folder are removed on each of these.
 """
 from __future__ import annotations
 
@@ -43,6 +56,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
@@ -50,7 +64,12 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
 RANK = {"allow": 0, "log": 1, "ask": 2, "deny": 3}
+# The calls the gate reads as a shell line (gate._runs_shell, gate.classify): these tool names, and an unknown tool
+# whose name ends in terminal or shell, with the line under "command" or "cmd".
 SHELL_TOOLS = ("terminal", "shell", "bash", "run_command", "exec_command")
+SHELL_NAMES = SHELL_TOOLS + ("remote_terminal", "remote_shell")
+SHELL_KEYS = ("command", "cmd")
+SHELL_FORMS = tuple((t, k) for t in SHELL_NAMES for k in SHELL_KEYS if (t, k) != ("terminal", "command"))
 HARVEST_GLOBS = ("tests/security/test_gate*.py", "plugins/exo-gate/tests/*.py")
 MAX_COMMAND = 10000           # longer harvested lines (stress tests) are left out
 
@@ -587,8 +606,10 @@ class Harvest:
             for v in self.values(args[0], scope):
                 n += self.add_command(v)
         elif name in _ACTION_FNS and (args or "action" in kw):
+            cwds = self._cwds(args[1] if len(args) > 1 else kw.get("cwd"), scope)
             for v in self.values(args[0] if args else kw["action"], scope):
-                n += self.add_action(v)
+                for cwd in cwds:
+                    n += self.add_action(v, cwd)
         elif name in _CODE_FNS and args:
             for v in self.values(args[0], scope):
                 if isinstance(v, str):
@@ -596,9 +617,11 @@ class Harvest:
         elif name in _HOOK_FNS:
             tool = args[0] if args else kw.get("tool_name")
             targs = args[1] if len(args) > 1 else kw.get("args")
+            cwds = self._cwds(kw.get("cwd"), scope)
             for t, a in _product([self.values(tool, scope), self.values(targs, scope)]):
                 if isinstance(t, str) and isinstance(a, dict):
-                    n += self.add_action({"tool": t, "args": a})
+                    for cwd in cwds:
+                        n += self.add_action({"tool": t, "args": a}, cwd)
         else:
             for fn in mod.helpers(name):
                 if not fn.feeds:
@@ -616,6 +639,12 @@ class Harvest:
                             n += self.add_command(v.value)
         return n
 
+    def _cwds(self, node: ast.AST | None, scope: _Scope) -> list[str | None]:
+        """The session folders a call passes to classify: None (always, as the hook passes none when it has none)
+        and each literal folder the argument may hold."""
+        found = self.values(node, scope) if node is not None else []
+        return [None] + list(dict.fromkeys(v for v in found if isinstance(v, str) and v.strip() and "\x00" not in v))
+
     # results -----------------------------------------------------------------------------------------------------
     def add_command(self, v: Any) -> int:
         if not isinstance(v, str) or not v.strip() or len(v) > MAX_COMMAND or "\x00" in v:
@@ -623,7 +652,9 @@ class Harvest:
         self.commands.setdefault(v, None)
         return 1
 
-    def add_action(self, v: Any) -> int:
+    def add_action(self, v: Any, cwd: str | None = None) -> int:
+        """Keep the call as written: its tool name and every argument, and ``cwd`` when the caller passed one. Only a
+        terminal call with nothing but a command is kept as that command, its canonical form."""
         if isinstance(v, _Param):
             v = v[0] if len(v) == 1 else tuple(v)
         if isinstance(v, (list, tuple)) and len(v) == 2 and isinstance(v[0], str):
@@ -635,11 +666,13 @@ class Harvest:
             return 0
         if not isinstance(tool, str) or not tool:
             return 0
-        if isinstance(args, dict) and tool in SHELL_TOOLS and set(args) in ({"command"}, {"cmd"}):
-            return self.add_command(args.get("command", args.get("cmd")))
         if not isinstance(args, (dict, str)) or _has_unknown(args):
             return 0
-        action = {"tool": tool, "args": _plain(args)}
+        if cwd is None and tool == "terminal" and isinstance(args, dict) and set(args) == {"command"}:
+            return self.add_command(args["command"])
+        action: dict[str, Any] = {"tool": tool, "args": _plain(args)}
+        if cwd is not None:
+            action["cwd"] = cwd
         try:
             key = json.dumps(action, sort_keys=True)
         except (TypeError, ValueError):
@@ -732,11 +765,12 @@ def harvest(tree: Path) -> Harvest:
 # --- generated variants --------------------------------------------------------------------------------------------
 
 # A few commands per category, so the variants reach every category even where the suites name it only inside
-# longer lines.
+# longer lines. A capital letter in a post checks that forbidden words still match in any case.
 SEED_COMMANDS = (
     "ls", "git status", "cat README.md", "echo hi", "make test", "touch notes.md", "sed -i s/a/b/ config.json",
     "rm x", "rm -rf build", "git commit -m wip", "git reset --hard HEAD~1", "git push origin main",
-    "git push --force origin main", "gh pr comment 3 --body hi", "gh issue close 3 --comment done",
+    "git push --force origin main", "gh pr comment 3 --body hi", 'gh pr comment 3 --body "Secret plan"',
+    "gh issue close 3 --comment done",
     "gh pr merge 3 --body done", "curl -X POST https://example.com/api -d x", "npm publish", "python3 x.py",
     "bash x.sh", "cp /tmp/x gate-grants.json", "printf x > gate-grants.json", "tee policies/gates.yaml < /tmp/x",
     "printf x > ~/.exo/state/gate-grants.json", "rm -rf ~/.exo/state", "cat ~/.ssh/id_rsa", "cat ~/.kube/config",
@@ -746,8 +780,18 @@ SEED_COMMANDS = (
 # Each simple command is also run inside these lines. {c} is the command, {q} the command as one quoted word.
 VARIANTS = (
     "true; {c}", "{c}; true", "true && {c}", "{c} && true", "echo x | {c}", "{c} | cat", "echo $({c})",
-    "bash -c {q}", "sudo {c}", "env X=1 {c}", "ssh host {q}",
-    "cd ~/.exo/state && {c}", "cd ~/.exo/state && (cd /dev) && {c}", "cd /dev && {c}",
+    "bash -c {q}", "sudo {c}", "env X=1 {c}", "timeout 5 {c}", "ssh host {q}", "bash <<'EOF'\n{c}\nEOF",
+    "bash <<< {q}", "cd ~/.exo/state && {c}", "cd ~/.exo/state && (cd /dev) && {c}", "cd /dev && {c}",
+)
+
+# The seeds also run with these session folders, the cwd the hook passes to classify (#209), and so do these file
+# calls with relative paths.
+SESSION_CWDS = ("~/.exo/state", "~/.ssh")
+CWD_ACTIONS = (
+    {"tool": "read_file", "args": {"path": "id_rsa"}}, {"tool": "read_file", "args": {"path": "gate-grants.json"}},
+    {"tool": "write_file", "args": {"path": "gate-grants.json", "content": "x"}},
+    {"tool": "write_file", "args": {"path": "authorized_keys", "content": "x"}},
+    {"tool": "grep", "args": {"pattern": "key", "path": "."}},
 )
 
 
@@ -775,10 +819,16 @@ def read_corpus_file(path: Path) -> list[Any]:
 
 
 def normal_action(item: Any) -> dict | None:
-    """A command string or a tool action as {"tool", "args"}. A plain shell call becomes a terminal command."""
+    """A command string, or a tool action {"tool", "args"} with an optional "cwd", kept as written. A command string
+    and a terminal call with nothing but a command are the same action."""
     h = Harvest()
     if isinstance(item, str):
         h.add_command(item)
+    elif isinstance(item, dict) and "cwd" in item:
+        cwd = item["cwd"]
+        if cwd is not None and (not isinstance(cwd, str) or not cwd.strip()):
+            raise ValueError(f"an action's cwd must be a folder name: {json.dumps(item)[:200]}")
+        h.add_action({k: v for k, v in item.items() if k != "cwd"}, cwd)
     else:
         h.add_action(item)
     for cmd in h.commands:
@@ -788,15 +838,32 @@ def normal_action(item: Any) -> dict | None:
     return None
 
 
+def shell_line(action: dict) -> str | None:
+    """The line of a call the gate reads as a shell line, whatever its tool name and key, or None."""
+    args = action.get("args")
+    if action.get("tool") not in SHELL_NAMES or not isinstance(args, dict):
+        return None
+    line = args.get("command") or args.get("cmd")
+    return line if isinstance(line, str) and line.strip() else None
+
+
+def shell_form(line: str) -> tuple[str, str]:
+    """The tool name and key a line runs under besides terminal: one of SHELL_FORMS, the same in every run."""
+    return SHELL_FORMS[zlib.crc32(line.encode("utf-8", "surrogatepass")) % len(SHELL_FORMS)]
+
+
 def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: bool = True, generate: bool = True
                  ) -> tuple[list[dict], dict[str, int]]:
     """The deduplicated actions to run, and how many came from each source.
 
     ``trees`` is (head, base). Both are harvested, so a row the head deletes from a test is still run: a change
     cannot hide a lowered line by dropping its test. What only the base names is counted as harvested_base_only.
+    ``builtin`` adds the harvest and the seeds. ``generate`` adds the generated forms of every line: of the --corpus
+    files alone when ``builtin`` is off.
     """
     out: dict[str, dict] = {}
     counts: Counter[str] = Counter()
+    lines: dict[str, None] = {}     # the shell lines of the files and the harvest, in order
 
     def put(item: Any, source: str) -> None:
         item = normal_action(item)
@@ -806,23 +873,44 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
         if key not in out:
             out[key] = item
             counts[source] += 1
+        line = shell_line(item)
+        if line is not None and source in ("files", "harvested", "harvested_base_only"):
+            lines.setdefault(line, None)
 
     for f in files:                 # first: --json keeps the lowered rows in corpus order, up to its cap
         for item in read_corpus_file(f):
             put(item, "files")
     if builtin:
-        commands: dict[str, None] = {}
         for k, tree in enumerate(dict.fromkeys(trees)):
             h = harvest(tree)
             source = "harvested" if k == 0 else "harvested_base_only"
             for cmd in h.commands:
-                commands.setdefault(cmd, None)
                 put(cmd, source)
             for a in h.actions.values():
                 put(a, source)
-        if generate:
-            for cmd in variants(list(dict.fromkeys(list(commands) + list(SEED_COMMANDS)))):
-                put(cmd, "generated")
+    if not generate:
+        return list(out.values()), dict(counts)
+    seeds = list(SEED_COMMANDS) if builtin else []
+    seed_lines = seeds + list(variants(seeds))
+    for cmd in seed_lines:
+        put(cmd, "generated")
+    others = [c for c in lines if c not in set(seeds)]
+    for cmd in variants(others):
+        put(cmd, "generated")
+    # The gate reads the line under other tool names and keys too: a head that drops one must show. Every seed line
+    # (the delete, store and credential seeds among them) runs under each form, and every other line under one, so
+    # each form gets many lines while the run grows by about a third, not by a factor of 13.
+    for cmd in seed_lines:
+        for tool, key in SHELL_FORMS:
+            put({"tool": tool, "args": {key: cmd}}, "shell_forms")
+    for cmd in others:
+        tool, key = shell_form(cmd)
+        put({"tool": tool, "args": {key: cmd}}, "shell_forms")
+    for cwd in SESSION_CWDS if builtin else ():
+        for cmd in seeds:
+            put({"tool": "terminal", "args": {"command": cmd}, "cwd": cwd}, "cwd_forms")
+        for a in CWD_ACTIONS:
+            put({**a, "cwd": cwd}, "cwd_forms")
     return list(out.values()), dict(counts)
 
 
@@ -867,10 +955,10 @@ def _on_error(tool: str, args: Any) -> str:
 
 def _row(i: int) -> list:
     gate, a = _W["gate"], _W["actions"][i]
-    tool, args = a.get("tool", ""), a.get("args", {})
+    tool, args, cwd = a.get("tool", ""), a.get("args", {}), a.get("cwd")
     npol = len(_W["pols"])
-    try:
-        c = gate.classify({"tool": tool, "args": args})
+    try:                            # as the hook calls it: with the session folder when there is one
+        c = gate.classify({"tool": tool, "args": args}, cwd=cwd) if cwd else gate.classify({"tool": tool, "args": args})
         cat, target = str(c.category), str(c.target)
     except Exception as exc:
         why = f"classify raised {type(exc).__name__}: {exc}"[:200]
@@ -920,6 +1008,7 @@ def _tree_main(argv: list[str]) -> int:
     p.add_argument("--jobs", type=int, default=1)
     a = p.parse_args(argv)
     t0 = time.monotonic()
+    parent = os.getppid()
     _load_tree(a.tree, a.corpus, a.policies)
     n = len(_W["actions"])
     step = 64
@@ -931,6 +1020,9 @@ def _tree_main(argv: list[str]) -> int:
         out.write(json.dumps({"header": head}) + "\n")
         try:
             for span, text in _chunks(spans, a.jobs if n > step else 1, (a.tree, a.corpus, a.policies)):
+                if os.getppid() != parent:    # the parent was killed outright (SIGKILL): stop, nobody reads this
+                    print(f"gate_diff [{a.label}]: the parent process is gone, stopping", file=sys.stderr, flush=True)
+                    return 4
                 out.write(text)
                 if time.monotonic() - last > 15:
                     last = time.monotonic()
@@ -1027,21 +1119,25 @@ def _rows(path: Path) -> Iterator[Any]:
 
 
 def show_action(a: dict, width: int = 160) -> str:
-    if a.get("tool") == "terminal" and set(a.get("args") or {}) == {"command"}:
+    if a.get("tool") == "terminal" and set(a.get("args") or {}) == {"command"} and not a.get("cwd"):
         text = a["args"]["command"]
     else:
         text = f"{a.get('tool')} {json.dumps(a.get('args'), sort_keys=True)}"
+        if a.get("cwd"):
+            text += f" in {a['cwd']}"
     text = "".join(ch if ch.isprintable() else repr(ch)[1:-1] for ch in text)   # newlines, escapes, surrogates
     return text if len(text) <= width else text[:width - 3] + "..."
 
 
 def _lost(db: list, dh: list) -> list[str]:
+    """What the head lost at the same outcome (never called for a deny: see the module docstring). A reserved hit
+    holds a target the head may name differently, so fewer hits or a lost category counts. A violation is its
+    text, so any of the base's that the head lacks counts, also when the head words it otherwise."""
     kinds = []
     rb, rh = {tuple(x) for x in db[3]}, {tuple(x) for x in dh[3]}
     if rb and (len(rh) < len(rb) or not {c for c, _ in rb} <= {c for c, _ in rh}):
         kinds.append("reserved")
-    vb, vh = set(db[4]), set(dh[4])
-    if vb and vh < vb:
+    if set(db[4]) - set(dh[4]):
         kinds.append("violations")
     return kinds
 
@@ -1230,9 +1326,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--base", required=True, type=_tree_arg, help="checkout to compare against (usually main)")
     p.add_argument("--head", required=True, type=_tree_arg, help="checkout with the gate change")
     p.add_argument("--corpus", nargs="+", action="extend", default=[], type=Path,
-                   help="more actions: a JSON list of commands or {tool, args} actions, or a .txt file, one per line")
-    p.add_argument("--only-corpus", action="store_true", help="skip the built-in corpus (harvest and variants)")
-    p.add_argument("--no-variants", action="store_true", help="skip the generated compound variants")
+                   help="more actions: a JSON list of commands or {tool, args, cwd} actions (cwd optional), or a "
+                        ".txt file, one command per line")
+    p.add_argument("--only-corpus", action="store_true",
+                   help="skip the built-in corpus (the harvest and the seeds): run the --corpus items and their "
+                        "generated forms")
+    p.add_argument("--no-variants", action="store_true",
+                   help="skip every generated form (compound variants, other shell tool names and keys, session "
+                        "folders)")
     p.add_argument("--policies", nargs="+", action="extend", default=[], type=Path,
                    help="more policies: a .py file with POLICIES (and CONTEXTS) or a .json mapping")
     p.add_argument("--only-policies", action="store_true", help="skip the built-in policies")
@@ -1256,6 +1357,20 @@ class Failed(Exception):
     """An error in this script or its input: exit 2 with this message."""
 
 
+class Stopped(BaseException):
+    """A SIGTERM or SIGHUP (a CI cancel, a closed terminal). It unwinds like an error, so the finally in run stops
+    both trees and removes the work folder. A BaseException, so no ``except Exception`` on the way catches it."""
+
+
+_STOP_SIGNALS = tuple(getattr(signal, n) for n in ("SIGTERM", "SIGHUP") if hasattr(signal, n))
+
+
+def _stop(signum: int, _frame: Any) -> None:
+    for sig in _STOP_SIGNALS:       # a second signal must not cut the cleanup short
+        signal.signal(sig, signal.SIG_IGN)
+    raise Stopped(signal.Signals(signum).name)
+
+
 def _out_path(p: Path | None, flag: str) -> Path | None:
     if p is None:
         return None
@@ -1272,12 +1387,26 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["_tree"]:
         return _tree_main(argv[1:])
     a = parse_args(argv)
+    before = {}
+    try:
+        for sig in _STOP_SIGNALS:
+            before[sig] = signal.signal(sig, _stop)
+    except ValueError:              # not the main thread: no handlers, as before
+        pass
     try:
         return run(a)
     except Failed as exc:
         print(f"gate_diff: {exc}", file=sys.stderr)
+    except Stopped as exc:
+        try:                        # after a SIGHUP the terminal may be gone: still exit 2
+            print(f"gate_diff: stopped by {exc}, both trees stopped and the work folder removed", file=sys.stderr)
+        except OSError:
+            pass
     except Exception as exc:        # a fault of this script is never a lowered line: exit 2, not 1
         print(f"gate_diff: internal error: {type(exc).__name__}: {exc}", file=sys.stderr)
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
     return 2
 
 
