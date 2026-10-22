@@ -440,9 +440,10 @@ stderr and in the summary, since its entries may get no lines. To these come gen
   `_SAFE_PY_MODULES` and each pip subcommand.
 - a line for each value option: `doas -u x rm -rf build`, `flock --wait x 1 rm -rf build`, a tmux command's
   options, an interpreter's (`python -W x -c ...`) and a run wrapper's (`uv run --with x rm -rf build`). Long options
-  run as `--opt=x` too. Also each option whose value is a command line (`git rebase --exec`, `tar --to-command`) or a
-  script file, `touch` behind each privileged wrapper (`chroot`), a write by each redirection operator, a POST to
-  each local host, a read in each store folder, and a read of each secret sample path and of a glob that matches it.
+  of a prefix or wrapper run as `--opt=x` too. Also each option whose value is a command line (`git rebase --exec`,
+  `tar --to-command`) or a script file, `touch` behind each privileged wrapper (`chroot`), a write by each
+  redirection operator, a POST to each local host, a read in each store folder, and a read of each secret sample
+  path and of a glob that matches it.
 - a string for each alternative of a few patterns, written by `regex_samples`: a read of a path for each
   alternative of the secret path pattern (`x.pem`, `.gnupg`), a SQL line for each destructive statement kind (`drop
   database`), and a patch header for each kind (`*** Add File:`) that names the store or a secret.
@@ -458,7 +459,8 @@ stderr and in the summary, since its entries may get no lines. To these come gen
   row otherwise without its folder, and a test checks that, so a head that stops reading the folder shows.
 - posts that trip each posting rule: a home path, an internal id and a model id for the default scrub, and each
   forbid entry, forbidden word, agent name and scrub pattern of the policies the run uses. Each runs as a `gh`
-  comment and title and under the text and title keys of the outbound tools.
+  comment and title, under each text and title key of the first outbound tool, and under the first text key of
+  the others.
 - calls of the other tools: each tool of the tool table and each tool name the classifier names, with no arguments,
   and a tool name for each name hint word (`mcp_acme_trash_item`). A store path and a secret path under each path key
   (`path`, `file_path`, `destination` and the rest), and for an outbound tool, a post with a forbidden word or a

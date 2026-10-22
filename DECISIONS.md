@@ -1277,8 +1277,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   are the lines and calls the gate suites of both trees test, kept as written, and generated forms. The script reads
   the gate's tables of both trees with `ast` and makes a line or call for each entry: each program, subcommand,
   prefix, wrapper, shell and interpreter flag, each value option, exec option and allowlisted module, each tool and
-  name hint word, each path, text, title and target key, and a string for each alternative of the secret path, SQL
-  and patch header patterns. A head that drops an entry still runs the base's line for it. A table a tree holds in
+  name hint word, each path, text, title and target key, and a string for each alternative of the secret path, SQL,
+  patch header and scrub patterns. A head that drops an entry still runs the base's line for it. A table a tree holds in
   another form is named, and the run exits 2. Posts trip each scrub and forbid rule, and payment and account calls
   meet budget and escalation policies that no other step masks. Tests take each table entry and each step of
   `decide` out of main's gate in turn and check that a built-in form or pair changes. Each simple line also runs in
