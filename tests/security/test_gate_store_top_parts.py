@@ -194,6 +194,31 @@ def test_a_delete_tool_on_the_store_keeps_its_matrix_deny():
     assert (d.outcome, d.rule) == ("deny", "matrix"), d
 
 
+def test_a_post_tool_on_a_store_path_keeps_its_text_for_the_posting_checks():
+    # the tool's own outbound reading carries its text and title, so a forbidden word in either is listed
+    p = normalize_policies({"posting": {"forbid_words": ["Zork"]}})
+    for action, own in (({"tool": "mcp__slack__post_message", "args": {"channel": "C1", "text": "Zork",
+                                                                       "file": "~/.exo/state/x"}}, "message_send"),
+                        ({"tool": "mcp__github__create_issue", "args": {"repo": "o/r", "title": "Zork", "body": "hi",
+                                                                        "file": "~/.exo/state/x"}}, "github_post")):
+        c = classify(action)
+        assert c.category == "store_write" and [q.category for q in c.parts] == [own], c
+        d = decide(c, p)
+        assert (d.outcome, d.rule) == ("ask", "posting") and any("forbidden word: Zork" in v for v in d.violations), d
+
+
+def test_each_file_a_write_tool_writes_is_a_part():
+    patch = ("*** Begin Patch\n*** Update File: notes.md\n@@\n-a\n+b\n*** Update File: ~/.exo/state/x\n@@\n-a\n+b\n"
+             "*** End Patch\n")
+    c = classify({"tool": "apply_patch", "args": {"patch": patch}})
+    assert c.category == "store_write" and [q.target for q in c.parts] == ["notes.md", "~/.exo/state/x"], c
+    d = decide(c, pol(deny=["target:notes.md"]))
+    assert (d.outcome, d.rule) == ("deny", "deny"), d                # as `echo b > notes.md; echo x > ~/.exo/state/x`
+    # a secret named in another argument sets the category, and the part is the file written
+    c = classify({"tool": "write_file", "args": {"path": "notes.md", "source": "~/.ssh/id_rsa", "content": "x"}})
+    assert c.category == "credentials" and [(q.category, q.target) for q in c.parts] == [("local_write", "notes.md")], c
+
+
 def test_a_file_tool_on_a_plain_path_has_no_part():
     for action in ({"tool": "write_file", "args": {"path": "notes.md", "content": "x"}},
                    {"tool": "delete_file", "args": {"path": "build/x"}},
