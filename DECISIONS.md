@@ -1281,13 +1281,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   them, so a descriptor path made a `store_write` part. That outranks a post on the line, and the matrix cell and
   posting rules see only the line's own part, so a matrix deny on the post became an ask and its posting violations
   were dropped. A store or descriptor path a rebound name runs later is still behind the opaque ask. *Differential
-  (#423).* Against main, over 25,097 actions (the gate tests, their compound variants and 57 probe lines) and 76
-  policies, 49 pairs on 42 actions are lower. No posting violation is lost. They fall in two groups, both kept on
+  (#423).* Against main, over 25,111 actions (the gate tests, their compound variants and 57 probe lines) and 76
+  policies, 53 pairs on 46 actions are lower. No posting violation is lost. They fall in two groups, both kept on
   purpose. (1) Eight pairs on two lines: under a policy that lowers `opaque_exec` (a category line or an allow rule
   naming it), `ssh host 'sudo hash -lp ./tool ls && ls'` and `ssh host 'sudo hash -p /tmp/x ls && ls'` go from log to
   allow. On main the hash part was a costly `read` whose matrix cell logged. Now it is the line's own `opaque_exec`
   part, and the category line replaces its matrix cell, as it does for `ssh host 'sudo eval x && ls'` on main. Under
-  the default policy both ask. (2) 41 pairs on 40 lines: under a reservation that matches the hash part
+  the default policy both ask. (2) 45 pairs on 44 lines: under a reservation that matches the hash part
   (`tool:terminal`, or `command:\brm\b` on a line with `rm`), that part's entry is named `opaque_exec` where it was
   `read`. Each line still asks as reserved, with at least as many entries, and the grant check of D-075 refuses each
   line it refused on main. *Rejected:* deciding the matrix cell and the posting rules on every part of a line. That
