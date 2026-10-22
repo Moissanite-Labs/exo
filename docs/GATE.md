@@ -524,10 +524,11 @@ after it: `GitHub PR comment on myorg/app#6: forbidden word: Zork`. When two pos
 the gate cannot read, each is named: a part's unseen body is read from the signals it carried
 before the line was combined (`Classification.own_signals`, left out of the ledger view). Once
 other posts add violations, a decision lists at most 20 and counts the rest
-(`and 40 more on other posts`). The dominant part's own violations are always all listed. The scrub
-compiles its patterns once per policy, so a line of many posts does not compile them again for
-each post. The approval binding hashes the whole command, so a grant for one line never covers a
-changed second body.
+(`and 40 more on other posts`). The dominant part's own violations are always all listed. So is
+the unseen-body note for a part the posting rules do not cover, such as a `curl` post. Both come
+before the other posts' violations. The scrub compiles its patterns once per policy, so a line of
+many posts does not compile them again for each post. The approval binding hashes the whole
+command, so a grant for one line never covers a changed second body.
 
 Third-party escalation, the matrix cell and the floors still read only the dominant part. So
 `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R other/repo --body $'fine\nF'`

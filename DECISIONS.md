@@ -2268,8 +2268,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   after it. A part's unseen body is its own `unseen_body` signal, read from the signals it carried before `_combine`
   gave it every part's (`Classification.own_signals`, left out of the ledger view). So two unseen posts are both
   named. Once other parts add violations, a decision lists at most 20 and counts the rest. The dominant part's own
-  violations are always all listed. The scrub compiles its patterns once per policy, since a line now runs it once
-  per post. The posting step only adds violations, so no decision is looser than before. The gate differential
+  violations are always all listed. So is the line-wide unseen-body note for a part the posting rules do not cover.
+  The scrub compiles its patterns once per policy, since a line now runs it once per post. The posting step only
+  adds violations, so no decision is looser than before. The gate differential
   (#423) bears that out. Over 25,497 actions x 85 policies (the built-in set and nine posting policies) it lowered
   0 pairs and tightened 1,295, each a `github_post` line going from log or allow to ask. Third-party escalation,
   the matrix cell and the floors still read the dominant part. So `gh pr comment 5 -R myorg/app --body $'ok\nF' &&
