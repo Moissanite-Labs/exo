@@ -435,13 +435,11 @@ class SessionStore:
         return seq
 
     def orphaned_copies(self, sid: str, upto_seq: int) -> list[Message]:
-        """Fork copies up to ``upto_seq`` of logged entries the tree no longer holds (undone after the fork, #245)."""
-        rows = self._q("SELECT c.data FROM sessions f JOIN messages c ON c.session=f.id WHERE f.id=? AND c.seq<=MIN(?,"
-                       " COALESCE(f.fork_seq, 0)) AND c.pos IS NULL AND json_extract(c.data, '$.meta.local')='fork' AND"
-                       " json_extract(c.data, '$.meta.pos') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM messages o JOIN"
-                       " sessions s ON s.id=o.session WHERE o.agent=f.agent AND o.pos=json_extract(c.data,"
-                       " '$.meta.pos') AND o.hidden=0 AND s.kind!='private') ORDER BY c.seq", (sid, upto_seq))
-        return [from_dict(Message, json.loads(r["data"]), strict=False) for r in rows]
+        return [from_dict(Message, json.loads(r["data"]), strict=False) for r in self._q(
+            "SELECT c.data FROM sessions f JOIN messages c ON c.session=f.id WHERE f.id=? AND c.seq<=MIN(?, COALESCE(f.fork_seq, 0))"
+            " AND c.pos IS NULL AND json_extract(c.data, '$.meta.local')='fork' AND json_extract(c.data, '$.meta.pos') IS NOT NULL"
+            " AND NOT EXISTS (SELECT 1 FROM messages o JOIN sessions s ON s.id=o.session WHERE o.agent=f.agent AND o.hidden=0"
+            " AND o.pos=json_extract(c.data, '$.meta.pos') AND s.kind!='private') ORDER BY c.seq", (sid, upto_seq))]
 
     def agents(self) -> list[str]:
         return [r[0] for r in self._q("SELECT DISTINCT agent FROM messages WHERE pos IS NOT NULL ORDER BY agent")]
