@@ -214,6 +214,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
+  line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
+  `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that
+  `approvals.yaml` lets answer `credentials` could approve a write to the policy files. The hook now reads every
+  part of the line. The ask goes to those allowed for its category and for each `credentials` or `store_write`
+  part (`gate.call_approvers`), and no standing grant covers a line with such a part, in any mode
+  (`gate.no_grant`). So a store write anywhere on the line is the principal's alone, also behind `sudo sh -c`,
+  `bash -c`, `timeout` or `env`, in a subshell, a `$( )` or a heredoc. The line's category and outcome do not
+  change. A secret read alone keeps its delegation. A shell write, delete, copy or archive that touches `keys/` or
+  the run folder (#169) is the principal's alone now for the same reason. A file tool's write there is not: it has
+  no store write part.
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
   line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
   secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,

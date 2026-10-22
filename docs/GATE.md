@@ -127,6 +127,18 @@ that document verifies, else from `<keys dir>/<seat>.pub`. Both are store paths 
 credentials" below): a tool call that writes the registry, the relay database or the keys folder is a
 `store_write`, which only the principal approves.
 
+The list reads every part of the line, not only the category that leads it (#447). A line with a
+`credentials` or `store_write` part goes to those allowed for its own category and for each such
+part (`gate.call_approvers`). A secret read outranks a store write, so
+`env; echo x > ~/.exo/policies/gates.yaml` and
+`cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` are `credentials`. Their store write
+part keeps them with the principal alone, as `echo x > ~/.exo/policies/gates.yaml` is. The same
+holds behind a wrapper (`sudo sh -c '...'`, `timeout 5 bash -c '...'`), in a subshell, a `$( )` or
+a heredoc. No standing grant covers a line with such a part, and observe mode still asks for it
+(`gate.no_grant`, see "Standing grants"). A secret read alone (`env`, `cat ~/.kube/config`) keeps
+the seats that `approvals.yaml` gives `credentials`. The line's category, its outcome and its
+matrix cell do not change.
+
 ## Who answered: the connection, not the body (D-039)
 
 The core never takes the answerer from the `approval.respond` body. The transport stamps a caller:
@@ -429,10 +441,9 @@ They fall in four groups, all from how the gate already handles a secret store:
   `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does.
 
 The differential does not count one more change, because the outcome stays an ask. Beside a store write, the
-line is `credentials`, not `store_write`. So a seat that `approvals.yaml` delegates `credentials` to may answer
-it, where a store write is the principal's alone:
-`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`. Main does the same for any secret on the
-line, `env; echo x > ~/.exo/policies/gates.yaml` included.
+line is `credentials`, not `store_write`: `cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`.
+Before #447 a seat that `approvals.yaml` delegates `credentials` to could answer it, as for any secret on the
+line. Now the store write part keeps it with the principal alone ("Who may approve").
 
 Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
 and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. On Linux, where `/proc/self`
@@ -1580,12 +1591,17 @@ or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm
 `rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`) is `credentials`. That covers moving or replacing
 the folder that holds the core sockets too: `mv ~/.exo/run ~/.exo/run.old`,
 `mv /tmp/x ~/.exo/run`, `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`,
-`mkdir -p ~/.exo/run` and `chmod 777 ~/.exo/run` are `credentials`, not `store_write`. It still
-always asks and is never granted, but a seat that `approvals.yaml` delegates `credentials` to
-(or a seat in `default:` with no `credentials:` line) may answer it, where only the principal
-answers a `store_write` (#169, the D-038 amendment; `keys/` was already so). A delete of job
-output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name (`rm ~/.exo/run/exod.sock`)
-stays `store_write`.
+`mkdir -p ~/.exo/run` and `chmod 777 ~/.exo/run` are `credentials`, not `store_write` (#169). It
+still always asks and is never granted. Its store write part keeps the answer with the principal
+alone, whatever `approvals.yaml` delegates (#447, "Who may approve"). Before #447 a seat that
+`approvals.yaml` delegates `credentials` to (or a seat in `default:` with no `credentials:` line)
+could answer it. A copy of a key or an archive of `keys/` (`cp ~/.exo/keys/seat.key /tmp/k`,
+`cat ~/.exo/keys/seat.key > /tmp/k`, `tar czf - ~/.exo/keys`) has a store write part too, so it
+is the principal's alone. A read alone (`cat ~/.exo/keys/seat.key`) has none, so such a seat may
+answer it. A file tool's write or delete there (`write_file` or `delete_file` on
+`~/.exo/keys/seat.key`) is `credentials` with no store write part, so such a seat may still
+answer it. A delete of job output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name
+(`rm ~/.exo/run/exod.sock`) stays `store_write`.
 
 What the floor does to a policy's denies. A shell write to the store keeps its own reading
 (`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category

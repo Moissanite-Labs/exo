@@ -543,9 +543,9 @@ class Gate:
             self._tighten(d, verdict)
         outward = gate.binds_exact(c, d)
         binding = gate.approval_binding(c, args) if outward else ""
-        # No standing allow for credentials and store writes, nor for a post whose body the gate did not see:
-        # its binding hashes only the line, so a grant would cover any later body (#208).
-        once = c.category in gate.NO_GRANT or gate.body_unseen(c)
+        # No standing allow for credentials and store writes (a part of the line counts, #447), nor for a post whose
+        # body the gate did not see: its binding hashes only the line, so a grant would cover any later body (#208).
+        once = gate.no_grant(c) or gate.body_unseen(c)
         grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" and not once else None
         if grant:
             d.outcome, d.rule = "allow", "grant"
@@ -573,8 +573,8 @@ class Gate:
             key = self._rule_key(tool, args, c, d)
             # D-038 (#211): a changed approvals.yaml can narrow who answers at once; a wider one waits for /gate accept.
             changed = self.changed_policies()
-            approvers = gate.strictest_approvers(c.category, pol.get("approvals"),
-                                                 changed.get("approvals") if changed is not None else None)
+            approvers = gate.call_approvers(c, pol.get("approvals"),
+                                            changed.get("approvals") if changed is not None else None)
             # persist: this gate keeps "always" grants itself (scoped, expiring, in the store), so the
             # core must not also keep an unscoped one in memory.
             approval_key = "a_" + secrets.token_hex(16)
@@ -589,7 +589,7 @@ class Gate:
             body["approval_key"] = approval_key
             body["approvers"] = approvers
         # NO_GRANT is enforced in every mode; a required executor never runs an unanswered ask.
-        if self.settings.mode == "observe" and c.category not in gate.NO_GRANT and not self.executor_required:
+        if self.settings.mode == "observe" and not gate.no_grant(c) and not self.executor_required:
             body["would"] = result["action"] if result else "run"
             result = None
         if d.outcome in ("allow", "log") and c.cost:
@@ -638,7 +638,7 @@ class Gate:
     # --- standing grants (D-033) --------------------------------------------------------
 
     def _grant_for(self, c: gate.Classification, d: gate.Decision, binding: str, outward: bool) -> Optional[dict]:
-        if c.category in gate.NO_GRANT or (d.violations and not binding):
+        if gate.no_grant(c) or (d.violations and not binding):
             return None
         # D-075: a grant covers the act it was given for. A reserved entry that matched another part of
         # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.
