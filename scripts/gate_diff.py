@@ -15,12 +15,13 @@ the same way in both. The HOME is kept out of /tmp (work_dir).
 A pair (action, policy) is lowered when the head's outcome ranks below the base's (allow < log < ask < deny), when
 the head keeps the outcome but has fewer reserved hits than the base (or loses a reserved category), or when any of
 the base's posting violations is missing from the head's (compared by text, so one the head words otherwise counts
-too). A base violation the head names after its post, as `<post>: v`, is kept. Such pairs are counted apart as
-reworded, not lowered. At an equal deny, lost reserved hits and violations are not counted: the hook blocks the call,
-and both only matter for an ask (a reserved hit keeps a standing grant from covering it, a violation is named in its
-message). A classify or decide exception counts as the outcome the hook gives on an error: ask, or allow for a read
-tool whose arguments name no secret. Tightenings are counted only. Actions whose category or target changed while
-every decision stayed the same are counted with a few examples.
+too). A violation either tree names after a part of the line (`<post>: v`, as a line of several posts lists them) is
+compared by its text v, so one the head names after its post, or after the post's new name, is kept. Such pairs are
+counted apart as reworded, not lowered. At an equal deny, lost reserved hits and violations are not counted: the
+hook blocks the call, and both only matter for an ask (a reserved hit keeps a standing grant from covering it, a
+violation is named in its message). A classify or decide exception counts as the outcome the hook gives on an error:
+ask, or allow for a read tool whose arguments name no secret. Tightenings are counted only. Actions whose category
+or target changed while every decision stayed the same are counted with a few examples.
 
 An action is {"tool", "args"}, with an optional "cwd": the session folder the hook passes to classify (#209). Each
 action runs as written. A plain command line is the terminal call {"tool": "terminal", "args": {"command": line}}.
@@ -1926,6 +1927,27 @@ def _on_error(tool: str, args: Any) -> str:
     return "allow" if tool in _W["safe"] and not secret else "ask"
 
 
+def _post_names(gate: Any, c: Any) -> list[str]:
+    """Each name the tree's decide may put before a part's violation (`<name>: v`, #396): every part's summary or
+    category, also with URL userinfo hidden where the gate hides it (#399). Longest first, so the parent strips the
+    whole name."""
+    red = getattr(gate, "redact_userinfo", None)
+    out: set[str] = set()
+    seen: set[int] = set()
+    todo = [c]
+    while todo:
+        p = todo.pop()
+        if id(p) in seen:
+            continue
+        seen.add(id(p))
+        name = str(getattr(p, "summary", "") or getattr(p, "category", ""))
+        out.add(name)
+        if callable(red):
+            out.add(str(red(name)))
+        todo.extend(getattr(p, "parts", None) or [])
+    return sorted(out - {""}, key=lambda n: (-len(n), n))
+
+
 def _row(i: int) -> list:
     gate, a = _W["gate"], _W["actions"][i]
     tool, args, cwd = a.get("tool", ""), a.get("args", {}), a.get("cwd")
@@ -1935,7 +1957,7 @@ def _row(i: int) -> list:
         cat, target = str(c.category), str(c.target)
     except Exception as exc:
         why = f"classify raised {type(exc).__name__}: {exc}"[:200]
-        return [None, None, why, [[_on_error(tool, args), "error", why, [], []]], [0] * npol, 0]
+        return [None, None, why, [[_on_error(tool, args), "error", why, [], []]], [0] * npol, 0, []]
     uniq: dict[tuple, int] = {}
     idx, nerr = [], 0
     for pol, ctx in _W["pols"]:
@@ -1947,7 +1969,8 @@ def _row(i: int) -> list:
             nerr += 1
             key = (_on_error(tool, args), "error", f"decide raised {type(exc).__name__}: {exc}"[:300], (), ())
         idx.append(uniq.setdefault(key, len(uniq)))
-    return [cat, target, None, [[o, r, why, [list(x) for x in res], list(v)] for o, r, why, res, v in uniq], idx, nerr]
+    return [cat, target, None, [[o, r, why, [list(x) for x in res], list(v)] for o, r, why, res, v in uniq], idx, nerr,
+            _post_names(gate, c)]
 
 
 def _chunk(span: tuple[int, int]) -> str:
@@ -2112,18 +2135,25 @@ def show_action(a: dict, width: int = 160) -> str:
     return text if len(text) <= width else text[:width - 3] + "..."
 
 
-def _lost(db: list, dh: list) -> list[str]:
+def _bare(v: str, names: Iterable[str]) -> str:
+    """A violation's text without the part name a line of several posts puts before it (`<name>: v`)."""
+    return next((v[len(n) + 2:] for n in names if v.startswith(n + ": ")), v)
+
+
+def _lost(db: list, dh: list, nb: Iterable[str] = (), nh: Iterable[str] = ()) -> list[str]:
     """What the head lost at the same outcome (never called for a deny: see the module docstring). A reserved hit
     holds a target the head may name differently, so fewer hits or a lost category counts. A violation is its
-    text, so any of the base's that the head lacks counts, also when the head words it otherwise. A base violation
-    the head names after its post (`<post>: v`, as a line of several posts lists them) is kept: "reworded" says so,
-    and the caller does not count it as lowered."""
+    text, so any of the base's that the head lacks counts, also when the head words it otherwise. Each tree may name
+    a violation after its part (`<post>: v`, as a line of several posts lists them; ``nb`` and ``nh`` are the names
+    each tree's parts go by). When the head holds each base text v as often as the base does, under whatever name,
+    nothing is lost: "reworded" says so, and the caller does not count it as lowered. One post's violation that
+    moves onto another post that already had it is still lost."""
     kinds = []
     rb, rh = {tuple(x) for x in db[3]}, {tuple(x) for x in dh[3]}
     if rb and (len(rh) < len(rb) or not {c for c, _ in rb} <= {c for c, _ in rh}):
         kinds.append("reserved")
-    if gone := set(db[4]) - set(dh[4]):
-        kept = all(any(h.endswith(": " + v) for h in dh[4]) for v in gone)
+    if set(db[4]) - set(dh[4]):
+        kept = not Counter(_bare(v, nb) for v in db[4]) - Counter(_bare(h, nh) for h in dh[4])
         kinds.append("reworded" if kept else "violations")
     return kinds
 
@@ -2162,8 +2192,9 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
         for side, r in (("base", rb), ("head", rh)):
             counts[f"{side}_classify_errors"] += r[2] is not None
             counts[f"{side}_decide_errors"] += r[5]
-        cb, tb, _, ub, pb, _ = rb
-        ch, th, _, uh, ph, _ = rh
+        cb, tb, _, ub, pb, _ = rb[:6]
+        ch, th, _, uh, ph, _ = rh[:6]
+        nb, nh = (rb[6] if len(rb) > 6 else []), (rh[6] if len(rh) > 6 else [])
         cls_changed = (cb, tb) != (ch, th)
         lb, lh = cb or "error", ch or "error"     # a classify that raised has no category
         if ub == uh and pb == ph:
@@ -2181,7 +2212,7 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
                 counts["pairs_same"] += 1
                 continue
             rkb, rkh = RANK.get(db[0], RANK["ask"]), RANK.get(dh[0], RANK["ask"])
-            kinds = ["outcome"] if rkh < rkb else (_lost(db, dh) if rkh == rkb and db[0] != "deny" else [])
+            kinds = ["outcome"] if rkh < rkb else (_lost(db, dh, nb, nh) if rkh == rkb and db[0] != "deny" else [])
             if "reworded" in kinds:
                 counts["violations_reworded"] += 1
                 kinds.remove("reworded")
@@ -2254,7 +2285,7 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
            f"  lowered: {c.get('lowered_pairs', 0)} pairs on {c.get('lowered_actions', 0)} actions "
            f"(outcome {c.get('lowered_outcome', 0)}, reserved lost {c.get('lowered_reserved', 0)}, "
            f"violations lost {c.get('lowered_violations', 0)})",
-           f"  violations reworded (each lost one named after its post, not lowered): "
+           f"  violations reworded (each lost one named after its post or the post's new name, not lowered): "
            f"{c.get('violations_reworded', 0)} pairs",
            f"  tightened: {c.get('tightened_pairs', 0)} pairs on {c.get('tightened_actions', 0)} actions",
            f"  same outcome, other detail changed: {c.get('pairs_detail_changed', 0)} pairs",
