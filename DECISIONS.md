@@ -186,7 +186,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   principal-started terminal and channel turns keep the unlimited default. A stricter explicit loop limit
   remains in force. Steers retain the running turn's limit and terminal stop behavior. An author-based cap was
   rejected because principal-started channel turns must remain unlimited. Spend admission remains opt-in.
-  Unattended turns need a finite bound even when nobody can stop them. Revisit if wakes gain a separate policy.
+  Unattended turns need a finite bound even when nobody can stop them. The engine copies supplied metadata and
+  retains a truthy author, defaulting missing or empty authors to `system`. Its direct fallback avoids a separate
+  conditional branch and keeps the current-main integration inside the unchanged core budget. Revisit if wakes
+  gain a separate policy.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -201,6 +204,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   local only until A rules on a private remote.
 - **Rejected:** keeping Arif in Postgres (cannot travel to a device); three separate stores per person
   (drift); remote embeddings (personal text leaves the machine).
+- **Amendment 2026-10-21 (#254):** until the FTS5 and embedding stages are built, retrieval is the in-memory BM25 of
+  `store.find`. It rebuilt its tables from every node on each call. It now keeps them with the node set they were
+  built from and builds them again when a reload makes a new set (a refresh that sees a change reloads). Holding the
+  set itself is the reload generation: a separate counter, read apart from the set, could pair an old set with a new
+  number when two threads share a store. Rejected: building the tables in `reload()`, which would tokenize stores that
+  are never searched. Also rejected: moving to FTS5 now, which is stage 3 of `docs/STORE-V2.md` and a larger change.
+  Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
@@ -216,6 +226,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   auto-promote under rule 4. The principal reviews that first batch, as `docs/ARCHITECTURE.md` section 5 says.
   Imported evidence is dated by its source time, and superseded rows (an edited ChatGPT prompt's older
   versions, inactive Hermes rows) do not count for the rule of three.
+  *Amendment 2026-10-21 (issue #263):* the chat capture after each turn no longer reads the whole ledger to find the
+  capture keys already written. The learner keeps them, with the last row it read, and reads only the rows after it.
+  The result is the same as a full read of any ledger `exo log verify` passes: the ledger is append-only and nothing
+  takes a key back. A ledger that no longer holds that row in its place is read again from the first row. With 10,000
+  captured rows in the ledger, each turn's capture took about 70 ms. Now the first turn after a start takes that once,
+  and each later turn under 1 ms.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
@@ -506,6 +522,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   says. Its delegate children open with `memory_zoom(subagent=)` only from it or a fork of it. A fork's copies count
   at their original's log position, so a fork opens with its parent's tail. Details in docs/MEMORY-MODEL.md
   "Private threads".
+  *Amendment 2026-10-21 (#245, PR #405):* a copy counts at its original's log position only while the tree holds
+  that original. When the parent undid an entry after the fork, the tree dropped the original, and no tree held
+  the copy. Once the fork's own later entries were summarized, its tail started after the copy, so its calls lost
+  it. Now a fork that is not private keeps such copies in its tail, verbatim, in order, ahead of its own entries
+  (`SessionStore.orphaned_copies`). Only copies of logged entries are kept. A copied context note was never logged,
+  so it still leaves the tail as the tail moves on. This is the second option in #245. The first, a summary tree
+  per fork as a private thread has, was not taken: every public fork would run a second tree, with its own
+  summarizer calls and a turn that waits on it (D-068), for copies that exist only after an undo in the parent.
+  The cost of the second option: the kept copies sit outside `tail_messages` and `/compact`, so a fork whose
+  parent undid 20 turns carries all 20 in every call. In a fork of a fork the kept copies come after the middle
+  fork's own entries, which the tree holds. The lookup runs only on a fork (`fork_seq` set) and reads only its
+  copies, so a thread that is not a fork pays nothing.
 
 ## D-029 (2026-10-12) jevgrep as code_find; native port later if the measured win holds
 - **Why:** "where is X decided" questions cost an agent many grep and read rounds. dzhng/jevgrep (MIT, `jg`
@@ -1260,7 +1288,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   operators of `HOME`, `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the
   default; both count. A shell word with a `$( )`, a backtick pair or an unknown variable is also matched with each
   one empty, and with each one between two literal parts read as `*`. A glob is read in bash's bracket syntax
-  (`[^x]`, POSIX classes), and `/proc/<pid>/<glob>` is matched against `environ`. Rejected: treating every
+  (`[^x]`, POSIX classes), and `/proc/<pid>/<glob>` is matched against `environ` (a thread's
+  `/proc/<pid>/task/<tid>/<glob>` too since the #313 amendment below, 2026-10-21). Rejected: treating every
   expansion inside a word as opaque, which would ask on `cat notes-$(date +%F).md`; refusing links in `read_file`
   alone, which leaves the shell open. The checks of one classify call share their file-system lookups, which made a
   10 KB line several times faster. Limits in `docs/GATE.md` "Other spellings of a store path".
@@ -1309,6 +1338,43 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
   rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
   here-doc body leads past the end, past a deny-listed command.
+  *Amendment 2026-10-21 (issue #313, follow-up to #199):* on Linux each thread's `/proc/<pid>/task/<tid>/environ`
+  holds the same environment as `/proc/<pid>/environ`, another process's included. The store list named only the
+  direct form, so `cat /proc/self/task/1/environ` and `read_file` on it were plain reads. The store list now names
+  the `task/<tid>/` form too. The #199 glob check reads `/proc/<pid>/<x>/<tid>/<glob>` as a thread's file when `<x>`
+  could match `task` and the glob could match `environ`, so `cat /proc/1/*/*/environ` and
+  `cat /proc/self/[t]ask/*/environ` ask. Other files under `task/` keep their class (`cat /proc/self/task/*/status`).
+  The search tools leave a thread's `environ` out of a walk, as they leave out the direct form (#241).
+  *Lowered lines.* A thread's environment is decided as `/proc/<pid>/environ` already was, so some lines decide
+  lower than before. A differential of main against the change ran 27,708 actions under 95 policies: the
+  differential's own set, plus task-environ lines, compound lines and file-tool calls, and 19 more policies (a
+  `read` deny, `reserved: [read]`, `/proc` targets, more matrix cells). It found 2,877 lowered pairs on 1,364
+  actions. Each one decides as main decides the same action with `/proc/self/environ`. Four groups, all from how
+  the gate already handles any secret store: (1) A file tool on a store takes the `credentials` class in place of
+  its own, so a deny on `read` or `local_write` (a category line, a `deny:` entry, a rule, a matrix cell) becomes
+  the credentials ask (`read_file /proc/self/task/1/environ` under `categories: {read: deny}`). A `reserved: [read]`
+  entry no longer matches the call. It still asks, and no grant covers it, since it is `credentials`. A shell line
+  keeps the read as a part (D-075), so a `read` deny still denies `cat`. (2) The matrix sees the dominant part only.
+  A credentials line is costly and private and takes the strongest reversibility of its parts, so a deny cell for a
+  read, or for another part of a compound line, no longer applies
+  (`cat /proc/self/task/1/environ; git push --force origin main` under an `irreversible`, `internal` deny cell
+  asks). (3) Before #396 the posting rules checked the dominant part, so a post beside the read lost its listed
+  violations. They now read every post (D-075 amendment, #396), so it keeps them, named after its part. The
+  line asks either way. (4) A line's credentials target is the first store it names and a `cat` part has no target, so a
+  `target:` entry for a second store on the line no longer matches
+  (`cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does). The differential does not count a fifth change,
+  because the outcome stays an ask. (5) Beside a store write the line is `credentials`, not `store_write`. A seat
+  that `approvals.yaml` delegates `credentials` to may then answer what only the principal answered
+  (`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`). Main does the same for any secret on
+  the line (`env; echo x > ~/.exo/policies/gates.yaml`). Rejected: keeping a file tool's own class as a part,
+  as D-075 does for shell lines. It would keep group 1 denied, but it changes every file-tool call on a store
+  (`read_file ~/.ssh/id_rsa` under `categories: {read: deny}` asks on main), so it is a follow-up, as are matrix
+  cells, posting checks and `target:` entries on every part, and a store write that keeps the principal's answer
+  beside a secret. Limits: a doubled slash or a `..` inside a store name is matched as written, so
+  `cat /proc/1/task/1//environ` and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does
+  on main. A glob in the `/proc` name itself is not read, for either form (`cat /pro?/self/task/1/environ`,
+  `cat /pro?/self/environ`).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

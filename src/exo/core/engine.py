@@ -642,9 +642,7 @@ class CoreRuntime:
                        max_iterations: int | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
-        meta = dict(meta or {})
-        if not meta.get("author"):
-            meta["author"] = provenance.SYSTEM  # internal wakeups need an explicit source to speak for anyone
+        meta = {**(meta or {}), "author": (meta or {}).get("author") or provenance.SYSTEM}  # wakes need an explicit source
         hooks = self.plugins.hooks
         await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
         try:

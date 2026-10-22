@@ -12,6 +12,30 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   plus a wrap-up, including background-job notices on scheduled threads and bus wakes with a client attached.
   Explicit positive limits retain their cap and progress report, and children retain `max_turns` (24 by default).
   User stops, approvals, spend limits, bounded retries and child token/time limits still apply.
+- A fork no longer loses its copies of entries the parent undid after the fork (#245). A copy counts
+  at its original's log position only while that original is visible, so once the fork's own later
+  entries were summarized the tail started after the copy, and no tree held it either: the fork's
+  calls dropped it. The tail now keeps such copies, in order, ahead of the fork's own entries. They stay
+  verbatim, outside `tail_messages` and `/compact`, in every call of the fork. Copied context notes are
+  not kept: they leave a fork's tail as before. The lookup reads only a fork's copies, so a thread that
+  is not a fork pays nothing for it (D-028 amendment).
+- `store.find` tokenized every node and rebuilt its BM25 tables on each call (#254, W1-5). `ctx`, `exo find`, the
+  default retrieval ranker, the learner and the memory plugin all call it, so each query paid for the whole store.
+  The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
+  the node set they were built from. A `reload()`, or a `refresh()` that sees a node file change, makes a new set
+  and the next `find` builds them again. A repeat query tokenizes only itself. Scores and order are unchanged.
+- A thread's environment file is a secret store, like the process's own (#313).
+  `/proc/<pid>/task/<tid>/environ` holds the same environment as `/proc/<pid>/environ`, another
+  process's included, but the gate read it as an ordinary file, literal path and glob alike.
+  Both the sensitive-path list and the `/proc/<pid>/<glob>` check now cover the `task/<tid>/`
+  form, also with a glob in the `task` folder itself (`cat /proc/1/*/*/environ`). The search
+  tools leave it out of a walk. Other files under `task/` keep their class. Such a path is
+  decided as `/proc/<pid>/environ` already was, so some lines decide lower than before. A file
+  tool on it asks under a `read` or `local_write` deny, a matrix deny cell for a read no longer
+  applies, and on a compound line the credentials part can hide another part's matrix deny or
+  a second store's `target:` entry (a post beside it keeps its violations, since #396). Beside a store write the line is
+  `credentials`, so a seat delegated `credentials` may answer it, where only the principal
+  answered. The D-038 amendment and `docs/GATE.md` "A thread's environment file" list them.
 - The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
   the footer, the forbidden words and the scrub on the combined classification's text. A compound
   line takes that text from its most severe part. So a post that passed, put first, carried a
@@ -28,6 +52,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
   without clicking; the composer draft stays in place. Existing answer keys and confirmation are unchanged.
+- The chat capture after each turn no longer reads the whole ledger (#263, the signals half of W2-7). To skip
+  corrections and rulings already written, it built the set of capture keys from every ruling, verdict and
+  question in the ledger on every turn: about 70 ms per turn with 10,000 such rows. The learner now keeps that set
+  with the last row it read and reads only the rows after it, so a turn after the first takes under 1 ms. What is
+  written is unchanged. A ledger that no longer holds that row in its place (another file, or one cut short) is
+  read again from the first row. The HTTP client half of W2-7 and the bus store half (W3-4) stay open.
 - exod answers a request with a bad number with 400 and a JSON `{"error": ...}` body (#264). `Content-Length`,
   `since` and `Last-Event-ID` were read with a bare `int()` and the handler swallowed its error, so a word or a
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the

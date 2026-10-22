@@ -108,6 +108,8 @@ class Runtime:
                                            writer="exo-learn", auto_keygen=True)
         self.signer = self.ledger.signer
         self.lock = threading.RLock()
+        # Capture keys read from the ledger, with the seq and id of the last row read (signals.known_keys).
+        self.known: tuple[int, str | None, set] = (0, None, set())
 
     def close(self) -> None:
         self.ledger.close()

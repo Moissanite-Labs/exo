@@ -38,6 +38,7 @@ Scheduled unattended runs explicitly pass `JOB_MAX_ROUNDS=24` and release the jo
 scheduled threads and bus wakes with a client attached. It passes a per-turn `Loop.send(max_iterations=...)`
 limit, keeping a stricter explicit loop limit. The shared loop limit stays unchanged, so principal-started turns
 from the terminal or a channel remain unlimited by default, even while another session runs a capped wake.
+The engine copies turn metadata, retaining its author or defaulting a missing or empty author to `system`.
 Delegated children explicitly use their `max_turns` limit, or 24 when unset or zero. Approvals, spend admission,
 interrupts, provider retry limits and child token/time limits keep their existing checks.
 For a reply without tool calls, a missing, empty or `tool_use` stop reason retains the turn's default `end`.
@@ -183,6 +184,18 @@ store.find("posting rules", n=5)     # [(node_id, score), ...]
 store.ctx("posting rules", budget=1500).text
 assemble(store, "posting rules", 1500).node_ids
 ```
+
+## Find
+
+`find` ranks nodes with BM25. A node's title counts three times, its summary and `load_when` twice, and its tags,
+id and body once. The first `find` tokenizes every node and keeps the tables it builds: each node's word counts and
+length, how many nodes hold each word, and the average length. Later calls tokenize only the query (#254). `ctx`
+and the default ranker of `assemble` call `find`, so they share the tables.
+
+The tables belong to the node set they were built from. `reload()` makes a new set, and so does a `refresh()` that
+sees a node file added, edited or removed. The next `find` then builds the tables again. So `find` always ranks the
+nodes that `nodes` returns. Like `nodes`, it does not see a file written after the last read until a `refresh()` or
+a `reload()`. Callers treat the node dicts as read-only and change a node by writing its file.
 
 ## Store checks
 
