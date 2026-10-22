@@ -162,9 +162,9 @@ def test_execute_code_f_strings_keep_their_class(code, category):
     ("{x," + "{}" * 5000 + "}", "read"),
 ], ids=["nested", "flat", "open", "wide", "commaless", "late-close", "empty-groups"])
 def test_long_brace_input_classifies_in_bounded_time(arg, category):
-    t = time.perf_counter()
+    t = time.process_time()
     c = _bash("cat ~/notes/" + arg)
-    assert time.perf_counter() - t < 20
+    assert time.process_time() - t < 20
     assert c.category == category
 
 
@@ -183,17 +183,17 @@ def test_long_brace_input_classifies_in_bounded_time(arg, category):
     ("execute_code", "\n".join(f"p{i} = 'abc{i}{{1..1000}}*'" for i in range(200)), "credentials"),
 ], ids=["6x676", "7x676", "1014-globs", "100x676", "400x676", "100x1000-glob", "100x1000", "300x64", "code-200x1000"])
 def test_many_brace_words_in_one_call_classify_in_bounded_time(tool, text, category):
-    t = time.perf_counter()
+    t = time.process_time()
     c = gate.classify({"tool": tool, "args": {"command": text} if tool == "bash" else {"code": text}})
-    assert time.perf_counter() - t < 5
+    assert time.process_time() - t < 5
     assert (c.category, gate.decide(c).outcome) == (category, "ask" if category == "credentials" else "allow")
 
 
 def test_tool_path_arguments_share_the_budget():
-    t = time.perf_counter()
+    t = time.process_time()
     one = gate.classify({"tool": "read_file", "args": {"path": "/srv/abc{1..1000}*"}})       # expanded once
     many = gate.classify({"tool": "read_file", "args": {"paths": ["~/x{1..1000}"] * 1000}})
-    assert time.perf_counter() - t < 5
+    assert time.process_time() - t < 5
     assert (one.category, many.category) == ("read", "credentials")
 
 
@@ -263,7 +263,7 @@ def test_zero_padded_sequence_reaching_the_store_is_credentials(monkeypatch, hom
 
 
 def test_shell_words_keep_their_source_text():
-    cmds = gate._parse("cat ''{},.env} \"$HOME\"/{a,b} < x'{'y,z}")[0]
+    cmds, _, _ = gate._parse("cat ''{},.env} \"$HOME\"/{a,b} < x'{'y,z}")
     assert [w.raw for w in cmds[0].words] == ["cat", "''{},.env}", '"$HOME"/{a,b}']
     assert [t.raw for _, t in cmds[0].redirs] == ["x'{'y,z}"]
     assert gate._dequote("''.env") == [".env"]

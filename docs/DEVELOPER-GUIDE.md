@@ -61,14 +61,14 @@ engine that `exo serve` runs; `exo.core.engine:create` forwards to it. The diagn
 goes in compose, new read-only views go in diagnostics, and neither goes into `CoreEngine`. These modules still read
 some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the split will replace with public queries.
 
-**The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the
-lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`
-(generated protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
-`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the
-headroom left (run it with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the
-rules (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on
-the engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol
-has its own cap (section 2).
+**The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
+in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
+protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
+`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the headroom left (run it
+with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the rules
+(`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on the
+engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol has
+its own cap (section 2).
 
 **Core, plugins, clients.** The core does the work and holds the state. Plugins add tools, commands, hooks, a memory
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
@@ -83,7 +83,12 @@ commands. Its collaborators have small interfaces:
 - `engine.peers` is the `PeerService` from `exo.peers`, or `None`. `exo.compose` passes
   `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
 - `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes
-  `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`.
+  `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`. `stop()` keeps it restartable;
+  `close()` closes schedule.sqlite and is final.
+- `await engine.close()` stops jobs, peers, channels and the scheduler, then closes schedule.sqlite and the
+  session store. The store is not final: a later read or write reopens sessions.sqlite (#281). Errors reported while
+  it stops them are still recorded as `harness.error` events. The engine drops its trace sink just before the
+  session store closes.
 - `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core
   (the scheduler) uses it, not the loop's private state.
 - A plugin callback that may be sync or async goes through `exo.core.hooks.maybe_await`. One that may not declare
@@ -126,14 +131,16 @@ Rules for changes (written in the file header): additive only, within a protocol
 defaults, or new types. Never rename or remove. Commands are strict: an unknown field is rejected. Clients decode
 events with `strict=False` so a newer server does not break them.
 
-Recovery fields (D-060): `hello` returns `instance` and `heartbeat`; `approvals.list` returns a `cursor`
+Recovery fields (D-060): `hello` returns `instance`, and over HTTP also `heartbeat` (that server's ping interval,
+with `heartbeat` in `capabilities`); stdio and in-process callers get no pings and no `heartbeat` (#226).
+`approvals.list` returns a `cursor`
 (`instance`, `seq`) taken with the list. A client replaces its pending approvals from the list, applies events above
 `cursor.seq`, and takes a new snapshot when `instance` changes. Never resend a turn or an approval answer whose
 reply was lost; reconcile from the snapshot instead. Principal clients on the Unix socket go through
 `exo.protocol.client.Client(principal=...)`, which checks the peer with the kernel first (`docs/GATE.md`); a refusal
 is `exo.peerauth.PrincipalRefused`, a `ConnectError` whose message names the reason. `GET /events` frames are raw
-UTF-8 JSON (U+0085, U+2028, U+2029 and lone surrogates escaped); the Python client skips a frame over 16 Mi characters and
-resumes after its seq, with or without `reconnect`, so a caller that keeps its own `since` gets the next event and
+UTF-8 JSON (U+0085, U+2028, U+2029 and lone surrogates escaped); the Python client splits lines at CRLF, LF or CR
+(`exo.peerauth.bounded_lines`), holds at most 16 Mi characters of one, skips a frame over that and resumes after its seq, with or without `reconnect`, so a caller that keeps its own `since` gets the next event and
 never sees the skipped one.
 
 Who sent a command is stamped by the transport, not read from the body (D-039, `docs/GATE.md` "Who answered").
@@ -244,7 +251,11 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 
 **Hooks.** `register_hook` accepts only the six names in `VALID_HOOKS` in `src/exo/core/hooks.py`, which the
 core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
-`on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. A failing callback is logged and
+`on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. The tool hooks (`pre_tool_call`,
+`post_tool_call`, `transform_tool_result`) get `tool_name`, `args`, `session_id`, `task_id`, `tool_call_id`,
+`turn_id`, `risk` and `cwd`, the session's working folder from which relative paths in `args` resolve (the gate
+reads them there, #209). Each callback gets only the keywords it declares, or all of them when it takes
+`**kwargs`, so a key added later does not break an older callback. A failing callback is logged and
 skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
@@ -279,7 +290,11 @@ methods matter for the principal's words:
   `checkpoint(reason="pre_compress")` and `on_compacted(session, node)` are optional siblings.
 
 Do not log or print message text from these hooks. Report errors through `exo.core.trace.report` so they show as
-`harness.error` and become findings.
+`harness.error` and become findings. `trace.add_sink(fn)` subscribes to those reports. A bound method is held weakly
+and does not keep its owner alive, so keep the owner referenced for as long as it should receive reports (the engine
+registers its own and removes it in `close()`, before the store closes). Sinks are copy-on-write and no sink runs
+under a lock, so a sink or a finalizer may call `report`, `add_sink` or `remove_sink`. A report already delivering
+may still call a sink removed after it began.
 
 **Context engine hooks.** `select_context(messages, session_id=)` gets each message with `author` and `principal`,
 like the memory hooks. After `session.undo` the core calls `on_session_switch(session, rewound=True, messages=,
@@ -440,7 +455,13 @@ sets it to `~/Work/handoffs`.
 **Deploying the site.** `scripts/deploy-site.sh` reads the Vercel team id and slug from `EXO_VERCEL_TEAM` and
 `EXO_VERCEL_SCOPE`, and the token file from `EXO_DEPLOY_ENV`. Put them in the environment or in an untracked
 `~/.config/exo/deploy.conf`. It deploys from a copy outside git, made with `rsync`. A failed copy or deploy stops it
-with a non-zero exit before anything is tagged.
+with a non-zero exit before anything is tagged. Any deploy, versioned or not, refuses when `site/` holds untracked
+files (ignored ones too, `.DS_Store` aside), so a private draft folder such as `site/pitch/` can never ship; commit it
+or move it out. It also refuses when `site/` contains a submodule (its working tree can hold files git does not list)
+and when git cannot list the files or read the status of `site/` (a corrupt index), rather than treating that as an empty
+list or a clean tree. It refuses a `site/` that is itself a symlink, untracked or tracked with mode 120000, because git does
+not see through it while `rsync` follows it; symlinks inside `site/` are copied as links. The Vercel CLI is pinned to an exact version set at the top of the script. `EXO_VERCEL_CLI` may name
+another exact `X.Y.Z` (a tag such as `latest`, or an empty value, is refused with exit 2). To move the pin, change the script in a PR.
 
 Staging first (D-047). With no flag the script deploys to `staging.exo.askaconsult.com` (Vercel project
 `exo-site-staging`), which sends `X-Robots-Tag: noindex, nofollow` and serves a `robots.txt` that disallows everything.
@@ -828,3 +849,21 @@ The design is `docs/TASTE-BASELINE.md`; its "Build status" says what is built. C
 - Policy files are product policy, not taste. Nothing in `baseline/` exports them.
 
 Run `tests/baseline` and the `exo-memory` plugin suite after a change.
+
+### Add an `exo` subcommand
+
+`src/exo/cli.py` imports a command's module only when that command runs (#260), so `exo --help`, `exo --version`
+and bare `exo` stay fast. A command that lives in its own module needs:
+
+1. In the module, a `register(sp, common)` that adds the parser (`sp.add_parser(NAME, parents=[common], help=...)`
+   when it works on a store), and a handler `cmd_<name>(a)`, or `cmd_<name>(a, store)` for a store command.
+2. A row in `LAZY` in `src/exo/cli.py`, at the place the command should appear in `exo --help`: the module, the
+   handler and the same help line `register` gives. `exo --help` prints the help line from the table, so it never
+   imports the module.
+3. For a store command, its name in `STORE_CMDS`, so `main` passes the resolved store.
+
+Keep the module's own top-level imports to what the command needs: they run only for that command. A command that
+belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs inside its function.
+`tests/test_cli_lazy.py` fails when the table and `register` disagree: it compares the help of every command, and of
+`exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
+`exo --help` loads no command module.

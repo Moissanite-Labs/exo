@@ -99,6 +99,10 @@ ExoEgg.STAGES;                      // the table above, as data
 ExoEgg.MAX_STAGE;                   // 4
 ```
 
+Repository events (proposed, D-059): `egg.event(type, {replay, weight})` for `issue`, `pr`, `review`, `merge`, `release`
+and `validated` (with a `kind`), `egg.meditate(on, {immediate})`, `egg.meditating()`, `egg.signal(level)` and
+`egg.queued()`. The contract is `docs/LIVE-EGG.md` section 1.2. `pulse(n)` keeps its meaning.
+
 Without script: `<canvas data-exo-egg data-stage="2" data-activity="0.6" data-seed="3" data-shell="off">` is mounted
 on load (`ExoEgg.autoMount(scope)` mounts canvases added later). The canvas fills its CSS box.
 

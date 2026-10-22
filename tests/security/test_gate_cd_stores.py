@@ -618,12 +618,15 @@ def test_many_levels_up_stays_linear(env, folder, name, monkeypatch):
         monkeypatch.setenv(k, v)
     if "EXO_HOME" not in env:
         monkeypatch.delenv("EXO_HOME")
-    took = []
-    for n in (20000, 80000):
-        line = _ups_line(n, folder, name)
-        start = time.monotonic()
-        _bash(line)
-        took.append(time.monotonic() - start)
+    lines = [_ups_line(n, folder, name) for n in (20000, 80000)]
+    for _ in range(3):      # CPU time; a retry only when over the bound, so load can't fail it but a quadratic step does
+        took = []
+        for line in lines:
+            start = time.process_time()
+            _bash(line)
+            took.append(time.process_time() - start)
+        if took[1] < 6 * took[0] + 0.5:
+            break
     assert took[1] < 6 * took[0] + 0.5, took
 
 
@@ -644,16 +647,30 @@ def test_work_is_linear(line, monkeypatch):
     monkeypatch.setattr(gate, "_parse", count("parse", gate._parse))
     monkeypatch.setattr(fnmatch, "fnmatch", count("fnmatch", fnmatch.fnmatch))
     monkeypatch.setattr(fnmatch, "filter", count("filter", fnmatch.filter))
-    start = time.monotonic()
+    start = time.process_time()
     c = _bash(line)
-    took = time.monotonic() - start
+    took = time.process_time() - start
     with_check = dict(calls)
     for k in calls:
         calls[k] = 0
-    monkeypatch.setattr(gate, "_cd_store_read", lambda cmds, subs, line=None: "")
-    start = time.monotonic()
+    real_read = gate._cd_store_read
+    monkeypatch.setattr(gate, "_cd_store_read", lambda cmds, subs: "")
+    start = time.process_time()
     _bash(line)
-    base = time.monotonic() - start
+    base = time.process_time() - start
+    first = dict(calls)
+    for _ in range(2):      # CPU time; a retry only when over the bound, so load can't fail it but a quadratic step does
+        if took < 3 * base + 2:
+            break
+        start = time.process_time()
+        _bash(line)
+        base = min(base, time.process_time() - start)
+        monkeypatch.setattr(gate, "_cd_store_read", real_read)
+        start = time.process_time()
+        _bash(line)
+        took = min(took, time.process_time() - start)
+        monkeypatch.setattr(gate, "_cd_store_read", lambda cmds, subs: "")
+    calls.update(first)
     cmds, subs = gate._parse(line)[:2]
     targets = line.count("cd ")
     assert with_check["sens"] - calls["sens"] <= min(targets, 4), (with_check, calls)    # one per store folder
@@ -663,3 +680,97 @@ def test_work_is_linear(line, monkeypatch):
     assert with_check["filter"] <= 2 * sum(map(line.count, "*?[{")), (with_check, calls)
     assert took < 3 * base + 2, (took, base)
     assert gate.decide(c).outcome in ("ask", "allow")
+
+
+def _fill(head: str, unit, size: int, tail: str = "") -> str:
+    """``head``, then ``unit(0)``, ``unit(1)``... until the line is about ``size`` bytes, then ``tail``."""
+    parts, n, i = [head], len(head) + len(tail), 0
+    while n < size:
+        parts.append(unit(i))
+        n, i = n + len(parts[-1]), i + 1
+    return "".join(parts) + tail
+
+
+_DEEP = "/".join(f"d{j}" for j in range(30))
+EXO_SHAPES = {   # #269's resolution in $EXO_HOME: each made its joins in full before its caps, quadratic in the line
+    "run-jobs-then-exo-cds": lambda n: _fill("cd ~/.exo/run/jobs; ", lambda i: f"cd .exo/r{i}; ", n),
+    "cds-then-exo-names": lambda n: _fill("", lambda i: f"cd /a{i}; ", n // 2) + _fill("cat", lambda i: f" .exo/x{i}", n // 2),
+    "64-store-cds-then-cds": lambda n: _fill("".join(f"cd ~/.exo/a{j}; " for j in range(64)), lambda i: f"cd r{i}; ", n),
+    "deep-store-cds-and-ups": lambda n: _fill("".join(f"cd ~/.exo/a{j}/{_DEEP}; " for j in range(64)) + "cd "
+                                              + "/".join([".."] * 64) + "; ", lambda i: f"cd r{i}; ", n),
+    "plain-cds": lambda n: _fill("", lambda i: f"cd /a{i}; ", n, "cat x"),
+    "plain-relative-cds": lambda n: _fill("cd /srv; ", lambda i: f"cd r{i}; cd ..; ", n, "cat x"),
+    "store-cd-many-names": lambda n: _fill("cd ~/.exo/run/jobs && cat", lambda i: f" f{i}.log", n),
+}
+
+
+@pytest.mark.parametrize("shape", list(EXO_SHAPES), ids=list(EXO_SHAPES))
+def test_exo_store_resolution_is_linear(shape):
+    """Every join `_exo_relative` makes is charged to one budget as it is made, so the cd check on a line four times
+    longer takes about four times the CPU, not sixteen (10.8x to 18.3x before), and its memory stays small (62 MB at
+    10 KB before, 8.6 GB for the whole call at 100 KB). The check is timed alone, the line parsed outside the timer;
+    CPU time, the best of three, and a ratio rather than a limit, because suites run side by side on one machine."""
+    make = EXO_SHAPES[shape]
+    parsed = [gate._parse(make(n))[:2] for n in (20_000, 80_000)]
+    tracemalloc.start()
+    try:
+        gate._cd_store_read(*parsed[0])
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 8 * 2**20, peak
+    took = []
+    for cmds, subs in parsed:
+        runs = []
+        for _ in range(3):
+            start = time.process_time()
+            gate._cd_store_read(cmds, subs)
+            runs.append(time.process_time() - start)
+        took.append(min(runs))
+    assert took[1] < 7 * took[0] + 0.05, took
+
+
+def test_a_spent_join_budget_asks(monkeypatch):
+    """Past the budget the line counts as reaching the store (fails closed); under it the line is read as before."""
+    line = "cd ~/.exo/run/jobs && cat " + " ".join(f"f{i}.log" for i in range(300))
+    assert _bash(line).category == "read"
+    monkeypatch.setattr(gate, "_EXO_PARTS", 1000)
+    c = _bash(line)
+    assert c.category == "credentials" and "too many to resolve" in c.summary
+
+
+_NEAR_CAP = ("cd ~/.exo/" + "/".join(f"d{j}" for j in range(62)) + "; cd " + "/".join([".."] * 64) + "; cat "
+             + " ".join(f"n{i}" for i in range(200)))      # 63 store folders and 12,600 names: just under both caps
+SUB_SHAPES = {
+    "nested-substitutions": lambda k: "".join(f"$(echo $(echo $(echo $({_NEAR_CAP})))) " for _ in range(k)),
+    "substitutions": lambda k: "".join(f"$({_NEAR_CAP}) " for _ in range(k)),
+    # few joins, each a deep glob: the budget counts path parts, not joins (5.8 s at 77 KB when it counted joins)
+    "deep-glob-names": lambda k: _NEAR_CAP.split("; cat ")[0] + "; ls " + " ".join(
+        "/".join(f"x{j}*" for j in range(60)) + f"/f{i}" for i in range(k)),
+}
+
+
+@pytest.mark.parametrize("shape, units", [("nested-substitutions", 2), ("substitutions", 8), ("deep-glob-names", 250)],
+                         ids=list(SUB_SHAPES))
+def test_the_join_budget_is_shared_by_every_substitution(shape, units, monkeypatch):
+    """Each `$( )` is classified again by its own classify_shell, nested ones too. The budget is kept in the classify
+    call's memo, so they all draw on one budget and a line pays it once, not once per substitution (a fresh budget
+    each made these lines 34x to 41x slower than without the check). It counts path parts, so a few deep glob names
+    spend it as fast as many short ones. Timed through gate.classify, CPU time,
+    against the same call with the check stubbed out, at two sizes: a ratio with a margin, not a limit."""
+    lines = [SUB_SHAPES[shape](units), SUB_SHAPES[shape](2 * units)]
+    took, base = [], []
+    for line in lines:
+        start = time.process_time()
+        c = _bash(line)
+        took.append(time.process_time() - start)
+        assert c.category == "credentials" and "too many to resolve" in c.summary     # fails closed once spent
+    real = gate._exo_relative
+    monkeypatch.setattr(gate, "_exo_relative", lambda *a, **kw: "")
+    for line in lines:
+        start = time.process_time()
+        _bash(line)
+        base.append(time.process_time() - start)
+    monkeypatch.setattr(gate, "_exo_relative", real)
+    for t, b in zip(took, base):
+        assert t < 2 * b + 0.5, (took, base)

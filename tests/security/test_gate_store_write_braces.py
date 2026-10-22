@@ -109,9 +109,9 @@ def test_ordinary_brace_writes_keep_their_class(cmd, category):
     ("mkdir -p a/{0001..1000} b/{0001..1000} c/{0001..1000} d/{001..100} && rm -rf a/{0001..1000}", "delete", "ask"),
 ])
 def test_many_brace_words_keep_their_class(cmd, category, outcome):
-    t = time.perf_counter()
+    t = time.process_time()
     assert _outcome(_bash(cmd)) == (category, outcome)
-    assert time.perf_counter() - t < 5
+    assert time.process_time() - t < 5
 
 
 def test_a_spelling_checked_narrow_is_still_checked_wide():
@@ -124,9 +124,9 @@ def test_a_spelling_checked_narrow_is_still_checked_wide():
     ";".join(["cd '/tmp/" + "A" * 100000 + "{1..1}" * 8000 + "'"] * 10),
 ])
 def test_quoted_braces_in_a_folder_target_are_not_expanded(cmd):
-    t = time.perf_counter()
+    t = time.process_time()
     assert _outcome(_bash(cmd))[0] != "store_write"
-    assert time.perf_counter() - t < 5
+    assert time.process_time() - t < 5
 
 
 @pytest.mark.parametrize("cmd", [
@@ -134,6 +134,6 @@ def test_quoted_braces_in_a_folder_target_are_not_expanded(cmd):
     "cp " + " ".join(f"/srv/w{i}/{{a,b}}{{c,d}}{{e,f}}{{g,h}}{{i,j}}{{k,l}}" for i in range(300)) + " d/",
 ])
 def test_store_checks_past_their_budget_ask_in_bounded_time(cmd):
-    t = time.perf_counter()
+    t = time.process_time()
     assert _outcome(_bash(cmd))[1] == "ask"
-    assert time.perf_counter() - t < 10
+    assert time.process_time() - t < 10

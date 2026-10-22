@@ -33,7 +33,7 @@ from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar
                              EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
 CLIENT_ID = "exo-tui"
-LOST = "connection_lost"  # post's code for a command whose reply never came (D-060: it is not resent)
+LOST = "connection_lost"  # post's code for a command whose reply never came or that never went out (D-060: not resent)
 DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
 MAX_FILE = 64 * 1024
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
@@ -219,6 +219,7 @@ class ExoApp(App):
         self.reconcile_every = 3.0  # how often an open card is checked against the core's own list (D-045)
         self._reconciled = 0.0
         self.pending_steers: list[tuple[str, Block]] = []  # (message id, its transcript line) not yet delivered
+        self.sending_messages: dict[Block, set[str]] = {}  # delivery events may arrive before turn.send's reply
         self.question: str | None = None
         self.running_tools = 0
         self.agents: dict[str, str] = {}
@@ -377,6 +378,9 @@ class ExoApp(App):
 
     def refresh_activity(self) -> None:
         bits = []
+        if self.pending_steers:
+            n = len(self.pending_steers)
+            bits.append(f"{n} steer{'s' if n != 1 else ''} queued (Up to edit)")
         if self.running_tools:
             bits.append("running tool" if self.running_tools == 1 else f"running {self.running_tools} tools")
         elif self.busy and self.turn_t0:
@@ -744,6 +748,7 @@ class ExoApp(App):
             self.approvals = [a for a in self.approvals if a.request_id in self.threadless]
         self.busy, self.turn_t0, self.running_tools, self.cur_id, self.question = False, 0.0, 0, None, None
         self.pending_steers.clear()
+        self.sending_messages.clear()
         self.agents.clear()
         if self.session:
             self.costs[self.session] = (self.cost, self.calls_seen, self.unpriced)
@@ -918,7 +923,10 @@ class ExoApp(App):
         try:
             resp = await self.client.send(body)
         except (httpx.TransportError, OSError) as exc:  # the request may have reached the core: say so, never resend
-            self.note("connection lost; this may not have been delivered. Check before you send it again.", "error")
+            if isinstance(exc, httpx.ConnectError):  # no connection, so no byte went out; a refused peer check says why
+                self.note(f"not sent: {str(exc) or 'no connection to the core'}", "error")
+            else:
+                self.note("connection lost; this may not have been delivered. Check before you send it again.", "error")
             if isinstance(body, s.ApprovalRespond):
                 self.run_worker(self.restore_approvals(), exit_on_error=False)
             return s.Response(id="", ok=False, error=s.ErrorInfo(code=LOST, message=str(exc)))
@@ -1175,18 +1183,31 @@ class ExoApp(App):
         self.add(block)
         self.hint("steer" if steering else "first_message")
         self.close_cur()
-        resp = await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
-                                          mode="steer" if steering else "send"))
+        received: set[str] = set()
+        session = self.session
+        self.sending_messages[block] = received
+        try:
+            resp = await self.post(s.TurnSend(session=session, text=send, parts=self.file_parts(text),
+                                              mode="steer" if steering else "send"))
+        finally:
+            self.sending_messages.pop(block, None)
+        if self.session != session:
+            return  # a late reply belongs to the thread left behind, not this composer's draft or queue
         if resp.error is not None and resp.error.code == LOST:
             self.keep_text(text)
-        if steering and resp.ok and resp.result.get("message_id"):  # queued, not delivered: it can be pulled back
-            self.pending_steers.append((resp.result["message_id"], block))
-            block.pending = True
-            block.flush()
-        elif resp.ok and resp.result.get("steered") and resp.result.get("message_id"):  # core steered a plain send into a child (D-070)
-            self.pending_steers.append((resp.result["message_id"], block))
-            block.steer = block.pending = True
-            block.flush()
+        if resp.ok and (steering or resp.result.get("steered")) and (mid := resp.result.get("message_id")):
+            block.steer = True
+            block.pending = mid not in received
+            if block.pending:  # queued, not delivered: it can be pulled back
+                self.pending_steers.append((mid, block))
+            else:
+                block.steer_state = "delivered"
+        elif resp.ok:
+            block.steer = False  # the turn finished meanwhile; the core accepted an ordinary new turn
+        elif steering:
+            block.steer_state = "delivery unknown" if resp.error and resp.error.code == LOST else "not sent"
+        block.flush()
+        self.refresh_activity()
 
     def keep_text(self, text: str) -> None:
         """A message whose delivery is unknown goes back in an empty composer, to send again or drop."""
@@ -1195,12 +1216,16 @@ class ExoApp(App):
 
     def steer_landed(self, message_id: str) -> None:
         """The steer reached the conversation (message.completed): it is no longer pending."""
+        for received in self.sending_messages.values():
+            received.add(message_id)
         for mid, block in self.pending_steers:
             if mid == message_id:
                 self.pending_steers.remove((mid, block))
                 block.pending = False
+                block.steer_state = "delivered"
                 if block.is_mounted:
                     block.flush()
+                self.refresh_activity()
                 return
 
     def drop_pending_steer(self, message_id: str) -> None:
@@ -1208,6 +1233,7 @@ class ExoApp(App):
             if mid == message_id:
                 self.pending_steers.remove((mid, block))
                 block.remove()
+                self.refresh_activity()
                 return
 
     async def unsteer(self) -> bool:
@@ -1218,9 +1244,14 @@ class ExoApp(App):
             self.note("nothing queued to pull back: a steer lands at the next tool round", "hint")
             return False
         mid, block = self.pending_steers[-1]
-        resp = await self.post(s.CommandRun(name="unsteer", args=mid, session=self.session))
+        session = self.session
+        resp = await self.post(s.CommandRun(name="unsteer", args=mid, session=session))
+        if self.session != session:
+            return False  # the old thread's pulled-back text must never enter the new composer's draft
         if resp.error is not None and resp.error.code == LOST:
             return False  # unknown whether it was pulled back: it stays shown as pending
+        if not resp.ok:
+            return False
         gone = (resp.result.get("output") or {}).get("cancelled", []) if resp.ok else []
         if not gone:  # it landed while we asked
             self.steer_landed(mid)
