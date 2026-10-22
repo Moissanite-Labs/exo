@@ -876,13 +876,34 @@ def test_compare_ranks_pairs_as_the_hook_would(tmp_path, base, head, kind):
     assert kind != "same" or c["pairs_detail_changed"] + c["pairs_same"] == 1
 
 
-@pytest.mark.parametrize("head, lowered", [(["post: X"], 0), (["Y"], 1)])
-def test_a_violation_named_after_its_post_is_kept(tmp_path, head, lowered):
-    # A line of several posts names each one's violations after the post (#406): main's text is still there.
-    _stream(tmp_path / "b.gz", [["github_post", "x", None, [_d("ask", violations=["X"])], [0], 0]], ["p"])
-    _stream(tmp_path / "h.gz", [["github_post", "x", None, [_d("ask", violations=head)], [0], 0]], ["p"])
+@pytest.mark.parametrize("base, head, lowered", [
+    ((["X"], []), (["post: X"], ["post"]), 0),            # named after its post (#406): main's text is still there
+    ((["X"], []), (["Y"], ["post"]), 1),
+    ((["X"], []), (["other: X"], ["post"]), 1),           # a prefix that names no part of the line is a new text
+    # The post's name changed with its target (#399): the same violation on the same post.
+    ((["on a#9: missing footer: F"], ["on a#9"]), (["on b#5: missing footer: F"], ["on b#5"]), 0),
+    ((["on a#9: missing footer: F"], ["on a#9"]), (["on b#5: forbidden word: F"], ["on b#5"]), 1),
+    # One post's violation lost while another post still has it: the head lists it once where main listed it twice.
+    ((["on a#9: missing footer: F", "on b#5: missing footer: F"], ["on a#9", "on b#5"]),
+     (["on b#5: missing footer: F"], ["on a#9", "on b#5"]), 1),
+])
+def test_a_violation_named_after_its_post_is_kept(tmp_path, base, head, lowered):
+    # A line of several posts names each one's violations after the post. Each tree's row lists its parts' names.
+    _stream(tmp_path / "b.gz", [["github_post", "x", None, [_d("ask", violations=base[0])], [0], 0, base[1]]], ["p"])
+    _stream(tmp_path / "h.gz", [["github_post", "x", None, [_d("ask", violations=head[0])], [0], 0, head[1]]], ["p"])
     rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
     assert rep["counts"]["lowered_pairs"] == lowered and rep["counts"]["violations_reworded"] == 1 - lowered
+
+
+def test_post_names_hold_every_part_and_the_name_the_gate_hides_userinfo_in():
+    from types import SimpleNamespace as NS
+    gate = NS(redact_userinfo=lambda s: s.replace("u:p@", "***@"))
+    two = NS(summary="GitHub PR comment on https://u:p@ghe.corp/pub/repo#5", category="github_post", parts=[])
+    line = NS(summary="", category="github_post", parts=[NS(summary="git status", category="read", parts=[two]), two])
+    assert gate_diff._post_names(gate, line) == [
+        "GitHub PR comment on https://***@ghe.corp/pub/repo#5", "GitHub PR comment on https://u:p@ghe.corp/pub/repo#5",
+        "github_post", "git status"]
+    assert gate_diff._post_names(NS(), NS(summary="x", parts=None)) == ["x"]
 
 
 def test_a_classify_error_is_labelled_error(tmp_path):
