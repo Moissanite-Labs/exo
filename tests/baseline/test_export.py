@@ -74,6 +74,26 @@ def test_manifest_has_no_timestamps_and_hashes_every_file(principal_store, tmp_p
     assert not {"ts", "created", "date"} & set(m) and not re.search(r"\d{4}-\d{2}-\d{2}", json.dumps(m))
 
 
+def test_export_does_not_follow_a_symlink_planted_at_a_temporary_name(principal_store, tmp_path):
+    """Each file was written as `<file>.tmp` with a plain write, which follows a symlink there (#273)."""
+    import os
+    import stat
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch\n")
+    out = tmp_path / "out"
+    (out / "soul").mkdir(parents=True)
+    for rel in ("MANIFEST.json.tmp", "soul/house.md.tmp"):
+        (out / rel).symlink_to(victim)
+    assert X.export_house(principal_store, out, "1.3.0").written
+    assert victim.read_text() == "do not touch\n"
+    umask = os.umask(0o022)
+    os.umask(umask)
+    for rel in ("MANIFEST.json", "items.jsonl", "soul/house.md", "review/REVIEW.md"):  # the mode write_bytes gave
+        st = os.lstat(out / rel)
+        assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o666 & ~umask, rel
+    assert json.loads((out / "MANIFEST.json").read_text())["version"] == "1.3.0"
+
+
 @pytest.mark.parametrize("node_id,type_,summary,label", [
     ("mind/name", "preference", "Show drafts to Sam Rivera first.", "store name"),
     ("mind/email", "preference", "Copy reports to boss@example.net.", "email"),
@@ -190,3 +210,127 @@ def test_cli_export_review_and_release(principal_store, tmp_path, capsys):
     write_node(principal_store, "mind/faith", "value", "Answer in the light of Islam.")
     assert cli.main(args) == 1
     assert "FAILED, nothing written" in capsys.readouterr().out
+
+
+def test_the_principal_name_org_and_email_domain_never_ship(tmp_path):
+    from .conftest import ORG, build_onboarded_store
+    s = build_onboarded_store(tmp_path / "principals" / "quill")
+    write_node(s, "work/commits", "rule", f"Sign commits as {ORG}, never with a personal handle.")
+    write_node(s, "work/release-ok", "rule", "Ask quill before a release goes out.")
+    write_node(s, "work/verify", "rule", "Verify a fix by running the tests before calling it done.")
+    s.reload()
+    out = tmp_path / "out"
+    res = X.export_house(s, out, "1.0.0")
+    assert res.ok, res.render()
+    assert {i.claim for i, _ in res.held} == {f"Sign commits as {ORG}, never with a personal handle.",
+                                             "Ask quill before a release goes out."}
+    shipped = (out / "items.jsonl").read_text()
+    assert "Verify a fix" in shipped and ORG not in shipped and "quill" not in shipped.lower()
+
+    # once PRINCIPAL.md names the principal, the name fails, and so does the bare email domain
+    (s.root / "PRINCIPAL.md").write_text('# PRINCIPAL: Quill Varden ("Quill")\n', encoding="utf-8")
+    write_node(s, "work/drafts", "rule", f"Keep drafts in the {ORG}.io shared drive.")
+    s.reload()
+    res = X.export_house(s, tmp_path / "out2", "1.0.0")
+    assert not res.ok and not (tmp_path / "out2").exists()
+    assert {"work/drafts", "work/release-ok"} <= {w for w, _ in res.failures}, res.failures
+
+
+def test_a_capitalised_plain_word_in_the_role_answer_ships(tmp_path):
+    from exo import onboard
+    s = onboard.create_store("quill", tmp_path / "principals" / "quill")
+    onboard.run_interview(s, "quill", onboard.file_asker({
+        "identity.name": "Quill Varden", "identity.role": "I build data tools in Python for a small team"}),
+        count_skips=False, seed=0)
+    write_node(s, "work/scripts", "rule", "Prefer Python for small scripts.")
+    write_node(s, "work/release-ok", "rule", "Ask Quill before a release goes out.")
+    s.reload()
+    out = tmp_path / "out"
+    res = X.export_house(s, out, "1.0.0")
+    assert res.ok, res.render()
+    assert [i.claim for i, _ in res.held] == ["Ask Quill before a release goes out."]
+    assert "Prefer Python for small scripts." in (out / "items.jsonl").read_text()
+
+
+def test_ordinary_lines_ship_beside_a_mail_contact_and_a_word_shaped_handle(tmp_path):
+    """A contact at a public mail service and a principal whose initial plus surname is a word ("price")."""
+    from exo.store import PrincipalStore
+    s = PrincipalStore.create(tmp_path / "principal")
+    (s.root / "PRINCIPAL.md").write_text('# PRINCIPAL: Pell Rice ("Pell")\n', encoding="utf-8")
+    write_node(s, "work/supplier", "entity", "A supplier, reached at " + "kit@" + "me.com.")
+    lines = ("Show me commands before running them.", "Ask me compact questions, one at a time.",
+             "Show the price in the report header.")
+    for i, line in enumerate(lines):
+        write_node(s, f"work/rule-{i}", "rule", line)
+    s.reload()
+    out = tmp_path / "out"
+    res = X.export_house(s, out, "1.0.0")
+    assert res.ok and not res.held, res.render()
+    assert {i.claim for i in res.items} == set(lines)
+
+
+def test_an_answer_the_node_withholds_never_ships(tmp_path):
+    """The onboarding answers carry a phone number, so `person/identity` withholds them; the ledger has them."""
+    from exo import onboard
+    from .conftest import ORG
+    s = onboard.create_store("pell", tmp_path / "principals" / "pell")
+    onboard.run_interview(s, "pell", onboard.file_asker({
+        "identity.name": "Pell Marrow, call me pell; mobile +44 7700 900123",
+        "identity.role": f"I run {ORG} ({ORG}.io); call +1 555 010 4477 or mail pell@{ORG}.io"}),
+        count_skips=False, seed=0)
+    write_node(s, "work/commits", "rule", f"Sign commits as {ORG}, never a personal handle.")
+    write_node(s, "work/release-ok", "rule", "Ask pell before a release goes out.")
+    write_node(s, "work/verify", "rule", "Verify a fix by running the tests before calling it done.")
+    s.reload()
+    out = tmp_path / "out"
+    res = X.export_house(s, out, "1.0.0")
+    assert res.ok, res.render()
+    assert {i.claim for i, _ in res.held} == {f"Sign commits as {ORG}, never a personal handle.",
+                                             "Ask pell before a release goes out."}
+    shipped = (out / "items.jsonl").read_text()
+    assert "Verify a fix" in shipped and ORG not in shipped and "pell" not in shipped.lower()
+
+    write_node(s, "work/drafts", "rule", f"Keep drafts in the {ORG}.io drive.")
+    s.reload()
+    res = X.export_house(s, tmp_path / "out2", "1.0.0")
+    assert not res.ok and ("work/drafts", f"store name: {ORG}.io") in res.failures, res.failures
+
+
+def test_the_name_answer_written_as_one_word_never_ships(tmp_path):
+    """An onboarded store whose PRINCIPAL.md heading is still the template's: only the name answer has the name."""
+    from .conftest import build_onboarded_store
+    s = build_onboarded_store(tmp_path / "principals" / "quill")
+    write_node(s, "work/tags", "rule", "Sign tags with the quillvarden key.")
+    write_node(s, "work/verify", "rule", "Verify a fix by running the tests before calling it done.")
+    s.reload()
+    out = tmp_path / "out"
+    res = X.export_house(s, out, "1.0.0")
+    assert res.ok, res.render()
+    assert [i.claim for i, _ in res.held] == ["Sign tags with the quillvarden key."]
+    assert "quillvarden" not in (out / "items.jsonl").read_text()
+
+    write_node(s, "work/notes", "rule", "Credit @qvarden in the release notes.")      # the handle fails
+    s.reload()
+    res = X.export_house(s, tmp_path / "out2", "1.0.0")
+    assert not res.ok and ("work/notes", "store name: qvarden") in res.failures, res.failures
+
+
+def test_generic_role_words_hold_a_value_item_and_never_fail_the_built_in_soul(tmp_path):
+    from exo import onboard
+    s = onboard.create_store("brin", tmp_path / "principals" / "brin")
+    onboard.run_interview(s, "brin", onboard.file_asker({
+        "identity.name": "Brin Talloway",
+        "identity.role": "Session musician; I performed for years and now lead a small team"}),
+        count_skips=False, seed=0)
+    write_node(s, "mind/credit", "value", "Put the team before personal credit.")
+    write_node(s, "work/verify", "rule", "Verify a fix by running the tests before calling it done.")
+    s.reload()
+    out = tmp_path / "out"
+    res = X.export_house(s, out, "1.0.0")
+    assert res.ok, res.render()                  # the built-in soul says "performed", and names no one
+    assert [i.claim for i, _ in res.held] == ["Put the team before personal credit."]
+    assert (out / "soul" / "house.md").read_text() == X.HOUSE_SOUL
+
+    # a soul the principal supplies is checked against the store words too, and the soul cannot be held
+    res = X.export_house(s, tmp_path / "out2", "1.0.0", soul="# House soul\n\nWrite as the team would.\n")
+    assert not res.ok and res.failures == [("soul/house.md", "store word: team")], res.failures

@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 from exo.core.sessions import SessionStore
-from exo.core.types import Message
+from exo.core.types import Message, from_dict
 
 
 def test_threads_share_one_log_in_order():
@@ -61,6 +61,18 @@ def test_undo_hides_log_entries_and_keeps_the_chain():
     assert nxt.meta["seq"] == 5 and nxt.meta["pos"] == 5
 
 
+def test_a_wrong_typed_part_an_older_core_stored_still_loads():
+    # Before strict command decoding, turn.send stored parts as the client sent them, so a row can hold an int
+    # where a str belongs. Reading it back must not make the session or the agent log unreadable.
+    st = SessionStore()
+    a = st.create_session(agent="helper")
+    old = from_dict(Message, {"role": "user", "content": [{"type": "image", "data": 5, "mime": "image/png"}]},
+                    strict=False)
+    st.append_message(a.id, old)
+    assert st.messages(a.id)[0].content[0].data == 5
+    assert st.log("helper")[0].message.content[0].data == 5
+
+
 def test_fork_copies_stay_out_of_the_log():
     st = SessionStore()
     a = st.create_session(agent="razi")
@@ -73,6 +85,39 @@ def test_fork_copies_stay_out_of_the_log():
     assert st.last_pos("razi") == 2
 
 
+def test_a_fork_copies_only_summaries_its_renumbered_copies_still_match():
+    """A fork renumbers its copies 1..n. A parent range with an undone row up to its end (hidden in the log, or a
+    deleted fork copy) would hold other messages in the fork, so only the summaries before the first gap go along."""
+    from exo.core.context import SummaryNode
+
+    st = SessionStore()
+
+    def say(sid, n):
+        for _ in range(n):
+            st.append_message(sid, Message.user("x"))
+
+    def leaves(sid, *starts):
+        for s in starts:
+            st.save_summary(SummaryNode(id=f"s_{sid}_{s}", session=sid, level=0, index=s // 2, start=s, end=s + 1,
+                                        text=f"{s}-{s + 1}", status="done"))
+
+    def copied(child):
+        return [(n.start, n.end) for n in st.summaries(child.id)]
+
+    p = st.create_session(agent="razi", kind="private")
+    say(p.id, 4)
+    st.truncate(p.id, 2)          # hides 3-4: the next row is 5, and the fork's copy of it is 3
+    say(p.id, 4)                  # 5-8
+    leaves(p.id, 1, 3, 5, 7)
+    child = st.fork(p.id)         # copies 1-6
+    assert copied(child) == [(1, 2)]
+    say(child.id, 2)              # 7-8, in the log
+    st.truncate(child.id, 3)      # deletes the copies 4-6 and hides 7-8: the next row is 9
+    say(child.id, 3)              # 9-11
+    leaves(child.id, 3, 7)        # 3-4 holds only 3: in a fork of the child it would hold the child's 9 too
+    assert copied(st.fork(child.id)) == [(1, 2)]
+
+
 def test_private_and_subagent_threads():
     st = SessionStore()
     p = st.create_session(agent="razi", kind="private")
@@ -82,6 +127,65 @@ def test_private_and_subagent_threads():
     assert [e.kind for e in st.log("razi")] == ["private"]
     assert st.search("secret", agent="razi") == []
     assert st.search("secret")  # still searchable locally, by session
+
+
+def test_private_covers_a_private_threads_children_at_any_depth():
+    """D-028: store.private is true for a private thread, its fork and its delegate children at any depth (they
+    hold briefs built from it), and false for any other session, an unknown id or none. A parent loop ends."""
+    st = SessionStore()
+    p = st.create_session(agent="razi", kind="private")
+    kid = st.create_session(agent="razi", kind="subagent", parent=p.id)
+    grandkid = st.create_session(agent="razi", kind="subagent", parent=kid.id)
+    st.append_message(p.id, Message.user("secret plan"))
+    fork = st.fork(p.id)
+    t = st.create_session(agent="razi")
+    tkid = st.create_session(agent="razi", kind="subagent", parent=t.id)
+    plain = st.create_session()
+    st._q("UPDATE sessions SET parent=? WHERE id=?", (tkid.id, t.id))  # a cycle must not hang the walk
+    assert [st.private(x.id) for x in (p, kid, grandkid, fork)] == [True] * 4
+    assert [st.private(x) for x in (t.id, tkid.id, plain.id, "s_missing", "", None)] == [False] * 6
+
+
+def test_a_private_threads_subagent_opens_from_that_thread_and_its_forks_only():
+    """D-028: memory_zoom(subagent=) opens a delegate child of a private thread from that thread or a fork of it.
+    A fork of a private thread is private too, with the original as its parent: its own children still open from it.
+    A normal thread, another private thread, the original (for the fork's children) and no caller do not."""
+    from exo.core.agentlog import AgentLogView
+
+    st = SessionStore()
+    p = st.create_session(agent="razi", kind="private")
+    st.append_message(p.id, Message.user("secret plan"))
+    f = st.fork(p.id)
+    t, q = st.create_session(agent="razi"), st.create_session(agent="razi", kind="private")
+    kids = {}
+    for owner, title in ((p, "p-kid"), (f, "f-kid")):
+        kid = st.create_session(agent="razi", kind="subagent", parent=owner.id, title=title)
+        st.append_message(kid.id, Message.assistant(f"{title} result"))
+        kids[title] = kid.id
+    view = AgentLogView(st, "razi")
+
+    def opens(name, caller):
+        return f"{name} result" in view.subagent(kids[name], caller=caller)
+
+    assert f.kind == "private" and st.get_session(f.id).parent == p.id
+    assert opens("f-kid", f.id) and opens("p-kid", p.id) and opens("p-kid", f.id)
+    assert not any(opens("f-kid", c) for c in (p.id, t.id, q.id, None))
+    assert not any(opens("p-kid", c) for c in (t.id, q.id, None))
+    st._q("UPDATE sessions SET parent=? WHERE id=?", (f.id, p.id))  # a parent loop must not hang the walk
+    assert opens("f-kid", f.id) and not opens("f-kid", t.id)
+
+
+def test_two_subagents_with_one_role_and_one_timestamp_open_the_later_one():
+    """Two children made in the same millisecond tie on `created`. The newest match is the one made later."""
+    from exo.core.agentlog import AgentLogView
+
+    st = SessionStore()
+    t = st.create_session(agent="razi")
+    for text in ("first child", "second child"):
+        kid = st.create_session(agent="razi", kind="subagent", parent=t.id, title="researcher: look it up")
+        st.append_message(kid.id, Message.assistant(text))
+    st._q("UPDATE sessions SET created='2026-10-18T20:00:00.000Z' WHERE kind='subagent'")
+    assert "second child" in AgentLogView(st, "razi").subagent("researcher", caller=t.id)
 
 
 def test_agent_search_gives_positions():
@@ -156,3 +260,52 @@ def test_undo_drops_agent_tree_summaries_that_cover_the_undone_entries():
     assert st.undo(a.id) == 2
     assert [n.id for n in st.summaries("agent:razi")] == ["s_old"]
     assert not st.has_summary("s_new")
+
+
+def test_undo_keeps_agent_tree_summaries_that_hold_no_undone_entry():
+    """D-041: undo drops the nodes whose range holds an entry it hides, and the merges above them. A node over
+    other threads' entries stays, and so does a node rebuilt over entries an earlier undo already hid."""
+    from exo.core.context import SummaryNode
+
+    st = SessionStore()
+    a, b = st.create_session(agent="razi"), st.create_session(agent="razi")
+
+    def say(sid, *texts):
+        for t in texts:
+            st.append_message(sid, Message.user(t) if t[0] in "qb" else Message.assistant(t))
+
+    def node(name, level, index, start, end):
+        st.save_summary(SummaryNode(id=f"s_{name}", session="agent:razi", level=level, index=index, start=start,
+                                    end=end, text=name, status="done"))
+
+    say(a.id, "q0", "a0")                          # pos 1-2
+    say(b.id, *(f"b{i}" for i in range(6)))        # pos 3-8
+    say(a.id, "q1", "a1")                          # pos 9-10
+    say(b.id, "b6", "b7")                          # pos 11-12
+    for args in (("0", 0, 0, 1, 4), ("1", 0, 1, 5, 8), ("2", 0, 2, 9, 12), ("top", 1, 0, 1, 8)):
+        node(*args)
+    assert st.undo(a.id) == 2                      # hides 9-10: only the node holding them goes
+    assert sorted(n.id for n in st.summaries("agent:razi")) == ["s_0", "s_1", "s_top"]
+    node("2b", 0, 2, 9, 12)                        # rebuilt from what is left of 9-12
+    assert st.undo(a.id) == 2                      # hides 1-2: leaf 0 and the merge above it go
+    assert sorted(n.id for n in st.summaries("agent:razi")) == ["s_1", "s_2b"]
+
+
+def test_undo_keeps_context_notes_and_drops_other_local_rows():
+    """A context note stored during the undone turn holds other threads' news, not the turn: it stays in the thread
+    and its search, and the count leaves it out. Other rows outside the log (fork copies) still go."""
+    st = SessionStore()
+    a = st.create_session(agent="razi")
+    st.append_message(a.id, Message.user("keep"))
+    st.append_message(a.id, Message.assistant("ok"))
+    st.append_message(a.id, Message.user("typo"))
+    note = Message.user("news from another thread: zanzibar")
+    note.meta.update({"note": "threads", "local": True})
+    st.append_message(a.id, note)
+    st.append_message(a.id, Message.assistant("answer"))
+    assert st.undo(a.id) == 2
+    assert [m.text() for m in st.messages(a.id)] == ["keep", "ok", "news from another thread: zanzibar"]
+    assert st.search("zanzibar", session=a.id) and st.search("typo", session=a.id) == []
+    child = st.fork(a.id)
+    assert st.undo(child.id) == 2                  # the copies of "keep" and "ok"; the copied note stays
+    assert [m.text() for m in st.messages(child.id)] == ["news from another thread: zanzibar"]

@@ -15,16 +15,21 @@ from __future__ import annotations
 import difflib
 import os
 import re
+import stat
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Callable
 
+from exo.core.private import atomic_write
 from exo.core.tools.builtin.fuzzy import (
     format_no_match_hint,
     fuzzy_find_and_replace,
     is_already_applied,
 )
+from exo.core.tools.registry import ToolError
+
+MAX_READ_BYTES = 50_000_000
 
 
 class OperationType(Enum):
@@ -106,8 +111,7 @@ def parse_v4a_patch(text: str) -> tuple[list[PatchOperation], str | None]:
                 hm = _HINT.match(line)
                 hunk = Hunk(context_hint=hm.group(1) if hm else None)
         elif op and line:
-            if hunk is None:
-                hunk = Hunk()
+            hunk = hunk or Hunk()
             if line[0] in "+- ":
                 hunk.lines.append(HunkLine(line[0], line[1:]))
             elif line[0] != "\\":  # "\ No newline at end of file"
@@ -150,6 +154,8 @@ def _update(content: str, op: PatchOperation) -> tuple[str, list[str]]:
             continue
         changed = True
         pattern, replacement = "\n".join(search), "\n".join(replace)
+        # Similarity may place the context lines; every '-' line must match its file line.
+        minus = frozenset(j for j, x in enumerate(x for x in h.lines if x.prefix != "+") if x.prefix == "-")
         if not search:
             new, err = _insert_addition_only(content, h, replacement)
             if err:
@@ -157,10 +163,11 @@ def _update(content: str, op: PatchOperation) -> tuple[str, list[str]]:
             else:
                 content = new
             continue
-        new, count, _s, err = fuzzy_find_and_replace(content, pattern, replacement)
+        new, count, _s, err = fuzzy_find_and_replace(content, pattern, replacement, exact_lines=minus)
         if not count and h.context_hint and (pos := content.find(h.context_hint)) != -1:
             lo, hi = max(0, pos - 500), min(len(content), pos + 2000)
-            win, count, _s, err = fuzzy_find_and_replace(content[lo:hi], pattern, replacement)
+            win, count, _s, err = fuzzy_find_and_replace(content[lo:hi], pattern, replacement,
+                                                  exact_lines=minus)
             if count:
                 new = content[:lo] + win + content[hi:]
         if count:
@@ -181,21 +188,27 @@ def _diff(path: str, old: str | None, new: str | None) -> str:
         tofile="/dev/null" if new is None else f"b/{path}"))
 
 
-def read_text(p: Path) -> str:
-    """Read UTF-8 text keeping line endings as they are on disk."""
-    with open(p, encoding="utf-8", newline="") as f:
-        return f.read()
+def read_regular(p: Path, cap: int) -> bytes:
+    """Bytes of a regular file (links followed). A FIFO or device is refused before it is opened. A file over
+    ``cap`` bytes is refused, also one that grows past it after ``fstat``: a cut copy would be written back whole."""
+    if not p.is_file():
+        raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
+    with open(os.open(p, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)), "rb") as f:  # a FIFO swapped in: no block
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
+        if st.st_size > cap:
+            raise ToolError(f"{p} is {st.st_size:,} bytes, over the {cap:,}-byte limit; use grep, or sed -n in bash")
+        raw = f.read(cap + 1)
+        if len(raw) > cap:
+            raise ToolError(f"{p} grew past the {cap:,}-byte limit while it was read; use grep, or sed -n in bash")
+        return raw
 
 
 def write_atomic(p: Path, text: str) -> None:
-    """Write UTF-8 text via a temp file and rename, keeping line endings as given."""
+    """Write UTF-8 text through `atomic_write` (#273), keeping line endings as given and the file's mode."""
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f".{p.name}.exo-tmp")
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-    if p.exists():
-        os.chmod(tmp, p.stat().st_mode & 0o7777)
-    os.replace(tmp, p)
+    atomic_write(p, text, p.stat().st_mode & 0o7777 if p.exists() else None)
 
 
 def apply_patch(text: str, resolve: Callable[[str], Path]) -> tuple[bool, str]:
@@ -217,7 +230,7 @@ def apply_patch(text: str, resolve: Callable[[str], Path]) -> tuple[bool, str]:
         if p in overlay:
             return overlay[p]
         if p not in originals:
-            originals[p] = read_text(p) if p.is_file() else None
+            originals[p] = read_regular(p, MAX_READ_BYTES).decode("utf-8") if p.is_file() else None
         return originals[p]
 
     def put(p: Path, label: str, value: str | None) -> None:
@@ -228,7 +241,9 @@ def apply_patch(text: str, resolve: Callable[[str], Path]) -> tuple[bool, str]:
     for op in ops:
         src = resolve(op.file_path)
         cur = read(src)
-        if op.operation is OperationType.ADD:
+        if op.operation is not OperationType.DELETE and src.is_symlink():  # the rename would replace the link
+            errors.append(f"{op.file_path}: is a symlink to {os.path.realpath(src)}; patch that path instead")
+        elif op.operation is OperationType.ADD:
             if cur is not None or src.is_dir():
                 errors.append(f"{op.file_path}: file already exists; use Update File, not Add File")
             else:
@@ -240,7 +255,7 @@ def apply_patch(text: str, resolve: Callable[[str], Path]) -> tuple[bool, str]:
             put(src, op.file_path, None)
         elif op.operation is OperationType.MOVE:
             dst = resolve(op.new_path or "")
-            if read(dst) is not None or dst.is_dir():
+            if read(dst) is not None or dst.is_dir() or dst.is_symlink():
                 errors.append(f"{op.new_path}: destination already exists; move would overwrite")
             else:
                 put(dst, op.new_path or "", cur)

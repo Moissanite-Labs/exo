@@ -16,14 +16,25 @@ Each event is a canonical JSON document:
 The chain hash of an event is sha256(prev + id). It is stored per row and becomes the
 next event's `prev`. Rows cannot be updated or deleted: triggers abort any attempt.
 
-Head anchor (D-040). Triggers stop a careless delete, not a deliberate one: a writer can drop a trigger,
-delete the tail and put the trigger back, and the shorter chain still links. So every append also writes the
-new head (sequence number, row count and chain hash) to two files outside the database: `<ledger>.head` beside
-it and `$EXO_HOME/keys/heads/<hash of the ledger path>.json` (the keys directory, which the gate treats as
-credentials). Both are 0600. `verify` checks every anchor it finds: the ledger must hold at least that many
-events and the chain hash at that position must match. `append` refuses to write past an anchor that does not
-match, so a truncated ledger cannot be papered over by the next event. A trigger found missing when the ledger
-is opened is recreated, and `verify` reports it.
+Head anchor (D-040). Triggers stop a careless delete, not a deliberate one: a writer can drop a trigger, delete the
+tail and put the trigger back, and the shorter chain still links. So every append also writes the new head (sequence
+number, row count and chain hash) to two files outside the database: `<ledger>.head` beside it and
+`$EXO_HOME/keys/heads/<hash of the ledger path>.json` (the keys directory, which the gate treats as credentials).
+The hash is of the path with its folder resolved but not the file, so a ledger file swapped for a symlink keeps its
+anchor. Both are 0600, read only as regular files and written through a fresh temporary file. The anchors are
+written after COMMIT, from the committed head, so a writer killed in between leaves them one event behind (caught up
+by the next append), never ahead of the ledger. The copy under keys/ is written even when the one beside the ledger
+fails. Before it writes, an append catches the anchors up when the one beside the ledger trails or none is at the
+head. It refuses when the one beside the ledger still trails, or when none is at the head and none can be written:
+appends never go on more than one event past every anchor. `verify` checks every anchor it finds: the ledger must
+hold at least that many events and the chain hash at that position must match. A ledger file that is gone while an
+anchor remains fails too (`missing_ledger_problem`). A ledger file that is a symlink fails verify, and append and
+anchor refuse it. Without an authority such a file is opened read-only, and only when it is a regular file, so
+opening it writes nothing through the link. The one exception is SQLite's own `-shm` file beside a target that
+already has a `-wal` file. `verify` warns when the anchors are more than one event apart. `append` also refuses to
+write past an anchor that does not match, so a truncated ledger cannot be papered over by the next event, and
+`anchor()` will not overwrite one unless forced. A trigger found missing when the ledger is opened is recreated, and
+`verify` reports it.
 
 What anchoring does not protect against: a process running as the same user that rewrites the database and both
 anchor files together, or deletes both anchors (verify then reports the ledger as unanchored, not as broken).
@@ -38,6 +49,7 @@ import json
 import logging
 import os
 import sqlite3
+import stat
 import threading
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
@@ -46,6 +58,7 @@ from typing import Any, NamedTuple
 from nacl.signing import SigningKey
 
 from . import crypto
+from .core.private import atomic_write
 from .crypto import GENESIS, Signer
 
 KINDS = frozenset({
@@ -69,6 +82,9 @@ CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
 """
 COLS = "seq,id,ts,author,kind,body,session,refs,prev,pub,sig,chain"
 TRIGGERS = ("events_no_update", "events_no_delete")
+
+RECOVER = ("Check with: exo memory verify. Only if no events were removed (an append killed by an older Exo can "
+           "leave its anchor ahead), run: exo log anchor --force")
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +118,21 @@ def signed_part(event: Mapping) -> dict:
     return {k: event[k] for k in SIGNED_KEYS}
 
 
+def _ledger_key(path: str | os.PathLike) -> Path:
+    """The ledger's path with its folder resolved but not the file. A ledger file swapped for a symlink keeps the
+    name of its anchor under keys/heads/, and for a regular file this is what `path.resolve()` gave."""
+    path = Path(path)
+    return path.parent.resolve() / path.name
+
+
+def anchor_paths_for(path: str | os.PathLike) -> list[Path]:
+    """`<ledger>.head` beside the database, and one file per ledger under `$EXO_HOME/keys/heads/`."""
+    from .store import exo_home
+    path = Path(path)
+    name = hashlib.sha256(str(_ledger_key(path)).encode("utf-8")).hexdigest()[:24] + ".json"
+    return [path.with_name(path.name + ".head"), exo_home() / "keys" / "heads" / name]
+
+
 class Ledger:
     """`Ledger(path, signer)`. `signer` may be a `crypto.Signer`, a bare `SigningKey`, or None
     for read-only use."""
@@ -121,6 +152,11 @@ class Ledger:
         if isinstance(signer, SigningKey):
             signer = Signer("", signer)
         self.signer = signer
+        self._lock = threading.Lock()
+        self.missing_triggers: list[str] = []
+        if authority is None and self.path.is_symlink():  # opened without writing through the link (#277)
+            self.db = _open_symlinked(self.path)
+            return
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None, timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=30000")
@@ -129,7 +165,6 @@ class Ledger:
             logger.warning("ledger %s: append-only trigger(s) %s were missing; recreated", self.path,
                            ", ".join(self.missing_triggers))
         self.db.executescript(SCHEMA)
-        self._lock = threading.Lock()
 
     def _missing_triggers(self) -> list[str]:
         """Triggers absent from an existing events table (a fresh database has neither table nor triggers)."""
@@ -141,36 +176,52 @@ class Ledger:
     # --- head anchors (D-040) --------------------------------------------------
 
     def anchor_paths(self) -> list[Path]:
-        """`<ledger>.head` beside the database, and one file per ledger under `$EXO_HOME/keys/heads/`."""
-        from .store import exo_home
-        real = str(self.path.resolve())
-        name = hashlib.sha256(real.encode("utf-8")).hexdigest()[:24] + ".json"
-        return [self.path.with_name(self.path.name + ".head"), exo_home() / "keys" / "heads" / name]
+        return anchor_paths_for(self.path)
 
     @staticmethod
     def _read_anchor(path: Path) -> dict | None:
+        """The anchor at `path`, None when there is none. Only a regular file counts: a symlink or anything else
+        there is unreadable, since this code only ever writes a regular file."""
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         try:
-            a = json.loads(path.read_text(encoding="utf-8"))
+            fd = os.open(path, flags)
         except FileNotFoundError:
             return None
+        except OSError:  # ELOOP: a symlink, even a dangling one
+            return {"unreadable": True}
+        try:
+            with os.fdopen(fd, "rb") as fh:
+                if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                    return {"unreadable": True}
+                a = json.loads(fh.read().decode("utf-8"))
         except (OSError, ValueError):
             return {"unreadable": True}
         return a if isinstance(a, dict) else {"unreadable": True}
 
     def _anchor_problem(self, a: Mapping, head: "Head") -> str:
+        return self._anchor_check(a, head)[0]
+
+    def _anchor_check(self, a: Mapping, head: "Head") -> tuple[str, int]:
+        """Why anchor `a` disagrees with the ledger ('' when it agrees), and the events up to its seq."""
         if a.get("unreadable") or not isinstance(a.get("seq"), int) or not isinstance(a.get("chain"), str):
-            return "the anchor file is unreadable"
+            return "the anchor file is unreadable", 0
         if a["seq"] > head.seq:
-            return f"the ledger ends at seq {head.seq} but its anchor says seq {a['seq']}: events were removed"
+            return f"the ledger ends at seq {head.seq} but its anchor says seq {a['seq']}: events were removed", 0
         if a["seq"] == 0:
-            return "" if a["chain"] == GENESIS else "the anchor's empty-ledger hash is wrong"
-        row = self.db.execute("SELECT chain FROM events WHERE seq = ?", (a["seq"],)).fetchone()
-        if row is None or row[0] != a["chain"]:
-            return f"the chain hash at seq {a['seq']} does not match its anchor: the ledger was rewritten"
+            return ("" if a["chain"] == GENESIS else "the anchor's empty-ledger hash is wrong"), 0
+        if not self._anchor_links(a):
+            return f"the chain hash at seq {a['seq']} does not match its anchor: the ledger was rewritten", 0
         count = self.db.execute("SELECT COUNT(*) FROM events WHERE seq <= ?", (a["seq"],)).fetchone()[0]
         if isinstance(a.get("count"), int) and count != a["count"]:
-            return f"{a['count']} events were anchored up to seq {a['seq']}, {count} remain"
-        return ""
+            return f"{a['count']} events were anchored up to seq {a['seq']}, {count} remain", count
+        return "", count
+
+    def _anchor_links(self, a: Mapping) -> bool:
+        """The ledger holds anchor `a`'s chain hash at its seq: one indexed lookup."""
+        if a.get("seq") == 0:
+            return a.get("chain") == GENESIS
+        row = self.db.execute("SELECT chain FROM events WHERE seq = ?", (a.get("seq"),)).fetchone()
+        return row is not None and row[0] == a.get("chain")
 
     def anchors(self) -> list[tuple[Path, dict]]:
         out = []
@@ -181,9 +232,10 @@ class Ledger:
         return out
 
     def check_anchors(self) -> str:
-        """'' when every anchor found matches the ledger, else why not. A writer updates the anchors just before
-        its COMMIT, under the write lock, so the check takes that lock too: it never sees an anchor ahead of a
-        commit still in flight. A database it cannot lock (read-only) is checked as it stands."""
+        """'' when every anchor found matches the ledger, else why not. A writer updates the anchors after its
+        COMMIT, in a second transaction under the write lock, so the check takes that lock too: it never reads the
+        head before a commit and the anchors after it. A database it cannot lock (read-only) is checked as it
+        stands."""
         with self._lock:
             locked = True
             try:
@@ -201,36 +253,113 @@ class Ledger:
                 if locked:
                     self.db.execute("ROLLBACK")
 
-    def _write_anchors(self, head: "Head", count: int) -> list[tuple[Path, bytes | None]]:
-        """Write the head to every anchor path. Returns the previous bytes of each, to undo on rollback."""
-        doc = json.dumps({"v": 1, "ledger": str(self.path.resolve()), "seq": head.seq, "count": count,
+    def _try_anchors(self, head: "Head", count: int) -> dict[Path, OSError]:
+        """Write the head to every anchor path. Returns the paths that could not be written, with why."""
+        doc = json.dumps({"v": 1, "ledger": str(_ledger_key(self.path)), "seq": head.seq, "count": count,
                           "chain": head.chain, "id": head.id}, sort_keys=True).encode("utf-8")
-        before = []
-        for i, p in enumerate(self.anchor_paths()):
-            try:
-                old = p.read_bytes() if p.exists() else None
-                _atomic_write(p, doc)
-                before.append((p, old))
-            except OSError as exc:
-                if i == 0:  # the anchor beside the ledger is required; the home copy is best effort
-                    raise
-                logger.warning("ledger %s: cannot write head anchor %s: %s", self.path, p, exc)
-        return before
-
-    def anchor(self) -> dict:
-        """Anchor the current head (a store that predates D-040, or after `exo init` reuses a path)."""
-        with self._lock:
-            self.db.execute("BEGIN IMMEDIATE")
-            try:
-                head = self.head()
-                self._write_anchors(head, len(self))
-            finally:
-                self.db.execute("COMMIT")
-        return {"seq": head.seq, "chain": head.chain}
-
-    def clear_anchors(self) -> None:
-        """Remove this path's anchors: only for a new, empty ledger made where an old one was deleted."""
+        failed: dict[Path, OSError] = {}
         for p in self.anchor_paths():
+            try:
+                _atomic_write(p, doc)
+            except OSError as exc:
+                failed[p] = exc
+        return failed
+
+    def _write_anchors(self, head: "Head", count: int) -> None:
+        """Write the head to every anchor path. The anchor beside the ledger is required: a failure there is raised,
+        but only after the copy under keys/ is written. That copy is best effort."""
+        beside = self.anchor_paths()[0]
+        failed = self._try_anchors(head, count)
+        for p, exc in failed.items():
+            if p != beside:
+                logger.warning("ledger %s: cannot write head anchor %s: %s", self.path, p, exc)
+        if beside in failed:
+            raise failed[beside]
+
+    def _catch_up(self, head: "Head", count: int, found: list[tuple[Path, int]]) -> None:
+        """Before an insert, under the write lock: bring the anchors up to the head when the anchor beside the
+        ledger trails it, or when no anchor holds it (the last write failed or was cut short). So an append never
+        goes on more than one event past every anchor. It refuses when the anchor beside the ledger trails and
+        cannot be written, or when no anchor holds the head and none can be written."""
+        beside = self.anchor_paths()[0]
+        seqs = dict(found)
+        trails = beside in seqs and seqs[beside] < head.seq
+        if not trails and (head.seq == 0 or max(seqs.values(), default=-1) >= head.seq):
+            return
+        failed = self._try_anchors(head, count)
+        if trails and beside in failed:
+            raise LedgerError(f"refusing to append: head anchor {beside} is at seq {seqs[beside]}, the ledger at "
+                              f"seq {head.seq}, and it cannot be written ({failed[beside]}). Restore write access "
+                              "to it, and the next append catches it up")
+        if len(failed) == len(self.anchor_paths()):
+            paths = " and ".join(str(p) for p in failed)
+            raise LedgerError(f"refusing to append: no head anchor is at the ledger's seq {head.seq}, and {paths} "
+                              f"cannot be written ({failed[beside]}). Restore write access to one of them, and the "
+                              "next append catches the anchors up")
+
+    def _count(self, checked: list[tuple[int, int]], head: "Head") -> int:
+        """Events in the ledger, from the newest (seq, count) an anchor check already took: only the tail after it
+        is counted again. With no anchor, every event is counted."""
+        if not checked:
+            return len(self)
+        seq, count = max(checked)
+        if seq < head.seq:
+            count += self.db.execute("SELECT COUNT(*) FROM events WHERE seq > ?", (seq,)).fetchone()[0]
+        return count
+
+    def _anchor_committed(self, mine: "Head", count: int) -> None:
+        """After an append's COMMIT: anchor the committed head under the write lock, so anchors only move forward.
+        The anchors were checked in full before the insert, so this takes indexed lookups only. Events another
+        process appended since are counted from the tail."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            head = self.head()
+            for p, a in self.anchors():
+                if not isinstance(a.get("seq"), int) or a["seq"] > head.seq or not self._anchor_links(a):
+                    raise LedgerError(f"head anchor {p} does not match the ledger")
+            if head.seq > mine.seq:
+                count += self.db.execute("SELECT COUNT(*) FROM events WHERE seq > ?", (mine.seq,)).fetchone()[0]
+            self._write_anchors(head, count)
+        finally:
+            self.db.execute("ROLLBACK")
+
+    def _anchor_head(self, force: bool = False) -> tuple["Head", list[tuple[Path, dict]]]:
+        """Write the committed head to the anchors under the write lock, so they only move forward. An anchor
+        that disagrees with the ledger is evidence and stays unless `force`. Returns the head and what it replaced."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            head = self.head()
+            bad = [(p, a, why) for p, a in self.anchors() if (why := self._anchor_problem(a, head))]
+            if bad and not force:
+                raise LedgerError(f"head anchor {bad[0][0]}: {bad[0][2]}")
+            self._write_anchors(head, len(self))
+            return head, [(p, a) for p, a, _ in bad]
+        finally:
+            self.db.execute("ROLLBACK")
+
+    def anchor(self, force: bool = False) -> dict:
+        """Anchor the current head (a store that predates D-040). It refuses to overwrite an anchor that disagrees
+        with the ledger, since events may have been removed. `force` does, for a store left with an anchor ahead
+        by an append killed before its COMMIT (older Exo wrote the anchor first), and lists what it replaced."""
+        if why := self._symlink_problem():  # anchoring would bless whatever database the link points at
+            raise LedgerError(f"refusing to anchor: {why}")
+        with self._lock:
+            try:
+                head, replaced = self._anchor_head(force)
+            except LedgerError as exc:
+                raise LedgerError(f"{exc}. {RECOVER}") from None
+            except OSError as exc:  # only the anchor beside the ledger raises
+                raise LedgerError(f"head anchor {self.anchor_paths()[0]} cannot be written ({exc}). Restore "
+                                  "write access to it") from None
+        out: dict = {"seq": head.seq, "chain": head.chain}
+        if replaced:
+            out["replaced"] = [{"path": str(p), "seq": a.get("seq"), "chain": a.get("chain")} for p, a in replaced]
+        return out
+
+    def clear_anchors(self, beside: bool = True) -> None:
+        """Remove this path's anchors: only for a new ledger made where an old one was deleted. `beside=False`
+        keeps `<ledger>.head`, for a ledger copied in together with its anchor (`exo import-store`)."""
+        for p in self.anchor_paths()[0 if beside else 1:]:
             p.unlink(missing_ok=True)
 
     @property
@@ -287,6 +416,13 @@ class Ledger:
     def __len__(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
 
+    def _symlink_problem(self) -> str:
+        """A ledger file that is a symlink may have been swapped for another database: verify fails, and append and
+        anchor refuse."""
+        if self.path.is_symlink():
+            return f"the ledger {self.path} is a symbolic link, not the database itself: it may have been swapped"
+        return ""
+
     # --- write ---------------------------------------------------------------
 
     def append(self, kind: str, body: Mapping, author: str | None = None, session: str | None = None,
@@ -298,6 +434,8 @@ class Ledger:
             raise LedgerError("direct-key ledger writes are disabled; use the installed authority factory")
         if self.signer is None:
             raise LedgerError("ledger opened without a signer; cannot append")
+        if why := self._symlink_problem():
+            raise LedgerError(f"refusing to append: {why}")
         author = author or self.signer.author
         if not author:
             raise LedgerError("author is required")
@@ -323,10 +461,16 @@ class Ledger:
                     if not self.db.execute("SELECT 1 FROM events WHERE id = ?", (r,)).fetchone():
                         raise LedgerError(f"ref {r} is not an event in this ledger")
                 head = self.head()
+                checked: list[tuple[int, int]] = []
+                found: list[tuple[Path, int]] = []
                 for p, a in self.anchors():
-                    why = self._anchor_problem(a, head)
+                    why, upto = self._anchor_check(a, head)
                     if why:
-                        raise LedgerError(f"refusing to append: head anchor {p}: {why}. Run: exo memory verify")
+                        raise LedgerError(f"refusing to append: head anchor {p}: {why}. {RECOVER}")
+                    checked.append((a["seq"], upto))
+                    found.append((p, a["seq"]))
+                count = self._count(checked, head)
+                self._catch_up(head, count, found)
                 event = {"ts": crypto.now_ts(), "author": author, "kind": kind, "body": body,
                          "session": session, "refs": refs, "prev": head.chain, "pub": self.signer.pub}
                 event["id"] = event_id(event)
@@ -336,20 +480,15 @@ class Ledger:
                     f"INSERT INTO events ({COLS.split(',', 1)[1]}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (event["id"], event["ts"], author, kind, crypto.canonical(body).decode("utf-8"), session,
                      json.dumps(refs), event["prev"], event["pub"], event["sig"], chain))
-                undo = self._write_anchors(Head(head.seq + 1, event["id"], chain), head.seq + 1)
-                try:
-                    self.db.execute("COMMIT")
-                except BaseException:
-                    for p, old in undo:
-                        if old is None:
-                            p.unlink(missing_ok=True)
-                        else:
-                            _atomic_write(p, old)
-                    raise
+                self.db.execute("COMMIT")
             except BaseException:
                 if self.db.in_transaction:
                     self.db.execute("ROLLBACK")
                 raise
+            try:  # after COMMIT: an anchor is never ahead of the ledger, even if this process dies here
+                self._anchor_committed(Head(head.seq + 1, str(event["id"]), chain), count + 1)
+            except (LedgerError, OSError, sqlite3.Error) as exc:  # the event stands; the next append catches up or refuses
+                logger.warning("ledger %s: seq %d committed, head anchor not updated: %s", self.path, head.seq + 1, exc)
         return {**event, "seq": head.seq + 1, "chain": chain}
 
     def sync_authority(self) -> dict:
@@ -406,6 +545,8 @@ class Ledger:
         """Recompute every id, chain link and signature, then check the head anchors and the append-only
         triggers. `trusted` is a map of author to allowed public keys, or a key registry with
         `reason(author, pub)` (exo.keyring): an event whose key it does not trust fails."""
+        if why := self._symlink_problem():
+            return {"ok": False, "error": why, "checked": 0}
         prev, checked = GENESIS, 0
         for ev in self.iter():
             doc = signed_part(ev)
@@ -431,18 +572,59 @@ class Ledger:
         why = self.check_anchors()
         if why:
             return {"ok": False, "error": why, "checked": checked, "head": prev}
-        return {"ok": True, "checked": checked, "head": prev, "anchored": bool(self.anchors())}
+        found = sorted((a["seq"], str(p)) for p, a in self.anchors() if isinstance(a.get("seq"), int))
+        res = {"ok": True, "checked": checked, "head": prev, "anchored": bool(found),
+               "anchored_seq": found[0][0] if found else None}
+        if found and found[-1][0] - found[0][0] > 1:  # appends go on while one anchor cannot be written (#277)
+            res["warning"] = (f"head anchor {found[0][1]} is at seq {found[0][0]}, {found[-1][0] - found[0][0]} "
+                              "events behind the other: it is not being written")
+        return res
+
+
+def missing_ledger_problem(path: str | os.PathLike) -> str:
+    """For a ledger file that is gone: '' when no anchor says it held events, else why that fails verify. It opens
+    no database, so the check does not put an empty one in place of the evidence."""
+    for p in anchor_paths_for(path):
+        a = Ledger._read_anchor(p)
+        if a is None:
+            continue
+        if a.get("unreadable") or not isinstance(a.get("seq"), int):
+            return f"ledger {path} is missing and its head anchor {p} is unreadable"
+        if a["seq"] > 0:
+            return f"ledger {path} is missing but its head anchor {p} says seq {a['seq']}: the ledger was deleted"
+    return ""
+
+
+def _open_symlinked(path: Path) -> sqlite3.Connection:
+    """A ledger file that is a symlink, opened read-only (SQLite's `mode=ro`): no WAL switch, no schema, no file
+    made at a dangling target. Only a regular file is opened: opening a FIFO would block. `immutable=1` keeps SQLite
+    from making `-wal` and `-shm` files beside a WAL target. Without a `-wal` file there, all its data is in the main
+    file. A target that is gone, not a regular file, not a database or without an events table reads as an empty
+    ledger kept in memory. Reads see the target's events, verify reports the link, and append and anchor refuse."""
+    target, db = Path(os.path.realpath(path)), None
+    try:
+        if target.is_file():
+            ro = "mode=ro" if Path(f"{target}-wal").exists() else "mode=ro&immutable=1"
+            db = sqlite3.connect(f"{target.as_uri()}?{ro}", uri=True, check_same_thread=False, isolation_level=None,
+                                 timeout=30)
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+                return db
+    except sqlite3.DatabaseError:
+        pass
+    if db is not None:
+        db.close()
+    db = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
+    db.executescript(SCHEMA)
+    return db
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
+    """Write an anchor (0600) through `atomic_write`: a symlink planted in the folder cannot redirect it. No fsync,
+    as before #273, so an append, which writes two anchors, costs what it did."""
     if not path.parent.exists():  # keys/heads under $EXO_HOME: private like the rest of keys/
         path.parent.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         path.parent.mkdir(mode=0o700, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(data)
-    os.replace(tmp, path)
+    atomic_write(path, data, sync=False)
 
 
 def _bad(ev: dict, reason: str, checked: int) -> dict:

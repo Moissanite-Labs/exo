@@ -23,11 +23,13 @@ Panels:
 
 ```sh
 exo serve                      # the core, in one terminal
-exo web                        # the web client: opens http://127.0.0.1:7342/#token=...
+exo web                        # the web client: prints http://127.0.0.1:7342/#token=... and opens the page
 ```
 
-The page needs the token in that link for every request (D-039): `exo web` prints the link and opens it in your
-browser; open the latest complete printed link yourself after `--no-open` or a restart.
+Every `/api/` route except `POST /api/launch` needs the token in that link (D-039). `POST /api/launch` is served without it, because it trades a one-time launch code for the token (#177), and the page shell (`/` and `/static/`) is served without it, behind the Host check only.
+`exo web` prints the link and opens the page in your browser with a one-time code that the page trades for the token (#166), so the token never sits in the browser
+launcher's argv; open the latest complete printed link yourself after `--no-open`, a restart or a
+non-loopback `--host` (no browser is opened then).
 The bare URL has no token. Each web launch creates a new token; old links expire. The tab keeps it in
 `sessionStorage` only, never permanent browser storage. See `docs/ui/WEB.md`.
 
@@ -36,8 +38,9 @@ calls `exo_command.__main__.main()`; arguments after `web` go to it. `python -m 
 with `PYTHONPATH=plugins/exo-command`.
 
 Options: `--socket PATH` (default `$EXO_HOME/run/exod.sock`), `--url URL --token-file FILE` for a core
-on TCP, `--host`, `--port`. It uses the standard library only. `exo web` will call
-XX
+on TCP, `--host`, `--port`. It uses the standard library only. A second `exo web` on a port in use says whether
+Exo's web client already runs there (its open page and printed link still work, Ctrl+C in its terminal stops it)
+or another program holds it, and suggests `--port`.
 
 The slash command `/exo-command` prints a short text digest of the same panels (it connects to the
 running core).
@@ -58,7 +61,10 @@ Web routes: `GET /`, `GET /api/snapshot?sections=a,b&fresh=true`, `GET /api/sect
 The server binds to loopback, and a POST from another origin is refused.
 
 On start the client reads the last 5000 events so recent approvals, usage and task moves are not missed.
-A client that drops resumes from the last `seq`.
+When its stream ends (a core restart, or a stream the core ended for falling behind, D-079), it replays from the
+last event it applied, so it misses nothing. That holds up to 16,384 missed events (`RESUME_GAP`, four times the
+core's limit). After a longer gap, such as a long outage while the core kept working, it reads the last 5000
+events as on start, so one reply never carries the whole gap. An approval asked before those does not show.
 
 ## The web UI
 
@@ -71,6 +77,8 @@ and nothing loaded from another site. It follows the system light or dark settin
   rendered as Markdown (headings, lists, code, quotes and pipe tables, built as DOM nodes, never as HTML).
   Each answer has accept, edit (with a text box) and reject, which send `feedback.send`. Enter sends; while
   a turn runs it steers.
+  A context note from other threads (`meta.note`, D-028) is for the model and is not drawn, as in the terminal
+  client.
 - **Panels:** `ui.panel` events open panels beside the chat. Kinds: markdown, diff, table, tasks,
   approval, taste, choice, file, chart. A markdown panel uses the same renderer as a completed reply, so it
   keeps its line breaks. A panel whose data is missing or odd shows its `text`. The page sends `ui.respond`
@@ -81,7 +89,8 @@ and nothing loaded from another site. It follows the system light or dark settin
 The server relays the protocol, it adds no state of its own beyond a ring of the last 3000 events and the
 list of open panels. When a resume cursor falls outside that ring, SSE signals the gap, replays the
 core’s durable event log, and the page refreshes its transcript, live sessions, panels and approvals. Routes (`api.py` has the table): `GET /api/events` (SSE of every event, `?since=`,
-`?session=` or `Last-Event-ID`), `/api/chat/sessions`, `/api/chat/sessions/<id>` (+ `/send`, `/interrupt`),
+`?session=` or `Last-Event-ID`), `/api/chat/sessions`, `/api/chat/sessions/<id>` (+ `/send`, `/interrupt`, `/model`),
+`/api/chat/models`,
 `/api/chat/panels`, `/api/complete/commands`, `/api/complete/files` (guarded, D-037), `/api/feedback`, `/api/ui/respond`, `/api/tasks`, `/api/schedule`. Every write checks
 its input, refuses a request from another origin, and answers 501 if the core does not handle that
 command yet.
@@ -107,7 +116,7 @@ Set them as `EXO_COMMAND_<KEY>` environment variables or pass them to `load_sett
 | `socket` | `$EXO_HOME/run/exod.sock` | Core socket. |
 | `url`, `token`, `token_file` | none | Core on TCP. The token falls back to `$EXO_TOKEN`, then `$EXO_HOME/run/exod.token`. |
 | `host`, `port` | `127.0.0.1`, `7342` | Where the web client listens. |
-| `principal_store` | `$EXO_PRINCIPAL_STORE`, else `$EXO_HOME/principals/$EXO_PRINCIPAL` | Principal store root. No guess when unset. |
+| `principal_store` | `$EXO_PRINCIPAL_STORE`, else the store of `$EXO_PRINCIPAL`: config `principals.<id>`, else `$EXO_HOME/principals/<id>` | Principal store root. No guess when unset. |
 | `decisions_queue` | `queues/decisions.jsonl` | Relative paths resolve inside the store. |
 | `live_window_seconds` | 900 | A session is live if it moved in this window. |
 | `past_window_hours` | 24 | Finished subagent sessions shown under Past. |
@@ -171,6 +180,13 @@ Per session cost is the core's `session_total.cost_usd` from `usage.updated`. A 
 not price (a local model, an unknown rate) shows its tokens and `unpriced`. The model shown is the one
 named by the newest `turn.started`. Cost per accepted output needs verdict events from the ledger and is
 left for when `exo.eval` publishes them.
+
+A subagent's spend counts once. When a delegated child finishes, the core adds its total to the parent's
+`session_total` and publishes `usage.updated` on the parent. From then on the table keeps the child's row,
+marked `in parent` (`rolled_up` in the data), and the total, the seat and model bars and the session counts
+leave it out. That spend then shows under the parent's seat and model. A child that is still running, the
+session of a scheduled job and a fork are summed as their own sessions, because the core rolls none of them
+into a parent.
 
 ## Tests
 

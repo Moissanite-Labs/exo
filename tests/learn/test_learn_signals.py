@@ -1,10 +1,12 @@
 import json
+import logging
 
 import pytest
 
 from exo import capture
 from exo.learn import handle_feedback, handle_ui_respond
 from exo.learn.learner import Learner
+from exo.learn.runtime import resolve_store
 
 from conftest import feedback, new_session
 from exo.protocol import schema as s
@@ -64,6 +66,69 @@ def test_same_edit_twice_makes_one_pair(engine, learner):
     assert len(verdicts(learner)) == 2 and len(pairs(learner)) == 2  # distinct verdict events, distinct evidence
 
 
+def test_feedback_on_a_private_thread_is_not_remembered(engine, learner):
+    """D-028: a verdict on a private thread's answer would put that answer and the question before it in the
+    ledger and the preference pairs, so it is not recorded and says why."""
+    sid, _ = new_session(engine, ("user", "Plan the zebracorn launch"), ("assistant", "Zebracorn ships Friday."),
+                         kind="private")
+    for verdict, text in (("accept", ""), ("edit", "Zebracorn ships Monday."), ("reject", "wrong day")):
+        out = handle_feedback(engine, feedback(sid, verdict, text))
+        assert out["recorded"] is False and "private" in out["reason"]
+    assert list(learner.runtime.ledger.iter()) == [] and pairs(learner) == [] and learner.tasks == {}
+
+
+def test_feedback_under_a_private_thread_is_not_remembered(engine, learner):
+    """D-028: a private thread's delegate child holds the brief built from it and the child's result, and a client
+    can open it (/tasks, /open) and send a verdict. Neither it nor its own child records one. A normal thread's
+    child still does."""
+    priv, _ = new_session(engine, ("user", "Plan the zebracorn deal"), ("assistant", "Delegating."), kind="private")
+    kid, _ = new_session(engine, ("user", "Dig into zebracorn"), ("assistant", "Zebracorn: $40M, closes Friday."),
+                         kind="subagent", parent=priv)
+    grandkid, _ = new_session(engine, ("user", "Check the zebracorn terms"), ("assistant", "Zebracorn terms hold."),
+                              kind="subagent", parent=kid)
+    for sid in (kid, grandkid):
+        for verdict, text in (("accept", ""), ("edit", "Zebracorn: $50M"), ("reject", "zebracorn is $50M")):
+            out = handle_feedback(engine, feedback(sid, verdict, text))
+            assert out["recorded"] is False and "private" in out["reason"]
+    assert list(learner.runtime.ledger.iter()) == [] and pairs(learner) == [] and learner.tasks == {}
+    normal, _ = new_session(engine, ("user", "Plan the trip"), ("assistant", "Delegating."), kind="thread")
+    child, _ = new_session(engine, ("user", "Check the ferry"), ("assistant", "Ferry: nine."), kind="subagent",
+                           parent=normal)
+    assert handle_feedback(engine, feedback(child, "edit", "Ferry: ten."))["recorded"] is True
+
+
+def test_ui_respond_on_a_private_threads_panel_is_not_remembered(engine, learner):
+    """D-028: what the user does with a panel a private thread opened (a choice, a comment) stays out of the
+    ledger; a panel from a normal thread, or one the event log does not know, is still noted."""
+    priv, _ = new_session(engine, ("user", "Compare the zebracorn offers"), kind="private")
+    normal, _ = new_session(engine, ("user", "Compare the ferries"), kind="thread")
+    engine.hub.publish(s.UiPanel(panel_id="p_priv", action="open", kind="choice", text="Zebracorn: A or B?"), priv)
+    engine.hub.publish(s.UiPanel(panel_id="p_norm", action="open", kind="choice", text="Ferry: A or B?"), normal)
+    out = handle_ui_respond(engine, s.UiRespond(panel_id="p_priv", action="acted",
+                                                value={"choice": "b", "comment": "zebracorn at $50M"}))
+    assert out["recorded"] is False and "private" in out["reason"]
+    for pid in ("p_norm", "p_unknown"):
+        assert handle_ui_respond(engine, s.UiRespond(panel_id=pid, action="acted", value={"choice": "a"}))["recorded"]
+    notes = [e["body"] for e in learner.runtime.ledger.iter(kind="note") if e["body"]["type"] == "ui_signal"]
+    assert [n["panel_id"] for n in notes] == ["p_norm", "p_unknown"]
+    assert "zebracorn" not in json.dumps(list(learner.runtime.ledger.iter())).lower()
+
+
+def test_ui_respond_on_a_panel_a_private_thread_updated_is_not_remembered(engine, learner):
+    """D-028: `ui update` takes a known panel id from any thread. A panel a normal thread opened and a private
+    thread (or its child) then updated may show the private thread's words, so a response to it is not noted."""
+    normal, _ = new_session(engine, ("user", "Compare the ferries"), kind="thread")
+    priv, _ = new_session(engine, ("user", "Compare the zebracorn offers"), kind="private")
+    kid, _ = new_session(engine, ("user", "Check zebracorn"), kind="subagent", parent=priv)
+    for pid, by in (("p_shared", priv), ("p_kid", kid)):
+        engine.hub.publish(s.UiPanel(panel_id=pid, action="open", kind="choice", text="Ferry: A or B?"), normal)
+        engine.hub.publish(s.UiPanel(panel_id=pid, action="update", kind="choice", text="Zebracorn: A or B?"), by)
+        out = handle_ui_respond(engine, s.UiRespond(panel_id=pid, action="acted",
+                                                    value={"choice": "b", "comment": "zebracorn at $50M"}))
+        assert out["recorded"] is False and "private" in out["reason"], pid
+    assert "zebracorn" not in json.dumps(list(learner.runtime.ledger.iter())).lower()
+
+
 def test_ui_respond_logs_a_note(engine, learner):
     out = handle_ui_respond(engine, s.UiRespond(panel_id="p1", action="dismissed", value={"why": "noise"}))
     assert out["recorded"]
@@ -96,6 +161,36 @@ def test_store_from_environment_principal(make_engine, template_store, tmp_path)
     assert lr.runtime is not None and lr.runtime.root == eng.home / "principals" / "pat"
 
 
+def test_store_falls_back_to_the_active_principal_in_config(make_engine, template_store):
+    """The installer and `exo init` write only config.json `principal`; learning finds that store, as exo-memory
+    does, and the environment still wins over the file."""
+    import shutil
+    eng = make_engine(store=False)
+    shutil.copytree(template_store.root, eng.home / "principals" / "pat")
+    shutil.copytree(template_store.root, eng.home / "principals" / "env-pick")
+    (eng.home / "config.json").write_text(json.dumps({"principal": "pat"}))
+    lr = Learner(eng, env={})
+    assert lr.runtime is not None and lr.runtime.root == eng.home / "principals" / "pat"
+    assert lr.notices == []
+    assert resolve_store(eng, {"EXO_PRINCIPAL": "env-pick"}) == eng.home / "principals" / "env-pick"
+    (eng.home / "config.json").write_text(json.dumps({"principal": "../escape"}))
+    assert resolve_store(eng, {}) is None  # a bad id in the file is ignored, not joined into a path
+    shutil.copytree(template_store.root, eng.home / "principals" / "7")
+    (eng.home / "config.json").write_text(json.dumps({"principal": 7}))
+    assert resolve_store(eng, {}) is None  # only a string names a principal, as exo-memory reads it
+
+
+def test_no_principal_at_all_is_a_quiet_notice_that_names_the_fix(make_engine, caplog):
+    """No principal anywhere is a setup step, not a fault: the notice names `exo init` and is not a warning,
+    so it is not printed over the terminal before the client draws (exo-memory says it there)."""
+    eng = make_engine(store=False)
+    with caplog.at_level(logging.DEBUG, logger="exo.learn"):
+        lr = Learner(eng, env={})
+        assert lr.runtime is None
+    assert len(lr.notices) == 1 and "exo init" in lr.notices[0]
+    assert not [r for r in caplog.records if r.name == "exo.learn" and r.levelno >= logging.WARNING]
+
+
 @pytest.mark.parametrize("text,cue", [
     ("Important correction: use tables for the summary, NOT bullet lists.", "label"),
     ("Important correction: the deploy target is staging, NOT prod.", "label"),
@@ -126,3 +221,96 @@ def test_chat_corrections_are_recorded_once(engine, learner):
     body = first[0]["body"]
     assert body["verdict"] == "edit" and "NOT bullet" in body["text"]
     assert learner.runtime.ledger.get(body["target"])["body"]["text"] == "- a\n- b"
+
+
+CAPTURED = ("ruling", "verdict", "question")
+
+
+def _full_scan(led):
+    """The known set as record_chat_signals built it before #263: every ruling, verdict and question in the ledger."""
+    return {(e["body"] or {}).get("capture_key") for e in led.iter(kind=CAPTURED)}
+
+
+def _say(engine, sid, role, text):
+    from exo.core.types import ContentPart, Message
+    engine.store.append_message(sid, Message(role=role, content=[ContentPart.of_text(text)]), "t1")
+
+
+def _captured_first(led, said, answer):
+    """Write the correction `said` of `answer` the way exo-memory does when it hears it first."""
+    (sig,) = capture.extract_signals([{"role": "assistant", "content": answer}, {"role": "user", "content": said}])
+    kind, body = capture.to_event(sig, source="pre_compress")
+    body["target"] = led.append("utterance", {"text": answer, "role": "assistant"}, "exo-memory")["id"]
+    return led.append(kind, body, "principal")
+
+
+def test_chat_capture_reads_only_the_new_ledger_rows(engine, learner, monkeypatch):
+    """#263: the known capture keys stay on the runtime between calls. A call reads only the ruling, verdict and
+    question rows after the last one read, and still sees a key another writer added in between."""
+    from exo.learn.signals import record_chat_signals
+    led = learner.runtime.ledger
+    for i in range(40):
+        led.append("ruling", {"text": f"rule {i}", "capture_key": f"old-{i}"}, "principal")
+    read, real = [], led.iter
+
+    def counted(*a, **kw):
+        for ev in real(*a, **kw):
+            if ev["kind"] in CAPTURED:
+                read.append(ev["seq"])
+            yield ev
+    monkeypatch.setattr(led, "iter", counted)
+    sid, _ = new_session(engine, ("user", "Summarise"), ("assistant", "- a\n- b"),
+                         ("user", "Important correction: use a table, NOT bullet lists."))
+    assert len(record_chat_signals(learner, sid)) == 1 and len(read) == 40  # the first call reads the ledger once
+    read.clear()
+    assert record_chat_signals(learner, sid) == [] and len(read) == 1  # then only the verdict it wrote
+    read.clear()
+    said, answer = "Important correction: the deploy target is staging, NOT prod.", "Deployed to prod."
+    theirs = _captured_first(led, said, answer)
+    _say(engine, sid, "assistant", answer)
+    _say(engine, sid, "user", said)
+    assert record_chat_signals(learner, sid) == [] and read == [theirs["seq"]]  # known: not written twice
+    read.clear()
+    assert record_chat_signals(learner, sid) == [] and read == []
+
+
+def test_known_capture_keys_match_a_full_scan_through_every_change(engine, learner, monkeypatch, tmp_path):
+    """#263: the kept set equals a full scan of the ledger at every call: after rows the learner writes, rows another
+    writer adds, the same file opened again, and another ledger put in its place, with a different history that is
+    longer or shorter than the rows read so far."""
+    from exo.ledger import Ledger
+    from exo.learn import signals
+    rt, real, calls = learner.runtime, signals.known_keys, []
+
+    def checked(r):
+        keys = real(r)
+        assert keys == _full_scan(r.ledger)
+        calls.append(len(keys))
+        return keys
+    monkeypatch.setattr(signals, "known_keys", checked)
+    fix = "Important correction: use a table, NOT bullet lists."
+    sid, _ = new_session(engine, ("user", "Summarise"), ("assistant", "- a\n- b"), ("user", fix))
+    rt.ledger.append("ruling", {"text": "Always cite the source.", "capture_key": "k-cite"}, "principal")
+    assert [e["kind"] for e in signals.record_chat_signals(learner, sid)] == ["verdict"]
+    _captured_first(rt.ledger, "Important correction: it is staging, NOT prod.", "Deployed to prod.")
+    _say(engine, sid, "assistant", "Deployed to prod.")
+    _say(engine, sid, "user", "Important correction: it is staging, NOT prod.")
+    assert signals.record_chat_signals(learner, sid) == []
+    rt.ledger.close()  # the same file opened again keeps the set
+    rt.ledger = Ledger(rt.store.ledger_path, rt.signer)
+    _say(engine, sid, "user", "From now on always run the tests before a push.")
+    assert [e["kind"] for e in signals.record_chat_signals(learner, sid)] == ["ruling"]
+    assert real(rt) == _full_scan(rt.ledger)
+    first = rt.ledger
+    longer = Ledger(tmp_path / "longer" / "ledger.sqlite", rt.signer)  # more rows than read so far, none of ours
+    for i in range(rt.known[0] + 5):
+        longer.append("note", {"text": f"n{i}"}, "principal")
+    rt.ledger = longer
+    assert sorted(e["kind"] for e in signals.record_chat_signals(learner, sid)) == ["ruling", "verdict", "verdict"]
+    shorter = Ledger(tmp_path / "shorter" / "ledger.sqlite", rt.signer)  # fewer rows: it holds just one of the keys
+    _captured_first(shorter, fix, "- a\n- b")
+    rt.ledger = shorter
+    assert sorted(e["kind"] for e in signals.record_chat_signals(learner, sid)) == ["ruling", "verdict"]
+    assert len(calls) == 5
+    first.close()
+    longer.close()

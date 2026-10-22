@@ -160,3 +160,53 @@ def test_the_relay_key_signs_only_marked_relay_posts_and_never_counts_as_the_sea
     reg, head = cli.registry(), cli.head()
     assert cli.signer_of(msg, reg, head["relay_pubkey"]) is None
     assert cli.verify()["ok"] is True  # the log itself still verifies: the relay vouched for the post
+
+
+def test_web_view_hides_plaintext_bodies_unless_the_operator_opts_in(bus):
+    """`/` takes no signed headers, so by default it shows who wrote to whom but never a plaintext body: the API
+    gives bodies only to signed seats. EXO_BUS_WEB_BODIES=1 (web_bodies) shows them; sealed bodies never show."""
+    assert bus.post("beta", "gamma", "dm-marker-beta-to-gamma")[0] == 201
+    body, enc = wire.encrypt_body("sealed-marker", bus.keys["beta"], "gamma", wire.pubkey_b64(bus.keys["gamma"]))
+    assert bus.post("beta", "gamma", body, enc=enc)[0] == 201
+    assert http("GET", f"{bus.url}/v1/messages")[0] == 401
+    status, _, page = http("GET", f"{bus.url}/")
+    assert status == 200 and "dm-marker-beta-to-gamma" not in page and "sealed-marker" not in page
+    assert "#1 <b>beta</b> → gamma" in page and "body hidden" in page and "bodies hidden" in page
+    assert "encrypted to gamma" in page
+    bus.relay.config.web_bodies = True
+    page = http("GET", f"{bus.url}/")[2]
+    assert "dm-marker-beta-to-gamma" in page and "sealed-marker" not in page and "hidden" not in page
+
+
+def test_web_bodies_is_off_unless_explicitly_turned_on():
+    from exo.bus.config import RelayConfig
+
+    def on(**environ):
+        return RelayConfig.from_env({"EXO_HOME": "/nonexistent", **environ}).web_bodies
+
+    assert on() is False
+    assert on(EXO_BUS_WEB_BODIES="1") is on(EXO_BUS_WEB_BODIES="True") is on(DIVAN_WEB_BODIES="yes") is True
+    for value in ("0", "no", "false", "off", "ture", ""):
+        assert on(EXO_BUS_WEB_BODIES=value) is False, value
+
+
+def test_relay_refuses_envelopes_that_would_not_store_as_signed(bus):
+    """The log stores v as the int 1 and the text fields as TEXT. An envelope signed with v=True, v=1.0 or a
+    non-string thread would be stored in another form than the one its id and signature cover, and /v1/verify would
+    fail at that row forever. Wrong types that used to crash the handler (500) get the same 422."""
+    def post_with(**override):
+        env = wire.make_envelope("beta", "group", "x", bus.head()["head"])
+        env.update(override)
+        return http("POST", f"{bus.url}/v1/messages", wire.finish_envelope(env, bus.keys["beta"]))
+
+    for override in ({"v": True}, {"v": 1.0}, {"v": "1"}, {"thread": 7}, {"thread": 7.5}, {"thread": True},
+                     {"thread": {}}, {"thread": []}, {"kind": ["msg"]}, {"from": ["beta"]}, {"body": 5},
+                     {"ts": 1700000000}):
+        status, data, raw = post_with(**override)
+        assert status == 422, (override, raw)
+    assert bus.head()["seq"] == 0
+    assert bus.post("beta", "group", "ok")[0] == 201
+    assert bus.post("beta", "group", "threaded", thread="t1")[0] == 201
+    assert post_with(thread="")[0] == 201
+    assert http("GET", f"{bus.url}/v1/verify")[1] == {"ok": True, "from": 1, "to": 3, "checked": 3,
+                                                       "head": bus.head()["head"]}

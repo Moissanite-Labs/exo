@@ -106,7 +106,8 @@ class Message:
 
 @dataclass
 class Usage:
-    """Token and cost accounting for one call (or a running total)."""
+    """Token and cost accounting for one call (or a running total). ``input_tokens`` is the uncached input on every
+    transport; cache reads and writes are counted apart, so the prompt is the sum of the three (D-080)."""
 
     input_tokens: int = 0
     output_tokens: int = 0
@@ -119,14 +120,9 @@ class Usage:
         cost = None
         if self.cost_usd is not None or other.cost_usd is not None:
             cost = (self.cost_usd or 0.0) + (other.cost_usd or 0.0)
-        return Usage(
-            input_tokens=self.input_tokens + other.input_tokens,
-            output_tokens=self.output_tokens + other.output_tokens,
-            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
-            cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
-            reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
-            cost_usd=cost,
-        )
+        counts = {f.name: getattr(self, f.name) + getattr(other, f.name)
+                  for f in dataclasses.fields(self) if f.name != "cost_usd"}
+        return Usage(**counts, cost_usd=cost)
 
 
 @dataclass
@@ -167,7 +163,7 @@ class ProviderEvent:
     status: int | None = None
     retry_after: float | None = None  # seconds until the provider says to retry (error only)
     route: str = ""  # done, usage, error: the provider:model that served (or last failed) the call; set by the router
-    attempts: list[dict[str, Any]] = field(default_factory=list)  # done, error: [{route, outcome, error, ms}]
+    attempts: list[dict[str, Any]] = field(default_factory=list)  # done, error, fallback notice: [{route, outcome, error, ms}]
 
 
 @runtime_checkable
@@ -203,6 +199,7 @@ def to_dict(obj: Any) -> Any:
 
 
 _HINTS: dict[type, dict[str, Any]] = {}
+_PRIMITIVES: dict[Any, tuple[type, ...]] = {int: (int,), float: (int, float), str: (str,), bool: (bool,)}
 
 
 def _hints(cls: type) -> dict[str, Any]:
@@ -214,7 +211,7 @@ def _hints(cls: type) -> dict[str, Any]:
 def _decode(tp: Any, value: Any, strict: bool) -> Any:
     origin = typing.get_origin(tp)
     if origin is Literal:
-        if value not in typing.get_args(tp):
+        if strict and value not in typing.get_args(tp):  # loose decoding keeps a newer peer's value (forward compat)
             raise ValueError(f"{value!r} not one of {typing.get_args(tp)}")
         return value
     if origin in (typing.Union, types.UnionType):
@@ -229,13 +226,17 @@ def _decode(tp: Any, value: Any, strict: bool) -> Any:
         return [_decode(arg, v, strict) for v in value]
     if isinstance(tp, type) and dataclasses.is_dataclass(tp):
         return from_dict(tp, value, strict=strict)
+    if strict and tp in _PRIMITIVES and (not isinstance(value, _PRIMITIVES[tp]) or
+                                         (isinstance(value, bool) and tp is not bool)):
+        raise ValueError(f"expected {tp.__name__}, got {type(value).__name__}")
     return value
 
 
 def from_dict(cls: type, data: Any, strict: bool = True) -> Any:
     """Build dataclass ``cls`` from plain data. Nested types are decoded.
 
-    strict=True rejects unknown fields; strict=False drops them (forward compat).
+    strict=True rejects unknown fields and wrong-typed int, float, str and bool fields (a bool is not an int;
+    an int is a float); strict=False drops unknown fields and takes primitives as they come (forward compat).
     Missing fields fall back to defaults; missing required fields raise.
     """
     if not isinstance(data, dict):

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -50,6 +51,34 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MCP_SERVER = Path(__file__).with_name("claude_cli_mcp.py")
 CLEANUP_TIMEOUT = 2.0
 STDERR_BYTES = 4096
+# The CLI reads user text as its own input, even with --disable-slash-commands and --tools "": a block that starts
+# with "/" runs as its command (a built-in gets a local "isn't available" reply, no model call), and an "@path" at
+# the start, after JS \s (U+FEFF too) or after CJK punctuation attaches that file, keys too, with no gate ask. The
+# CLI resolves the path from its cwd, Exo's empty folder (workdir), folding ".." as text, so only a path that leaves
+# that folder reaches a file: "/", "~", "." or '"' after the "@", or a "/.." step later in the token (2.1.303).
+TEXT_GUARD = "\u200b"  # a zero-width space in front keeps both plain text
+MENTION_AT = re.compile(r"(?<![^\s\ufeff\u3002\u3001\uff1f\uff01])@")  # Python's \s holds JS \s, except U+FEFF
+JS_SPACE = re.compile("[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]")  # ends a token
+PATH_START = ("/", "~", ".", '"')
+
+
+def guard_text(text: str) -> str:
+    """A user text block as the CLI gets it: U+200B before a leading "/" and before each "@" whose path can leave the
+    CLI's empty folder. A decorator, "@media", a "@@" hunk header and "a@b.c" pass as typed, so code the model copies
+    carries no hidden character. Linear: each token's last "/.." is found once, not once per "@"."""
+    out = [TEXT_GUARD] if text.startswith("/") else []
+    done, end, up = 0, -1, -1
+    for m in MENTION_AT.finditer(text):
+        at = m.start()
+        if at >= end:  # the first "@" in this token
+            space = JS_SPACE.search(text, at)
+            end = space.start() if space else len(text)
+            up = text.rfind("/..", at, end)
+        if text.startswith(PATH_START, at + 1) or up > at:
+            out += [text[done:at], TEXT_GUARD]
+            done = at
+    out.append(text[done:])
+    return "".join(out)
 
 
 def child_env(env: Mapping[str, str] | None = None, *, drop: tuple[str, ...] = DROP_ENV,
@@ -96,7 +125,8 @@ def build_frames(messages: list[Message], names: set[str]) -> tuple[str, list[di
             blocks += [{"type": "tool_use", "id": sanitize_tool_id(tc.id), "name": PREFIX + tc.name if tc.name in names else tc.name,
                         "input": tc.arguments} for tc in m.tool_calls]
         else:
-            role, blocks = "user", _blocks(m)
+            role, blocks = "user", [{**b, "text": guard_text(b["text"])} if b["type"] == "text" else b
+                                    for b in _blocks(m)]
         if not blocks:  # an empty frame (a tool message with no results, a blank turn) carries nothing
             continue
         if frames and frames[-1]["type"] == role:
@@ -117,11 +147,13 @@ def _private_dir(path: str) -> bool:
 
 def workdir() -> str:
     """A stable private cwd for the CLI (it writes the cwd into the prompt, so a changing one breaks
-    prompt caching). Our own 0700 directory in the tempdir; a fresh mkdtemp if that is not trustworthy."""
+    prompt caching). Our own 0700 directory in the tempdir; a fresh mkdtemp if that is not trustworthy.
+    guard_text lets "@word" through because the CLI resolves it here, so the folder must hold no name such a word
+    reaches: any entry without a leading "." sends the call to a fresh empty folder. The CLI writes nothing here."""
     path = os.path.join(tempfile.gettempdir(), f"claude-cli-cwd-{os.getuid()}")
     try:
         os.makedirs(path, mode=0o700, exist_ok=True)
-        if _private_dir(path):
+        if _private_dir(path) and all(n.startswith(".") for n in os.listdir(path)):
             return path
     except OSError:
         pass
@@ -185,7 +217,6 @@ class ClaudeCliProvider(CliProvider):
 
     name = "claude-cli"
     default_command = "claude"
-    default_read = 60.0
 
     def _diagnostic(self, text: Any, limit: int = 300) -> str:
         # Scrub token/header patterns and credentials already in the caller's environment. Do not read a key

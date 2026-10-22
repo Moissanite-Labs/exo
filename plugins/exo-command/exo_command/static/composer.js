@@ -6,7 +6,9 @@ import { suggest, completeText, ghost, closest, Guide } from "./complete.js";
 const MENU_ROWS = 8;
 
 export function attachComposer({ input, composer, getSession, reducedMotion }) {
-  let cmds = [], sug = { mode: "", items: [], start: 0, hint: "" }, sel = 0, closedFor = null, files = [], fileQ = null, fileTimer = 0;
+  let cmds = [], core = [], client = [], loaded = false, haveCore = false, settled = false, stopped = false, loadingCmds = null;
+  let retries = 0, retryTimer = 0;
+  let sug = { mode: "", items: [], start: 0, hint: "" }, sel = 0, closedFor = null, files = [], fileQ = null, fileTimer = 0;
   let browse = -1, draft = "", ghostInfo = { text: "", ok: false }, tip = null;
   const history = [];
   const guide = new Guide();
@@ -18,7 +20,31 @@ export function attachComposer({ input, composer, getSession, reducedMotion }) {
   input.parentNode.insertBefore(ghostEl, input);
   input.addEventListener("scroll", () => { ghostEl.scrollTop = input.scrollTop; });
 
-  api("GET", "/api/complete/commands").then((d) => { cmds = d.commands || []; guide.enabled = d.guidance !== false; pickTip(); refresh(); }).catch(() => {});
+  // The names typo help and the hold rule need (#146). An answer brings this page's own and the terminal client's; the
+  // core's (commands.list) are asked again until the core gives them, however long it is away: by a timer (1 s
+  // doubling to every 30 s) and on each send, which does not move the backoff on. Only an older core without
+  // commands.list answers [] and ends the asking.
+  function loadCommands(timed) {
+    if (settled || stopped || loadingCmds) return;
+    clearTimeout(retryTimer);
+    loadingCmds = api("GET", "/api/complete/commands").then((d) => {
+      cmds = d.commands || []; client = d.client || [];
+      // Each answer carries guidance.enabled (on while the core cannot say): the core's setting wins once it is back.
+      guide.enabled = d.guidance !== false;
+      if (!guide.enabled && tip) { tip = null; drawTip(); }
+      const first = !loaded;
+      if (!loaded) { loaded = true; pickTip(); }
+      // Redraw only when the names change, so an open menu keeps its selection across the retries.
+      if (d.core != null && !haveCore) { core = d.core; haveCore = true; refresh(); } else if (first) refresh();
+      // A core down or restarting: no names from it yet, or its guidance setting is not known yet.
+      settled = haveCore && d.guidance != null;
+      if (!settled) throw new Error("the core's command names or guidance setting are not available yet");
+    }).catch(() => {
+      retryTimer = setTimeout(() => loadCommands(true), Math.min(30000, 1000 * 2 ** retries));
+      if (timed) retries = Math.min(retries + 1, 5);
+    }).finally(() => { loadingCmds = null; });
+  }
+  loadCommands(true);
 
   function wantFiles() { return !!getSession(); }
   function atEnd() { return input.selectionStart === input.value.length && input.selectionEnd === input.value.length; }
@@ -136,14 +162,29 @@ export function attachComposer({ input, composer, getSession, reducedMotion }) {
       if (/job_output/.test(text)) state.jobDone = "";
       refresh();
     },
+    // Whether /name can be judged: the names have loaded, or, while the core's are still missing, it is this page's
+    // or the terminal client's (any other name could be the core's, so it is held). Asks again for what is missing.
+    ready(name) {
+      loadCommands();
+      return haveCore || (loaded && (cmds.some((c) => c.name === name) || client.includes(name)));
+    },
     // A mistyped /command: the suggestion, or null when it is not a typo (so the line is a normal message).
+    // Like the TUI, the names are this page's commands, the core's commands.list and the terminal client's own, and
+    // only a simple lower-case name gets typo help (/Users and /v2 are text); here is false when the page does not run it.
     typo(text) {
-      const m = /^\/([A-Za-z][\w-]*)(\s|$)/.exec(text);
-      if (!m || !cmds.length || cmds.some((c) => c.name === m[1].toLowerCase())) return null;
-      const g = closest(m[1], cmds.map((c) => c.name));
-      return g ? { guess: g, line: "/" + g + text.slice(m[0].length - m[2].length) } : null;
+      const m = /^\/([A-Za-z][\w-]*)(\s|$)/.exec(text), name = m && m[1].toLowerCase();
+      if (!m || !loaded || cmds.some((c) => c.name === name) || core.includes(name) || client.includes(name)) return null;
+      if (!/^[a-z][a-z-]*$/.test(m[1])) return null;
+      const g = closest(name, [...cmds.map((c) => c.name), ...core, ...client]);
+      return g ? { guess: g, line: "/" + g + text.slice(m[0].length - m[2].length), here: cmds.some((c) => c.name === g) } : null;
     },
     known(name) { return cmds.some((c) => c.name === name); },
-    stop() { clearInterval(timer); },
+    // Where a command this page does not run lives: "core" (commands.list, so exo chat runs it too) or "client" (the
+    // terminal client's own, such as /help or /quit); "" when the page runs it or nobody does. Held, never sent (#146).
+    elsewhere(name) {
+      if (cmds.some((c) => c.name === name)) return "";
+      return core.includes(name) ? "core" : client.includes(name) ? "client" : "";
+    },
+    stop() { stopped = true; clearInterval(timer); clearTimeout(retryTimer); },
   };
 }

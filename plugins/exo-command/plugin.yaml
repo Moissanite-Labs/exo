@@ -33,7 +33,7 @@ config_schema:
   principal_store:
     type: str
     default: ""
-    description: Principal store root. Empty falls back to EXO_PRINCIPAL_STORE, then EXO_HOME/principals/EXO_PRINCIPAL.
+    description: Principal store root. Empty falls back to EXO_PRINCIPAL_STORE, then the store of EXO_PRINCIPAL (config principals.<id>, else EXO_HOME/principals/<id>).
   decisions_queue:
     type: str
     default: queues/decisions.jsonl

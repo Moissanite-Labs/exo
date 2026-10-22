@@ -15,6 +15,7 @@ from .runtime import PRINCIPAL, Runtime
 
 MAX_ANSWER = 4000
 CORRECTION_VERDICTS = ("edit", "reject", "should_have_been")
+CAPTURED = ("ruling", "verdict", "question")  # the ledger kinds a captured signal is written as
 
 
 def _h(*parts: str) -> str:
@@ -82,6 +83,9 @@ def handle_feedback(engine: Any, body: Any) -> dict:
     if verdict not in VERDICTS:
         return {"recorded": False, "reason": f"unknown verdict {verdict!r}"}
     session = getattr(body, "session", None)
+    if lr.private(session):  # D-028: nothing from a private thread (or its child) reaches the ledger, verdicts too
+        return {"recorded": False, "reason": "this is a private thread, or runs under one: feedback on it is not "
+                                             "remembered"}
     text = (getattr(body, "text", "") or "").strip()
     answer, context, mid = _answer_and_context(lr, session, getattr(body, "message_id", None))
     with rt.lock:
@@ -108,12 +112,27 @@ def handle_feedback(engine: Any, body: Any) -> dict:
     return {"recorded": True, "event": ev["id"], "verdict": verdict, "pair": pair, "review": started}
 
 
+def _panel_sessions(engine: Any, panel_id: str) -> list[str]:
+    """Every session with a `ui.panel` event for panel `panel_id` in sessions.sqlite: the one that opened it and any
+    that updated it (`ui update` takes a known id from any thread). Empty if unknown."""
+    store = getattr(engine, "store", None)
+    if not panel_id or store is None:
+        return []
+    rows = store._q("SELECT DISTINCT session FROM events WHERE type='ui.panel' AND json_extract(body, '$.panel_id')=?",
+                    (panel_id,))
+    return [r["session"] for r in rows]
+
+
 def handle_ui_respond(engine: Any, body: Any) -> dict:
     """`ui.respond`: log what the user did with a panel (opened, dismissed, acted, ignored) as a `note` event."""
     lr = get_learner(engine)
     rt = lr.runtime
     if rt is None:
         return {"recorded": False, "reason": lr.notices[0] if lr.notices else "learning is off"}
+    shown = _panel_sessions(engine, getattr(body, "panel_id", ""))
+    if any(lr.private(x) for x in shown):  # D-028: its value can hold a comment
+        return {"recorded": False, "reason": "this panel is from a private thread: what you did with it is not "
+                                             "remembered"}
     value = dict(getattr(body, "value", None) or {})
     if len(json.dumps(value, default=str)) > 4000:
         value = {"truncated": True}
@@ -121,6 +140,22 @@ def handle_ui_respond(engine: Any, body: Any) -> dict:
         ev = rt.ledger.append("note", {"type": "ui_signal", "source": "ui", "panel_id": getattr(body, "panel_id", ""),
                                        "action": getattr(body, "action", ""), "value": value}, PRINCIPAL)
     return {"recorded": True, "event": ev["id"]}
+
+
+def known_keys(rt: Runtime) -> set:
+    """The capture keys of every ruling, verdict and question in the ledger (#263).
+
+    The set stays on `rt` with the last row read, and a call reads only the rows after it. The ledger is append-only
+    and nothing takes a key back, so the set only grows. If the ledger no longer holds that row in its place (another
+    ledger, or a file swapped or cut short), the set is built again from the first row. Call it under `rt.lock`."""
+    seq, last, keys = rt.known
+    if last is not None and ((ev := rt.ledger.get(last)) is None or ev["seq"] != seq):
+        seq, last, keys = 0, None, set()
+    for ev in rt.ledger.iter(kind=CAPTURED, since=seq):
+        keys.add((ev["body"] or {}).get("capture_key"))
+        seq, last = ev["seq"], ev["id"]
+    rt.known = (seq, last, keys)
+    return keys
 
 
 def record_chat_signals(lr: Learner, session: str, messages: Sequence[Mapping[str, Any]] | None = None) -> list[dict]:
@@ -134,9 +169,9 @@ def record_chat_signals(lr: Learner, session: str, messages: Sequence[Mapping[st
     if messages is None:
         messages = [provenance.flat(m) for m in lr.messages(session)[-12:]]
     msgs = provenance.principal_view(messages)  # D-040: a peer message or job notice is not the principal
-    known = {(e["body"] or {}).get("capture_key") for e in rt.ledger.iter(kind=("ruling", "verdict", "question"))}
     out = []
     with rt.lock:
+        known = known_keys(rt)
         for sig in capture.extract_signals(msgs):
             if sig.key in known or sig.kind == capture.DECISION:
                 continue
@@ -144,7 +179,6 @@ def record_chat_signals(lr: Learner, session: str, messages: Sequence[Mapping[st
             if kind == "verdict":
                 said = capture.content_text(msgs[sig.target_index].get("content")) if sig.target_index is not None else ""
                 body["target"] = ensure_utterance(rt, session, "assistant", said or "(agent output not in the transcript)")
-            ev = rt.ledger.append(kind, body, PRINCIPAL, session=session)
-            known.add(sig.key)
-            out.append(ev)
+            # No known.add: extract_signals gives each key once, and the set holds only what known_keys read.
+            out.append(rt.ledger.append(kind, body, PRINCIPAL, session=session))
     return out

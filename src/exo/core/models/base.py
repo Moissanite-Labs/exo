@@ -60,9 +60,7 @@ def iter_sse(lines: Iterator[str] | list[str]) -> Iterator[tuple[str, str]]:
             if data:
                 yield event or "message", "\n".join(data)
             event, data = "", []
-        elif line.startswith(":"):
-            continue
-        else:
+        elif not line.startswith(":"):
             name, _, value = line.partition(":")
             value = value[1:] if value.startswith(" ") else value
             if name == "event":

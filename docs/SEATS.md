@@ -3,6 +3,10 @@
 A seat is one named configuration of an Exo agent: who it serves, which models, which tools, which
 skills, which MCP servers, which plugins and channels. Run one with `exo serve --seat <name>`
 (sets `EXO_SEAT`; the engine factory reads it). `seat.list` shows the files and the active seat.
+A second seat beside a running `exo serve` needs its own `--socket`, for example
+`exo serve --seat scout --socket $EXO_HOME/run/scout.sock`, and its clients pass the same `--socket`. `exo serve`
+refuses a socket that another core answers on, or is starting on at the same moment (an `exod.sock.lock` file
+beside the socket, held for the core's life), and exits 1. Only the core that holds `run/exod.sock` writes `run/exod.pid`, so `exo stop` stops that core and never a seat on its own socket.
 
 This is the one seat format. The role templates in `plugins/exo-orchestra/seats/*/seat.toml` are written in
 it (see `plugins/exo-orchestra/SEATS.md`), and `/orchestra check <file>` validates a file against it.
@@ -29,7 +33,8 @@ roles = { fast = ["local:qwen"] }   # optional router overrides; also providers,
 
 [tools]
 toolsets = ["fs", "search", "skills", "mcp"]   # omit for all. "mcp" matches every mcp:<server>; "skills" is always kept
-env_allow = ["GH_TOKEN"]     # secret-looking variables bash and jobs may keep (default none, see docs/TOOLS.md)
+env_allow = ["GH_TOKEN"]     # variables the scrub would drop (secrets, shell startup hooks) that bash and jobs keep
+                             # (default none; docs/TOOLS.md "Environment of bash and jobs" has the startup-code caveat)
 env_deny = ["COMPANY_*"]     # more names or patterns bash, jobs and code_find never see (D-039)
 
 [skills]
@@ -55,6 +60,18 @@ cwd = "~/Work/exo-live"       # where this seat's threads start; beats config.js
 [trace]                       # D-032: anomaly limits for this seat over config.json's [trace] (docs/TRACE.md)
 turn_wall_s = 90              # also model_call_s, model_call_routes, turn_total_wall_s, model_wait_s, subagent_s, verify_turns, verify_days
 ```
+
+The `[models]` tables (`roles`, `providers`, `models` for prices, `fake`) merge over config.json's `models`
+entry by entry. A role or a `provider:model` price entry the seat names replaces config.json's entry of that name
+whole. Every other entry stays as config.json set it. So the example above sets only `fast` (which `tier` then
+makes the seat's main model) and keeps config.json's `aux` and `decision` routes, and `roles = { decision = [] }`
+empties that one role. A price field the seat's entry leaves out comes from the catalog, not from config.json.
+
+A provider entry merges one level deeper, key by key over config.json's entry of that name, by the same rule as
+a provider table over the catalog (`docs/PROVIDERS.md`). The keys the seat sets win and the rest stay. So a seat
+that sets only `read_timeout = 300` under `[models.providers.openai]` keeps the `base_url` config.json gave that
+provider, a LAN server for example, and sends no key there unless config.json named one. A seat entry that sets
+`base_url` drops config.json's `key_env` and `headers`: no key or header token follows a new URL unless the seat names it.
 
 When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.
@@ -85,5 +102,27 @@ values shaped like API keys. Changes apply on the next start.
 ## Channels
 
 A plugin calls `register_channel(name, factory)`. For each channel a seat (or `channels` in config.json)
-enables, `exo serve` calls `factory(link, **config)` with a real protocol `Client` on the server socket, runs
-`start()` after the server listens, and `stop()` on shutdown.
+enables, `exo serve` calls `factory(link, **config)`, runs `start()` after the server listens, and `stop()` on
+shutdown. The link is exod's in-process `ChannelLink`: it runs commands as the caller `channel` (`docs/GATE.md`
+"Who answered"), the only caller the core takes a bus message from. A channel run through a protocol `Client` on
+the socket cannot hand in bus messages.
+
+## Several seats in one home
+
+Seats whose files sit in one `$EXO_HOME` run side by side. With no `exo serve` on the home's `run/exod.sock`,
+`exo tui --seat scout` and `exo tui --seat forge` are two cores, one per seat. So are two `exo serve --seat NAME`,
+each with its own `--socket`. A TUI window joins a server on `run/exod.sock` whatever its `--seat`, so it then talks
+to that server's seat. Each core holds its own writer lock (`run/agent-<seat>.lock`, see docs/MEMORY-MODEL.md), and
+all of them use the home's `sessions.sqlite` and `schedule.sqlite`.
+
+- **Events.** Each core numbers its own events, and the database raises a number past the table's highest inside
+  the write transaction, so two cores never reuse one. One core's stream still rises, with gaps where the other
+  seat wrote. A core sends only its own events live. Replay goes by number, not by seat, so it returns the other
+  seat's events too. A session filter still lets through the ones with no session, such as a scheduled job's card.
+  `hello`, `events.subscribe` and `/health` report the table's highest number, so a client that starts from there
+  replays none of the other seat's past events.
+- **Delegate tasks.** A core fails the queued or running tasks a dead process left behind only for its own agent,
+  and only once it holds the writer lock. Another seat's core, or a second core of the same seat that fails the
+  lock, leaves live tasks alone.
+- **Scheduled jobs.** A job with a `seat` runs only in that seat's core, and each due slot runs once
+  (docs/SCHEDULE.md).
