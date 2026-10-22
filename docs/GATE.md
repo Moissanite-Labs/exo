@@ -652,6 +652,16 @@ Any indirection walked past it. It now works the other way round. A small lexer
 (`exo.gate._Lexer`) reads quotes, escapes, `$( )`, backticks, `$VAR`, redirections and heredocs,
 and splits the line into simple commands. Each simple command has one program position (after
 assignments, reserved words such as `if` and `do`, and prefixes such as `sudo`, `env`, `timeout`).
+A loop body starts where bash starts it (#436). Bash and POSIX take `do` as the reserved word right
+after the name in `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before
+it, and run the loop over the positional parameters. So the gate reads
+`for x do git push --force origin main; done` as `for x; do git push --force origin main; done`:
+the push is a `force_push` and `deny: [force_push]` denies the line. Before, the gate read that `do`
+and the body as words of the `for` command, which lists no programs, so the line was an allowed
+`read` under every policy. The same holds after `function NAME` or `coproc [NAME]` and a reserved
+word such as `{`, as in `function f { for x do ...; done; }`, and behind reserved words such as
+`then`. A quoted `"do"`, a `do` in an `in` list and a `for` that is only an argument
+(`echo for x do`) stay plain words, as in bash.
 A `$'..'` word is decoded with bash's ANSI-C rules (bash 5.2, UTF-8 locale; issue #167): `\n`, `\e`
 and the other letter escapes, octal and `\x` values (also `\x{..}`) cut to 8 bits, `\u` with 1 to 4
 and `\U` with 1 to 8 hex digits, `\cX` (`\c\\` takes one backslash), and an unknown escape kept with
@@ -1183,9 +1193,11 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   inspection depth (above); `eval $(...)` and `eval "$(...)"`; a command arriving on stdin,
   `echo '...' | xargs -I{} sh -c '{}'` (while
   `echo 3 | xargs -I{} sh -c 'gh pr comment {} --body hi'` is read and denied); the body of
-  `time { ...; }`; and the wrapper forms #160 left unread, such as `su -c`, `runuser`, `bwrap`,
-  tmux's `if-shell` and `send-keys`, and `parallel` with no template ("Known limit (#160)" below
-  lists more of them). These are examples, not a complete list.
+  `time { ...; }` and of `time for x do ...; done`; and the wrapper forms #160 left unread, such as
+  `su -c`, `runuser`, `bwrap`, tmux's `if-shell` and `send-keys`, and `parallel` with no template
+  ("Known limit (#160)" below lists more of them). These are examples, not a complete list. After
+  `time` the gate does not read `{` or `for` as a reserved word, so either is an unknown program
+  there. The body of `time for x; do ...; done` is read.
 - **Deny becomes allow.** Some unread execution does not even ask. An entry for the hidden
   action's category (`github_post`, `delete`...) does not reach it, in `categories:`, `deny:`
   or `reserved:`. An entry that matches the command text does (a `command:` regex, or a rule
