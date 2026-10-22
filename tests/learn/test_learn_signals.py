@@ -221,3 +221,96 @@ def test_chat_corrections_are_recorded_once(engine, learner):
     body = first[0]["body"]
     assert body["verdict"] == "edit" and "NOT bullet" in body["text"]
     assert learner.runtime.ledger.get(body["target"])["body"]["text"] == "- a\n- b"
+
+
+CAPTURED = ("ruling", "verdict", "question")
+
+
+def _full_scan(led):
+    """The known set as record_chat_signals built it before #263: every ruling, verdict and question in the ledger."""
+    return {(e["body"] or {}).get("capture_key") for e in led.iter(kind=CAPTURED)}
+
+
+def _say(engine, sid, role, text):
+    from exo.core.types import ContentPart, Message
+    engine.store.append_message(sid, Message(role=role, content=[ContentPart.of_text(text)]), "t1")
+
+
+def _captured_first(led, said, answer):
+    """Write the correction `said` of `answer` the way exo-memory does when it hears it first."""
+    (sig,) = capture.extract_signals([{"role": "assistant", "content": answer}, {"role": "user", "content": said}])
+    kind, body = capture.to_event(sig, source="pre_compress")
+    body["target"] = led.append("utterance", {"text": answer, "role": "assistant"}, "exo-memory")["id"]
+    return led.append(kind, body, "principal")
+
+
+def test_chat_capture_reads_only_the_new_ledger_rows(engine, learner, monkeypatch):
+    """#263: the known capture keys stay on the runtime between calls. A call reads only the ruling, verdict and
+    question rows after the last one read, and still sees a key another writer added in between."""
+    from exo.learn.signals import record_chat_signals
+    led = learner.runtime.ledger
+    for i in range(40):
+        led.append("ruling", {"text": f"rule {i}", "capture_key": f"old-{i}"}, "principal")
+    read, real = [], led.iter
+
+    def counted(*a, **kw):
+        for ev in real(*a, **kw):
+            if ev["kind"] in CAPTURED:
+                read.append(ev["seq"])
+            yield ev
+    monkeypatch.setattr(led, "iter", counted)
+    sid, _ = new_session(engine, ("user", "Summarise"), ("assistant", "- a\n- b"),
+                         ("user", "Important correction: use a table, NOT bullet lists."))
+    assert len(record_chat_signals(learner, sid)) == 1 and len(read) == 40  # the first call reads the ledger once
+    read.clear()
+    assert record_chat_signals(learner, sid) == [] and len(read) == 1  # then only the verdict it wrote
+    read.clear()
+    said, answer = "Important correction: the deploy target is staging, NOT prod.", "Deployed to prod."
+    theirs = _captured_first(led, said, answer)
+    _say(engine, sid, "assistant", answer)
+    _say(engine, sid, "user", said)
+    assert record_chat_signals(learner, sid) == [] and read == [theirs["seq"]]  # known: not written twice
+    read.clear()
+    assert record_chat_signals(learner, sid) == [] and read == []
+
+
+def test_known_capture_keys_match_a_full_scan_through_every_change(engine, learner, monkeypatch, tmp_path):
+    """#263: the kept set equals a full scan of the ledger at every call: after rows the learner writes, rows another
+    writer adds, the same file opened again, and another ledger put in its place, with a different history that is
+    longer or shorter than the rows read so far."""
+    from exo.ledger import Ledger
+    from exo.learn import signals
+    rt, real, calls = learner.runtime, signals.known_keys, []
+
+    def checked(r):
+        keys = real(r)
+        assert keys == _full_scan(r.ledger)
+        calls.append(len(keys))
+        return keys
+    monkeypatch.setattr(signals, "known_keys", checked)
+    fix = "Important correction: use a table, NOT bullet lists."
+    sid, _ = new_session(engine, ("user", "Summarise"), ("assistant", "- a\n- b"), ("user", fix))
+    rt.ledger.append("ruling", {"text": "Always cite the source.", "capture_key": "k-cite"}, "principal")
+    assert [e["kind"] for e in signals.record_chat_signals(learner, sid)] == ["verdict"]
+    _captured_first(rt.ledger, "Important correction: it is staging, NOT prod.", "Deployed to prod.")
+    _say(engine, sid, "assistant", "Deployed to prod.")
+    _say(engine, sid, "user", "Important correction: it is staging, NOT prod.")
+    assert signals.record_chat_signals(learner, sid) == []
+    rt.ledger.close()  # the same file opened again keeps the set
+    rt.ledger = Ledger(rt.store.ledger_path, rt.signer)
+    _say(engine, sid, "user", "From now on always run the tests before a push.")
+    assert [e["kind"] for e in signals.record_chat_signals(learner, sid)] == ["ruling"]
+    assert real(rt) == _full_scan(rt.ledger)
+    first = rt.ledger
+    longer = Ledger(tmp_path / "longer" / "ledger.sqlite", rt.signer)  # more rows than read so far, none of ours
+    for i in range(rt.known[0] + 5):
+        longer.append("note", {"text": f"n{i}"}, "principal")
+    rt.ledger = longer
+    assert sorted(e["kind"] for e in signals.record_chat_signals(learner, sid)) == ["ruling", "verdict", "verdict"]
+    shorter = Ledger(tmp_path / "shorter" / "ledger.sqlite", rt.signer)  # fewer rows: it holds just one of the keys
+    _captured_first(shorter, fix, "- a\n- b")
+    rt.ledger = shorter
+    assert sorted(e["kind"] for e in signals.record_chat_signals(learner, sid)) == ["ruling", "verdict"]
+    assert len(calls) == 5
+    first.close()
+    longer.close()

@@ -1109,14 +1109,18 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     opened: list = []       # compounds still open: (opener, index of their first command, command piped in)
     tops: dict = {}         # opener -> its indexes in opened, so a closer finds its opener without a scan
     shut = None             # the open compound the current command closes
+    loop = None             # the reserved word `for` or `select` that opened the latest loop
     lead = True             # every word of cur so far is a reserved word
+    head, pre = True, 0     # the next word is in command position, as with lead and also after `coproc [NAME]`,
+                            # `function NAME` and reserved words after them. Only `do` uses it (#436). pre is where
+                            # cur's words after its latest leading reserved words start
     taken: dict = {}        # first command -> (end, an exec inside set the shell's stdin) of a compound whose
                             # stdin is set (inner closers win); also _piped_text's memo
     o_first = o_body = o_end = -1   # cur's own text: where its tokens start, where those after its reserved words do, its end
     p_at = -1                       # where the pipeline cur is in starts, when only simple commands came before it
 
     def end(piped: bool = False) -> None:
-        nonlocal cur, shut, lead, o_first, o_body, o_end, p_at
+        nonlocal cur, shut, lead, head, o_first, o_body, o_end, p_at
         if shut is not None:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
         at = o_first if o_body < 0 else o_body
@@ -1130,7 +1134,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
         # the next command's pipeline starts here, or where this one's did; a compound before it has no such text.
         # A command piped from a compound (piped_group) finds p_at at -1, as the end before it had a compound shut.
         p_at = (p_at if cur.piped_in else at) if piped and shut is None and at >= 0 else -1
-        cur, shut, lead = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True
+        cur, shut, lead, head = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True, True
         o_first = o_body = o_end = -1
 
     def push(entry: tuple) -> None:
@@ -1182,7 +1186,11 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             a, o_end = marks[i]
             o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
         else:
-            if not v.quoted and _command_word(cur.words, lead):
+            if not v.quoted and v.text == "do" and len(cur.words) > 1 and cur.words[-2] is loop:
+                end()   # `for NAME do` (no `in`, no `;`): bash opens the body here, as after `for NAME;` (#436)
+            cw = not v.quoted and _command_word(cur.words, head, pre)
+            loop = v if cw and v.text in ("for", "select") else loop     # also `function f { for x do` (#436)
+            if not v.quoted and _command_word(cur.words, lead, 0):
                 if v.text in _COMPOUND_OPENERS:
                     push((v.text, len(cmds), cmds[-1] if cur.piped_in and cmds else None))
                 elif v.text in _COMPOUND_CLOSERS:
@@ -1190,6 +1198,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                     if j >= 0:
                         close(j)
             lead = lead and not v.quoted and v.text in _OPENERS
+            pre, head = (len(cur.words) if head else pre), cw and v.text in _OPENERS
             a, o_end = marks[i]
             o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 and not lead else o_body)
             cur.words.append(v)
@@ -2434,10 +2443,10 @@ _COMPOUND_OPENERS = frozenset(o for names in _COMPOUND_CLOSERS.values() for o in
 _READ_REDIRS = ("<", "<&", "<>")
 
 
-def _command_word(words: list, lead: bool) -> bool:
-    """Whether the next word is in command position: only reserved words (lead, which the parser keeps so this
-    is O(1)), `coproc [NAME]` or `function NAME` before it."""
-    return lead or (len(words) <= 2 and not words[0].quoted and words[0].text in ("coproc", "function"))
+def _command_word(words: list, lead: bool, pre: int) -> bool:
+    """Whether the next word is in command position: only reserved words before it (lead, which the parser keeps
+    so this is O(1)), or a `coproc [NAME]` or `function NAME` that starts at words[pre]."""
+    return lead or (len(words) - pre <= 2 and not words[pre].quoted and words[pre].text in ("coproc", "function"))
 
 
 def _own_stdin(k: _Cmd) -> bool:
@@ -3552,6 +3561,11 @@ def _classify_exo(argv: list[str], cmd: str) -> Classification:
         c = _make("store_write", summary=f"exo {sub} {verb}".strip(), command=cmd)
         c.signals.append("exo store")
         return c
+    if sub == "update" and verb == "--pin-trust":   # writes the signed-update trust pin (D-073, #133)
+        c = _make("store_write", summary="exo update --pin-trust", command=cmd)
+        c.signals.append("exo store")
+        c.parts = [_opaque("exo update starts, stops or changes Exo itself", cmd)]   # a deny on that still holds
+        return c
     if sub in ("find", "get", "ctx", "links", "lint", "graph", "wire", "providers", "--version", "--help", "") or \
             (sub == "log" and verb in ("tail", "verify")):
         return _make("read", summary=f"exo {sub}".strip(), command=cmd)
@@ -4425,7 +4439,7 @@ _SENSITIVE_PATH = re.compile(
     r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"
     r"\.config/gh/hosts\.yml|\.git-credentials|\.docker/config\.json|\.kube/config|"
     r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
-    r"proc/[^/]+/environ)(/|$)")
+    r"proc/[^/]+/(task/[^/]+/)?environ)(/|$)")
 
 # D-039: a run folder holds the principal credential and the TCP token beside each socket, so the folder itself
 # is a secret store; what is below it keeps its own class (job output in run/jobs/ stays readable). A relative
@@ -4956,14 +4970,14 @@ def _glob_words(words: list[str]) -> bool:
     return any(_glob_word(w, home, samples, secrets, runs) for w in words)
 
 
-_PROC_FILE = re.compile(r"/proc/[^/]+/([^/]+)")
+_PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
 
 
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
-    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ of any process (#199)
-    if proc and _glob_names(proc[1], ("environ",)):
+    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ, or a thread's (#199, #313)
+    if proc and (proc[1] is None or _glob_names(proc[1], ("task",))) and _glob_names(proc[2], ("environ",)):
         return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
@@ -5008,14 +5022,16 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # sit in the tool's working folder); absolute paths are also checked against EXO_HOME, its principal stores,
 # EXO_PRINCIPAL_STORE, every store root recorded in config `principals` (`exo init --root`, `exo import-store
 # --root`) and the bus folder and files (_bus_paths).
+# $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
     r"\.exo/(bus|plugins)(/|$)|bus/registry\.json$|bus/relay\.sqlite(-wal|-shm|-journal)?$|"
+    r"\.exo/update(/|$)|update/allowed_signers$|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
     r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
     r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
-_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "plugins")
+_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "update", "plugins")
 _STORE_PROTECTED = ("policies", "state", "keys")
 # #210: $EXO_HOME/bus, and the bus settings that move a file the gate trusts out of it: the registry, the relay
 # database and its sidecars, and the seat keys folder. Each name is read as EXO_BUS_<NAME> and as the legacy
