@@ -1140,6 +1140,16 @@ gate does not read:
   That does not lower the ask of a command a declaration runs as it reads a value again
   (`reread`, above).
 
+A change to the classifier or to `decide` is checked against main with `scripts/gate_diff.py` (#423, D-038
+amendment of 2026-10-22). It runs both gates over the suites' lines, a line or call for each entry of the gate's
+tables, generated forms of them and a set of policies, and lists every decision the change makes lower. A lowered
+line is fixed or named in the change's decision amendment. A table the change holds in a form the script does not
+read stops the run with exit 2, since its entries get no lines. The secret path, SQL, patch header and scrub patterns
+get a string for each alternative. Any other regex alternative or helper pattern is seen only where a test or a seed
+names it. The check also does not see the stores the environment moves, session folders beyond the ones it generates,
+names and keys the gate reads outside its tables unless a test names them, files and links in HOME beyond its own,
+or the hook steps after `decide` (developer guide §7, "Checking a gate change against main").
+
 Known limits. Each one is true of main today; where a fix is open, its PR is named.
 
 - **Inspection depth (#137).** Nesting is read four levels deep (`_DEPTH = 4` in `exo.gate`).
