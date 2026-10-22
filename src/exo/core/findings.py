@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import math
 import secrets
-from datetime import datetime, timezone
 from typing import Any
 
 from exo.core.trace import Flag, Thresholds, TurnTrace, at_or_after, eligible, harness_version, scrub
@@ -25,14 +24,6 @@ SEVERITIES = ("blocker", "bug", "papercut", "idea")
 SOURCES = ("anomaly", "agent", "principal")
 STATUSES = ("open", "fixed", "verified", "reopened")
 MAX_SESSIONS = 10
-
-
-def _age_days(ts: str | None) -> float:
-    try:
-        then = datetime.fromisoformat((ts or "").replace("Z", "+00:00"))
-    except ValueError:
-        return 0.0
-    return (datetime.now(timezone.utc) - then).total_seconds() / 86400
 
 
 class Findings:

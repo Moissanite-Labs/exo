@@ -174,6 +174,10 @@ def test_a_body_file_under_dev_or_proc_is_never_read(store, work, monkeypatch):
     link = work / "body.md"
     link.symlink_to("/dev/stdin")
     _, ctx = make_gate(store)
-    for path in ("/dev/stdin", str(link)):
-        r = call(ctx, f"gh pr comment 5 {R} --body-file {path}")
-        assert r["action"] == "approve" and gate.UNSEEN_BODY in r["message"] and r.get("once") is True, (path, r)
+    r = call(ctx, f"gh pr comment 5 {R} --body-file {str(link)}")
+    assert r["action"] == "approve" and gate.UNSEEN_BODY in r["message"] and r.get("once") is True, r
+    # Written out, /dev/stdin is also a descriptor path the gate cannot resolve (#217): a store write, which only the
+    # principal answers, never granted, the stricter ask. The card says the path is unresolved, not that gh writes it.
+    r = call(ctx, f"gh pr comment 5 {R} --body-file /dev/stdin")
+    assert r["action"] == "approve" and r.get("once") is True and r["approvers"] == ["principal"], r
+    assert "/dev/stdin, a descriptor path or folder the gate cannot resolve" in r["message"], r
