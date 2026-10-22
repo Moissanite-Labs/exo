@@ -3666,9 +3666,12 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                     t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 return t.text
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
-    # `hash -p` only records a path for a later name to run (#330): it writes nothing, so a store path there is no
-    # store write, and its part never outranks a post on the line
-    if prog == "hash" or all(p.category == "read" for p in parts):
+    # `hash -p` only records a path for a later name to run (#330), so the builtin's own part counts as the read it
+    # was: a store path in its words alone is no store write that outranks a post on the line. A redirect or a cd
+    # into the store is still checked, and so is a program named hash run by path (./hash), which is no builtin.
+    own = parts[0] if prog == "hash" and not words[0].dynamic and (
+        "/" not in words[0].text or _trusted_path(words[0].text)) else None
+    if all(p.category == "read" or p is own for p in parts):
         return ""
     argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(

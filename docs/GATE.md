@@ -931,9 +931,12 @@ gate does not read:
   bash skips.
   Setting `BASH_CMDS`, the table `hash -p` fills, is opaque in any of the forms above
   (`BASH_CMDS[ls]=/tmp/x`, `read 'BASH_CMDS[ls]'`), and so is `BASH_ALIASES`, which defines an
-  alias. `hash -p` only records the path, so a store or descriptor path in it is not a store
-  write. Its part never outranks a post on the line, and the post's matrix cell and posting
-  rules still decide it (`hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`).
+  alias. `hash -p` only records the path, so for the store check its part is the read it was.
+  A store or descriptor path in it alone is no store write, and a post on the line keeps its
+  matrix cell and posting rules (`hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`). A
+  redirect on the same command is still checked as for any read, also after a `cd` into the
+  store (`cd ~/.exo/state && hash > notes`). A program named `hash` run by path
+  (`./hash ~/.exo/state/x`) is no builtin, and its words are checked as before.
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
   `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
@@ -1081,8 +1084,8 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   part but `credentials`. So a post beside a store write is decided as the store write: a matrix
   deny on the post becomes an ask, and its posting violations are not listed
   (`echo x > ~/.exo/state/x; gh pr comment 1 --body hi`,
-  `eval /proc/self/fd/3; gh pr comment 1 --body hi`). `hash -p` makes no store write, so it is
-  kept out of this (#330). Since #394 a rule that
+  `eval /proc/self/fd/3; gh pr comment 1 --body hi`). A `hash -p` path alone makes no store
+  write, so it is kept out of this (#330). Since #394 a rule that
   would lower a compound line must also name its deciding command and every command that would get
   a stricter outcome alone, but a command allowed alone still rides on the outcome the rule gives,
   as before: `cd /tmp/other && git push --force origin main` and

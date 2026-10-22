@@ -14,9 +14,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   cluster, with the path attached and after the path. An option word the gate cannot read
   (`hash $O ls`) is opaque too, and so is setting `BASH_CMDS` or `BASH_ALIASES`. Plain `hash`,
   `hash -r`, `hash -d` and `hash "$cmd"` stay read, as do a `-p` after the first operand and one
-  with no name to bind. The path is not read as a store write, so a post on the same line keeps
-  its matrix cell and posting rules: `hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi` is
-  denied under a matrix deny for the post, as before.
+  with no name to bind. The path alone is not read as a store write, so a post on the same line
+  keeps its matrix cell and posting rules: `hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`
+  is denied under a matrix deny for the post, as before.
 - Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
