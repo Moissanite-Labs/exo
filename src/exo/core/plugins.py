@@ -126,16 +126,12 @@ class LoadedPlugin:
         return self.error is None
 
 
-def _parse_yaml(text: str) -> Any:
-    from exo.gate import parse_yaml  # stdlib YAML subset already used for policies
-    return parse_yaml(text)
-
-
 def read_manifest(folder: Path) -> Manifest:
+    from exo.gate import parse_yaml  # stdlib YAML subset already used for policies
     folder = Path(folder)
     f = folder / MANIFEST
     try:
-        raw = _parse_yaml(f.read_text(encoding="utf-8")) or {}
+        raw = parse_yaml(f.read_text(encoding="utf-8")) or {}
     except Exception as e:
         raise PluginError(f"{f}: {e}") from None
     if not isinstance(raw, dict) or not raw.get("name"):
@@ -297,17 +293,16 @@ class PluginContext:
         self._track("command", clean, lambda: cmds.pop(clean, None))
         return entry
 
-    def register_memory_provider(self, provider: Any) -> bool:
-        active = self.manager.slots.fill("memory", provider, self.plugin)
-        self._track("memory_provider", str(provider.name),
-                    lambda: self.manager.slots.release("memory", provider))
+    def _fill(self, slot: str, kind: str, obj: Any) -> bool:
+        active = self.manager.slots.fill(slot, obj, self.plugin)
+        self._track(kind, str(obj.name), lambda: self.manager.slots.release(slot, obj))
         return active
 
+    def register_memory_provider(self, provider: Any) -> bool:
+        return self._fill("memory", "memory_provider", provider)
+
     def register_context_engine(self, engine: Any) -> bool:
-        active = self.manager.slots.fill("context", engine, self.plugin)
-        self._track("context_engine", str(engine.name),
-                    lambda: self.manager.slots.release("context", engine))
-        return active
+        return self._fill("context", "context_engine", engine)
 
     def register_channel(self, name: str, factory: Callable[..., Any], description: str = "",
                          **meta: Any) -> ChannelEntry:

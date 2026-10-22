@@ -101,7 +101,7 @@ class StubLink:
         if type(body).__name__ == "SessionCreate":
             return {"session": {"id": f"s_{len(self.calls)}"}}
         if type(body).__name__ == "Peers":  # D-040: the core's ingress path; this stub's policy delivers everything
-            return {"msg_id": "bm_x", "state": "delivered", "session": body.session}
+            return {"msg_id": "bm_x", "state": "delivered", "session": body.session, "mode": "started"}
         return {"accepted": True}
 
     async def events(self, since=0, session=None):
@@ -121,8 +121,8 @@ def test_channel_routes_inbox_to_turns_and_replies_signed(bus, tmp_path):
     bus.post("delta", "team:core", "to the core team")
     bus.post("beta", "group", "my own message")
     extra = {"url": bus.url, "seat": "beta", "keys_dir": str(keys), "state_dir": str(tmp_path / "state")}
+    load_plugin()  # registers exo_bus_plugin, so the import below works when this test runs alone
     from exo_bus_plugin.exo_bus_hermes.adapter import BusChannel, route
-    load_plugin()
 
     async def main():
         link = StubLink()
@@ -134,8 +134,11 @@ def test_channel_routes_inbox_to_turns_and_replies_signed(bus, tmp_path):
         sessions = dict(ch._by_chat)
         sid = sessions["gamma"]
         ev = lambda body, seq: s.Event(seq=seq, type="x", body=body, session=sid)
-        await link.q.put(ev(s.MessageCompleted(message=Message.assistant("reply from exo")), 1))
-        await link.q.put(ev(s.TurnCompleted(turn_id="t1"), 2))
+        opener = Message(role="user", meta={"turn_id": "t1", "author": "bus:gamma",  # the turn gamma's message opened
+                                            "bus": {"envelope": bus.client("beta").inbox()[0]["id"]}})
+        await link.q.put(ev(s.MessageCompleted(message=opener), 1))
+        await link.q.put(ev(s.MessageCompleted(message=Message.assistant("reply from exo")), 2))
+        await link.q.put(ev(s.TurnCompleted(turn_id="t1"), 3))
         await asyncio.sleep(0.3)
         await ch.stop()
         return n, again, sessions, link.calls

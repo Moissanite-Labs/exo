@@ -14,9 +14,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,7 +24,7 @@ from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.private import private_file
 from exo.core.types import Message, from_dict, to_dict
-from exo.protocol.schema import EVENTS, Event, SessionInfo, now_ts
+from exo.protocol.schema import EVENTS, Event, SessionInfo, new_id, now_ts
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -79,10 +79,6 @@ LOGGED_KINDS = ("thread", "scheduled", "private")  # thread kinds whose messages
 SCHEMA_VERSION = 2
 
 
-def new_id(prefix: str) -> str:
-    return f"{prefix}_{secrets.token_hex(8)}"
-
-
 def canonical_cwd(path: str | None) -> str | None:
     """Real path with each component spelled as it is on disk (fixes ``~/work`` vs ``~/Work``)."""
     if not path:
@@ -130,27 +126,68 @@ class SessionStore:
 
     def __init__(self, path: str | Path = ":memory:", migrate: bool = True):
         self.path = str(path)
-        if self.path != ":memory:":
-            private_file(self.path)
-        self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
-        self._db.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self._conn: sqlite3.Connection | None = self._open()
         with self._lock:
-            self._db.execute("PRAGMA journal_mode=WAL")
-            self._db.execute("PRAGMA foreign_keys=ON")
-            self._db.executescript(SCHEMA)
-            for table, col, decl in UPGRADES:
-                have = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
-                if col not in have:
-                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
-            self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS messages_log ON messages (agent, pos)"
-                             " WHERE pos IS NOT NULL")
+            deadline = time.monotonic() + 2  # a new file's switch to WAL can be busy without waiting (#246)
+            while True:
+                try:
+                    self._db.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc) or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
+            # One write transaction: two processes opening the file at once cannot both add a column (#246).
+            # BEGIN goes inside the script because executescript commits a pending transaction first.
+            try:
+                self._db.executescript("BEGIN IMMEDIATE;" + SCHEMA)
+                for table, col, decl in UPGRADES:
+                    have = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
+                    if col not in have:
+                        self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+                self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS messages_log ON messages (agent, pos)"
+                                 " WHERE pos IS NOT NULL")
+            except BaseException:
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
         if migrate:
             self.migrate_agents()
 
+    def _open(self) -> sqlite3.Connection:
+        if self.path != ":memory:":
+            private_file(self.path)  # owner-only, also when a late reader reopens a file that was removed
+        db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")  # per connection; WAL mode stays set in the file itself
+        return db
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        """The connection, reopened if it is used after close() (a late reader at shutdown, a test that inspects)."""
+        db = self._conn
+        if db is None:
+            with self._lock:
+                if self._conn is None:
+                    if self.path == ":memory:":  # a new connection would be an empty database
+                        raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+                    self._conn = self._open()
+                db = self._conn
+        return db
+
     def close(self) -> None:
+        """Release the connection and its file handles.
+
+        Not final: any later use opens the file again, so a reader or writer that runs after
+        ``CoreRuntime.close()`` (a turn finishing, a test that inspects) keeps working, and holds a
+        handle until the next close. Only a ``:memory:`` store stays closed.
+        """
         with self._lock:
-            self._db.close()
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def _q(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:
@@ -183,8 +220,9 @@ class SessionStore:
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?)", (sid, title, seat, model, cwd, parent, fork_seq, ts, ts, agent, kind))
         return self.get_session(sid)  # type: ignore[return-value]
 
-    def _info(self, row: sqlite3.Row) -> SessionInfo:
-        (count,) = self._q("SELECT COUNT(*) FROM messages WHERE session=? AND hidden=0", (row["id"],))[0]
+    def _info(self, row: sqlite3.Row, count: int | None = None) -> SessionInfo:
+        if count is None:
+            (count,) = self._q("SELECT COUNT(*) FROM messages WHERE session=? AND hidden=0", (row["id"],))[0]
         return SessionInfo(id=row["id"], title=row["title"], seat=row["seat"], model=row["model"],
                            cwd=row["cwd"], parent=row["parent"], created=row["created"],
                            updated=row["updated"], message_count=count, agent=row["agent"], kind=row["kind"] or "")
@@ -194,21 +232,27 @@ class SessionStore:
         return self._info(rows[0]) if rows else None
 
     def list_sessions(self, limit: int = 50, seat: str | None = None, agent: str | None = None) -> list[SessionInfo]:
-        where, args = [], []
-        if seat is not None:
-            where.append("seat=?")
-            args.append(seat)
-        if agent is not None:
-            where.append("agent=?")
-            args.append(agent)
-        sql = "SELECT * FROM sessions" + (" WHERE " + " AND ".join(where) if where else "")
-        rows = self._q(sql + " ORDER BY updated DESC, id LIMIT ?", (*args, limit))
-        return [self._info(r) for r in rows]
+        # One query: the limited selection is a subquery, so each correlated count runs only for a
+        # row the limit keeps. A count in the outer select runs before the sort, for every
+        # provisional candidate, however small the limit (#365).
+        cols = {k: v for k, v in (("seat", seat), ("agent", agent)) if v is not None}
+        page = ("SELECT * FROM sessions" + (" WHERE " + " AND ".join(f"{k}=?" for k in cols) if cols else "")
+                + " ORDER BY updated DESC, id LIMIT ?")
+        rows = self._q("SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session=s.id AND m.hidden=0)"
+                       f" AS message_count FROM ({page}) s ORDER BY s.updated DESC, s.id",
+                       (*cols.values(), limit))
+        return [self._info(r, r["message_count"]) for r in rows]
 
     def thread(self, sid: str) -> tuple[str | None, str]:
         """(agent, kind) of a session; (None, "") outside any agent."""
         rows = self._q("SELECT agent, kind FROM sessions WHERE id=?", (sid,))
         return (rows[0]["agent"], rows[0]["kind"] or "") if rows else (None, "")
+
+    def private(self, sid: str | None) -> bool:
+        """A private thread, or a session under one at any depth (its delegate child): not remembered (D-028)."""
+        return bool(sid) and bool(self._q(
+            "WITH RECURSIVE up(parent, kind) AS (SELECT parent, kind FROM sessions WHERE id=? UNION SELECT s.parent,"
+            " s.kind FROM sessions s JOIN up ON s.id=up.parent) SELECT 1 FROM up WHERE kind='private'", (sid,)))
 
     def update_session(self, sid: str, **fields: Any) -> SessionInfo:
         allowed = {"title", "seat", "model", "cwd"}
@@ -246,8 +290,7 @@ class SessionStore:
     # ---------------------------------------------------------------- messages
 
     def last_seq(self, sid: str) -> int:  # counts hidden rows too, so a seq is never reused
-        (seq,) = self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,))[0]
-        return seq
+        return self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,))[0][0]
 
     def append_message(self, sid: str, msg: Message, turn_id: str | None = None) -> Message:
         """Store ``msg`` (assigning ``id`` and ``meta['seq']``) and return it."""
@@ -286,27 +329,29 @@ class SessionStore:
         """Messages with ``since < seq <= upto``, in order."""
         rows = self._q("SELECT data FROM messages WHERE session=? AND seq>? AND seq<=? AND hidden=0 ORDER BY seq",
                        (sid, since, upto if upto is not None else 2**62))
-        return [from_dict(Message, json.loads(r["data"])) for r in rows]
+        return [from_dict(Message, json.loads(r["data"]), strict=False) for r in rows]
 
     def message_seq(self, sid: str, message_id: str) -> int | None:
         rows = self._q("SELECT seq FROM messages WHERE session=? AND id=?", (sid, message_id))
         return rows[0]["seq"] if rows else None
 
     def truncate(self, sid: str, after_seq: int) -> int:
-        """Remove messages with seq > after_seq and summaries touching them. Agent log entries are hidden,
-        not deleted, so the log stays append-only."""
+        """Remove messages with seq > after_seq and summaries holding them. Agent log entries are hidden,
+        not deleted, so the log stays append-only. Context notes stay: they hold other threads' news."""
 
         def drop(db: sqlite3.Connection) -> int:
-            ids = [r[0] for r in db.execute("SELECT id FROM messages WHERE session=? AND seq>? AND hidden=0",
+            keep = " AND json_extract(data, '$.meta.note') IS NULL"
+            ids = [r[0] for r in db.execute("SELECT id FROM messages WHERE session=? AND seq>? AND hidden=0" + keep,
                                              (sid, after_seq))]
-            logged = db.execute("SELECT agent, MIN(pos) AS first FROM messages WHERE session=? AND seq>?"
-                                " AND hidden=0 AND pos IS NOT NULL", (sid, after_seq)).fetchone()
-            if logged and logged["agent"]:  # an agent tree is keyed agent:<name> and spans log positions
-                db.execute("DELETE FROM summaries WHERE session=? AND end_seq>=?",
-                           (f"agent:{logged['agent']}", logged["first"]))
+            logged = db.execute("SELECT agent FROM messages WHERE session=? AND seq>? AND hidden=0 AND pos IS NOT NULL",
+                                (sid, after_seq)).fetchone()
+            if logged:  # agent tree nodes (ranges are log positions) holding an undone entry, and the merges above them
+                db.execute("DELETE FROM summaries WHERE session=? AND EXISTS (SELECT 1 FROM messages m WHERE m.session=?"
+                           " AND m.seq>? AND m.hidden=0 AND m.pos BETWEEN summaries.start_seq AND summaries.end_seq)",
+                           (f"agent:{logged['agent']}", sid, after_seq))
             db.executemany("DELETE FROM messages_fts WHERE msg_id=?", [(i,) for i in ids])
             db.execute("UPDATE messages SET hidden=1 WHERE session=? AND seq>? AND pos IS NOT NULL", (sid, after_seq))
-            db.execute("DELETE FROM messages WHERE session=? AND seq>? AND pos IS NULL", (sid, after_seq))
+            db.execute("DELETE FROM messages WHERE session=? AND seq>? AND pos IS NULL" + keep, (sid, after_seq))
             db.execute("DELETE FROM summaries WHERE session=? AND end_seq>?", (sid, after_seq))
             return len(ids)
 
@@ -335,8 +380,10 @@ class SessionStore:
             m.meta["local"] = "fork"  # the original is already in the agent log
             m.id = None
             self.append_message(child.id, m)
-        for row in self._q("SELECT * FROM summaries WHERE session=? AND end_seq<=? AND status='done'",
-                           (sid, upto)):
+        # the copies are renumbered 1..n: a range with an undone (hidden or deleted) row up to its end would shift
+        for row in self._q("SELECT * FROM summaries WHERE session=? AND end_seq<=? AND status='done' AND end_seq=("
+                           "SELECT COUNT(*) FROM messages m WHERE m.session=? AND hidden=0 AND seq<=summaries.end_seq)",
+                           (sid, upto, sid)):
             self._q("INSERT INTO summaries (id, session, level, idx, start_seq, end_seq, text, status,"
                     " lane) VALUES (?,?,?,?,?,?,?,?,?)",
                     (new_id("sum"), child.id, row["level"], row["idx"], row["start_seq"],
@@ -368,8 +415,7 @@ class SessionStore:
     # ---------------------------------------------------------------- agent log (D-028)
 
     def last_pos(self, agent: str) -> int:
-        (pos,) = self._q("SELECT COALESCE(MAX(pos), 0) FROM messages WHERE agent=?", (agent,))[0]
-        return pos
+        return self._q("SELECT COALESCE(MAX(pos), 0) FROM messages WHERE agent=?", (agent,))[0][0]
 
     def log(self, agent: str, since: int = 0, upto: int | None = None) -> list[LogEntry]:
         """Agent log entries with ``since < pos <= upto``, in order, hidden ones included (flagged)."""
@@ -377,13 +423,23 @@ class SessionStore:
                        " sessions s ON s.id=m.session WHERE m.agent=? AND m.pos>? AND m.pos<=? ORDER BY m.pos",
                        (agent, since, upto if upto is not None else 2**62))
         return [LogEntry(r["pos"], r["session"], r["kind"] or "", r["created"],
-                         from_dict(Message, json.loads(r["data"])), bool(r["hidden"])) for r in rows]
+                         from_dict(Message, json.loads(r["data"]), strict=False), bool(r["hidden"])) for r in rows]
 
     def last_logged_seq(self, sid: str, upto_pos: int) -> int:
-        """The seq of this thread's last log entry with pos <= upto_pos (0 if none)."""
-        (seq,) = self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=? AND pos IS NOT NULL AND pos<=?",
-                         (sid, upto_pos))[0]
+        """The seq of this thread's last log entry with pos <= upto_pos (0 if none). A fork copy counts at its
+        original's pos (kept in its meta) while the tree can hold that original (visible, not private)."""
+        (seq,) = self._q("SELECT COALESCE(MAX(c.seq), 0) FROM messages c WHERE c.session=? AND COALESCE(c.pos, (SELECT"
+                         " o.pos FROM messages o JOIN sessions s ON s.id=o.session WHERE json_extract(c.data, '$.meta.local')"
+                         "='fork' AND o.agent=(SELECT agent FROM sessions WHERE id=c.session) AND o.pos=json_extract(c.data,"
+                         " '$.meta.pos') AND o.hidden=0 AND s.kind!='private'))<=?", (sid, upto_pos))[0]
         return seq
+
+    def orphaned_copies(self, sid: str, upto_seq: int) -> list[Message]:
+        return [from_dict(Message, json.loads(r["data"]), strict=False) for r in self._q(
+            "SELECT c.data FROM sessions f JOIN messages c ON c.session=f.id WHERE f.id=? AND c.seq<=MIN(?, COALESCE(f.fork_seq, 0))"
+            " AND c.pos IS NULL AND json_extract(c.data, '$.meta.local')='fork' AND json_extract(c.data, '$.meta.pos') IS NOT NULL"
+            " AND NOT EXISTS (SELECT 1 FROM messages o JOIN sessions s ON s.id=o.session WHERE o.agent=f.agent AND o.hidden=0"
+            " AND o.pos=json_extract(c.data, '$.meta.pos') AND s.kind!='private') ORDER BY c.seq", (sid, upto_seq))]
 
     def agents(self) -> list[str]:
         return [r[0] for r in self._q("SELECT DISTINCT agent FROM messages WHERE pos IS NOT NULL ORDER BY agent")]
@@ -492,10 +548,15 @@ class SessionStore:
         return ev
 
     def write_event(self, ev: Event) -> None:
-        """Store an event that already has its ``seq`` (the server Hub numbers events)."""
-        self._tx(lambda db: db.execute("INSERT INTO events (seq, id, session, type, ts, body) VALUES"
-                                       " (?,?,?,?,?,?)", (ev.seq, ev.id, ev.session, ev.type, ev.ts,
-                                                          json.dumps(to_dict(ev.body), ensure_ascii=False))))
+        """Store an event the server Hub numbered. Seats of one home each run a Hub on this file, and ``append_event``
+        lets SQLite pick the seq (#237), so the seq is raised past the table's highest inside the write transaction;
+        ``Hub.publish`` then takes ``ev.seq``."""
+        def write(db: sqlite3.Connection) -> None:
+            ev.seq = max(ev.seq, db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0] + 1)
+            db.execute("INSERT INTO events (seq, id, session, type, ts, body) VALUES (?,?,?,?,?,?)",
+                       (ev.seq, ev.id, ev.session, ev.type, ev.ts, json.dumps(to_dict(ev.body), ensure_ascii=False)))
+
+        self._tx(write)
 
     def events_since(self, since: int = 0, session: str | None = None, limit: int = 10000,
                      with_global: bool = False, skip: tuple[str, ...] = ()) -> list[Event]:
@@ -517,8 +578,7 @@ class SessionStore:
         return out
 
     def last_event_seq(self) -> int:
-        (seq,) = self._q("SELECT COALESCE(MAX(seq), 0) FROM events")[0]
-        return seq
+        return self._q("SELECT COALESCE(MAX(seq), 0) FROM events")[0][0]
 
 
 Subscriber = Callable[[Event], Any]

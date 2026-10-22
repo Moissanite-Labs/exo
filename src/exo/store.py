@@ -10,8 +10,9 @@ Layout (see templates/principal-store/):
     corpus/private/     raw record, git-ignored, mode 0700
     ledger.sqlite       the event log (exo.ledger)
 
-The store is principal-agnostic. Its root is a parameter; the default for a principal id
-is `$EXO_HOME/principals/<id>`, with EXO_HOME defaulting to `~/.exo`.
+The store is principal-agnostic. Its root is a parameter; for a principal id it is the root
+recorded in config `principals.<id>`, else `$EXO_HOME/principals/<id>`, with EXO_HOME defaulting
+to `~/.exo` (`principal_root`).
 """
 from __future__ import annotations
 
@@ -52,10 +53,41 @@ def exo_home() -> Path:
     return Path(os.environ.get('EXO_HOME') or Path.home() / '.exo').expanduser()
 
 
-def principal_root(pid: str) -> Path:
+def _root_path(root: object) -> Path | None:
+    """A recorded store root as an absolute path, or None. A root that is not a string, is blank, holds a NUL byte,
+    names an unknown user (`~nosuchuser/x`) or is relative after `~` expansion is not a store root."""
+    if not isinstance(root, str) or not root.strip() or '\0' in root:
+        return None
+    try:
+        path = Path(root).expanduser()
+    except (RuntimeError, ValueError, OSError):
+        return None
+    return path if path.is_absolute() else None
+
+
+def explicit_roots(home: str | os.PathLike | None = None) -> dict[str, Path]:
+    """Store roots by principal id from `principals` in `<home>/config.json` (`exo init --root` and
+    `exo import-store --root` record them). A missing or unreadable file, or a bad entry, adds nothing."""
+    try:
+        data = json.loads((Path(home or exo_home()).expanduser() / 'config.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    roots = data.get('principals') if isinstance(data, dict) else None
+    out = {}
+    for pid, root in (roots.items() if isinstance(roots, dict) else ()):
+        path = _root_path(root)
+        if isinstance(pid, str) and ID_RE.match(pid) and path is not None:
+            out[pid] = path
+    return out
+
+
+def principal_root(pid: str, home: str | os.PathLike | None = None) -> Path:
+    """The store of a principal id: its explicit root (`explicit_roots`), else `<home>/principals/<id>`.
+    `home` defaults to `$EXO_HOME`. Every reader that turns an id into a store goes through here."""
     if not ID_RE.match(pid):
         raise ValueError(f'bad principal id {pid!r}: use lowercase letters, digits, - and _')
-    return exo_home() / 'principals' / pid
+    home = Path(home).expanduser() if home else exo_home()
+    return explicit_roots(home).get(pid) or home / 'principals' / pid
 
 
 def template_dir() -> Path:
@@ -177,6 +209,8 @@ class PrincipalStore:
     def __init__(self, root: str | os.PathLike):
         self.root = Path(root).expanduser().resolve()
         self._nodes: dict[str, dict] | None = None
+        self._seen: tuple = ()  # the node files as the last reload saw them (`refresh`)
+        self._bm25: tuple | None = None  # (node set, tables) for `find`, rebuilt when a reload replaces the set
 
     def __repr__(self) -> str:
         return f'PrincipalStore({str(self.root)!r})'
@@ -220,7 +254,21 @@ class PrincipalStore:
         meta['_path'] = path.relative_to(self.root).as_posix()
         return meta
 
+    def _node_files(self) -> tuple:
+        """(path, mtime, size) of every node file: it changes when a node is added, edited or removed."""
+        seen = []
+        for d, _, files in os.walk(self.nodes_dir):
+            for f in files:
+                if f.endswith('.md'):
+                    try:
+                        st = os.stat(os.path.join(d, f))
+                    except OSError:
+                        continue
+                    seen.append((os.path.join(d, f), st.st_mtime_ns, st.st_size))
+        return tuple(sorted(seen))
+
     def reload(self) -> dict[str, dict]:
+        self._seen = self._node_files()  # before reading, so a write during the walk shows at the next refresh
         nodes: dict[str, dict] = {}
         if self.nodes_dir.is_dir():
             for d, _, files in sorted(os.walk(self.nodes_dir)):
@@ -231,6 +279,15 @@ class PrincipalStore:
                             nodes[n['id']] = n
         self._nodes = nodes
         return nodes
+
+    def refresh(self) -> bool:
+        """Reload when a node file was added, edited or removed since the last read: another process or another
+        store object (the CLI's `exo proposals accept`, the learner's) wrote it. True when it reloaded. `nodes`
+        itself stays a plain cached read, so a long-lived reader calls this once per use."""
+        if self._nodes is not None and self._node_files() == self._seen:
+            return False
+        self.reload()
+        return True
 
     @property
     def nodes(self) -> dict[str, dict]:
@@ -246,31 +303,19 @@ class PrincipalStore:
     # --- search --------------------------------------------------------------
 
     def find(self, query: str | list[str], n: int | None = None) -> list[tuple[str, float]]:
-        """BM25 over nodes. Title counts three times, summary and load_when twice."""
+        """BM25 over nodes. Title counts three times, summary and load_when twice. The node tables are built once
+        per node set: every reload makes a new set, so only a reload (or a refresh that saw a change) rebuilds
+        them, and a repeat query tokenizes just itself."""
         q = tokens(query if isinstance(query, str) else ' '.join(query))
         if not q:
             return []
-        docs = {}
-        for i, node in self.nodes.items():
-            tags = node.get('tags') or []
-            weighted = ' '.join([
-                ' '.join([node.get('title') or ''] * 3),
-                ' '.join([node.get('summary') or ''] * 2),
-                ' '.join([node.get('load_when') or ''] * 2),
-                ' '.join(tags) if isinstance(tags, list) else str(tags),
-                i.replace('/', ' '),
-                node['_body'],
-            ])
-            docs[i] = Counter(tokens(weighted))
+        nodes, cached = self.nodes, self._bm25
+        if cached is None or cached[0] is not nodes:
+            cached = self._bm25 = (nodes, *self._bm25_tables(nodes))
+        _, docs, df, avg = cached
         N = len(docs)
-        df: Counter = Counter()
-        for c in docs.values():
-            for w in set(c):
-                df[w] += 1
-        avg = sum(sum(c.values()) for c in docs.values()) / max(N, 1)
         scores = {}
-        for i, c in docs.items():
-            L = sum(c.values())
+        for i, (c, L) in docs.items():
             s = 0.0
             for w in q:
                 if w not in c:
@@ -281,6 +326,27 @@ class PrincipalStore:
                 scores[i] = s
         ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
         return ranked[:n] if n else ranked
+
+    @staticmethod
+    def _bm25_tables(nodes: dict[str, dict]) -> tuple[dict[str, tuple[Counter, int]], Counter, float]:
+        """Each node's weighted token counts and length, each token's document frequency, the average length."""
+        docs = {}
+        for i, node in nodes.items():
+            tags = node.get('tags') or []
+            weighted = ' '.join([
+                ' '.join([node.get('title') or ''] * 3),
+                ' '.join([node.get('summary') or ''] * 2),
+                ' '.join([node.get('load_when') or ''] * 2),
+                ' '.join(tags) if isinstance(tags, list) else str(tags),
+                i.replace('/', ' '),
+                node['_body'],
+            ])
+            c = Counter(tokens(weighted))
+            docs[i] = (c, sum(c.values()))
+        df: Counter = Counter()
+        for c, _ in docs.values():
+            df.update(set(c))
+        return docs, df, sum(L for _, L in docs.values()) / max(len(docs), 1)
 
     def ctx(self, words: str | list[str], budget: int = 1500,
             ranked: list[tuple[str, float]] | None = None) -> Context:

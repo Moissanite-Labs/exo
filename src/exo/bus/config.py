@@ -8,11 +8,16 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import overload
 
 DEFAULT_URL = "http://127.0.0.1:8787"
 DEFAULT_BIND = "127.0.0.1:8787"
 
 
+@overload
+def env(name: str, default: str, environ=None) -> str: ...
+@overload
+def env(name: str, default: None = None, environ=None) -> str | None: ...
 def env(name: str, default: str | None = None, environ=None) -> str | None:
     environ = os.environ if environ is None else environ
     for key in (f"EXO_BUS_{name}", f"DIVAN_{name}"):
@@ -57,6 +62,7 @@ class RelayConfig:
     bind: str = DEFAULT_BIND
     title: str = "Exo Bus"
     mcp: bool = True
+    web_bodies: bool = False  # the unauthenticated web view at / shows plaintext bodies only when this is set
 
     @classmethod
     def from_env(cls, environ=None) -> "RelayConfig":
@@ -71,4 +77,5 @@ class RelayConfig:
             bind=env("BIND", DEFAULT_BIND, environ),
             title=env("TITLE", "Exo Bus", environ),
             mcp=env("MCP", "1", environ) not in ("0", "false", "no"),
+            web_bodies=(env("WEB_BODIES", "", environ) or "").lower() in ("1", "true", "yes"),
         )

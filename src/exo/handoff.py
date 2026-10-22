@@ -25,15 +25,18 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import provenance
+from .core.private import atomic_write
 from .store import PrincipalStore, exo_home, principal_root
 
 FORMAT_VERSION = 1
-PIN_OPEN, PIN_CLOSE = '<exo-pinned>', '</exo-pinned>'
+PIN_OPEN, PIN_CLOSE = provenance.PIN_OPEN, provenance.PIN_CLOSE
 HEADER_RE = re.compile(r'<!--\s*exo-handoff\s+(.*?)\s*-->', re.S)
 ATTR_RE = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 # Text that marks a host-written compaction summary; its body is not the principal speaking.
@@ -158,7 +161,7 @@ def _principal_turns(messages: list[dict]) -> list[tuple[int, dict, str]]:
     for i, m in enumerate(messages):
         if not isinstance(m, dict) or m.get('role') != 'user':
             continue
-        if m.get('principal') is False or (m.get('author') and m.get('author') != 'principal'):
+        if m.get('principal') is False or provenance.author_of(m) != provenance.PRINCIPAL:
             continue  # D-040: a peer, bus or job message is not the principal's ruling
         text = message_text(m).strip()
         if len(text) < 2 or is_summary_text(text):
@@ -211,7 +214,10 @@ def _coerce_capture(items: Any, kind: str) -> list[Signal]:
 
 
 def extract_rulings_and_corrections(messages: list[dict]) -> tuple[list[Signal], list[Signal]]:
-    """Use exo.capture when present (the seam), else the local heuristics."""
+    """Use exo.capture when present (the seam), else the local heuristics. D-040: a user message whose author,
+    read through `provenance.author_of` with its meta tags, is not the principal's (peer, bus, job, a context
+    note) is never a ruling."""
+    messages = provenance.principal_view(messages)  # such a message becomes role "other", which both paths skip
     try:
         from . import capture
         found = capture.extract_signals(messages, skip=lambda m: is_summary_text(message_text(m)))
@@ -231,6 +237,7 @@ def extract_rulings_and_corrections(messages: list[dict]) -> tuple[list[Signal],
 
 
 def _open_decisions(messages: list[dict]) -> list[Signal]:
+    messages = provenance.principal_view(messages)  # D-040: a deferral in a peer, bus or job row is not open
     last_user = max((i for i, _, _ in _principal_turns(messages)), default=-1)
     out: list[Signal] = []
     for i, m in enumerate(messages):
@@ -393,10 +400,29 @@ def _unquote_items(block: str) -> list[str]:
     return [i for i in items if i]
 
 
+def _pinned_spans(text: str) -> Iterable[tuple[int, int, int, int]]:
+    """(start, body_start, body_end, end) of each closed pinned block, in order. A linear `find`
+    scan (#322): the first open tag with no close after it ends the scan, since no later open can
+    close either. The lazy regex this replaces rescanned to the end from every unclosed open, so
+    a run of them cost quadratic time."""
+    pos = 0
+    while True:
+        start = text.find(PIN_OPEN, pos)
+        if start < 0:
+            return
+        body_start = start + len(PIN_OPEN)
+        body_end = text.find(PIN_CLOSE, body_start)
+        if body_end < 0:
+            return
+        pos = body_end + len(PIN_CLOSE)
+        yield start, body_start, body_end, pos
+
+
 def parse_pinned_blocks(text: str) -> dict[str, list[str]]:
     """Read every `<exo-pinned>` block in `text` back into verbatim items per kind."""
     out: dict[str, list[str]] = {k: [] for _, k, _ in _PIN_SECTIONS}
-    for body in re.findall(re.escape(PIN_OPEN) + r'(.*?)' + re.escape(PIN_CLOSE), text, re.S):
+    for _, body_start, body_end, _ in _pinned_spans(text):
+        body = text[body_start:body_end]
         for title, kind, _ in _PIN_SECTIONS:
             m = re.search(r'^### ' + re.escape(title) + r'\s*$(.*?)(?=^### |\Z)', body, re.S | re.M)
             if m:
@@ -406,7 +432,12 @@ def parse_pinned_blocks(text: str) -> dict[str, list[str]]:
 
 def strip_pinned(text: str) -> str:
     """`text` without any `<exo-pinned>` blocks."""
-    return re.sub(re.escape(PIN_OPEN) + r'.*?' + re.escape(PIN_CLOSE), '', text, flags=re.S)
+    parts, pos = [], 0
+    for start, _, _, end in _pinned_spans(text):
+        parts.append(text[pos:start])
+        pos = end
+    parts.append(text[pos:])
+    return ''.join(parts)
 
 
 def render_pinned_block(signals: Signals, handoff_path: str | os.PathLike | None = None,
@@ -446,13 +477,33 @@ def render_pinned_block(signals: Signals, handoff_path: str | os.PathLike | None
 
 # --- extraction ------------------------------------------------------------------
 
+def _may_carry(m: dict) -> bool:
+    """D-040: a pinned block is carried only from a message that opens with it (exo-context's own block rides in a
+    system message, or an older host's untagged user turn opens with one), whose author reads as the system or the
+    principal through `provenance.author_of`, meta tags included. A row opening with a compaction marker (a host's
+    summary) carries nothing, whatever its role or author (#385): exo-context escapes the tags of summaries it
+    writes itself, and its own block rides inside them, but a stock summary a host built on its own (made before
+    exo-context was the engine, restored from state.db on resume, a micro compaction) never passed that escaping,
+    and nothing about the row tells the two apart: the `_compressed_summary` flag shows a host made it, not that
+    exo-context escaped it (#371), and a user-role summary reads as the principal's own turn. Continuity for those
+    rows comes from the engine's session pins, not from carrying. A block in peer, bus, job, tool or agent text is
+    data, and so is one quoted further down a message: the Exo core's system message quotes each span too small to
+    summarize word for word, a peer's turn included."""
+    meta = m.get('meta')
+    meta = meta if isinstance(meta, Mapping) else {}
+    if any(meta.get(k) is not None for k in ('peer', 'bus', 'job')):
+        return False  # an ingress tag in meta is not the principal, whatever the role says (#322)
+    return m.get('role') in ('system', 'user') and provenance.author_of(m) in (
+        provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith(PIN_OPEN)
+
+
 def extract_signals(messages: list[dict]) -> Signals:
     """All principal signals in `messages`, including items carried in earlier pinned blocks."""
     messages = [m for m in messages if isinstance(m, dict)]
     carried: dict[str, list[str]] = {k: [] for _, k, _ in _PIN_SECTIONS}
-    for m in messages:
+    for m in provenance.principal_view(messages):
         text = message_text(m)
-        if PIN_OPEN in text:
+        if PIN_OPEN in text and _may_carry(m):
             for k, items in parse_pinned_blocks(text).items():
                 carried[k].extend(items)
     rulings, corrections = extract_rulings_and_corrections(messages)
@@ -531,6 +582,11 @@ def _quoted_items(signals: list[Signal]) -> str:
     return '\n\n'.join(out)
 
 
+def _one_line(text: str) -> str:
+    """One physical line, words kept: a field rendered as a list item must never open a section (#353)."""
+    return ' '.join(str(text).splitlines())
+
+
 def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, created: str | None = None,
                    session: str | None = None, principal: str | None = None, summary: str = '') -> str:
     created = created or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -539,7 +595,7 @@ def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, cr
         meta += f' session="{_attr(session)}"'
     if principal:
         meta += f' principal="{_attr(principal)}"'
-    L = [f'<!-- exo-handoff {meta} -->', f'# Handoff: {topic}',
+    L = [f'<!-- exo-handoff {meta} -->', f'# Handoff: {_one_line(topic)}',
          f'Written {created} by exo-context from {signals.message_count} messages. '
          'Self-contained: a fresh session needs this file, the principal pack and the router.', '',
          '## How to resume',
@@ -561,27 +617,29 @@ def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, cr
         L.append('None recorded in this session.')
 
     L += ['', '## Open decisions']
-    L += [f'{n}. {s.text}' for n, s in enumerate(signals.open_decisions, 1)] or ['None found.']
+    L += [f'{n}. {_one_line(s.text)}' for n, s in enumerate(signals.open_decisions, 1)] or ['None found.']
 
     L += ['', '## State']
     if summary.strip():
-        L += [summary.strip(), '']
+        # Quoted like the brief and the last report: summary text is model text, and a line of it
+        # must never open a section of its own (#315) next to the principal's quoted words.
+        L += [_quote(summary), '']
     if signals.last_state:
         L += ['Last report in the session:', _quote(signals.last_state)]
     if not summary.strip() and not signals.last_state:
         L.append('No assistant report yet.')
 
     L += ['', '## Live processes mentioned']
-    L += [f'- {s.text}' for s in signals.processes] or ['None mentioned.']
+    L += [f'- {_one_line(s.text)}' for s in signals.processes] or ['None mentioned.']
 
     L += ['', '## Files touched']
-    L += [f'- written: {p}' for p in signals.files_written]
-    L += [f'- mentioned: {p}' for p in signals.files_mentioned]
+    L += [f'- written: {_one_line(p)}' for p in signals.files_written]
+    L += [f'- mentioned: {_one_line(p)}' for p in signals.files_mentioned]
     if not signals.files_written and not signals.files_mentioned:
         L.append('None recorded.')
 
     L += ['', '## Next steps']
-    L += [f'{n}. {s}' for n, s in enumerate(signals.next_steps, 1)] or [
+    L += [f'{n}. {_one_line(s)}' for n, s in enumerate(signals.next_steps, 1)] or [
         'None written down. Start from the open decisions and the last report.']
     return '\n'.join(L).rstrip() + '\n'
 
@@ -601,16 +659,16 @@ def write_handoff(topic: str, messages: list[dict], store: PrincipalStore | None
         principal = Path(store.root).name
     text = render_handoff(topic, sig, path=path, created=now.strftime('%Y-%m-%dT%H:%M:%SZ'),
                           session=session, principal=principal, summary=summary)
-    tmp = path.with_suffix('.md.tmp')
-    tmp.write_text(text, encoding='utf-8')
-    os.replace(tmp, path)
+    atomic_write(path, text, mode=None)
     return path
 
 
 def _sections(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for m in re.finditer(r'^## (.+?)\s*$(.*?)(?=^## |\Z)', text, re.S | re.M):
-        out[m.group(1).strip()] = m.group(2).strip('\n')
+        # First of a name wins: a later duplicate (an old file's unquoted summary, a hand edit)
+        # never replaces the real section, which the writer puts first (#315).
+        out.setdefault(m.group(1).strip(), m.group(2).strip('\n'))
     return out
 
 
@@ -635,6 +693,10 @@ def load_handoff(path: str | os.PathLike) -> Handoff:
         tm = re.search(r'^# (?:Handoff:\s*)?(.+)$', text, re.M)
         topic = tm.group(1).strip() if tm else p.stem
     secs = _sections(text)
+    # Next steps is the one section the writer puts after every untrusted one, so its genuine copy
+    # is the last in the file; a forged earlier copy (an old file's unquoted summary) loses (#353).
+    for m in re.finditer(r'^## Next steps\s*$(.*?)(?=^## |\Z)', text, re.S | re.M):
+        secs['Next steps'] = m.group(1).strip('\n')
     decided = secs.get("Decisions made (principal's words, verbatim)", '')
     open_body = secs.get('Open decisions', '')
     return Handoff(
@@ -647,7 +709,9 @@ def load_handoff(path: str | os.PathLike) -> Handoff:
 
 
 def resume_text(handoff: Handoff, store: PrincipalStore | None = None, budget: int = 1500) -> str:
-    """Working context for a fresh session: the handoff plus a retrieval pass over the store."""
+    """Working context for a fresh session: the handoff plus a retrieval pass over the store. It goes into the
+    system message, so every pinned-block tag in it is escaped (#279): the file quotes the agent's report and a
+    summary, and records the principal's words as quoted items under their own headings, never as a pinned block."""
     parts = [f'Resuming "{handoff.topic}" from the handoff at {handoff.path}. The quoted rulings and '
              'corrections are the principal\'s own words; follow them.', '', handoff.text.strip()]
     if store is not None and store.exists():
@@ -659,4 +723,4 @@ def resume_text(handoff: Handoff, store: PrincipalStore | None = None, budget: i
                 parts += ['', '## Retrieved from the principal store', got.text.strip()]
         except Exception as e:  # retrieval is a bonus; the handoff stands alone
             parts += ['', f'(Retrieval pass skipped: {e})']
-    return '\n'.join(parts).rstrip() + '\n'
+    return provenance.defuse_pins('\n'.join(parts).rstrip() + '\n')

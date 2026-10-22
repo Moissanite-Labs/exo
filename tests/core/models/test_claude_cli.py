@@ -6,6 +6,7 @@ import stat
 import subprocess
 import signal
 import sys
+import tempfile
 import time
 
 import pytest
@@ -21,7 +22,7 @@ from exo.models_cmd import available_models
 # A fake CLI speaking stream-json both ways. fake.json beside it (the CLI gets a minimal env, D-039) gives the mode
 # (the behaviour), out (where it records what it saw) and pid.
 FAKE = f"""#!{sys.executable}
-import json, os, sys, time
+import json, os, re, sys, time
 cfg = json.load(open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "fake.json")))
 mode = cfg["mode"]
 out = lambda d: print(json.dumps(d), flush=True)
@@ -38,6 +39,7 @@ if mode in ("orphan", "orphanfail", "orphansleep"):
     if mode == "orphansleep":
         time.sleep(60)
 if mode == "fail":
+    sys.stdin.read()  # fail the request, not the start: exiting first breaks the provider's write (#163)
     sys.stderr.write("boom\\n")
     sys.exit(3)
 if mode == "sleep":
@@ -50,10 +52,27 @@ for line in sys.stdin:
     frames.append(f)
     if f.get("shouldQuery") is False:
         out({{"type": "result", "subtype": "success", "num_turns": 0, "is_error": False}})
+def mentions(t):  # as the real CLI (2.1.303) reads "@path": the first "@" in a whitespace-split token that starts it
+    # or follows a CJK full stop, comma, ? or !, up to the token's last word character; and @"a quoted path"
+    got = re.findall(r'(?:^|(?<=[\\s\\ufeff\\u3002\\u3001\\uff1f\\uff01]))@"([^"]+)"', t)
+    for tok in re.split(r"[\\s\\ufeff]+", t):
+        at = [i for i, c in enumerate(tok) if c == "@" and (i == 0 or tok[i - 1] in "\\u3002\\u3001\\uff1f\\uff01")]
+        name = re.sub(r"[^A-Za-z0-9_]+$", "", tok[at[0] + 1:]) if at else ""
+        got += [name] if name and not name.startswith('"') else []
+    return got
+def resolve(p):  # "~" and "~/" from HOME, the rest from the cwd with ".." folded as text, as Node's path.resolve
+    return os.path.normpath(os.path.join(os.getcwd(), os.path.expanduser(p) if p == "~" or p[:2] == "~/" else p))
+read = [open(p).read() for f in frames if f["type"] == "user" for b in f["message"]["content"]
+        for p in map(resolve, mentions(b.get("text", ""))) if os.path.isfile(p)]  # sent to the model
 settings = json.load(open(sys.argv[sys.argv.index("--settings") + 1]))
-json.dump({{"argv": sys.argv[1:], "frames": frames, "cwd": os.getcwd(), "env": dict(os.environ),
+json.dump({{"argv": sys.argv[1:], "frames": frames, "cwd": os.getcwd(), "env": dict(os.environ), "read": read,
            "system": open(sys.argv[sys.argv.index("--system-prompt-file") + 1]).read(),
            "body": json.loads(settings["env"]["CLAUDE_CODE_EXTRA_BODY"])}}, open(cfg["out"], "w"))
+last = frames[-1]["message"]["content"][-1] if frames else {{}}
+if re.match(r"/[A-Za-z][\\w:-]*(\\s|$)", str(last.get("text", ""))):  # as the real CLI: a command name never reaches the model
+    out({{"type": "assistant", "message": {{"content": [{{"type": "text", "text": last["text"].split()[0] + " isn't available in this environment."}}]}}}})
+    out({{"type": "result", "subtype": "success", "num_turns": 0, "is_error": False}})
+    sys.exit(0)
 if mode == "nologin":
     out({{"type": "assistant", "error": "authentication_failed", "message": {{"content": [{{"type": "text", "text": "Not logged in"}}]}}}})
     out({{"type": "result", "subtype": "success", "is_error": True}})
@@ -331,6 +350,26 @@ def test_cancelling_cli_stops_its_descendant(tmp_path):
                 pass
 
 
+def test_cancel_as_a_line_arrives_still_cancels():
+    # #163: Python 3.11's wait_for returned the line and dropped a cancel that landed with it, so Esc was lost
+    # and the turn ran on until the next line or the read timeout.
+    async def go():
+        line = asyncio.get_running_loop().create_future()
+        class Out:
+            async def readline(self):
+                return await line
+        class Proc:
+            stdout = Out()
+        task = asyncio.create_task(claude_cli.ClaudeCliProvider(env={})._read_line(Proc()))
+        for _ in range(5):
+            await asyncio.sleep(0)  # the read is waiting on the line
+        line.set_result(b"{}\n")
+        task.cancel()  # in the same loop step as the line
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    asyncio.run(go())
+
+
 def test_cleanup_timeout_closes_transport_when_pipe_stays_open(monkeypatch):
     closed, killed = [], []
     class Transport:
@@ -399,3 +438,160 @@ def test_foreign_tool_ids_are_sanitized_and_paired(tmp_path):
     assert all(re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", i) for i in uses)
     assert len(set(uses)) == 3
     assert uses[2] == "ok_1-x"
+
+
+def test_user_slash_text_reaches_the_model_not_the_cli(tmp_path):
+    """The real CLI (seen on 2.1.302) runs a user text that starts with a command name as its own command, even with
+    --disable-slash-commands: "/help isn't available in this environment." and no model call, which Exo reads as an
+    incomplete response and cools the route. The fake answers the same way; Exo must send the text as text."""
+    r = router(tmp_path)
+    evs = run(r, [Message.system("be brief"), Message.user("/help")])
+    assert evs[-1].kind == "done" and "".join(e.text for e in evs if e.kind == "text") == "hi there"
+    assert seen(tmp_path)["frames"][-1]["message"]["content"] == [{"type": "text", "text": "\u200b/help"}]
+    run(r, [Message.user("/model opus"), Message.assistant("ok"), Message.user("/compact now")])  # replayed too
+    fr = seen(tmp_path)["frames"]
+    assert [f["message"]["content"][0]["text"] for f in fr] == ["\u200b/model opus", "ok", "\u200b/compact now"]
+
+
+def test_build_frames_guards_each_user_slash_block_and_nothing_else():
+    from exo.core.types import ContentPart
+    two = Message(role="user", content=[ContentPart.of_text("note"), ContentPart.of_text("/etc/hosts")])
+    hist = [Message.system("/sys @~/.ssh/id_rsa"), Message.user(" /help"), Message.user("a/b"), two,
+            Message.assistant("/compact @~/.ssh/id_rsa", [ToolCall(id="t1", name="get_weather", arguments={})]),
+            Message(role="tool", tool_results=[ToolResult.of_text("t1", "/tmp/out @~/.ssh/id_rsa")]),
+            Message.user("/usage @~/.ssh/id_rsa")]
+    system, frames = claude_cli.build_frames(hist, {"get_weather"})
+    texts = [(f["type"], b.get("text", b.get("content"))) for f in frames for b in f["message"]["content"]]
+    assert system == "/sys @~/.ssh/id_rsa"  # the system prompt goes in a file, never through the command parser
+    assert texts == [("user", " /help"), ("user", "a/b"), ("user", "note"), ("user", "\u200b/etc/hosts"),
+                     ("assistant", "/compact @~/.ssh/id_rsa"), ("assistant", None),
+                     ("user", "/tmp/out @~/.ssh/id_rsa"), ("user", "\u200b/usage \u200b@~/.ssh/id_rsa")]
+
+
+@pytest.mark.parametrize("text, sent", [
+    ("@/a b", "\u200b@/a b"), ("x @/a\t@~/b\n@./c", "x \u200b@/a\t\u200b@~/b\n\u200b@./c"),
+    ('read @"/p q"', 'read \u200b@"/p q"'),
+    ("x\u00a0@/a x\ufeff@~/a x\u3000@../a", "x\u00a0\u200b@/a x\ufeff\u200b@~/a x\u3000\u200b@../a"),
+    ("\u770b\u3002@/a \u5417\uff1f@a/../b", "\u770b\u3002\u200b@/a \u5417\uff1f\u200b@a/../b"),
+    ('@"a b"', '\u200b@"a b"'),
+    ("mail a@example.com, (@/a), x:@/a @/b", "mail a@example.com, (@/a), x:@/a \u200b@/b")])  # only token starts
+def test_build_frames_guards_each_user_at_mention(text, sent):
+    """The real CLI (2.1.302) reads "@path" where it starts a token (the text start, JS whitespace, U+FEFF) or follows
+    a CJK full stop, comma, ? or !, and attaches the file. Only a path-form @ at those spots gets the zero-width
+    space; a bare @word there passes unchanged."""
+    assert claude_cli.build_frames([Message.user(text)], set())[1][0]["message"]["content"][0]["text"] == sent
+
+
+def as_sent(text):  # one user text block as Exo hands it to the CLI
+    return claude_cli.build_frames([Message.user(text)], set())[1][0]["message"]["content"][0]["text"]
+
+
+PATHS = ("/etc/x", "~/x", "./x", "../x", '"x y"', "x/../../etc/x")
+
+
+@pytest.mark.parametrize("start", ["", "x ", "x\t", "x\n", "x\u00a0", "x\ufeff", "x\u3000", "x\u2028", "\u770b\u3002",
+                                   "\u770b\u3001", "\u5417\uff1f", "\u5417\uff01"])
+def test_every_path_mention_is_guarded_at_every_token_start(start):
+    """The forms that reach a file outside the CLI's empty folder: absolute, home, "./", "../", quoted, and a word
+    with a "/.." step (on 2.1.303 an unguarded "@x/../../<path>" sent the file)."""
+    for p in PATHS:
+        assert as_sent(f"{start}@{p} end") == f"{start}\u200b@{p} end"
+
+
+@pytest.mark.parametrize("text", [
+    "fix this:\n" "@app.route('/x')\n@login_required\ndef f(): ...", "@media (max-width: 600px) { a { color: red } }",
+    "@@ -1,3 +1,4 @@\n-a\n+b", "write to a@b.c", "@p, see @peer-bot", "@@a", "@import url(x.css);",
+    "(@/p)", '"@/p"', "x:@/p", "a@/p", "x\uff0c@/p", "x\uff1b@/p", "x\uff1a@/p", "\u300c@/p", "x\u200b@/p"])
+def test_code_mail_and_non_token_at_signs_pass_as_typed(text):
+    """abu-aska's review of #213: a U+200B before "@app.route" or "@login_required" lands in a file the model writes
+    from it, a SyntaxError in Python. A bare word resolves inside the CLI's empty folder and reaches nothing. An "@"
+    after "(", a quote, ":", a letter, a fullwidth comma, semicolon, colon or corner bracket, or U+200B starts no
+    mention on the real CLI."""
+    assert as_sent(text) == text
+
+
+def test_a_dotdot_path_is_guarded_and_code_reaches_the_model_as_typed(tmp_path, monkeypatch):
+    """Real CLI 2.1.303 against a fake API: an unguarded "@x/../../<path>" attached the file, because the CLI folds
+    ".." as text from its cwd. A decorator, "@media", a hunk header and an address attached nothing. The fake reads
+    the same way: with the guard switched off it reads the canary, with it on it reads nothing."""
+    canary = tmp_path / "canary.txt"
+    canary.write_text("CANARY")
+    up = f"look at @x{'/..' * 40}{canary}"
+    code = ["fix this:\n" "@app.route('/x')\n@login_required\ndef f(): ...", "@media print { a { color: red } }",
+            "@@ -1,3 +1,4 @@\n-a\n+b", "write to a@b.c", "@p, see @peer-bot"]
+    r = router(tmp_path)
+    with monkeypatch.context() as m:
+        m.setattr(claude_cli, "TEXT_GUARD", "")
+        run(r, [Message.user(up)])
+    assert seen(tmp_path)["read"] == ["CANARY"]
+    hist = [x for t in [up, *code] for x in (Message.user(t), Message.assistant("ok"))][:-1]
+    assert run(r, hist)[-1].kind == "done"
+    got = seen(tmp_path)
+    assert got["read"] == []
+    sent = [b["text"] for f in got["frames"] if f["type"] == "user" for b in f["message"]["content"]]
+    assert sent == [up.replace("@", "\u200b@"), *code]
+
+
+def test_the_cli_folder_holds_no_name_a_bare_mention_reaches(tmp_path, monkeypatch):
+    """guard_text lets "@word" through because the CLI resolves it in its own empty folder. A name there without a
+    leading "." would be reachable, so that folder is not used: the call gets a fresh empty one."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    stable = tmp_path / f"claude-cli-cwd-{os.getuid()}"
+    assert claude_cli.workdir() == str(stable)
+    (stable / ".cache").mkdir()  # "@.cache" is guarded, so a dot name is out of reach
+    assert claude_cli.workdir() == str(stable)
+    (stable / "notes.txt").write_text("mine")
+    fresh = claude_cli.workdir()
+    assert fresh != str(stable) and os.path.dirname(fresh) == str(tmp_path) and os.listdir(fresh) == []
+
+
+def test_user_at_path_is_never_read_by_the_cli(tmp_path):
+    """The real CLI (2.1.302) reads "@path" in any user frame as a file to attach, even with --tools "": the file
+    reaches the model with no gate ask, ~/.ssh keys included. Peer and bus notes, other-thread recaps and delegate
+    briefs arrive as user text too. The fake reads the same way; Exo must keep the text plain."""
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_rsa").write_text("FAKE-KEY")
+    canary = tmp_path / "canary.txt"
+    canary.write_text("CANARY")
+    texts = ["what does @~/.ssh/id_rsa say", f"look at @{canary} now", f"first\n@{canary}", f"see\u00a0@{canary}",
+             f"\u770b\u3002@{canary}", f'read @"{canary}" please', "hello @peer-bot, see @~/.ssh/id_rsa"]
+    r = router(tmp_path, HOME=str(home))
+    hist = [m for t in texts for m in (Message.user(t), Message.assistant("ok"))][:-1]  # the last turn and history
+    evs = run(r, hist)
+    assert evs[-1].kind == "done"
+    got = seen(tmp_path)
+    assert got["read"] == []
+    sent = [b["text"] for f in got["frames"] if f["type"] == "user" for b in f["message"]["content"]]
+    assert [t.replace("\u200b", "") for t in sent] == texts  # the model reads the words as typed
+
+
+def test_engine_names_the_session_cwd_on_the_cli_route(tmp_path):
+    """Report blocker: the CLI runs in its private folder and its environment note names that folder, so Exo's
+    system text names the session's real cwd as the one that counts."""
+    from exo.core.engine import CoreEngine
+    from exo.protocol import schema as s
+    from exo.server.app import Dispatcher
+
+    path = fake_claude(tmp_path)
+    (tmp_path / "bin" / "fake.json").write_text(json.dumps({"mode": "ok", "out": str(tmp_path / "out.json"),
+                                                            "pid": str(tmp_path / "pid")}))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["claude-cli:sonnet"], "aux": ["claude-cli:sonnet"]}},
+                     cwd=str(proj), env={"PATH": path})
+
+    async def main():
+        d = Dispatcher(eng)
+        sid = (await d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
+        await d.run(s.Command.of(s.TurnSend(session=sid, text="where do you work?")))
+        while eng._tasks:
+            await asyncio.sleep(0.01)
+        return eng.store.get_session(sid).cwd
+
+    cwd = asyncio.run(main())
+    got = seen(tmp_path)
+    assert "claude-cli-cwd-" in got["cwd"]  # the CLI still runs in its stable private folder (prompt caching)
+    assert cwd and os.path.samefile(cwd, proj) and cwd in got["system"]
+    from exo.core.loop import WORKDIR_LINE
+    assert WORKDIR_LINE.format(cwd=cwd) in got["system"]

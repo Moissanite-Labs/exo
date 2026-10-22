@@ -18,9 +18,10 @@ internal names that must never be published in the principal store:
                                         "identifier_patterns": [...], "max_paragraph_chars": 420,
                                         "flag_mentions": true, "flag_semicolons": true}
   <store>/policies/internal-names.txt  one name per line, '#' comments allowed
-<store> is $EXO_PRINCIPAL_STORE, else $EXO_HOME/principals/$EXO_PRINCIPAL (EXO_HOME defaults
-to ~/.exo). $EXO_PROSE_POLICY and $EXO_INTERNAL_NAMES override the two paths.
-Provenance: generalized from the Protean team's check-prose.py (stdlib only).
+<store> is $EXO_PRINCIPAL_STORE, else the store of $EXO_PRINCIPAL: config principals.<id> (from
+`exo init --root`) when Exo is importable, else $EXO_HOME/principals/<id> (EXO_HOME defaults to
+~/.exo). $EXO_PROSE_POLICY and $EXO_INTERNAL_NAMES override the two paths.
+Provenance: generalized from the Protean team's check-prose.py (stdlib only; Exo is optional).
 A hit is a candidate to fix, not a verdict: a quote from someone else, a code block,
 and an em dash inside a quoted command are all legitimate. Read each hit.
 """
@@ -103,9 +104,19 @@ def _store_dir():
     if explicit:
         return Path(explicit).expanduser()
     principal = os.environ.get("EXO_PRINCIPAL")
-    if principal:
-        return Path(os.environ.get("EXO_HOME", "~/.exo")).expanduser() / "principals" / principal
-    return None
+    if not principal:
+        return None
+    home = Path(os.environ.get("EXO_HOME") or "~/.exo").expanduser()
+    try:  # the core's rule, so a store made with `exo init --root` is found
+        from exo.store import principal_root
+    except Exception:  # no usable Exo here (not installed, or too old): the default location only
+        return home / "principals" / principal
+    try:
+        return principal_root(principal, home)
+    except ValueError:  # not a principal id
+        return None
+    except TypeError:  # an older Exo: principal_root(pid) takes no home, so the default location only
+        return home / "principals" / principal
 
 
 def _read_names(path):
@@ -138,8 +149,18 @@ def load_policy(policy_path=None, names_path=None):
         names.extend(_read_names(names_path))
         loaded.append(str(names_path))
     if names:
-        IDENTIFIER_PATTERNS.append(r"\b(" + "|".join(re.escape(n) for n in names) + r")\b")
+        IDENTIFIER_PATTERNS.append(names_pattern(names))
     return loaded
+
+
+def names_pattern(names):
+    """Whole names: a word edge must not touch another word character, a non-word edge
+    ('.agents', '@bot', 'seat.') needs no boundary. Longest first, so the full name is reported."""
+    def one(n):
+        return ((r"(?<!\w)" if re.match(r"\w", n) else "") + re.escape(n)
+                + (r"(?!\w)" if re.search(r"\w\Z", n) else ""))
+    return "|".join(one(n) for n in sorted(names, key=len, reverse=True))
+
 
 # A GitHub handle mention on a thread owned by that same account is a self-ping
 # (see clean-writing: "Never @-mention the thread owner"). Flag every mention as

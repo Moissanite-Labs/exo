@@ -5,6 +5,7 @@ import stat
 import pytest
 
 from exo import privacy
+from exo import store as store_mod
 from exo.retrieve import assemble
 from exo.store import PrincipalStore, parse_text, principal_root, template_dir
 
@@ -124,3 +125,86 @@ def test_graph_and_index(template_store):
     saved = json.loads((template_store.root / "graph" / "graph.json").read_text())
     assert saved == g
     assert template_store.index() == 5
+
+
+NODE = ("---\nid: work/zebra-deploys\ntitle: Zebra deploys\ntype: rule\ndomain: work\n"
+        "summary: Zebra deploys go out on Fridays only.\nload_when: zebra deploy\nconfidence: high\n"
+        "stability: durable\nvalid_from: 2026-01-01\nsources: [test]\nlinks: []\n---\n{body}\n")
+
+
+def test_refresh_sees_nodes_another_store_wrote(template_store):
+    """A long-lived store (exo-memory's, the learner's) reads nodes once. `refresh` picks up what another store
+    object or process added, edited or removed since; `nodes` alone stays the cached read."""
+    other = PrincipalStore(template_store.root)
+    assert other.refresh() is True  # nothing read yet
+    assert other.refresh() is False and template_store.refresh() is False  # nothing changed
+    path = other.nodes_dir / "work" / "zebra-deploys.md"
+    path.write_text(NODE.format(body="Zebra deploys go out on Fridays only."))
+    assert "work/zebra-deploys" not in template_store.nodes  # cached
+    assert template_store.refresh() is True and "work/zebra-deploys" in template_store.nodes
+    assert template_store.find("zebra deploy")[0][0] == "work/zebra-deploys"
+    assert template_store.refresh() is False
+    path.write_text(NODE.format(body="Zebra deploys moved to Tuesdays, after the freeze."))
+    assert template_store.refresh() is True
+    assert "Tuesdays" in template_store.render("work/zebra-deploys", body_only=True)
+    path.unlink()
+    assert template_store.refresh() is True and "work/zebra-deploys" not in template_store.nodes
+    template_store.reload()  # a direct reload also counts as the last read
+    assert template_store.refresh() is False
+
+
+QUERIES = ["report decisions format", "machines accounts tools", "projects status", "principal example node",
+           "zebra deploy", "tuesdays freeze", "identity"]
+
+
+def counting_tokens(monkeypatch) -> list[str]:
+    """Record every text `find` tokenizes: the query, and each node it builds a table row for."""
+    seen: list[str] = []
+    real = store_mod.tokens
+    monkeypatch.setattr(store_mod, "tokens", lambda s: seen.append(s) or real(s))
+    return seen
+
+
+def test_find_tokenizes_each_node_once_across_calls(template_store, monkeypatch):
+    """#254: `find` built every node's BM25 counts again on each call. The tables are now kept per node set, so
+    100 queries tokenize each node once and otherwise only the query."""
+    store = PrincipalStore(template_store.root)
+    seen = counting_tokens(monkeypatch)
+    for k in range(100):
+        store.find(QUERIES[k % len(QUERIES)])
+    assert len(seen) == len(store.nodes) + 100
+    store.ctx("projects status")
+    assemble(store, "machines accounts tools", budget=400)  # ctx and the default ranker share the same tables
+    assert len(seen) == len(store.nodes) + 102
+
+
+def test_find_cached_ranking_matches_a_fresh_store(template_store):
+    """Kept tables give the same scores and order as tables built from scratch, call after call."""
+    for _ in range(3):
+        for q in QUERIES:
+            assert template_store.find(q) == PrincipalStore(template_store.root).find(q)
+    assert template_store.find("report decisions format", n=1)[0][0] == "relationship/reporting"
+
+
+def test_find_follows_every_change_to_the_node_set(template_store, monkeypatch):
+    """`find` ranks exactly the nodes `nodes` returns: a reload, or a refresh that saw a change, rebuilds the
+    tables, and a refresh that saw nothing keeps them."""
+    other = PrincipalStore(template_store.root)
+    assert template_store.find("zebra deploy") == []
+    path = other.nodes_dir / "work" / "zebra-deploys.md"
+    path.write_text(NODE.format(body="Zebra deploys go out on Fridays only."))
+    assert template_store.find("zebra deploy") == []  # not read yet, as with `nodes`
+    assert template_store.refresh() is True
+    assert template_store.find("zebra deploy")[0][0] == "work/zebra-deploys"
+    seen = counting_tokens(monkeypatch)
+    assert template_store.refresh() is False
+    assert template_store.find("zebra deploy")[0][0] == "work/zebra-deploys" and len(seen) == 1  # the query only
+    path.write_text(NODE.format(body="Zebra deploys moved to Tuesdays, after the freeze."))
+    assert template_store.find("tuesdays freeze") == []
+    template_store.reload()
+    assert template_store.find("tuesdays freeze")[0][0] == "work/zebra-deploys"
+    assert len(seen) == 3 + len(template_store.nodes)  # three queries, one rebuild
+    for q in QUERIES:
+        assert template_store.find(q) == PrincipalStore(template_store.root).find(q)
+    path.unlink()
+    assert template_store.refresh() is True and template_store.find("zebra deploy") == []

@@ -103,3 +103,22 @@ context.save({provider: "openai"}, input).then(() => {
     assert name == "openai" and "Stored in file" in message and f"Effective source: {source}" in message
     assert warning in message and css == kind and rendered["input"] == ""
     assert "synthetic-browser-test-key" not in proc.stdout
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="Node is needed to execute the browser status chip")
+def test_web_chip_shows_a_provider_without_base_url_cannot_answer():
+    """A key alone is not a route: the router gives a provider with no base_url no credential."""
+    script = r'''
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const func = src.slice(src.indexOf("function chip("), src.indexOf("export function mount("));
+const context = { pill: (text, cls) => [text, cls] };
+vm.createContext(context);
+vm.runInContext(func + "; this.chip = chip;", context);
+const row = { status: "no base_url", needs: "key", key: "found", ready: false, verified: false };
+process.stdout.write(JSON.stringify([context.chip(row), context.chip({ ...row, status: "key found", ready: true })]));
+'''
+    proc = subprocess.run([shutil.which("node"), "-e", script, str(STATIC / "providers.js")],
+                          capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == [["no base_url", "off"], ["key found", "known"]]

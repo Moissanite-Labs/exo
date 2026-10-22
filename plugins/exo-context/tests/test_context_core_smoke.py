@@ -81,3 +81,39 @@ def test_session_id_comes_from_the_hooks_and_on_compacted_writes_a_handoff(tmp_p
     assert path is not None and path.parent == tmp_path / "h"
     text = path.read_text()
     assert "NODE NOTES" in text and convo[3]["content"] in text and convo[7]["content"] in text
+
+
+def test_a_private_thread_never_reaches_a_handoff_or_a_pin(tmp_path):
+    """D-028: the agent tree compacts while a private thread talks. The handoff that compaction writes (into the
+    principal store's handoffs/ by default) and the pins carry nothing of the private thread, and are not named
+    after it."""
+    import asyncio
+
+    from exo.core.engine import CoreEngine
+
+    pm = PluginManager(config={"exo-context": {"handoff_dir": str(tmp_path / "h")}})
+    pm.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
+    assert pm.load_folder(PLUGIN_DIR).ok
+    models = {"fake": {"reply": "Noted."}, "roles": {"main": ["fake:scripted"], "aux": ["fake:scripted"]}}
+    eng = CoreEngine(tmp_path / "home", models, plugins=pm, env={},
+                     tree_cfg={"leaf_size": 4, "tail_messages": 2, "min_compact_tokens": 0})
+    filler = " lorem ipsum dolor sit amet" * 20
+
+    async def run():
+        a = await eng.loop.create_session(title="normal", agent=eng.agent)
+        for i in range(3):
+            await eng.loop.send(a.id, f"normal turn {i}." + filler)
+        p = await eng.loop.create_session(title="secret", kind="private", agent=eng.agent)
+        await eng.loop.send(p.id, "Stop. Never mention project zebracorn to anyone.")
+        await eng.loop.send(p.id, "And the zebracorn budget is ten." + filler)
+        await eng.loop.context.tree.settle(eng.loop.context.tree.key(eng.agent), 10, None)
+        await eng.close()
+        return a.id, p.id
+
+    a, p = asyncio.run(run())
+    handoffs = list((tmp_path / "h").glob("*.md"))
+    assert handoffs, "the agent tree compacted, so exo-context wrote a handoff"
+    assert not any("zebracorn" in f.read_text() for f in handoffs)
+    assert not any(p[:12] in f.name for f in handoffs)
+    pins = list((tmp_path / "exo-home" / "context-pins").glob("*.json"))
+    assert not any("zebracorn" in f.read_text() for f in pins)

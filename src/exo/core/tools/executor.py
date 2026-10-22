@@ -37,9 +37,7 @@ def freeze_arguments(value: Any) -> Any:
         return MappingProxyType({key: freeze_arguments(item) for key, item in value.items()})
     if isinstance(value, list):
         return tuple(freeze_arguments(item) for item in value)
-    if value is None or type(value) in (str, bool, int):
-        return value
-    if type(value) is float and math.isfinite(value):
+    if value is None or type(value) in (str, bool, int) or (type(value) is float and math.isfinite(value)):
         return value
     raise ValueError("arguments must contain only finite JSON values")
 

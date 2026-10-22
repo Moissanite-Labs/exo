@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
+import http.client
 import sys
 from typing import List, Optional
 
@@ -30,14 +32,35 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "port": a.port})
     try:
         web = WebServer(CommandCentre(st))
-        web.open_browser = not a.no_open and sys.stdout.isatty()  # the URL carries the page token (D-034)
+        web.open_browser = not a.no_open and sys.stdout.isatty()  # opens a one-time code, never the token (#166)
         asyncio.run(web.run(st.host, st.port))
     except KeyboardInterrupt:
         return 130
     except OSError as exc:
-        print("exo-command: {}".format(exc), file=sys.stderr)
+        print("exo-command: {}".format(busy(st.host, st.port) if exc.errno == errno.EADDRINUSE else exc),
+              file=sys.stderr)
         return 1
     return 0
+
+
+def busy(host: str, port: int) -> str:
+    """What to do when the port is taken: by another `exo web` (its page shell answers), or by another program."""
+    shown = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    try:  # the page shell is served without the token; http.client ignores proxy settings
+        conn = http.client.HTTPConnection(shown, port, timeout=2)
+        conn.request("GET", "/")
+        ours = b"<title>Exo</title>" in conn.getresponse().read(4096)
+        conn.close()
+    except (OSError, http.client.HTTPException):
+        ours = False
+    where = "{}:{}".format("[{}]".format(shown) if ":" in shown else shown, port)
+    if not ours:
+        return "{} is in use by another program. Pick a free port: exo web --port {}".format(where, port + 1)
+    return ("Exo's web client is already running at http://{}/ (its page token lives in that process only).\n"
+            "  If its page is open, keep using it. To get back in:\n"
+            "  - open the full link it printed in its terminal, with #token=...\n"
+            "  - or stop it with Ctrl+C in that terminal and run exo web again\n"
+            "  - or start a second one on another port: exo web --port {}".format(where, port + 1))
 
 
 if __name__ == "__main__":

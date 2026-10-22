@@ -5,7 +5,7 @@ import httpx
 
 from exo.core.models.openai_chat import OpenAIChatProvider, convert_messages
 from exo.core.models.base import HttpTransport
-from exo.core.types import ContentPart, Message, ToolCall, ToolResult, ToolSpec
+from exo.core.types import ContentPart, Message, ToolCall, ToolResult, ToolSpec, Usage
 
 from .conftest import Recorder, collect, fixture_bytes
 
@@ -72,7 +72,8 @@ def test_stream_assembles_interleaved_tool_call_deltas():
     done = events[-1]
     assert done.kind == "done" and done.stop_reason == "tool_use"
     assert done.message.text() == "Checking." and done.message.content[0].type == "reasoning"
-    assert done.usage.input_tokens == 50 and done.usage.cache_read_tokens == 32 and done.usage.reasoning_tokens == 5
+    # prompt_tokens 50 includes 32 cached: input_tokens is the uncached 18, as on Anthropic (D-080)
+    assert done.usage.input_tokens == 18 and done.usage.cache_read_tokens == 32 and done.usage.reasoning_tokens == 5
     body = rec.body()
     assert body["reasoning"] == {"effort": "low"} and body["max_tokens"] == 100
     assert body["tools"][0]["function"]["name"] == "weather"
@@ -181,3 +182,62 @@ def test_clean_close_without_finish_is_an_error_even_after_text():
     ok = b'data: {"choices":[{"delta":{"content":"fine"},"finish_reason":"stop"}]}\n\n'  # no [DONE], but a stop reason
     events = collect(P("http://h/v1", client=Recorder((200, ok, {})).client()).stream([Message.user("x")], []))
     assert events[-1].kind == "done" and events[-1].stop_reason == "end"
+
+
+def test_build_body_tool_choice_none_keeps_the_tools():
+    prov, spec = OpenAIChatProvider("http://h/v1"), ToolSpec(name="weather", description="w")
+    on = prov.build_body([Message.user("x")], [spec], model="m")
+    off = prov.build_body([Message.user("x")], [spec], model="m", tool_choice="none")
+    assert off["tools"] == on["tools"] and off["tool_choice"] == "none" and "tool_choice" not in on
+    assert "tool_choice" not in prov.build_body([Message.user("x")], [], model="m", tool_choice="none")
+
+
+def _usage_stream(usage: dict) -> bytes:
+    chunks = [{"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}, {"choices": [], "usage": usage}]
+    return ("".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n").encode()
+
+
+def _final(usage: dict, require_usage: bool) -> object:
+    prov = OpenAIChatProvider("https://api.openai.com/v1", "k", client=Recorder((200, _usage_stream(usage), {})).client())
+    return collect(prov.stream_prepared(prov.build_body([Message.user("hi")], [], model="m"),
+                                        require_usage=require_usage))[-1]
+
+
+def test_cached_usage_matches_anthropic_shape():
+    """D-080: prompt_tokens counts the cached tokens too. The transport splits them out, so the same prompt gives
+    the same Usage on both transports: input_tokens is the uncached input, cache reads are counted apart."""
+    from exo.core.models.anthropic import AnthropicProvider
+
+    ant = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in [
+        {"type": "message_start", "message": {"usage": {"input_tokens": 2000, "cache_read_input_tokens": 90_000,
+                                                        "cache_creation_input_tokens": 0, "output_tokens": 1}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": "ok"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 300}},
+        {"type": "message_stop"}]).encode()
+    a = collect(AnthropicProvider("https://api.anthropic.com", "k", client=Recorder((200, ant, {})).client())
+                .stream([Message.user("hi")], [], model="claude-opus-5-5"))[-1]
+    o = _final({"prompt_tokens": 92_000, "completion_tokens": 300,
+                "prompt_tokens_details": {"cached_tokens": 90_000}}, require_usage=True)
+    assert a.kind == o.kind == "done"
+    assert a.usage == o.usage == Usage(input_tokens=2000, output_tokens=300, cache_read_tokens=90_000)
+
+
+def test_cache_split_edges():
+    base = {"prompt_tokens": 50, "completion_tokens": 3}
+    for details, split in ((None, (50, 0)), ({}, (50, 0)), ({"cached_tokens": None}, (50, 0)),
+                           ({"cached_tokens": 0}, (50, 0)), ({"cached_tokens": 50}, (0, 50))):  # last: all cached
+        end = _final({**base, "prompt_tokens_details": details}, require_usage=True)
+        assert end.kind == "done" and (end.usage.input_tokens, end.usage.cache_read_tokens) == split, details
+
+
+def test_cached_count_that_cannot_be_split_is_incomplete_usage():
+    """A cached count above the prompt count, negative or not an integer cannot be split out of prompt_tokens.
+    The usage is incomplete, so the spend boundary (require_usage) gets an error and retains its reservation;
+    without it the full prompt stays uncached input. Nothing raises."""
+    for cached in (60, -1, "5", 1.5, True):
+        usage = {"prompt_tokens": 50, "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": cached}}
+        end = _final(usage, require_usage=True)
+        assert end.kind == "error" and end.error == "provider did not return complete token usage", cached
+        loose = _final(usage, require_usage=False)
+        assert loose.kind == "done" and (loose.usage.input_tokens, loose.usage.cache_read_tokens) == (50, 0), cached
