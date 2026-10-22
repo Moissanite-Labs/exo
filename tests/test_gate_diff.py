@@ -3,12 +3,15 @@ import ast
 import gzip
 import json
 import os
+import re
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -422,23 +425,177 @@ def test_each_folder_row_decides_otherwise_without_its_folder(tmp_path):
     assert {a for a in with_folder} == {("credentials", "ask")}
 
 
-def test_each_table_entry_has_a_line_main_reads(tmp_path):
-    # A line for a prefix, wrapper, shell or interpreter must reach the `rm -rf build` inside it in main, and a
-    # PROGRAMS or SUBCOMMANDS line must get its table's category: then a head that drops the entry lowers the line.
+# A child that loads main's gate with gate_diff's HOME and environment and decides each case's actions under every
+# built-in policy, with one table entry taken out first when the case names one: (table, key) or (table, key, item).
+REMOVE_CHILD = r"""
+import json, os, sys
+spec = json.load(open(sys.argv[1]))
+sys.path.insert(0, os.path.join(spec["tree"], "src"))
+from exo import gate
+pols = [(gate.normalize_policies(e["policy"]), e.get("context")) for e in spec["policies"].values()]
+
+
+def remove(path):
+    name, *rest = path
+    old = getattr(gate, name)
+    key = tuple(rest[0]) if isinstance(rest[0], list) else rest[0]
+    if len(rest) == 1:
+        new = ({k: v for k, v in old.items() if k != key} if isinstance(old, dict)
+               else type(old)(x for x in old if x != key))
+    else:
+        new = dict(old)
+        v = old[key]
+        new[key] = v.replace(rest[1], "") if isinstance(v, str) else type(v)(x for x in v if x != rest[1])
+    setattr(gate, name, new)
+    return name, old
+
+
+def row(a):
+    try:
+        c = gate.classify({"tool": a["tool"], "args": a["args"]})
+    except Exception as exc:
+        return [type(exc).__name__]
+    out = [c.category]
+    for pol, ctx in pols:
+        d = gate.decide(c, pol, ctx)
+        out.append([d.outcome, sorted(map(str, d.reserved)), sorted(map(str, d.violations))])
+    return out
+
+
+res = []
+for case in spec["cases"]:
+    saved = remove(case["entry"]) if case["entry"] else None
+    try:
+        res.append([row(a) for a in case["actions"]])
+    finally:
+        if saved:
+            setattr(gate, *saved)
+json.dump(res, open(sys.argv[2], "w"))
+"""
+
+
+def _removed(tmp_path: Path, cases: list[tuple[tuple, list]]) -> tuple[list[str], list[list]]:
+    """The built-in policy names, and for each case (entry, actions) the category and the decisions of main's gate
+    under each policy for each action, with that entry taken out of its table (none for an empty entry)."""
+    work = tmp_path / "removed"
+    work.mkdir()
+    pols = {k: gate_diff._entry(v) for k, v in gate_diff.BUILTIN_POLICIES.items()}
+    spec = {"tree": str(ROOT), "policies": pols,
+            "cases": [{"entry": list(e), "actions": [_as_action(a) for a in acts]} for e, acts in cases]}
+    (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+    (work / "child.py").write_text(REMOVE_CHILD, encoding="utf-8")
+    home = gate_diff.make_home(work)
+    proc = subprocess.run([sys.executable, "-I", str(work / "child.py"), str(work / "spec.json"), str(work / "out.json")],
+                          env=gate_diff.tree_env(home), cwd=str(home), capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stderr
+    return list(pols), json.loads((work / "out.json").read_text(encoding="utf-8"))
+
+
+def _blind_by_design(entry: tuple, t: dict) -> str:
+    """Why taking this entry out of main's gate changes no decision of any form, or ''. Each is a property of main's
+    gate, not of the forms: no line or call could show the entry."""
+    table, key, *item = entry
+    if table == "_OPAQUE_PROGRAMS":
+        return "a program the gate does not know asks as opaque_exec too: only the reason changes"
+    if table == "TOOL_SUBCOMMANDS" and key in t["_INTERPRETERS"]:
+        return "bun and deno are interpreters: the interpreter branch reads the line first"
+    if table == "READ_PROGRAMS" and (key in t["_PREFIXES"] or key in ("cd", "pushd")):
+        return "a prefix, or a folder change, which the gate reads before the allowlist"
+    if table == "_INTERPRETERS" and key in ("perl", "ruby") and item[0] in ("-e", "-E"):
+        return "perl and ruby read any cluster that ends in e or E (`-ne`) as inline code"
+    if table == "_WRAPPERS" and len(item[0]) > 5 and any(o != item[0] and o.startswith(item[0]) for o in t[table][key]):
+        return "a prefix of a longer option of the wrapper, which _wrapper_args then reads it as"
+    if table == "_SENSITIVE_SAMPLES" and "/" in key and re.search(t["_SENSITIVE_PATH"], "/" + key.rpartition("/")[0] + "/"):
+        return "its folder is a secret store by _SENSITIVE_PATH"
+    if table == "TOOLS" and key in t["tool_names"]:
+        return "the tool has a branch of its own in classify"
+    from exo import gate
+    if table == "TOOLS" and gate.classify_by_name(key) == t["TOOLS"][key]:
+        return "the name hints give the same category"
+    return {("PROGRAMS", "crontab"): "the crontab branch runs first",
+            ("_LOCAL_HOSTS", "[::1]"): "the URL parser drops the brackets, so ::1 decides",
+            ("_SENSITIVE_SAMPLES", ".config/exo/keys.env"): "the default EXO_KEYS_FILE, a sample of its own",
+            }.get((table, key), "")
+
+
+def test_each_table_entry_changes_its_form(tmp_path):
+    # A form that main decides the same with its entry taken out of the table shows nothing: a head that drops the
+    # entry, or one that adds it (its own form runs in both trees), would pass. So for each entry of table_forms,
+    # and each TOOLS key, key-table entry and read verb of the calls, main's gate must decide one of its forms
+    # otherwise without it, under some built-in policy (its outcome, reserved hits or posting violations).
     t = gate_diff.gate_tables(ROOT)
-    lines = gate_diff.table_lines([t])
-    got = dict(zip(lines, _decisions(tmp_path, lines)))
-    for table in ("_PREFIXES", "_WRAPPERS", "_SHELLS", "_INTERPRETERS", "_TMUX_RUNS", "_TMUX_ALIASES"):
-        for name in t[table]:
-            mine = [x for x in lines if (x.startswith(f"tmux {name} ") if table.startswith("_TMUX")
-                                         else x.split()[0] == name or x.endswith(f"| {name}"))]
-            assert any(got[x][0] == "delete" for x in mine), (table, name, {x: got[x] for x in mine})
-    for name, cat in t["PROGRAMS"].items():
-        if name == "crontab":       # main's own crontab branch runs first: the entry decides no line
-            continue
-        assert got[f"{name} notes.md"][0] == cat, name
-    for (prog, sub), cat in t["SUBCOMMANDS"].items():
-        assert got[f"{prog} {sub}"][0] == cat, (prog, sub)
+    forms: dict[tuple, list] = {}
+    for _, item, entry in gate_diff.table_forms(t):
+        if entry:
+            forms.setdefault(tuple(tuple(x) if isinstance(x, list) else x for x in entry), []).append(item)
+    calls = gate_diff.tool_actions([t], gate_diff.SHELL_TOOLS, gate_diff.BUILTIN_POLICIES.values())
+    x, y = gate_diff.HINT_AROUND
+    for name in gate_diff._names(t["TOOLS"]):
+        forms[("TOOLS", name)] = [c for c in calls if c["tool"] == name][:40]
+    values = {"_PATH_ARG_KEYS": (gate_diff.STORE_PATH, gate_diff.SECRET_PATH), "_TEXT_KEYS": (gate_diff.POST_TEXT,),
+              "_TITLE_KEYS": (gate_diff.POST_TEXT,), "_TARGET_KEYS": (gate_diff.POST_TARGET,),
+              "_AMOUNT_KEYS": gate_diff.AMOUNTS}
+    for table, vals in values.items():
+        for k in gate_diff._names(t[table]):
+            forms[(table, k)] = [c for c in calls if c["args"].get(k) in vals][:60]
+    for v in gate_diff._names(t["_READ_VERBS"]):
+        forms[("_READ_VERBS", v)] = [c for c in calls if c["tool"] == f"mcp_{x}_{v}_{y}"]
+    assert all(forms.values()), [e for e, f in forms.items() if not f]
+    entries = list(forms)
+    assert {e[0] for e in entries} >= {"PROGRAMS", "SUBCOMMANDS", "_PREFIXES", "_WRAPPERS", "_SAFE_PY_MODULES",
+                                       "_EXEC_OPTS", "_GIT_EXEC_OPTS", "_EXEC_FILE_OPTS", "_WRITE_REDIRS",
+                                       "_LOCAL_HOSTS", "_STORE_FOLDERS", "_SENSITIVE_SAMPLES", "_PRIVILEGED_WRAPPERS",
+                                       "_INTERP_VALUE_FLAGS", "_WRAPPER_VALUE_OPTS", "_TMUX_RUNS", "TOOLS"}
+    _, rows = _removed(tmp_path, [((), [f for e in entries for f in forms[e]])] + [(e, forms[e]) for e in entries])
+    base, at, blind = rows[0], 0, []
+    for e, without in zip(entries, rows[1:]):
+        if base[at:at + len(forms[e])] == without and not _blind_by_design(e, t):
+            blind.append((e, forms[e][:2]))
+        at += len(forms[e])
+    assert not blind, blind
+
+
+def test_the_pattern_forms_get_main_s_category(tmp_path):
+    # The forms written from patterns and from the HOME's links: a read of each _SENSITIVE_PATH sample asks as
+    # credentials, each SQL statement kind is a delete, each patch header that names the store or a secret is a
+    # write there, each post trips a rule of some built-in policy, and the budget and escalation policies decide
+    # the payment and account calls as their limits say.
+    t = gate_diff.gate_tables(ROOT)
+    samples = gate_diff._secret_samples(t)
+    assert len(samples) >= 40 and "x.pem" in samples and "proc/x/environ" in samples
+    sql = gate_diff.regex_samples(t["_SQL_DESTRUCTIVE"])
+    assert {"drop database", "drop schema", "drop view", "drop index", "delete from"} <= set(sql)
+    patches = {path: gate_diff.regex_samples(t["_PATCH_PATHS"], path)
+               for path in (gate_diff.STORE_PATH, gate_diff.SECRET_PATH)}
+    assert any(p.startswith("*** Add File:") for p in patches[gate_diff.SECRET_PATH])
+    texts = gate_diff.post_texts([t], gate_diff.BUILTIN_POLICIES.values())
+    want: list[tuple[Any, str, str]] = []          # (action, policy, category outcome)
+    want += [(f"cat ~/{s}", "default", "credentials ask") for s in samples]
+    want += [({"tool": "read_file", "args": {"path": f"~/{s}"}}, "default", "credentials ask") for s in samples]
+    want += [(f"{prog} {lead} {shlex.quote(s + ' x')}", "deny_delete", "delete deny") for s in sql
+             for prog, lead in gate_diff.SQL_PROGRAMS]
+    want += [({"tool": tool, "args": {"patch": p}}, "default", f"{cat} ask") for tool in t["patch_tools"]
+             for path, cat in ((gate_diff.STORE_PATH, "store_write"), (gate_diff.SECRET_PATH, "credentials"))
+             for p in patches[path]]
+    want += [("cat ~/notes-link.txt", "default", "credentials ask"), ("cat notes-link.txt", "default", "credentials ask"),
+             ("printf x > ~/grants-link.json", "default", "store_write ask")]
+    buy = "mcp_acme_buy_item"
+    for amount, daily, per_action in (("10", "allow", "allow"), ("18", "ask", "allow"), ("25", "ask", "ask"),
+                                      ("500", "ask", "ask")):
+        call = {"tool": buy, "args": {"amount": amount, "to": "acme"}}
+        want += [(call, "budget_decides", f"payment {daily}"), (call, "budget_per_action", f"payment {per_action}"),
+                 (call, "scope_private_allow_all", "payment ask")]
+    want += [({"tool": buy, "args": {"to": "acme"}}, "budget_decides", "payment ask"),
+             ({"tool": "mcp_create_account_item", "args": {"to": "acme"}}, "scope_private_allow_all", "account ask")]
+    posts = [f"gh pr comment 3 --body {shlex.quote(s)}" for s in texts]
+    names, rows = _removed(tmp_path, [((), [a for a, _, _ in want] + posts)])
+    got = rows[0]
+    wrong = [(a, p, w, f"{got[i][0]} {got[i][1 + names.index(p)][0]}") for i, (a, p, w) in enumerate(want)
+             if f"{got[i][0]} {got[i][1 + names.index(p)][0]}" != w]
+    assert not wrong, wrong
+    quiet = [s for s, r in zip(texts, got[len(want):]) if not any(d[2] for d in r[1:])]
+    assert not quiet, quiet                    # each post trips a posting or scrub rule under some policy
+    assert len(texts) >= 15 and any("/home/" in s for s in texts) and any("password" in s for s in texts)
 
 
 # One loosening each, as a reviewer found them: a table entry dropped, a key or name no longer read, a posting shape
@@ -471,6 +628,40 @@ LOOSENINGS = {
     "footer_exposures": (('footer_on = posting.get("footer_exposures") or ("internal", "public")',
                           'footer_on = ("internal", "public")'), "gh pr comment 3 --body hi",
                          "posting_footer_everywhere"),
+    # The third review: an entry added to an allowlist, a value option, a pattern alternative, a scrub or forbid rule,
+    # a decide step a built-in policy masked, an action value, a link in HOME and a privileged wrapper.
+    "safe module": (('"pydoc", "pyright", "flake8", "pylint"}', '"pydoc", "pyright", "flake8", "pylint", "http.server"}'),
+                    "python -m http.server", "default"),
+    "value option": (('"ionice": {"-c", "-n", "-p"}', '"ionice": {"-c", "-n"}'), "ionice -p x rm -rf build",
+                     "deny_delete"),
+    "pem": ((r'id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|', r'id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.key|'),
+            "cat ~/x.pem", "default"),
+    "drop database": ((r'drop\s+(table|database|schema|trigger|view|index)', r'drop\s+(table|trigger)'),
+                      "psql -c 'drop database x'", "deny_delete"),
+    "patch add": ((r'(?:Update|Add|Delete)\s+File:', r'(?:Update)\s+File:'),
+                  {"tool": "apply_patch", "args": {"patch": "*** Add File: ~/.ssh/id_rsa "}}, "default"),
+    "home scrub": (('                  (r"/home/[A-Za-z0-9._-]+", "home path")]', '                  ]'),
+                   "gh pr comment 3 --body 'status: /home/x'", "default"),
+    "plain forbid": (('        elif str(f) and str(f) in both:\n            out.append(f"forbidden: {f}")\n', ''),
+                     "gh pr comment 3 --body 'status: password'", "posting_forbid_patterns"),
+    "scrub patterns": (('    for p in cfg.get("patterns") or []:\n        if isinstance(p, Mapping):',
+                        '    for p in []:\n        if isinstance(p, Mapping):'),
+                       "gh pr comment 3 --body 'status: bluefin'", "scrub_patterns"),
+    "budget": (('    if esc.get("cost_over_budget", True):\n        per_action', '    if False:\n        per_action'),
+               {"tool": "mcp_acme_buy_item", "args": {"amount": "25", "to": "acme"}}, "budget_per_action"),
+    "escalate account": (('"categories": ["credentials", "account",', '"categories": ["credentials",'),
+                         {"tool": "mcp_create_account_item", "args": {"to": "acme"}}, "scope_private_allow_all"),
+    "cron action": (('        if action in ("list", "get", "status", ""):',
+                     '        if action not in ("create", "add", "update", "edit"):'),
+                    {"tool": "cronjob_manage", "args": {"action": "remove"}}, "default"),
+    "send action": (('if str(args.get("action", "send")).lower() == "list":',
+                     'if str(args.get("action", "send")).lower() != "send":'),
+                    {"tool": "send_message", "args": {"action": "reply"}}, "default"),
+    "link": (('            if real in cands and real != a and _SENSITIVE_PATH.search(_below(real, base or scope.here, w, '
+              'memo)):\n                return True\n', ''), "cat ~/notes-link.txt", "default"),
+    "privileged": (('_PRIVILEGED_WRAPPERS = ("chroot", "nsenter", "unshare", "systemd-run")',
+                    '_PRIVILEGED_WRAPPERS = ("nsenter", "unshare", "systemd-run")'), "chroot 1 touch notes.md",
+                   "rule_costly_part_deny"),
 }
 
 
@@ -487,7 +678,12 @@ def test_the_generated_calls_come_from_the_tables_of_both_trees(tmp_path):
                  "tmux new-session 'rm -rf build'", "perl -E 'system(\"rm -rf build\")'", "browser_vault_unlock {}",
                  "mcp_acme_trash_item {}", 'mcp_gh_comment_item {"comment": "Secret plan"}',
                  'mcp_gh_comment_item {"chat_id": "pub/notes"}', 'edit_file {"file_path": "~/.exo/state/gate-grants.json"}',
-                 'grep {"destination": "~/.ssh/id_rsa"}', 'mcp_acme_buy_item {"price": "10"}'):
+                 'grep {"destination": "~/.ssh/id_rsa"}', 'mcp_acme_buy_item {"price": "10"}',
+                 "doas -u x rm -rf build", "flock --wait x 1 rm -rf build", "tmux new-session -c x 'rm -rf build'",
+                 "python -W x -c 'system(\"rm -rf build\")'", "uv run --with x rm -rf build", "python -m json.tool",
+                 "python3 -m pytest x", "python -m pip install", "git rebase --exec 'rm -rf build'",
+                 'cronjob_manage {"action": "xyz"}', 'send_message {"action": "reply"}', "cat ~/server.pem",
+                 "psql -c 'drop database x'", "cat ~/notes-link.txt", "printf x &> ~/.exo/state/gate-grants.json"):
         assert line in seen, line
     assert counts["tables"] > 300 and counts["tool_forms"] > 2000
 
@@ -694,7 +890,7 @@ def test_corpus_files_come_first_and_the_work_folder_is_out_of_tmp(tmp_path):
     lines.write_text("echo mine\n", encoding="utf-8")
     actions, counts = gate_diff.build_corpus((tmp_path,), [lines])
     assert actions[0] == {"tool": "terminal", "args": {"command": "echo mine"}}
-    assert list(counts) == ["files", "generated", "shell_forms", "cwd_forms"]
+    assert list(counts)[:2] == ["files", "generated"] and "harvested" not in counts      # no gate, no tests here
     assert "sudo echo mine" in [gate_diff.show_action(a) for a in actions]      # the line's own variants
     work = gate_diff.work_dir()
     try:
@@ -726,7 +922,7 @@ def test_the_built_in_policies_cover_the_listed_kinds():
         gate.normalize_policies(gate_diff._entry(raw)["policy"])
 
 
-POLICY_READERS = ("check_post", "decide", "_decide", "normalize_policies")
+POLICY_READERS = ("check_post", "decide", "_decide", "normalize_policies", "normalize_scrub", "check_scrub")
 NOT_POLICY_KEYS = {"_normalized"}       # marks a policy normalize_policies already filled in: never a written key
 
 
@@ -762,10 +958,188 @@ def test_the_built_in_policies_use_every_key_the_gate_reads():
     fns = {n.name: n for n in mod.body if isinstance(n, ast.FunctionDef) and n.name in POLICY_READERS}
     assert set(fns) == set(POLICY_READERS)
     read = set().union(*(_keys_read(f) for f in fns.values()))
-    assert {"footer_exposures", "ignore_case", "spent_today", "applies_to"} <= read
+    assert {"footer_exposures", "ignore_case", "spent_today", "applies_to", "patterns", "exposures", "allow"} <= read
     used: set = set()
     for raw in gate_diff.BUILTIN_POLICIES.values():
         entry = gate_diff._entry(raw)
         _keys_of(entry["policy"], used)
         _keys_of(entry["context"], used)
     assert not read - used - NOT_POLICY_KEYS, sorted(read - used - NOT_POLICY_KEYS)
+
+
+def test_gate_tables_reads_every_table_of_main():
+    # A table main holds in a form gate_tables does not read would lose its lines without a test failing.
+    t = gate_diff.gate_tables(ROOT)
+    assert set(gate_diff.GATE_TABLES) <= set(t), sorted(set(gate_diff.GATE_TABLES) - set(t))
+    assert t["unread"] == {}
+    assert gate_diff.unread_tables({"base": ROOT}) == {"base": {}}
+    assert t["arg_values"]["cronjob_manage"]["action"][:1] == ["list"] and "patch" in t["patch_keys"]
+
+
+SYNTH_GATE = """import re
+def _words(s):
+    return s.split()
+TOOLS = dict(a_tool="read", **{"b_tool": "read"})
+TOOLS |= {"zz_reader": "read"}
+TOOLS["zz_lister"] = "read"
+READ_PROGRAMS = frozenset(x for x in "cat ls zzshow".split() if x != "ls")
+_SHELLS = set(_words("bash sh"))
+PROGRAMS = {"rm": "delete"}
+PROGRAMS.update({"zzrm": "delete"})
+_INTERPRETERS = {"python": ("-c",)}
+if True:
+    _INTERPRETERS["zzpy"] = ("-c",)
+_SENSITIVE_PATH = re.compile(r"(^|/)(\\.ssh|[^/]+\\.pem)(/|$)")
+_SQL_DESTRUCTIVE = re.compile(r"(drop)\\1")
+"""
+
+
+def test_gate_tables_reads_later_writes_and_names_what_it_cannot(tmp_path):
+    # `NAME |= lit`, `NAME[key] = lit`, dict() with keywords and a filtered comprehension are read. Any other write,
+    # a table built by a call, a pattern the sampler cannot read and a missing table are named in "unread".
+    gate = tmp_path / "src" / "exo" / "gate.py"
+    gate.parent.mkdir(parents=True)
+    gate.write_text(SYNTH_GATE, encoding="utf-8")
+    t = gate_diff.gate_tables(tmp_path)
+    assert set(t["TOOLS"]) == {"a_tool", "b_tool", "zz_reader", "zz_lister"}
+    assert t["READ_PROGRAMS"] == {"cat", "zzshow"} and "x.pem" in gate_diff._secret_samples(t)
+    unread = t["unread"]
+    assert unread["_SHELLS"].startswith("line 8 is not a literal") and "_words" in unread["_SHELLS"]
+    assert unread["PROGRAMS"] == "changed at line 10 (Call)" and unread["_INTERPRETERS"] == "changed at line 13 (Assign)"
+    assert "cannot read" in unread["_SQL_DESTRUCTIVE"] and unread["OUTBOUND"] == "not in gate.py"
+    assert {"TOOLS", "READ_PROGRAMS", "_SENSITIVE_PATH"}.isdisjoint(unread)
+    actions, _ = gate_diff.build_corpus((tmp_path,))
+    seen = {gate_diff.show_action(a) for a in actions}
+    assert {"zz_reader {}", "zz_lister {}", "zzshow notes.md"} <= seen
+    gate.write_text("TOOLS = {\n", encoding="utf-8")
+    assert set(gate_diff.gate_tables(tmp_path)["unread"]) == set(gate_diff.GATE_TABLES)
+
+
+TOOLS_ANCHOR = "# One list of secret stores, used by the path tools (read/write/patch) and by shell parsing.\n"
+
+
+def test_a_read_tool_added_after_the_tools_literal_runs(tmp_path):
+    # A head that adds a read tool below the TOOLS literal runs its call, which main reads as an unknown tool.
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head", (TOOLS_ANCHOR, 'TOOLS |= {"zz_reader": "read"}\nTOOLS["zz_lister"] = "read"\n'
+                                    + TOOLS_ANCHOR))
+    assert {"zz_reader", "zz_lister"} <= set(gate_diff.gate_tables(head)["TOOLS"])
+    actions, _ = gate_diff.build_corpus((head, base))
+    calls = [{"tool": n, "args": {}} for n in ("zz_reader", "zz_lister")]
+    assert all(c in actions for c in calls)
+    assert [c for c, _ in _decisions(tmp_path, calls)] == ["unknown"] * 2
+    (tmp_path / "decide").rename(tmp_path / "decide-base")
+    assert [c for c, _ in _decisions(tmp_path, calls, head)] == ["read"] * 2
+
+
+def test_a_table_the_head_writes_otherwise_stops_the_run(tmp_path, monkeypatch):
+    # A table changed in a form gate_tables does not read gets no lines: the run says so and exits 2, unless the
+    # reviewer names the table in --accept-unread. A lowered pair would still exit 1.
+    head = _tree(tmp_path, "head", (TOOLS_ANCHOR, 'TOOLS.update({"zz_reader": "read"})\n' + TOOLS_ANCHOR))
+    monkeypatch.setattr(gate_diff, "build_corpus",
+                        lambda *a, **k: ([{"tool": "terminal", "args": {"command": "ls"}}], {"files": 1}))
+    argv = ["--base", str(ROOT), "--head", str(head), "--pick", "default", "--jobs", "1", "--json",
+            str(tmp_path / "out.json")]
+    assert gate_diff.main(argv) == 2
+    rep = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert rep["incomplete"] == ["TOOLS"] and rep["unread_tables"]["head"]["TOOLS"].startswith("changed at line")
+    assert gate_diff.main(argv + ["--accept-unread", "TOOLS"]) == 0
+    other = _tree(tmp_path, "other", ('OUTBOUND = ("github_post", "message_send", "email_send", "social_post", "web_post", '
+                                      '"publish")', 'OUTBOUND = "github_post"'))
+    assert gate_diff.unread_tables({"head": other, "base": ROOT}) == {
+        "head": {"OUTBOUND": "a string here, a collection in the base"},
+        "base": {"OUTBOUND": "a collection here, a string in the head"}}
+
+
+def test_odd_table_values_never_stop_the_forms(tmp_path):
+    # A table of another shape (a TOOLS value that is a mapping or a list) gives fewer forms, never an error.
+    odd = {"TOOLS": {"odd_map": {"cat": "read"}, "odd_list": ["read"], "gh_tool": "github_post"},
+           "OUTBOUND": ("github_post",), "_TEXT_KEYS": ("body",), "_PREFIXES": {"sudo": None, 3: {"-u"}},
+           "_WRAPPERS": ["setsid"], "_TMUX_RUNS": {"new-session": 3}, "_INTERPRETERS": {"python": None},
+           "_EXEC_OPTS": {("tar",): ("-I",)}, "NAME_HINTS": [({"pay"}, None)], "DEFAULT_SCRUB": ["x"],
+           "_HOME_PATTERNS": [3, ("/home/[a-z]+",)], "arg_values": {"t": {"action": "list"}}}
+    calls = gate_diff.tool_actions([odd], policies=[{"posting": {"forbid": [3, None, {"pattern": 4}]}}, ["x"]])
+    assert {"tool": "odd_map", "args": {}} in calls and {"tool": "gh_tool", "args": {"body": "Secret plan"}} in calls
+    assert list(gate_diff.table_forms(odd))
+    head = _tree(tmp_path, "head", ('    "cronjob_manage": "schedule",\n',
+                                    '    "cronjob_manage": "schedule",\n    "odd_tool": {"cat": "read"},\n'))
+    actions, _ = gate_diff.build_corpus((head, ROOT))
+    assert {"tool": "odd_tool", "args": {}} in actions
+
+
+# A child that loads main's gate, classifies each action once and decides it under every built-in policy with each
+# step of gate._decide taken out in turn: each bump() call, the part deny and the deny entries. It writes, for each
+# step, its first line and how many pairs it lowered.
+STEP_CHILD = r"""
+import ast, inspect, json, os, sys, textwrap
+spec = json.load(open(sys.argv[1]))
+sys.path.insert(0, os.path.join(spec["tree"], "src"))
+from exo import gate
+pols = [(gate.normalize_policies(e["policy"]), e.get("context")) for e in spec["policies"].values()]
+cs = [gate.classify({"tool": a["tool"], "args": a["args"]}) for a in spec["actions"]]
+RANK = {"allow": 0, "log": 1, "ask": 2, "deny": 3}
+
+
+def decisions():
+    return [[(d.outcome, set(map(str, d.reserved)), set(map(str, d.violations)))
+             for d in (gate.decide(c, pol, ctx) for pol, ctx in pols)] for c in cs]
+
+
+def lower(b, h):
+    return RANK[h[0]] < RANK[b[0]] or (h[0] == b[0] != "deny" and bool(b[1] - h[1] or b[2] - h[2]))
+
+
+src = textwrap.dedent(inspect.getsource(gate._decide))
+fn = ast.parse(src).body[0]
+steps = []
+for node in ast.walk(fn):
+    for field in ("body", "orelse"):
+        stmts = getattr(node, field, None)
+        for i, st in enumerate(stmts if isinstance(stmts, list) else []):
+            first = (ast.get_source_segment(src, st) or "").split("\n")[0]
+            if (isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and getattr(st.value.func, "id", "") == "bump"
+                    or isinstance(st, ast.If) and ("_override_deny" in first or 'gates.get("deny")' in first)):
+                steps.append((getattr(node, field), i, first.strip()))
+base, orig, out = decisions(), gate._decide, []
+for stmts, i, first in steps:
+    saved, stmts[i] = stmts[i], ast.Pass()
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[])), "<step>", "exec"), gate.__dict__)
+    stmts[i] = saved
+    try:
+        out.append([first, sum(lower(b, h) for rb, rh in zip(base, decisions()) for b, h in zip(rb, rh))])
+    finally:
+        gate._decide = orig
+json.dump(out, open(sys.argv[2], "w"))
+"""
+
+# Built-in actions that, under the built-in policies, show each step of gate._decide when it is taken out.
+STEP_WITNESSES = ("rm -rf ~/.exo/state", "rm x", "make test", "ls", "gh pr comment 3 --body hi", "git commit -m wip",
+                  "npm publish", "cat ~/.ssh/id_rsa", "tee policies/gates.yaml < /tmp/x", "echo $(git status)",
+                  {"tool": "mcp_acme_buy_item", "args": {"to": "acme"}},
+                  {"tool": "mcp_acme_buy_item", "args": {"amount": "25", "to": "acme"}},
+                  {"tool": "mcp_acme_buy_item", "args": {"amount": "18", "to": "acme"}},
+                  {"tool": "mcp_create_account_item", "args": {"to": "acme"}})
+
+
+def test_each_decide_step_lowers_a_built_in_pair(tmp_path):
+    # A step that every built-in policy masks with another ask (the budget, the escalation of payment and account
+    # in the second review) checks nothing: a head that drops it would pass. Each step of main's _decide that raises
+    # an outcome, taken out alone, must lower a pair of a built-in action and a built-in policy. A new step needs a
+    # witness here, and a policy or a generated form that shows it.
+    actions, _ = gate_diff.build_corpus((ROOT,))
+    keys = {json.dumps(a, sort_keys=True) for a in actions}
+    witnesses = [_as_action(w) for w in STEP_WITNESSES]
+    assert all(json.dumps(w, sort_keys=True) in keys for w in witnesses)
+    work = tmp_path / "steps"
+    work.mkdir()
+    spec = {"tree": str(ROOT), "policies": {k: gate_diff._entry(v) for k, v in gate_diff.BUILTIN_POLICIES.items()},
+            "actions": witnesses}
+    (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+    (work / "child.py").write_text(STEP_CHILD, encoding="utf-8")
+    home = gate_diff.make_home(work)
+    proc = subprocess.run([sys.executable, "-I", str(work / "child.py"), str(work / "spec.json"), str(work / "out.json")],
+                          env=gate_diff.tree_env(home), cwd=str(home), capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    steps = json.loads((work / "out.json").read_text(encoding="utf-8"))
+    assert len(steps) >= 14
+    assert not [first for first, lowered in steps if not lowered], steps

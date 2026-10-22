@@ -2,14 +2,15 @@
 """Never looser than main: compare the gate of two checkouts over a corpus and a policy set (#423).
 
     python scripts/gate_diff.py --base ../main --head . [--corpus lines.txt ...] [--policies more.py ...]
-        [--jobs N] [--json out.json] [--max-examples N] [--home DIR] [--timeout SECS]
+        [--jobs N] [--json out.json] [--max-examples N] [--home DIR] [--timeout SECS] [--accept-unread TABLES]
 
 Each tree is a checkout of this repo. The script runs `gate.classify` and `gate.decide` for every action of the
 corpus under every policy of the set, once in each tree, in two child processes started with `python -I` and the
 tree's `src` first on `sys.path`. Each child checks that `gate.__file__` is inside its tree. This process never
 imports either gate. Both children get the same small environment (a shared temp HOME holding `~/.exo/state`,
-`~/.ssh`, `~/.kube` and `~/.config/gh`, no `EXO_*`, `DIVAN_*` or `CLAUDE_CONFIG_DIR`) and run in that HOME, so
-store and secret paths classify the same way in both. The HOME is kept out of /tmp (work_dir).
+`~/.ssh`, `~/.kube` and `~/.config/gh`, a key file and a grants file, and two plain names that are links to them,
+HOME_LINKS; no `EXO_*`, `DIVAN_*` or `CLAUDE_CONFIG_DIR`) and run in that HOME, so store and secret paths classify
+the same way in both. The HOME is kept out of /tmp (work_dir).
 
 A pair (action, policy) is lowered when the head's outcome ranks below the base's (allow < log < ask < deny), when
 the head keeps the outcome but has fewer reserved hits than the base (or loses a reserved category), or when any of
@@ -25,29 +26,40 @@ action runs as written. A plain command line is the terminal call {"tool": "term
 
 The built-in corpus is harvested from the gate tests of both trees (tests/security/test_gate*.py and
 plugins/exo-gate/tests/*.py, read with `ast`, never run), so a head that deletes a test row still runs its line.
-The literal tables of both gates (GATE_TABLES, gate_tables) are read the same way. To that come the generated forms:
-- a line for each entry of the program, prefix and shell tables (table_lines: each PROGRAMS key, SUBCOMMANDS pair,
-  prefix, wrapper, tmux command, shell and interpreter flag) and of the allowlists (allowlist_lines);
+The tables of both gates (GATE_TABLES, gate_tables) are read the same way, a pattern as its text. A table a tree
+holds in another form, or as another kind of value than the other tree, is named on stderr and in the summary
+(unread_tables). To that come the generated forms:
+- a line or call for each entry of the tables (table_forms): each PROGRAMS key, SUBCOMMANDS pair, prefix, wrapper,
+  tmux command, shell and interpreter flag, each program and subcommand of the allowlists and each module of
+  _SAFE_PY_MODULES, each value option of a prefix, wrapper, tmux command, interpreter and run wrapper, each exec
+  option, opaque program, privileged wrapper, write operator, local host, store folder and secret sample, and a
+  string for each alternative of the secret path, SQL and patch patterns (regex_samples);
 - compound variants (VARIANTS) of each simple line of the harvest, of the --corpus files, of SEED_COMMANDS and of
   the table lines;
 - each line under the other shell tool names and keys the gate reads (shell_forms: every seed under each, every
   other line under one in turn);
 - folder rows (cwd_rows): calls that read a secret store only as resolved from the session folder or from the call's
   own cwd (#209), each of which main decides otherwise without the folder;
+- posts (post_texts) that trip each rule of the default scrub and each forbid and scrub entry of the policies run,
+  as gh comments and titles and under the text and title keys of the outbound tools;
 - calls of the other tools (tool_actions): each TOOLS key, each name classify compares a tool with and a name for
-  each NAME_HINTS word, store and secret paths under each path key, and posts and targets under each text, title and
-  target key.
-The built-in policies are below (BUILTIN_POLICIES).
+  each NAME_HINTS word, store and secret paths under each path key, posts and targets under each text, title and
+  target key, payment and account calls with amounts around the budget policies' limits, each value a tool's branch
+  compares an argument with and others, and patch headers that name the store and a secret.
+The built-in policies are below (BUILTIN_POLICIES). tests/test_gate_diff.py checks that main decides each entry's
+form otherwise with the entry taken out, and that each step of decide lowers a built-in pair when taken out.
 
 Left out: the environment of a real seat (EXO_HOME, EXO_PRINCIPAL_STORE, EXO_KEYS_FILE and EXO_BUS_* move the
 stores, and both trees run without them), session folders other than the corpus's own "cwd" values and cwd_rows,
-argument keys and tool names the gate reads outside its tables (only where a test names them), and every hook step
+argument keys, tool names, programs, patterns and helper sets the gate reads outside GATE_TABLES (only where a test
+or a seed names them), file contents and links in HOME other than HOME_FILES and HOME_LINKS, and every hook step
 after decide: standing grants and NO_GRANT, binds_exact, the registry risk floor, the required executor, a policy
 changed mid-session and the decision model.
 
 Exit status: 0 when nothing is lowered, 1 when anything is lowered, 2 when a tree could not be run, the script
 itself failed (a bad flag or path, a --corpus item that is not a command or a {tool, args} action, a policy file
-that raises or holds no plain data) or a SIGTERM or SIGHUP stopped it. Both tree processes and the work folder are
+that raises or holds no plain data), a SIGTERM or SIGHUP stopped it, or nothing is lowered but a tree holds a gate
+table in a form gate_tables does not read (unless --accept-unread names it). Both tree processes and the work folder are
 removed on each of these. A stop signal the script started with ignored (under nohup) stays ignored, so the run
 goes on. Once the cleanup starts, stop signals are ignored, so it runs to its end.
 """
@@ -60,6 +72,7 @@ import gzip
 import itertools
 import json
 import os
+import re
 import runpy
 import shlex
 import shutil
@@ -113,6 +126,7 @@ _EXPOSURES = ("private", "internal", "public")
 _ROWS = ("reversible", "costly", "irreversible")
 _ALLOW_ALL = {r: {e: "allow" for e in _EXPOSURES} for r in _ROWS}
 _ASK_ALL = {r: {e: "ask" for e in _EXPOSURES} for r in _ROWS}
+_PAY_ALLOW = {"scopes": {"private": ["*"]}, "categories": {"payment": "allow"}, "escalate": {"categories": []}}
 _DENY_SOME = {c: "deny" for c in ("delete", "force_push", "github_post", "vcs_push", "local_write", "opaque_exec",
                                  "web_post", "credentials", "web_read")}
 
@@ -216,6 +230,29 @@ BUILTIN_POLICIES: dict[str, dict] = {
     "third_party_allow_gh": {"gates": {"rules": [_rule("^gh ", third_party=True)]}},
     "budget_spent": {"policy": {"budget": {"per_action_max": 1, "per_day_max": 5}, "gates": {"rules": [_rule(".*")]}},
                      "context": {"spent_today": 10}},
+    # A scope clears the third party and the public exposure, so the escalation step and the budget decide alone: a
+    # payment or account call asks only for its category (scope_private_allow_all, whose budget is above each of
+    # AMOUNTS) or its amount (budget_decides asks for 18 by the daily limit alone, budget_per_action for 25 by the
+    # per-action limit alone, and both for 500 and for a call with no amount).
+    "scope_private_allow_all": {"gates": {"scopes": {"private": ["*"]}, "matrix": _ALLOW_ALL},
+                                "budget": {"per_action_max": 1000, "per_day_max": 1000}},
+    "budget_decides": {"policy": {"gates": _PAY_ALLOW, "budget": {"per_action_max": 20, "per_day_max": 30}},
+                       "context": {"spent_today": 15}},
+    "budget_per_action": {"policy": {"gates": _PAY_ALLOW, "budget": {"per_action_max": 20, "per_day_max": 1000}},
+                          "context": {"spent_today": 0}},
+    # A part a privileged wrapper runs is costly (gate._PRIVILEGED_WRAPPERS): only a rule on a part sees that.
+    "rule_costly_part_deny": {"gates": {"rules": [{"match": {"category": ["local_write", "shell", "read"],
+                                                             "reversibility": "costly"},
+                                                   "decision": "deny", "reason": "run by a privileged wrapper"}]}},
+    # scrub settings (D-033): patterns as strings and entries, an allow list, the internal exposure, and off
+    "scrub_patterns": {"posting": {"scrub": {"patterns": ["bluefin", {"pattern": "orca-[0-9]+", "label": "ticket"}],
+                                             "allow": ["/home/ci"]}}},
+    "scrub_internal": {"gates": {"scopes": {"internal": ["*"]}},
+                       "posting": {"scrub": {"exposures": ["internal", "public"]}}},
+    "scrub_off": {"posting": {"scrub": {"enabled": False}}},
+    "scrub_kinds_off": {"posting": {"scrub": {"seat_names": False, "home_paths": False, "model_ids": False,
+                                              "internal_ids": False, "model_patterns": []}},
+                        "internal_names": ["builder"]},
     # rules written flat and named, and the keys normalize_policies only carries along
     "rules_flat_named": {"gates": {"rules": [{"command": "^git status$", "decision": "allow", "name": "status"},
                                              {"category": "delete", "decision": "log", "name": "deletes"}],
@@ -860,14 +897,24 @@ def without_cwd(action: dict) -> dict:
 
 # --- the gate's own tables -----------------------------------------------------------------------------------------
 
-# The module-level literals of gate.py the generated forms come from. They are read with ast from both trees, never
-# imported, so an entry one tree drops or adds still runs.
+# The module-level tables of gate.py the generated forms come from. They are read with ast from both trees, never
+# imported, so an entry one tree drops or adds still runs. A pattern (`re.compile` of a literal) is read as its text.
 GATE_TABLES = ("TOOLS", "OUTBOUND", "PROGRAMS", "SUBCOMMANDS", "READ_PROGRAMS", "SHELL_PROGRAMS", "TOOL_SUBCOMMANDS",
-               "_RUN_WRAPPERS", "_PREFIXES", "_WRAPPERS", "_WRAPPER_OPERANDS", "_TMUX_RUNS", "_TMUX_ALIASES", "_SHELLS",
-               "_INTERPRETERS", "_PATH_ARG_KEYS", "_TEXT_KEYS", "_TITLE_KEYS", "_TARGET_KEYS", "_AMOUNT_KEYS",
-               "NAME_HINTS", "_READ_VERBS")
+               "_SAFE_PY_MODULES", "_RUN_WRAPPERS", "_WRAPPER_VALUE_OPTS", "_PREFIXES", "_WRAPPERS", "_WRAPPER_OPERANDS",
+               "_PRIVILEGED_WRAPPERS", "_TMUX_RUNS", "_TMUX_ALIASES", "_OPAQUE_PROGRAMS", "_SHELLS", "_INTERPRETERS",
+               "_INTERP_VALUE_FLAGS", "_EXEC_OPTS", "_GIT_EXEC_OPTS", "_EXEC_FILE_OPTS", "_WRITE_REDIRS", "_LOCAL_HOSTS",
+               "_STORE_FOLDERS", "_SENSITIVE_SAMPLES", "_SENSITIVE_PATH", "_SQL_DESTRUCTIVE", "_PATCH_PATHS",
+               "_PATH_ARG_KEYS", "_TEXT_KEYS", "_TITLE_KEYS", "_TARGET_KEYS", "_AMOUNT_KEYS", "NAME_HINTS",
+               "_READ_VERBS", "DEFAULT_SCRUB", "_HOME_PATTERNS", "_INTERNAL_ID")
 _BUILDERS: dict[str, Callable[..., Any]] = {"frozenset": frozenset, "set": set, "tuple": tuple, "list": list,
                                             "sorted": sorted, "dict": dict}
+_COMPARE: dict[type, Callable[[Any, Any], bool]] = {
+    ast.In: lambda a, b: a in b, ast.NotIn: lambda a, b: a not in b, ast.Eq: lambda a, b: a == b,
+    ast.NotEq: lambda a, b: a != b, ast.Is: lambda a, b: a is b, ast.IsNot: lambda a, b: a is not b}
+# Calls that change a table in place: gate_tables reports a table one of them changes as not read.
+_MUTATORS = frozenset({"update", "add", "append", "extend", "insert", "setdefault", "pop", "popitem", "remove",
+                       "discard", "clear", "sort", "reverse", "difference_update", "intersection_update",
+                       "symmetric_difference_update", "__setitem__", "__delitem__", "__ior__", "__iadd__"})
 
 
 class _NotLiteral(Exception):
@@ -875,13 +922,14 @@ class _NotLiteral(Exception):
 
 
 def _lit(node: ast.AST, env: dict[str, Any]) -> Any:
-    """The value of a literal expression: constants, containers, names bound above, comprehensions over them, `+`
-    and `|`, and the frozenset, set, tuple, list, sorted, dict, split, items, keys and values calls."""
+    """The value of a literal expression: constants, containers, names bound above, comprehensions over them (with
+    their `if` filters), `+` and `|`, `in`, `==` and `not`, the frozenset, set, tuple, list, sorted and dict calls
+    (dict with keywords too), and split, items, keys and values. `re.compile` of a literal is its pattern text."""
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.Name):
         if node.id not in env:
-            raise _NotLiteral(node.id)
+            raise _NotLiteral(f"the name {node.id}")
         return env[node.id]
     if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
         items: list = []
@@ -899,23 +947,51 @@ def _lit(node: ast.AST, env: dict[str, Any]) -> Any:
             else:
                 d[_lit(k, env)] = _lit(v, env)
         return d
-    if isinstance(node, (ast.DictComp, ast.ListComp, ast.SetComp, ast.GeneratorExp)) and len(node.generators) == 1 \
-            and not node.generators[0].ifs:
-        gen, rows = node.generators[0], []
-        for item in _lit(gen.iter, env):
-            local = dict(env)
-            _lit_bind(gen.target, item, local)
-            if isinstance(node, ast.DictComp):
-                rows.append((_lit(node.key, local), _lit(node.value, local)))
-            else:
-                rows.append(_lit(node.elt, local))
+    if isinstance(node, (ast.DictComp, ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        rows: list = []
+
+        def walk(k: int, local: dict[str, Any]) -> None:
+            if k == len(node.generators):
+                rows.append((_lit(node.key, local), _lit(node.value, local)) if isinstance(node, ast.DictComp)
+                            else _lit(node.elt, local))
+                return
+            gen = node.generators[k]
+            if gen.is_async:
+                raise _NotLiteral("an async comprehension")
+            for item in _lit(gen.iter, local):
+                inner = dict(local)
+                _lit_bind(gen.target, item, inner)
+                if all(_lit(c, inner) for c in gen.ifs):
+                    walk(k + 1, inner)
+
+        walk(0, env)
         return dict(rows) if isinstance(node, ast.DictComp) else set(rows) if isinstance(node, ast.SetComp) else rows
-    if isinstance(node, ast.Call) and not node.keywords:
-        args = [_lit(a, env) for a in node.args]
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and type(node.ops[0]) in _COMPARE:
+        return _COMPARE[type(node.ops[0])](_lit(node.left, env), _lit(node.comparators[0], env))
+    if isinstance(node, ast.BoolOp):
+        vals = (_lit(v, env) for v in node.values)
+        return all(vals) if isinstance(node.op, ast.And) else any(vals)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return not _lit(node.operand, env)
+    if isinstance(node, ast.Call) and not any(isinstance(a, ast.Starred) for a in node.args):
         f = node.func
-        if isinstance(f, ast.Name) and f.id in _BUILDERS and len(args) <= 1:
+        if isinstance(f, ast.Attribute) and f.attr == "compile" and isinstance(f.value, ast.Name) \
+                and f.value.id == "re" and node.args:
+            text = _lit(node.args[0], env)
+            if isinstance(text, str):
+                return text
+        args = [_lit(a, env) for a in node.args]
+        if isinstance(f, ast.Name) and f.id == "dict" and len(args) <= 1:
+            d = dict(*args)
+            for kw in node.keywords:
+                if kw.arg is None:
+                    d.update(_lit(kw.value, env))
+                else:
+                    d[kw.arg] = _lit(kw.value, env)
+            return d
+        if not node.keywords and isinstance(f, ast.Name) and f.id in _BUILDERS and len(args) <= 1:
             return _BUILDERS[f.id](*args)
-        if isinstance(f, ast.Attribute) and f.attr in ("split", "items", "keys", "values"):
+        if not node.keywords and isinstance(f, ast.Attribute) and f.attr in ("split", "items", "keys", "values"):
             obj = _lit(f.value, env)
             if f.attr == "split" and isinstance(obj, str) and all(isinstance(a, str) for a in args):
                 return obj.split(*args)
@@ -924,7 +1000,7 @@ def _lit(node: ast.AST, env: dict[str, Any]) -> Any:
     if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.BitOr)):
         left, right = _lit(node.left, env), _lit(node.right, env)
         return left + right if isinstance(node.op, ast.Add) else left | right
-    raise _NotLiteral(type(node).__name__)
+    raise _NotLiteral(f"a {type(node).__name__}" + (f" of {_callee(node)}" if isinstance(node, ast.Call) else ""))
 
 
 def _lit_bind(target: ast.AST, value: Any, env: dict[str, Any]) -> None:
@@ -938,28 +1014,96 @@ def _lit_bind(target: ast.AST, value: Any, env: dict[str, Any]) -> None:
         raise _NotLiteral("a loop target")
 
 
+def _patterns(name: str, value: Any) -> list[Any]:
+    """The patterns a pattern table holds: the pattern itself, the first item of each (pattern, label) entry, or
+    DEFAULT_SCRUB's model_patterns. Empty for a table that holds none."""
+    if name in ("_SENSITIVE_PATH", "_SQL_DESTRUCTIVE", "_PATCH_PATHS", "_INTERNAL_ID"):
+        return [value]
+    if name == "_HOME_PATTERNS" and isinstance(value, (list, tuple)):
+        return [e[0] if isinstance(e, (list, tuple)) and e else e for e in value]
+    if name == "DEFAULT_SCRUB" and isinstance(value, dict) and isinstance(value.get("model_patterns"), (list, tuple)):
+        return list(value["model_patterns"])
+    return []
+
+
 def gate_tables(tree: Path) -> dict[str, Any]:
-    """The GATE_TABLES of a tree's gate.py that are plain literals, and from its code "tool_names" (each name it
-    compares `tool` with), "shell_tools" (those _runs_shell names) and "first_keys" (each argument key classify hands
-    to _first in a literal tuple). Empty when the file does not parse."""
+    """The GATE_TABLES of a tree's gate.py, read with ast, and from its code: "tool_names" (each name it compares
+    `tool` with), "shell_tools" (those _runs_shell names), "first_keys" (each argument key classify hands to _first
+    in a literal tuple), "arg_values" (tool -> argument key -> the strings the tool's branch compares that key with),
+    "patch_tools" and "patch_keys" (the tools whose branch reads a patch text with _patch_paths, and its keys), and
+    "catalog_posts" (_catalog_posts).
+
+    A table is a literal assigned at module level, with each `NAME |= lit`, `NAME += lit` and `NAME[key] = lit` after
+    it. "unread" maps each table the tree lacks, does not assign as such a literal, changes in any other way (in a
+    function or under an `if`, with `.update()` or `global`), or holds a pattern regex_samples cannot read, to the
+    reason: its entries may get no line. run prints them and exits 2, unless --accept-unread names them."""
     path = tree / "src" / "exo" / "gate.py"
     try:
         mod = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
-        return {}
+    except (OSError, SyntaxError, UnicodeDecodeError, ValueError) as exc:
+        return {"unread": {k: f"gate.py could not be parsed ({type(exc).__name__})" for k in GATE_TABLES}}
     env: dict[str, Any] = {}
+    why: dict[str, str] = {}
+    handled: set[int] = set()
     for st in mod.body:
-        if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
-            name, value = st.targets[0].id, st.value
-        elif isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name) and st.value is not None:
-            name, value = st.target.id, st.value
+        target: ast.AST | None = None
+        value: ast.AST | None = None
+        if isinstance(st, ast.Assign) and len(st.targets) == 1:
+            target, value = st.targets[0], st.value
+        elif isinstance(st, (ast.AnnAssign, ast.AugAssign)) and st.value is not None:
+            target, value = st.target, st.value
+        sub = isinstance(st, ast.Assign) and isinstance(target, ast.Subscript)
+        if isinstance(target, ast.Name):
+            name = target.id
+        elif sub and isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+            name = target.value.id
         else:
             continue
+        handled.add(id(st))
         try:
-            env[name] = _lit(value, env)
-        except (_NotLiteral, TypeError, ValueError, KeyError, AttributeError, RecursionError):
+            v = _lit(value, env) if value is not None else None
+            if isinstance(st, ast.AugAssign):
+                if not isinstance(st.op, (ast.BitOr, ast.Add)) or name not in env:
+                    raise _NotLiteral(f"a {type(st.op).__name__}= on a table not read")
+                v = env[name] | v if isinstance(st.op, ast.BitOr) else env[name] + v
+            elif sub and isinstance(target, ast.Subscript):
+                if not isinstance(env.get(name), dict):
+                    raise _NotLiteral("a key set on a table not read")
+                v = {**env[name], _lit(target.slice, env): v}
+            env[name] = v
+            why.pop(name, None)
+        except (_NotLiteral, TypeError, ValueError, KeyError, AttributeError, IndexError, RecursionError) as exc:
             env.pop(name, None)       # a later assignment that is no literal hides the earlier one
+            why[name] = f"line {st.lineno} is not a literal ({exc})"
+
+    def base(t: ast.AST) -> str:
+        while isinstance(t, (ast.Subscript, ast.Attribute, ast.Starred)):
+            t = t.value
+        return t.id if isinstance(t, ast.Name) else ""
+
+    for node in ast.walk(mod):        # any other write to a table
+        if id(node) in handled:
+            continue
+        names: list[str] = []
+        if isinstance(node, (ast.Assign, ast.Delete)):
+            names = [base(x) for t in node.targets for x in (t.elts if isinstance(t, (ast.Tuple, ast.List)) else [t])]
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr, ast.For, ast.AsyncFor)):
+            names = [base(node.target)]
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            names = list(node.names)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _MUTATORS:
+            names = [base(node.func.value)]
+        for name in names:
+            if name in GATE_TABLES and name not in why:
+                why[name] = f"changed at line {getattr(node, 'lineno', '?')} ({type(node).__name__})"
+    for name in GATE_TABLES:
+        if name not in env and name not in why:
+            why[name] = "not in gate.py"
+        for p in _patterns(name, env.get(name)) if name not in why else ():
+            if not regex_samples(p):
+                why[name] = f"a pattern regex_samples cannot read: {str(p)[:60]!r}"
     out: dict[str, Any] = {k: env[k] for k in GATE_TABLES if k in env}
+    out["unread"] = {k: why[k] for k in GATE_TABLES if k in why}
 
     def strings(node: ast.AST) -> list[str]:
         vals = node.elts if isinstance(node, (ast.Tuple, ast.List, ast.Set)) else [node]
@@ -970,13 +1114,219 @@ def gate_tables(tree: Path) -> dict[str, Any]:
                                   and isinstance(n.left, ast.Name) and n.left.id == "tool"
                                   for c in n.comparators for s in strings(c)))
 
+    def arg_key(expr: ast.AST) -> str:
+        """The key of the first `args.get("key")` in an expression, or ''."""
+        for n in ast.walk(expr):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get" \
+                    and isinstance(n.func.value, ast.Name) and n.func.value.id == "args" and n.args \
+                    and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str):
+                return n.args[0].value
+        return ""
+
     out["tool_names"] = compared(mod)
     out["shell_tools"] = [s for fn in mod.body if isinstance(fn, ast.FunctionDef) and fn.name == "_runs_shell"
                           for s in compared(fn)]
     out["first_keys"] = list(dict.fromkeys(s for n in ast.walk(mod) if isinstance(n, ast.Call)
                                            and _callee(n) == "_first" and len(n.args) > 1 for s in strings(n.args[1])))
+    arg_values: dict[str, dict[str, list[str]]] = {}
+    patch_tools: dict[str, None] = {}
+    patch_keys: dict[str, None] = {}
+    for node in ast.walk(mod):        # each branch on the tool name: `if tool == "x":`, `elif tool in ("x", "y"):`
+        test = node.test if isinstance(node, ast.If) else None
+        if not (isinstance(test, ast.Compare) and isinstance(test.left, ast.Name) and test.left.id == "tool"
+                and len(test.ops) == 1 and isinstance(test.ops[0], (ast.Eq, ast.In))):
+            continue
+        tools = strings(test.comparators[0])
+        body = [n for st in node.body for n in ast.walk(st)]
+        bound = {n.targets[0].id: k for n in body if isinstance(n, ast.Assign) and len(n.targets) == 1
+                 and isinstance(n.targets[0], ast.Name) and (k := arg_key(n.value))}
+        for n in body:
+            if isinstance(n, ast.Compare):
+                k = bound.get(n.left.id, "") if isinstance(n.left, ast.Name) else arg_key(n.left)
+                for t in tools if k else ():
+                    vals = arg_values.setdefault(t, {}).setdefault(k, [])
+                    vals += [s for c in n.comparators for s in strings(c) if s not in vals]
+            elif isinstance(n, ast.Call) and _callee(n) == "_patch_paths":
+                patch_tools.update(dict.fromkeys(tools))
+                patch_keys.update(dict.fromkeys(k for a in n.args if (k := arg_key(a))))
+    out["arg_values"] = arg_values
+    out["patch_tools"], out["patch_keys"] = list(patch_tools), list(patch_keys)
+    out["catalog_posts"] = _catalog_posts(tree, _patterns("DEFAULT_SCRUB", env.get("DEFAULT_SCRUB")))
     return out
 
+
+def _kind(v: Any) -> str:
+    return ("a mapping" if isinstance(v, dict) else "a string" if isinstance(v, str)
+            else "a collection" if isinstance(v, (list, tuple, set, frozenset)) else f"a {type(v).__name__}")
+
+
+def unread_tables(trees: dict[str, Path]) -> dict[str, dict[str, str]]:
+    """For each labelled tree, the tables gate_tables could not read and why (empty when it read them all). A table
+    both trees hold as different kinds of value (a mapping in one, a list or a string in the other) counts too: the
+    forms read it as the kind main has, so the other tree's entries may get none."""
+    tables = {label: gate_tables(tree) for label, tree in trees.items()}
+    out = {label: dict(t.get("unread", {})) for label, t in tables.items()}
+    for name in GATE_TABLES:
+        kinds = {label: _kind(t[name]) for label, t in tables.items() if name in t}
+        for label, kind in kinds.items():
+            other = next(((o, k) for o, k in kinds.items() if k != kind), None)
+            if other and name not in out[label]:
+                out[label][name] = f"{kind} here, {other[1]} in the {other[0]}"
+    return out
+
+
+# --- strings a pattern matches ---------------------------------------------------------------------------------------
+
+_ESCAPES = {"d": "1", "D": "x", "w": "x", "W": "-", "s": " ", "S": "x", "b": "", "B": "", "A": "", "Z": "",
+            "n": "\n", "t": "\t", "r": "\r", "f": "\f", "v": "\v", "a": "\a"}
+_MAX_SAMPLES = 512                    # forms of one pattern: more is a pattern regex_samples does not read
+
+
+class _Sampler:
+    """Reads the regex syntax the gate's patterns use and writes strings the pattern matches (regex_samples)."""
+
+    def __init__(self, pattern: str, any_char: str):
+        self.p, self.i, self.any = pattern, 0, any_char
+
+    def peek(self, n: int = 1) -> str:
+        return self.p[self.i:self.i + n]
+
+    def alt(self) -> list[str]:
+        out = self.seq()
+        while self.peek() == "|":
+            self.i += 1
+            out += self.seq()
+        out = list(dict.fromkeys(out))
+        if len(out) > _MAX_SAMPLES:
+            raise _NotLiteral("too many forms")
+        return out
+
+    def seq(self) -> list[str]:
+        """The first form of each part in a row, then each other form of one part with the rest as first."""
+        parts: list[list[str]] = []
+        while self.peek() not in ("", "|", ")"):
+            parts.append(self.quant(self.atom()))
+        first = [p[0] for p in parts]
+        out = ["".join(first)]
+        for k, p in enumerate(parts):
+            out += ["".join(first[:k] + [s] + first[k + 1:]) for s in p[1:]]
+        return out
+
+    def quant(self, forms: list[str]) -> list[str]:
+        least = -1
+        if self.peek() in ("*", "+", "?"):
+            least = 0 if self.peek() in "*?" else 1
+            self.i += 1
+        elif m := re.match(r"\{(\d*)(,\d*)?\}", self.p[self.i:]):
+            if m.group(1) or m.group(2) not in (None, ","):
+                least = int(m.group(1) or 0)
+                self.i += m.end()
+        if least < 0:
+            return forms
+        if self.peek() in ("?", "+"):          # lazy or possessive
+            self.i += 1
+        return forms + [""] if least == 0 else [s * least for s in forms]
+
+    def escape(self) -> str:
+        """The character of an escape after the backslash (a class escape gives a character of its class)."""
+        e = self.peek()
+        self.i += 1
+        if e in "xuU":
+            n = {"x": 2, "u": 4, "U": 8}[e]
+            digits = self.peek(n)
+            if len(digits) != n or not all(c in "0123456789abcdefABCDEF" for c in digits):
+                raise _NotLiteral("a bad hex escape")
+            self.i += n
+            return chr(int(digits, 16))
+        if e.isdigit() or e in ("N", "g", "k", "p", "P", ""):
+            raise _NotLiteral("a back reference or named escape")
+        return _ESCAPES.get(e, e)
+
+    def atom(self) -> list[str]:
+        c = self.peek()
+        self.i += 1
+        if c == "(":
+            zero = False
+            if self.peek() == "?":
+                m = re.match(r"\?(?::|=|!|<=|<!|P<\w+>|<\w+>|[aiLmsux-]+:|([aiLmsux-]+)\))", self.p[self.i:])
+                if not m:
+                    raise _NotLiteral("a group the sampler does not read")
+                self.i += m.end()
+                if m.group(1):                  # inline flags: (?i)
+                    return [""]
+                zero = m.group(0) in ("?=", "?!", "?<=", "?<!")
+            inner = self.alt()
+            if self.peek() != ")":
+                raise _NotLiteral("an unclosed group")
+            self.i += 1
+            return [""] if zero else inner      # a look-around matches no text of its own
+        if c == "[":
+            return [self.cls()]
+        if c == "\\":
+            return [self.escape()]
+        if c == ".":
+            return [self.any]
+        if c in ("^", "$"):
+            return [""]
+        if c in ("", "*", "+", "?", ")"):
+            raise _NotLiteral("a quantifier with nothing to repeat")
+        return [c]
+
+    def cls(self) -> str:
+        """One character of a set: x, a or 1 when the set has it (lacks it, for [^...]), else its first one."""
+        neg = self.peek() == "^"
+        self.i += neg
+        items: list[tuple[str, str]] = []
+        while True:
+            c = self.peek()
+            if not c:
+                raise _NotLiteral("an unclosed set")
+            self.i += 1
+            if c == "]" and items:
+                break
+            if c == "\\":
+                if self.peek() in tuple("dwsDWS"):
+                    items.append(("\\" + self.peek(), ""))
+                    self.i += 1
+                    continue
+                c = self.escape()
+            if self.peek() == "-" and self.peek(2)[1:] not in ("]", ""):
+                self.i += 1
+                hi = self.peek()
+                self.i += 1
+                if hi == "\\":
+                    hi = self.escape()
+                items.append((c, hi))
+            else:
+                items.append((c, c))
+
+        def has(ch: str) -> bool:
+            return any(re.fullmatch(lo, ch) if not hi else lo <= ch <= hi for lo, hi in items)
+
+        for ch in "xa1-_. /":
+            if has(ch) != neg:
+                return ch
+        if not neg:
+            lo, hi = items[0]
+            return _ESCAPES[lo[1]] if not hi else lo
+        raise _NotLiteral("a set the sampler cannot fill")
+
+
+def regex_samples(pattern: Any, any_char: str = "x") -> list[str]:
+    """Strings a pattern matches: one with the first form of each part (the first alternative, an optional part
+    once), then one for each other alternative and optional part, each varied alone, so every alternative shows
+    once. `.` is ``any_char``, a set gives x, a or 1, a look-around nothing. Empty for a pattern it cannot read."""
+    if not isinstance(pattern, str):
+        return []
+    s = _Sampler(pattern, any_char)
+    try:
+        out = s.alt()
+    except (_NotLiteral, IndexError, KeyError, ValueError, re.error):
+        return []
+    return out if s.i == len(pattern) else []
+
+
+# --- forms from the tables -------------------------------------------------------------------------------------------
 
 def _names(v: Any) -> list[str]:
     """The string entries of a table, sorted: a mapping's keys, or the items of a sequence or set."""
@@ -994,59 +1344,213 @@ def _pairs(v: Any) -> list[tuple[str, str]]:
                    and all(isinstance(x, str) and x.strip() for x in k)})
 
 
+def _dict(v: Any) -> dict:
+    return v if isinstance(v, dict) else {}
+
+
+_RM = "rm -rf build"                   # the line a prefix, wrapper, shell or option runs: delete when the gate sees it
 _CODE = 'system("rm -rf build")'      # program text: the gate reads its string literal as a shell line
+SQL_PROGRAMS = (("psql", "-c"), ("mysql", "-e"), ("sqlite3", "db"), ("duckdb", "db"))
+# Files and links of the shared HOME (make_home): a link that reads a secret or the store under a plain name.
+HOME_FILES = (".ssh/id_rsa", ".exo/state/gate-grants.json")
+HOME_LINKS = (("notes-link.txt", ".ssh/id_rsa"), ("grants-link.json", ".exo/state/gate-grants.json"))
+
+
+def _glob(sample: str) -> str:
+    """A glob that matches a sample store path by its first three and its last character (`key*v`, `.gnupg/pub*x`):
+    the gate tests a glob with three literal characters against the samples (gate._glob_word)."""
+    head, _, name = sample.rpartition("/")
+    g = f"{name[:3]}*{name[-1]}" if len(name) >= 4 else name
+    return f"{head}/{g}" if head else g
+
+
+def _secret_samples(t: dict) -> list[str]:
+    """Paths below HOME that _SENSITIVE_PATH matches: one for each of its alternatives, as regex_samples writes."""
+    return list(dict.fromkeys(s.strip("/") for s in regex_samples(t.get("_SENSITIVE_PATH")) if s.strip("/")))
+
+
+def table_forms(t: dict) -> Iterator[tuple[str, Any, tuple]]:
+    """Each generated form of one tree's tables, as (group, line or call, entry). The entry is the table entry the
+    form is there for, as a path (table, key) or (table, key, item), or () when the form stands for no one entry. A
+    test removes each entry from main's gate in turn and checks that its form is decided otherwise.
+
+    The groups: "table" lines also run in the compound forms (VARIANTS), "allow" and "option" lines run alone and
+    under one other shell form, and "call" items are tool calls. The forms:
+    - table: each PROGRAMS key with a file, each SUBCOMMANDS pair, `rm -rf build` behind each _RUN_WRAPPERS pair,
+      prefix and wrapper (after the operands _WRAPPER_OPERANDS counts, and as -c text where the wrapper takes -c),
+      each tmux command that runs one, each shell with -c and from its input, and code that runs it given to each
+      interpreter with each of its flags and on its input.
+    - allow: each READ_PROGRAMS and SHELL_PROGRAMS program with a file, each TOOL_SUBCOMMANDS subcommand, each
+      _SAFE_PY_MODULES module after `python -m` and `python3 -m`, and each pip subcommand after `python -m pip`.
+    - option, the value options: each of a prefix, wrapper (attached, for one that ends in `=`), tmux command,
+      interpreter (_INTERP_VALUE_FLAGS) and run wrapper (_WRAPPER_VALUE_OPTS), with a value before `rm -rf build`,
+      and the long ones as `--opt=x` too.
+    - option, the other tables: each _EXEC_OPTS and _GIT_EXEC_OPTS option with `rm -rf build` as its value, each
+      _EXEC_FILE_OPTS option with a script, each _OPAQUE_PROGRAMS program, `touch` behind each _PRIVILEGED_WRAPPERS
+      wrapper, a write to the store and to a file by each _WRITE_REDIRS operator, a POST to each _LOCAL_HOSTS host,
+      a read in and below each _STORE_FOLDERS folder, and a read of each _SENSITIVE_SAMPLES path and of a glob that
+      matches it.
+    - option, the patterns and HOME: a read of each path regex_samples writes for _SENSITIVE_PATH, one line per SQL
+      statement kind of _SQL_DESTRUCTIVE for each SQL_PROGRAMS program, and a read of and a write through each
+      HOME_LINKS link.
+    - call: read_file and write_file of each _SENSITIVE_SAMPLES and _SENSITIVE_PATH path and of each link, and a
+      web_extract of each local host.
+    """
+    q = shlex.quote
+    rm, code = _RM, _CODE
+    for p in _names(t.get("PROGRAMS")):
+        yield "table", f"{q(p)} notes.md", ("PROGRAMS", p)
+    for a, b in _pairs(t.get("SUBCOMMANDS")):
+        yield "table", f"{q(a)} {q(b)}", ("SUBCOMMANDS", (a, b))
+    runs = _pairs(t.get("_RUN_WRAPPERS"))
+    for a, b in runs:
+        yield "table", f"{q(a)} {q(b)} {rm}", ("_RUN_WRAPPERS", (a, b))
+    for o in _names(t.get("_WRAPPER_VALUE_OPTS")):
+        for a, b in runs:
+            yield "option", f"{q(a)} {q(b)} {q(o)} x {rm}", ("_WRAPPER_VALUE_OPTS", o)
+    prefixes = _dict(t.get("_PREFIXES"))
+    for p in _names(prefixes):
+        yield "table", f"{q(p)} {rm}", ("_PREFIXES", p)
+        for o in _names(prefixes[p]):
+            yield "option", f"{q(p)} {q(o)} x {rm}", ("_PREFIXES", p, o)
+            if o.startswith("--"):
+                yield "option", f"{q(p)} {q(o + '=x')} {rm}", ()
+    wrappers, operands = _dict(t.get("_WRAPPERS")), _dict(t.get("_WRAPPER_OPERANDS"))
+    for w in _names(wrappers):
+        n = operands.get(w, 0)
+        ops = " 1" * (n if isinstance(n, int) and 0 <= n <= 4 else 0)
+        opts = _names(wrappers[w])
+        ends = [rm] + ([f"-c {q(rm)}"] if "-c" in opts else [])
+        for e in ends:
+            yield "table", f"{q(w)}{ops} {e}", ("_WRAPPERS", w)
+        # A value is a word the wrapper then reads as its command, or (before -c, where options may follow operands)
+        # an option of the wrapper that takes a value: a wrapper that no longer knows the option reads the next word
+        # as that value. An option that takes its value only attached (`-m=`) gets such a letter attached.
+        shorts = [o[1] for o in opts if len(o) == 2 and o[0] == "-" and o[1] not in "-c"]
+        for o in opts:
+            other = next((ch for ch in shorts if ch != o[1:] and ch + "=" != o[1:]), "")
+            if o.endswith("="):
+                leads = [f"{q(w)} {q(o[:-1] + (other or 'x'))}"] * 2
+            else:
+                leads = [f"{q(w)} {q(o)} x", f"{q(w)} {q(o)} " + (f"-{other}" if other else "x")]
+            for lead, e in zip(leads, ends):
+                yield "option", f"{lead}{ops} {e}", ("_WRAPPERS", w, o)
+                if o.startswith("--") and not o.endswith("="):
+                    yield "option", f"{q(w)} {q(o + '=x')}{ops} {e}", ()
+    tmux_runs = _dict(t.get("_TMUX_RUNS"))
+    for c in _names(tmux_runs) + _names(t.get("_TMUX_ALIASES")):
+        yield "table", f"tmux {q(c)} {q(rm)}", ("_TMUX_RUNS" if c in tmux_runs else "_TMUX_ALIASES", c)
+    for c in _names(tmux_runs):
+        letters = tmux_runs[c] if isinstance(tmux_runs[c], str) else ""
+        for ch in dict.fromkeys(x for x in letters if x.isalnum()):
+            yield "option", f"tmux {q(c)} -{ch} x {q(rm)}", ("_TMUX_RUNS", c, ch)
+    for s in _names(t.get("_SHELLS")):
+        for line in (f"{q(s)} -c {q(rm)}", f"echo {q(rm)} | {q(s)}"):
+            yield "table", line, ("_SHELLS", s)
+    interpreters = _dict(t.get("_INTERPRETERS"))
+    for i in _names(interpreters):
+        for f in _names(interpreters[i]):
+            yield "table", f"{q(i)} {q(f)} {q(code)}", ("_INTERPRETERS", i, f)
+        yield "table", f"echo {q(code)} | {q(i)}", ("_INTERPRETERS", i)
+    values = _dict(t.get("_INTERP_VALUE_FLAGS"))
+    for i in _names(values):
+        evals = _names(interpreters.get(i))
+        run = f"{q(evals[0])} {q(code)}" if evals else q(code)
+        for f in _names(values[i]):
+            yield "option", f"{q(i)} {q(f)} x {run}", ("_INTERP_VALUE_FLAGS", i, f)
+    for table, lead in (("_EXEC_OPTS", ""), ("_GIT_EXEC_OPTS", "git ")):
+        for p, opts in sorted(_dict(t.get(table)).items(), key=lambda kv: str(kv[0])):
+            for o in _names(opts) if isinstance(p, str) else ():
+                yield "option", f"{lead}{q(p)} {q(o)} {q(rm)}", (table, p, o)
+                if o.startswith("--"):
+                    yield "option", f"{lead}{q(p)} {q(o + '=' + rm)}", ()
+    for p, opts in sorted(_dict(t.get("_EXEC_FILE_OPTS")).items(), key=lambda kv: str(kv[0])):
+        for o in _names(opts) if isinstance(p, str) else ():
+            yield "option", f"{q(p)} {q(o)} script.sh notes.md", ("_EXEC_FILE_OPTS", p, o)
+    for p in _names(t.get("_OPAQUE_PROGRAMS")):
+        yield "option", f"{q(p)} notes.md", ("_OPAQUE_PROGRAMS", p)
+    for w in _names(t.get("_PRIVILEGED_WRAPPERS")):
+        n = operands.get(w, 0)
+        ops = " 1" * (n if isinstance(n, int) and 0 <= n <= 4 else 0)
+        yield "option", f"{q(w)}{ops} touch notes.md", ("_PRIVILEGED_WRAPPERS", w)
+    for op in _names(t.get("_WRITE_REDIRS")):
+        for target in (STORE_PATH, "notes.md"):
+            yield "option", f"printf x {op} {target}", ("_WRITE_REDIRS", op)
+    for h in _names(t.get("_LOCAL_HOSTS")):
+        url = f"http://{h if h.startswith('[') or ':' not in h else '[' + h + ']'}/api"
+        yield "option", f"curl -X POST {q(url)} -d x", ("_LOCAL_HOSTS", h)
+        yield "call", {"tool": "web_extract", "args": {"url": url}}, ("_LOCAL_HOSTS", h)
+    for f in _names(t.get("_STORE_FOLDERS")):
+        p = f if f.startswith("/") else "~/" + f
+        parent, _, name = p.rpartition("/")
+        yield "option", f"cd {p} && cat *", ("_STORE_FOLDERS", f)
+        yield "option", f"cd {parent or '/'} && cat {q(name)}/x", ("_STORE_FOLDERS", f)
+    paths = [(s, ("_SENSITIVE_SAMPLES", s)) for s in _names(t.get("_SENSITIVE_SAMPLES"))]
+    for s, entry in paths:
+        if re.fullmatch(r"[\w./-]+", s):           # a glob bash expands: no quotes
+            yield "option", f"cat ~/{_glob(s)}", entry
+    paths += [(s, ()) for s in _secret_samples(t)] + [(name, ()) for name, _ in HOME_LINKS]
+    for s, entry in paths:
+        yield "option", f"cat ~/{q(s)}", entry
+        yield "call", {"tool": "read_file", "args": {"path": f"~/{s}"}}, entry
+        yield "call", {"tool": "write_file", "args": {"path": f"~/{s}", "content": "x"}}, entry
+    for name, _ in HOME_LINKS:
+        yield "option", f"cat {q(name)}", ()
+        yield "option", f"printf x > ~/{q(name)}", ()
+    for s in regex_samples(t.get("_SQL_DESTRUCTIVE")):
+        for prog, lead in SQL_PROGRAMS:
+            yield "option", f"{prog} {lead} {q(s + ' x')}", ()
+    for p in _names(t.get("READ_PROGRAMS")) + _names(t.get("SHELL_PROGRAMS")):
+        yield "allow", f"{q(p)} notes.md", ("READ_PROGRAMS" if p in _names(t.get("READ_PROGRAMS"))
+                                            else "SHELL_PROGRAMS", p)
+    subs = _dict(t.get("TOOL_SUBCOMMANDS"))
+    for p in _names(subs):
+        for s in _names(subs[p]):
+            yield "allow", f"{q(p)} {q(s)}", ("TOOL_SUBCOMMANDS", p, s)
+    for m in _names(t.get("_SAFE_PY_MODULES")):
+        yield "allow", f"python -m {q(m)}", ("_SAFE_PY_MODULES", m)
+        yield "allow", f"python3 -m {q(m)} x", ("_SAFE_PY_MODULES", m)
+    for s in _names(subs.get("pip")):
+        yield "allow", f"python -m pip {q(s)}", ("TOOL_SUBCOMMANDS", "pip", s)
+
+
+def _group(tables: Iterable[dict], group: str) -> list:
+    out: dict[str, Any] = {}
+    for t in tables:
+        for g, item, _ in table_forms(t):
+            if g == group:
+                out.setdefault(item if isinstance(item, str) else json.dumps(item, sort_keys=True), item)
+    return list(out.values())
 
 
 def table_lines(tables: Iterable[dict]) -> list[str]:
-    """A line for each entry of the program, prefix and shell tables of each tree: each PROGRAMS key with a file
-    operand, each SUBCOMMANDS pair, `rm -rf build` behind each _RUN_WRAPPERS pair, prefix and wrapper (after the
-    operands _WRAPPER_OPERANDS counts, and as -c text where the wrapper takes -c) and each tmux command that runs
-    one, the same line run by each shell with -c and from its input, and code that runs it given to each interpreter
-    with each of its flags and on its input."""
-    q = shlex.quote
-    out: dict[str, None] = {}
-    for t in tables:
-        lines = [f"{q(p)} notes.md" for p in _names(t.get("PROGRAMS"))]
-        lines += [f"{q(a)} {q(b)}" for a, b in _pairs(t.get("SUBCOMMANDS"))]
-        lines += [f"{q(a)} {q(b)} rm -rf build" for a, b in _pairs(t.get("_RUN_WRAPPERS"))]
-        lines += [f"{q(p)} rm -rf build" for p in _names(t.get("_PREFIXES"))]
-        wrappers, operands = t.get("_WRAPPERS"), t.get("_WRAPPER_OPERANDS")
-        for w in _names(wrappers):
-            n = operands.get(w, 0) if isinstance(operands, dict) else 0
-            lead = q(w) + " 1" * (n if isinstance(n, int) and 0 <= n <= 4 else 0)
-            lines.append(f"{lead} rm -rf build")
-            if "-c" in _names(wrappers.get(w) if isinstance(wrappers, dict) else ()):
-                lines.append(f"{lead} -c 'rm -rf build'")
-        lines += [f"tmux {q(c)} 'rm -rf build'" for c in _names(t.get("_TMUX_RUNS")) + _names(t.get("_TMUX_ALIASES"))]
-        for s in _names(t.get("_SHELLS")):
-            lines += [f"{q(s)} -c 'rm -rf build'", f"echo 'rm -rf build' | {q(s)}"]
-        interpreters = t.get("_INTERPRETERS")
-        for i in _names(interpreters):
-            flags = interpreters.get(i) if isinstance(interpreters, dict) else ()
-            lines += [f"{q(i)} {q(f)} {q(_CODE)}" for f in _names(flags)] + [f"echo {q(_CODE)} | {q(i)}"]
-        out.update(dict.fromkeys(lines))
-    return list(out)
+    """The "table" lines of table_forms of each tree: a line for each entry of the program, prefix and shell
+    tables."""
+    return _group(tables, "table")
 
 
 def allowlist_lines(tables: Iterable[dict]) -> list[str]:
-    """A line for each program of the allowlists (READ_PROGRAMS, SHELL_PROGRAMS) with a file operand, and each
-    subcommand TOOL_SUBCOMMANDS allows, of each tree: a head that adds or moves an entry shows on its line."""
-    q = shlex.quote
-    out: dict[str, None] = {}
-    for t in tables:
-        lines = [f"{q(p)} notes.md" for p in _names(t.get("READ_PROGRAMS")) + _names(t.get("SHELL_PROGRAMS"))]
-        subs = t.get("TOOL_SUBCOMMANDS")
-        for p in _names(subs):
-            lines += [f"{q(p)} {q(s)}" for s in _names(subs.get(p) if isinstance(subs, dict) else ())]
-        out.update(dict.fromkeys(lines))
-    return list(out)
+    """The "allow" lines of table_forms of each tree: a head that adds or moves an allowlist entry shows on its
+    line."""
+    return _group(tables, "allow")
+
+
+def option_lines(tables: Iterable[dict]) -> list[str]:
+    """The "option" lines of table_forms of each tree: the value options, the exec options, the opaque programs and
+    privileged wrappers, the write operators, local hosts, store folders, secret paths and SQL statements."""
+    return _group(tables, "option")
 
 
 # What the generated tool calls carry: a store path, a secret path, a post with a forbidden word (posting_* policies
-# forbid "secret"), a target deny_target_pub denies, and the words around a NAME_HINTS word in a tool name.
+# forbid "secret"), a target deny_target_pub denies, the words around a NAME_HINTS word in a tool name, a plain
+# target the scope policies hold and amounts below and above the budget of budget_decides.
 STORE_PATH, SECRET_PATH = "~/.exo/state/gate-grants.json", "~/.ssh/id_rsa"
 POST_TEXT, POST_TARGET = "Secret plan", "pub/notes"
 HINT_AROUND = ("acme", "item")
+PLAIN_TARGET, AMOUNTS = "acme", ("10", "18", "25", "500")
+# Values for an argument a tool's branch compares (arg_values): each value it names and these, so a branch that
+# reads more values one way shows too.
+ACTION_VALUES = ("create", "update", "edit", "delete", "remove", "run", "send", "reply", "xyz")
 
 
 def _hints(t: dict) -> list[tuple[list[str], list[str], str]]:
@@ -1069,26 +1573,86 @@ def hint_names(t: dict) -> list[str]:
     return list(out)
 
 
-def tool_actions(tables: Iterable[dict], shell_tools: Iterable[str] = SHELL_TOOLS) -> list[dict]:
+def _catalog_posts(tree: Path, model_patterns: Iterable[Any]) -> list[str]:
+    """Two posts from a tree's model catalog (src/exo/core/models/catalog.toml), whose names the scrub holds back:
+    a catalog model name no DEFAULT_SCRUB model pattern matches, and `<provider>:x` for its first provider."""
+    try:
+        import tomllib
+        data = tomllib.loads((tree / "src" / "exo" / "core" / "models" / "catalog.toml").read_text("utf-8"))
+    except (ImportError, OSError, ValueError):
+        return []
+    refs = [str(r) for r in (data.get("models") or {})]
+    refs += [str(r) for routes in (data.get("roles") or {}).values() if isinstance(routes, list) for r in routes]
+    names = sorted({m.rpartition("/")[2] for r in refs if (m := r.partition(":")[2])})
+    pats = [p for p in model_patterns if isinstance(p, str)]
+    plain = [n for n in names if not any(re.search(p, n, re.I) for p in pats)]
+    out = [f"built with {plain[0]}"] if plain else []
+    providers = sorted(str(p) for p in (data.get("providers") or {}))
+    return out + ([f"routed to {providers[0]}:x"] if providers else [])
+
+
+def post_texts(tables: Iterable[dict], policies: Iterable[Any] = ()) -> list[str]:
+    """Posts that each trip one posting rule: a string each pattern of the default scrub matches (_HOME_PATTERNS,
+    _INTERNAL_ID, DEFAULT_SCRUB's model_patterns), the catalog posts of each tree, and from the policies
+    each plain forbid entry, a string each forbid pattern matches, each forbidden word and agent name, and each scrub
+    name, internal name and scrub pattern (a string or a {pattern, label} entry)."""
+    hits: dict[str, None] = {}
+    for t in tables:
+        for name in ("_HOME_PATTERNS", "_INTERNAL_ID", "DEFAULT_SCRUB"):
+            for p in _patterns(name, t.get(name)):
+                hits.update(dict.fromkeys(regex_samples(p)))
+        hits.update(dict.fromkeys(str(x) for x in t.get("catalog_posts") or []))
+    for raw in policies:
+        pol = _entry(raw)["policy"] if isinstance(raw, dict) else {}
+        if not isinstance(pol, dict):
+            continue
+        posting = pol.get("posting") if isinstance(pol.get("posting"), dict) else {}
+        scrub = posting.get("scrub") if isinstance(posting.get("scrub"), dict) else {}
+        for f in posting.get("forbid") or []:
+            hits.update(dict.fromkeys(regex_samples(f.get("pattern")) if isinstance(f, dict) else [str(f)]))
+        for p in scrub.get("patterns") or []:
+            hits.update(dict.fromkeys(regex_samples(p.get("pattern") if isinstance(p, dict) else p)))
+        for key, where in (("forbid_words", posting), ("names", scrub), ("agents", pol), ("internal_names", pol)):
+            words = where.get(key)
+            hits.update(dict.fromkeys(str(w) for w in (words if isinstance(words, (list, tuple)) else [])))
+    return [f"status: {h}" for h in hits if h.strip()]
+
+
+def post_lines(texts: Iterable[str]) -> list[str]:
+    """Each post as a gh comment body and as a gh issue title."""
+    q = shlex.quote
+    return [line for s in texts for line in (f"gh pr comment 3 --body {q(s)}", f"gh issue create --title {q(s)} --body x")]
+
+
+def tool_actions(tables: Iterable[dict], shell_tools: Iterable[str] = SHELL_TOOLS, policies: Iterable[Any] = ()
+                 ) -> list[dict]:
     """Calls of the tools that are not shell tools, from the tables of each tree. With no arguments: each TOOLS key,
     each name classify compares a tool with and each hint_names name. A store path and a secret path under each path
     key (_PATH_ARG_KEYS and the keys classify hands to _first) for those tools but the hint names, and one name per
     NAME_HINTS entry. For each outbound tool (a TOOLS key or NAME_HINTS entry whose category is in OUTBOUND), a post
-    with a forbidden word under each text and title key and a pub/ target under each target key. For a payment tool, an
-    amount under each _AMOUNT_KEYS key."""
+    with a forbidden word under each text and title key and a pub/ target under each target key, and each post_texts
+    post under each text and title key of the first outbound tool and under the first text key of the others. For a
+    payment tool, each of AMOUNTS under each _AMOUNT_KEYS key, alone and with a plain target, and the plain target
+    alone for it and for an account tool. For a tool whose branch compares an argument (arg_values), each value the
+    branch names and each of ACTION_VALUES. For a tool whose branch reads a patch text, each header regex_samples
+    writes for _PATCH_PATHS, naming the store path and the secret path. Then the "call" forms of table_forms."""
+    tables = list(tables)
     shell = set(shell_tools)
     x, y = HINT_AROUND
     named: dict[str, None] = {}
     hinted: dict[str, None] = {}
     outbound: dict[str, None] = {}
-    payment: dict[str, None] = {}
+    by_cat: dict[str, dict[str, None]] = {"payment": {}, "account": {}}
     keys: dict[str, dict[str, None]] = {"path": {}, "text": {}, "target": {}, "amount": {}}
     for t in tables:
-        tools, out_cats = t.get("TOOLS"), set(_names(t.get("OUTBOUND")))
+        tools, out_cats = _dict(t.get("TOOLS")), set(_names(t.get("OUTBOUND")))
         for name in _names(tools):
             named[name] = None
-            if isinstance(tools, dict) and tools.get(name) in out_cats:
+            cat = tools.get(name)
+            if isinstance(cat, str) and cat in out_cats:      # a value of another type is no category
                 outbound[name] = None
+            if isinstance(cat, str) and cat in by_cat:
+                by_cat[cat][name] = None
         named.update(dict.fromkeys(n for n in _names(t.get("tool_names")) if n not in shell))
         hinted.update(dict.fromkeys(hint_names(t)))
         for hits, needs, cat in _hints(t):
@@ -1097,19 +1661,39 @@ def tool_actions(tables: Iterable[dict], shell_tools: Iterable[str] = SHELL_TOOL
                 named[rep] = None
                 if cat in out_cats:
                     outbound[rep] = None
-                if cat == "payment":
-                    payment[rep] = None
+                if cat in by_cat:
+                    by_cat[cat][rep] = None
         first = _names(t.get("first_keys"))
         keys["path"].update(dict.fromkeys(_names(t.get("_PATH_ARG_KEYS")) + first))
         keys["text"].update(dict.fromkeys(_names(t.get("_TEXT_KEYS")) + _names(t.get("_TITLE_KEYS")) + first))
         keys["target"].update(dict.fromkeys(_names(t.get("_TARGET_KEYS")) + first))
         keys["amount"].update(dict.fromkeys(_names(t.get("_AMOUNT_KEYS"))))
-    calls = [(n, {}) for n in {**named, **hinted}]
+    calls: list[tuple[str, dict]] = [(n, {}) for n in {**named, **hinted}]
     calls += [(n, {k: v}) for n in named for k in keys["path"] for v in (STORE_PATH, SECRET_PATH)]
     calls += [(n, {k: POST_TEXT}) for n in outbound for k in keys["text"]]
     calls += [(n, {k: POST_TARGET}) for n in outbound for k in keys["target"]]
-    calls += [(n, {k: "10"}) for n in payment for k in keys["amount"]]
-    return [{"tool": n, "args": a} for n, a in calls]
+    texts, out_tools, text_keys = post_texts(tables, policies), list(outbound), list(keys["text"])
+    calls += [(n, {k: s}) for n in out_tools[:1] for s in texts for k in text_keys]
+    calls += [(n, {k: s}) for n in out_tools[1:] for s in texts for k in text_keys[:1]]
+    to = "to" if "to" in keys["target"] else next(iter(keys["target"]), "to")
+    pay = by_cat["payment"]
+    calls += [(n, {k: a}) for n in pay for k in keys["amount"] for a in AMOUNTS]
+    calls += [(n, {k: a, to: PLAIN_TARGET}) for n in pay for k in keys["amount"] for a in AMOUNTS]
+    calls += [(n, {to: PLAIN_TARGET}) for n in {**pay, **by_cat["account"]}]
+    patch_tools: dict[str, None] = {}
+    patch_keys: dict[str, None] = {}
+    for t in tables:
+        for tool, compared in _dict(t.get("arg_values")).items():
+            for k, vals in _dict(compared).items():
+                named_vals = [v for v in (vals if isinstance(vals, list) else []) if isinstance(v, str)]
+                calls += [(tool, {k: v}) for v in dict.fromkeys([*named_vals, *ACTION_VALUES])]
+        patch_tools.update(dict.fromkeys(_names(t.get("patch_tools"))))
+        patch_keys.update(dict.fromkeys(_names(t.get("patch_keys"))))
+    for t in tables:
+        for path in (STORE_PATH, SECRET_PATH):
+            for s in regex_samples(t.get("_PATCH_PATHS"), path):
+                calls += [(n, {k: s}) for n in patch_tools for k in patch_keys]
+    return [{"tool": n, "args": a} for n, a in calls] + _group(tables, "call")
 
 
 def simple(cmd: str) -> bool:
@@ -1197,16 +1781,18 @@ def shell_form(line: str, forms: tuple[tuple[str, str], ...] = SHELL_FORMS) -> t
     return forms[zlib.crc32(line.encode("utf-8", "surrogatepass")) % len(forms)]
 
 
-def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: bool = True, generate: bool = True
-                 ) -> tuple[list[dict], dict[str, int]]:
+def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: bool = True, generate: bool = True,
+                 policies: Iterable[Any] | None = None) -> tuple[list[dict], dict[str, int]]:
     """The deduplicated actions to run, and how many came from each source.
 
     ``trees`` is (head, base). Both are harvested, so a row the head deletes from a test is still run: a change
     cannot hide a lowered line by dropping its test. What only the base names is counted as harvested_base_only.
     The tables of both gates are read the same way (gate_tables). The files always run. ``builtin`` adds the harvest,
-    and with ``generate`` the seeds, the table and allowlist lines, the folder rows and the calls of the other tools.
-    ``generate`` adds the compound forms of the simple lines and the other shell tool names and keys. With ``builtin``
-    off they are the forms of the files' lines alone. With ``generate`` off only the files and the harvest run.
+    and with ``generate`` the seeds, the table, allowlist and option lines (table_forms), the posts (post_texts of
+    the tables and of ``policies``, the policies run, BUILTIN_POLICIES when None), the folder rows and the calls of
+    the other tools. ``generate`` adds the compound forms of the simple lines and the other shell tool names and
+    keys. With ``builtin`` off they are the forms of the files' lines alone. With ``generate`` off only the files and
+    the harvest run.
     """
     trees = list(dict.fromkeys(trees))
     out: dict[str, dict] = {}
@@ -1246,10 +1832,14 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
     seed_lines = seeds + list(variants(seeds))
     for cmd in seed_lines:
         put(cmd, "generated")
+    pols = list(BUILTIN_POLICIES.values() if policies is None else policies)
     table = table_lines(tables) if builtin else []
-    allow = allowlist_lines(tables) if builtin else []
-    for cmd in table + allow:
+    alone = allowlist_lines(tables) + option_lines(tables) if builtin else []    # lines that need no wrapping
+    for cmd in table + alone:
         put(cmd, "tables")
+    posts = post_lines(post_texts(tables, pols)) if builtin else []
+    for cmd in posts:
+        put(cmd, "posts")
     seed_set = set(seeds)
     wrapped = list(dict.fromkeys(c for c in [*lines, *table] if c not in seed_set))
     for cmd in variants(wrapped):
@@ -1260,13 +1850,13 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
     for cmd in seed_lines:
         for tool, key in forms:
             put({"tool": tool, "args": {key: cmd}}, "shell_forms")
-    for cmd in dict.fromkeys(wrapped + allow):
+    for cmd in dict.fromkeys(wrapped + alone + posts):
         tool, key = shell_form(cmd, forms)
         put({"tool": tool, "args": {key: cmd}}, "shell_forms")
     if builtin:
         for a in cwd_rows(forms):
             put(a, "cwd_forms")
-        for a in tool_actions(tables, shell_tools):
+        for a in tool_actions(tables, shell_tools, pols):
             put(a, "tool_forms")
     return list(out.values()), dict(counts)
 
@@ -1410,9 +2000,19 @@ def work_dir() -> Path:
 
 
 def make_home(root: Path) -> Path:
+    """The shared HOME: the store and secret folders, the HOME_FILES, and the HOME_LINKS (a plain name that is a
+    link to a secret or to the store)."""
     home = root / "home"
     for d in (".exo/state", ".ssh", ".kube", ".config/gh"):
         (home / d).mkdir(parents=True, exist_ok=True)
+    for f in HOME_FILES:
+        if not (home / f).exists():
+            (home / f).write_text("x\n", encoding="utf-8")
+    for name, to in HOME_LINKS:
+        try:
+            os.symlink(to, home / name)
+        except OSError:             # there already, or no links here: the link lines read a missing file
+            pass
     return home
 
 
@@ -1655,8 +2255,17 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
     if rep.get("lowered_truncated"):
         out.append(f"  (--json keeps the first {len(rep['lowered_actions'])} lowered actions and "
                    f"{len(rep['lowered'])} lowered pairs, in corpus order with the --corpus items first)")
-    out.append("result: " + ("LOWERED (exit 1): fix each line or record it in the decision amendment"
-                             if c.get("lowered_pairs") else "nothing lowered (exit 0)"))
+    for side, tabs in (rep.get("unread_tables") or {}).items():
+        out.append(f"Tables the {side} holds in a form the script does not read (their entries got no lines):")
+        out += [f"  {k}: {why}" for k, why in tabs.items()]
+    if c.get("lowered_pairs"):
+        result = "LOWERED (exit 1): fix each line or record it in the decision amendment"
+    elif rep.get("incomplete"):
+        result = (f"INCOMPLETE (exit 2): nothing lowered, but the lines of {', '.join(rep['incomplete'])} are missing "
+                  "(keep each a literal, or name it in --accept-unread once you have read the change)")
+    else:
+        result = "nothing lowered (exit 0)"
+    out.append("result: " + result)
     return "\n".join(out)
 
 
@@ -1709,6 +2318,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--home", type=Path,
                    help="HOME for both trees (default: a temp folder under /var/tmp with the usual stores)")
     p.add_argument("--dump-corpus", type=Path, help="write the corpus as JSON here, then run as usual")
+    p.add_argument("--accept-unread", default="",
+                   help="comma-separated gate tables a tree may hold in a form the script does not read (exit 0 "
+                        "instead of 2 for them, still listed in the summary)")
     return p.parse_args(argv)
 
 
@@ -1784,16 +2396,12 @@ def run(a: argparse.Namespace) -> int:
     t0 = time.monotonic()
     work: Path | None = None
     procs: dict[str, subprocess.Popen] = {}
+    unread: dict[str, dict[str, str]] = {}
     try:
         json_path, dump_path = _out_path(a.json, "--json"), _out_path(a.dump_corpus, "--dump-corpus")
         home = a.home.expanduser().resolve() if a.home else None
         if home is not None and not home.is_dir():
             raise Failed(f"--home {a.home}: no such folder")
-        try:
-            actions, corpus_counts = build_corpus((a.head, a.base), a.corpus, builtin=not a.only_corpus,
-                                                  generate=not a.no_variants)
-        except (OSError, ValueError) as exc:
-            raise Failed(f"could not build the corpus: {exc}") from None
         policies = {} if a.only_policies else {k: _entry(v) for k, v in BUILTIN_POLICIES.items()}
         if a.pick:
             keep = [x.strip() for x in a.pick.split(",") if x.strip()]
@@ -1808,6 +2416,17 @@ def run(a: argparse.Namespace) -> int:
                 raise Failed(f"could not load policies from {f}: {type(exc).__name__}: {exc}") from None
             for name, entry in loaded.items():
                 policies[name if name not in policies else f"{name}@{f.name}"] = entry
+        try:
+            actions, corpus_counts = build_corpus((a.head, a.base), a.corpus, builtin=not a.only_corpus,
+                                                  generate=not a.no_variants, policies=policies.values())
+        except (OSError, ValueError) as exc:
+            raise Failed(f"could not build the corpus: {exc}") from None
+        # A table a tree holds in a form gate_tables does not read gets no lines for its entries: never silently.
+        unread = unread_tables({"head": a.head, "base": a.base}) if not a.only_corpus and not a.no_variants else {}
+        for side, tabs in unread.items():
+            if tabs:
+                print(f"gate_diff: {side}: tables not read, their entries get no lines: "
+                      + "; ".join(f"{k} ({v})" for k, v in tabs.items()), file=sys.stderr, flush=True)
         if not actions or not policies:
             raise Failed("the corpus or the policy set is empty")
         if dump_path:
@@ -1840,8 +2459,11 @@ def run(a: argparse.Namespace) -> int:
                 stop_tree(p)
             if work is not None:
                 shutil.rmtree(work, ignore_errors=True)
+    accepted = {x.strip() for x in a.accept_unread.split(",") if x.strip()}
     rep.update(base=f"{a.base} {_commit(a.base)}".strip(), head=f"{a.head} {_commit(a.head)}".strip(),
-               corpus_counts=corpus_counts, wall_secs=round(time.monotonic() - t0, 1))
+               corpus_counts=corpus_counts, wall_secs=round(time.monotonic() - t0, 1),
+               unread_tables={side: tabs for side, tabs in unread.items() if tabs},
+               incomplete=sorted({k for tabs in unread.values() for k in tabs} - accepted))
     if json_path:                   # before the summary, so a failed write never follows a printed result
         full = {k: v for k, v in rep.items() if k not in ("examples_by_policy", "examples_by_transition")}
         try:
@@ -1849,7 +2471,7 @@ def run(a: argparse.Namespace) -> int:
         except OSError as exc:
             raise Failed(f"could not write --json {json_path}: {exc}") from None
     print(summary_text(rep, a.max_examples))
-    return 1 if rep["counts"].get("lowered_pairs") else 0
+    return 1 if rep["counts"].get("lowered_pairs") else 2 if rep["incomplete"] else 0
 
 
 if __name__ == "__main__":

@@ -1273,21 +1273,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   *Amendment 2026-10-22 (issue #423):* a change to the gate's classifier or to `decide` is checked against main with
   `scripts/gate_diff.py`. Each line it decides lower than main is fixed or named in the change's decision amendment,
   with the reason it is safe. The script runs `classify` and `decide` of both trees, each in a process of its own with
-  the same temp HOME, under more than 70 policies, which use every posting key the gate reads. The actions are the
-  lines and calls the gate suites of both trees test, kept as written, and generated forms. The script reads the
-  gate's tables of both trees with `ast` and makes a line or call for each entry: each program, subcommand, prefix,
-  wrapper, shell and interpreter flag, each tool and name hint word, and each path, text, title and target key. A
-  head that drops an entry still runs the base's line for it. Each simple line also runs in compound wrappers
-  (`timeout`, a heredoc and a here-string among them) and under the other shell tool names and keys the gate reads.
+  the same temp HOME, under more than 80 policies, which use every posting and scrub key the gate reads. The actions
+  are the lines and calls the gate suites of both trees test, kept as written, and generated forms. The script reads
+  the gate's tables of both trees with `ast` and makes a line or call for each entry: each program, subcommand,
+  prefix, wrapper, shell and interpreter flag, each value option, exec option and allowlisted module, each tool and
+  name hint word, each path, text, title and target key, and a string for each alternative of the secret path, SQL
+  and patch header patterns. A head that drops an entry still runs the base's line for it. A table a tree holds in
+  another form is named, and the run exits 2. Posts trip each scrub and forbid rule, and payment and account calls
+  meet budget and escalation policies that no other step masks. Tests take each table entry and each step of
+  `decide` out of main's gate in turn and check that a built-in form or pair changes. Each simple line also runs in
+  compound wrappers (`timeout`, a heredoc and a here-string among them) and under the other shell tool names and
+  keys the gate reads.
   Folder rows read a secret store only as resolved from the session folder or the call's own `cwd` (#209), so main
   decides each otherwise without its folder. A pair is lower when its outcome ranks lower in allow, log, ask, deny.
   At the same outcome below deny it is also lower when it loses a reserved hit or category, or a posting violation
   main lists. At an equal deny neither counts, since the call is blocked. Reviewers run main's copy of the script
   against the PR head and read any change a gate PR makes to it, so a PR cannot weaken the check that judges it.
   Left out, so a change there needs its own tests: session folders beyond the corpus's own and the folder rows, a
-  name, key or program the script does not read from those tables (it runs only where a test names it), the stores
-  the environment moves (`EXO_HOME`, `EXO_PRINCIPAL_STORE`, `EXO_KEYS_FILE`, `EXO_BUS_*`), and the hook steps after
-  `decide` (grants and `NO_GRANT`, `binds_exact`, the registry risk floor, the required executor). Chosen over a fixed
+  name, key or program the script does not read from those tables (it runs only where a test names it), a regex
+  alternative or helper pattern beyond the four sampled ones (seen only where a test or a seed names it), files and
+  links in HOME beyond its own, the stores the environment moves (`EXO_HOME`, `EXO_PRINCIPAL_STORE`,
+  `EXO_KEYS_FILE`, `EXO_BUS_*`), and the hook steps after `decide` (grants and `NO_GRANT`, `binds_exact`, the
+  registry risk floor, the required executor). Chosen over a fixed
   table of expected outcomes, which a change can edit along with the gate: the corpus comes from the tests and tables
   of both trees, so deleting a row or an entry does not hide its line.
 
