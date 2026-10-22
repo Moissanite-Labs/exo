@@ -555,7 +555,8 @@ system or bash will.
   `[a-zA-Z]`). A class bash does not know, or more than 32 `[`, could match anything and counts as a match. So
   `cat ~/.kube/[^x]onfig`, `cat ~/.kube/[[:alpha:]]onfig` and `cat ~/.config/gh/hosts.[^x]ml` ask.
   `/proc/<pid>/<glob>` asks when the glob could match `environ`, for any process: `cat /proc/self/[!x]nviron`,
-  `cat /proc/*/[!x]nviron` and `cat /proc/self/*` ask, while `ls /proc/*/status` stays a read.
+  `cat /proc/*/[!x]nviron` and `cat /proc/self/*` ask, while `ls /proc/*/status` stays a read. A thread's
+  `/proc/<pid>/task/<tid>/<glob>` is read the same way (#313, below).
 
 Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
 each folder's resolution) across all the line's words. Before, each word looked them up again. On three 10 KB
@@ -574,12 +575,59 @@ gate's view of the file system may differ from the worker's. A name built whole 
     does the glob `cat .env.*` (the glob samples have no `.env.<suffix>`);
   - #311: a relative name read in a shell's `cwd` inside a store (`{"command": "cat config", "cwd": "~/.kube"}`) is
     matched by the name as written; a `cd` on the line is tracked (#192);
-  - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved;
-  - #313: a thread's `/proc/<pid>/task/<tid>/environ` is not a store.
+  - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved.
 
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
 `test_gate_expansions_in_names.py`, `test_gate_bash_glob_classes.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
+
+### A thread's environment file (#313)
+
+On Linux each thread of a process has its own folder, `/proc/<pid>/task/<tid>/`. Its `environ` holds the same
+environment as `/proc/<pid>/environ`, so it is a secret store too, for any process. The store list names both
+forms. A glob is read as bash reads it: `/proc/<pid>/<x>/<tid>/<glob>` asks when `<x>` could match `task` and the
+glob could match `environ`. So these ask: `cat /proc/self/task/1/environ`, `cat /proc/*/task/*/environ`,
+`cat /proc/1/*/*/environ`, `cat /proc/self/[t]ask/*/environ`, `cat /proc/self/task/{1,2}/environ`,
+`cd /proc/self/task/1 && cat environ`, and `read_file` or `write_file` on such a path. The search tools leave it
+out of a walk, as they leave out the direct form (#241): `grep` on `/proc/self` skips each thread's `environ`.
+Other files under `task/` keep their class: `cat /proc/self/task/*/status`, `cat /proc/self/*/*/cmdline` and
+`ls /proc/self/task` are reads.
+
+A thread's environment is decided as `/proc/<pid>/environ` already was. Some lines decide lower than before
+because of that. A differential of main against the change found 2,877 lowered pairs (27,708 actions under 95
+policies). Every one of them decides as main decides the same action with `/proc/self/environ`. They fall in
+four groups, all from how the gate already handles a secret store:
+
+- **A file tool's own class.** A file tool on a secret store takes the `credentials` class in place of its own.
+  A deny on `read` or `local_write` then becomes the credentials ask: `read_file /proc/self/task/1/environ`
+  under `categories: {read: deny}` asks where it was denied. A `reserved: [read]` entry no longer matches the
+  call. The call still asks, and no grant covers it, since it is `credentials`. A shell line keeps its read as a
+  part (D-075), so `cat` there is still denied by a `read` deny.
+- **Matrix cells.** The matrix sees the dominant part only. A credentials line is costly and private, so a deny
+  cell for a read (`reversible`, `private`) no longer applies to `cat /proc/self/task/1/environ`. On a compound
+  line the credentials part takes over, so a deny cell another part hit no longer applies:
+  `cat /proc/self/task/1/environ; git push --force origin main` under an `irreversible`, `internal` deny cell
+  asks.
+- **Posting rules.** The posting rules read every post on the line (#396), so a post beside the read keeps its
+  violations, named after its part. Before #396 they checked the dominant part only, and such a post lost
+  them. The line asks either way.
+- **A second store's target.** A line's credentials target is the first store it names, and a `cat` part has no
+  target. So a `target:` entry for a second store on the line no longer matches:
+  `cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does.
+
+The differential does not count one more change, because the outcome stays an ask. Beside a store write, the
+line is `credentials`, not `store_write`. So a seat that `approvals.yaml` delegates `credentials` to may answer
+it, where a store write is the principal's alone:
+`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`. Main does the same for any secret on the
+line, `env; echo x > ~/.exo/policies/gates.yaml` included.
+
+Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
+and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. A path through `/proc/self`
+is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
+either form: `cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` stay reads.
+
+Tests: `tests/security/test_gate_proc_task_environ.py`.
 
 ### What the search tools read (#241)
 
