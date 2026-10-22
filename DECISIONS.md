@@ -815,8 +815,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Go's strings.ToLower maps U+0130 to `i`, where Python gives `i` and a combining dot, so for gh
   `https://g%C4%B0thub.com/pub/repo/pull/9` is on github.com. `_gh_url_host` now reads the host as Go 1.26 does:
   after the last `@`, the port after the first `:` (or after the `]` of an IPv6 address) as digits only, the host
-  decoded, and None where url.Parse refuses the URL (a second colon, a `[` past the start, an escape below %80
-  other than %25, a control character). `_gh_host` lowers it one character for one, U+0130 to `i`. It is the only
+  decoded, and None where url.Parse refuses the URL (a second colon, a `[` past the start, an escape below %80 other
+  than %25, a control character before its `#`). `_gh_host` lowers each character, U+0130 to `i`. It is the only
   character whose lower case differs between Go 1.26 and Python 3.13. `_gh_repo` reads a URL `-R` the same way, its
   query and fragment dropped. `_gh_elsewhere` took any URL with two path segments, in any operand, also an option's
   value in the reading where every option is a flag, so `gh variable set X -R myorg/app --body
@@ -852,6 +852,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `GH_COBRA`, each also behind ssh and `bash -c` and in compound lines) under 106 policies. The 3,822 of them that
   classify differently from round 7 went through the decide harness under 119 policies and the exo-gate hook harness
   in 13 setups, and none is lower on any axis.
+  2026-10-22, round 9 of the review: Go's url.Parse cuts the fragment off before it looks for a control character,
+  and keeps a fragment that has one (Go 1.26's `Parse` and `setFragment`). `_gh_url_parts` and `_gh_repo_parts`
+  refused a URL with a control character anywhere in it, so with `-R myorg/app` the line
+  `gh pr review $'https://api.github.com/pub/x/pull/9#\t' --approve` was a post on myorg/app that an allow rule there
+  let through, while gh approves pub/x#9. They now look for one only before the first `#`. Round 8 said gh reads gh
+  repo's first word with `ghrepo.FromFullName`. gh repo fork reads an `http:/`, `https:/` or `git@` value, and gh
+  repo clone any value with a `:`, with cli's `git.ParseURL` and `ghrepo.FromURL` instead, which drops a leading
+  `www.` once (fork.go and clone.go in gh 2.89). So `gh repo fork https://www.www.garage.github.com/pub/x` forks
+  pub/x on github.com, and round 8 read it as garage.github.com, where a deny on pub/* did not fire. `_gh_from_url`
+  tells the two apart, and `_gh_repo_parts` then reads the value as gh does: one strip, any value with a `:` and no
+  URL scheme as an scp-like ssh remote, and for clone the path's first two parts. Last, an option word before gh's
+  command with its `=` before any expansion (`gh --repo="$R" secret set X`) stands alone in cobra's `stripFlags`,
+  whatever bash puts after the `=`. `_gh_command_at` took it for the command, so the line was `opaque_exec`, and a
+  deny on credentials did not fire. It now passes over such a word unless bash may split it. When bash may, the line
+  read with the word whole stands when it gives no grant, as for `gh -R $R secret set X`. A differential against main
+  2ef1a81f found no line lower. gate_diff read 32,778 targeted lines (control characters around a URL's fragment,
+  each fork and clone value form, option words with a `=` before the command, each also behind ssh and `bash -c`),
+  round 7's 14,426 lines and round 8's 34,440 lines under 106 policies, and its built-in corpus of 31,505 actions
+  under its 76 policies. The 12,041 of those lines that classify differently from round 8 went through the decide
+  harness under 119 policies and the exo-gate hook harness in 13 setups, and none is lower on a decision axis or in
+  the hook. On 954 the line as read drops the `indirection` signal and the line as read before keeps it, so the
+  decision and the hook stand.
   Limits: `docs/GATE.md` "Where a gh command lands".
 
 - **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.

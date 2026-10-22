@@ -126,10 +126,15 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   (below). gh sends a repo on any host that ends in `.github.com` to github.com, so
   `-R api.github.com/pub/repo` names `pub/repo` too. On another instance (`-R ghe.corp/myorg/app`)
   the gate cannot tell whether a scope means that repo, so the value as written is another target.
-  gh reads `-R` and `gh repo`'s first word with ghrepo.FromFullName, which drops a leading `www.`
-  from a URL's host, lowers it, and then does both again. So
+  gh reads `-R` and most of `gh repo`'s first words with ghrepo.FromFullName, which drops a leading
+  `www.` from a URL's host, lowers it, and then does both again. So
   `-R https://WWW.garage.github.com/pub/x` and `gh repo delete https://WWW.garage.github.com/pub/x`
-  are on garage.github.com, another instance, and the gate reads them so.
+  are on garage.github.com, another instance, and the gate reads them so. `gh repo fork` reads an
+  `http:/`, `https:/` or `git@` value, and `gh repo clone` any value with a `:`, with
+  ghrepo.FromURL, which does it once (gh 2.89). So
+  `gh repo fork https://www.www.garage.github.com/pub/x` is on www.garage.github.com, which gh
+  sends to github.com, and names `pub/x`. `gh repo clone` reads such a value as a git remote:
+  `api.github.com:pub/x` is an ssh remote for `pub/x`, and the path keeps its first two parts.
 - A URL operand names the repo, also beside `-R`, because gh posts there.
   `gh pr comment https://github.com/myorg/app/pull/9 -R pub/repo` lands on `myorg/app#9`. The URL
   reads close to how gh reads it: the scheme and the host in any case, without a user, a port or a
@@ -146,10 +151,12 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   stays another target. gh gist takes a gist's URL or id, never a repo, so a URL there names no
   repo (`gh gist view https://gist.github.com/pub/abc`). For `gh repo` a repo URL drops its `.git`,
   as `-R` does. A URL that url.Parse refuses names no repo here: a port that is not digits, a
-  second colon (`github.com:80:80`), or an escape below `%80` other than `%25` in the host
-  (`g%69thub.com`). A URL on another instance (`ghe.corp`, `x.ghe.com`, `github.com.`, a look-alike
-  such as `github.com.evil.io`) names that instance's repo, which a scope may not mean. So
-  `https://ghe.corp/pub/repo/pull/5` is the other target `ghe.corp/pub/repo#5`, as a `-R` on
+  second colon (`github.com:80:80`), an escape below `%80` other than `%25` in the host
+  (`g%69thub.com`), or a control character before the first `#`. url.Parse cuts the fragment off
+  first and keeps one with a control character, so `$'https://api.github.com/pub/repo/pull/5#\t'`
+  names `pub/repo#5`. A URL on another instance (`ghe.corp`, `x.ghe.com`, `github.com.`, a
+  look-alike such as `github.com.evil.io`) names that instance's repo, which a scope may not mean.
+  So `https://ghe.corp/pub/repo/pull/5` is the other target `ghe.corp/pub/repo#5`, as a `-R` on
   another instance is. That holds where gh reads a repo from an operand: a pull request URL in
   `gh pr`, an issue or pull request URL in `gh issue`, a discussion URL in `gh discussion`, and the
   first word of `gh repo` and of `gh label clone`, its source (`ghe.corp/pub/repo`). Another URL on
@@ -170,9 +177,11 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   characters takes the next word as its value, `--help` and any other option word stand alone, an
   empty word is passed over (`gh pr "" comment`, also `gh "" pr comment`), and `--` ends the
   search. gh finds the command the same way past the options before it, where `--help` and
-  `--version` stand alone. `-R` is then an option of each group that calls gh's
-  `EnableRepoOverride`: pr, issue, release, secret, variable and others. gh repo does not call it,
-  only some of its subgroups. So `gh -R pub/repo pr comment 5`, `gh --repo pub/repo pr comment 5`
+  `--version` stand alone. So does an option word with its `=` before any expansion
+  (`--repo="$R"`), whatever bash puts after the `=`, unless bash may split it. `-R` is then an
+  option of each group that calls gh's `EnableRepoOverride`: pr, issue, release, secret, variable
+  and others. gh repo does not call it, only some of its subgroups. So
+  `gh -R pub/repo pr comment 5`, `gh --repo pub/repo pr comment 5`
   and `gh -b x pr comment 5 -R pub/repo` are comments on `pub/repo#5` too, and the gate reads them
   so. An alias reads as the subcommand it names, from the aliases in gh 2.89's help: `new` is
   `create` (pr, issue, repo, release, gist), `remove` is `delete` (variable, secret), `ls` is
@@ -189,8 +198,10 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   outside quotes too. bash may read a `${ }` past its first `}` when a quote, a backslash or a `$(`
   comes before it, so the gate cannot tell what is quoted after it, and such a value counts as one
   that may split. `gh auth` and `gh secret` stay credentials, also past an empty word or an option
-  (`gh "" secret "$V"`, `gh -R pub/repo secret "$V"`), and past an option's value bash may split
-  (`gh -R $R secret set X`). The line as the gate read it before, with each gh command's words
+  (`gh "" secret "$V"`, `gh -R pub/repo secret "$V"`), and past an option's value or an option
+  word with its `=` that bash may split (`gh -R $R secret set X`, `gh --repo=$R secret set X`).
+  With an empty value `-R$R` is a bare `-R` that takes the next word, so `gh -R$R secret set X`
+  stays `opaque_exec`. The line as the gate read it before, with each gh command's words
   where they are written, is decided too, and the stricter decision stands on each axis. Without
   that a compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5`
   the edit now outranks the push, and `private: [myorg/*]` lowers it. Such a line binds its

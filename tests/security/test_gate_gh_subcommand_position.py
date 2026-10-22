@@ -380,16 +380,37 @@ def test_an_unquoted_here_doc_substitution_in_the_subcommand_s_place():
 # Round 7: an option's value before the command that bash may split puts gh's command word in doubt, but with
 # R=pub/repo `gh -R $R secret set X` sets a secret on pub/repo (gh secret takes -R, cmdutil.EnableRepoOverride in
 # gh 2.89). The line read with the value as one word stands when it holds credentials, as for the quoted forms, so
-# `opaque_exec: allow` does not run it and a deny on credentials fires.
+# `opaque_exec: allow` does not run it and a deny on credentials fires. Round 9: an option word with its `=` before
+# any expansion (`--repo="$R"`, `--repo=$R`) stands alone in cobra's stripFlags, whatever bash puts after the `=`, so
+# gh's command is the next word. The gate took the word for gh's command, and the line was opaque_exec.
 @pytest.mark.parametrize("line", ['gh -R pub/repo secret "$V"', "gh -R pub/repo secret set X",
                                   "gh -R $R secret set X", "gh -R $R secret set X -b v", 'gh -R $R secret "$V"',
-                                  "gh -R $R auth token", 'gh -R "$R" secret set X -b v', "gh secret -R $R set X -b v"])
+                                  "gh -R $R auth token", 'gh -R "$R" secret set X -b v', "gh secret -R $R set X -b v",
+                                  'gh --repo="$R" secret set X', "gh --repo=$R secret set X",
+                                  "gh --repo=$R auth token", 'gh --repo="$R" secret set X -b y',
+                                  "gh -R=$R secret set X", 'gh "--repo=$R" secret set X', "gh --re\"po\"=$R auth token"])
 def test_credentials_past_an_option_before_the_command(line):
     c, _ = run(line)
     assert c.category == "credentials", (line, c)
     allow = normalize_policies({"gates": {"categories": {"opaque_exec": "allow"}}})
     assert decide(c, allow).outcome == "ask", line
     assert decide(c, normalize_policies({"gates": {"deny": ["credentials"]}})).outcome == "deny", line
+
+
+# Round 9: with an empty value an attached short one (`-R$R`) is a bare `-R`, which takes the next word, and an
+# expansion before the `=` (`--$X=1`) may leave no `=`. gh's command stays in doubt there, and where bash may split
+# the word (`--repo=$R` with R='x secret set X'). So does a command that holds no credentials.
+@pytest.mark.parametrize("line", ["gh -R$R secret set X", 'gh -R"$R" secret set X', "gh --$X=1 secret set X",
+                                  "gh --repo=$R pr comment 5 -b x", 'gh --repo="$R" pr comment 5 -b x',
+                                  "gh --repo=$R status"])
+def test_an_option_word_bash_may_change_keeps_the_command_in_doubt(line):
+    c, _ = run(line)
+    assert c.category == "opaque_exec", (line, c)
+
+
+def test_a_quoted_option_word_with_its_equals_sign_stands_alone():
+    c, _ = run('gh --repo="$R" status')
+    assert c.category == "read", c
 
 
 def test_a_split_value_before_a_command_that_holds_no_credentials_stays_opaque():

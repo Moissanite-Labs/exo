@@ -502,10 +502,13 @@ def test_a_url_operand_keeps_the_reading_before():
 
 
 # Go 1.26's url.Parse refuses a port that is not ASCII digits, a second colon, and an escape below %80 other than
-# %25 in the host (round 7).
+# %25 in the host (round 7). It refuses a control character before the first `#`, in a query too (round 9).
 @pytest.mark.parametrize("url", ["https://github.com:x/pub/repo/pull/5", "ftp://github.com/pub/repo/pull/5",
                                  "https://github.com:80:80/pub/repo/pull/5", "https://g%69thub.com/pub/repo/pull/5",
-                                 "https://github.com:\u0665/pub/repo/pull/5"])
+                                 "https://github.com:\u0665/pub/repo/pull/5",
+                                 "$'https://api.github.com/pub/repo/pull/5?\\t'",
+                                 "$'https://api.github.com/pub/repo/pull/5?a\\x7f#b'",
+                                 "$'https://api.github.com/pub/repo/pull/5\\t#a'"])
 def test_a_url_gh_refuses_names_no_repo(url):
     c, _ = run(f"gh pr merge {url} -R myorg/app")
     assert (c.target, c.alt_targets) == ("myorg/app", []), c
@@ -528,6 +531,14 @@ REVIEW = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "po
     "gh pr comment https://github.com:99999/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'",
     "gh pr comment https://api.github.com:65536/pub/repo/pull/9 -R myorg/app -b $'Note\\nF'",
     "gh issue comment https://github.com:99999/pub/repo/issues/9 -R myorg/app -b $'Note\\nF'",
+    # Round 9: url.Parse cuts the fragment off before it looks for a control character, and keeps a fragment with
+    # one. So gh reads these URLs, and the gate read none of them.
+    "gh pr comment $'https://api.github.com/pub/repo/pull/9#\\t' -R myorg/app -b $'Note\\nF'",
+    "gh pr comment $'https://api.github.com/pub/repo/pull/9#a\\nb' -R myorg/app -b $'Note\\nF'",
+    "gh pr comment $'https://api.github.com/pub/repo/pull/9#\\x7f' -R myorg/app -b $'Note\\nF'",
+    "gh pr comment $'https://github.com:99999/pub/repo/pull/9#\\t' -R myorg/app -b $'Note\\nF'",
+    "gh pr comment $'https://github.com:99999/pub/repo/pull/9#a\\nb' -R myorg/app -b $'Note\\nF'",
+    "gh issue comment $'https://github.com:99999/pub/repo/issues/9#\\x7f' -R myorg/app -b $'Note\\nF'",
 ])
 def test_a_url_on_a_github_com_host_names_the_repo(line):
     c, d = run(line, REVIEW)
@@ -535,11 +546,18 @@ def test_a_url_on_a_github_com_host_names_the_repo(line):
     assert (d.outcome, d.exposure, d.third_party) == ("ask", "public", True), (line, d)
 
 
-@pytest.mark.parametrize("host", ["api.github.com", "github.com:99999"])
-def test_an_allow_rule_on_the_r_repo_does_not_cover_the_url_s_repo(host):
+@pytest.mark.parametrize("url", ["https://api.github.com/pub/x/pull/9", "https://github.com:99999/pub/x/pull/9",
+                                 # Round 9: a control character in the fragment
+                                 "$'https://api.github.com/pub/x/pull/9#\\t'",
+                                 "$'https://api.github.com/pub/x/pull/9#a\\nb'",
+                                 "$'https://api.github.com/pub/x/pull/9#\\x7f'",
+                                 "$'https://github.com:99999/pub/x/pull/9#\\t'",
+                                 "$'https://github.com:99999/pub/x/pull/9#a\\nb'",
+                                 "$'https://github.com:99999/pub/x/pull/9#\\x7f'"])
+def test_an_allow_rule_on_the_r_repo_does_not_cover_the_url_s_repo(url):
     pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}, "rules": [
         {"match": {"category": "github_post", "target": "myorg/*"}, "decision": "allow"}]}, "posting": {"footer": "F"}})
-    c, d = run(f"gh pr review https://{host}/pub/x/pull/9 -R myorg/app --approve -b $'hi\\nF'", pol)
+    c, d = run(f"gh pr review {url} -R myorg/app --approve -b $'hi\\nF'", pol)
     assert c.target == "pub/x#9", c
     assert d.outcome == "ask", d
 
@@ -554,7 +572,17 @@ def test_an_allow_rule_on_the_r_repo_does_not_cover_the_url_s_repo(host):
                                   "gh pr review https://github.com:99999/pub/x/pull/9 -R myorg/app --approve",
                                   "gh repo archive https://g%C4%B0thub.com/pub/x --yes",
                                   "gh repo archive g\u0130thub.com/pub/x --yes",
-                                  "gh pr comment 5 -R https://g%C4%B0thub.com/pub/x -b x"])
+                                  "gh pr comment 5 -R https://g%C4%B0thub.com/pub/x -b x",
+                                  # Round 9: a control character in the fragment
+                                  "gh repo archive $'https://api.github.com/pub/x#\\t' --yes",
+                                  "gh repo delete $'https://api.github.com/pub/x#a\\nb' --yes",
+                                  "gh repo archive $'https://github.com:99999/pub/x#\\x7f' --yes",
+                                  "gh pr comment 5 -R $'https://api.github.com/pub/x#\\t' -b x",
+                                  "gh pr comment 5 -R $'https://github.com:99999/pub/x#a\\nb' -b x",
+                                  f"gh pr comment 5 -R $'git{GIT_AT[3:4]}api.github.com:pub/x#\\x7f' -b x",
+                                  "gh issue close $'https://api.github.com/pub/x/issues/9#\\x01' -R myorg/app",
+                                  "gh pr review $'https://github.com:99999/pub/x/pull/9#\\t' -R myorg/app --approve",
+                                  "gh pr review $'https://api.github.com/pub/x/pull/9#\\x7f' -R myorg/app --approve"])
 def test_a_repo_on_a_github_com_host_meets_a_deny(line):
     c, d = run(line, normalize_policies({"gates": {"deny": ["target:pub/*"]}}))
     assert c.target.startswith("pub/x"), c
@@ -623,6 +651,42 @@ def test_a_repo_word_drops_www_twice_as_gh_does(word):
     assert (d.outcome, d.exposure) == ("ask", "public"), d
     c, _ = run(f"gh pr comment 5 -R {word} -b x", DENY_PUB)
     assert c.target == "pub/x#5" and f"{word}#5" in c.alt_targets, c
+
+
+# Round 9: gh repo fork reads an `http:/`, `https:/` or `git@` value, and gh repo clone any value with a `:`, with
+# ghrepo.FromURL, which drops a leading `www.` once (fork.go and clone.go in gh 2.89). So these hosts are
+# www.garage.github.com there, which gh sends to github.com, and gh forks or clones github.com's pub/x. Round 8 read
+# them as garage.github.com, and a deny on pub/* no longer fired. gh repo clone keeps a path's first two parts.
+@pytest.mark.parametrize("line", ["gh repo fork https://www.www.garage.github.com/pub/x",
+                                  "gh repo fork https://WWW.garage.github.com/pub/x",
+                                  f"gh repo fork git{GIT_AT[3:4]}www.www.garage.github.com:pub/x",
+                                  f"gh repo fork git{GIT_AT[3:4]}WWW.garage.github.com:pub/x.git",
+                                  "gh repo clone https://www.www.garage.github.com/pub/x",
+                                  "gh repo clone https://WWW.garage.github.com/pub/x.git",
+                                  f"gh repo clone git{GIT_AT[3:4]}www.www.garage.github.com:pub/x",
+                                  f"gh repo clone ssh://git{GIT_AT[3:4]}WWW.garage.github.com/pub/x.git",
+                                  "gh repo clone git+ssh://www.www.garage.github.com/pub/x",
+                                  "gh repo clone ftp://WWW.garage.github.com/pub/x",
+                                  "gh repo clone www.www.garage.github.com:pub/x",
+                                  f"gh repo clone git{GIT_AT[3:4]}api.github.com:pub/x/tree/main",
+                                  "gh repo clone api.github.com:pub/x"])
+def test_fork_and_clone_drop_a_url_s_www_once(line):
+    c, d = run(line, DENY_PUB)
+    assert c.target == "pub/x", (line, c)
+    assert d.outcome == "deny", (line, d)
+
+
+# A value gh repo fork reads with ghrepo.FromFullName (another scheme) drops it twice, and garage.github.com itself
+# stays another instance for both, so the deny on pub/* does not fire.
+@pytest.mark.parametrize("line", ["gh repo fork https://garage.github.com/pub/x",
+                                  "gh repo fork ssh://www.www.garage.github.com/pub/x",
+                                  "gh repo fork git+https://WWW.garage.github.com/pub/x",
+                                  "gh repo clone https://garage.github.com/pub/x",
+                                  "gh repo clone garage.github.com:pub/x"])
+def test_fork_and_clone_keep_garage_github_com_another_instance(line):
+    c, d = run(line, DENY_PUB)
+    assert (c.target, c.alt_targets) == ("", ["garage.github.com/pub/x"]), (line, c)
+    assert d.outcome != "deny", (line, d)
 
 
 @pytest.mark.parametrize("line,target", [("gh repo delete https://www.www.github.com/pub/x --yes", "pub/x"),
