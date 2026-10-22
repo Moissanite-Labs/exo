@@ -42,7 +42,8 @@ in the summary (unread_tables). To that come the generated forms:
 - folder rows (cwd_rows): calls that read a secret store only as resolved from the session folder or from the call's
   own cwd (#209), each of which main decides otherwise without the folder;
 - posts (post_texts) that trip each rule of the default scrub and each forbid and scrub entry of the policies run,
-  as gh comments and titles and under the text and title keys of the outbound tools;
+  as gh comments and titles, under each text and title key of the first outbound tool and the first text key
+  of the others;
 - calls of the other tools (tool_actions): each TOOLS key, each name classify compares a tool with and a name for
   each NAME_HINTS word, store and secret paths under each path key, posts and targets under each text, title and
   target key, payment and account calls with amounts around the budget policies' limits, each value a tool's branch
@@ -970,8 +971,13 @@ def _lit(node: ast.AST, env: dict[str, Any]) -> Any:
     if isinstance(node, ast.Compare) and len(node.ops) == 1 and type(node.ops[0]) in _COMPARE:
         return _COMPARE[type(node.ops[0])](_lit(node.left, env), _lit(node.comparators[0], env))
     if isinstance(node, ast.BoolOp):
-        vals = (_lit(v, env) for v in node.values)
-        return all(vals) if isinstance(node.op, ast.And) else any(vals)
+        # As Python does: `and` gives the first falsy operand, `or` the first truthy one, else the last.
+        val = None
+        for v in node.values:
+            val = _lit(v, env)
+            if bool(val) is not isinstance(node.op, ast.And):
+                return val
+        return val
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         return not _lit(node.operand, env)
     if isinstance(node, ast.Call) and not any(isinstance(a, ast.Starred) for a in node.args):
@@ -1397,7 +1403,7 @@ def table_forms(t: dict) -> Iterator[tuple[str, Any, tuple]]:
       _SAFE_PY_MODULES module after `python -m` and `python3 -m`, and each pip subcommand after `python -m pip`.
     - option, the value options: each of a prefix, wrapper (attached, for one that ends in `=`), tmux command,
       interpreter (_INTERP_VALUE_FLAGS) and run wrapper (_WRAPPER_VALUE_OPTS), with a value before `rm -rf build`,
-      and the long ones as `--opt=x` too.
+      and the long ones of a prefix or wrapper as `--opt=x` too.
     - option, the other tables: each _EXEC_OPTS and _GIT_EXEC_OPTS option with `rm -rf build` as its value, each
       _EXEC_FILE_OPTS option with a script, each _OPAQUE_PROGRAMS program, `touch` behind each _PRIVILEGED_WRAPPERS
       wrapper, a write to the store and to a file by each _WRITE_REDIRS operator, a POST to each _LOCAL_HOSTS host,
@@ -1588,19 +1594,26 @@ def hint_names(t: dict) -> list[str]:
 
 def _catalog_posts(tree: Path, model_patterns: Iterable[Any]) -> list[str]:
     """Two posts from a tree's model catalog (src/exo/core/models/catalog.toml), whose names the scrub holds back:
-    a catalog model name no DEFAULT_SCRUB model pattern matches, and `<provider>:x` for its first provider."""
+    a catalog model name no DEFAULT_SCRUB model pattern matches, and `<provider>:x` for its first provider. The
+    catalog is read as the gate's _catalog_models reads it, so a part of another shape gives what it gives there."""
     try:
         import tomllib
         data = tomllib.loads((tree / "src" / "exo" / "core" / "models" / "catalog.toml").read_text("utf-8"))
     except (ImportError, OSError, ValueError):
         return []
-    refs = [str(r) for r in (data.get("models") or {})]
-    refs += [str(r) for routes in (data.get("roles") or {}).values() if isinstance(routes, list) for r in routes]
-    names = sorted({m.rpartition("/")[2] for r in refs if (m := r.partition(":")[2])})
+    providers: list[str] = []
+    names: set[str] = set()
+    try:
+        providers = sorted(str(p) for p in (data.get("providers") or {}))
+        refs = [str(r) for r in (data.get("models") or {})]
+        for routes in (data.get("roles") or {}).values():
+            refs += [str(r) for r in (routes if isinstance(routes, list) else [])]
+        names = {m.rpartition("/")[2] for r in refs if (m := r.partition(":")[2])}
+    except Exception:  # the gate reads the rest of such a catalog as empty
+        pass
     pats = [p for p in model_patterns if isinstance(p, str)]
-    plain = [n for n in names if not any(re.search(p, n, re.I) for p in pats)]
+    plain = [n for n in sorted(names) if not any(re.search(p, n, re.I) for p in pats)]
     out = [f"built with {plain[0]}"] if plain else []
-    providers = sorted(str(p) for p in (data.get("providers") or {}))
     return out + ([f"routed to {providers[0]}:x"] if providers else [])
 
 

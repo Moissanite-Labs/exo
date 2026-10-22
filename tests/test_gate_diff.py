@@ -1080,6 +1080,30 @@ def test_odd_table_values_never_stop_the_forms(tmp_path):
     assert {"tool": "odd_tool", "args": {}} in actions
 
 
+def test_and_or_in_a_table_read_as_python_reads_them(tmp_path):
+    # `A or B` is the first truthy operand and `A and B` the first falsy one, as in Python, so the table keeps its
+    # entries instead of turning into a bool.
+    gate = tmp_path / "src" / "exo" / "gate.py"
+    gate.parent.mkdir(parents=True)
+    gate.write_text('_SHELLS = {"bash", "sh"} or set()\nREAD_PROGRAMS = () or ("cat", "ls")\n'
+                    'SHELL_PROGRAMS = ("make",) and ("echo", "true")\nPROGRAMS = {} and {"rm": 1}\n', encoding="utf-8")
+    t = gate_diff.gate_tables(tmp_path)
+    assert t["_SHELLS"] == {"bash", "sh"} and t["READ_PROGRAMS"] == ("cat", "ls")
+    assert t["SHELL_PROGRAMS"] == ("echo", "true") and t["PROGRAMS"] == {}
+
+
+def test_a_catalog_of_another_shape_is_read_as_the_gate_reads_it(tmp_path):
+    # A roles part that is not a table stops the gate's read of the models but keeps the providers it read first.
+    # Lists of models and providers are read as the gate reads them. None of these ends the run.
+    catalog = tmp_path / "src" / "exo" / "core" / "models" / "catalog.toml"
+    catalog.parent.mkdir(parents=True)
+    for text, posts in (('roles = ["a"]\n', []),
+                        ('providers = ["p"]\nmodels = ["q:m1"]\n[[roles]]\nmain = "x:y"\n', ["routed to p:x"]),
+                        ('models = ["a:b"]\nproviders = ["p"]\n', ["built with b", "routed to p:x"])):
+        catalog.write_text(text, encoding="utf-8")
+        assert gate_diff._catalog_posts(tmp_path, ()) == posts
+
+
 # A child that loads main's gate, classifies each action once and decides it under every built-in policy with each
 # step of gate._decide taken out in turn: each bump() call, the part deny and the deny entries. It writes, for each
 # step, its first line and how many pairs it lowered.
