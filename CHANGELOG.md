@@ -6,9 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
-- Interactive turns no longer stop after 24 tool rounds (#360). `Loop` defaults to `max_iterations=0` (unlimited);
-  unattended scheduled runs explicitly keep a 24-round cap and release the job for its next launch. Explicit
-  positive limits retain their cap and progress report, and delegated children retain `max_turns` (24 by default).
+- Principal-started interactive turns no longer stop after 24 tool rounds (#363, #360), including channel turns.
+  `Loop` defaults to `max_iterations=0` (unlimited). Unattended scheduled runs keep a 24-round cap and release the
+  job for its next launch. Turns started by a job notice, peer or bus message also stop after 24 tool rounds
+  plus a wrap-up, including background-job notices on scheduled threads and bus wakes with a client attached.
+  Explicit positive limits retain their cap and progress report, and children retain `max_turns` (24 by default).
   User stops, approvals, spend limits, bounded retries and child token/time limits still apply.
 - The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
   the footer, the forbidden words and the scrub on the combined classification's text. A compound

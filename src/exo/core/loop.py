@@ -171,7 +171,8 @@ class Loop:
         return gone
 
     async def send(self, session: str, text: str = "", parts: list[ContentPart] | None = None,
-                   mode: str = "send", meta: dict[str, Any] | None = None) -> TurnResult | None:
+                   mode: str = "send", meta: dict[str, Any] | None = None,
+                   max_iterations: int | None = None) -> TurnResult | None:
         """Run a turn. ``steer`` while a turn still takes steers injects the message between tool rounds and returns None
         (the newest of ``state(session).steer``); otherwise, as ``queue`` and ``send`` do, it waits for the running turn."""
         if self.store.get_session(session) is None:
@@ -195,7 +196,7 @@ class Loop:
             st.running = st.accepting_steers = True
             st.interrupt.clear()
             try:
-                return await self._turn(session, msg, st)
+                return await self._turn(session, msg, st, self.max_iterations if max_iterations is None else max_iterations)
             finally:
                 st.running = st.accepting_steers = False
                 st.interrupt.clear()
@@ -215,7 +216,7 @@ class Loop:
         await self._emit(ev.MessageCompleted(message=msg), session)
         return msg
 
-    async def _turn(self, session: str, user: Message, st: _SessionState) -> TurnResult:
+    async def _turn(self, session: str, user: Message, st: _SessionState, max_iterations: int) -> TurnResult:
         turn_id, t0 = new_id("t"), time.monotonic()
         st.stats = {"model_ms": 0, "tool_ms": 0, "model_calls": 0, "fallbacks": 0, "tool_errors": 0}
         waited = self.approval_ms.get(session, 0)
@@ -235,13 +236,13 @@ class Loop:
             await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
         result = TurnResult(turn_id=turn_id, stop_reason="end")
         try:
-            await self._rounds(session, turn_id, user, st, result)
+            await self._rounds(session, turn_id, user, st, result, max_iterations)
             while st.steer and result.stop_reason == "end":  # arrived between the last call and the turn's end
                 late = list(st.steer)
                 st.steer.clear()
                 for m in late:
                     await self._add(session, m, turn_id)
-                await self._rounds(session, turn_id, late[-1], st, result)
+                await self._rounds(session, turn_id, late[-1], st, result, max_iterations)
         except _Interrupted:
             result.stop_reason = "interrupted"
         except Exception as exc:  # unexpected bug in a collaborator: end the turn cleanly
@@ -309,10 +310,10 @@ class Loop:
         return "\n\n".join(p for p in parts if p), recall
 
     async def _rounds(self, session: str, turn_id: str, user: Message, st: _SessionState,
-                      result: TurnResult) -> None:
+                      result: TurnResult, max_iterations: int) -> None:
         system, recall = await self._system(session, user.text())
         extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
-        for _ in count() if self.max_iterations == 0 else range(self.max_iterations):
+        for _ in count() if max_iterations == 0 else range(max_iterations):
             if hasattr(self.context, "note"):
                 await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)
@@ -341,7 +342,7 @@ class Loop:
             await self._tools(session, turn_id, reply.tool_calls, st)
             await self._drain_steer(session, turn_id, st)
         result.stop_reason = "max_iterations"
-        await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
+        await self._emit(ev.Notice(text=f"stopped after {max_iterations} tool rounds",
                                    level="warn"), session)
         if self.wrap_up:
             await self._wrap_up(session, turn_id, system, extra, st, result)

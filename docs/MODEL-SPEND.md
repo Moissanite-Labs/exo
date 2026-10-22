@@ -273,8 +273,9 @@ and tier floors (`admit_native`), reserves before dispatch and settles before ex
 completed model result. `spend_refused` attempt outcomes become the protocol error
 code `model_spend_refused`. Retained uncertainty or an existing journal stop uses
 `spend_stopped` and `model_spend_stopped`. Both are nonretryable for that request.
-Interactive turns have no default tool-round cap. Unattended scheduled turns explicitly stop after 24 tool
-rounds; delegated children retain their `max_turns` limit (24 by default). A turn that reaches a positive
+Principal-started turns, including channel turns, have no default tool-round cap. Unattended scheduled turns
+and turns started by job notices, peer or bus messages stop after 24 tool rounds, including job wakes on
+scheduled threads. Delegated children retain their `max_turns` limit (24 by default). A turn that reaches a positive
 tool-round cap makes one more admitted call, its wrap-up, so it reserves and settles one more journal entry;
 a refusal there is reported with the same codes.
 

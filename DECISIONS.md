@@ -169,17 +169,24 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   envelope, so the bound is checked before the stream opens. A malformed request line still closes the
   connection with no reply.
 
-- *Amendment 2026-10-20 (#360, continuous interactive turns):* the core loop defaults to `max_iterations=0`, with no
-  tool-round cap, so an interactive task can continue beyond 24 rounds until it finishes or a user stop, error or
-  spend boundary ends it. Unattended scheduled runs explicitly pass `JOB_MAX_ROUNDS=24`, so a repeating run
+- *Amendment 2026-10-20 (#360, continuous interactive turns):* the core loop defaults to `max_iterations=0`, with
+  no tool-round cap, so an interactive task can continue beyond 24 rounds until it finishes or a user stop, error
+  or spend boundary ends it. Unattended scheduled runs explicitly pass `JOB_MAX_ROUNDS=24`, so a repeating run
   stops and releases the job for a later launch. Explicit positive limits retain the existing cap and wrap-up
-  report. Delegated children still pass `max_turns or 24`; approvals, interrupts, spend admission, bounded provider retries and child token/time
-  limits are unchanged. A larger fixed default was rejected because it would interrupt longer tasks at another
-  arbitrary count. Revisit if a separate principal-controlled interactive round policy is needed.
-  Terminal replies without tool calls retain the turn's initial `end` for a missing, empty or `tool_use` stop
-  reason, and copy other stop reasons. Only `end` continues for queued steers, preserving that default before
+  report. Delegated children still pass `max_turns or 24`. Approvals, interrupts, spend admission, bounded provider
+  retries and child token/time limits are unchanged. A larger fixed default was rejected because it would interrupt
+  longer tasks at another arbitrary count. Revisit if a separate principal-controlled interactive round policy is
+  needed. Terminal replies without tool calls retain the turn's initial `end` for a missing, empty or `tool_use`
+  stop reason, and copy other stop reasons. Only `end` continues for queued steers, preserving that default before
   each reply. This normalization removes a redundant assignment. User behavior is unchanged. Developers must
   preserve the default when extending the continuation path.
+- *Amendment 2026-10-22 (#363, unattended wakes):* `CoreEngine.start_turn` bounds job-notice, peer and bus wakes
+  at 24 tool rounds plus wrap-up, including a background job waking a scheduled thread and a bus wake with a
+  client attached. `Loop.send` accepts a per-turn limit, so the shared loop stays unchanged and concurrent
+  principal-started terminal and channel turns keep the unlimited default. A stricter explicit loop limit
+  remains in force. Steers retain the running turn's limit and terminal stop behavior. An author-based cap was
+  rejected because principal-started channel turns must remain unlimited. Spend admission remains opt-in.
+  Unattended turns need a finite bound even when nobody can stop them. Revisit if wakes gain a separate policy.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

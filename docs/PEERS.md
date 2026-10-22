@@ -11,6 +11,9 @@ the other changes course at its next step. In Exo this works between Exo session
 - `/send <peer> <text>` (you typing) or the `peer_send` tool (an agent) sends a message.
 - A running target takes it at its next tool round. An idle target queues it for its next turn, and wakes
   only if its seat allows (`wake`).
+- A turn started by a peer or bus wake gets at most 24 tool rounds plus a wrap-up report, including bus wakes
+  with a client attached. A message steered into an existing turn keeps that turn's limit. A principal-started
+  channel turn stays unlimited by default (`docs/CORE.md`, "Turn limits").
 - The receiver sees `peer message from <name>`, framed as a teammate, never as the user. The sender gets
   a receipt: delivered, held, released, denied or expired. The tool result says plainly when a message is
   held, so the model does not claim delivery or resend.

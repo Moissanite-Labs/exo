@@ -34,6 +34,10 @@ seats. `exo.gate` is the action gate (`docs/GATE.md`). `exo.ingest` imports past
 finishes, the user stops them, or an existing error or spend boundary stops them. A positive `max_iterations`
 still limits rounds and runs the existing tool-free wrap-up report (`docs/CORE-V2-INTERFACES.md`, "Round cap").
 Scheduled unattended runs explicitly pass `JOB_MAX_ROUNDS=24` and release the job when they stop.
+`CoreEngine.start_turn` caps job-notice, peer and bus wakes at 24 rounds plus wrap-up, including job wakes on
+scheduled threads and bus wakes with a client attached. It passes a per-turn `Loop.send(max_iterations=...)`
+limit, keeping a stricter explicit loop limit. The shared loop limit stays unchanged, so principal-started turns
+from the terminal or a channel remain unlimited by default, even while another session runs a capped wake.
 Delegated children explicitly use their `max_turns` limit, or 24 when unset or zero. Approvals, spend admission,
 interrupts, provider retry limits and child token/time limits keep their existing checks.
 For a reply without tool calls, a missing, empty or `tool_use` stop reason retains the turn's default `end`.

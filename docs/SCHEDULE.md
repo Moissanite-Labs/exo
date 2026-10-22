@@ -49,11 +49,14 @@ sleeps at most a minute, so a job that another seat's core adds or resumes start
   `harness.error` (`scheduler tick`) and the loop waits a few seconds and goes on. If the loop ever ends by
   itself, that is recorded too (`scheduler loop`) and a
   warning notice is shown.
-- Scheduled turns explicitly use `JOB_MAX_ROUNDS=24`, separate from the interactive loop's unlimited
-  default. At that cap the run fails with `stopped early (max_iterations)` and releases the job for a later run. The loop's wrap-up reply
-  (what was done, what is open, the next step; see `docs/CORE-V2-INTERFACES.md`) is appended to its status and
-  warning notice. When there is no complete wrap-up reply (it failed, had no text, or `wrap_up` is off), nothing
-  is appended; the last tool round's text is never shown as the report.
+- Scheduled turns explicitly use `JOB_MAX_ROUNDS=24`, separate from the interactive loop's unlimited default. At
+  that cap the run fails with `stopped early (max_iterations)` and releases the job for a later run. The loop's
+  wrap-up reply says what was done, what is open and the next step. It is appended to the status and warning notice
+  (see `docs/CORE-V2-INTERFACES.md`). When there is no complete wrap-up reply (it failed, had no text, or `wrap_up`
+  is off), nothing is appended. The last tool round's text is never shown as the report.
+- A background job may finish after the run ends and wake its thread. That follow-up is an engine turn, capped
+  at 24 tool rounds plus wrap-up as every job-notice wake is (`docs/JOBS.md`). It cannot inherit the interactive
+  loop's unlimited default. It does not change the completed scheduled run's status.
 - Runs missed while the engine was down happen once at start, not once per missed slot.
 
 ## Clock changes
