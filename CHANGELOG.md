@@ -557,6 +557,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   by `src`.
 
 ### Changed
+- `exo` imports a command's module only when that command runs (#260, D-035 amendment). Before, every call loaded
+  every command's module, with the ledger, signing, HTTP and model code behind them, and a module that failed to
+  import broke all of `exo`. Now `exo --help`, `exo --version` and bare `exo` load none of them, and a broken module
+  breaks only its own commands. Measured best of 5: `import exo.cli` 190 ms to 14 ms, `exo --version` 240 ms to
+  73 ms, `exo --help` 251 ms to 42 ms. Usage, errors and every `--help` are byte-identical. `exo update`'s
+  self-check still imports every command's module. Code that imported a name such as `cmd_ask` from `exo.cli`
+  still gets it.
 - Gate timing tests (#308): the linear-time checks in `tests/security` and `plugins/exo-gate/tests` measure process CPU time
   (`time.process_time`) instead of wall time, and the scaling checks retry up to three times before they fail, so a
   suite running beside other suites no longer trips them. A quadratic step still fails every attempt. Test-only.

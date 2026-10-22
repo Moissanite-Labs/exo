@@ -933,8 +933,8 @@ def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates
 
 
 # --- CLI hook -----------------------------------------------------------------------------------
-# Wire into exo.cli: in build_parser() call `eval.register(sp, common)`, and expose `cmd_eval`
-# in exo.cli's globals (e.g. `from .eval import cmd_eval`).
+# `exo.cli` lists `eval` in its LAZY table. It imports this module, calls `register(sp, common)` and runs
+# `cmd_eval` only when `exo eval` runs.
 
 def register(sp, common) -> None:
     p = sp.add_parser("eval", parents=[common], help="n=1 evaluation report")
