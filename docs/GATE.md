@@ -1352,9 +1352,11 @@ own stdin however it is spelled or prefixed (`"exec"`, `\exec`, `command exec`, 
 `eval`, `source`, `.`, a program name from a variable or a function defined on the line, which can
 run such an exec unseen. When the closer has its own `<`, nothing is fed (the gate keeps no order
 between a closer's redirections, so it does not guess which one bash applies last: `{ bash; } <<EOF
-< f`), and a closer heredoc or here-string wins over a pipe in. That holds for stdin (fd 0). Heredocs
-keep no fd number, so a closer heredoc on another fd (`{ bash; } 3<<EOF`), where bash leaves
-stdin alone, is read as stdin too: its body is fed (code inside can still run it, as `{ source
+< f`), and a closer heredoc or here-string wins over a pipe in. Since #316 the commands that such
+a `<`, or a pipe whose text the gate cannot read, would reach are marked as fed a stdin the gate
+cannot read, so an `ssh` among them asks (see the `ssh` paragraphs below). That holds for stdin
+(fd 0). Heredocs keep no fd number, so a closer heredoc on another fd (`{ bash; } 3<<EOF`), where
+bash leaves stdin alone, is read as stdin too: its body is fed (code inside can still run it, as `{ source
 /dev/fd/3; }` does), and text piped in reaches only the first command inside, as in any `echo ... |
 bash`. So `echo 'rm -rf build' | { bash; } 3<<EOF` is a `delete` whichever text bash runs, but in
 `echo 'rm -rf build' | { true; bash; } 3<<EOF` bash, which reads the pipe there, is read with the
@@ -1425,6 +1427,70 @@ forms of those three flags (`StdinNull`, `SessionType=none`, `ForkAfterAuthentic
 honored, so such a line reads its stdin anyway; text fed to a remote shell (`ssh host bash -s
 <<EOF`) is not read yet, and the line asks as `opaque_exec` as before; a stdin set earlier by
 `exec < file` (`exec < f; ssh host`) is not seen. `mosh` lines are unchanged.
+
+Since #316 the gate also sees a stdin that reaches `ssh` in four more ways. The gate does not have
+its text, so the line asks as `opaque_exec`, as `ssh host < script.sh` does. A known text is read.
+
+- A compound fed a stdin the gate cannot read: `{ ssh host; } < cmds.sh`, `(ssh host) < cmds.sh`,
+  `while read h; do ssh host; done < hosts.txt`, `cat cmds.sh | { cd /; ssh host; }`. The feed
+  reaches the commands that the compound paragraph above says, and the command a wrapper among
+  them runs (`{ uv run ssh host; } < cmds.sh`, `{ flock /tmp/l ssh host; } < cmds.sh`). A lone
+  `< /dev/null` feeds nothing.
+- An output process substitution. The commands in a `>( )` are fed what the command around it
+  writes: `echo 'rm -rf /data' > >(ssh host)`, `tee >(ssh host)`, `exec 3> >(ssh host)`. A command
+  in the body that sets its own stdin (`>(ssh host < /dev/null)`), or that a wrapper with a stdin
+  of its own runs (`>(uv run ssh host < /dev/null)`), is not fed, and `ssh -n` does not read it.
+  A `>( )` is still one of the line's substitutions for every other reading, such as a `cd` in it
+  (`echo >(cd ~/.config); cat gh/hosts.yml` is `credentials`, D-038) or a declare value bash reads
+  again (#188), where its body is fed too, also when the line runs the same text unfed elsewhere
+  (`echo $(ssh host); declare -a 'a=(>(ssh host))'`).
+- A `$( )`, backticks or `<( )` inherits the stdin of the command it sits in. On a line that is
+  fed such a stdin, or where a pipe or a compound feeds a command, an `ssh` in one is read as fed
+  a stdin the gate does not read: `cat cmds.sh | echo $(ssh host)`, `{ echo $(ssh host); } <
+  cmds.sh`. A command's own `<` is set up after its words are expanded, so `echo $(ssh host) < f`
+  keeps its reading.
+- A remote hop. An `ssh` with a remote command passes its stdin on to that command, unless `-n`,
+  `-N` or `-f` (before the host or after it) stops it. The remote command is then read as a line
+  fed that stdin. An `ssh` in it with no stdin of its own runs the stdin on the next host,
+  wherever it sits and behind a wrapper: `ssh a ssh b`, `ssh a 'cd /; ssh b'`, `ssh a sudo ssh b`,
+  and each hop of `ssh a ssh b ssh c`. A known text is read as for the direct form, so
+  `echo 'rm -rf /data' | ssh prod-db ssh inner` is `delete` and denies under `deny: [delete]`. An
+  inner `ssh` that reads another stdin (`ssh a 'cat x | ssh b'`, `ssh a 'ssh b < /dev/null'`) is no
+  hop for the outer one.
+
+As for the direct form, these lines take the category of what runs, and the new `opaque_exec`
+part, which runs on the remote host, can be the part that decides the line. The policy steps
+that looked at the part it displaced then look at it, so such a line can decide lower than
+before, as main decides the line where the same `ssh` reads its stdin directly (D-038 amendment
+for #316):
+
+- Under a policy that allows or logs `opaque_exec` (`categories: {opaque_exec: allow}` or a
+  rule), `{ sudo ssh host; } < cmds.sh` (sudo, logged as `shell`) and `{ ssh host; git push
+  origin main; } < cmds.sh` (a push the matrix logs) go from `log` to `allow`, as `sudo ssh host
+  < cmds.sh` and `ssh host < cmds.sh; git push origin main` already did.
+- `sudo` and the privileged wrappers (`nsenter`, `chroot`, `unshare`, `systemd-run`) make
+  `costly` only the part they get for their command, and that is now the new part. A rule that
+  denies `shell` or `read` parts that are `costly` no longer finds the plain `ssh` part, so `{ git
+  push origin main; sudo ssh host; } < cmds.sh` asks instead of being denied, as `git push origin
+  main; sudo ssh host < cmds.sh` does.
+- A `reserved` hit on the displaced part goes with it, and the line still asks.
+
+`deny` entries and category lines that deny a category still see every part: `deny:
+[vcs_push]` still denies the push line, and `categories: {shell: deny}` the sudo line. As for
+`{ bash; } < f` (#394), the part that runs the stdin has no own text when a compound or a `>( )`
+feeds it, so a rule that names the `ssh` does not lower such a line. In a hop the part takes the
+text that shows where the stdin comes from, as for a remote `bash`: the outer ssh's own text in
+`ssh jump 'ssh host' < cmds.sh`, the pipeline in `cat cmds.sh | ssh jump ssh host`. A word that
+may expand to no word or several among ssh's options and host leaves them uncountable, as for
+the direct form, so `while read h; do ssh -n "$h" uptime; done < hosts.txt` asks, while `ssh
+"$h" uptime < /dev/null` in that loop keeps its reading. Known limits: the mark names one line,
+so a nested shell in a fed line reads its own line unmarked (`>(bash -c 'ssh host')`, `flock -c`
+and `env -S` ask anyway, as they run shell commands). The gate does not know which command a
+substitution sits in, so on a fed line a `$( )` is read as fed even where the command it sits in
+reads a pipe: `ssh a 'cat x | echo $(ssh b)'` reads the outer stdin as run on `b`, which fails
+closed. A `<`, or a pipe whose text the gate cannot read, that a wrapper itself has does not
+reach the command it runs, as before #316: `uv run ssh host < cmds.sh` and `cat cmds.sh |
+nsenter -t 1 ssh host` keep their reading.
 
 `mosh` reads its options with Perl's Getopt::Long in its default mode, and the gate reads them the
 same way, against mosh's own option list: `--`, `-` or `+` before the name, any case, a unique
