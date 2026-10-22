@@ -1277,6 +1277,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the `task/<tid>/` form too. The #199 glob check reads `/proc/<pid>/<x>/<tid>/<glob>` as a thread's file when `<x>`
   could match `task` and the glob could match `environ`, so `cat /proc/1/*/*/environ` and
   `cat /proc/self/[t]ask/*/environ` ask. Other files under `task/` keep their class (`cat /proc/self/task/*/status`).
+  The search tools leave a thread's `environ` out of a walk, as they leave out the direct form (#241).
   *Lowered lines.* A thread's environment is decided as `/proc/<pid>/environ` already was, so some lines decide
   lower than before. A differential of main against the change ran 27,708 actions under 95 policies: the
   differential's own set, plus task-environ lines, compound lines and file-tool calls, and 19 more policies (a
@@ -1284,21 +1285,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   actions. Each one decides as main decides the same action with `/proc/self/environ`. Four groups, all from how
   the gate already handles any secret store: (1) A file tool on a store takes the `credentials` class in place of
   its own, so a deny on `read` or `local_write` (a category line, a `deny:` entry, a rule, a matrix cell) becomes
-  the credentials ask, and a `reserved: [read]` hit is reported as `credentials`, which no grant covers
-  (`read_file /proc/self/task/1/environ` under `categories: {read: deny}`). A shell line keeps the read as a part
-  (D-075), so a `read` deny still denies `cat`. (2) The matrix sees the dominant part only. A credentials line is
-  costly and private and takes the strongest reversibility of its parts, so a deny cell for a read, or for another
-  part of a compound line, no longer applies (`cat /proc/self/task/1/environ; git push --force origin main` under
-  an `irreversible`, `internal` deny cell asks). (3) The posting rules check the dominant part, so a post beside
-  the read loses its listed violations. The line still asks. (4) A line's credentials target is the first store it
-  names and a `cat` part has no target, so a `target:` entry for a second store on the line no longer matches
+  the credentials ask (`read_file /proc/self/task/1/environ` under `categories: {read: deny}`). A `reserved: [read]`
+  entry no longer matches the call. It still asks, and no grant covers it, since it is `credentials`. A shell line
+  keeps the read as a part (D-075), so a `read` deny still denies `cat`. (2) The matrix sees the dominant part only.
+  A credentials line is costly and private and takes the strongest reversibility of its parts, so a deny cell for a
+  read, or for another part of a compound line, no longer applies
+  (`cat /proc/self/task/1/environ; git push --force origin main` under an `irreversible`, `internal` deny cell
+  asks). (3) The posting rules check the dominant part, so a post beside the read loses its listed violations. The
+  line still asks. (4) A line's credentials target is the first store it names and a `cat` part has no target, so a
+  `target:` entry for a second store on the line no longer matches
   (`cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
-  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does). Rejected: keeping a file tool's own class as a part,
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does). The differential does not count a fifth change,
+  because the outcome stays an ask. (5) Beside a store write the line is `credentials`, not `store_write`. A seat
+  that `approvals.yaml` delegates `credentials` to may then answer what only the principal answered
+  (`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`). Main does the same for any secret on
+  the line (`env; echo x > ~/.exo/policies/gates.yaml`). Rejected: keeping a file tool's own class as a part,
   as D-075 does for shell lines. It would keep group 1 denied, but it changes every file-tool call on a store
   (`read_file ~/.ssh/id_rsa` under `categories: {read: deny}` asks on main), so it is a follow-up, as are matrix
-  cells, posting checks and `target:` entries on every part. Limits: a doubled slash or a `..` inside a store name
-  is matched as written, so `cat /proc/1/task/1//environ` and `read_file /proc/1/task/1//environ` stay reads, as
-  `cat ~/.kube//config` does on main.
+  cells, posting checks and `target:` entries on every part, and a store write that keeps the principal's answer
+  beside a secret. Limits: a doubled slash or a `..` inside a store name is matched as written, so
+  `cat /proc/1/task/1//environ` and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does
+  on main. A glob in the `/proc` name itself is not read, for either form (`cat /pro?/self/task/1/environ`,
+  `cat /pro?/self/environ`).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

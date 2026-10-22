@@ -10,12 +10,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `/proc/<pid>/task/<tid>/environ` holds the same environment as `/proc/<pid>/environ`, another
   process's included, but the gate read it as an ordinary file, literal path and glob alike.
   Both the sensitive-path list and the `/proc/<pid>/<glob>` check now cover the `task/<tid>/`
-  form, also with a glob in the `task` folder itself (`cat /proc/1/*/*/environ`). Other files
-  under `task/` keep their class. Such a path is decided as `/proc/<pid>/environ` already was,
-  so some lines decide lower than before. A file tool on it asks under a `read` or `local_write`
-  deny, a matrix deny cell for a read no longer applies, and on a compound line the credentials
-  part can hide another part's matrix deny, a post's violations or a second store's `target:`
-  entry. The D-038 amendment and `docs/GATE.md` "A thread's environment file" list them.
+  form, also with a glob in the `task` folder itself (`cat /proc/1/*/*/environ`). The search
+  tools leave it out of a walk. Other files under `task/` keep their class. Such a path is
+  decided as `/proc/<pid>/environ` already was, so some lines decide lower than before. A file
+  tool on it asks under a `read` or `local_write` deny, a matrix deny cell for a read no longer
+  applies, and on a compound line the credentials part can hide another part's matrix deny, a
+  post's violations or a second store's `target:` entry. Beside a store write the line is
+  `credentials`, so a seat delegated `credentials` may answer it, where only the principal
+  answered. The D-038 amendment and `docs/GATE.md` "A thread's environment file" list them.
 - Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
