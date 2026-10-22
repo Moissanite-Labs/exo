@@ -6,6 +6,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Decision titles in the docs map keep a stable pointer to their amendment history in `DECISIONS.md` (#278).
+  New amendments update coverage cells when needed, without appending another date to a shared title line.
 - Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
   verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
   Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.
