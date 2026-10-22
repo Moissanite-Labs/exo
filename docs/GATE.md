@@ -1074,6 +1074,20 @@ gate does not read:
   included, so `FOO+=1 printenv GITHUB_TOKEN` and `env FOO[0]=1` are dumps too (#230). A runner
   followed by ordinary work (`uv run pytest -q`) is unchanged. `uvx`, `pipx run` and `npx` stay
   `opaque_exec`.
+- `sudo` and `doas` add the `sudo` signal, and the command's own part counts as costly. A write
+  redirection on that command (`sudo echo hi > /tmp/f`, `doas echo hi >> /etc/hosts`) sets the
+  line's category, as it does without sudo (#454). Bash opens the file as the calling user before
+  sudo runs, so the write happens either way. When the command's own costly `read`, `shell` or
+  `code` part would lead the line, the write leads in its place, with that cost. The line is then a
+  costly `local_write`, and a `categories:` line, a rule or an escalation on `local_write` reaches
+  it. Before, the costly `read` outranked the write, and only a deny reached the write. The parts
+  stay as they were, so a deny keyed on the costly `read` or on the write still reaches it. A part
+  that outranks that `read` still leads, also one that would tie with a costly write, such as an
+  unknown program: `sudo echo hi > /tmp/f; foo` asks as `opaque_exec`. A store path stays
+  `store_write`, and `/dev/null` adds no write, as without sudo. A redirection on a compound
+  around a sudo command (`{ sudo echo hi; } > /tmp/f`) or on another command of the line
+  (`sudo echo hi | cat > /tmp/f`) is not on the sudo command. There the dominant part decides, as
+  on any line (D-075).
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and

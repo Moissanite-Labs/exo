@@ -214,6 +214,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#454, D-038 amendment): a write redirection on a `sudo` or `doas` command sets the line's category, as on
+  any other command. `sudo echo hi > /tmp/f` was a `read`: sudo made the command's own `read` costly, so it outranked
+  the write, and `categories: {local_write: ask}` allowed the line while `echo hi > /tmp/f` asked. Bash opens the
+  file as the calling user before sudo runs, so the write happens either way. Where that `read` would lead the line,
+  the write now leads in its place, with its cost. The line is a costly `local_write`, so an ask or log line, a rule
+  or an escalation on `local_write` reaches it. A part that outranks the `read`, such as an unknown program, still
+  leads, and a store path stays `store_write`. This also ends the #436 lowering of
+  `for x do sudo echo hi > /tmp/f; done`.
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
   line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
   secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,
