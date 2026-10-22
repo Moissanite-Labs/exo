@@ -198,6 +198,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#464, #448, D-075 amendment): a store write or secret that sets a line's category no longer hides the
+  line's other denies. A part's own matrix cell now counts in the #191 pass, so
+  `rm -rf ~/work; touch ~/.exo/state/x`, `git push --force origin main; echo x > ~/.exo/policies/a` and
+  `rm -rf ~/.exo/policies` are denied under a matrix deny on irreversible commands, where they asked. After `cd /dev` or `cd /proc/self/fd`, a
+  store write keeps the descriptor folder as a target, so `target:/dev*` still denies it. A relative key read
+  after `tar -C` into a store (`tar -C ~/.exo/policies -czf - ../keys/seat`) is a `credentials` part, so
+  `deny: [credentials]` denies it. A file tool on a store or secret path keeps its own category as a part, so
+  `deny: [delete]` denies `delete_file ~/.exo/state/x` and `deny: [read]` denies `read_file ~/.ssh/id_rsa`, as
+  for the shell forms. Each call keeps its category, card and approvers, and no decision is lower than before.
 - Gate (#436, D-038 amendment): `for NAME do LIST; done` and `select NAME do LIST; done`, with no `in` list and no
   `;` before `do`, are read as `for NAME; do LIST; done`. Bash and POSIX accept that form and run the loop over the
   positional parameters, but the gate read the body as words of the `for` command and classified nothing in it, so
@@ -215,8 +224,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grant covers it. `.exo/update` and `update/allowed_signers` count by name anywhere. `exo update --pin-trust` is
   `store_write` too and keeps its `opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it.
   Reads stay `read`, and a project folder called `update` is unchanged. A file tool's write to the pin is
-  `store_write` alone, so it now asks where a `local_write` deny denied it before, as a file tool's write to
-  `state/` already did. `config.json` is left to #125 (D-074).
+  `store_write`, and since #448 it keeps its `local_write` reading as a part, so a `local_write` deny still
+  denies it. `config.json` is left to #125 (D-074).
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under
