@@ -786,7 +786,13 @@ def test_a_run_under_nohup_ignores_sighup(tmp_path):
      {"tool": "exec_command", "args": {"command": "rm -rf build"}}, lambda a: a["tool"] == "exec_command"),
     (('args.get("command") or args.get("cmd") or ""', 'args.get("command") or ""'),
      {"tool": "bash", "args": {"cmd": "rm -rf build"}}, lambda a: "cmd" in a["args"]),
-], ids=["drop exec_command", "drop the cmd key"])
+    # #460: a name that ends in terminal is a shell tool until TOOLS lists it, and the gate reads "command" first.
+    (('"read_terminal", "read_window_below"', '"read_terminal", "view_terminal", "read_window_below"'),
+     {"tool": "view_terminal", "args": {"command": "rm -rf build"}}, lambda a: a["tool"] == "view_terminal"),
+    (('args.get("command") or args.get("cmd") or ""', 'args.get("cmd") or args.get("command") or ""'),
+     {"tool": "bash", "args": {"command": "rm -rf build", "cmd": "true"}},
+     lambda a: set(a["args"]) == {"command", "cmd"}),
+], ids=["drop exec_command", "drop the cmd key", "a terminal name in TOOLS", "cmd read first"])
 def test_a_head_that_drops_a_shell_tool_name_or_key_is_lowered(tmp_path, patch, example, only):
     # Built-in corpus only: the copied trees hold no tests, so it is the seeds, their variants and their forms.
     base = _tree(tmp_path, "base")
@@ -893,6 +899,50 @@ def test_a_violation_named_after_its_post_is_kept(tmp_path, base, head, lowered)
     _stream(tmp_path / "h.gz", [["github_post", "x", None, [_d("ask", violations=head[0])], [0], 0, head[1]]], ["p"])
     rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
     assert rep["counts"]["lowered_pairs"] == lowered and rep["counts"]["violations_reworded"] == 1 - lowered
+
+
+def test_a_text_main_lists_twice_counts_twice(tmp_path):
+    # Two posts of one name each list their violation (#460): a head that lists the text once lost one.
+    two, one = ["post: missing footer: F"] * 2, ["post: missing footer: F"]
+    for base, head, lowered in ((two, one, 1), (two, two, 0), (one, two, 0)):
+        _stream(tmp_path / "b.gz", [["delete", "x", None, [_d("ask", violations=base)], [0], 0, ["post"]]], ["p"])
+        _stream(tmp_path / "h.gz", [["delete", "x", None, [_d("ask", violations=head)], [0], 0, ["post"]]], ["p"])
+        rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
+        assert rep["counts"]["lowered_pairs"] == lowered, (base, head, rep["counts"])
+
+
+def test_a_reworded_pair_is_shown_and_counted_once(tmp_path):
+    base, head = ["on a#9: missing footer: F"], ["on b#5: missing footer: F"]
+    _stream(tmp_path / "b.gz", [["github_post", "x", None, [_d("ask", violations=base)], [0], 0, ["on a#9"]]], ["p"])
+    _stream(tmp_path / "h.gz", [["github_post", "x", None, [_d("ask", violations=head)], [0], 0, ["on b#5"]]], ["p"])
+    rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
+    c = rep["counts"]
+    assert c["violations_reworded"] == 1 and c["pairs_detail_changed"] == 0 and c["lowered_pairs"] == 0, c
+    assert rep["reworded"] == [{"action": {"tool": "terminal", "args": {"command": "x"}}, "policy": "p", "kinds": [],
+                                "base": {"category": "github_post", "violations": base},
+                                "head": {"category": "github_post", "violations": head}}]
+    rep.update(base="b", head="h", wall_secs=0, corpus_counts={})
+    text = gate_diff.summary_text(rep)
+    assert "Reworded, examples" in text and "base: on a#9: missing footer: F" in text, text
+    assert "head: on b#5: missing footer: F" in text and "other detail changed: 0 pairs" in text, text
+
+
+def test_each_post_also_runs_twice_to_one_pr():
+    assert "rm -rf build; gh pr comment 5 --body x; gh pr comment 5 --body x" in gate_diff.post_lines(["x"])
+
+
+def test_a_head_that_lists_a_text_once_where_main_lists_it_twice_is_lowered(tmp_path):
+    # Through _row: the rows keep each text as often as decide lists it.
+    room = "    room = max(_LISTED_VIOLATIONS - len(violations), 0)\n"
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head", (room, "    named = list(dict.fromkeys(named))\n" + room))
+    corpus = tmp_path / "mine.txt"
+    corpus.write_text("rm -rf build; gh pr comment 5 --body 'hi there'; gh pr comment 5 --body 'hi again'\n",
+                      encoding="utf-8")
+    proc, rep = _gate_diff(base, head, tmp_path, "--only-corpus", "--no-variants", "--corpus", str(corpus),
+                           "--pick", "posting_footer", "--jobs", "1")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert rep["counts"]["lowered_violations"] == 1, rep["counts"]
 
 
 def test_post_names_hold_every_part_and_the_name_the_gate_hides_userinfo_in():
