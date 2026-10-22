@@ -79,6 +79,10 @@ def test_unset_path_asks_as_the_empty_assignment_does(cmd):
     'unset "${arr[@]}"; ls',  # arr=(PATH)
     "unset PAT?; ls",
     "unset [P]ATH; ls",       # a leading [ is a glob the lexer does not mark: a file named PATH matches it
+    "unset \\\n[P]ATH; ls",   # bash drops the \<newline> first, so the [ still leads the word
+    "unset -v \\\n[P]ATH; ls",
+    "unset FOO \\\n[P]ATH; ls",
+    "unset \\\n[P]ATH; git status",
     "unset FOO=$x; ls",       # unset takes no assignment: x=' PATH' splits into a second name
     'unset "a["$i]; ls',      # the $ is outside the quotes: i='1] PATH [' splits off PATH
     # an option word the gate cannot read: bash may see -v, `-`, or more words
@@ -134,6 +138,7 @@ def test_an_exporter_option_the_gate_cannot_read_asks(cmd):
     "unset -f {,-v} PATH; ls",
     "unset -f fn; ls",
     "unset 'arr[1]'; ls",
+    "unset \\\n'[P]ATH'; ls",  # a quoted [ is no glob, after a \<newline> too
     "unset PYTHONPATH; pytest",
     "echo unset PATH",        # words, not the builtin
     "git commit -m 'unset PATH; ls'",
