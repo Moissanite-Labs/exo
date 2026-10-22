@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
+  verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
+  Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.
 - The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
   the footer, the forbidden words and the scrub on the combined classification's text. A compound
   line takes that text from its most severe part. So a post that passed, put first, carried a
