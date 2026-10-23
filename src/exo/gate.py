@@ -3215,11 +3215,28 @@ def _ssh_setting(text: str) -> tuple[str, str]:
     return key.lower(), rest.lstrip(" \t\r\n=")
 
 
+def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
+    """Where a builtin's operands start in ``args`` (its words after the name), and the option letters bash surely
+    reads before them. `--` ends the options, and so does a word not spelled `-x`, or `+x` when ``plus`` (declare,
+    typeset and local take `+x`; export, readonly and unset read it as a name). So does a word that may expand
+    (`-$f`, `-[fv]`, `-{,}`): bash may read it as options, as `-`, which ends them, or as several words, so it and
+    the words after it are operands, and its letters count for nothing (#329)."""
+    i, flags = 0, ""
+    while i < len(args) and args[i].text[:1] in ("-+" if plus else "-") and len(args[i].text) > 1 \
+            and not (args[i].dynamic or args[i].glob or args[i].brace):
+        if args[i].text == "--":
+            return i + 1, flags
+        flags += args[i].text[1:] if args[i].text[0] == "-" else ""
+        i += 1
+    return i, flags
+
+
 def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
     """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
     `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
     comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
-    name the gate cannot read. A for-loop variable comes here from _classify_simple with prog "for"."""
+    name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
+    _classify_simple with prog "for"."""
     args, targets, parts = words[1:], [], []
     if prog == "for":
         targets = args[:1]
@@ -3241,13 +3258,7 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
     elif prog == "printf" and args[:1] and args[0].text.startswith("-v"):
         targets = [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
     elif prog in _EXPORTERS:
-        i, flags = 0, ""
-        while i < len(args) and args[i].text[:1] in "-+" and len(args[i].text) > 1:
-            if args[i].text == "--":
-                i += 1
-                break
-            flags += args[i].text[1:] if args[i].text[0] == "-" else ""
-            i += 1
+        i, flags = _builtin_options(args, prog in ("declare", "typeset", "local"))
         if "f" in flags or "F" in flags:                  # names functions, not variables
             return []
         if "p" in flags and prog in ("declare", "typeset", "local"):  # prints; export/readonly -p still assign
@@ -3256,6 +3267,8 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
             name, (_, sep, ref) = re.split(r"\[|\+?=", w.text, maxsplit=1)[0], w.text.partition("=")
             if _unreadable_name(w):
                 targets.append(w)
+            elif w.dynamic and w.text.startswith(("-", "+")):  # `-o=$v`: options and names the gate cannot see
+                parts.append(_opaque(f"{prog} takes a word the gate cannot read", cmd))
             elif "n" in flags and prog != "export":     # a nameref: what it points at is what gets set
                 if not sep:
                     parts.append(_opaque(f"{prog} -n {name} makes a reference the gate cannot follow"[:120], cmd))
@@ -3361,6 +3374,21 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     named = assigns + (argv[1:] if prog in (*_EXPORTERS, "unset") else []) + \
         [b for a, b in zip(argv, argv[1:]) if prog in ("test", "[") and a == "-v"]   # where NAME[..] is arithmetic
     sets += [(name, value, True, literal) for name, value, literal in _hidden_sets(k, named)]
+    if prog == "unset":
+        # `unset PATH` is `PATH=` for what follows it: with no PATH, bash looks a command up in the
+        # working folder, the empty-element hazard #231 reads in an assignment (#329). `-f` names
+        # functions (with `-v` it is an error), so it leaves PATH alone, but only where bash surely
+        # reads it as an option. A word that may expand, a name or an option, may spell PATH or hide
+        # the options (`unset $v`, `unset {PATH,}`, `unset -${f}v PATH`), and so may a `$` outside
+        # double quotes anywhere in a word: x='1] PATH [' splits `unset a[$x]` into three names. An
+        # unquoted `[` that starts a word is a glob too, one the lexer does not mark (`unset [P]ATH`),
+        # also after a `\<newline>` that bash drops first.
+        i, flags = _builtin_options(words[1:], False)
+        if "f" not in flags:
+            sets += [("PATH", "", True, False) for a in argv[1 + i:] if re.split(r"\[", a)[0] == "PATH"]
+            if any(_unreadable_name(w) or w.brace or w.raw.replace("\\\n", "")[:1] == "[" or
+                   w.dynamic and not re.fullmatch(r'"(?:[^"\\]|\\.)*"', w.raw) for w in words[1:]):
+                parts.append(_opaque("unset takes a word the gate cannot read, which may unset PATH", cmd))
     git_env: dict[tuple[str, ...], str] = {}
     for name, value, runs_nothing, literal in sets:
         if name in _EXEC_ENV:
