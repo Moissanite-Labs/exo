@@ -2822,9 +2822,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-23 (D-082 plugin binding reduction, #498):** moving plugin tool/slot adaptation and
   lifecycle verdict translation behind `PluginManager.bind_tools` in the existing `exo.plugin_lifecycle`
   boundary takes counted core lines from 15,857 to 15,790 (67 fewer). Explicit registry/log/privacy/approval
-  collaborators replace engine-state access in the adapter; direct `CoreRuntime` plugin behavior and its
+  collaborators replace engine-state access in the adapter. Direct `CoreRuntime` plugin behavior and its
   compatibility helper methods remain. Gate policy, registration order and protocol behavior are unchanged.
-  `CORE_HEADROOM` returns to 1,000; `CORE_FLOOR` stays 14,813 because the count is still above it.
+  `CORE_HEADROOM` returns to 1,000. `CORE_FLOOR` stays 14,813 because the count is still above it.
   No module is excluded. The ceiling is 15,813, leaving 23 lines before subsequent features.
 
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
@@ -2975,7 +2975,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `PluginManager.bind_tools` takes explicit collaborators, including the existing approval desk and a
   live required-mode callback. Core helper shims preserve compatibility. This is a behavior-preserving
   extraction: no approval policy, binding, private-thread rule or protocol contract changed. It restores
-  the standard core allowance (D-077 amendment above); broader private-state query cleanup remains open.
+  the standard core allowance (D-077 amendment above). Broader private-state query cleanup remains open.
   User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
 
 ## D-083 (2026-10-23) Optional skill discovery within a prompt budget
