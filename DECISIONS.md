@@ -932,13 +932,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   violation has no need of. #460 stops counting that line.
   2026-10-23, round 11 of the review: one copy lifted the cap for every post on the line, so the card, the ledger
   row and the decision model's input grew with the line. One copy and 500 posts of 20 names each gave a 1.1 MB
-  reason, past the ledger authority's 1 MiB limit, so no row was written. Now the room past the twenty grows only by
-  what the posts with copies and their copies list. Main's list differs from this one only in those entries, so
-  every entry main lists keeps its place within the room. A line lists at most 200 other posts' violations
-  (`_LISTED_WITH_COPIES`), so a line where every post has a copy and the entries pass 200 can list fewer than main
-  does. It still asks. When decide merges the line's readings, it lists one `and N more on other posts`, the
-  largest, last. Main bounds no line's ledger row or model input either: #485. The docstring of `classify` ends on
-  its old last line again, which main's gate_diff tests patch after.
+  reason, past the ledger authority's 1 MiB limit, so no row was written. Now the other posts' entries keep main's
+  room of twenty, less the line's own violations, and the entries of posts with copies and of the copies have a room
+  of their own, 200 per reading (`_LISTED_WITH_COPIES`). Each keeps the line's order. Main lists an entry of a post
+  without copies only within its room, and lists at most twenty of the others, so this lists every entry main lists
+  while the posts with copies and their copies list no more than 200. A line past that can list fewer than main
+  does, and still asks. A first version had one room for both, so ten posts with copies of twenty names each pushed
+  a plain post's violation out (found by an independent review of this round). When decide merges the line's
+  readings, it lists one `and N more on other posts`, last: the most any reading left out that the merged list does
+  not hold, so the merged list holds as many as any reading. The bound is on the count. 200 entries with long
+  targets can still pass 1 MiB where main's twenty do not, and main bounds no row either: #485. The docstring of
+  `classify` ends on its old last line again, which main's gate_diff tests patch after.
   Limits: `docs/GATE.md` "Where a gh command lands".
 
 - **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.

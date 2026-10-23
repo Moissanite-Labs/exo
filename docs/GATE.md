@@ -238,11 +238,11 @@ Each other reading is a copy of the action among the line's parts, with its own 
 `target:` deny or reserved entry matches it also when the gh call is not the line's most severe
 part. The posting rules list a post's violations under the post's own name, and right after
 them what a copy finds that neither the post nor another copy of it does (under a scope a copy's
-target can be public where the post's is internal). On a line with such copies, the room past
-the twenty grows by what the posts with copies and their copies list, so it lists all that main
-lists, and at most 200 entries from other posts in all. Its question merges the readings of the
-line, so a copy's finding can show both under the copy's name and under the post's, and it lists
-one `and N more on other posts`, the largest. The ledger row lists the other targets as `alt_targets`, with a user and password in a
+target can be public where the post's is internal). On a line with such copies, the other posts
+keep the room of twenty, and the posts with copies and their copies have a room of 200 of their
+own, so it lists all that main lists while those list no more than 200. Its question merges the
+readings of the line, so a copy's finding can show both under the copy's name and under the
+post's, and it lists one `and N more on other posts`. The ledger row lists the other targets as `alt_targets`, with a user and password in a
 URL as `***@`. The question the principal sees
 names each of them, also when none decides the line:
 `merge PR on pub/repo#7 (costly, internal). It may land on myorg/app#7 instead.`
@@ -772,7 +772,8 @@ after it: `GitHub PR comment on myorg/app#6: forbidden word: Zork`. When two pos
 the gate cannot read, each is named: a part's unseen body is read from the signals it carried
 before the line was combined (`Classification.own_signals`, left out of the ledger view). Once
 other posts add violations, a decision lists at most 20 and counts the rest
-(`and 40 more on other posts`). The dominant part's own violations are always all listed. So is
+(`and 40 more on other posts`). A gh post's copies on other targets have a room of their own
+("Where a gh command lands"). The dominant part's own violations are always all listed. So is
 the unseen-body note for a part the posting rules do not cover, such as a `curl` post. Both come
 before the other posts' violations. The scrub compiles its patterns once per policy, so a line of
 many posts does not compile them again for each post. The approval binding hashes the whole
