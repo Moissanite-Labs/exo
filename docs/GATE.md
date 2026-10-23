@@ -135,8 +135,9 @@ leads it (#447). Such a line goes to those allowed for its own category and for 
 part keeps them with the principal alone, as `echo x > ~/.exo/policies/gates.yaml` is. The same
 holds behind a wrapper (`sudo sh -c '...'`, `timeout 5 bash -c '...'`), in a subshell, a `$( )` or
 a heredoc, and for a substitution's write after a `cd` into the store (#465):
-`cd ~/.exo/state && env; echo $(cp /tmp/evil x)` is the principal's alone. No standing grant covers a line with such a part, and observe mode still asks for it
-(`gate.no_grant`, see "Standing grants"). A secret read alone (`env`, `cat ~/.kube/config`) keeps
+`cd ~/.exo/state && env; echo $(cp /tmp/evil x)` is the principal's alone. No standing grant
+covers a line with such a part, and observe mode still asks for it (`gate.no_grant`, see
+"Standing grants"). A secret read alone (`env`, `cat ~/.kube/config`) keeps
 the seats that `approvals.yaml` gives `credentials`. The line's category, its outcome and its
 matrix cell do not change. Other parts do not narrow the list. With
 `credentials: [principal, "seat:builder"]` and `force_push: [principal]`,
