@@ -1053,11 +1053,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   this change over the built-in corpus, 12,780 lines of substitutions around a `cd` into 14 folders, 28 lines from
   the review, the 2,127 #464 lines, 1,932 lines with a copy of the substitution's text before the `cd`, 3,000 lines
   with a compound around the `cd` and a substitution in its redirections, 384 lines with a secret beside a heavier
-  command, and the 1,716 `unset` lines of the #404 review, under the 87 built-in policies and 21 more. The #460
-  script read 102,784 actions: 0 outcomes lower, 4 pairs with the reserved hit above, 2,048 pairs reworded. Main's
-  script read 102,143 actions and reports those 4 and 256 pairs on 64 lines as violations lost. In
+  command, 288 with a relative key read beside one, and the 1,716 `unset` lines of the #404 review, under the 87
+  built-in policies and 23 more. The #460 script read 103,366 actions: 0 outcomes lower, 4 pairs with the reserved
+  hit above, 2,048 pairs reworded. Main's script (run before the key-read weight) reports those 4 and 256 pairs on
+  64 lines as violations lost. In
   `cd ~/.exo/policies && echo $(echo $(gh pr comment 3 --body hi))` the post's bare violation is now named after the
-  post, since the store write sets the card. Both trees list it, and the #460 script counts it as reworded. 669,724
+  post, since the store write sets the card. Both trees list it, and the #460 script counts it as reworded. 685,477
   pairs are stricter, nearly all the store-write ask on the forms above.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
