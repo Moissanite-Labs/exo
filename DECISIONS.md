@@ -1601,7 +1601,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `/proc/<pid>/fd`, and `ps e` (row 3 of #476), which is left to #476.
   *Lowered lines.* On main an odd spelling kept its own class, and any deny that class drew. It now takes the store's
   class, so it decides as main decides the same action spelt plainly, and some lines decide lower than before. The #423
-  differential of main (c27d8739) against the change ran 56,079 actions under 87 policies and found 28 lowered pairs on
+  differential of main (5a9dc394) against the change ran 57,029 actions under 87 policies and found 28 lowered pairs on
   24 actions (25 outcomes, 3 reserved hits), all from the new test rows and the forms built from them. Two focused runs
   added their own lines under the same policies. The first had 1,570 lines: odd spellings of other store names, quoted
   and continued spellings, `..` after a root link, wrappers such as `less`, `awk`, `dd`, `sudo -E`, `env -u`, `zsh -c`,
@@ -1615,6 +1615,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   actions, and it found 42 lowered pairs on 28 actions (35 outcomes, 7 reserved hits). Each lowered pair of the three
   runs decides as main decides the plain spelling (no `//`, `/./` or `x/..`, `/proc` for a glob that could be it, `/`
   for a root link, the resolved folder for a link before a `..`): same class, outcome, reserved hits and violations.
+  A last run of 966 lines put each odd spelling beside a `cd` into the store with a write, force push or delete in a
+  `$( )`, backticks or `<( )` (#465): in the `cd` folder, in the substitution and on the line around it. With their
+  forms that is 1,932 actions, and it found no lowered pair.
   Three groups, all from how the gate already handles any secret store. The counts are for the built-in run, then the
   two focused runs.
   (1) 21, 180 and 21 pairs: a rule that matched the line as a `read` no longer matches it as `credentials`. So
