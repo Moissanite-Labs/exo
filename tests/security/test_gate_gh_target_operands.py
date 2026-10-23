@@ -900,6 +900,21 @@ def test_one_copy_keeps_a_long_line_of_posts_as_short_as_main_lists_it():
     assert len(d.violations) <= 1 + 20 + 2 + 1 and d.violations[-1].startswith("and "), d.violations
 
 
+def test_past_the_room_of_posts_with_copies_a_line_can_hide_what_main_lists():
+    # Round 12 (review of 2b2f9c38): the documented limit. Ten copied posts of twenty names fill the room of 200, so the
+    # last copied post's one violation, the only one main lists here, is only counted. The line still asks.
+    names = [f"NM{i:02d}X" for i in range(20)]
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}},
+                              "posting": {"footer": "F", "scrub": {"names": names + ["ZZOTHER"]}}})
+    copied = " && ".join(f"gh pr comment https://api.github.com/pub/repo/pull/{n} -R myorg/app -b '{' '.join(names)} F'"
+                         for n in range(10, 20))
+    d = run(f"gh pr comment 1 -R pub/a -b 'F' && {copied}"
+            " && gh pr comment https://api.github.com/pub/zz/pull/7 -R pub/other -b 'ZZOTHER F'", pol)[1]
+    assert d.outcome == "ask" and not any("ZZOTHER" in v for v in d.violations), d.violations[-2:]
+    assert len(d.violations) == 1 + gate._LISTED_WITH_COPIES and d.violations[-1] == "and 1 more on other posts", \
+        (len(d.violations), d.violations[-1])
+
+
 def test_a_line_where_every_post_has_copies_lists_at_most_the_bound():
     pol = normalize_policies({"posting": {"footer": "F"}})
     posts = " && ".join(f"gh pr comment {n} -R https://ghe.example.com/pub/r{n} -b x" for n in range(1, 301))
