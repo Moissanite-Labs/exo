@@ -201,6 +201,7 @@ EVERYDAY = [
     # a name that could be `..` outside the store
     ("grep -r x ./.?", "read"),
     ("cd ~/project && ls .?/..", "read"),
+    ("cd ~/project && cd $PWD/.?/.. && grep -r x .", "read"),
 ]
 
 
@@ -225,6 +226,9 @@ DOTDOT = [
     "cd {jobs} && ls ./.?/",
     "cd {jobs} && grep -r x .?/..",                # `.?/..` is `.`, or `../..` when `.?` is `..`
     "cd {jobs} && grep -r x ./.?/..",
+    "cd {jobs} && grep -r x .//.?",                # an empty part, as bash reads `./.?`
+    "cd {jobs} && grep -r x ././/.?",
+    "cd {jobs} && ls .//.?/",
     # a `cd ..` written as a glob or split by a substitution
     "cd {jobs} && cd .$(:). && grep -r .",
     "cd {jobs} && cd ..$(:) && grep -r .",
@@ -232,6 +236,12 @@ DOTDOT = [
     "cd {jobs} && cd .? && grep -r .",
     "cd {jobs} && cd .[.] && grep -r .",
     "cd {jobs} && cd .$(:). && cat jobs/1.log",      # as `cd {jobs} && cd .. && cat jobs/1.log` (JOBS below)
+    "cd {jobs} && cd .?/.. && grep -r x .",          # a target `.?/..` is `.`, or `../..` when `.?` is `..`
+    "cd {jobs} && cd ./.?/.. && grep -r x .",
+    "cd {jobs} && cd $PWD/.?/.. && grep -r x .",       # the current folder spelt out, as the name form is
+    'cd {jobs} && cd "$PWD"/.?/.. && grep -r x .',
+    "cd {jobs} && cd ${{PWD}}/.?/.. && grep -r x .",
+    "cd {jobs} && cd ~+/.?/.. && grep -r x .",
     # run/jobs reached by a split relative target below the folder that holds `run`
     "cd {top} && cd r$(:)un/jobs && grep -r x ..",
     # run/jobs, or a folder in it, spelt with a glob or a printing substitution below the store's own folder
@@ -327,13 +337,37 @@ FAIL_CLOSED = [
     "cd ~/.kube && kubectl get pods -n $(cat ns.txt)",
     "cd ~/.exo && ls principals",
     "cat ${x}rc",                                     # `.*rc` could be .netrc
-    "cp x state/$(date +%F).json",                   # could be state/approval-grants.json
+    # a trailing substitution is `*`, and `cat /tmp/*` or `ls ~/.config/*` asks on main too
+    "cat /tmp/$(cat last)",
+    "ls /tmp/$(whoami)",
+    "ls ~/.config/$(whoami)",
+    "cat ~/.config/$(ls ~/.config | head -1)",
 ]
 
 
 @pytest.mark.parametrize("cmd", FAIL_CLOSED)
 def test_an_everyday_line_that_could_reach_a_store_asks(cmd):
     _asks(sh(cmd))
+
+
+# A store file's folder with output for the file name is not that file: the name needs three characters of its own
+# (`cp x policies/gat$(:)es.yaml` asks, STORE_WRITES below). Main 77274ab9's class, which fa5dcdf7 raised
+# to store_write.
+FOLDER_ONLY = [
+    ("cp x state/$(date +%F).json", "shell"),
+    ("cp x src/state/$(basename $f)", "shell"),
+    ("cp x src/policies/${name}.md", "shell"),
+    ("cp x lib/state/$1.json", "shell"),
+    ("cp x /srv/app/state/$(date +%F).json", "shell"),
+    ("sed -i s/a/b/ src/state/$(git ls-files | head -1)", "local_write"),
+    ("sed -i s/a/b/ policies/$(ls policies | head -1)", "local_write"),
+    ("rm -rf out/state/$(date +%F).json", "delete"),
+]
+
+
+@pytest.mark.parametrize("cmd,main", FOLDER_ONLY)
+def test_a_store_files_folder_alone_keeps_mains_class(cmd, main):
+    assert gate.classify(sh(cmd)).category == main
 
 
 # A principal's store, which holds its run folder, by a relative name or target: read/allow (the tar line
@@ -409,6 +443,11 @@ STORE_WRITES = [
     "cp x ${x:-$HOME/.exo}/policies/a",
     'cp x "${x:-$HOME/.exo}/policies/a"',
     "cp x ${x[0]:-$HOME/.exo}/policies/a",
+    # the bus store and the update signers file, as _STORE_NAMES names them
+    "cp x ~/.exo/bu$(printf s)/x",
+    "cp x ~/.exo/b$(printf u)s/registry.json",
+    "cp x ~/x/bus/rel$(printf a)y.sqlite",
+    "cp x ~/x/update/allowed_$(printf s)igners",      # anywhere, as `cp x ~/x/update/allowed_signers` on main
 ]
 
 
@@ -432,6 +471,106 @@ def test_a_substitution_inside_a_write_to_the_keys_folder_asks(cmd, cat):
     _asks(sh(cmd))
     assert gate.classify(sh(cmd)).category == cat
     assert gate.classify(sh("cp x ~/.exo/keys/a")).category == "credentials"
+
+
+# The review of fa5dcdf7: the `*` reading made these lines store_write, and the matrix cell or `/dev` target that
+# denied them on main 77274ab9 stopped deciding. #467's part pass (a part's matrix cell, the descriptor folder as its
+# own store_write part, a key read as a credentials part) keeps main's deny. gate_diff's built-in policies.
+MATRIX = {"gates": {"matrix": {"irreversible": {"public": "deny", "internal": "deny"}, "costly": {"public": "deny"}}}}
+PRIVATE = {"gates": {"matrix": {"irreversible": {"private": "deny"}}}}
+DEV = {"gates": {"deny": ["target:/dev*", "target:/proc*"]}}
+CREDS = {"gates": {"deny": ["credentials"]}}
+DENIED = [
+    ("ssh host 'rm -rf /srv/app/state/$(date +%F).json'", MATRIX),
+    ("ssh host 'rm -rf app/policies/$(date +%F).yaml'", MATRIX),
+    ("ssh host 'git -C ~/app checkout -- state/$(date +%F).json'", MATRIX),
+    ("ssh host 'git -C ~/.e$xxo/policies checkout -- gates.yaml'", MATRIX),
+    ("rm -rf out/state/$(date +%F).json", PRIVATE),
+    ("rm -f src/state/$(ls src/state | head -1)", PRIVATE),
+    ("rm -rf build/policies/$(date +%F).yaml", PRIVATE),
+    ("shred -u data/state/$(date +%F).json", PRIVATE),
+    ("rm -rf ~/.exo/state/$(date +%F).json", PRIVATE),
+    ("rm -rf ~/.exo/pol$(:)icies", PRIVATE),
+    ("shred -u ~/.exo/state/$(date +%F).json", PRIVATE),
+    ("cd /proc/self/fd && cp 3 backup/state/$(date +%F).json", DEV),
+    ("cd /dev && cp x state/$(date +%F).json", DEV),
+    ("cd /dev && tee state/$(date +%F).json < x", DEV),
+    ("cd /dev && sed -i s/a/b/ src/state/$(ls src/state | head -1)", DEV),
+    ("cd /dev && cp x ~/.exo/polic$(date)ies/a", DEV),
+    ("cd /dev && cp x ~/.exo/poli$xcies/gates.yaml", DEV),
+    ("tar -C ~/.exo/poli$(:)cies -czf - ../keys/seat", CREDS),
+]
+
+
+@pytest.mark.parametrize("cmd,policy", DENIED)
+def test_a_matrix_or_target_deny_holds_beside_the_store_reading(cmd, policy):
+    assert gate.decide(gate.classify(sh(cmd)), policy).outcome == "deny"
+
+
+# A privileged wrapper's `costly` reaches every part it runs, over ssh or through a shell too (_run_privileged). With
+# only the line costly, a line the store reading made credentials or store_write matched no rule on costly parts:
+# read, shell or local_write deny on main 77274ab9, ask on df22ec97. The last two asked on main too. gate_diff's
+# built-in rule_costly_part_deny.
+COSTLY = {"gates": {"rules": [{"match": {"category": ["local_write", "shell", "read"], "reversibility": "costly"},
+                               "decision": "deny"}]}}
+PRIVILEGED = [
+    "sudo ssh host 'cat ${x}rc'",
+    "doas ssh host 'cat /tmp/$(cat last)'",
+    "sudo -u bob ssh host 'cat ${x:-~/.kube}/config'",
+    "sudo env ssh host 'cat ~/.ku$[0]be/config'",
+    "sudo timeout 5 ssh host 'cd ~/.kube && echo $(date)'",
+    "sudo ssh host 'cp x out/schedule$(date +%F).sqlite'",
+    "doas ssh host 'cp x ~/.exo/polic$(date)ies/a'",
+    "sudo ssh host 'cp x ~/.exo/poli$[0]cies/gates.yaml'",
+    "sudo -E ssh host 'echo x > ~/.exo/ke$[0]ys/seat'",
+    "sudo ssh host 'cp x ~/.exo/bu$(printf s)/x'",
+    "sudo ssh host 'cd ~/.exo/run/jobs && cd .?/.. && ls'",
+    "sudo ssh host 'cd ~/.exo/run/jobs && grep -r x .//.?'",
+    "sudo ssh h1 ssh h2 'cat ${x}rc'",
+    "chroot / ssh host 'cat ${x}rc'",
+    "nsenter -t 1 ssh host 'cat ${x}rc'",
+    "chroot / bash -c 'cat ${x}rc'",
+    "sudo ssh host 'cat ~/.kube/config'",
+    "sudo ssh host 'cp x ~/.exo/policies/a'",
+]
+
+
+@pytest.mark.parametrize("cmd", PRIVILEGED)
+def test_a_privileged_wrappers_cost_reaches_what_it_runs_over_ssh(cmd):
+    c = gate.classify(sh(cmd))
+    assert gate.decide(c, COSTLY).outcome == "deny", c
+    assert gate.decide(c).outcome == "ask"
+
+
+# The costly reading is added beside each part a privileged wrapper runs, not put in its place: a rule that denies a
+# reversible read, or a category line that denies reads lifted by a rule for costly ones, still reaches the parts as
+# written. Each line denies under both on main 77274ab9; with the parts themselves made costly the first policy
+# logged or asked and the second allowed `sudo ssh host 'ls; cat x'`.
+REVERSIBLE_READ_DENY = {"gates": {"rules": [{"match": {"category": ["read"], "reversibility": "reversible"},
+                                             "decision": "deny"}]}}
+COSTLY_READ_LIFT = {"gates": {"categories": {"read": "deny"},
+                              "rules": [{"match": {"category": "read", "reversibility": "costly"}, "decision": "allow"}]}}
+PRIVILEGED_READS = [
+    "sudo ssh host 'ls; cat x'",
+    "sudo ssh host 'cat ~/.kube/config'",
+    "chroot / ssh host 'cd ~/.exo/run/jo$(:)bs && grep -r x .?/..'",
+    "sudo ssh host 'find ~/.ku$[0]be -exec cat {} \\;'",
+]
+
+
+@pytest.mark.parametrize("policy", [REVERSIBLE_READ_DENY, COSTLY_READ_LIFT], ids=["reversible-deny", "costly-lift"])
+@pytest.mark.parametrize("cmd", PRIVILEGED_READS)
+def test_a_privileged_wrapper_keeps_the_parts_it_runs_as_written(cmd, policy):
+    assert gate.decide(gate.classify(sh(cmd)), policy).outcome == "deny"
+    assert gate.decide(gate.classify(sh(cmd)), COSTLY).outcome == "deny"
+
+
+def test_a_privileged_wrappers_copies_add_no_posting_violation():
+    """The costly copies hold no post, so a post on the line is checked once (#396 lists each post's violations)."""
+    policy = {"posting": {"forbid_words": ["secret"]}}
+    line = "ssh host 'gh issue comment 1 --body secret; gh issue comment 2 --body secret'"
+    want = gate.decide(gate.classify(sh(line)), policy).violations
+    assert want and gate.decide(gate.classify(sh("sudo " + line)), policy).violations == want
 
 
 def test_the_seats_folder_is_read_once_per_call(home, monkeypatch):

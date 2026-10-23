@@ -215,33 +215,54 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `cd ~/.kube && cat $(ls)`), `$(( ))` and `$[ ]` as substitutions (`cat id_ed$((25519))`, `cat id_ed$[25519]`),
   one that starts a name as `.*` (`cat $(printf .e)nv`), and the default word of an unknown variable as its value
   (`cat ${x-.env}`, `cat ${x:-~/.kube}/config`, `cat ${x[0]:-.env}`, `cat ${x:-$HOME/.exo}/keys/seat`). These were
-  allowed reads. The
-  same reading reaches working-folder targets (`cd ~/.k$(:)ube && cat config`, `tar -C ~/.k$(:)ube -czf - .`,
-  `cd ~/.k${u}ube && cat config`) and the Exo-store write checks (#309), so `cp x ~/.exo/polic$(:)ies/gates.yaml`,
-  `mv x ~/.exo/polic${u}ies/gates.yaml`, `tee ~/.exo/polic$(:)ies/gates.yaml < x`,
-  `cp x ~/.exo/$(printf policies)/default.yaml` and `cp x ${x:-$HOME/.exo}/policies/a` are `store_write`; they
-  were allowed `shell` writes. #305's resolution of names from a folder in `$EXO_HOME` now reads a target spelt
-  with a glob or an expansion, in the store's own folder or below it (`cd ~/.e*o/run/jobs && grep -r x ..`,
-  `cd ~/.exo/r?n/jobs && grep -r x ..`, `cd ~/.exo/r$(printf u)n/jobs && ls ..`, `cd ~/.exo && cd r$(:)un/jobs`,
-  `cd ~/.exo/principals/m?/run/jobs && ls ..`), a part that
-  could be `..` (`cd .? && grep -r .`, `grep -r . .$(:).`, `grep -r . ./.?`, `grep -r . .?/..`), a glob that could
-  be the run folder
-  (`tar -C ~/.exo -czf - ru?`), and a folder that holds a run folder (`cd ~/.exo/run/jobs && grep -r x ../..`,
-  `cd ~/.exo && grep -r x principals/me`, `tar -C ~/.exo/principals/me -czf - .`). Each spelling is read once per
-  tool call, so the work stays linear. Words that cannot spell a store name keep their class
-  (`cat notes$(date +%F).txt`, `cat $f`, `cat ${OUT:-/tmp/out}/report.txt`, `cp x out/$(date +%F).json`). This
-  fails closed on a few lines: a word that is a substitution alone after a `cd` into a store folder
-  (`cd ~/.kube && echo $(date)`, `kubectl get pods -n $(cat ns.txt)`), `cd ~/.exo && ls principals`, in `run/jobs`
-  `ls ../..`, `cat $(ls)` and `tail -f $(ls -t | head -1)`, a variable that starts a name (`cat ${x}rc`, read as
-  `.*rc`), and a relative store file name split by output (`cp x state/$(date +%F).json` is `store_write`). A write
-  to `keys/` only the `*` reading reaches (`cp x ~/.exo/$(printf keys)/a`) is `store_write`, not `credentials`;
-  both ask. A long write line full of expansions costs 2 to 2.5 times the CPU time it did (2,000 `cp` words: 2.6 s
-  against 1.3 s); the work stays linear. Not covered: a name left with fewer than three
-  characters of its own (`cat .$(printf env)`), a pattern-matched name split by output (`cat server.k$(printf e)y`),
-  output with a `/` in it (`cp x ~/$(printf .exo/policies)/x`), an expansion that ends a store write's word
-  (`cp x ~/.exo/$name`), a literal glob in a store write (`cp x ~/.exo/polic?es/gates.yaml`), a default word with
-  a `}` in it (`${x:-${HOME}/.kube}`), and a folder by its full path (`tar czf - ${x:-$HOME/.kube}`, as
-  `tar czf - ~/.kube`; `grep -r x ~/.exo/principals/me`).
+  allowed reads. The same reading reaches working-folder targets (`cd ~/.k$(:)ube && cat config`,
+  `tar -C ~/.k$(:)ube -czf - .`, `cd ~/.k${u}ube && cat config`) and the Exo-store write checks (#309), so
+  `cp x ~/.exo/polic$(:)ies/gates.yaml`, `mv x ~/.exo/polic${u}ies/gates.yaml`,
+  `tee ~/.exo/polic$(:)ies/gates.yaml < x`, `cp x ~/.exo/$(printf policies)/default.yaml`,
+  `cp x ${x:-$HOME/.exo}/policies/a`, `cp x ~/.exo/bu$(printf s)/x` and `cp x ~/x/update/allowed_$(printf s)igners`
+  are `store_write`. They were allowed `shell` writes. #305's resolution of names from a folder in `$EXO_HOME` now
+  reads a target spelt with a glob or an expansion, in the store's own folder or below it
+  (`cd ~/.e*o/run/jobs && grep -r x ..`, `cd ~/.exo/r?n/jobs && grep -r x ..`, `cd ~/.exo/r$(printf u)n/jobs && ls ..`,
+  `cd ~/.exo && cd r$(:)un/jobs`, `cd ~/.exo/principals/m?/run/jobs && ls ..`), a part that could be `..`
+  (`cd .? && grep -r .`, `cd .?/.. && grep -r x .`, `cd $PWD/.?/.. && grep -r x .`, `grep -r . .$(:).`,
+  `grep -r . ./.?`, `grep -r . .//.?`, `grep -r . .?/..`), a glob that could be the run folder (`tar -C ~/.exo -czf - ru?`), and a folder that holds a
+  run folder (`cd ~/.exo/run/jobs && grep -r x ../..`, `cd ~/.exo && grep -r x principals/me`,
+  `tar -C ~/.exo/principals/me -czf - .`). Each spelling is read once per tool call, so the work stays linear. A
+  matrix cell or a `target:/dev*` entry that denied such a line on main still denies it (#464): the `*` reading
+  makes some lines `store_write`, and the line's other parts keep their own cells and targets. A rule that denies a
+  costly `read`, `shell` or `local_write` part still denies such a line run over ssh by `sudo` or `doas`, or by a
+  privileged wrapper over ssh or through a shell: a costly copy of each reversible part the wrapper runs, nested ones
+  too, is added beside it (`sudo ssh host 'cat ${x}rc'` and `doas ssh host 'cp x ~/.exo/polic$(date)ies/a'` under
+  gate_diff's `rule_costly_part_deny`), and so does the unsplit line (`sudo ssh host 'cat ~/.kube/config'`), which
+  asked on main. The parts stay as written, so a rule or entry keyed on `reversibility` reaches them as on main
+  (`sudo ssh host 'ls; cat x'` still denies under a rule that denies a reversible `read`, and under `read: deny`
+  lifted by a rule that allows a costly `read`). gate_diff against main 77274ab9, under its 87 built-in policies and
+  under 57 policies keyed on `reversibility` (rules, lifted category lines, matrix rows, deny and reserved entries),
+  lowers no outcome; the reserved entries that list one part fewer at the same ask are in the D-038 amendment.
+  Words that cannot spell a store name keep their class (`cat notes$(date +%F).txt`, `cat $f`,
+  `cat ${OUT:-/tmp/out}/report.txt`, `cp x out/$(date +%F).json`), and so does a write whose file name only its folder
+  ties to the store
+  (`cp x state/$(date +%F).json`, `cp x src/state/$(basename $f)`, `sed -i s/a/b/ src/state/$(git ls-files | head -1)`).
+  This fails closed on a few lines. A word that is a substitution alone after a `cd` into a store folder asks
+  (`cd ~/.kube && echo $(date)`, `kubectl get pods -n $(cat ns.txt)`), and so do `cd ~/.exo && ls principals`, in
+  `run/jobs` `ls ../..`, `cat $(ls)` and `tail -f $(ls -t | head -1)`, a variable that starts a name (`cat ${x}rc`,
+  read as `.*rc`), a read of a folder that holds a store by a name made by output (`cat /tmp/$(cat last)`,
+  `ls /tmp/$(whoami)`, `ls ~/.config/$(whoami)`, `cat ~/.config/$(ls ~/.config | head -1)`, as `cat /tmp/*` asks),
+  and `cat ${x:-'~/.kube'}/config`. A name whose own text fits a store file, split by output, is `store_write`
+  (`cp x data/schedule$(date +%F).sqlite`, `cp x out/seat$(date +%F).json`), and so is a split spelling bash never
+  makes a store path (`cp x ~/.exo/polic$(date)ies/a`). A write to `keys/` only the `*` reading reaches
+  (`cp x ~/.exo/$(printf keys)/a`) is `store_write`, not `credentials`. Both ask. A key read from a split `tar -C`
+  store folder (`tar -C ~/.exo/poli$(:)cies -czf - ../keys/seat`, `credentials` on main) is now `store_write` with a
+  `credentials` part, so a policy that denies `credentials` still denies it. A long write line full of expansions
+  costs 2 to 3 times the CPU time it did (2,000 `cp` words with a `$(:)` in each: about 2.4 times), and the work
+  stays linear. Not covered: a name left with fewer than three characters of its own
+  (`cat .$(printf env)`), a pattern-matched name split by output (`cat server.k$(printf e)y`), output with a `/` in
+  it (`cp x ~/$(printf .exo/policies)/x`), an expansion that ends a store write's word (`cp x ~/.exo/$name`), a store
+  file's name made whole by output (`cp x state/$(printf approval-grants).json`), a literal glob in a store write
+  (`cp x ~/.exo/polic?es/gates.yaml`), a default word with a `}` in it (`${x:-${HOME}/.kube}`), behind an indirect
+  name (`${!x:-~/.kube}`, `${!x[0]:-.env}`) or a subscript with an expansion in braces (`${x[${i}]:-$HOME/.exo}`),
+  a part that could be `..` after a literal part (`grep -r x ~/.exo/run/jobs/.?`), and a folder by its full path
+  (`tar czf - ${x:-$HOME/.kube}`, as `tar czf - ~/.kube`, and `grep -r x ~/.exo/principals/me`).
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
   line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
   secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,
