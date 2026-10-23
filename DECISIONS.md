@@ -1015,17 +1015,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the `x=$( )`, `cat <( )`, backtick and nested forms,
   `cd ~/.exo/state && echo "$(cp /tmp/g.json approval-grants.json)"` and `cd /dev && echo $(cp /tmp/evil fd/3)`
   were allowed with no ask, under the default policy too, while the unwrapped `cp` asked the principal. Bash runs
-  the substitution in the folder the `cd` entered. Now a substitution on a line that entered the store or a
-  descriptor folder is classified in that folder, so its writes are store writes as they are unwrapped, with the
-  descriptor folder as the target after `cd /dev`. Its reads stay reads (`echo $(cat gates.yaml)`). As for the
-  line's own commands, neither the order of the commands nor a subshell is followed, so this fails closed: a
-  `$( )` before the `cd` (`echo $(cp x gates.yaml); cd ~/.exo/policies`) counts too. Each text is still classified
-  once per depth in a call (#334), now once for each folder context as well, so the same `$( )` read outside the
-  store and in it on one line is read in both. A `bash -c` string, `eval` or a heredoc fed to a shell after the
-  `cd` already asked, since that command is itself a non-read command in the store. This needs the D-075 amendment
-  for #464: without it, a force push or post inside such a `$( )` would lose its matrix deny beside the new store
-  write (`cd ~/.exo/policies && echo $(git push --force origin main)` under an irreversible deny cell), as any
-  command beside a store write did. With both, every change makes a line stricter or leaves it alone. GDNUMBERS465
+  a substitution where its command runs. Now a substitution of a command after the `cd` into the store or a
+  descriptor folder is classified in that folder, as the same command unwrapped is: a command the gate does not
+  read as a read (a write, and also `sed`, `sort`, `curl` or an interpreter) is a store write, with the
+  descriptor folder as the target after `cd /dev`, and a read (`cat`, `grep`, `git log`) stays a read. So the #338
+  friction after `cd /proc` or `cd /dev` reaches such substitutions too. A substitution in the `cd` itself or in a
+  command before it runs where the line started, so it is read as before
+  (`cd /proc/$(docker inspect -f '{{.State.Pid}}' web) && cat status` stays a read). A text found both before and
+  after the `cd` counts as after. As for the line's own commands, a subshell `cd` and a later `cd` out of the store
+  are not followed, so those fail closed (`(cd ~/.exo) && echo $(sort x)` asks). A line nested in the substitution
+  keeps its own folder: an `ssh` remote command runs on its host, while a local `bash -c` in the substitution is
+  itself a command in the store. A `declare` or `local` value that bash runs again after the `cd`
+  (`declare -a x='($(cp /tmp/evil gates.yaml))'`) is classified in the folder as well. Each text is still
+  classified once per depth in a call (#334), now once for each folder as well, so the same `$( )` read outside
+  the store and in it on one line is read in both. This needs the D-075 amendment for #464: without it, a command
+  in such a `$( )` whose matrix cell denies it (a force push, a post, a delete) would lose that deny beside the new
+  store write. Two more checks keep such a command as strict as when it decided the line. A part read from a nested
+  line carries that line as its text, so an anchored allow rule (`{command: '^git push', decision: allow}`)
+  lifted the push in the #191 pass, though it does not lower the line when the push decides it (#394). A rule
+  keyed on `command` that would lift a part must now match the whole line too. And a credentials line took the
+  weight of an irreversible command from its direct parts only, so a delete held by a store write in a `$( )`
+  (`cd ~/.exo/keys && echo $(rm -f x)`) no longer made it irreversible. It now reads every part. With these, every
+  change makes a line stricter or leaves it alone. GDNUMBERS465
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
