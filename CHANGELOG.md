@@ -222,11 +222,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   store, and so do other commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `xxd`). A call
   that sends a store file out (an `email_send`, post or payment tool call with the file in `files:`, an MCP upload
   tool, `curl -T`, `curl -F`, `mail -A`) keeps the call as a part, with its target and text. So a deny, reserved
-  entry, rule, matrix deny cell or posting rule on that call still applies, as on main, and a here-doc body on the line
-  still reaches the post, also inside `bash <<EOF`. For `policies/`, `state/` and `update/` that is stricter than
-  before, and so is a matrix deny on a delete part of a store line (`ssh host 'rm -rf ~/.exo/update'`). A tool the
-  gate reads as a file write or delete by its name keeps no part yet (#448), even one that sends, such as
-  `upload_file`: a deny on its category or its URL asks the principal instead. Not covered: the folders in
+  entry, rule, matrix deny cell or posting rule on that call still applies, as on main, and a here-doc body on the
+  line still reaches the post, also inside `bash <<EOF`. For `policies/`, `state/` and `update/` the here-doc body is
+  new: the gate gave it to no post, so `mail -A ~/.exo/policies/x a@b.c <<EOF` listed no violation for a home path in
+  the body. A file tool there keeps its own reading as a part (#448), and a line in `/dev` keeps `/dev` as a target
+  (#464), so a deny on `local_write`, `delete` or `target:/dev*` still applies. Not covered: the folders in
   `$EXO_PLUGIN_DIRS`, which developers point at a checkout, and, as for the rest of the store, a relative path written
   by a tool whose working folder is in the plugins folder.
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category

