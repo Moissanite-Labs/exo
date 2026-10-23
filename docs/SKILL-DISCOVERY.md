@@ -1,6 +1,6 @@
 # Budgeted skill discovery
 
-**Status:** Implemented for review (D-083, [#504](https://github.com/aska-digital/exo/issues/504)).
+**Status:** In progress (D-083, [#504](https://github.com/aska-digital/exo/issues/504)). Implemented on the feature branch and awaiting review.
 
 Skill discovery selects relevant skill descriptions for each turn. It uses local text matching,
 with no model calls, network service or extra dependencies. Full instructions still load through
@@ -86,6 +86,28 @@ Tests exercise actual composed model requests, exact default prompt preservation
 outside the shortlist, scheduled and concurrent turns, edited metadata, SOUL refresh, seat filtering,
 plugin precedence, invalid configuration, special files and character ceilings. They use fake models
 and temporary stores. Reduced prompt text is not evidence of improved task success.
+
+### Reproduce the catalog footprint
+
+On 2026-10-23, a deterministic fixture generated 100 skills across ten repeating topics.
+For the query `Postgres schema migration`, discovery used `max_chars: 2048` and `top_k: 6`.
+It selected `skill-000`, `skill-010`, `skill-020`, `skill-030`, `skill-040` and `skill-050`.
+
+| Prompt component | Full catalog | Discovery enabled |
+|---|---:|---:|
+| Catalog block, including heading | 10,631 characters | 832 characters |
+| Contribution, including joining blank line | 10,633 characters | 834 characters |
+
+These are character counts from the existing catalog renderer and the selector, not token counts
+or a complete conversation measurement. The fixture uses temporary files and makes no model or
+network requests. Reproduce it from the repository in the development environment:
+
+```sh
+PYTHONPATH=src python -m pytest -q -s tests/test_skill_discovery.py::test_reproducible_catalog_footprint
+```
+
+The test prints its settings, query, selected names and counts as JSON. Its synthetic catalog
+demonstrates the prompt budget. It does not measure retrieval accuracy or task success.
 
 The design draws on the [Hermes Skill Retrieval example](HERMES-PLUGIN-OPPORTUNITIES.md#11-budgeted-skill-discovery).
 This implementation uses standard BM25 scoring and copies no upstream implementation.

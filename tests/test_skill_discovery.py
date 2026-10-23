@@ -1,5 +1,6 @@
 """Local selection budgets, metadata changes, and isolation without model/network calls."""
 from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 
 import pytest
@@ -135,3 +136,24 @@ def test_authority_tags_are_escaped_before_budget_accounting(tmp_path):
     result = selector(tmp_path, max_chars=230).select("charts")
     assert "<exo-pinned>" not in result.text
     assert len(result.text) + 2 <= 230
+
+
+def test_reproducible_catalog_footprint(tmp_path):
+    """A synthetic catalog measures prompt size, not retrieval or task quality."""
+    topics = ("Postgres schema migrations", "Python test failures", "React component design",
+              "image composition", "spreadsheet formulas", "release notes", "incident timelines",
+              "API authentication", "container deployment", "document conversion")
+    for number in range(100):
+        skill(tmp_path, f"skill-{number:03}",
+              f"Use for {topics[number % len(topics)]}; inspect inputs, apply targeted changes, and verify the result.")
+    discovery = selector(tmp_path, max_chars=2048, top_k=6)
+    query = "Postgres schema migration"
+    selected = discovery.select(query)
+    legacy = discovery.index.prompt()
+    assert selected.names == tuple(f"skill-{number:03}" for number in range(0, 60, 10))
+    assert len(selected.text) + 2 <= 2048 < len(legacy) + 2
+    print(json.dumps({"skills": 100, "query": query,
+        "settings": {"enabled": True, "max_chars": 2048, "top_k": 6},
+        "legacy_catalog_chars": len(legacy), "legacy_contribution_chars": len(legacy) + 2,
+        "selected_block_chars": len(selected.text), "selected_contribution_chars": len(selected.text) + 2,
+        "selected_names": selected.names}, sort_keys=True))
