@@ -358,6 +358,13 @@ class JobManager:
         kill_process_group(h.proc)
         return True
 
+    def abort_startup(self) -> None:
+        """Release the unstarted worker pool; a running manager needs async close()."""
+        if self.loop is not None or self.live or self._tasks:
+            raise RuntimeError("cannot abort a started job manager")
+        self.target.closed = True
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
     async def close(self) -> None:
         """Jobs end with exod: stop every running job's process group, then record it once, with no notice."""
         self.target.closed = True

@@ -107,7 +107,9 @@ class CoreRuntime:
                  context_factory: Callable[[ContextTree], TurnContext] | None = None,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None,
-                 attach_peers: Any = None, attach_scheduler: Any = None, **loop_kw: Any) -> None:
+                 attach_peers: Any = None, attach_scheduler: Any = None,
+                 attach_jobs: Any = jobs_mod.attach, attach_agents: Any = Delegator,
+                 skills_enabled: bool = True, **loop_kw: Any) -> None:
         # Fail before opening stores, loading adapters or registering host handlers.
         required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
         if executor is not None:
@@ -193,14 +195,15 @@ class CoreRuntime:
             self.router.set_role("main", list(self.router.roles[seat.tier]))
         self.skills = SkillIndex.discover([*(seat.skill_folders if seat else []), self.home / "skills"]
                                           if skill_folders is None else skill_folders, self.plugins.skills.values(),
-                                          only=seat.skill_load if seat else None)
-        register_skill_tool(self.registry, self.skills)
+                                          only=seat.skill_load if seat else None) if skills_enabled else SkillIndex()
+        if skills_enabled:
+            register_skill_tool(self.registry, self.skills)
         if self.registry.get("ui") is None:
             ui_tool.register(self.registry, lambda body, sid: self.hub.publish(body, sid))  # D-014 panels
         harness_tool.register(self.registry, self.trace_text, self.findings.file)  # D-025
         self._peer_target = EngineTarget(self)  # peers, bus and job notices reach sessions through it
         self.peers = attach_peers(self) if attach_peers else None  # D-026: exo.peers.PeerService, from exo.compose
-        self.jobs = jobs_mod.attach(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
+        self.jobs = attach_jobs(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
         self.handoff_sources["jobs"] = self._open_jobs  # /handoff lists the agent's running background jobs
         self.mcp = McpManager(mcp_cfg, env)
         self._started: asyncio.Future | None = None
@@ -227,7 +230,7 @@ class CoreRuntime:
                 signer = crypto.Signer.from_file(seat.name, ensure_key(seat.key_path(self.home)))
             except Exception:
                 signer = None
-        self.agents = Delegator(self, delegation, signer=signer)  # the delegate tool and the tasks table
+        self.agents = attach_agents(self, delegation, signer=signer)  # the delegate tool and the tasks table
         self.agents.install()
         self.scheduler = attach_scheduler(self) if attach_scheduler else None  # exo.scheduler, from exo.compose
         self._schedule = schedule  # serve turns the cron loop on; tests and one-shot engines leave it off
@@ -272,6 +275,8 @@ class CoreRuntime:
 
     async def start(self) -> None:
         """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
+        if getattr(self, "_closing", False):
+            raise RuntimeError("the engine is closing")
         if self._started is None:
             if self.peers is not None and self.peers.autostart:
                 await self.peers.start()
@@ -337,9 +342,9 @@ class CoreRuntime:
             self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
+        from exo.runtime_shutdown import quiesce
+        await quiesce(self)  # a live sync tool keeps its resources and writer claim until close can be retried
         self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
-        agentlog.release_writer(self._writer)
-        self._writer = None
         await self.stop_channels()
         errors: list[BaseException] = []  # every step runs; the first error is raised at the end
         for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
@@ -347,6 +352,9 @@ class CoreRuntime:
                 await step()  # jobs end with exod
             except BaseException as exc:  # noqa: BLE001 - re-raised below
                 errors.append(exc)
+        self.plugins.close()  # resources owned by plugins, after transports stop and before the store closes
+        agentlog.release_writer(self._writer)
+        self._writer = None
         trace.remove_sink(self._on_harness_error)  # after the steps: a notice that fails in jobs.close is recorded
         try:
             self.store.close()  # last: the hub is closed before this (serve), so nothing writes events after it
@@ -414,12 +422,12 @@ class CoreRuntime:
 
     @staticmethod
     def _plugin_handler(fn: Any) -> Any:
-        async def run(args: dict[str, Any], ctx: ToolContext) -> Any:
+        def run(args: dict[str, Any], ctx: ToolContext) -> Any:
             kw = {"session_id": ctx.session or "", "task_id": ctx.session or "", "tool_call_id": ctx.call_id}
-            if inspect.iscoroutinefunction(fn):
-                return await fn(args, **kw)
-            return await asyncio.to_thread(fn, args, **kw)
-        return run
+            return fn(args, **kw)
+        async def run_async(args: dict[str, Any], ctx: ToolContext) -> Any:
+            return await run(args, ctx)
+        return run_async if inspect.iscoroutinefunction(fn) else run
 
     def _hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
         return {"tool_name": call.name, "args": call.arguments, "session_id": ctx.session or "",
@@ -477,6 +485,8 @@ class CoreRuntime:
 
     async def run_tool(self, call: ToolCall, lctx: dict[str, Any]) -> ToolResult:
         """The loop's tool runner: a fresh ToolContext per call."""
+        if getattr(self, "_closing", False):
+            return ToolResult.of_text(call.id, "The engine is closing", True)
         sid = lctx.get("session")
         info = self.store.get_session(sid) if sid else None
         loop = asyncio.get_running_loop()
@@ -510,7 +520,15 @@ class CoreRuntime:
                           emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "author": lctx.get("author", ""),
                                            "jobs": self.jobs, "env_allow": self.env_allow,
                                            "env_deny": self.env_deny})
-        return await self.registry.call(call, ctx)
+        task = asyncio.current_task()
+        owned = task not in self._tasks
+        if task is not None:
+            self._tasks.add(task)
+        try:
+            return await self.registry.call(call, ctx)
+        finally:
+            if task is not None and owned:
+                self._tasks.discard(task)
 
     def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:
         """Running background jobs of this agent (jobs belong to the agent, not one thread), for /handoff."""
@@ -643,6 +661,8 @@ class CoreRuntime:
         self._spawn_turn(s.TurnSend(session=session, text=text), meta)
 
     def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None) -> None:
+        if getattr(self, "_closing", False):
+            raise CommandFailed("closed", "the engine is closing")
         task = asyncio.create_task(self.run_turn(b, meta))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -650,16 +670,26 @@ class CoreRuntime:
     async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
+        if getattr(self, "_closing", False):
+            raise CommandFailed("closed", "the engine is closing")
         meta = dict(meta or {})
         if not meta.get("author"):
             meta["author"] = provenance.SYSTEM  # internal wakeups need an explicit source to speak for anyone
         hooks = self.plugins.hooks
-        await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
+        task = asyncio.current_task()
+        owned = task not in self._tasks
+        if task is not None:
+            self._tasks.add(task)  # public direct callers need the same shutdown ownership as dispatched turns
         try:
+            await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
             return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
                                                  meta=meta)
         finally:
-            await hooks.afire("on_turn_end", session_id=b.session)
+            try:
+                await hooks.afire("on_turn_end", session_id=b.session)
+            finally:
+                if task is not None and owned:
+                    self._tasks.discard(task)
 
     # ------------------------------------------------------------ peers (D-026)
 

@@ -83,6 +83,7 @@ LAZY = {
     'trace': ('trace_cmd', 'cmd_trace', 'how the harness performed in a session: per turn timing, routes, flags'),
     'findings': ('trace_cmd', 'cmd_findings', 'what the harness found wrong with itself'),
     'memory': ('memory_cmd', 'cmd_memory', "each agent's one log and the signed ledger: verify, threads"),
+    'harness': ('harness_cmd', 'cmd_harness', 'inspect and select modular harness profiles'),
     'taste': ('baseline.cli', 'cmd_taste', 'the taste layers: house, learned, pins (D-044)'),
 }
 # Commands whose handler also takes the principal store.

@@ -6258,3 +6258,41 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** leaving 402 in the key-refusal set (wrong advice), a second money format for floors, and treating an unpriced fallback as free.
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
+
+## D-082 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
+- **Status:** Implemented for review ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
+  letting users choose how lean or capable Exo should be. Comparative performance is not yet established.
+- **Evidence:** `docs/HARNESS-LANDSCAPE.md` records the current Pi, Codex, Hermes, OpenCode, DeepSeek Harness,
+  Claude Code, Aider and Goose sources, concrete user requests, licenses and remaining work. The strongest
+  immediate fit is composition of Exo's already substantial capabilities, predictable extension ownership,
+  and repository instruction compatibility. No competitor implementation was copied.
+- **Decision:** Optional `harness` configuration selects `lean`, `coding` or `full`, with explicit capability
+  enables/disables, dependency resolution and `EXO_PROFILE` override. The CLI can explain or dry-run the plan
+  without importing plugins or contacting providers. The no-profile path preserves legacy discovery.
+  Runtime overlays retain suppressed configuration on disk. The gate is mandatory for explicit profiles.
+  Executor-required plugins and trusted inventories remain authoritative. Seats cannot revive disabled
+  services or built-in plugins. Jobs/delegation use inert adapters when disabled. Background calls are
+  blocked before local or broker execution. Learning's lazy feedback path honors the same profile.
+- **Plugins:** Folder `requires` declarations are planned before import. Entry-point declarations are
+  available after import and checked before registration. Missing/excluded/failed/cyclic requirements fail
+  the dependent, not independent plugins. `register_cleanup` owns synchronous resources, unwound once in
+  reverse order on registration failure or final shutdown. Shutdown is not live unload and retains gate
+  registrations. Startup failures release constructed resources.
+  Shutdown drains turns and tracks actual synchronous workers before releasing plugins. If work exceeds
+  the five-second shutdown bound, close fails with resources and writer ownership retained for retry.
+- **Instructions:** A session-scoped provider reads root-to-cwd `AGENTS.override.md` or `AGENTS.md`, with
+  optional `CLAUDE.md` fallback, bounded to 32 KiB total. It never executes project code, refuses symlink
+  files, and labels guidance as project input rather than approval. Child loops resolve their own cwd.
+  Required-executor mode refuses this host-read provider until an executor-backed reader exists.
+- **Rejected:** Enabling every feature by default for existing users. A profile that merely hides tools
+  while services continue running. Silently installing dependencies. Treating plugin filtering as sandbox
+  isolation. Promising live reload without an active-work lifecycle. Claiming market leadership without
+  a controlled evaluation. Profiles do not yet minimize installed package size or eliminate all shared
+  core imports. Remaining repository maps, workflow recipes, ACP and provider evaluations have explicit
+  acceptance gates in the roadmap.
+- **Validation:** Profile/CLI resolution and dry runs. Actual composition with fake models and real gate.
+  Disabled broker dispatch. Workspace scope including delegated sessions. Plugin dependency/rollback and
+  resource cleanup. Learning feedback exclusion. Existing root/plugin suites, Ruff, type baseline,
+  protocol export and core budget checks. Test outcomes are reported with the change.
+- **Docs:** `docs/HARNESS.md`, `docs/WORKSPACE-INSTRUCTIONS.md`, `docs/HARNESS-LANDSCAPE.md`, user guide §1,
+  developer guide §1/§4, command reference, README and changelog. Whitepaper coverage remains a future batch.

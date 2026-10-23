@@ -76,6 +76,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
+- Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
+  explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
+  The approval gate and required executor constraints remain enforced. Existing configurations
+  without a profile retain legacy behavior (`docs/HARNESS.md`, D-082).
+- Dependency-aware plugin composition and synchronous resource cleanup on failed registration or
+  final shutdown. Folder requirements are validated before import. Entry-point requirements before registration.
+- Optional scoped `AGENTS.md`/`AGENTS.override.md` workspace guidance, with bounded reads and independent
+  main/child session scope. `CLAUDE.md` fallback is configurable (`docs/WORKSPACE-INSTRUCTIONS.md`).
+- A sourced harness landscape comparison and phased roadmap with evaluation gates (`docs/HARNESS-LANDSCAPE.md`).
 
 ### Changed
 - Chat status instruments wrap within the conversation width. Model names, values and full-row notices
