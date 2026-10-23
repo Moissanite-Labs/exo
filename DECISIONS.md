@@ -1450,6 +1450,84 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   registry risk floor, the required executor). Chosen over a fixed
   table of expected outcomes, which a change can edit along with the gate: the corpus comes from the tests and tables
   of both trees, so deleting a row or an entry does not hide its line.
+  *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
+  push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
+  `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and
+  runs `cmd`, but the gate read an unknown program named `X=a b` and never read `cmd`. So
+  `git push origin feature && X='a b' rm -rf /srv/data` logged, also under `deny: [delete]`, and a second post
+  behind such a word skipped the posting rules (#396). A word is now an assignment when its `NAME=` (with any
+  `[subscript]` and `+`) is unquoted in its source text, so only the value may be quoted. A word whose name or `=` is
+  quoted (`'X=a' cmd`, `"X"=a cmd`, `X\=a cmd`) stays the program, as bash runs it, and after `env` or `sudo` a word
+  quoted whole is still an assignment (#231). A line continuation in the name (`X\<newline>='a b' cmd`) is dropped
+  before the check, as bash drops it. The env-inject scan (#231) reads the value as before. (2) The opaque
+  floor fired when the line's category was `opaque_exec` or a part carried `indirection`. An unknown program carries
+  the signal `unknown program` instead, so beside a more severe part that logs (`git push origin feature && mytool
+  --wipe`, `git push origin feature; kill -9 1`) its ask was dropped. The floor now fires on that signal too, and a
+  category line naming `opaque_exec` below ask still lowers it (#178); a rule on `opaque_exec` lowers it only when
+  that rule matches the line's dominant part, as for `indirection`. `binds_exact` takes the signal as well, so an
+  "always" on such a line covers that exact line, not every later push to the same remote. The differential does
+  not run that hook step, so the new tests pin it.
+  These steps keep every decision at least as strict as main's. The old reading stays beside the new one as an
+  unknown-program part, with main's exec-options scan over it, so `X='a b' ls`, a bare `X='a b'` and a post behind
+  one still ask. The store check scans that reading's words first, so a store path in a quoted value
+  (`X="$HOME/.exo/state/notes.md" ls`, or the folder a `cd` into the store left) is store_write as before. The old
+  reading is kept also when the new one reaches an `env -S` or `--split-string`, so `X="$HOME/.exo/state/notes.md"
+  env -S 'ls'` stays store_write and `GIT_SSH_COMMAND='rm -rf /srv/data' env -S 'git fetch'` is still denied under
+  `deny: [delete]`. The setter check of a `command` rule (#394) counts a setter under either reading, so `X="$Y" ls`
+  (a program from a variable, before) still has to be named by an allow rule that would lower `X="$Y" ls; git push
+  --force origin main`. And the parts read from the command behind such a word carry the signal `quoted
+  assignment`: `decide` also decides the line with the part `_combine` would put on top without them, as main did,
+  and keeps the stricter outcome. Without that step the differential lowered 110 pairs on 44 actions, each a post
+  followed by a delete or a force push behind a quoted assignment (`gh pr comment 5 ... && X='a b' rm -rf
+  /srv/data`): the delete now outranks the post, and the matrix cell, category lines and third-party escalation read
+  the dominant part only (#437), so an all-allow or all-log category policy allowed or logged what the post's
+  third-party escalation asked for, and a deny cell for irreversible public acts asked. Those steps read one simple
+  command at a time, and the new reading also changes what the commands after it see. A `cd` behind a quoted word
+  (`X='a b' cd /dev && yarn publish`) moves their folder, as bash runs it, and their store write then outranks the
+  publish a deny cell denied (the same as `X=ab cd /dev && yarn publish` on main); a reserved word after one is read
+  as after an unquoted assignment (`X='a b' coproc env | cat` a coprocess, where bash runs a program named
+  `coproc`); and a value declare reads again is added to the line late. So `classify` also reads a call that has a
+  quoted prefix assignment as before, each such word the program, in a call of its own (`Classification.before`),
+  and `decide` decides that reading too: the stricter outcome stands, and at an equal one the reserved parts and
+  violations of both. The hook reads a post's body file into that reading as well. Within the simple command, the
+  old reading's store scan reads its own parts and the folder from before the new reading's `cd`, and the late parts
+  the new reading adds are signed. Before these, the reviews' differential runs lowered 338 pairs on 150 actions of
+  each built-in shell line behind `X='a b'` (`X='a b' coproc env | cat`: credentials deny -> credentials ask;
+  `X='a b' cd /dev && ssh -vpls 22 rm -rf /data`: delete deny -> store_write ask; `X='a b' cd ~/.exo && mv keys
+  /tmp/k`: credentials deny -> store_write ask) and 98 pairs on 50 actions of an aimed corpus (`gh pr comment 5 ...
+  && X='a b' declare -a 'arr=($(rm -rf /srv/data))'`: github_post deny -> delete ask), and with the two in-command
+  fixes alone 284 pairs on 132 actions still lowered, each a `cd` or a `coproc` behind the quoted word. Rejected:
+  dropping the old reading, which lowers those lines and the ones that ask only as an unknown program. Rejected:
+  reading a reserved word after an assignment as a program, as bash does: right for both forms, but it changes the
+  unquoted form main reads as a coprocess, which this fix leaves alone. Rejected: giving the
+  env-inject scan's matching loop the same unquoted-name test. Bash runs `'GIT_SSH_COMMAND=rm -rf /srv/data' git
+  fetch` as a program of that name, but main reads the delete in the value and `deny: [delete]` denies the line.
+  With the test it would ask. The loop still reads a word with a quoted name as an assignment, which only adds parts.
+  The differential (main's `scripts/gate_diff.py` under its built-in policies and the 74 from the reviews, among them
+  `command` rules on `git push` beside `opaque_exec: allow`, target and command denies and matrix deny cells) lowers
+  nothing in five runs, 38,632,272 pairs on 239,952 actions in all, and tightens 2,067,718 pairs: its built-in
+  corpus with 6,701 aimed lines and the reviews' probe lines (13,617,863 pairs); 39,180 aimed lines as written
+  (6,307,980): a `cd` or `pushd` into `/dev`, `/proc`, `~/.exo` or `~/.ssh` behind each quoting style, also through
+  `builtin`, `command`, `env -S`, `--split-string`, `env -u`, `nice`, `sudo`, `timeout` and `exec`, before a
+  publish, a force push, a post, an ssh delete, a secret read or a move of the store's keys; a `cd` before one;
+  reserved words and `coproc` after one; environment dumps behind one; values declare and friends read again after a
+  post; the reviews' corpus of each built-in shell line behind `X='a b'`; and the reviews' probe lines; 15,400 lines
+  of each quoting style with store, secret and env-inject values (`PATH`, `BASH_ENV`, `GIT_SSH_COMMAND`, `PS4`,
+  `LD_PRELOAD`) through each wrapper (2,479,400); 3,000 of the `cd` lines and 3,080 of those, with their compound
+  forms (7,981,575); and the reviews' 6,000 prefixed built-in lines with their compound forms (8,245,454). Earlier
+  versions lowered lines it now covers:
+  one that scanned only the new reading's words for store paths lowered 664 pairs on 71 actions (a store path in a
+  quoted value lost store_write); one that dropped the old reading when an `env -S` followed lowered 8,889 pairs on
+  932 actions of the `env -S` lines (store_write and env-inject deletes lost); and one whose setter check read only the
+  new reading lowered 8 pairs on 6 actions (`X="$Y" ls; git push --force origin main` allowed by a rule on
+  `git push`). The top transitions are a push that logged, or was allowed, and now asks beside an unknown program or
+  a command read behind a quoted assignment (`vcs_push log -> vcs_push ask`, 132,363 pairs in the built-in run), and
+  the command behind one taking the line (`opaque_exec allow -> delete ask`, 89,497 there and 276,241 in the
+  prefixed run). In a sample of 6,000 built-in actions and one of 2,000 aimed lines, each decided under the default
+  policy and `deny: [delete]`, none is lower; each of the 45 and 306 stricter pairs is a command read behind a quoted
+  assignment, now asking or denying as it does alone, or an unknown program (the quoted word read as before) asking
+  beside a push that logged. The everyday cost is a script that calls a local tool the gate does not know after a
+  push or a post (`git push origin feature && notify-send done`): it asks where it logged.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
