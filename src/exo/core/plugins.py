@@ -11,7 +11,6 @@ error is kept on its ``LoadedPlugin`` record. One bad plugin never stops the cor
 
 from __future__ import annotations
 
-import importlib.metadata
 import importlib.util
 import logging
 import os
@@ -25,6 +24,7 @@ from exo.core import trace
 from exo.core.hooks import HookRegistry, accepted
 from exo.core.slots import Slots
 from exo.core.types import Risk, ToolSpec
+from exo.plugin_lifecycle import Resources, dependency_error
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,7 @@ class PluginContext:
         self.manifest = manifest
         self.plugin = manifest.name
         self._undo: list[Callable[[], None]] = []
+        self._resources = Resources(self.plugin)
         self.registered: list[tuple[str, str]] = []
 
     @property
@@ -221,7 +222,12 @@ class PluginContext:
         self._undo.append(undo)
         self.registered.append((kind, name))
 
+    def register_cleanup(self, callback: Callable[[], None]) -> None:
+        """Release a synchronous resource on failed registration or final manager shutdown."""
+        self._resources.add(callback)
+
     def rollback(self) -> None:
+        self._resources.close()
         for undo in reversed(self._undo):
             try:
                 undo()
@@ -345,6 +351,7 @@ class PluginManager:
         self.channels: dict[str, ChannelEntry] = {}
         self.skills: dict[str, SkillEntry] = {}
         self.plugins: dict[str, LoadedPlugin] = {}
+        self._resources = Resources("plugin manager")
 
     @property
     def executor_required(self) -> bool:
@@ -360,11 +367,16 @@ class PluginManager:
         if manifest.name in self.plugins:
             rec.error = "already loaded"
             return rec
+        if error := dependency_error(self, manifest):
+            rec.error = error
+            self.plugins[manifest.name] = rec
+            return rec
         ctx = PluginContext(self, manifest)
         try:
             if not callable(register):
                 raise PluginError("no register(ctx) function")
             register(ctx)
+            self._resources.add(ctx._resources.close)
         except Exception as e:
             ctx.rollback()
             rec.error = f"{type(e).__name__}: {e}"
@@ -377,6 +389,9 @@ class PluginManager:
         m = folder if isinstance(folder, Manifest) else read_manifest(Path(folder))
         if m.name in self.plugins:
             return LoadedPlugin(m, "dir", error="already loaded")
+        if error := dependency_error(self, m):
+            rec = self.plugins[m.name] = LoadedPlugin(m, "dir", error=error)
+            return rec
         try:
             mod = import_folder(m)
         except Exception as e:
@@ -388,42 +403,18 @@ class PluginManager:
 
     def load_entry_points(self, group: str = ENTRY_POINT_GROUP,
                           allow: Callable[[str], bool] = lambda n: True) -> list[LoadedPlugin]:
-        out = []
-        for ep in importlib.metadata.entry_points(group=group):
-            if not allow(ep.name):
-                continue
-            m = Manifest(name=ep.name, kind="entry_point")
-            try:
-                obj = ep.load()
-            except Exception as e:
-                rec = LoadedPlugin(m, "entry_point", error=f"import failed: {type(e).__name__}: {e}")
-                self.plugins.setdefault(ep.name, rec)
-                out.append(rec)
-                continue
-            raw = getattr(obj, "PLUGIN_MANIFEST", None)
-            if isinstance(raw, dict):
-                m.raw, m.version = raw, str(raw.get("version", ""))
-                m.description = str(raw.get("description", ""))
-            out.append(self._run_register(m, "entry_point", getattr(obj, "register", obj)))
-        return out
+        from exo.plugin_lifecycle import load_entry_points
+        return load_entry_points(self, group, allow)
 
     def load_all(self, dirs: Iterable[str | Path] | None = None, enabled: Iterable[str] | None = None,
                  disabled: Iterable[str] = (), entry_points: bool = True) -> list[LoadedPlugin]:
-        """Load folders from ``dirs`` (default ``default_dirs()``) then entry points.
+        """Load selected plugins in dependency order; excluded dependencies stay disabled."""
+        from exo.plugin_lifecycle import load_all
+        return load_all(self, dirs, enabled, disabled, entry_points)
 
-        ``enabled`` (if given) is an allow list; ``disabled`` always wins.
-        """
-        allow_set = set(enabled) if enabled is not None else None
-        deny = set(disabled)
-
-        def allow(name: str) -> bool:
-            return name not in deny and (allow_set is None or name in allow_set)
-
-        out = [self.load_folder(m) for m in discover(default_dirs() if dirs is None else dirs)
-               if allow(m.name)]
-        if entry_points:
-            out += self.load_entry_points(allow=allow)
-        return out
+    def close(self) -> None:
+        """Final shutdown: release plugin resources once, in reverse registration order."""
+        self._resources.close()
 
     def tool_specs(self) -> list[ToolSpec]:
         """Specs of plugin tools whose check passes, sorted by name."""

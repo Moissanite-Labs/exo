@@ -2767,6 +2767,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-19 (reduction, #332):** a no-behavior-change reduction (dead code, merged duplicates, shorter equivalent forms) took the counted core from 15,870 on main to 15,776 (94 lines; it was 15,800 before #314). `CORE_FLOOR` stays 14,813: the count was already above the floor, and the floor never goes up, so setting it to the new count would have lifted the ceiling by about 960 lines. `CORE_HEADROOM` is back at 1,000 after #314's temporary raise to 1,058, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 37.
 - *2026-10-20 (#346, follow-up to #321):* CORE_HEADROOM raised by 29 to 1,029 for the job notice fixes (key redaction and event loop robustness). The lead schedules a reduction this week.
 - **Amendment 2026-10-20 (reduction, #373):** a no-behaviour-change reduction (dead overrides, merged duplicates, an exception clause the following handler could never reach, shorter equivalent forms) took the counted core from 15,841 on main to 15,801 (40 lines). `CORE_FLOOR` stays 14,813: the count is above the floor, and the floor never goes up. `CORE_HEADROOM` is back at 1,000 after #346's temporary raise to 1,029, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 12.
+- *2026-10-23 (D-082):* CORE_HEADROOM raised by the minimum 45 to 1,045 for bounded active-work shutdown and startup rollback. Count 15,857, ceiling 15,858. Reduction follow-up [#498](https://github.com/aska-digital/exo/issues/498) due 2026-10-30: consolidate lifecycle queries behind public interfaces and restore 1,000 headroom without excluding counted modules. CORE_FLOOR remains 14,813.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
 
@@ -2867,3 +2868,41 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and a first launch from a clean home with the claude CLI: no approval card for the intro skill, no decision
   call to the CLI, and read-only tool calls at 0.0 s.
 - **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.
+
+## D-082 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
+- **Status:** Implemented for review ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
+  letting users choose how lean or capable Exo should be. Comparative performance is not yet established.
+- **Evidence:** `docs/HARNESS-LANDSCAPE.md` records the current Pi, Codex, Hermes, OpenCode, DeepSeek Harness,
+  Claude Code, Aider and Goose sources, concrete user requests, licenses and remaining work. The strongest
+  immediate fit is composition of Exo's already substantial capabilities, predictable extension ownership,
+  and repository instruction compatibility. No competitor implementation was copied.
+- **Decision:** Optional `harness` configuration selects `lean`, `coding` or `full`, with explicit capability
+  enables/disables, dependency resolution and `EXO_PROFILE` override. The CLI can explain or dry-run the plan
+  without importing plugins or contacting providers. The no-profile path preserves legacy discovery.
+  Runtime overlays retain suppressed configuration on disk. The gate is mandatory for explicit profiles.
+  Executor-required plugins and trusted inventories remain authoritative. Seats cannot revive disabled
+  services or built-in plugins. Jobs/delegation use inert adapters when disabled. Background calls are
+  blocked before local or broker execution. Learning's lazy feedback path honors the same profile.
+- **Plugins:** Folder `requires` declarations are planned before import. Entry-point declarations are
+  available after import and checked before registration. Missing/excluded/failed/cyclic requirements fail
+  the dependent, not independent plugins. `register_cleanup` owns synchronous resources, unwound once in
+  reverse order on registration failure or final shutdown. Shutdown is not live unload and retains gate
+  registrations. Startup failures release constructed resources.
+  Shutdown drains turns and tracks actual synchronous workers before releasing plugins. If work exceeds
+  the five-second shutdown bound, close fails with resources and writer ownership retained for retry.
+- **Instructions:** A session-scoped provider reads root-to-cwd `AGENTS.override.md` or `AGENTS.md`, with
+  optional `CLAUDE.md` fallback, bounded to 32 KiB total. It never executes project code, refuses symlink
+  files, and labels guidance as project input rather than approval. Child loops resolve their own cwd.
+  Required-executor mode refuses this host-read provider until an executor-backed reader exists.
+- **Rejected:** Enabling every feature by default for existing users. A profile that merely hides tools
+  while services continue running. Silently installing dependencies. Treating plugin filtering as sandbox
+  isolation. Promising live reload without an active-work lifecycle. Claiming market leadership without
+  a controlled evaluation. Profiles do not yet minimize installed package size or eliminate all shared
+  core imports. Remaining repository maps, workflow recipes, ACP and provider evaluations have explicit
+  acceptance gates in the roadmap.
+- **Validation:** Profile/CLI resolution and dry runs. Actual composition with fake models and real gate.
+  Disabled broker dispatch. Workspace scope including delegated sessions. Plugin dependency/rollback and
+  resource cleanup. Learning feedback exclusion. Existing root/plugin suites, Ruff, type baseline,
+  protocol export and core budget checks. Test outcomes are reported with the change.
+- **Docs:** `docs/HARNESS.md`, `docs/WORKSPACE-INSTRUCTIONS.md`, `docs/HARNESS-LANDSCAPE.md`, user guide §1,
+  developer guide §1/§4, command reference, README and changelog. Whitepaper coverage remains a future batch.

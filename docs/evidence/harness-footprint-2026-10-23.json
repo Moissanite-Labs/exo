@@ -1,0 +1,207 @@
+{
+  "git_sha": "01101d3c60aeafbf04949bee1128b4e40e1e92ec",
+  "measured_at": "2026-10-23T15:34:13.685932+00:00",
+  "medians": {
+    "coding": {
+      "close_ms": 2.191456999980801,
+      "compose_close_ms": 74.1831140001068,
+      "compose_ms": 71.991657000126,
+      "peak_rss_mib": 44.53515625,
+      "process_ms": 586.3888219998898,
+      "registered_tools": 21,
+      "schema_chars": 15306,
+      "schema_tokens_approx": 3827
+    },
+    "full": {
+      "close_ms": 2.3592780000853963,
+      "compose_close_ms": 89.70055200006755,
+      "compose_ms": 87.23712899995917,
+      "peak_rss_mib": 45.15625,
+      "process_ms": 618.3740369999668,
+      "registered_tools": 27,
+      "schema_chars": 18234,
+      "schema_tokens_approx": 4559
+    },
+    "lean": {
+      "close_ms": 1.1781229998177878,
+      "compose_close_ms": 38.182446000064374,
+      "compose_ms": 37.00866100007261,
+      "peak_rss_mib": 42.234375,
+      "process_ms": 426.03743199993005,
+      "registered_tools": 12,
+      "schema_chars": 7870,
+      "schema_tokens_approx": 1968
+    }
+  },
+  "notes": [
+    "Fresh interpreter and template-only principal store per sample; OS caches are not flushed.",
+    "Compose excludes imports/store setup; process wall time includes imports/setup/measurement.",
+    "PATH is an empty temporary directory: no installed CLI detection/probes run.",
+    "Registered schemas include unavailable tools; tokens approximate schema characters / 4.",
+    "Peak RSS covers the entire child process; source digest identifies live uncommitted code."
+  ],
+  "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+  "python": "3.11.17 (main, Oct  3 2026, 01:05:36) [Clang 22.1.3 ]",
+  "samples": [
+    {
+      "close_ms": 1.3476229999014322,
+      "compose_close_ms": 42.89097099990613,
+      "compose_ms": 41.5433480000047,
+      "loaded_plugins": [
+        "exo-gate"
+      ],
+      "peak_rss_mib": 42.2890625,
+      "process_ms": 608.1372529999953,
+      "profile": "lean",
+      "registered_tools": 12,
+      "sample": 1,
+      "schema_chars": 7870,
+      "schema_tokens_approx": 1968
+    },
+    {
+      "close_ms": 2.261946999851716,
+      "compose_close_ms": 90.24392199989961,
+      "compose_ms": 87.9819750000479,
+      "loaded_plugins": [
+        "exo-context",
+        "exo-gate",
+        "exo-memory"
+      ],
+      "peak_rss_mib": 44.25,
+      "process_ms": 586.3888219998898,
+      "profile": "coding",
+      "registered_tools": 21,
+      "sample": 1,
+      "schema_chars": 15306,
+      "schema_tokens_approx": 3827
+    },
+    {
+      "close_ms": 2.3592780000853963,
+      "compose_close_ms": 92.83753399995476,
+      "compose_ms": 90.47825599986936,
+      "loaded_plugins": [
+        "exo-bus",
+        "exo-command",
+        "exo-context",
+        "exo-gate",
+        "exo-memory",
+        "exo-orchestra"
+      ],
+      "peak_rss_mib": 45.27734375,
+      "process_ms": 488.79305899981773,
+      "profile": "full",
+      "registered_tools": 27,
+      "sample": 1,
+      "schema_chars": 18234,
+      "schema_tokens_approx": 4559
+    },
+    {
+      "close_ms": 2.191456999980801,
+      "compose_close_ms": 74.1831140001068,
+      "compose_ms": 71.991657000126,
+      "loaded_plugins": [
+        "exo-context",
+        "exo-gate",
+        "exo-memory"
+      ],
+      "peak_rss_mib": 44.53515625,
+      "process_ms": 461.9100699999308,
+      "profile": "coding",
+      "registered_tools": 21,
+      "sample": 2,
+      "schema_chars": 15306,
+      "schema_tokens_approx": 3827
+    },
+    {
+      "close_ms": 2.463423000108378,
+      "compose_close_ms": 89.70055200006755,
+      "compose_ms": 87.23712899995917,
+      "loaded_plugins": [
+        "exo-bus",
+        "exo-command",
+        "exo-context",
+        "exo-gate",
+        "exo-memory",
+        "exo-orchestra"
+      ],
+      "peak_rss_mib": 45.15625,
+      "process_ms": 655.6890280000971,
+      "profile": "full",
+      "registered_tools": 27,
+      "sample": 2,
+      "schema_chars": 18234,
+      "schema_tokens_approx": 4559
+    },
+    {
+      "close_ms": 1.173784999991767,
+      "compose_close_ms": 38.182446000064374,
+      "compose_ms": 37.00866100007261,
+      "loaded_plugins": [
+        "exo-gate"
+      ],
+      "peak_rss_mib": 42.234375,
+      "process_ms": 424.38163900010295,
+      "profile": "lean",
+      "registered_tools": 12,
+      "sample": 2,
+      "schema_chars": 7870,
+      "schema_tokens_approx": 1968
+    },
+    {
+      "close_ms": 1.8598299998302537,
+      "compose_close_ms": 81.1171679997642,
+      "compose_ms": 79.25733799993395,
+      "loaded_plugins": [
+        "exo-bus",
+        "exo-command",
+        "exo-context",
+        "exo-gate",
+        "exo-memory",
+        "exo-orchestra"
+      ],
+      "peak_rss_mib": 44.9921875,
+      "process_ms": 618.3740369999668,
+      "profile": "full",
+      "registered_tools": 27,
+      "sample": 3,
+      "schema_chars": 18234,
+      "schema_tokens_approx": 4559
+    },
+    {
+      "close_ms": 1.1781229998177878,
+      "compose_close_ms": 25.235993999785933,
+      "compose_ms": 24.057870999968145,
+      "loaded_plugins": [
+        "exo-gate"
+      ],
+      "peak_rss_mib": 42.22265625,
+      "process_ms": 426.03743199993005,
+      "profile": "lean",
+      "registered_tools": 12,
+      "sample": 3,
+      "schema_chars": 7870,
+      "schema_tokens_approx": 1968
+    },
+    {
+      "close_ms": 2.083885999809354,
+      "compose_close_ms": 70.71829999972579,
+      "compose_ms": 68.63441399991643,
+      "loaded_plugins": [
+        "exo-context",
+        "exo-gate",
+        "exo-memory"
+      ],
+      "peak_rss_mib": 44.6015625,
+      "process_ms": 615.2026229999592,
+      "profile": "coding",
+      "registered_tools": 21,
+      "sample": 3,
+      "schema_chars": 15306,
+      "schema_tokens_approx": 3827
+    }
+  ],
+  "samples_per_profile": 3,
+  "schema_version": 1,
+  "scope": "Offline compose/close only; no model turns, tools, service startup or external connections.",
+  "source_sha256": "69fa6acb0c165e177c77db243f95fc31606cdbe38973d7e8c826d840d1bfacd3"
+}

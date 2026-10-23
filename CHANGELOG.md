@@ -5,6 +5,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
+  explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
+  The approval gate and required executor constraints remain enforced. Existing configurations
+  without a profile retain legacy behavior (`docs/HARNESS.md`, D-082).
+- Dependency-aware plugin composition and synchronous resource cleanup on failed registration or
+  final shutdown. Folder requirements are validated before import. Entry-point requirements before registration.
+- Optional scoped `AGENTS.md`/`AGENTS.override.md` workspace guidance, with bounded reads and independent
+  main/child session scope. `CLAUDE.md` fallback is configurable (`docs/WORKSPACE-INSTRUCTIONS.md`).
+- A sourced harness landscape comparison and phased roadmap with evaluation gates (`docs/HARNESS-LANDSCAPE.md`).
+
 ### Fixed
 - `scripts/gate_diff.py` counts a posting violation as often as each tree lists it, so a gate change that lists once
   what two posts of one name both meet shows as lower (#460). Each seed also runs under each tool table name that
