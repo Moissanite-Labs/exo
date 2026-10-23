@@ -1425,9 +1425,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `BASH_CMDS` or `BASH_ALIASES` value record a path and open nothing. Their `opaque_exec` part is marked (signal
   `rebinds a name`), and the store check takes a marked part as the `read` it was, whatever runs or sets it: the shell,
   sudo, ssh, mosh, an ssh `ProxyCommand`, `man -P`, `printf -v` or `declare`. A line that ssh, mosh, `man -P`, less or
-  more runs counts so when its other commands are reads, marked parts or plain shell commands. A shell command run with
-  sudo outranked the read the rebind was, on main too, so it keeps the check. So a store or descriptor path in these
-  words alone makes no store write. This matters because a store write outranks a post on the line: the line then asks
+  more runs counts so when its other commands are reads or marked parts, and the hop of ssh or mosh counts too. Any
+  other command keeps the check of the words around the line, in either order: a plain shell command
+  (`ssh host 'sort x; hash -p /x ls'`) or one run with sudo. So a store or descriptor path in these words alone makes no
+  store write. This matters because a store write outranks a post on the line: the line then asks
   the principal alone, and an allow, log or ask cell reads the store write only (#437). The first draft checked the hash
   part's words, so a descriptor path in them turned a matrix deny on the post into an ask and dropped its posting
   violations (main has read a deny cell on every part since #464). The second draft exempted only a simple command named
@@ -1436,52 +1437,55 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of an environment dump carries every signal on its line as its own. A store or descriptor path a rebound name runs
   later is still behind the opaque ask. A redirect is still checked as for any read, also after a `cd` into the store
   (`cd ~/.exo/state && hash > notes`), and so is a program named hash run by path (`./hash ~/.exo/state/x`), which is no
-  builtin. *Differential (#423).* Main's `scripts/gate_diff.py` against main c27d8739 runs 54,779 actions and 87
-  policies, and 188 pairs on 92 actions are lower. Two probe sets ran alone (`--only-corpus`). The first has 8,305
+  builtin. *Differential (#423).* Main's `scripts/gate_diff.py` against main c27d8739 runs 54,812 actions and 87
+  policies, and 104 pairs on 91 actions are lower. Three probe sets ran alone (`--only-corpus`). The first has 8,305
   lines: the review's lines and every rebinding form under sudo, doas, env, timeout, nice, `bash -c`, ssh, mosh,
   `man -P`, a `ProxyCommand`, `$( )` and a here-doc, alone and beside a post or a force push. It runs 33,244 actions,
-  and 20,763 pairs on 8,117 actions are lower. The second has 5,948 lines: the rebind under chroot, nsenter, unshare,
+  and 13,754 pairs on 7,252 actions are lower. The second has 5,948 lines: the rebind under chroot, nsenter, unshare,
   systemd-run and other wrappers, with and without ssh or mosh, and a plain shell command before or after a rebind in 82
   forms that run a nested line (`man -P`, less, an ssh `LocalCommand`, pagers, `find -exec` and `git rebase --exec`
-  among them), with a store or descriptor path in the other words. It runs 24,170 actions, and 26,594 pairs on 10,713
-  actions are lower. No posting violation is lost in any run. The pairs fall in four groups, all kept on purpose. Each
-  count is for the first probe set, then the second, then the script's own corpus. (1) 5,924 pairs on 1,481 actions,
-  9,280 on 2,320, and 4 on 1: under a policy that lowers `opaque_exec` (a category line or an allow rule naming it), a
-  rebinding form that sudo, doas or another wrapper that makes its part costly (chroot, nsenter, unshare, systemd-run)
-  runs, inside or around ssh or mosh (`ssh host 'sudo hash -lp ./tool ls && ls'`,
-  `ssh host 'sudo BASH_CMDS[ls]=/tmp/x ls'`, `sudo ssh host 'hash -p /x ls'`, `chroot /srv ssh host 'hash -p /x ls'`),
-  goes from log, or ask inside a fed shell or under such a wrapper, to allow. On main the hash part was a costly `read`
-  whose matrix cell logged. Now it is the line's own `opaque_exec` part, and the category line replaces its matrix cell,
-  as it does for `ssh host 'sudo eval x && ls'` on main. Under the default policy each asks. (2) 4,795 pairs on 4,795
-  actions, 5,717 on 5,717, and 83 on 82: under a reservation that matches the hash part (`tool:terminal`, or
-  `command:\brm\b` on a line with `rm`), that part's entry is named `opaque_exec`, with the path as target, where it was
-  `read`. Over ssh, where the rebind now names the line, another opaque part keeps its own empty target and the hop's
-  entry keeps the host (`ssh host 'setsid ssh b "hash -p /x ls"'`). Each line still asks as reserved, and the grant
-  check of D-075 refuses each line it refused on main. (3) 2,840 pairs on 2,840 actions, 7,148 on 7,148, and 10 on 10:
-  under a deny rule on costly `read`, `shell` or `local_write` parts, a rebinding form run by sudo, doas, chroot,
-  nsenter, unshare or systemd-run goes from deny to ask (`sudo hash -p /x git`, `sudo builtin hash -p /x git`,
-  `sudo -u bob hash -p /x ls`, `doas hash -p /x git`, `sudo hash $O ls`, `sudo hash "$@"`, `chroot /srv hash -p /x ls`).
-  So does a line that holds one, also over ssh or beside a post or a force push, and
-  `sudo hash -p ~/.exo/state/x ls > out` stays a store write that asks. A privileged wrapper makes its part costly. On
-  main that part was a costly `read`, which the rule names. Now it is `opaque_exec`, which it does not, as for
-  `sudo eval x` on main. Under the default policy each asks. (4) 7,204 pairs on 1,060 actions, 4,449 on 548, and 91 on 8
-  (the known-limit lines of the tests): a line that ssh, `man -P`, less or more runs (the remote command, an ssh
-  `ProxyCommand` or `LocalCommand`, `man -P`, `less '+!...'`) where a plain shell command comes before the rebind
-  (`ssh host 'sort x; hash -p /proc/self/fd/3 ls'`, `man -P 'sort x; hash -p /x ls' -l ~/.exo/state/x`) goes from
-  `store_write` to the line's other category. So a deny on store writes or on the store path becomes an ask, a store
-  reservation no longer matches it (and so no longer refuses a standing grant), and a category line or rule that allows
-  `opaque_exec`, or a post or a push beside it, now decides it. On main the hash part was a `read` that tied with the
-  shell command, and the first of the two named the line, so main checked the words around it for store paths when the
-  shell command came first and not when the rebind did. The rebind's own descriptor path then made the store write. Now
-  the order does not matter. The same holds for ssh's own options, such as its log file
-  (`ssh -E ~/.exo/state/log host 'sort x; hash -p /x ls'`), which main checks only when the line ssh runs is more than
-  reads: it allows `ssh -E ~/.exo/state/log host ls` and `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'`. Reading
-  ssh's own options in every case is left to its own issue (`docs/GATE.md`, "Known limits"). *Rejected:* deciding the
-  matrix cell and the posting rules on every part of a line here. The D-075 amendment of 2026-10-22 for #464 and #448
-  now does it for a deny cell, so a post beside `eval /proc/self/fd/3` or a store redirect is denied under a matrix deny
-  for the post. An allow, log or ask cell still reads the dominant part only (#437). Also rejected: taking a marked part
-  as a read only when the rest of its nested line is reads. Main read `ssh host 'hash -p /proc/self/fd/3 ls; sort x'` as
-  its first command, so a post beside it would sit under a store write that main does not make.
+  among them), with a store or descriptor path in the other words. It runs 24,170 actions, and 22,111 pairs on 10,291
+  actions are lower. The third has 11,037 lines: ssh with its own `-E`, `-S`, `UserKnownHostsFile` or `ControlPath` on
+  a store file, running a rebind and a shell command in either order, also as a `ProxyCommand`, a `LocalCommand`, a
+  second hop or a here-doc fed to ssh, the same lines under mosh, `man -P`, less and more, and under sudo, env,
+  timeout, nice, `bash -c`, `$( )` and a here-doc, alone and beside a post. It runs 29,434 actions, and 6,564 pairs on
+  4,586 actions are lower. No posting violation is lost in any run, and a deny is lost only in group (3). The pairs
+  fall in three groups, all kept on purpose. Each count is for the first probe set, the second, the third, then the
+  script's own corpus. (1) 5,924 pairs on 1,481 actions, 9,120 on 2,280, 1,844 on 481, and 4 on 1: under a policy
+  that lowers `opaque_exec` (a category line or an allow rule naming it), a rebinding form that sudo, doas or another
+  wrapper that makes its part costly (chroot, nsenter, unshare, systemd-run) runs, inside or around ssh or mosh
+  (`ssh host 'sudo hash -lp ./tool ls && ls'`, `ssh host 'sudo BASH_CMDS[ls]=/tmp/x ls'`,
+  `sudo ssh host 'hash -p /x ls'`, `chroot /srv ssh host 'hash -p /x ls'`), goes from log, or ask inside a fed shell or
+  under such a wrapper, to allow. So does a rebind beside a command such a wrapper runs over ssh
+  (`ssh host 'hash -p /x ls | sudo sort x'`). On main the costly part was a `read` or a `shell` part whose matrix cell
+  logged. Now the rebind is the line's own `opaque_exec` part, and the category line replaces its matrix cell, as it
+  does for `ssh host 'sudo eval x && ls'` and `ssh host 'eval x | sudo sort x'` on main. Under the default policy each
+  asks. (2) 4,990 pairs on 4,990 actions, 5,843 on 5,843, 4,216 on 4,216, and 90 on 89: under a reservation that
+  matches the hash part (`tool:terminal`, or `command:\brm\b` on a line with `rm`), that part's entry is named
+  `opaque_exec`, with the path as target, where it was `read`. Over ssh, where the rebind now names the line, another
+  opaque part keeps its own empty target and the hop's entry keeps the host (`ssh host 'setsid ssh b "hash -p /x ls"'`).
+  A line that is now a store write gains a store entry too (`ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'`).
+  Each line still asks as reserved, and the grant check of D-075 refuses each line it refused on main. (3) 2,840 pairs
+  on 2,840 actions, 7,148 on 7,148, 504 on 504, and 10 on 10: under a deny rule on costly `read`, `shell` or
+  `local_write` parts, a rebinding form run by sudo, doas, chroot, nsenter, unshare or systemd-run goes from deny to ask
+  (`sudo hash -p /x git`, `sudo builtin hash -p /x git`, `sudo -u bob hash -p /x ls`, `doas hash -p /x git`,
+  `sudo hash $O ls`, `sudo hash "$@"`, `chroot /srv hash -p /x ls`). So does a line that holds one, also over ssh or
+  beside a post or a force push, and `sudo hash -p ~/.exo/state/x ls > out` stays a store write that asks. A privileged
+  wrapper makes its part costly. On main that part was a costly `read`, which the rule names. Now it is `opaque_exec`,
+  which it does not, as for `sudo eval x` on main. Under the default policy each asks. *A shell command beside the
+  rebind.* On main the hash part was a `read` that tied with a plain shell command in a line that ssh, `man -P`, less or
+  more runs, and the first of the two named the line. So main checked the words around the line for store paths when the
+  shell command came first and not when the rebind did. Now they are checked in either order. ssh's own `-E`, `-S` and
+  `UserKnownHostsFile` name a local file it writes, so `ssh -E ~/.exo/state/log host 'sort x && hash -p /x ls'` stays a
+  store write and `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'` becomes one. Beside a line of reads alone,
+  ssh's own options are read on neither tree (`ssh -E ~/.exo/state/log host ls` is allowed, #484). *Rejected:* deciding
+  the matrix cell and the posting rules on every part of a line here. The D-075 amendment of 2026-10-22 for #464 and
+  #448 now does it for a deny cell, so a post beside `eval /proc/self/fd/3` or a store redirect is denied under a matrix
+  deny for the post. An allow, log or ask cell still reads the dominant part only (#437). Also rejected: taking a plain
+  shell command beside the rebind as a read too. An earlier draft did, so that a post beside
+  `ssh host 'hash -p /proc/self/fd/3 ls; sort x'` would not sit under a store write that main does not make. Since #464
+  that costs the post nothing: a deny cell on it still denies the line, and its posting violations are kept, named after
+  the post. The draft cost the store check instead: ssh's own `-E ~/.exo/state/log` in such a line made no store write.
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the
