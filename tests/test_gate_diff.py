@@ -422,7 +422,10 @@ def test_each_folder_row_decides_otherwise_without_its_folder(tmp_path):
     with_folder, without = got[:len(rows) + len(joined)], got[len(rows) + len(joined):]
     same = [(r, a) for r, a, b in zip(rows + joined, with_folder, without) if a == b]
     assert not same, same[:3]
-    assert {a for a in with_folder} == {("credentials", "ask")}
+    assert {o for _, o in with_folder} == {"ask"}
+    # The session folder makes the call credentials (#209). A shell call's own cwd adds a credentials part, and the
+    # line keeps its own category (#311).
+    assert {a for r, a in zip(rows + joined, with_folder) if "cwd" not in r["args"]} == {("credentials", "ask")}
 
 
 # A child that loads main's gate with gate_diff's HOME and environment and decides each case's actions under every
@@ -601,8 +604,8 @@ def test_the_pattern_forms_get_main_s_category(tmp_path):
 # One loosening each, as a reviewer found them: a table entry dropped, a key or name no longer read, a posting shape
 # ignored. The built-in corpus must lower a call or line for each (the action and the policy that shows it).
 LOOSENINGS = {
-    "own cwd ignored": (('if isinstance(sub, str) and sub and _runs_shell(tool, args):',
-                         'if False and isinstance(sub, str) and sub and _runs_shell(tool, args):'),
+    "own cwd ignored": (('                    if isinstance(sub, str) and sub:\n',
+                         '                    if False and isinstance(sub, str) and sub:\n'),
                         {"tool": "terminal", "args": {"command": "cat keys", "cwd": "~/.exo"}}, "default"),
     "vault tool read": (('("browser_vault_fill", "browser_vault_unlock", "browser_vault_save_login",',
                          '("browser_vault_fill", "browser_vault_save_login",'),
