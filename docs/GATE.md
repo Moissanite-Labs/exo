@@ -1425,12 +1425,13 @@ host`, `ssh "$HOST"`, `ssh host $CMD`), leaves them uncountable, as for the opti
 so the stdin is read then too (`echo data | ssh "$HOST" 'cat > f'` asks). A `-n`, `-N` or `-f`
 before the first such word is an option whatever the word becomes, so since #316 ssh does not
 read its stdin then (`ssh -n "$h" uptime < hosts.txt`). A `--` before the host ends the options, so
-a letter after it does not count (`ssh -- -n "$h" < f`, where ssh takes `-n` as the host). Known
-limits: the `-o` forms of those three flags (`StdinNull`, `SessionType=none`,
+a letter after it is not sure (`ssh -- -n "$h" < f`, where ssh takes `-n` as the host, asks).
+Known limits: the `-o` forms of those three flags (`StdinNull`, `SessionType=none`,
 `ForkAfterAuthentication`) are not honored, so such a line reads its stdin anyway; text fed to a
 remote shell (`ssh host bash -s <<EOF`) is not read yet, and the line asks as `opaque_exec` as
-before; a stdin set earlier by `exec < file` (`exec < f; ssh host`) is not seen. `mosh` lines are
-unchanged.
+before; a stdin set earlier by `exec < file` (`exec < f; ssh host`) is not seen. The host reader
+still passes over a `--` before the host (D-075), so `ssh -- -n bash < f`, where ssh would run
+`bash` on a host named `-n`, keeps its plain reading. `mosh` lines are unchanged.
 
 Since #316 the gate also sees a stdin that reaches `ssh` in five more ways. The gate does not have
 its text, so the line asks as `opaque_exec`, as `ssh host < script.sh` does. A known text is read.
@@ -1493,6 +1494,10 @@ line. The policy steps that read only that part then read it, so some lines deci
 - A `-n`, `-N` or `-f` before a word that may expand to no word or several now counts (see the
   `ssh` paragraph above). ssh never reads its stdin then, so `ssh -n "$h" uptime < hosts.txt`
   takes its own reading (`read`) and is allowed, where its stdin was read as run and it asked.
+  The `opaque_exec` part is gone there, so `deny: [opaque_exec]` no longer denies the line, a
+  reserved entry loses its hit on that part, and after a `cd` into the store the line is no longer
+  a store write. Each such line decides as `ssh -n host uptime < hosts.txt`, with a plain host,
+  already did.
 
 As for `{ bash; } < f` (#394), the part that runs the stdin has no own text when a compound or a
 `>( )` feeds it, so a rule that names the `ssh` does not lower such a line. In a hop the part takes
@@ -1508,7 +1513,9 @@ the mark names one line, so a nested shell in a fed line reads its own line unma
 'ssh host')`, `flock -c` and `env -S` ask anyway, as they run shell commands). The gate does not
 know which command a substitution sits in, so on a fed line a `$( )` is read as fed even where the
 command it sits in reads a pipe: `ssh a 'cat x | echo $(ssh b)'` reads the outer stdin as run on
-`b`, which fails closed. A stdin set earlier by `exec < file` is still not seen.
+`b`, which fails closed. A known text that reaches an `ssh` only through a `>( )` is read as a
+stdin the gate cannot read, as for `tee >(bash)`: `echo 'rm -rf /data' | ssh jump 'tee >(ssh
+host)'` is `opaque_exec`, not `delete`. A stdin set earlier by `exec < file` is still not seen.
 
 `mosh` reads its options with Perl's Getopt::Long in its default mode, and the gate reads them the
 same way, against mosh's own option list: `--`, `-` or `+` before the name, any case, a unique
