@@ -1022,8 +1022,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `$( )` before the `cd` (`echo $(cp x gates.yaml); cd ~/.exo/policies`) counts too. Each text is still classified
   once per depth in a call (#334), now once for each folder context as well, so the same `$( )` read outside the
   store and in it on one line is read in both. A `bash -c` string, `eval` or a heredoc fed to a shell after the
-  `cd` already asked, since that command is itself a non-read command in the store. Every change makes a line
-  stricter or leaves it alone. GDNUMBERS465
+  `cd` already asked, since that command is itself a non-read command in the store. This needs the D-075 amendment
+  for #464: without it, a force push or post inside such a `$( )` would lose its matrix deny beside the new store
+  write (`cd ~/.exo/policies && echo $(git push --force origin main)` under an irreversible deny cell), as any
+  command beside a store write did. With both, every change makes a line stricter or leaves it alone. GDNUMBERS465
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
