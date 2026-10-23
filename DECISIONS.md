@@ -2768,6 +2768,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - *2026-10-20 (#346, follow-up to #321):* CORE_HEADROOM raised by 29 to 1,029 for the job notice fixes (key redaction and event loop robustness). The lead schedules a reduction this week.
 - **Amendment 2026-10-20 (reduction, #373):** a no-behaviour-change reduction (dead overrides, merged duplicates, an exception clause the following handler could never reach, shorter equivalent forms) took the counted core from 15,841 on main to 15,801 (40 lines). `CORE_FLOOR` stays 14,813: the count is above the floor, and the floor never goes up. `CORE_HEADROOM` is back at 1,000 after #346's temporary raise to 1,029, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 12.
 - *2026-10-23 (D-082):* CORE_HEADROOM raised by the minimum 45 to 1,045 for bounded active-work shutdown and startup rollback. Count 15,857, ceiling 15,858. Reduction follow-up [#498](https://github.com/aska-digital/exo/issues/498) due 2026-10-30: consolidate lifecycle queries behind public interfaces and restore 1,000 headroom without excluding counted modules. CORE_FLOOR remains 14,813.
+- **Amendment 2026-10-23 (D-082 plugin binding reduction, #498):** moving plugin tool/slot adaptation and
+  lifecycle verdict translation behind `PluginManager.bind_tools` in the existing `exo.plugin_lifecycle`
+  boundary takes counted core lines from 15,857 to 15,790 (67 fewer). Explicit registry/log/privacy/approval
+  collaborators replace engine-state access in the adapter; direct `CoreRuntime` plugin behavior and its
+  compatibility helper methods remain. Gate policy, registration order and protocol behavior are unchanged.
+  `CORE_HEADROOM` returns to 1,000; `CORE_FLOOR` stays 14,813 because the count is still above it.
+  No module is excluded. The ceiling is 15,813, leaving 23 lines before subsequent features.
+
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
 
@@ -2910,3 +2918,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   catalog and proposes eleven optional additions, with pinned sources and acceptance criteria. Reuse
   existing context, ingestion, questions, memory, operations views and spend accounting. Add capability
   packs and observer contracts through the existing roadmap. This amendment changes no runtime behavior.
+
+- **Plugin binding follow-up (2026-10-23, #498):** `exo.plugin_lifecycle.PluginToolBridge` now owns the
+  Hermes-compatible tool/slot adapters and lifecycle-verdict translation previously inside `CoreRuntime`.
+  `PluginManager.bind_tools` takes explicit collaborators, including the existing approval desk and a
+  live required-mode callback. Core helper shims preserve compatibility. This is a behavior-preserving
+  extraction: no approval policy, binding, private-thread rule or protocol contract changed. It restores
+  the standard core allowance (D-077 amendment above); broader private-state query cleanup remains open.
+  User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.

@@ -84,6 +84,18 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
   policy"). No code changed. Counted core lines: 14,999 before and after, against a floor of 14,813 and a ceiling
   of 15,813.
 
+- 2026-10-23, plugin binding seam (D-082, [#498](https://github.com/aska-digital/exo/issues/498)):
+  counted core lines 15,857 before, 15,790 after, 67 fewer. `PluginManager.bind_tools` supplies
+  `exo.plugin_lifecycle.PluginToolBridge` with the registry, home, agent log, privacy predicate,
+  approval desk and a callback for required-executor mode. The bridge translates existing plugin
+  tool/slot signatures and lifecycle verdicts; it does not own engine state or change gate policy.
+  `CoreRuntime` keeps its tool runner and private compatibility methods. A directly constructed
+  runtime gets the same plugin behavior without importing application/context composition.
+  This consolidates the existing plugin lifecycle boundary; no counted module was excluded.
+  `CORE_HEADROOM` returns from 1,045 to 1,000. The count remains above the floor, so
+  `CORE_FLOOR` stays 14,813; the restored ceiling leaves 23 lines for subsequent seams.
+  Private-state queries and other inward imports listed above remain separate follow-up work.
+
 ## Budget policy
 
 Decided 2026-10-15 (D-077). It replaces the hard 15,000-line ceiling that D-067 set on 2026-10-13. The principal's
@@ -92,8 +104,8 @@ product-market fit". A line count should not stand in the way of security, robus
 is a ratchet with headroom. The structural goal in point 5 is the aim, and the count is a signal for it.
 
 1. **Two recorded numbers.** `tests/integration/test_wave1_acceptance.py` holds `CORE_FLOOR = 14813` and
-   `CORE_HEADROOM = 1045` (D-082's bounded shutdown and startup rollback). The only assertion is
-   `total < CORE_FLOOR + CORE_HEADROOM`, so the ceiling today is 15,858 counted lines.
+   `CORE_HEADROOM = 1000` (restored by the D-082 plugin bridge extraction). The only assertion is
+   `total < CORE_FLOOR + CORE_HEADROOM`, so the ceiling today is 15,813 counted lines.
    The floor is the count right after the last real reduction, #124 (D-067). That branch measured 14,812
    before its last merge from main, and the count at the merge is 14,813.
 2. **The floor ratchets down.** Every real reduction PR (deletions, simplification, real seams per this plan) sets

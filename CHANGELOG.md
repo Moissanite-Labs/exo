@@ -17,6 +17,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A sourced harness landscape comparison and phased roadmap with evaluation gates (`docs/HARNESS-LANDSCAPE.md`).
 
 ### Fixed
+- Plugin tool/slot adaptation and hook-verdict translation now share the plugin lifecycle bridge, with
+  explicit runtime collaborators and compatibility shims. Counted core size falls by 67 lines and the
+  headroom allowance returns to 1,000; approval behavior is unchanged (D-077/D-082, #498).
 - `scripts/gate_diff.py` counts a posting violation as often as each tree lists it, so a gate change that lists once
   what two posts of one name both meet shows as lower (#460). Each seed also runs under each tool table name that
   ends in `terminal` or `shell`, and in a call holding both `command` and `cmd`. The report shows a few reworded

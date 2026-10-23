@@ -64,7 +64,7 @@ some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the 
 **The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
 in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
 protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
-`CORE_HEADROOM`. Today that is 14,813 plus 1,045, a ceiling of 15,858. The test prints the current count and the headroom left (run it
+`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the headroom left (run it
 with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the rules
 (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on the
 engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol has
@@ -81,6 +81,14 @@ seams, as jobs/delegation factories do. Disabling a feature must remove its tool
 and reject direct execution attempts. Test seat overrides and alternate executor paths too.
 Profiles are runtime selection, not an OS sandbox or separate installation distributions.
 See [HARNESS.md](HARNESS.md) and the sourced [landscape/roadmap](HARNESS-LANDSCAPE.md).
+
+**Plugin runtime binding (D-082).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
+private=..., approvals=..., required=...)` binds the existing tool and slot interfaces through
+`exo.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback;
+metadata is resolved for each call. The bridge translates existing plugin approval verdicts through
+`ApprovalDesk`, preserving bindings, approvers and standing-grant behavior. It does not change the
+execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
+construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
 
 **The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
 commands. Its collaborators have small interfaces:
