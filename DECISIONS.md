@@ -4996,11 +4996,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Gate classification:** Valid `read` and `history` actions are `read`. Valid `update` is `local_write`.
   These classifications require the action's supported top-level keys. Calls without a valid action or
   with unsupported keys keep generic classification, including secret and store path checks.
-  Main's comparison script at `5a9dc394` checked notebook code at `e5677363`: 43 calls across all 87
-  policies, or 3,741 pairs. All 32 missing-action calls behind the earlier 2,167 lowerings were covered.
-  None lowered after the fix. Six intentional read/history differences remain for policies targeting
-  `unknown`. Update tightens four pairs. No reserved protections or posting violations are lost, and
-  neither tree has classification or decision errors. The corpus and results are in
+  Main's comparison script at `5a9dc394` checked notebook code at `042c896e`: 152 calls across all 87
+  policies, or 13,224 pairs. All 35 previously lowered notebook calls are included. The 32 calls
+  responsible for 2,167 missing-action lowerings now have none. Another 108 cases pair supported actions
+  with unsupported keys, with no lowerings. Nine intentional read/history differences remain for
+  policies targeting `unknown`. Update tightens four pairs. No reserved protections or posting
+  violations are lost, and neither tree has classification or decision errors. The registry and handler
+  validate field values beyond the classifier's action and key checks. The corpus and results are in
   `docs/evidence/work-notebook-gate-2026-10-23.json`. This focused comparison does not cover other tools.
 - **Limits:** Strict nested fields, document byte limits, bounded snapshots and history listings.
   A per-session revision ceiling refuses further writes without deleting history. The feature owns
