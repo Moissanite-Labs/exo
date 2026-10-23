@@ -347,7 +347,9 @@ What the gate asks about, and why:
 - **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
   against each command the gate reads on a line, so with pushes denied `git push origin main && rm -rf build` is
   denied, not asked about the delete. A `categories: {X: deny}` setting or a rule with `decision: deny` holds the
-  same way (#191).
+  same way (#191), and so does a `matrix:` cell set to `deny` for one command on the line (#464). A store write on
+  the line no longer hides those denies, and a file tool on a store or secret path keeps them too: under
+  `deny: [delete]`, `delete_file ~/.exo/state/x` is denied rather than asked about (#448).
 - **An allow rule names the command it allows (#394).** A rule with `decision: allow` or `log` and a `command:` regex
   lowers a line of several commands, or a command with another run inside it (`ssh host '...'`, `bash -c '...'`,
   `eval`), only when the regex matches the line, as before, and also the command that decides the line, as you wrote
