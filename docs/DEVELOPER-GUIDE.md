@@ -1004,4 +1004,5 @@ Keep the module's own top-level imports to what the command needs: they run only
 belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs inside its function.
 `tests/test_cli_lazy.py` fails when the table and `register` disagree: it compares the help of every command, and of
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
-`exo --help` loads no command module.
+`exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
+store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.
