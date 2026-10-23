@@ -412,7 +412,7 @@ class _Cmd:
     subs_met: int = 0            # how many of the line's subs lie in its text and before it, in the lexer's order (#465)
     opens: tuple | None = None   # on a compound's closer: (the compound's first command, the subs met before the
                                  # closer's redirections), which bash expands before the compound runs (#465)
-    stdin_unknown: bool = False  # a compound around it is fed a stdin whose text the gate cannot read (#316)
+    stdin_unknown: bool = False  # a stdin the gate cannot read reaches it: a compound's feed or its wrapper's (#316)
     stdin_apart: bool = False    # a wrapper runs it with the wrapper's stdin, which is not its line's (#316)
 
 
@@ -1092,8 +1092,8 @@ _fed_stdin: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_fed_
 
 # The signal of an ssh part that runs the stdin its line was fed, a stdin the gate cannot read (#316). An ssh whose
 # remote command is that line passes its own stdin on to it, so it runs that stdin too: `ssh a ssh b`, `ssh a 'cd /;
-# ssh b'`, `ssh a ssh b ssh c`. The ssh that reads it takes it off its remote command's result, and a >( ) body's off
-# its own (_classify_sub), so it names the line it is on.
+# ssh b'`, `ssh a ssh b ssh c`. The ssh around reads it from a reading of its remote command it keeps for that alone,
+# and a >( ) body takes it off its own result (_classify_sub), so it names the line it is on.
 _LINE_STDIN = "runs its line's stdin"
 
 
@@ -2493,10 +2493,14 @@ def _own_stdin(k: _Cmd) -> bool:
 
 def _wrapped(k: _Cmd, words: list) -> _Cmd:
     """The command a wrapper k runs (uv run, nsenter, flock, xargs, git bisect run...), read as its own command: it
-    keeps k's heredocs and here-strings, and k's stdin for the #316 reading. A compound's feed the gate cannot read
-    reaches it too (`{ uv run ssh h; } < cmds.sh`), and it reads the stdin of a fed line only when k does: k's own
-    `<`, a pipe into k or a compound around k gives it another (`>(uv run ssh h < /dev/null)`)."""
-    return _Cmd(words=words, heredocs=k.heredocs, herestrings=k.herestrings, stdin_unknown=k.stdin_unknown,
+    keeps k's heredocs and here-strings, and k's stdin for the #316 reading. A stdin of k the gate cannot read
+    reaches it too: k's own `<` from anything but /dev/null, a pipe into k or a compound's feed (`uv run ssh h <
+    cmds.sh`, `cat cmds.sh | uv run ssh h`, `{ uv run ssh h; } < cmds.sh`); a pipe whose text is known reaches it as
+    `piped`. It reads the stdin of a fed line only when k does: k's own `<`, a pipe into k or a compound around k
+    gives it another (`>(uv run ssh h < /dev/null)`)."""
+    unread = k.stdin_unknown or k.piped_in or \
+        any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs)
+    return _Cmd(words=words, heredocs=k.heredocs, herestrings=k.herestrings, stdin_unknown=unread,
                 stdin_apart=k.stdin_apart or k.fed or k.piped_in or _own_stdin(k))
 
 
@@ -3061,28 +3065,31 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c = _too_deep(cmd, "ssh chain nested too deep to read", dest)
             c.signals.append("unread hops")
         elif inner:
-            # The remote command of an ssh that passes a stdin on is a line fed that stdin (#316).
-            c = _classify_fed(inner, inner_depth, forwards)
+            c = classify_shell(inner, inner_depth)
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
-        # An ssh in the remote command runs the stdin this one passes on. Only a fed line carries the signal, so
-        # it means that this ssh forwards.
-        hop = _LINE_STDIN in c.signals
-        if hop:
-            c.signals.remove(_LINE_STDIN)       # c is this caller's own copy (_own_copy)
+        # An ssh that passes a stdin on gives its remote command that stdin, and an ssh there that runs it runs it
+        # on the next host (#316). Only a line read as fed carries the signal. That reading finds the hop alone:
+        # ssh's own part reads the command as before, so a wrapper around ssh still marks it.
+        hop = forwards and bool(inner) and depth < _DEPTH and \
+            _LINE_STDIN in _classify_fed(inner, inner_depth, True).signals
         fed = []
-        if prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags, fed_line):
+        reads = prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags, fed_line)
+        if reads:
             # #240: the login shell on the host runs ssh's stdin. It is read as shell, as for `bash -s`, and asks.
             fed = [_runs_stdin(_opaque(f"ssh {dest} runs its stdin as commands on the remote host"[:120], cmd), k)]
         elif hop:
             # #316: ssh passes its stdin on to the remote command, and an ssh in it runs it on the next host.
             fed = [_runs_stdin(_opaque(f"ssh {dest} passes its stdin to an ssh that runs it as commands"[:120], cmd), k)]
+        stdin = None
         if fed:
             if fed_line:
                 fed[0].signals.append(_LINE_STDIN)
             if depth < _DEPTH:
                 fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
-            c = _combine([c, *fed], cmd)
+            # A part beside ssh's own, not built into it (#316): sudo or a privileged wrapper around ssh still marks
+            # ssh's own part costly, as when ssh reads no stdin, and the line takes the more severe part.
+            stdin = _combine(fed, cmd)
         dests = [host, dest]
         if dest != old_dest:
             # The gate used to read another word as the host. The line asks and both readings' parts are
@@ -3116,10 +3123,19 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 p.exposure = "internal"
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
-        c.target = dest if "unread hops" in c.signals else (c.target or dest)
+        if not reads:                         # else ssh's own part is no more than the hop parts, as before #316
+            c.target = dest if "unread hops" in c.signals else (c.target or dest)
         if not here:
             c.signals.append("remote host")
-        return [c]
+        if stdin is None:
+            return [c]
+        stdin = copy.deepcopy(stdin)          # as for c: the stdin runs on the remote host (ssh, never mosh)
+        for p in _each_part(stdin):
+            if EXPOSURE.index(p.exposure) < 1:
+                p.exposure = "internal"
+        stdin.target = stdin.target or dest
+        stdin.signals.append("remote host")
+        return [c, stdin]
     if prog in ("vercel", "netlify"):
         if "login" in argv:
             return [_make("credentials", summary=f"{prog} login", command=cmd)]
@@ -3275,18 +3291,32 @@ def _ssh_stdin_runs(words: list, k: _Cmd, piped: str | None, i: int, flags: str,
     read, #316), none of `-n`, `-N` and `-f` (ssh then does not read it) and no remote command: ssh reads
     options after the host too (`ssh host -T`), up to the command, and an empty word is no command. A word
     that may expand to no word or several (`$A`, a glob) among the options and the host, or as every word of
-    the command, leaves them uncountable, so the stdin is read then too. `words` is ssh's argv as words; `i`
-    is the host's index in words[1:], `flags` the letters before it. `fed`: ssh's stdin is that of a line fed
-    one the gate cannot read (a >( ) body, a hop's remote command, #316)."""
+    the command, leaves them uncountable, so the stdin is read then too, unless a `-n`, `-N` or `-f` comes
+    before that word (#316: `ssh -n "$h" uptime`). `words` is ssh's argv as words; `i` is the host's index in
+    words[1:], `flags` the letters before it. `fed`: ssh's stdin is that of a line fed one the gate cannot read
+    (a >( ) body, a hop's remote command, #316)."""
     if not (fed or _stdin_given(k, piped)):
         return False
+    sure, j, wild = _ssh_sure_flags(words, i, flags)
+    if set(sure) & set("nNf"):
+        return False
+    texts = [w.text for w in words[1:]]
+    return any(wild[:j]) or " ".join(texts[j:]) == "" or all(wild[j:])
+
+
+def _ssh_sure_flags(words: list, i: int, flags: str) -> tuple[str, int, list[bool]]:
+    """(ssh's flag letters the gate is sure of, where its options after the host end, which of its words may expand
+    to no word or several). Such a word among the options and the host may end the options early or move later
+    ones into the remote command, so only the letters before it are sure: `-n` is an option in `ssh -n "$h"
+    uptime`, not in `ssh $OPTS -n host`. `i` is the host's index in words[1:], `flags` the letters before it."""
     texts = [w.text for w in words[1:]]
     wild = [w.dynamic or (not w.quoted and (w.glob or bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
             for w in words[1:]]
-    j, late = (i + 1, "") if "--" in texts[:i] else _ssh_options(texts, i + 1, after=True)
-    if any(wild[:j]):
-        return True
-    return not set(flags + late) & set("nNf") and (" ".join(texts[j:]) == "" or all(wild[j:]))
+    j = i + 1 if "--" in texts[:i] else _ssh_options(texts, i + 1, after=True)[0]
+    first = next((n for n, x in enumerate(wild[:j]) if x), j)
+    if first > i:
+        return flags + _ssh_options(texts[:first], i + 1, after=True)[1], j, wild
+    return _ssh_options(texts[:first], 0)[1], j, wild
 
 
 def _ssh_forwards(words: list, k: _Cmd, piped: str | None, i: int, flags: str, fed: bool = False) -> bool:
