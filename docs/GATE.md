@@ -1354,7 +1354,9 @@ A folder in a repo's own `.claude` folder holds the repo's files, as the search 
 (#241): it is in `worktrees`, `commands`, `agents` or `skills`, the parent holds `.git`, and the
 `.claude` folder holds no Claude login or transcripts. Only a word that resolves into a store counts
 there. So `ls *`, `ls config`, `wc -l *`, `grep -r foo *`, `du -sh *`, `file *` and
-`rg -n config src` in a checkout at `<repo>/.claude/worktrees/x` keep their class. The `.claude`
+`rg -n config src` in a checkout at `<repo>/.claude/worktrees/x` keep their class. A store folder
+by its name inside the checkout (`x/.kube`, `x/.config/gh`, `x/.docker`) is not the repo's, so
+`cat config` with `x/.kube` as `cwd` asks, as `cd x/.kube && cat config` does. The `.claude`
 folder itself, `~/.claude` and a `.claude` folder with no `.git` beside it are stores, so any call
 there asks, as a `cd` there does.
 

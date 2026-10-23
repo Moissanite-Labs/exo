@@ -1374,24 +1374,31 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `.claude/worktrees`, `commands`, `agents` or `skills` holds the repo's files, as the search tools judge it
   (StoreSkip, #241: the parent holds `.git`, and the folder holds no Claude login or transcripts). Only a #209 hit
   counts there, so `ls *`, `ls config`, `wc -l *`, `grep -r foo *`, `du -sh *`, `file *` and `rg -n config src` in
-  `<repo>/.claude/worktrees/x` keep their class. The `.claude` folder itself, `~/.claude` and a `.claude` folder with
-  no `.git` beside it are stores, so any call there asks. *History.* The first version (#415) made the whole call
-  `credentials`, as a `cd` does. exo-36's differential of it found 1,770 actions that went from deny to ask, 118 that
-  lost posting violations and 173 that lost reserved entries. It also read the folder in every nested line, which
-  read it into the text `ssh` runs on another host and spent the #269 budget at every level. The next version added
-  the part, but also put `workdir` among the #209 folders, which made the whole call `credentials` again for
-  `workdir`. exo-36 found 54 matrix denies that went to ask there, and 114 calls with a wider approver set. Rejected:
-  the folder argument among the #209 folders, which replaces the line. Keeping the old reading costs a second reading
-  of the line and a second decision, both only where the line read in its folder has a `credentials` part. That
-  reading is a whole classification, so nothing has to be found among the parts. A `cd` on the line still makes the
-  whole line `credentials`, as before. Limits: the session's own folder (#209) is not a target. The file tools ignore
-  a folder argument. A name that climbs out of a repo's `.claude` worktree back into it is not caught (`cat
-  ../../settings.local.json`), as before. The store-write checks do not read the folder argument (`echo x >
-  gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`, #453). A differential against main 39cafcba
-  (`gate_diff`, #423) finds 0 lowered pairs: 4,793,352 pairs on its built-in corpus (55,096 actions under 87
-  policies), and 4,213,758 pairs on 48,434 folder-argument actions (75 lines, 29 folder spellings, 21 tool and key
-  forms, and relative folders). On the 47,475 actions written for it, under four approval tables, no call gets a
-  wider approver set or loses `no_grant`. No lowering is intended.
+  `<repo>/.claude/worktrees/x` keep their class. A store folder by its name inside such a folder (`x/.kube`,
+  `x/.config/gh`) is not the repo's, and is read as a `cd` there is. The `.claude` folder itself, `~/.claude` and a
+  `.claude` folder with no `.git` beside it are stores, so any call there asks. *History.* The first version (#415)
+  made the whole call `credentials`, as a `cd` does. exo-36's differential of it found 1,770 actions that went from
+  deny to ask, 118 that lost posting violations and 173 that lost reserved entries. It also read the folder in every
+  nested line, which read it into the text `ssh` runs on another host and spent the #269 budget at every level. The
+  next version added the part, but also put `workdir` among the #209 folders, which made the whole call `credentials`
+  again for `workdir`. exo-36 found 54 matrix denies that went to ask there, and 114 calls with a wider approver set.
+  A check of the version after that found three more points. A NUL in the folder, or a relative folder while the
+  gate's own folder is gone, made `classify` raise, so the hook asked as for a call it could not classify, which any
+  seat may answer, where the line alone was denied. A store folder inside a repo's `.claude` worktree was not read.
+  With both folder arguments, the part named the first folder even when the name resolved into a store from the other,
+  so a target entry on the store missed it. Rejected: the folder argument among the #209 folders, which replaces the
+  line. Keeping the old reading costs a second reading of the line and a second decision, both only where the line
+  read in its folder has a `credentials` part. That reading is a whole classification, so nothing has to be found
+  among the parts. A `cd` on the line still makes the whole line `credentials`, as before. Limits: the session's own
+  folder (#209) is not a target. The file tools ignore a folder argument. A name that climbs out of a repo's `.claude`
+  worktree back into it is not caught (`cat ../../settings.local.json`), as before. The store-write checks do not read
+  the folder argument (`echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`, #453). A
+  differential against main (`gate_diff`, #423, at 3ddd89e9, whose gate is the same as 39cafcba's) finds 0 lowered
+  pairs: 4,803,183 pairs on its built-in corpus (55,209 actions under 87 policies), and 1,905,648 pairs on 21,904
+  folder-argument actions (68 lines under 42 folder spellings and 9 tool and key forms, with both keys, relative
+  folders and session folders in a store). On the 21,292 actions of that corpus, under 9 policies and three approval
+  tables, no call gets a wider approver set or loses `no_grant`, `binds_exact`, a reserved hit or a violation. No
+  lowering is intended.
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the
