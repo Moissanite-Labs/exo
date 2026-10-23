@@ -19,8 +19,10 @@ too). A violation either tree names after a part of the line (`<post>: v`, as a 
 compared by its text v, as often as each tree lists it, so one the head names after its post, or after the post's
 new name, is kept. Such pairs are counted apart as reworded, not lowered, and not as another detail changed. Past
 the cap on the violations decide lists, `and N more on other posts` counts N in each tree's total, and a head whose
-total is lower has lost one too. At an equal deny, lost reserved hits and violations are not counted: the hook blocks the call, and both only matter for an
-ask (a reserved hit keeps a standing grant from covering it, a violation is named in its message). A classify or
+total is lower has lost one too. The texts behind that line are compared by count only, so a head that lists more
+and hides another text there in place of one main hid shows nothing. At an equal deny, lost reserved hits and
+violations are not counted: the hook blocks the call, and both only matter for an ask (a reserved hit keeps a
+standing grant from covering it, a violation is named in its message). A classify or
 decide exception counts as the outcome the hook gives on an error: ask, or allow for a read tool whose arguments
 name no secret. Tightenings are counted only. Actions whose category or target changed while every decision stayed
 the same are counted with a few examples.
@@ -1898,6 +1900,8 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
     for cmd in seeds:
         for tool in sorted(n for n in known if n.endswith(SHELL_SUFFIXES) and n not in shell_tools):
             put({"tool": tool, "args": {"command": cmd}}, "shell_forms")
+        for tool in dict.fromkeys(t for t, _ in forms if t not in shell_tools):    # a name read by its suffix
+            put({"tool": tool, "args": {"command": "", "cmd": cmd}}, "shell_forms")
         for tool in shell_tools:
             put({"tool": tool, "args": {"command": cmd, "cmd": BOTH_KEYS_OTHER}}, "shell_forms")
             put({"tool": tool, "args": {"command": BOTH_KEYS_OTHER, "cmd": cmd}}, "shell_forms")
@@ -2166,9 +2170,9 @@ def show_action(a: dict, width: int = 160) -> str:
 _MORE_LINE = re.compile(r"and (\d+) more on other posts")
 
 
-def _total(d: list) -> int:
+def _total(violations: Iterable[str]) -> int:
     """How many violations a decision holds: one per text it lists, and N per `and N more on other posts`."""
-    return sum(int(m.group(1)) if (m := _MORE_LINE.fullmatch(v)) else 1 for v in d[4])
+    return sum(int(m.group(1)) if (m := _MORE_LINE.fullmatch(v)) else 1 for v in violations)
 
 
 def _bare(v: str, names: Iterable[str]) -> str:
@@ -2189,7 +2193,7 @@ def _lost(db: list, dh: list, nb: Iterable[str] = (), nh: Iterable[str] = ()) ->
     if rb and (len(rh) < len(rb) or not {c for c, _ in rb} <= {c for c, _ in rh}):
         kinds.append("reserved")
     vb, vh = ([v for v in d[4] if not _MORE_LINE.fullmatch(v)] for d in (db, dh))
-    fewer = _total(dh) < _total(db)
+    fewer = _total(dh[4]) < _total(db[4])
     if Counter(vb) - Counter(vh) or fewer:
         kept = not fewer and not Counter(_bare(v, nb) for v in vb) - Counter(_bare(h, nh) for h in vh)
         kinds.append("reworded" if kept else "violations")
@@ -2315,7 +2319,7 @@ def _decision(d: dict) -> str:
     if d["reserved"]:
         extra += f", reserved {len(d['reserved'])}"
     if d["violations"]:
-        extra += f", violations {len(d['violations'])}"
+        extra += f", violations {_total(d['violations'])}"     # with what `and N more on other posts` counts
     return f"{d['category'] or 'error'} {d['outcome']} ({d['rule']}{extra})"
 
 
