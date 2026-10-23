@@ -314,7 +314,7 @@ def missing_directives(summary: str, principal: list[Message]) -> list[str]:
 
 
 class TurnContext(Protocol):
-    """Minimal context view used by a turn; recall/cache/turn callbacks are optional."""
+    """Minimal turn view; optional for_child(tree, tools=names) decorates delegated context."""
 
     on_event: Callable[[Any, str], Awaitable[Any]] | None
 

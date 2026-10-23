@@ -46,6 +46,13 @@ def create(seat: str | None = None) -> CoreEngine:
     cfg = Config.load()
     plan = resolve(cfg.data)
     cfg = Config(plan.settings, cfg.home)  # runtime overlay only; never persist suppressed settings
+    tool_output = cfg.get("tool_output", {})
+    if not isinstance(tool_output, dict) or type(tool_output.get("enabled", False)) is not bool:
+        raise ConfigError("tool_output must be an object with a boolean enabled setting")
+    output_options = None
+    if tool_output.get("enabled", False):
+        from exo.tool_evidence import Options
+        output_options = Options.parse(tool_output)
     executor, executor_required = load_executor()  # required failures precede all plugin imports
     instructions = cfg.get("workspace_instructions", {})
     instruction_provider = None
@@ -143,6 +150,9 @@ def create(seat: str | None = None) -> CoreEngine:
                                 if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
         eng.harness_plan = plan
         eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is
+        if output_options is not None:
+            from exo.tool_evidence import attach
+            attach(eng, output_options, principal)
         if eng.peers is not None:
             eng.peers.autostart = True
             eng.peer_cfg_dir = eng.peer_cfg_dir or fitting_peers_dir()
