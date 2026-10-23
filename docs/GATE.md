@@ -154,8 +154,10 @@ folder that holds the store counts too, as `mv` and `rm` do (`move_file` from `~
 that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` from `~/.exo` to
 `~/.ssh/x`, as `cp -r` does), or writes a secret outside the store (`write_file ~/.ssh/config`),
 has no such part and keeps the delegation. With no secret, a file tool's move of a folder that
-holds the store is not read as a store write yet (#494). The hook's error fallback reads the
-parts too (see "The store is credentials").
+holds the store is not read as a store write yet (#494). Nor is a delete of one by a tool with a
+camelCase name (`deleteFile` on `~/.exo`). Its category is `unknown`, so it runs under the default
+policy unless its registry risk is high, where `delete_file` asks the principal. The hook's error
+fallback reads the parts too (see "The store is credentials").
 
 ## Who answered: the connection, not the body (D-039)
 
