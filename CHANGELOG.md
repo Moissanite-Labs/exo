@@ -18,10 +18,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `BASH_ALIASES` value, whatever runs it (ssh, mosh, `man -P`, `printf -v`). So a post on the same
   line keeps its matrix cell and posting rules: `hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`
   and `ssh host 'hash -p /dev/fd/3 ls'; gh pr comment 1 --body hi` are denied under a matrix deny
-  for the post, as before. Some lines decide lower than before. A rebind run with sudo asks under a
-  rule that denies costly reads, and over ssh a policy that allows `opaque_exec` allows it. A line
-  ssh runs with a shell command before the rebind is no longer a store write. The D-038 amendment
-  lists them.
+  for the post, as before. Some lines decide lower than before. A rebind run with sudo, doas,
+  chroot, nsenter, unshare or systemd-run asks under a rule that denies costly reads, and over ssh
+  a policy that allows `opaque_exec` allows it. A line that ssh, `man -P` or less runs with a shell
+  command before the rebind is no longer a store write. The D-038 amendment lists them.
 - Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
   verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
   Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.

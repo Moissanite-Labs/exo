@@ -1027,9 +1027,9 @@ gate does not read:
   (`BASH_CMDS[ls]=/tmp/x`, `read 'BASH_CMDS[ls]'`), and so is `BASH_ALIASES`, which defines an
   alias. `hash -p` and these values only record a path, so for the store check their part is the
   read it was, whatever runs it: the shell, sudo, ssh, mosh, an ssh `ProxyCommand`, `man -P`,
-  `printf -v` or `declare`. A line that ssh, mosh or `man -P` runs counts as a read when its other
-  commands are reads, such parts or plain shell commands. A shell command run with sudo is more
-  than the read, as before. A store or descriptor path in these words alone is no store write,
+  `printf -v` or `declare`. A line that ssh, mosh, `man -P`, less or more runs counts as a read when
+  its other commands are reads, such parts or plain shell commands. A shell command run with sudo
+  is more than the read, as before. A store or descriptor path in these words alone is no store write,
   and a post on the line keeps its matrix cell and posting rules
   (`hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`,
   `ssh host 'hash -p /dev/fd/3 ls'; gh pr comment 1 --body hi`,
@@ -1202,7 +1202,9 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   is more than reads: `ssh -E ~/.exo/state/log host ls` is allowed. A rebind in that line counts
   as a read, and so does a plain shell command beside it, so
   `ssh -E ~/.exo/state/log host 'sort x; hash -p /x ls'` asks as `opaque_exec`, not as a store
-  write. Since #394 a rule that
+  write. The other words of `man -P` and less are not checked for such a line either
+  (`man -P 'sort x; hash -p /x ls' -l ~/.exo/state/x`); they name files those programs read.
+  Since #394 a rule that
   would lower a compound line must also name its deciding command and every command that would get
   a stricter outcome alone, but a command allowed alone still rides on the outcome the rule gives,
   as before: `cd /tmp/other && git push --force origin main` and
