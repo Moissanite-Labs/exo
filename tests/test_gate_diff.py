@@ -792,7 +792,10 @@ def test_a_run_under_nohup_ignores_sighup(tmp_path):
     (('args.get("command") or args.get("cmd") or ""', 'args.get("cmd") or args.get("command") or ""'),
      {"tool": "bash", "args": {"command": "rm -rf build", "cmd": "true"}},
      lambda a: set(a["args"]) == {"command", "cmd"}),
-], ids=["drop exec_command", "drop the cmd key", "a terminal name in TOOLS", "cmd read first"])
+    # #462 review: an empty "command" falls through to "cmd" in the gate, as it does in a tool that reads either
+    (('args.get("command") or args.get("cmd") or ""', 'args.get("command", args.get("cmd")) or ""'),
+     {"tool": "bash", "args": {"command": "", "cmd": "rm -rf build"}}, lambda a: a["args"].get("command") == ""),
+], ids=["drop exec_command", "drop the cmd key", "a terminal name in TOOLS", "cmd read first", "empty command"])
 def test_a_head_that_drops_a_shell_tool_name_or_key_is_lowered(tmp_path, patch, example, only):
     # Built-in corpus only: the copied trees hold no tests, so it is the seeds, their variants and their forms.
     base = _tree(tmp_path, "base")
@@ -931,6 +934,22 @@ def test_a_reworded_pair_that_hides_fewer_is_lowered(tmp_path):
     _stream(tmp_path / "h.gz", [["github_post", "x", None, [_d("ask", violations=head)], [0], 0, ["q"]]], ["p"])
     rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
     assert rep["counts"]["lowered_violations"] == 1 and rep["counts"]["violations_reworded"] == 0, rep["counts"]
+
+
+def test_reworded_examples_name_other_actions_and_a_cut_json_says_so(tmp_path):
+    # #462 review nits: the examples were the first pairs in corpus order, often one line under several policies, and
+    # --json cut the reworded list with no word of it.
+    base, head = ["on a#9: missing footer: F"], ["on b#5: missing footer: F"]
+    for path, v, n in ((tmp_path / "b.gz", base, "on a#9"), (tmp_path / "h.gz", head, "on b#5")):
+        _stream(path, [["github_post", c, None, [_d("ask", violations=v)], [0, 0], 0, [n]] for c in "xy"], ["p", "q"])
+    acts = [{"tool": "terminal", "args": {"command": c}} for c in "xy"]
+    rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", acts, json_limit=3)
+    assert rep["counts"]["violations_reworded"] == 4 and len(rep["reworded"]) == 3 and rep["reworded_truncated"], rep
+    rep.update(base="b", head="h", wall_secs=0, corpus_counts={})
+    text = gate_diff.summary_text(rep)
+    shown = [line for line in text.splitlines() if line.startswith("           [")]
+    assert len(shown) == 2 and shown[0].endswith(" x") and shown[1].endswith(" y"), shown
+    assert "(--json keeps the first 3 reworded pairs, in corpus order)" in text, text
 
 
 def test_a_reworded_pair_is_shown_and_counted_once(tmp_path):
