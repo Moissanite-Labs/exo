@@ -464,8 +464,8 @@ def full(call, policy):
     ({"tool": "copy_file", "args": {"source": "~/.kube/x/../config", "destination": "~/.exo/policies/gates.yaml"}},
      {"tool": "copy_file", "args": {"source": "~/.kube/config", "destination": "~/.exo/policies/gates.yaml"}}),
     ("cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml", "cat ~/.kube/config; echo x > ~/.exo/policies/gates.yaml"),
-    # a heredoc body is the line's text only when the line is outbound, so a post that reads it from stdin keeps only
-    # its unread-body violation, for both spellings, and still asks
+    # a heredoc body is the line's text only when the line is outbound, so `gh api --input -`, whose body only the
+    # heredoc holds, keeps only its unread-body violation, for both spellings, and still asks
     ("cat ~/.kube//config; gh api repos/a/b/issues/3/comments --input - <<'EOF'\na secret\nEOF",
      "cat ~/.kube/config; gh api repos/a/b/issues/3/comments --input - <<'EOF'\na secret\nEOF"),
 ])

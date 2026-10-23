@@ -229,9 +229,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   after its working folder link, which does for pid 1 and most daemons (`cat /proc/1/cwd/pro?/1/environ`). This also
   covers rows 1 and 2 of #476. A `..` after another link is resolved as text, so `~/.kube/link/../config` asks even
   where the link leads elsewhere (fails closed), and a glob's folder part with a `..` is resolved too, so
-  `cat /dev/fd/../env*` asks. Such a line now takes the store's class, so a deny that only its own class drew (a rule
-  on a costly `read`, a `target:` entry for a second store on the line, a `store_write` deny on a `/proc/<pid>/root` or
-  `/dev/fd` path) becomes the store's ask, as for the plain spelling. The D-038 amendment lists the groups.
+  `cat /dev/fd/../env*` asks. The check reads the word, so `ls /*/bin/*` and `cat /*/src/*` ask, as `ls /proc/bin/*`
+  does. Such a line now takes the store's class, so a deny that only its own class drew (a rule on a costly `read`, a
+  `target:` entry for a second store on the line, a `store_write` deny on a `/proc/<pid>/root` or `/dev/fd` path or on
+  a file tool that writes a store file and names a secret) becomes the store's ask, as for the plain spelling. The
+  D-038 amendment lists the groups.
 - Gate store protection (#465, D-038 amendment): after `cd` into the store or a descriptor folder, a `$( )`,
   backticks or `<( )` of a later command is classified in that folder, as the same command unwrapped is. Each
   substitution was classified as a fresh line, so `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the
