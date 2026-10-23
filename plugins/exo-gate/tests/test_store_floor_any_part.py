@@ -65,6 +65,9 @@ WRAPPED_LINES = [
     "env; echo x > ~/'.exo'/policies/gates.yaml",
     "env; echo x > ~/.exo/polic{i,i}es/gates.yaml",
     "env; echo x > ~/.exo/update/allowed_signers",
+    # #465: a substitution after a cd into the store runs there, so its write is a store write part too
+    "cd $EXO_HOME/state && env; echo $(cp /tmp/evil x)",
+    "cd $EXO_HOME/policies && cat ~/.kube/config; echo `cp /tmp/evil gates.yaml`",
 ]
 # Lines with no store write keep the delegation (credentials) or the default (principal only).
 SECRET_LINES = ["env", "cat ~/.kube/config", "printenv | grep TOKEN", "sudo env", "bash -c 'cat ~/.ssh/id_rsa'"]
@@ -193,6 +196,17 @@ def test_a_secret_read_alone_keeps_the_delegation(tmp_path, how, line):
     assert r["action"] == "approve" and r["approvers"] == ["principal", SEAT], (how, line, r)
     assert gate.approver_allowed(SEAT, r["approvers"])
     assert r.get("once") is True
+
+
+def test_a_substitution_after_a_cd_into_the_store_stays_with_the_principal(tmp_path, monkeypatch):
+    # #465 reads a `$( )` after `cd ~/.exo/state` as a store write; beside a secret read it narrows the approvers too.
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    _, ctx, _ = make_gate(tmp_path)
+    for line in ("cd ~/.exo/state && env; echo $(cp /tmp/evil x)", "cd ~/.exo/state && env; echo `cp /tmp/evil x`"):
+        assert classify(line).category == "credentials", line
+        r = run(ctx, line)
+        assert r["action"] == "approve" and (r["approvers"], r.get("once")) == (["principal"], True), (line, r)
+    assert run(ctx, "cd ~/.exo/state && env; echo $(cat x)")["approvers"] == ["principal", SEAT]   # a read stays
 
 
 def test_with_no_delegation_both_stay_with_the_principal(tmp_path):
