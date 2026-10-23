@@ -287,12 +287,14 @@ def test_a_store_line_keeps_the_matrix_deny_of_its_parts(cmd, exo_home):
 
 
 @pytest.mark.parametrize("cmd", ["sudo ssh host 'scp {f} host:/tmp/'", "sudo mosh host -- scp {f} host:/tmp/",
-                                 "doas ssh host 'scp {f} host:/tmp/'", "sudo -u bob ssh host 'scp {f} host:/tmp/'"])
-def test_a_costly_rule_no_longer_reaches_a_store_send_under_sudo_over_ssh(cmd, exo_home):
+                                 "doas ssh host 'scp {f} host:/tmp/'", "sudo -u bob ssh host 'scp {f} host:/tmp/'",
+                                 "sudo ssh host 'cp /tmp/evil.py {f}'", "doas ssh host 'tee {f} < /tmp/evil.py'"])
+def test_a_costly_rule_no_longer_reaches_a_store_write_or_send_under_sudo_over_ssh(cmd, exo_home):
     """Recorded in the D-038 amendment of 2026-10-22: sudo makes the line's dominant part costly, and the store write
     is now that part, so a rule on `shell` with `reversibility: costly` no longer denies the line, nor does a matrix
-    that denies that cell while store_write has its own category line. It asks the principal alone, as the same line
-    with a policies/ file does on main, and `deny: [store_write]` still denies it."""
+    that denies that cell while store_write has its own category line. That holds for a write into the folder as for
+    a send of a file in it. It asks the principal alone, as the same line with a policies/ file does on main, and
+    `deny: [store_write]` still denies it."""
     rule = {"gates": {"rules": [{"match": {"category": ["shell", "local_write"], "reversibility": "costly"},
                                  "decision": "deny", "reason": "privileged"}]}}
     cell = {"gates": {"matrix": {"costly": {"private": "deny", "internal": "deny"}},

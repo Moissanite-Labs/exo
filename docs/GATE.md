@@ -1517,12 +1517,13 @@ for the call, a rule that matches it, its own matrix cell and the posting rules 
 tool that the gate reads as `local_write` or `delete` by its name, such as an `upload_file` tool
 that is not from MCP, keeps that reading as a part with the call's own URL as its target. A here-doc
 body on the line goes to the post, also inside a script fed to `bash`. Each of these still asks the
-principal alone when nothing denies it. One reading no longer reaches such a line. Under `sudo` or
-`doas` over `ssh` or `mosh`, the wrapper makes the dominant part costly. A rule on `shell` or
-`local_write` with `reversibility: costly` matched that part, and so did a matrix that denies that
-cell while `store_write` has its own category line. The store write is now that part, so neither
-denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'`, which asks the principal alone, as for
-`policies/` on main. `deny: [store_write]` is the reliable way to refuse every write into the
+principal alone when nothing denies it. One reading no longer reaches a write into the folder or a
+send of a file in it under `sudo` or `doas` over `ssh` or `mosh`. The wrapper makes the dominant part
+costly. A rule on `shell` or `local_write` with `reversibility: costly` matched that part, and so did
+a matrix that denies that cell while `store_write` has its own category line. The store write is now
+that part, so neither denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'` or `sudo ssh host
+'cp evil.py ~/.exo/plugins/foo/__init__.py'`. Each asks the principal alone, as for `policies/` on
+main. `deny: [store_write]` is the reliable way to refuse every write into the
 folder. A `target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*`
 denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the absolute path and
 `~/.exo/../.exo/plugins/...` still only ask.
