@@ -1042,7 +1042,11 @@ gate does not read:
   `builtin` or `command`, `-p` in a cluster (`-rp`, `-dp`) or with the path attached
   (`-p/tmp/x`), more options after the path (`hash -p /tmp/x -- ls`), and the last `-p` wins.
   An option word the gate cannot read may hold `-p`, so `hash $O ls` and `hash {-p,x} ls` are
-  opaque too. A lone quoted word at the end (`hash "$cmd"`) is one word with no name after it,
+  opaque too. From the path on, such a word may hold a name. `hash -p $P` with
+  `P='/tmp/x ls'` binds `ls`, and so does `hash -p /tmp/x {ls,/}`, which bash runs as
+  `hash -p /tmp/x ls /`. Both are opaque. One double-quoted path word (`hash -p "$P"`) does not
+  split, and a glob keeps a slash it has (`hash -p /tmp/x*`), so these stay `read`.
+  A lone quoted word at the end (`hash "$cmd"`) is one word with no name after it,
   so it stays `read`. So do plain `hash`, `hash -r`, `-d` and `-t`, a `-p` after the first
   operand, one with no path, an empty path or no name after it, and a name with a slash, which
   bash skips.
@@ -1052,7 +1056,8 @@ gate does not read:
   read it was, whatever runs it: the shell, sudo, ssh, mosh, an ssh `ProxyCommand`, `man -P`,
   `printf -v` or `declare`. A line that ssh, mosh, `man -P`, less or more runs counts as a read when
   its other commands are reads or such parts. Any other command keeps the check of the words
-  around the line, a plain shell command too, in either order: in
+  around the line, a plain shell command or a login to another host too
+  (`ssh a 'ssh b; hash -p /x ls'`), in either order: in
   `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'`, ssh's own log file in the store is a store
   write. A store or descriptor path in these words alone is no store write,
   and a post on the line keeps its matrix cell and posting rules
@@ -1226,7 +1231,9 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   line (#464). A path that `hash -p` or a `BASH_CMDS` value records makes no store write,
   whatever runs it, so it is kept out of this (#330). The
   same check reads ssh's own options, such as its log file (`-E`), only when the line ssh runs
-  is more than reads (#484): `ssh -E ~/.exo/state/log host ls` is allowed. A rebind in that line
+  is more than reads (#484): `ssh -E ~/.exo/state/log host ls` is allowed. less's log file
+  (`-o`, `-O`, `--log-file`) is read the same way: `cat f | less -o ~/.exo/state/y` is allowed.
+  A rebind in that line
   counts as a read, so `ssh -E ~/.exo/state/log host 'hash -p /x ls'` asks as `opaque_exec`, not
   as a store write.
   Since #394 a rule that

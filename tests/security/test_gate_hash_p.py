@@ -55,6 +55,27 @@ ASK = [
     "read 'BASH_CMDS[ls]' <<< /tmp/x; ls",
     "printf -v 'BASH_CMDS[ls]' /tmp/x; ls",
     "BASH_ALIASES[ls]=/tmp/x; ls",
+    # a name the gate cannot read may lose its slash: bash runs `{ls,/}` as `ls /`, skips `/` and binds ls (abu-aska,
+    # #409)
+    "hash -p /tmp/x {ls,/}; ls",
+    "hash -p /tmp/x l{s,/}; ls",
+    "hash -p /tmp/x -- {ls,/a}; ls",
+    "N=ls/; hash -p /tmp/x ${N%/}; ls",
+    'N=ls/; hash -p /tmp/x "${N%/}"; ls',
+    "hash -p /tmp/x $(cat /tmp/names); ls",
+    "hash -p /tmp/x `cat /tmp/names`; ls",
+    "builtin hash -p /tmp/x {ls,/}; git log",
+    "ssh host 'hash -p /tmp/x {ls,/}; ls'",
+    # and a path word it cannot read may split into a path and a name: P='/tmp/x ls' runs `hash -p /tmp/x ls`
+    "hash -p {/tmp/x,ls}",
+    "hash -p $P; ls",
+    "hash -p ${P}; ls",
+    "hash -p `cat /tmp/p`; ls",
+    "hash -p $(printf '/tmp/x ls'); ls",
+    "hash -p *; ls",                         # in a folder that holds `a` and `ls`: hash -p a ls
+    'hash -p "$@"; ls',
+    "hash -p /a -p$P; ls",                   # so may an attached path, or an option word after the path
+    "hash -p /a -l$O; ls",
 ]
 
 READ = [
@@ -70,6 +91,12 @@ READ = [
     "hash ls -p /tmp/x; ls",                 # an option after the first operand is a name, not an option
     "hash -- -p /tmp/x ls; ls",
     'hash "$cmd"',                           # one word with nothing after it binds nothing
+    'hash -p "$P"; ls',                      # one double-quoted path word does not split
+    "hash -p '/tmp/x ls'; ls",
+    "hash -p /tmp/x\\ ls; ls",
+    'hash -p /a "-l$O"; ls',
+    "hash -p /tmp/x*; ls",                   # a glob keeps the slash it has
+    "hash -p /tmp/x /usr/bin/l*; ls",
     "hash ls $O",                            # words after the first operand are names
     "ls",
     "git log",
@@ -103,6 +130,8 @@ def test_hash_without_a_rebind_stays_read(line):
     ("hash -p /a -p /b ls; ls", "hash -p makes ls run /b"),
     ("hash -p /tmp/x ./ls git; git log", "hash -p makes git run /tmp/x"),
     ("hash -p /tmp/x ls git; git log", "hash -p makes ls, git run /tmp/x"),
+    ("hash -p /tmp/x {ls,/}; ls", "hash -p makes {ls,/} run /tmp/x"),
+    ("hash -p /tmp/x ./ls ${N%/}; ls", "hash -p makes ${N%/} run /tmp/x"),
 ])
 def test_the_card_names_the_rebound_program_and_its_file(line, card):
     c = classify(sh(line))
@@ -118,6 +147,13 @@ def test_a_target_entry_on_the_path_denies_the_rebind():
 def test_an_unread_option_word_is_the_target():
     c = classify(sh("hash $O ls"))
     assert c.target == "$O" and "$O" in c.summary, c
+
+
+@pytest.mark.parametrize("line, word, path", [("hash -p $P; ls", "$P", "$P"), ("hash -p /a -l$O; ls", "-l$O", "/a")])
+def test_a_word_from_the_path_on_that_may_split_is_on_the_card(line, word, path):
+    c = classify(sh(line))
+    assert c.summary == f"hash -p may rebind a program name: a word the gate cannot read ({word})", c
+    assert c.target == path, c
 
 
 # exo-36's review of #409: the hash part went through the store-path scan, so a descriptor or store path in it made
@@ -150,6 +186,8 @@ POSTS = [
     "declare 'BASH_CMDS[ls]=/proc/self/fd/3'; gh pr comment 1 --body Zork",
     "printf -v 'a[BASH_CMDS=3]' /proc/self/fd/3; gh pr comment 1 --body Zork",    # set in a subscript
     "gh pr comment 1 --body Zork && ssh host 'hash -p /dev/fd/3 ls'",
+    "hash -p /proc/self/fd/3 {ls,/}; gh pr comment 1 --body Zork",   # a name or path the gate cannot read
+    "hash -p $P; gh pr comment 1 --body Zork",
     # a rebind over ssh inside a line ssh runs: the marked part is checked the same way, however deep
     "ssh host 'hash -p /proc/self/fd/3 ls; ssh b \"hash -p /dev/fd/3 ls\"'; gh pr comment 1 --body Zork",
 ]
@@ -238,6 +276,11 @@ def test_a_rebind_beside_a_force_push_keeps_the_push_deny():
     "man -P 'sort x; hash -p /x ls' -l ~/.exo/state/x",
     "less ~/.exo/state/x '+!sort x; hash -p /x ls'",
     "more ~/.exo/state/x '+!hash -p /x ls; sort x'",
+    # only the bare part of the hop that runs the rebind counts, not a login to another host on the line
+    "ssh -E ~/.exo/state/log a 'ssh b; hash -p /x ls'",
+    "ssh -E ~/.exo/state/log a 'hash -p /x ls; ssh -t b'",
+    "ssh -E ~/.exo/state/log a 'ssh; hash -p /x ls'",
+    "less ~/.exo/state/x '+!ssh b; hash -p /x ls'",
     # only BASH_CMDS and BASH_ALIASES are marked: a store path in another variable the gate reads as opaque is
     # still checked as on main, however the line sets it
     "export LD_PRELOAD=~/.exo/state/x",
@@ -260,6 +303,7 @@ def test_a_store_write_beside_hash_is_still_one(line, monkeypatch):
 @pytest.mark.parametrize("line", [
     "ssh host 'hash -p /proc/self/fd/3 ls; sort x'; gh pr comment 1 --body Zork",
     "ssh host 'sort x; hash -p /proc/self/fd/3 ls'; gh pr comment 1 --body Zork",
+    "ssh host 'ssh b; hash -p /proc/self/fd/3 ls'; gh pr comment 1 --body Zork",
 ])
 def test_a_post_beside_a_rebind_and_a_shell_command_over_ssh_keeps_its_deny(line):
     c = classify(sh(line))
