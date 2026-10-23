@@ -17,8 +17,9 @@ the head keeps the outcome but has fewer reserved hits than the base (or loses a
 the base's posting violations is missing from the head's (compared by text, so one the head words otherwise counts
 too). A violation either tree names after a part of the line (`<post>: v`, as a line of several posts lists them) is
 compared by its text v, as often as each tree lists it, so one the head names after its post, or after the post's
-new name, is kept. Such pairs are counted apart as reworded, not lowered, and not as another detail changed. At an
-equal deny, lost reserved hits and violations are not counted: the hook blocks the call, and both only matter for an
+new name, is kept. Such pairs are counted apart as reworded, not lowered, and not as another detail changed. Past
+the cap on the violations decide lists, `and N more on other posts` counts N in each tree's total, and a head whose
+total is lower has lost one too. At an equal deny, lost reserved hits and violations are not counted: the hook blocks the call, and both only matter for an
 ask (a reserved hit keeps a standing grant from covering it, a violation is named in its message). A classify or
 decide exception counts as the outcome the hook gives on an error: ask, or allow for a read tool whose arguments
 name no secret. Tightenings are counted only. Actions whose category or target changed while every decision stayed
@@ -1650,12 +1651,17 @@ def post_texts(tables: Iterable[dict], policies: Iterable[Any] = ()) -> list[str
 
 def post_lines(texts: Iterable[str]) -> list[str]:
     """Each post as a gh comment body and as a gh issue title, and twice to one PR behind a delete, so main names
-    both posts' violations alike and lists each text twice (#460)."""
+    both posts' violations alike and lists each text twice (#460). Then one line of 25 posts behind a delete, past the
+    cap on the violations decide lists, so a head that hides fewer of them shows."""
     q = shlex.quote
+    texts = list(texts)
     out: list[str] = []
     for s in texts:
         out += [f"gh pr comment 3 --body {q(s)}", f"gh issue create --title {q(s)} --body x",
                 f"rm -rf build; gh pr comment 5 --body {q(s)}; gh pr comment 5 --body {q(s)}"]
+    if texts:
+        many = [f"gh pr comment {n} --body {q(texts[n % len(texts)])}" for n in range(1, 25)]
+        out.append("; ".join(["rm -rf build", *many, many[0]]))
     return out
 
 
@@ -2153,8 +2159,14 @@ def show_action(a: dict, width: int = 160) -> str:
 
 
 # The line decide adds when it lists only so many of other posts' violations (#406). It names no text, so it is not
-# compared: a text it hides is missing from the explicit list either way, and a head that lists more has none.
-_MORE_LINE = re.compile(r"and \d+ more on other posts")
+# compared as one, but its N counts in each tree's total: a head that lists the same texts and hides fewer has lost
+# one past the cap, and a head that lists more and hides none has lost none.
+_MORE_LINE = re.compile(r"and (\d+) more on other posts")
+
+
+def _total(d: list) -> int:
+    """How many violations a decision holds: one per text it lists, and N per `and N more on other posts`."""
+    return sum(int(m.group(1)) if (m := _MORE_LINE.fullmatch(v)) else 1 for v in d[4])
 
 
 def _bare(v: str, names: Iterable[str]) -> str:
@@ -2169,14 +2181,15 @@ def _lost(db: list, dh: list, nb: Iterable[str] = (), nh: Iterable[str] = ()) ->
     a violation after its part (`<post>: v`, as a line of several posts lists them; ``nb`` and ``nh`` are the names
     each tree's parts go by). When the head holds each base text v as often as the base does, under whatever name,
     nothing is lost: "reworded" says so, and the caller does not count it as lowered. One post's violation that
-    moves onto another post that already had it is still lost."""
+    moves onto another post that already had it is still lost, and so is one fewer past the listing cap."""
     kinds = []
     rb, rh = {tuple(x) for x in db[3]}, {tuple(x) for x in dh[3]}
     if rb and (len(rh) < len(rb) or not {c for c, _ in rb} <= {c for c, _ in rh}):
         kinds.append("reserved")
     vb, vh = ([v for v in d[4] if not _MORE_LINE.fullmatch(v)] for d in (db, dh))
-    if Counter(vb) - Counter(vh):
-        kept = not Counter(_bare(v, nb) for v in vb) - Counter(_bare(h, nh) for h in vh)
+    fewer = _total(dh) < _total(db)
+    if Counter(vb) - Counter(vh) or fewer:
+        kept = not fewer and not Counter(_bare(v, nb) for v in vb) - Counter(_bare(h, nh) for h in vh)
         kinds.append("reworded" if kept else "violations")
     return kinds
 
