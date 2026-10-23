@@ -108,8 +108,8 @@ def test_another_file_tool_on_the_pin_folder_is_a_store_write(tool, args, exo_ho
 
 def test_what_the_floor_does_to_a_deny(exo_home):
     """docs/GATE.md "What the floor does to a policy's denies". A shell write keeps its own reading as a part, so a
-    deny on that category still denies it. A file tool's write is store_write alone, so a local_write deny no longer
-    reaches it and it asks the principal: the trade-off the D-038 amendment of 2026-10-21 records."""
+    deny on that category still denies it. Since #448 a file tool's write keeps its local_write reading as a part
+    too, so the deny holds there as well, and the call is still store_write."""
     pin = PIN.format(h=exo_home)
     for line, pol in ((f"printf x > {pin}", {"deny": ["local_write"]}), (f"cp /tmp/evil {pin}", {"deny": ["shell"]}),
                       (f"rm -rf {exo_home}/update", {"deny": ["delete"]})):
@@ -118,7 +118,7 @@ def test_what_the_floor_does_to_a_deny(exo_home):
     if "$" not in exo_home:
         c = gate.classify({"tool": "write_file", "args": {"path": pin, "content": "x"}})
         d = gate.decide(c, gate.normalize_policies({"gates": {"deny": ["local_write"]}}))
-        assert (c.category, d.outcome, d.rule) == ("store_write", "ask", "floor")
+        assert (c.category, d.outcome, d.rule) == ("store_write", "deny", "deny")
 
 
 def test_an_apply_patch_to_the_pin_is_a_store_write(exo_home):
