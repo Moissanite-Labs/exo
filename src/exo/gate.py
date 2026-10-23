@@ -4321,13 +4321,18 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     if func:
         parts.append(_opaque("defines a shell function", cmd))
     setters = [k.own for k in cmds if _sets_state(k)] + ([None] if func else [])
-    c = _combine(parts, cmd)
-    if c.category == "credentials":  # a secret beside an irreversible command keeps that command's weight
-        c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
+    c = combined = _combine(parts, cmd)
+
+    def weight() -> str:
+        """A secret beside an irreversible command keeps that command's weight, also one that a store write in a
+        $( ) holds (#465). One walk over every part the line was built from, made only when a secret decides it."""
+        return max((q.reversibility for q in _each_part(combined)), key=REVERSIBILITY.index)
+    if c.category == "credentials":
+        c.reversibility = weight()
     segs = [[w.text for w in k.words] for k in cmds if k.words]
     hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
     if hit and c.category != "credentials":
-        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
+        rev = weight()
         signals = c.signals
         c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
@@ -4342,7 +4347,7 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
                                    own=None, signals=["secret store"])]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     elif found:
-        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
+        rev = weight()
         signals = c.signals
         c = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
                   reversibility=max(rev, "costly", key=REVERSIBILITY.index))
@@ -5808,6 +5813,11 @@ def _override_deny(c: Classification, gates: Mapping,
         first = None
         for r in rules:
             if not _rule_matches(r["match"], p):
+                continue
+            # #465: a part read from a nested line carries that line as its text, so a rule keyed on `command` that
+            # would lift it must also name the whole line, as it must when that command decides the line itself
+            if r["decision"] != "deny" and "command" in r["match"] and p.command != c.command and \
+                    not _rule_matches({"command": r["match"]["command"]}, c):
                 continue
             if passed is not None and r["decision"] != "deny" and "command" in r["match"] and not (
                     p.own is not None and any(re.search(str(x), p.own) for x in _as_list(r["match"]["command"]))):

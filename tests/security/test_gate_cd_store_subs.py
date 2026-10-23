@@ -87,3 +87,20 @@ def test_order_and_subshells_are_not_followed():
     for line in ("echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies",
                  "(cd ~/.exo/policies) && echo $(cp /tmp/evil gates.yaml)"):
         assert _bash(line).category == "store_write", line
+
+
+def test_a_command_in_a_substitution_keeps_the_decision_it_had_as_the_line_s_command():
+    # with the substitution a store write, the push and the delete inside it are parts beside it: a deny they got
+    # on main as the line's dominant command still holds (needs the #464 part pass, and the two checks below)
+    gates = {"matrix": {"irreversible": {"private": "deny", "internal": "deny"}},
+             "rules": [{"match": {"command": "^git push"}, "decision": "allow"}]}
+    pol = gate.normalize_policies({"gates": gates})
+    assert gate.decide(_bash("git push --force origin main"), pol).outcome == "allow"     # the rule names it alone
+    # an anchored rule matches no compound line (#394), so it does not lift the push inside the line either
+    for line in ("echo $(git push --force origin main)", "cd ~/.exo/policies && echo $(git push --force origin main)"):
+        assert gate.decide(_bash(line), pol).outcome == "deny", line
+    # a secret line takes the weight of an irreversible command, also one held by a store write in a $( )
+    pol = gate.normalize_policies({"gates": {"matrix": {"irreversible": {"private": "deny"}}, "categories": {"delete": "allow"}}})
+    for line in ("cd ~/.exo/keys && rm -f x", "cd ~/.exo/keys && echo $(rm -f x)"):
+        c = _bash(line)
+        assert (c.category, c.reversibility, gate.decide(c, pol).outcome) == ("credentials", "irreversible", "deny"), line
