@@ -36,6 +36,11 @@ def _engine(tmp_path, sent, store="", models=MODELS):
         ctx.register_tool("run_command", "demo", {"parameters": {"type": "object", "properties": {
             "command": {"type": "string"}}}},
             handler=lambda args, **kw: (sent.append(args["command"]), "ran")[1], risk="high")
+        # A file tool by name; it only records what it would move.
+        ctx.register_tool("move_file", "demo", {"parameters": {"type": "object", "properties": {
+            "source": {"type": "string"}, "destination": {"type": "string"}}}},
+            handler=lambda args, **kw: (sent.append(f"{args['source']} -> {args['destination']}"), "moved")[1],
+            risk="high")
     pm._run_register(Manifest(name="demo"), "dir", register)
     return CoreEngine(tmp_path / "home", models, plugins=pm, cwd=str(tmp_path), env={})
 
@@ -203,3 +208,33 @@ def test_a_seat_delegated_credentials_may_not_answer_a_store_write_on_the_line(t
         assert not out[0].ok and "seat:builder may not answer" in out[0].error.message
         assert out[1].ok, out[1].error
     assert ran == [line]
+
+
+@pytest.mark.parametrize("destination, seat_answers", [
+    ("~/.exo/policies/gates.yaml", False),                                    # a secret moved into the store
+    ("/tmp/k", True),                                                         # a secret moved elsewhere
+])
+def test_a_seat_delegated_credentials_may_not_answer_a_file_tool_that_writes_the_store(tmp_path, destination,
+                                                                                         seat_answers):
+    """#447 (the #467 review): `move_file` from a secret is credentials. Its store write part keeps a move into the
+    store with the principal alone. A move elsewhere keeps the delegation."""
+    store = tmp_path / "store"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "approvals.yaml").write_text('approvers:\n  credentials: [principal, "seat:builder"]\n')
+    args = {"source": "~/.ssh/id_rsa", "destination": destination}
+    models = {"fake": {"rules": [{"match": "move it", "steps": [{"tool": "move_file", "args": args}, "done"]}]},
+              "roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
+    moved: list[str] = []
+    eng = _engine(tmp_path, moved, store, models)
+    builder = _seat_key("builder")
+    req, out = asyncio.run(_turn(eng, [_signed(builder, "builder", "allow"),
+                                       {"decision": "allow", "caller": "principal:tui"}], text="move it"))
+    assert req.options == ["allow", "deny"]                                   # no standing grant on offer
+    if seat_answers:
+        assert req.approvers == ["principal", "seat:builder"]
+        assert out[0].ok and not out[1].ok, [r.error for r in out]
+    else:
+        assert req.approvers == ["principal"]
+        assert not out[0].ok and "seat:builder may not answer" in out[0].error.message
+        assert out[1].ok, out[1].error
+    assert moved == [f"~/.ssh/id_rsa -> {destination}"]

@@ -139,6 +139,14 @@ a heredoc. No standing grant covers a line with such a part, and observe mode st
 the seats that `approvals.yaml` gives `credentials`. The line's category, its outcome and its
 matrix cell do not change.
 
+A file tool that names a secret and a store file is `credentials` too: `apply_patch` on
+`~/.ssh/config` and `~/.exo/policies/gates.yaml`, or `move_file` from `~/.ssh/id_rsa` to
+`~/.exo/policies/gates.yaml`. Each store file such a tool writes, moves, copies or deletes is a
+`store_write` part, so the call is the principal's alone as well. A file tool that only reads
+(`read_file ~/.ssh/id_rsa`), or writes a secret outside the store (`write_file ~/.ssh/config`),
+has no such part and keeps the delegation. The hook's error fallback reads the parts too (see
+"The store is credentials").
+
 ## Who answered: the connection, not the body (D-039)
 
 The core never takes the answerer from the `approval.respond` body. The transport stamps a caller:
@@ -1584,7 +1592,8 @@ writing subcommand, and any writing command after `cd` into the store. `rm -rf ~
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
 policy pattern that does not compile, for example), the hook's fallback card still asks the
-principal alone, once, in observe mode too (#464). Other calls keep their fallback: a read tool
+principal alone, once, in observe mode too (#464). A store write or secret part counts, as on the
+normal path (#447). Other calls keep their fallback: a read tool
 runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,
@@ -1597,10 +1606,10 @@ alone, whatever `approvals.yaml` delegates (#447, "Who may approve"). Before #44
 `approvals.yaml` delegates `credentials` to (or a seat in `default:` with no `credentials:` line)
 could answer it. A copy of a key or an archive of `keys/` (`cp ~/.exo/keys/seat.key /tmp/k`,
 `cat ~/.exo/keys/seat.key > /tmp/k`, `tar czf - ~/.exo/keys`) has a store write part too, so it
-is the principal's alone. A read alone (`cat ~/.exo/keys/seat.key`) has none, so such a seat may
-answer it. A file tool's write or delete there (`write_file` or `delete_file` on
-`~/.exo/keys/seat.key`) is `credentials` with no store write part, so such a seat may still
-answer it. A delete of job output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name
+is the principal's alone. A file tool's write, move, copy or delete there (`write_file` or
+`delete_file` on `~/.exo/keys/seat.key`) is `credentials` with a store write part as well, so it is
+the principal's alone too. A read alone (`cat ~/.exo/keys/seat.key`, `read_file` on it) has none,
+so such a seat may answer it. A delete of job output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name
 (`rm ~/.exo/run/exod.sock`) stays `store_write`.
 
 What the floor does to a policy's denies. A shell write to the store keeps its own reading
@@ -1613,6 +1622,10 @@ tool's own reading as a part (#448): a `local_write` part for each file a write 
 the tool's own category (`delete`). So a `local_write` or `delete` deny, a `reserved:` entry, a
 `target:` entry on another file the patch writes and a matrix cell on it still apply. A file tool on a secret store keeps its reading beside `credentials` the
 same way (`read_file ~/.ssh/id_rsa` is denied under `deny: [read]`, as `cat ~/.ssh/id_rsa` is).
+When such a tool also writes, moves, copies or deletes a store file, that file is a `store_write`
+part (#447), so a `store_write` deny or `reserved:` entry, or a `target:` entry on the store file,
+applies to it: `move_file` from `~/.ssh/id_rsa` to `~/.exo/policies/gates.yaml` is denied under
+`deny: [store_write]`, where it asked before.
 After `cd /dev` or `cd /proc/self/fd`, a line naming a store path (`printf x > update/allowed_signers`)
 has that path as its target, and the descriptor folder is a second store-write part (#464), so a
 `target:/dev*` or `target:/proc*` deny still denies it. On a store-write line, a relative key read after `tar -C` into

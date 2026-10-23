@@ -490,9 +490,9 @@ class Gate:
                 secret = bool(gate.args_sensitive(args))
             except Exception:
                 secret = True
-            try:        # the call read as a store write or secret, when only the decision failed (a bad policy regex)
-                action = {"tool": tool_name, "args": args}
-                store = (gate.classify(action, cwd=cwd) if cwd else gate.classify(action)).category in gate.NO_GRANT
+            try:        # the call read as a store write or secret, when only the decision failed (a bad policy regex):
+                action = {"tool": tool_name, "args": args}      # a part counts too, as on the normal path (#447)
+                store = gate.no_grant(gate.classify(action, cwd=cwd) if cwd else gate.classify(action))
             except Exception:
                 pass
             if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not (secret or store):
