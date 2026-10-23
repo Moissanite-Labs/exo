@@ -1424,11 +1424,13 @@ word or several among the options and the host, or as every word of the command 
 host`, `ssh "$HOST"`, `ssh host $CMD`), leaves them uncountable, as for the option reader above,
 so the stdin is read then too (`echo data | ssh "$HOST" 'cat > f'` asks). A `-n`, `-N` or `-f`
 before the first such word is an option whatever the word becomes, so since #316 ssh does not
-read its stdin then (`ssh -n "$h" uptime < hosts.txt`). Known limits: the `-o`
-forms of those three flags (`StdinNull`, `SessionType=none`, `ForkAfterAuthentication`) are not
-honored, so such a line reads its stdin anyway; text fed to a remote shell (`ssh host bash -s
-<<EOF`) is not read yet, and the line asks as `opaque_exec` as before; a stdin set earlier by
-`exec < file` (`exec < f; ssh host`) is not seen. `mosh` lines are unchanged.
+read its stdin then (`ssh -n "$h" uptime < hosts.txt`). A `--` before the host ends the options, so
+a letter after it does not count (`ssh -- -n "$h" < f`, where ssh takes `-n` as the host). Known
+limits: the `-o` forms of those three flags (`StdinNull`, `SessionType=none`,
+`ForkAfterAuthentication`) are not honored, so such a line reads its stdin anyway; text fed to a
+remote shell (`ssh host bash -s <<EOF`) is not read yet, and the line asks as `opaque_exec` as
+before; a stdin set earlier by `exec < file` (`exec < f; ssh host`) is not seen. `mosh` lines are
+unchanged.
 
 Since #316 the gate also sees a stdin that reaches `ssh` in five more ways. The gate does not have
 its text, so the line asks as `opaque_exec`, as `ssh host < script.sh` does. A known text is read.
@@ -1467,19 +1469,22 @@ its text, so the line asks as `opaque_exec`, as `ssh host < script.sh` does. A k
 As for the direct form, these lines take the category of what runs. The part that runs the stdin
 runs on the remote host, and it sits beside ssh's own part, which keeps the reading it had before:
 sudo or a privileged wrapper around `ssh` still makes that part `costly`, and in a hop it is the
-remote command read as before, with its own target and category. So `deny` and `reserved`
-entries, category lines that deny and rules that deny a part still see every part they saw: under
-`{match: {category: [shell, read], reversibility: costly}, decision: deny}`, `{ sudo ssh host; } <
-cmds.sh` is denied as before, and `sudo ssh host < cmds.sh`, which asked, is denied too. The new
-`opaque_exec` part can be the part that decides the line. The policy steps that read only that
-part then read it, so some lines decide lower than before (D-038 amendment for #316):
+remote command read as before, with its own target and category. ssh's own part names the host as it
+did where ssh read no stdin. In the direct #240 form, the part that led when #240 built the parts
+into one still leads on equal parts and takes the host, so that form decides and lists its reserved
+hits as before #316. So `deny` and `reserved` entries, category lines that deny and rules that deny
+a part still see every part they saw: under `{match: {category: [shell, read], reversibility:
+costly}, decision: deny}`, `{ sudo ssh host; } < cmds.sh` is denied as before, and `sudo ssh host <
+cmds.sh`, which asked, is denied too. The new `opaque_exec` part can be the part that decides the
+line. The policy steps that read only that part then read it, so some lines decide lower than before
+(D-038 amendment for #316):
 
 - Under a policy that allows or logs `opaque_exec` (a category line or a rule), or the category
   of a known text a hop reads (`delete`), a line where the new part displaces one the matrix logs,
   one the opaque floor asks about or a post's third-party ask goes to `allow` or `log`: `{ sudo
   ssh host; } < cmds.sh` and `{ ssh host; git push origin main; } < cmds.sh` go from `log` to
-  `allow`, and `nsenter -t 1 ssh host < cmds.sh` from `ask`, as `sudo ssh host < cmds.sh` and
-  `ssh host < cmds.sh; git push origin main` already did.
+  `allow`, and `nsenter -t 1 ssh host < cmds.sh` from `ask` or `log`, as `sudo ssh host <
+  cmds.sh` and `ssh host < cmds.sh; git push origin main` already did.
 - sudo and the privileged wrappers (`nsenter`, `chroot`, `unshare`, `systemd-run`) make `costly`
   only the deciding part of a nested line they run, such as a remote command or a `bash -c` line.
   Where a `>( )` or a `$( )` in that line now reads an `ssh` as fed, the new part decides it, so

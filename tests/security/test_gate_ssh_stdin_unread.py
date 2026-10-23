@@ -520,6 +520,32 @@ def test_the_direct_form_keeps_its_reserved_hits():
                                ("read", "")}, d
 
 
+@pytest.mark.parametrize("command", [
+    'while read l; do ssh prod-db "echo $l"; done < f',
+    'cat f | grep x | while read l; do ssh prod-db "echo $l"; done',
+    'tee >(ssh prod-db "echo $l") < f',
+])
+def test_a_fed_ssh_s_own_part_keeps_the_host(command):
+    """ssh's own part names the host as main named it where it read no stdin, so a reserved entry on the host still
+    finds the remote command's category beside the new part."""
+    d = gate.decide(gate.classify_shell(command), {"gates": {"reserved": ["target:prod-db"]}})
+    assert d.outcome == "ask" and {("read", "prod-db"), ("opaque_exec", "prod-db")} <= set(d.reserved), d
+
+
+@pytest.mark.parametrize("command, policy, outcome, hits", [
+    # a known text #240 reads led the line while ssh's own part, an unknown remote program, was still private
+    ("echo 'gh pr merge 1' | ssh $O jump", {"gates": {"categories": {"opaque_exec": "allow"}}}, "log", set()),
+    # ssh's own part led, so it kept the host and the part that runs the stdin kept no target
+    ("ssh -T $h 'cat | ssh inner' <&3", {"gates": {"reserved": ["opaque_exec", "shell"]}}, "ask",
+     {("opaque_exec", ""), ("opaque_exec", "inner"), ("shell", "$h")}),
+])
+def test_the_direct_form_is_led_and_targeted_as_before(command, policy, outcome, hits):
+    """Where the line gives ssh its stdin itself (#240), the part that led when it was built into ssh's own part
+    leads beside it, and the target goes where it went."""
+    d = gate.decide(gate.classify_shell(command), policy)
+    assert d.outcome == outcome and hits <= set(d.reserved), d
+
+
 def test_a_rule_for_the_outer_ssh_does_not_name_the_sudo_part_of_a_hop():
     """#394: the remote command's own part is a command of the line. sudo makes it costly, so alone it logs,
     and a rule written for the outer ssh does not lower the line past it (main logs it)."""
@@ -590,9 +616,12 @@ def test_a_flag_before_a_word_that_may_expand_is_sure(command):
     'ssh -o "$X" -n host < cmds.sh',
     'ssh "$h" -n < cmds.sh',
     "echo 'rm -rf /data' | ssh $X -n prod-db ssh inner",
+    'ssh -- -n "$h" < cmds.sh',
+    'ssh -T -- -n "$h" < cmds.sh',
 ])
 def test_a_flag_after_a_word_that_may_expand_is_not_sure(command):
-    """The word may end the options or turn the flag into a word of the remote command."""
+    """The word may end the options or turn the flag into a word of the remote command. After a `--` the flag is no
+    option at all: ssh reads `-n` as the host, and `"$h"` may be empty, so no remote command."""
     c = gate.classify_shell(command)
     assert any("runs its stdin" in p.summary for p in gate._each_part(c)), c
     assert gate.decide(c).outcome == "ask"
