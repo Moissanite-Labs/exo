@@ -405,9 +405,9 @@ Other files under `task/` keep their class: `cat /proc/self/task/*/status`, `cat
 `ls /proc/self/task` are reads.
 
 A thread's environment is decided as `/proc/<pid>/environ` already was. Some lines decide lower than before
-because of that. A differential of main against the change found 2,877 lowered pairs (27,708 actions under 95
-policies). Every one of them decides as main decides the same action with `/proc/self/environ`. They fall in
-four groups, all from how the gate already handles a secret store:
+because of that. A differential of main against the change found 4,878 lowered pairs on 1,910 actions (28,651
+actions under 103 policies). Every one of them decides as main decides the same action with `/proc/self/environ`.
+They fall in four groups, all from how the gate already handles a secret store:
 
 - **A file tool's own class.** A file tool on a secret store takes the `credentials` class in place of its own.
   A deny on `read` or `local_write` then becomes the credentials ask: `read_file /proc/self/task/1/environ`
@@ -435,8 +435,8 @@ it, where a store write is the principal's alone:
 line, `env; echo x > ~/.exo/policies/gates.yaml` included.
 
 Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
-and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. A path through `/proc/self`
-is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
+and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. On Linux, where `/proc/self`
+is a link, a path through it is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
 either form: `cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` stay reads.
 
 Tests: `tests/security/test_gate_proc_task_environ.py`.
