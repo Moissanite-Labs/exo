@@ -2511,10 +2511,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   either the old view or the merged one, never a mix. Logic is in `src/exo/turn_settle.py`, outside the counted core.
 - **Validation:** `tests/core/test_turn_settle.py`, `tests/core/loop/test_loop.py`.
 - **Docs:** `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep".
-- *Amendment 2026-10-21 (issue #244):* a private thread's own tree has no summary to wait for until its first
-  one lands, and its tail is then the whole thread, so a slow summarizer left the first calls unbounded. Until
-  that first summary lands, the tail is cut to `view_budget` behind an "[earlier messages are being summarized]"
-  marker (`fit_tail` in `src/exo/turn_settle.py`). Validation: `tests/core/test_agent_context.py`.
+- *Amendment 2026-10-23 (issue #244):* the wait does not bound a private thread's call. Its own view ends at its
+  last summary, so every span after it rides in the tail, pending ones included, and a slow summarizer left those
+  calls unbounded, the first ones and the ones after the first leaves land. While that tree has leaves pending,
+  `cut_pending` in `src/exo/turn_settle.py` leaves out their spans, oldest first and a whole leaf at a time, until
+  what comes before the turn fits `view_budget`. An "[earlier messages are being summarized]" marker stands in
+  each gap. The turn (from its user message, found by turn id) and spans that are not pending (skipped, failed,
+  or in no leaf yet) are never cut, and a call keeps its results. Tool-call arguments count in full. A whole leaf
+  at a time keeps the cached prefix until the cut must grow. The counted core grows by no line: `build` and
+  `report` wrap `_thread_tail`. Validation: `tests/core/test_agent_context.py`, `tests/core/test_turn_settle.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It

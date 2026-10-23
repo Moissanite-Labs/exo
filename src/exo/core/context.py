@@ -27,7 +27,7 @@ from exo import provenance
 from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.types import ContentPart, Message, Provider
-from exo.turn_settle import SUMMARIZING_MARKER, fit_tail, settle_for_turn
+from exo.turn_settle import cut_pending, settle_for_turn
 
 # ---------------------------------------------------------------- lifted prompt text
 
@@ -916,7 +916,7 @@ class AgentContext(TreeContext):
             raise ValueError("this thread is not part of an agent's memory (no summary tree)")
         top, frontier, parts = self._view(key)
         tree_text = (AGENT_VIEW_HEADER + "\n\n" + "\n\n".join(parts)) if parts else ""
-        tail = self._thread_tail(session, frontier)
+        tail = cut_pending(self, session, self._thread_tail(session, frontier))
         notes = [m for m in tail if m.meta.get("note") == "threads"]
         recent = [m for m in tail if m.meta.get("note") != "threads"]
         _, pending_text = self._unseen(session, key, frontier, self.store.get_meta(session))
@@ -934,7 +934,7 @@ class AgentContext(TreeContext):
             "tree": {"nodes": len(top), "levels": sorted({n.level for n in top if n.status == "done"}),
                      "summaries": sum(1 for n in top if n.status == "done"), "covers": [1, frontier] if frontier else []},
             "notes": {"stored": len(notes), "unseen": bool(pending_text)},
-            "tail": {"messages": len(recent), "from_seq": recent[0].meta.get("seq") if recent else None},
+            "tail": {"messages": len(recent), "from_seq": next((m.meta["seq"] for m in recent if "seq" in m.meta), None)},
             "nodes": {**count, "running": len(self.pending(key))},
             "capture": {"uncaptured": len(self.uncaptured(key)), "store": self.on_capture is not None},
             "eligible": {"leaves": sum(1 for i in range(full) if i not in leaves),
@@ -993,7 +993,7 @@ class AgentContext(TreeContext):
                 await settle_for_turn(self, session)
         top, frontier, parts = self._view(key)
         self.sync_thread(session, frontier)
-        tail = self._thread_tail(session, frontier)
+        tail = cut_pending(self, session, self._thread_tail(session, frontier), turn_id)  # a private tree's pending spans (#244)
         if recall:
             block = Message.user("# Recalled memory (for this turn)\n" + recall)
             block.meta["author"] = "system"  # D-040: recalled memory is data, never the principal's words
@@ -1014,8 +1014,7 @@ class AgentContext(TreeContext):
 
     def _thread_tail(self, session: str, frontier: int) -> list[Message]:
         """This thread after the frontier, at least its last ``tail_messages``, never opening on a tool result.
-        A private thread's frontier is its own tree's, whose view leads the tail; before its first summary
-        lands, the tail is instead cut to ``view_budget`` behind a marker (issue #244)."""
+        A private thread's frontier is its own tree's, whose view leads the tail."""
         own = self._top(session) if self._own(session) else None
         if own:  # as in _view, it ends at its last summary: small or pending spans after it stay whole in the tail
             own = own[:max((i for i, n in enumerate(own) if self._summarized(n)), default=-1) + 1]
@@ -1028,17 +1027,10 @@ class AgentContext(TreeContext):
         while tail and tail[0].role == "tool" and start > 0:  # widen back to the call these results answer
             start -= 1
             tail = self.store.messages(session, since=start)
-        cut = 0
-        if own is not None and not own:
-            # No summary of its own has landed, so the tail is the whole thread: cut it to the budget (issue #244)
-            tail, cut = fit_tail(tail, self.view_budget)
         while tail and tail[0].role == "tool":
             tail.pop(0)
         tail = (self.store.orphaned_copies(session, start) if own is None else []) + tail  # fork copies of logged entries undone after the fork are in no tree (#245)
         if own:
             view = PRIVATE_HEAD + "\n\n" + "\n\n".join(self._view_parts(own))
             tail.insert(0, Message("user", [ContentPart.of_text(view)], meta={"note": "private", "local": True}))
-        elif cut:
-            tail.insert(0, Message("user", [ContentPart.of_text(SUMMARIZING_MARKER)],
-                                   meta={"note": "private", "local": True}))
         return tail

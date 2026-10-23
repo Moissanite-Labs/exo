@@ -76,8 +76,9 @@ Each model call is built fresh, in this order:
    system message is byte-identical for every thread of the agent in the same folder until a real summary
    lands.
 2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its last
-   `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored in the
-   thread are part of it. A fork's copies count at their original's log position, so a fork opens with its
+   `tail_messages`, widened back so it never starts with an orphan tool result. A private thread's call can
+   leave out spans its own tree is still summarizing (below). Context notes stored in the thread are part of
+   it. A fork's copies count at their original's log position, so a fork opens with its
    parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too, except for the
    kept copies below. A copy counts only while the tree can hold its original. A private thread's fork has a
    tree of its own (below), which summarizes its copies. In any other fork, the parent may undo an entry after
@@ -102,15 +103,22 @@ thread therefore keeps a summary tree of its own over its own messages, as a sub
 session id, ranges: message numbers). Its tail starts at that tree's frontier, not the agent's, and the tree's
 view opens the tail as an unstored message headed "Earlier in this private thread". As in the agent view, that
 view ends at its last summarized node: spans too small to summarize, or a summary still running, stay whole in
-the tail. Until the first summary lands, the tail is the thread's own words, newest first kept: if it would
-overflow `view_budget`, it is cut to the budget behind an "[earlier messages are being summarized]" marker, so
-a slow summarizer cannot leave the first calls unbounded. A long private thread with no tree yet,
+the tail. Until the first summary lands, the whole thread is in the tail. A long private thread with no tree yet,
 such as one from before it had one, gets its leaves on its next turn. That turn waits for them as the agent
-tree's turns do (see "A turn does not wait for memory upkeep"), so a fast summarizer bounds the call sooner.
-The system message is the same as in the agent's
-other threads, so the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its
-`checkpoint`), `capture_principal` or `on_compacted`. `/context` counts its view in the recent tail, and
-`/compact` folds only the agent tree.
+tree's turns do (see "A turn does not wait for memory upkeep"), so a fast summarizer bounds the call. A slow one
+does not, so while the private tree has leaves pending, the call leaves out their spans (#244). It cuts the
+oldest pending leaf first, a whole leaf at a time, until what comes before the turn fits `view_budget`. An
+unstored "[earlier messages are being summarized]" message stands in each gap. Nothing else is cut. The turn stays
+whole: its user message, found by its turn id, and all after it, tool rounds and context notes included. A span
+that is not pending stays whole too: one skipped for good, one waiting to retry, and the last `tail_messages`,
+which are in no leaf yet. A tool call and its results are kept or cut together. The cut moves only when it must
+grow, and then by a whole leaf, so the calls in between extend the one before. The size counts tool-call
+arguments in full, but an image only as its placeholder. A span of large tool-call arguments can still be
+skipped as too small, since a leaf's size cuts each call's arguments at 400 characters, and then it stays
+verbatim. The system message is the same as in the agent's other threads, so the cached prefix holds. Plugin
+hooks never see that tree: no `on_pre_compress` (and its `checkpoint`), `capture_principal` or `on_compacted`.
+`/context` counts its view and the marker in the recent tail, and its `from_seq` is the first stored message
+there. `/compact` folds only the agent tree.
 
 A fork copies its parent's finished per-session summaries, but it numbers its copies 1 to n. Undo hides
 rows that are in the agent log, so their numbers stay used, and it deletes rows outside the log, such as a
@@ -183,7 +191,8 @@ thread checks its own tree the same way, after the agent tree.
 
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf
-summaries or the finished summary. Messages are never both summarized and verbatim, and never neither. Memory
+summaries or the finished summary. Messages are never both summarized and verbatim, and never neither, except
+that a private thread's call can leave out a span whose summary is running, behind a marker. Memory
 content is the same once the summaries finish. Tests: `tests/core/test_turn_settle.py`.
 
 ## Undo and failed summaries (D-041)
