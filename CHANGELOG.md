@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A ledger row built from a long line is no longer lost whole (#485). The ledger authority refuses a document
+  over 1 MiB, and a route can refuse an oversized request, so the exo-gate hook now cuts every string in a row
+  and in the decision model's input at 2,048 chars, marked with the full length and the value's sha256. The row
+  is always written and still identifies the call. The decision itself is made from the full values.
 - `scripts/gate_diff.py` counts a posting violation as often as each tree lists it, so a gate change that lists once
   what two posts of one name both meet shows as lower (#460). Each seed also runs under each tool table name that
   ends in `terminal` or `shell`, and in a call holding both `command` and `cmd`. The report shows a few reworded
