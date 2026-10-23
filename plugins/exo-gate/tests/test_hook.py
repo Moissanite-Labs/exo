@@ -424,6 +424,25 @@ def test_internal_error_on_a_secret_read_is_not_a_free_pass(keyed_store, monkeyp
     assert g.pre_tool_call("read_file", {"path": "README.md"}) is None
 
 
+def test_a_policy_that_breaks_decide_still_asks_the_principal_once_for_a_store_write(keyed_store, tmp_path,
+                                                                                     monkeypatch):
+    # #464: a regex that does not compile raises in decide, now also on a store write's own part. The error card
+    # for a call the gate read as a store write or secret asks the principal alone, once, in every mode.
+    store, key = keyed_store
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (store / "policies" / "gates.yaml").write_text("deny:\n  - category: local_write\n    command: '^(rm|shred'\n")
+    for extra in ({}, {"mode": "observe"}):
+        g, _ = make_gate(store, key, decision_model=False, **extra)
+        r = g.pre_tool_call("write_file", {"path": "~/.exo/policies/gates.yaml", "content": "version: 1\n"})
+        assert r["action"] == "approve" and r["rule_key"] == "exo-gate:error:write_file", r
+        assert (r["approvers"], r["once"]) == (["principal"], True), r
+        plain = g.pre_tool_call("write_file", {"path": "notes.md", "content": "x"})
+        if extra:
+            assert plain is None                      # observe mode, as before
+        else:
+            assert plain["action"] == "approve" and "once" not in plain and "approvers" not in plain
+
+
 # --- settings precedence under Exo's plugin loader (issue #19) -----------------------------
 
 def _loaded_settings(config=None):

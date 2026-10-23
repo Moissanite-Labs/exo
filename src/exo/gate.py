@@ -2841,12 +2841,17 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
     hit = _store_touch(k, words, parts, ctx)
-    if hit:
+    hits = [hit] if hit else []
+    if hit and ctx.get("fd_cwd") not in (None, hit):
+        # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
+        # so a `target:/dev*` entry still matches it, as it matches any other write there
+        hits.append(ctx["fd_cwd"])
+    for t in hits:
         # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
         # command is known to write there (`gh ... --body-file /dev/stdin` reads it), so the card says just that
-        what = (f"uses {hit}, a descriptor path or folder the gate cannot resolve (it may lead to an Exo store file)"
-                if _fd_path(hit) or _FD_DIR.fullmatch(os.path.normpath(hit)) else f"write to the Exo store: {hit}")
-        c = _make("store_write", summary=what[:120], target=hit, link=hit, command=cmd)
+        what = (f"uses {t}, a descriptor path or folder the gate cannot resolve (it may lead to an Exo store file)"
+                if _fd_path(t) or _FD_DIR.fullmatch(os.path.normpath(t)) else f"write to the Exo store: {t}")
+        c = _make("store_write", summary=what[:120], target=t, link=t, command=cmd)
         c.signals.append("exo store")
         parts.append(c)
     if any(w.locale for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]):
@@ -3256,11 +3261,28 @@ def _ssh_setting(text: str) -> tuple[str, str]:
     return key.lower(), rest.lstrip(" \t\r\n=")
 
 
+def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
+    """Where a builtin's operands start in ``args`` (its words after the name), and the option letters bash surely
+    reads before them. `--` ends the options, and so does a word not spelled `-x`, or `+x` when ``plus`` (declare,
+    typeset and local take `+x`; export, readonly and unset read it as a name). So does a word that may expand
+    (`-$f`, `-[fv]`, `-{,}`): bash may read it as options, as `-`, which ends them, or as several words, so it and
+    the words after it are operands, and its letters count for nothing (#329)."""
+    i, flags = 0, ""
+    while i < len(args) and args[i].text[:1] in ("-+" if plus else "-") and len(args[i].text) > 1 \
+            and not (args[i].dynamic or args[i].glob or args[i].brace):
+        if args[i].text == "--":
+            return i + 1, flags
+        flags += args[i].text[1:] if args[i].text[0] == "-" else ""
+        i += 1
+    return i, flags
+
+
 def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
     """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
     `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
     comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
-    name the gate cannot read. A for-loop variable comes here from _classify_simple with prog "for"."""
+    name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
+    _classify_simple with prog "for"."""
     args, targets, parts = words[1:], [], []
     if prog == "for":
         targets = args[:1]
@@ -3282,13 +3304,7 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
     elif prog == "printf" and args[:1] and args[0].text.startswith("-v"):
         targets = [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
     elif prog in _EXPORTERS:
-        i, flags = 0, ""
-        while i < len(args) and args[i].text[:1] in "-+" and len(args[i].text) > 1:
-            if args[i].text == "--":
-                i += 1
-                break
-            flags += args[i].text[1:] if args[i].text[0] == "-" else ""
-            i += 1
+        i, flags = _builtin_options(args, prog in ("declare", "typeset", "local"))
         if "f" in flags or "F" in flags:                  # names functions, not variables
             return []
         if "p" in flags and prog in ("declare", "typeset", "local"):  # prints; export/readonly -p still assign
@@ -3297,6 +3313,8 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
             name, (_, sep, ref) = re.split(r"\[|\+?=", w.text, maxsplit=1)[0], w.text.partition("=")
             if _unreadable_name(w):
                 targets.append(w)
+            elif w.dynamic and w.text.startswith(("-", "+")):  # `-o=$v`: options and names the gate cannot see
+                parts.append(_opaque(f"{prog} takes a word the gate cannot read", cmd))
             elif "n" in flags and prog != "export":     # a nameref: what it points at is what gets set
                 if not sep:
                     parts.append(_opaque(f"{prog} -n {name} makes a reference the gate cannot follow"[:120], cmd))
@@ -3402,6 +3420,21 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     named = assigns + (argv[1:] if prog in (*_EXPORTERS, "unset") else []) + \
         [b for a, b in zip(argv, argv[1:]) if prog in ("test", "[") and a == "-v"]   # where NAME[..] is arithmetic
     sets += [(name, value, True, literal) for name, value, literal in _hidden_sets(k, named)]
+    if prog == "unset":
+        # `unset PATH` is `PATH=` for what follows it: with no PATH, bash looks a command up in the
+        # working folder, the empty-element hazard #231 reads in an assignment (#329). `-f` names
+        # functions (with `-v` it is an error), so it leaves PATH alone, but only where bash surely
+        # reads it as an option. A word that may expand, a name or an option, may spell PATH or hide
+        # the options (`unset $v`, `unset {PATH,}`, `unset -${f}v PATH`), and so may a `$` outside
+        # double quotes anywhere in a word: x='1] PATH [' splits `unset a[$x]` into three names. An
+        # unquoted `[` that starts a word is a glob too, one the lexer does not mark (`unset [P]ATH`),
+        # also after a `\<newline>` that bash drops first.
+        i, flags = _builtin_options(words[1:], False)
+        if "f" not in flags:
+            sets += [("PATH", "", True, False) for a in argv[1 + i:] if re.split(r"\[", a)[0] == "PATH"]
+            if any(_unreadable_name(w) or w.brace or w.raw.replace("\\\n", "")[:1] == "[" or
+                   w.dynamic and not re.fullmatch(r'"(?:[^"\\]|\\.)*"', w.raw) for w in words[1:]):
+                parts.append(_opaque("unset takes a word the gate cannot read, which may unset PATH", cmd))
     git_env: dict[tuple[str, ...], str] = {}
     for name, value, runs_nothing, literal in sets:
         if name in _EXEC_ENV:
@@ -4369,9 +4402,15 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
         c.parts = list(parts)
-    # D-038: a relative read on a line that enters a store folder may read the store; store_write stays.
-    found = _cd_store_read(cmds, subs) if c.category not in ("credentials", "store_write") else ""
-    if found:
+    # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
+    # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
+    # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
+    found = _cd_store_read(cmds, subs) if c.category != "credentials" else ""
+    if found and c.category == "store_write":
+        c.parts = [*c.parts, _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
+                                   own=None, signals=["secret store"])]
+        c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
+    elif found:
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
         signals = c.signals
         c = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
@@ -5462,6 +5501,9 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         c = _make(cat, summary=f"write {path}", target=path, link=path)
         if cat == "store_write":
             c.signals.append("exo store")
+        if cat != "local_write":    # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply
+            c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
+                       for p in dict.fromkeys(paths or [path])]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -5481,7 +5523,7 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
             c = _opaque(f"cronjob_manage mutation: {action}", operation)
             c.tool = tool
     else:
-        cat = TOOLS.get(tool) or classify_by_name(tool)
+        cat = own = TOOLS.get(tool) or classify_by_name(tool)
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
         if secret:
             cat = "credentials"
@@ -5512,6 +5554,10 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         if store:
             c.signals.append("exo store")
             c.summary, c.target = f"{tool} {store}"[:120], store
+        if cat != own:  # #448: the tool's own reading stays a part, so its deny, reserved and matrix entries apply
+            out = own in OUTBOUND
+            c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
+                             text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
     c.tool = tool
     if c.category in ("web_post", "web_read") and c.target and _is_local_host(c.target):
         c.exposure, c.third_party = "private", False
@@ -5811,18 +5857,23 @@ def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classificatio
 
 def _override_deny(c: Classification, gates: Mapping,
                    passed: list[Mapping] | None = None) -> tuple[Classification, str, str] | None:
-    """The first part of the line, below the combined result, that a category line or rule denies as it would
-    deny that command alone (#191): its category's line, then the first rule that matches it; or a deny rule
-    whose `command` regex matches only a decoded view of the line (#136). ``(part, why, step)`` or None.
+    """The first part of the line, below the combined result, that its matrix cell, a category line or a rule denies
+    as it would deny that command alone (#191): its matrix cell (#464), then its category's line, then the first rule
+    that matches it; or a deny rule whose `command` regex matches only a decoded view of the line (#136).
+    ``(part, why, step)`` or None. The cell matters where the combined result's axes are not the part's: a store
+    write or secret beside a delete or force push (`rm -rf ~/work; touch ~/.exo/state/x`), or a matrix that denies a
+    less severe cell than the dominant part's.
     With ``passed`` (#394), an allow, log or ask rule keyed on `command` that matches must also match the part's own
     text, or it is passed over and added to ``passed``: a rule written for another command on the line does not lift
     the part's deny. Deny rules match as before, so every part denied without this test is denied with it."""
-    cats, rules = gates.get("categories") or {}, gates.get("rules") or []
-    if not (cats or rules):
+    cats, rules, matrix = gates.get("categories") or {}, gates.get("rules") or [], gates["matrix"]
+    if not (cats or rules or any(v == "deny" for row in matrix.values() for v in row.values())):
         return None
     line = _line_matcher(c)
     for p in list(_each_part(c))[1:]:
-        out, why, step = cats.get(p.category), f"category {p.category}", "category"
+        out, why, step = matrix[p.reversibility][p.exposure], f"{p.reversibility} and {p.exposure}", "matrix"
+        if p.category in cats:
+            out, why, step = cats[p.category], f"category {p.category}", "category"
         first = None
         for r in rules:
             if not _rule_matches(r["match"], p):
@@ -6100,7 +6151,8 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     if eff.category == "store_write":
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
 
-    # #191: a category line or rule that would deny a part alone denies the line, as a deny entry does (D-075).
+    # #191: a matrix cell (#464), category line or rule that would deny a part alone denies the line, as a deny entry
+    # does (D-075).
     if outcome != "deny" and (part := _override_deny(eff, gates, passed)):
         p, why, step = part
         outcome, reason, rule = "deny", f"denied by policy ({why}: {p.summary or p.category})", step

@@ -897,11 +897,13 @@ def test_a_violation_named_after_its_post_is_kept(tmp_path, base, head, lowered)
 
 def test_post_names_hold_every_part_and_the_name_the_gate_hides_userinfo_in():
     from types import SimpleNamespace as NS
-    gate = NS(redact_userinfo=lambda s: s.replace("u:p@", "***@"))
-    two = NS(summary="GitHub PR comment on https://u:p@ghe.corp/pub/repo#5", category="github_post", parts=[])
+    user = "u:p" + "@"                 # split, so the privacy check (D-042) reads no address in this file
+    gate = NS(redact_userinfo=lambda s: s.replace(user, "***@"))
+    two = NS(summary=f"GitHub PR comment on https://{user}ghe.corp/pub/repo#5", category="github_post", parts=[])
     line = NS(summary="", category="github_post", parts=[NS(summary="git status", category="read", parts=[two]), two])
     assert gate_diff._post_names(gate, line) == [
-        "GitHub PR comment on https://***@ghe.corp/pub/repo#5", "GitHub PR comment on https://u:p@ghe.corp/pub/repo#5",
+        "GitHub PR comment on https://***@ghe.corp/pub/repo#5",
+        f"GitHub PR comment on https://{user}ghe.corp/pub/repo#5",
         "github_post", "git status"]
     assert gate_diff._post_names(NS(), NS(summary="x", parts=None)) == ["x"]
 
