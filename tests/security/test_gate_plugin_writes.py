@@ -287,17 +287,47 @@ def test_a_store_line_keeps_the_matrix_deny_of_its_parts(cmd, exo_home):
     assert gate.decide(c, {"gates": {**pol["gates"], "categories": {"delete": "ask"}}}).outcome == "ask"
 
 
-@pytest.mark.parametrize("cmd", ["sudo ssh host 'scp {f} host:/tmp/'", "sudo mosh host -- scp {f} host:/tmp/"])
+@pytest.mark.parametrize("cmd", ["sudo ssh host 'scp {f} host:/tmp/'", "sudo mosh host -- scp {f} host:/tmp/",
+                                 "doas ssh host 'scp {f} host:/tmp/'", "sudo -u bob ssh host 'scp {f} host:/tmp/'"])
 def test_a_costly_rule_no_longer_reaches_a_store_send_under_sudo_over_ssh(cmd, exo_home):
     """Recorded in the D-038 amendment of 2026-10-22: sudo makes the line's dominant part costly, and the store write
-    is now that part, so a rule on `shell` with `reversibility: costly` no longer denies the line. It asks the
-    principal alone, as the same line with a policies/ file does on main, and `deny: [store_write]` still denies it."""
+    is now that part, so a rule on `shell` with `reversibility: costly` no longer denies the line, nor does a matrix
+    that denies that cell while store_write has its own category line. It asks the principal alone, as the same line
+    with a policies/ file does on main, and `deny: [store_write]` still denies it."""
     rule = {"gates": {"rules": [{"match": {"category": ["shell", "local_write"], "reversibility": "costly"},
                                  "decision": "deny", "reason": "privileged"}]}}
-    assert gate.decide(gate.classify(_sh(cmd.format(f="/tmp/x.py"))), rule).outcome == "deny"
+    cell = {"gates": {"matrix": {"costly": {"private": "deny", "internal": "deny"}},
+                      "categories": {"store_write": "ask"}}}
+    alone = gate.classify(_sh(cmd.format(f="/tmp/x.py")))
+    assert gate.decide(alone, rule).outcome == gate.decide(alone, cell).outcome == "deny"
     c = gate.classify(_sh(cmd.format(f=f"{exo_home}/plugins/foo/__init__.py")))
-    assert (c.category, gate.decide(c, rule).outcome) == ("store_write", "ask")
+    assert (c.category, gate.decide(c, rule).outcome, gate.decide(c, cell).outcome) == ("store_write", "ask", "ask")
     assert gate.decide(c, {"gates": {"deny": ["store_write"]}}).outcome == "deny"
+
+
+@pytest.mark.parametrize("make", [
+    lambda f: {"tool": "upload_file", "args": {"url": "https://example.com/u", "path": f}},
+    lambda f: {"tool": "put_object", "args": {"url": "https://example.com/u", "file": f}},
+    lambda f: {"tool": "delete_remote_file", "args": {"url": "https://example.com/u", "path": f}},
+], ids=["upload_file", "put_object", "delete_remote_file"])
+def test_a_send_the_gate_reads_as_a_file_tool_keeps_no_part(make, exo_home):
+    """Recorded in the D-038 amendment of 2026-10-22: a tool the gate reads as local_write or delete by its name is a
+    file tool here, even when it sends. With a plugin file it is store_write alone, so a target:, reserved: or
+    category entry on the call no longer reaches it, as for policies/ on main. It asks the principal alone, and
+    `deny: [store_write]` still denies it. An MCP tool reads as remote_write, so it keeps the call as a part.
+    Keeping a file tool's own reading as a part is open as #448."""
+    alone = gate.classify(make("/tmp/x.py"))
+    lost = [{"gates": {"deny": ["target:https://example.com/*"]}}, {"gates": {"deny": [alone.category]}},
+            {"gates": {"rules": [{"match": {"target": "https://example.com/*"}, "decision": "deny", "reason": "t"}]}}]
+    assert alone.category in ("local_write", "delete")
+    assert [gate.decide(alone, p).outcome for p in lost] == ["deny"] * 3
+    assert gate.decide(alone, {"gates": {"reserved": ["target:https://example.com/*"]}}).reserved
+    c = gate.classify(make(f"{exo_home}/plugins/foo/__init__.py"))
+    assert (c.category, [gate.decide(c, p).outcome for p in lost]) == ("store_write", ["ask"] * 3)
+    assert not gate.decide(c, {"gates": {"reserved": ["target:https://example.com/*"]}}).reserved
+    assert gate.decide(c, {"gates": {"deny": ["store_write"]}}).outcome == "deny"
+    mcp = gate.classify({**make(f"{exo_home}/plugins/foo/__init__.py"), "tool": "mcp__drive__upload_file"})
+    assert (mcp.category, gate.decide(mcp, lost[0]).outcome) == ("store_write", "deny")
 
 
 def test_a_target_entry_matches_only_the_spelling_it_names(tmp_path, monkeypatch):

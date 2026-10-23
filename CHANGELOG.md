@@ -209,13 +209,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$EXO_HOME`, the resolved path or a link into it. A read with a read command (`cat`, `ls`, `grep -r`, `find`, a read
   tool) stays a read. A writing command that names a file there only as a source asks too, as for the rest of the
   store, and so do other commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `xxd`). A call
-  that sends a store file out (an `email_send`, post, upload or payment tool call with the file in `files:`,
-  `curl -T`, `curl -F`, `mail -A`) keeps the call as a part, with its target and text. So a deny, reserved entry,
-  rule, matrix deny cell or posting rule on that call still applies, as on main, and a here-doc body on the line still
-  reaches the post, also inside `bash <<EOF`. For `policies/`, `state/` and `update/` that is stricter than before,
-  and so is a matrix deny on a delete part of a store line (`ssh host 'rm -rf ~/.exo/update'`). Not covered: the
-  folders in `$EXO_PLUGIN_DIRS`, which developers point at a checkout, and, as for the rest of the store, a relative
-  path written by a tool whose working folder is in the plugins folder.
+  that sends a store file out (an `email_send`, post or payment tool call with the file in `files:`, an MCP upload
+  tool, `curl -T`, `curl -F`, `mail -A`) keeps the call as a part, with its target and text. So a deny, reserved
+  entry, rule, matrix deny cell or posting rule on that call still applies, as on main, and a here-doc body on the line
+  still reaches the post, also inside `bash <<EOF`. For `policies/`, `state/` and `update/` that is stricter than
+  before, and so is a matrix deny on a delete part of a store line (`ssh host 'rm -rf ~/.exo/update'`). A tool the
+  gate reads as a file write or delete by its name keeps no part yet (#448), even one that sends, such as
+  `upload_file`: a deny on its category or its URL asks the principal instead. Not covered: the folders in
+  `$EXO_PLUGIN_DIRS`, which developers point at a checkout, and, as for the rest of the store, a relative path written
+  by a tool whose working folder is in the plugins folder.
 - Gate (#436, D-038 amendment): `for NAME do LIST; done` and `select NAME do LIST; done`, with no `in` list and no
   `;` before `do`, are read as `for NAME; do LIST; done`. Bash and POSIX accept that form and run the loop over the
   positional parameters, but the gate read the body as words of the `for` command and classified nothing in it, so

@@ -1486,18 +1486,24 @@ it, or as a relative `.exo/plugins/...`. That covers a plugin's own files too, s
 What a policy can still do there. As for every protected folder, a file tool's write or delete there
 is one `store_write` with no part left for `local_write` or `delete`. So a `deny` or `categories:`
 line on those no longer denies it, and the floor asks instead. A shell line keeps its own command as
-a part, so a deny on that still holds. A call that is not a file write and names a file in a
-protected folder only as what it sends keeps the call as a part, with its target and text (#435
-review). Examples are an `email_send`, post, upload or payment tool call with the file in `files:`,
-and `curl -T`, `curl -F` or `mail -A` on a shell line. So a `deny`, `reserved` or `categories:`
-entry for the call, a rule that matches it, and the posting rules still apply to it. On a store
-write a part with no category line also reads its own matrix cell, and a `deny` cell there denies
-the line (`_override_deny`). The store outranks a post by its category, not by its cell, so the
-store's cell (costly and private) would hide it. A here-doc body on the line goes to the post, also
-inside a script fed to `bash`. Each of these still asks the principal alone when nothing denies it.
-One rule no longer reaches such a line. Under `sudo` over `ssh` or `mosh`, the wrapper makes the
-dominant part costly, and a rule on `shell` or `local_write` with `reversibility: costly` matched
-that part. The store write is now that part, so the rule does not deny
+a part, so a deny on that still holds. A tool call that the gate does not read as a file write or
+delete, and that names a file in a protected folder only as what it sends, keeps the call as a part,
+with its target and text (#435 review). Examples are an `email_send`, `web_post`, `github_post`,
+`social_post`, `publish` or `payment` tool call with the file in `files:`, an MCP upload tool, and
+`curl -T`, `curl -F` or `mail -A` on a shell line. So a `deny`, `reserved` or `categories:` entry
+for the call, a rule that matches it, and the posting rules still apply to it. A tool that the gate
+reads as `local_write` or `delete` by its name is a file tool here, even when it sends: an
+`upload_file` or `put_object` tool that is not from MCP, given a plugin file and a URL, is
+`store_write` alone. So a `target:` or `reserved:` entry or a rule on that URL no longer reaches it,
+as a `local_write` deny does not. Keeping a file tool's own reading as a part is open as #448. On a
+store write a part with no category line also reads its own matrix cell, and a `deny` cell there
+denies the line (`_override_deny`). The store outranks a post by its category, not by its cell, so
+the store's cell (costly and private) would hide it. A here-doc body on the line goes to the post,
+also inside a script fed to `bash`. Each of these still asks the principal alone when nothing
+denies it. One more reading no longer reaches such a line. Under `sudo` or `doas` over `ssh` or
+`mosh`, the wrapper makes the dominant part costly. A rule on `shell` or `local_write` with
+`reversibility: costly` matched that part, and so did a matrix that denies that cell while
+`store_write` has its own category line. The store write is now that part, so neither denies
 `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'`, which asks the principal alone, as for
 `policies/` on main. `deny: [store_write]` is the reliable way to refuse every write into the
 folder. A `target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*`
