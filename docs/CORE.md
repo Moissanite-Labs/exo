@@ -176,9 +176,10 @@ length, how many nodes hold each word, and the average length. Later calls token
 and the default ranker of `assemble` call `find`, so they share the tables.
 
 The tables belong to the node set they were built from. `reload()` makes a new set, and so does a `refresh()` that
-sees a node file added, edited or removed. The next `find` then builds the tables again. So `find` always ranks the
-nodes that `nodes` returns. Like `nodes`, it does not see a file written after the last read until a `refresh()` or
-a `reload()`. Callers treat the node dicts as read-only and change a node by writing its file.
+sees a node file added, edited or removed. The reload drops the old tables at once, and the next `find` builds new
+ones. So `find` always ranks the nodes that `nodes` returns. Like `nodes`, it does not see a file written after the
+last read until a `refresh()` or a `reload()`. Callers treat the node dicts as read-only and change a node by
+writing its file.
 
 ## Store checks
 

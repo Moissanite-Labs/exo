@@ -501,16 +501,24 @@ class Gate:
             logger.exception("exo-gate: internal error on %s", tool_name)
             if self.executor_required:
                 return {"action": "block", "message": "Required gate checks or audit failed"}
-            secret = False
+            secret = store = False
             try:
                 secret = bool(gate.args_sensitive(args))
             except Exception:
                 secret = True
-            if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not secret:
+            try:        # the call read as a store write or secret, when only the decision failed (a bad policy regex)
+                action = {"tool": tool_name, "args": args}
+                store = (gate.classify(action, cwd=cwd) if cwd else gate.classify(action)).category in gate.NO_GRANT
+            except Exception:
+                pass
+            if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not (secret or store):
                 return None
-            return {"action": "approve", "message": f"exo-gate could not classify {tool_name} ({exc}). "
+            card = {"action": "approve", "message": f"exo-gate could not classify {tool_name} ({exc}). "
                                                     "Approve only if you expected this action. Default if no reply: skip.",
                     "rule_key": f"exo-gate:error:{tool_name}"}
+            if store:   # a store write or secret the gate read: the principal answers, once, in every mode (D-033)
+                card.update(approvers=["principal"], once=True)
+            return card
 
     def _rules(self, tool: str, args: dict, risk: str, cwd: str = "") -> tuple[gate.Classification, gate.Decision]:
         """Classification and the rule outcome (policies, then the registry risk floor)."""
