@@ -426,9 +426,9 @@ Other files under `task/` keep their class: `cat /proc/self/task/*/status`, `cat
 `ls /proc/self/task` are reads.
 
 A thread's environment is decided as `/proc/<pid>/environ` already was. Some lines decide lower than before
-because of that. A differential of main against the change found 2,877 lowered pairs (27,708 actions under 95
-policies). Every one of them decides as main decides the same action with `/proc/self/environ`. They fall in
-four groups, all from how the gate already handles a secret store:
+because of that. A differential of main against the change found 4,878 lowered pairs on 1,910 actions (28,651
+actions under 103 policies). Every one of them decides as main decides the same action with `/proc/self/environ`.
+They fall in four groups, all from how the gate already handles a secret store:
 
 - **A file tool's own class.** A file tool on a secret store takes the `credentials` class in place of its own.
   A deny on `read` or `local_write` then becomes the credentials ask: `read_file /proc/self/task/1/environ`
@@ -455,8 +455,8 @@ it, where a store write is the principal's alone:
 line, `env; echo x > ~/.exo/policies/gates.yaml` included.
 
 Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
-and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. A path through `/proc/self`
-is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
+and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. On Linux, where `/proc/self`
+is a link, a path through it is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
 either form: `cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` stay reads.
 
 Tests: `tests/security/test_gate_proc_task_environ.py`.
@@ -1007,7 +1007,20 @@ gate does not read:
   `PATH=$PATH: ls`), any other folder in `PATH`, appended or not, since it supplies every program
   the folders before it lack (`export PATH="$HOME/.local/bin:$PATH"`), `PYTHONPATH` before any
   other program (`PYTHONPATH=/tmp/p python3 -m json.tool x` loads a `json` module from there) or
-  exported, and `GIT_CONFIG_GLOBAL` set to a file. The
+  exported, and `GIT_CONFIG_GLOBAL` set to a file. `unset PATH` and `unset -v PATH` ask as
+  `PATH=` does, since with no `PATH` bash looks a command up in the current folder (#329).
+  `unset -f PATH` stays `allow`: `-f` names a function, and with `-v` it is an error. The gate
+  takes `-f` only from an option word it can read, before any word it cannot. A `+x` word, `--`
+  or a name ends unset's options, so a later `-f` is a name (`unset +f -f PATH` asks). An
+  `unset` with a word the gate cannot read asks too, as a name or as an option: a name made by a
+  variable or a substitution (`unset "$v"`, `unset $(echo PATH)`), an option word with one
+  (`unset -${f}v PATH`), a `$` outside double quotes, which bash may split into more names
+  (`unset a[$i]`), a glob (`unset PAT?`, `unset [P]ATH`, and an unquoted subscript such as
+  `unset arr[1]`), or an unquoted brace (`unset {PATH,}`). bash drops a `\<newline>` before it
+  reads a word, so `unset \<newline>[P]ATH` asks too. A word wholly in double quotes is
+  read as before (`unset "arr[$k]"`), and so is `unset 'arr[1]'`. `unset -n PATH` asks too, to
+  be safe. bash leaves a plain `PATH` set under `-n`, but it unsets a `PATH` that an earlier
+  command made a nameref. The
   line sets one before the program, through a prefix, exported or bare (`export -p` and
   `readonly -p` assign too, while `declare -p` only prints), as a parameter-expansion assignment
   (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
@@ -1031,7 +1044,12 @@ gate does not read:
   parent's value as `${_}`, so classify, which runs in the gate hook, cannot be stalled by a
   long run of unclosed or nested expansions. A name the gate cannot read (`export $X=...`,
   `read -r "$v"`, `declare -n r=$X`, a nameref with no target, or a glob the shell expands
-  first such as `export PAT?=.` or `read HOM[E]`) is opaque too.
+  first such as `export PAT?=.` or `read HOM[E]`) is opaque too. So is an exporter option word
+  the gate cannot read (`declare -${f}x $V=`). The options end at that word, so a `-f` or `-p`
+  after it does not count. `export` and `readonly` read `+x` as a name, and the words after it
+  as names too. So `export +x -f $V=` asks, and `readonly +x -n r=PATH` makes no nameref
+  (#329). An exporter name in a brace (`export {PATH,X}=`) is not read yet (#438), and neither
+  is a leading `[` in a `read` or exporter name (`read [P]ATH`).
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
   `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
@@ -1140,6 +1158,16 @@ gate does not read:
   says (#178).
   That does not lower the ask of a command a declaration runs as it reads a value again
   (`reread`, above).
+
+A change to the classifier or to `decide` is checked against main with `scripts/gate_diff.py` (#423, D-038
+amendment of 2026-10-22). It runs both gates over the suites' lines, a line or call for each entry of the gate's
+tables, generated forms of them and a set of policies, and lists every decision the change makes lower. A lowered
+line is fixed or named in the change's decision amendment. A table the change holds in a form the script does not
+read stops the run with exit 2, since its entries get no lines. The secret path, SQL, patch header and scrub patterns
+get a string for each alternative. Any other regex alternative or helper pattern is seen only where a test or a seed
+names it. The check also does not see the stores the environment moves, session folders beyond the ones it generates,
+names and keys the gate reads outside its tables unless a test names them, files and links in HOME beyond its own,
+or the hook steps after `decide` (developer guide §7, "Checking a gate change against main").
 
 Known limits. Each one is true of main today; where a fix is open, its PR is named.
 

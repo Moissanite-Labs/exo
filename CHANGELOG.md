@@ -6,6 +6,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `unset PATH` is now read as the assignment it amounts to (#329). With PATH unset, bash looks a
+  command up in the working folder, so a later `ls` on the line can run a planted `./ls`. The gate
+  already asked on the assignment forms (`PATH= ls`). `unset` and `unset -v` of PATH now ask the
+  same way, as `opaque_exec`. `unset -f` names a function, not the variable, and stays read. An
+  `unset` word the gate cannot read asks too, as a name or as an option: `unset $v`, `unset PAT?`,
+  `unset {PATH,}`, `unset [P]ATH`, `unset \<newline>[P]ATH` and `unset -${f}v PATH`. The exporters
+  read their options the same way, so `export +x -f $V=` and `declare -${f}x $V=` ask as
+  `export $V=` does. A `readonly +x -n r=PATH` no longer asks: bash reads `+x` and `-n` there as
+  names, so it makes no nameref.
 - Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
   verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
   Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.
@@ -20,7 +29,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   default retrieval ranker, the learner and the memory plugin all call it, so each query paid for the whole store.
   The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
   the node set they were built from. A `reload()`, or a `refresh()` that sees a node file change, makes a new set
-  and the next `find` builds them again. A repeat query tokenizes only itself. Scores and order are unchanged.
+  and the next `find` builds them again. The reload drops the old tables at once, so they are not held until that
+  `find`. A repeat query tokenizes only itself. Scores and order are unchanged.
 - A thread's environment file is a secret store, like the process's own (#313).
   `/proc/<pid>/task/<tid>/environ` holds the same environment as `/proc/<pid>/environ`, another
   process's included, but the gate read it as an ordinary file, literal path and glob alike.
@@ -548,6 +558,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   declare and is a `github_post` too.
 
 ### Added
+- `scripts/gate_diff.py` checks a gate change against main (#423, D-038 amendment). It runs `gate.classify` and
+  `gate.decide` of two checkouts, each in its own process, over the calls the gate suites test, a line or call for
+  each entry of the gate's tables (value options and pattern alternatives among them), compound forms of them, each
+  line under the other shell tool names and keys, folder rows, posts that trip each posting rule and more than 80
+  policies. It lists each decision the head makes lower than the base. Exit 1 means something is lower. Exit 2
+  also means a tree holds a gate table in a form the script does not read. Reviewers run main's copy of the script.
+  The developer guide's section "Checking a gate change against main" says how to run it and what it leaves out.
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
