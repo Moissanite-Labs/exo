@@ -137,11 +137,15 @@ class Classification:
     # The signals this part carried before _combine gave it every part's (#396), so the posting checks can tell its
     # own unseen body from another post's. None for a part never combined: its signals are then its own.
     own_signals: list[str] | None = field(default=None, repr=False, compare=False)
+    # The part a sudo command's write took the lead from (#454). decide() also reads the line with that part leading,
+    # as before, and keeps the stricter outcome. None on any other result.
+    displaced: "Classification | None" = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
         d.pop("parts", None)
+        d.pop("displaced")
         d.pop("_command_views")
         d.pop("own")
         d.pop("setters")
@@ -3055,6 +3059,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
         c.target = dest if "unread hops" in c.signals else (c.target or dest)
+        if c.displaced is not None:           # #454: the part a sudo write displaced gets the host, as it did
+            lead = replace(c.displaced, target=c.displaced.target or dest)
+            c.parts, c.displaced = [lead if q is c.displaced else q for q in c.parts], lead
         if not here:
             c.signals.append("remote host")
         return [c]
@@ -4383,13 +4390,15 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     setters = [k.own for k in cmds if _sets_state(k)] + ([None] if func else [])
     # #454: bash opens a redirection's file as the calling user, before sudo runs, so the write of `sudo echo hi >
     # /tmp/f` happens either way. Sudo makes the command's own read costly, so it outranked the write. When such a
-    # part leads the line, a copy of a sudo command's write with its cost leads in its place, so the line has the
+    # part leads the line, a copy of the first sudo write with its cost leads in its place, so the line has the
     # category it has without sudo. Every other part ranks below the copy, and a part that outranks the read (an
-    # unknown program) keeps the lead. The write part itself stays as it is, so a rule or entry on a part sees it.
+    # unknown program) keeps the lead. The copy keeps the part it displaced, so decide() still reads the line with
+    # that part leading (a rule on a gh read's repo), and its summary names both. The parts stay as they are.
     lead, writes = _most_severe(parts), ctx.get("sudo_writes")
-    if writes and lead and lead.category in ("read", "shell", "code") and lead.exposure == "private" \
-            and not lead.third_party:
-        c = combined = _combine([replace(writes[0], reversibility=lead.reversibility), *parts], cmd)
+    if writes and lead and lead.category in ("read", "shell") and lead.exposure == "private" and not lead.third_party:
+        top = replace(writes[0], reversibility=lead.reversibility, displaced=lead,
+                      summary=f"{lead.summary or lead.category}, write {writes[0].target}"[:120])
+        c = combined = _combine([top, *parts], cmd)
     else:
         c = combined = _combine(parts, cmd)
 
@@ -6003,6 +6012,16 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
     ctx = dict(context or {})
+    if c.displaced is not None:
+        # #454: a sudo write leads the line in place of the command's own costly part. The line is also decided with
+        # that part leading, as before, so a category line, rule, scope or escalation on it (a rule on a gh read's
+        # repo, on an ssh host) still reaches the line, and the stricter outcome stands. Both readings have the same
+        # parts, that one among them, so a deny or reserved entry finds the same hits in each.
+        p = c.displaced
+        d = decide(replace(c, displaced=None), pol, ctx)
+        alt = decide(replace(c, category=p.category, cost=p.cost, summary=p.summary, target=p.target, link=p.link,
+                             own=p.own, displaced=None), pol, ctx)
+        return alt if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome) else d
     if _one_text(c):
         return _decide(c, pol, ctx, None)
     passed: list[Mapping] = []

@@ -221,12 +221,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   any other command. `sudo echo hi > /tmp/f` was a `read`: sudo made the command's own `read` costly, so it outranked
   the write, and `categories: {local_write: ask}` allowed the line while `echo hi > /tmp/f` asked. Bash opens the
   file as the calling user before sudo runs, so the write happens either way. Where that `read` would lead the line,
-  the write now leads in its place, with its cost. The line is a costly `local_write`, so an ask or log line, a rule
-  or an escalation on `local_write` reaches it. Its target is the written path, as without sudo, so a rule or a
-  standing grant on that path reaches it too, also on an `ssh` line, where the host was the target. A part that
-  outranks the `read`, such as an unknown program, still leads, and a store path stays `store_write`. This also ends
-  the #436 lowering of `for x do sudo echo hi > /tmp/f; done`. Some policies now decide these lines lower, such as
-  `{read: ask}`. The D-038 amendment lists each such group.
+  the first sudo write now leads in its place, with its cost. The line is a costly `local_write` with the written
+  path as target, so an ask or log line, a rule or an escalation on `local_write` or on that path reaches it. Its
+  summary names the program and the path. The line is also decided with the displaced `read` leading, as before,
+  and the stricter outcome stands, so `{read: ask}` and a rule on a gh read's repo or on an `ssh` host still reach
+  it. A part that outranks the `read`, such as an unknown program, still leads, and a store path stays
+  `store_write`. This also ends the #436 lowering of `for x do sudo echo hi > /tmp/f; done`. A standing grant and
+  the approvers follow the new category and target.
 - Gate store protection (#465, D-038 amendment): after `cd` into the store or a descriptor folder, a `$( )`,
   backticks or `<( )` of a later command is classified in that folder, as the same command unwrapped is. Each
   substitution was classified as a fresh line, so `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the
