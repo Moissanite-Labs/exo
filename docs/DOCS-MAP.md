@@ -33,6 +33,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 |---|---|---|---|---|
 | D-082 Modular harness profiles, plugin dependencies/cleanup, runtime binding and scoped workspace instructions (In progress) | `docs/HARNESS.md`, `docs/WORKSPACE-INSTRUCTIONS.md`, `docs/HARNESS-LANDSCAPE.md`, `docs/evidence/harness-footprint-2026-10-23.json` | §1 "Choose how much Exo loads" | §1 "Harness composition", §4 "Dependencies and cleanup" | MISSING (next batch) |
 | D-082 Hermes plugin catalog follow-up (Proposed) | `docs/HERMES-PLUGIN-OPPORTUNITIES.md` | n/a (research only) | n/a (no extension contract changed) | n/a (proposals) |
+| D-084 Retained tool-output views and bounded exact expansion | `docs/TOOL-OUTPUT.md`, `scripts/benchmark_tool_evidence.py`, `docs/evidence/tool-output-2026-10-23.json` | §1 "Choose how much Exo loads" | §1 "Retained tool output" | MISSING (next batch) |
 | D-001 Work lives in this repo, phases leave handoffs | `DECISIONS.md` D-001 (process) | n/a | §8 | n/a |
 | D-002 Research as parallel subagents | `DECISIONS.md` D-002 (process) | n/a | n/a | n/a |
 | D-003 hafiz is an input | `docs/STORE-V2.md` "Facts checked on disk" | n/a | n/a | WP §3, §4 (idea, no D number) |

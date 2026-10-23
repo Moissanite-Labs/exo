@@ -311,8 +311,11 @@ class Delegator:
         if "code_find" in names:
             prompt += CODE_FIND_NOTE
         # no cwd line here: the loop names the child session's cwd (b.cwd) in the system text
-        child = Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
-                     e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
+        context = TreeContext(e.store, DefaultCompressor(e.router.provider("aux")))
+        decorate = getattr(e.loop.context, "for_child", None)
+        if decorate is not None:
+            context = decorate(context, tools=names)
+        child = Loop(e.store, provider, bus=_Bus(self), context=context, tool_specs=lambda: e.registry.specs(names=sorted(names)),
                      run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
                      max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
         child.approval_ms = e.loop.approval_ms  # engine.ask adds to one table; the parent turn reads it
