@@ -3889,7 +3889,10 @@ def _fn_glob(glob: str) -> str | None:
 
 
 def _glob_names(glob: str, names) -> list:
-    """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything."""
+    """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything. A word with no
+    `*`, `?` or `[` is only itself, so it is compared as text: a line of many such words compiles no pattern each."""
+    if "*" not in glob and "?" not in glob and "[" not in glob:
+        return [n for n in names if n == glob]
     pat = _fn_glob(glob)
     return list(names) if pat is None else fnmatch.filter(names, pat)
 
@@ -4636,9 +4639,10 @@ def _dynamic_secret_paths() -> list[str]:
     return paths
 
 
-def _is_run_dir(path: str, real: str = "") -> bool:
+def _is_run_dir(path: str, real: str = "", lexical: bool = False) -> bool:
     """The run folder itself (D-039), in any spelling: `$EXO_HOME/run`, `.exo/run` or a principal's `run`. An
-    absolute path is also resolved as written, links before `..` (``real``, when the caller has resolved it)."""
+    absolute path is also resolved as written, links before `..` (``real``, when the caller has resolved it), or with
+    ``lexical`` from its lexical form, once per classify call (_resolved)."""
     raw = path.replace("\\", "/")
     path = os.path.normpath(raw)
     if _RUN_DIR.search(path):
@@ -4646,11 +4650,20 @@ def _is_run_dir(path: str, real: str = "") -> bool:
     if not path.startswith("/"):
         return False
     try:
-        cands = {c for c in (path, real or os.path.realpath(raw)) if c.endswith("/run")}
+        cands = {c for c in (path, real or (_resolved(path) if lexical else os.path.realpath(raw))) if c.endswith("/run")}
         homes = {os.path.normpath(_exo_home()), os.path.realpath(_exo_home())} if cands else set()
     except (OSError, ValueError):
         return False
     return any(re.fullmatch(re.escape(h) + r"(/principals/[^/]+)?/run", c) for c in cands for h in homes)
+
+
+def _resolved(path: str) -> str:
+    """os.path.realpath of the normalized absolute ``path``, looked up once per classify call (_call_memo)."""
+    memo = _call_memo.get()
+    seen: dict[str, str] = {} if memo is None else memo.setdefault("resolved", {})
+    if path not in seen:
+        seen[path] = os.path.realpath(path)
+    return seen[path]
 
 
 def _run_secrets() -> list[str]:
@@ -5100,7 +5113,8 @@ def _root_links(path: str) -> Iterator[str]:
     A process's working folder link (`cwd`) counts too: for pid 1 and most daemons it is `/`. The parts up to the
     link are walked as the kernel walks them (`//`, `.` and `..`); what follows is left as written, since `..` right
     after the link stays at `/`: `/proc/self/root/../pro?/1/environ` is `/pro?/1/environ`. A link with nothing left
-    below it once its `..` parts are taken back (`/proc/self/root/..`) is skipped."""
+    below it once its `..` parts are taken back (`/proc/self/root/..`) is skipped. Five parts down no link can be, so
+    the walk skips to the next `..` there."""
     if path[:1] != "/":
         return
     parts, up, last = path.split("/"), 0, 0
@@ -5113,14 +5127,30 @@ def _root_links(path: str) -> Iterator[str]:
                 last = j
                 break
             up -= 1
-    for i, s in enumerate(parts[1:last], 1):
+    i, deep = 1, 0                           # `deep`: the parts below the first five, where no link can be
+    while i < last:
+        s = parts[i]
         if s == "..":
-            del at[-1:]
-        elif s not in ("", "."):
+            if deep:
+                deep -= 1
+            else:
+                del at[-1:]
+        elif s in ("", "."):
+            pass
+        elif len(at) < 5:
             at.append(s)
             if (len(at) == 3 or len(at) == 5 and _glob_names(at[2], ("task",))) and _glob_names(at[0], ("proc",)) \
                     and _glob_names(s, ("root", "cwd")):
                 yield "/" + "/".join(parts[i + 1:])
+        else:                                # five parts down: up to the next `..` no link can follow, so skip there
+            try:
+                j = parts.index("..", i, last)
+            except ValueError:
+                j = last
+            seg = parts[i:j]
+            deep, i = deep + len(seg) - seg.count("") - seg.count("."), j
+            continue
+        i += 1
 
 
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str], hop: bool = True) -> bool:
@@ -5138,14 +5168,16 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     # its `cwd`, so `/proc/self/root/pro?/1/environ`, `/proc/1/cwd/pro?/1/environ` and
     # `/proc/self/root/../pro?/1/environ` are read from there. One such step: a second link after it counts (fails
     # closed), so `/*/*/*/...` is not read again at each third part, and past 16 links (`/proc/1/*/../*/../x`) the
-    # word counts, so the work stays linear
+    # word counts. So a word is read at most 17 times. The reads after a link look up a run folder in its lexical
+    # form, once per call (_resolved): the rests of one word mostly differ only before a `..`, and looking each up as
+    # written made a 100 KB word with 16 links cost 10 times what it costs on main (#513 review)
     for n, rest in enumerate(_root_links(written)):
         if not hop or n >= 16 or _glob_word(rest, home, samples, secrets, runs, False):
             return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
-    linked = bool(d_abs) and _is_run_dir(raw if raw.startswith("/") else os.path.join(home, raw))
+    linked = bool(d_abs) and _is_run_dir(raw if raw.startswith("/") else os.path.join(home, raw), lexical=not hop)
     if linked:                                           # also when normpath lost it: ~/<link to run/jobs>/..
         runs = runs + [d_abs]
     keys = "agent-" in tok or ".principal" in tok

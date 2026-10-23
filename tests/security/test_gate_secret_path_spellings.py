@@ -3,6 +3,8 @@
 The shell and the kernel read `~/.kube//config` and `~/.kube/./config` as `~/.kube/config`, so the secret-store and
 Exo-store names are matched in that lexical form too. Every check classifies; nothing is run."""
 import os
+import re
+import time
 
 import pytest
 
@@ -69,7 +71,9 @@ def test_the_later_rows_ask(call):
 
 # --- every store name with more than one part ---------------------------------------------------------------------
 
-# Each multi-part name in the secret-store list, with a doubled slash, a `.` part and a `..` that comes back.
+# Each multi-part name in the secret-store list, with a doubled slash, a `.` part and a `..` that comes back. Where a
+# folder already names the store (`~/.config/gcloud/`, `~/.config/muse/`, `~/.exo/keys/`), or the last part alone does
+# (`keys.env`), main asked too, so 15 of the 38 rows are controls (#513 review).
 MULTI = ["~/.config/gcloud/creds.db", "~/.config/muse/session", "~/.config/exo/keys.env", "~/.exo/keys/seat",
          "~/.unii/acct/token", "~/.config/gh/hosts.yml", "~/.docker/config.json", "~/.kube/config",
          "~/.config/netlify/config.json", "~/Library/Preferences/Netlify/config.json"]
@@ -239,6 +243,26 @@ def test_dotdot_after_a_root_link_into_a_home_store_asks(env):
 
 
 @pytest.mark.parametrize("line", [
+    # A `..` before the link takes back the part before it: a walk that kept the part never reaches `root` (#513 review).
+    "cat /proc/*/../1/root/pro?/1/environ",
+    "cat /proc/x/../1/root/pro?/1/environ",
+    "cat /proc/x/../1/root/proc/1/env*",
+    "cat /proc/1/task/x/../1/root/pro?/1/environ",
+    # A `.` part before the link is no part: a walk that counted it never reaches `root` or `cwd`.
+    "cat /proc/1/./root/pro?/1/environ",
+    "cat /proc/./1/root/pro?/1/environ",
+    "cat /proc/1/./cwd/pro?/1/environ",
+    "cat /proc/1/task/./1/root/pro?/1/environ",
+    # Five parts down the walk skips to the next `..`, counting the parts on the way, but not `//` or `.`.
+    "cat /proc/1/a/b/c/d/../../../../root/pro?/1/environ",
+    "cat /proc/1/a/b/c/d//e/../../../../../root/pro?/1/environ",
+    "cat /proc/1/a/b/c/d/./e/../../../../../root/pro?/1/environ",
+])
+def test_dot_and_dotdot_before_a_process_link_are_walked_as_the_kernel_walks_them(line):
+    assert bash(line) == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("line", [
     "cat /proc/1/cwd/pro?/1/environ",            # pid 1's working folder is `/`, as for most daemons
     "cat /proc/*/cwd/pro?/*/environ",
     "cat /proc/1/task/1/cwd/pro?/1/environ",
@@ -283,7 +307,7 @@ def test_a_glob_after_a_link_into_a_store_and_dotdot_asks(env, tmp_path):
 def test_a_long_run_of_glob_parts_is_read_once():
     # `*` could be `proc` and `root` at once: the root step is taken once, so 4,000 parts do not recurse 1,300 deep.
     assert bash("ls " + "/*" * 4000) == ("credentials", "ask")
-    # Each `*` before a `..` could be a root link too: past 16 of them the word counts, so the work stays linear.
+    # Each `*` before a `..` could be a root link too: past 16 of them the word counts, so it is read at most 17 times.
     assert bash("ls /proc/1" + "/*/.." * 3000 + "/x") == ("credentials", "ask")
 
 
@@ -299,6 +323,38 @@ def test_links_taken_back_by_dotdot_are_skipped_in_linear_time(monkeypatch):
     monkeypatch.setattr(os.path, "normpath", counting)
     assert bash(line) == ("read", "allow")
     assert seen[0] < 50 * len(line)
+
+
+def test_a_long_word_with_sixteen_links_costs_about_what_it_costs_without_them():
+    # #513 review: each of the 16 reads after a link looked up the whole folder below it again, and so did the `/proc`
+    # step of each, so a 100 KB word cost 18.9 s against 1.5 s on main. Those reads now look up their folder from its
+    # lexical form, once per call. The lookup costs more than linear time on main too (a 4x longer word costs about
+    # 10x), so the word is timed against the same word without the links. CPU time; a retry only when over the bound.
+    tail = "/ab" * 15_000 + "/x*"
+    lines = ["ls /proc/1/x" + "/ab" * 25 + tail, "ls /proc/1/*" + "/../*" * 15 + tail]
+    assert len(lines[0]) == len(lines[1])
+    for _ in range(3):
+        took = []
+        for line in lines:
+            start = time.process_time()
+            assert bash(line) == ("read", "allow")
+            took.append(time.process_time() - start)
+        if took[1] < 4 * took[0] + 0.2:
+            break
+    assert took[1] < 4 * took[0] + 0.2, took
+
+
+def test_a_line_of_many_plain_names_below_proc_compiles_no_pattern_for_them(monkeypatch):
+    # #513 review: each part below `/proc` is matched against `root` and `cwd`. A plain name was matched as a pattern,
+    # one compiled for each distinct name, so a 906 KB line of them took 17.3 s against 6.9 s on main.
+    names, flt = [], gate.fnmatch.filter
+
+    def counting(items, pat):
+        names.append(pat)
+        return flt(items, pat)
+    monkeypatch.setattr(gate.fnmatch, "filter", counting)
+    assert bash("ls " + " ".join(f"/proc/1/x{i}z/../st*" for i in range(200))) == ("read", "allow")
+    assert not [p for p in names if re.fullmatch(r"x\d+z", p)], names[:5]
 
 
 @pytest.mark.parametrize("line", [
@@ -370,10 +426,14 @@ STRICT = [
     {"gates": {"deny": ["target:/dev*", "target:*/.ssh/*"]}},
     {"gates": {"reserved": ["read", "local_write"]}},
     {"gates": {"deny": ["store_write"]}},
+    {"gates": {"categories": {"store_write": "deny"}, "reserved": ["store_write"]}},
     {"posting": {"forbid_words": ["secret"]}},
     {"gates": {"rules": [{"match": {"category": ["read"], "reversibility": "costly"}, "decision": "deny",
                           "reason": "a read run by a privileged wrapper"}]}},
 ]
+
+
+PATCH = "*** Begin Patch\n*** Update File: {}\n@@\n-a\n+b\n*** End Patch\n"
 
 
 def full(call, policy):
@@ -395,6 +455,19 @@ def full(call, policy):
     ("sudo ssh host cat ~/.kube//config", "sudo ssh host cat ~/.kube/config"),
     ({"tool": "cat", "args": {"path": "/proc/self/root/*/1/environ"}},
      {"tool": "cat", "args": {"path": "/proc/self/root/proc/1/environ"}}),
+    # #513 review: a file tool that writes a store file and names a secret is credentials, not store_write, as main
+    # reads the plain spelling (its classify() branch, #447), so a store_write deny no longer applies
+    ({"tool": "write_file", "args": {"path": "~/.exo/policies/gates.yaml", "patch": PATCH.format("~/.kube//config")}},
+     {"tool": "write_file", "args": {"path": "~/.exo/policies/gates.yaml", "patch": PATCH.format("~/.kube/config")}}),
+    ({"tool": "apply_patch", "args": {"patch": PATCH.format("~/.exo/policies/gates.yaml") + PATCH.format("~/.kube/./config")}},
+     {"tool": "apply_patch", "args": {"patch": PATCH.format("~/.exo/policies/gates.yaml") + PATCH.format("~/.kube/config")}}),
+    ({"tool": "copy_file", "args": {"source": "~/.kube/x/../config", "destination": "~/.exo/policies/gates.yaml"}},
+     {"tool": "copy_file", "args": {"source": "~/.kube/config", "destination": "~/.exo/policies/gates.yaml"}}),
+    ("cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml", "cat ~/.kube/config; echo x > ~/.exo/policies/gates.yaml"),
+    # a heredoc body is the line's text only when the line is outbound, so a post that reads it from stdin keeps only
+    # its unread-body violation, for both spellings, and still asks
+    ("cat ~/.kube//config; gh api repos/a/b/issues/3/comments --input - <<'EOF'\na secret\nEOF",
+     "cat ~/.kube/config; gh api repos/a/b/issues/3/comments --input - <<'EOF'\na secret\nEOF"),
 ])
 def test_a_lowered_line_decides_as_its_plain_spelling(odd, plain, policy):
     assert full(odd, policy) == full(plain, policy)
