@@ -98,7 +98,7 @@ OUTBOUND = ("github_post", "message_send", "email_send", "social_post", "web_pos
 POSTING_DEFAULT = ("github_post", "message_send", "email_send", "social_post")
 # The most posting violations a decision lists when other posts on the line add theirs (#396). The rest are counted.
 _LISTED_VIOLATIONS = 20
-_LISTED_WITH_COPIES = 200   # at most this many other posts' violations on a line with a post's copies (#439)
+_LISTED_WITH_COPIES = 200   # per reading, the entries of posts with copies and of their copies, beside the twenty (#439)
 
 
 class PolicyError(ValueError):
@@ -184,10 +184,14 @@ class Decision:
     # (category, target) of each part a reserved entry matched, once each (D-075). A standing grant for the
     # line's own category must not cover a reserved part outside it, so the targets stay as written here.
     reserved: list[tuple[str, str]] = field(default_factory=list)
+    # The other posts' violations `and N more on other posts` counts, so a merge of a line's readings counts each
+    # entry one of them left out (#439 round 13). Not in the ledger view: the count stands for them there.
+    hidden: list[str] = field(default_factory=list, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger view: reserved targets with URL userinfo redacted."""
         d = asdict(self)
+        d.pop("hidden")
         d["reserved"] = list(dict.fromkeys((cat, redact_userinfo(t)) for cat, t in self.reserved))
         return d
 
@@ -6683,11 +6687,11 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     if unseen and not post_unseen_seen and (checked or line_applies):
         violations.append(UNSEEN_BODY)  # a body on a part the posting rules do not cover is still unseen
     room, seen, listed = max(_LISTED_VIOLATIONS - len(violations), 0), [0, 0], []
+    hidden: list[str] = []
     for v, h in zip(named, held):
-        if seen[h] < (_LISTED_WITH_COPIES if h else room):
-            listed.append(v)
+        (listed if seen[h] < (_LISTED_WITH_COPIES if h else room) else hidden).append(v)
         seen[h] += 1
-    left = len(named) - len(listed)
+    left = len(hidden)
     violations += listed + ([f"and {left} more on other posts"] if left else [])
     if violations:
         bump("ask", "posting rules: " + "; ".join(violations), "posting")
@@ -6713,7 +6717,7 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
         outcome, reason, rule = "deny", f"denied by policy ({denied[0][1]})", "deny"
     d = Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
                  exposure=eff.exposure, third_party=eff.third_party,
-                 reserved=list(dict.fromkeys((p.category, p.target) for p, _ in reserved)))
+                 reserved=list(dict.fromkeys((p.category, p.target) for p, _ in reserved)), hidden=hidden)
     if "locale translation" in c.signals and c.category != "opaque_exec":
         # A $".." word can turn into any code (#136): decide the line as opaque_exec too, and keep the stricter.
         # `replace` keeps the parts as classifications, so their deny and reserved entries still apply. That
@@ -6747,17 +6751,19 @@ def _strictest(ds: list[Decision], why: list[str]) -> Decision:
             if not _HIDDEN.fullmatch(v) and more[v] > 0:
                 violations.append(v)
                 more[v] -= 1
-    # One `and N more on other posts`, last: of what a reading left out, at least N is not in the merged list, and the
-    # merged list with N holds as many as any reading does with its own count.
-    merged, hidden = Counter(violations), 0
+    # One `and N more on other posts`, last. It counts each entry a reading left out that the merged list does not
+    # hold, as often as one reading holds it, listed or left out (#439 round 13). A copy's finding can be in the merged
+    # list twice, once under the copy's name and once as the post's own on the copy's target, and neither twin stands
+    # for an entry left out.
+    held: Counter[str] = Counter()
     for d in ds:
-        n = sum(int(m.group(1)) for v in d.violations if (m := _HIDDEN.fullmatch(v)))
-        hidden = max(hidden, n - sum((merged - Counter(v for v in d.violations if not _HIDDEN.fullmatch(v))).values()))
-    violations += [f"and {hidden} more on other posts"] if hidden > 0 else []
+        held |= Counter(v for v in d.violations if not _HIDDEN.fullmatch(v)) + Counter(d.hidden)
+    hidden = list((held - Counter(violations)).elements())
+    violations += [f"and {len(hidden)} more on other posts"] if hidden else []
     return replace(ds[i], reason=ds[i].reason + why[i], violations=violations,
                    exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
                    third_party=any(d.third_party for d in ds),
-                   reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)))
+                   reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)), hidden=hidden)
 
 
 def _target_names(targets: Iterable[str]) -> str:
