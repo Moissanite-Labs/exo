@@ -2906,3 +2906,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   protocol export and core budget checks. Test outcomes are reported with the change.
 - **Docs:** `docs/HARNESS.md`, `docs/WORKSPACE-INSTRUCTIONS.md`, `docs/HARNESS-LANDSCAPE.md`, user guide §1,
   developer guide §1/§4, command reference, README and changelog. Whitepaper coverage remains a future batch.
+- **Research follow-up (2026-10-23):** `docs/HERMES-PLUGIN-OPPORTUNITIES.md` reviews the Hermes plugin
+  catalog and proposes eleven optional additions, with pinned sources and acceptance criteria. Reuse
+  existing context, ingestion, questions, memory, operations views and spend accounting. Add capability
+  packs and observer contracts through the existing roadmap. This amendment changes no runtime behavior.
