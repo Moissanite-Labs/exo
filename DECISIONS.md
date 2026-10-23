@@ -1492,7 +1492,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of an environment dump carries every signal on its line as its own. A store or descriptor path a rebound name runs
   later is still behind the opaque ask. A redirect is still checked as for any read, also after a `cd` into the store
   (`cd ~/.exo/state && hash > notes`), and so is a program named hash run by path (`./hash ~/.exo/state/x`), which is no
-  builtin. *Differential (#423).* Main's `scripts/gate_diff.py` (with #462) against main 01101d3c runs 55,546 actions
+  builtin. *Differential (#423).* Main's `scripts/gate_diff.py` (with #488) against main 5a9dc394 runs 55,855 actions
   and 87 policies, and 111 pairs on 98 actions are lower. Four probe sets ran alone (`--only-corpus`). The first has
   8,305 lines: the review's lines and every rebinding form under sudo, doas, env, timeout, nice, `bash -c`, ssh, mosh,
   `man -P`, a `ProxyCommand`, `$( )` and a here-doc, alone and beside a post or a force push. It runs 33,244 actions,
