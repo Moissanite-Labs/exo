@@ -228,7 +228,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   every other target ("It may land on pub/repo#7 instead."). A user and password in such a URL read as `***@` there,
   in a reason that names a post or a denied part after it, and in the ledger's `alt_targets`. A line with such a post
   lists what its posts with copies and their copies find in a room of 200 of their own, beside the twenty of the
-  other posts, so it lists all that main lists. `gh issue close --duplicate-of` and `-r` take a value in
+  other posts, so it lists all that main lists while those list no more than 200. Past that, a line can list fewer
+  than main does, and it still asks. `gh issue close --duplicate-of` and `-r` take a value in
   the gate's table now, and the table lists `gh pr ready`, `lock` and `unlock`, `gh issue develop`, `lock`, `unlock`,
   `delete` and `transfer`, and `gh release upload` and `delete`, beside the reopen and merge rows from #397. So
   `gh pr ready --undo <URL>` no longer asks about "the current repo". `gh api` took its endpoint from the first word
