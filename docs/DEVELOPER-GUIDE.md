@@ -34,6 +34,13 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 
 ## 1. Repo layout
 
+**Session working notes (D-086).** `exo.work_notebook` owns optional revisioned
+state in `sessions.sqlite`. Composition validates `work_notes` before opening
+runtime resources, then attaches the gated tool, per-session prompt and handoff
+source. Updates compare revisions inside one transaction. Keep note authorship
+as `agent`, preserve session scope, and use existing gate and executor dispatch.
+The adapter and limits are documented in [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
+
 | Path | What lives there |
 |---|---|
 | `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, approvals, ingress, jobs, plugin loader. Small on purpose. |
