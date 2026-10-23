@@ -798,7 +798,13 @@ def test_a_run_under_nohup_ignores_sighup(tmp_path):
     # #462 review: an empty "command" falls through to "cmd" in the gate, as it does in a tool that reads either
     (('args.get("command") or args.get("cmd") or ""', 'args.get("command", args.get("cmd")) or ""'),
      {"tool": "bash", "args": {"command": "", "cmd": "rm -rf build"}}, lambda a: a["args"].get("command") == ""),
-], ids=["drop exec_command", "drop the cmd key", "a terminal name in TOOLS", "cmd read first", "empty command"])
+    # #462 review: a name read by its suffix gets the seed under "cmd" beside an empty "command" too
+    (('tool not in TOOLS and isinstance(args.get("command"), str)',
+      'tool not in TOOLS and bool(args.get("command")) and isinstance(args.get("command"), str)'),
+     {"tool": "remote_terminal", "args": {"command": "", "cmd": "rm -rf build"}},
+     lambda a: a["args"].get("command") == "" and a["tool"] not in gate_diff.SHELL_TOOLS),
+], ids=["drop exec_command", "drop the cmd key", "a terminal name in TOOLS", "cmd read first", "empty command",
+        "empty command, suffix name"])
 def test_a_head_that_drops_a_shell_tool_name_or_key_is_lowered(tmp_path, patch, example, only):
     # Built-in corpus only: the copied trees hold no tests, so it is the seeds, their variants and their forms.
     base = _tree(tmp_path, "base")
@@ -1315,3 +1321,10 @@ def test_each_decide_step_lowers_a_built_in_pair(tmp_path):
     steps = json.loads((work / "out.json").read_text(encoding="utf-8"))
     assert len(steps) >= 14
     assert not [first for first, lowered in steps if not lowered], steps
+
+
+def test_a_decision_shows_its_total_with_the_hidden_count():
+    # #462 review nit: the summary showed how many entries a tree listed, so a fall in N alone did not show
+    d = {"category": "github_post", "outcome": "ask", "rule": "posting", "reserved": [],
+         "violations": ["A", "B", "and 3 more on other posts"]}
+    assert gate_diff._decision(d) == "github_post ask (posting, violations 5)", gate_diff._decision(d)
