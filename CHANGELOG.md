@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
+  its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
+  each tree's violation total with what `and N more on other posts` counts.
 - `scripts/gate_diff.py` counts a posting violation as often as each tree lists it, so a gate change that lists once
   what two posts of one name both meet shows as lower (#460). Each seed also runs under each tool table name that
   ends in `terminal` or `shell`, and in a call holding both `command` and `cmd`. The report shows a few reworded
