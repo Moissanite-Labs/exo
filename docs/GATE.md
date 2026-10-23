@@ -1080,19 +1080,24 @@ gate does not read:
 - `sudo` and `doas` add the `sudo` signal, and the command's own part counts as costly. A write
   redirection on that command (`sudo echo hi > /tmp/f`, `doas echo hi >> /etc/hosts`) sets the
   line's category, as it does without sudo (#454). Bash opens the file as the calling user before
-  sudo runs, so the write happens either way. When the command's own costly `read`, `shell` or
-  `code` part would lead the line, the write leads in its place, with that cost. The line is then a
-  costly `local_write`, and a `categories:` line, a rule or an escalation on `local_write` reaches
-  it. Its target is the written path, as without sudo, so a rule or a standing grant on that path
-  reaches it too. On an `ssh` line that path takes the place of the host, as for
-  `ssh host 'echo hi > /tmp/f'`. Before, the costly `read` outranked the write, and only a deny
-  reached the write. The parts stay as they were, so a deny keyed on the costly `read` or on the
-  write still reaches it. A part that outranks that `read` still leads, also one that would tie
-  with a costly write, such as an unknown program: `sudo echo hi > /tmp/f; foo` asks as
-  `opaque_exec`. A store path stays `store_write`, and `/dev/null` adds no write, as without sudo.
+  sudo runs, so the write happens either way. When the command's own costly `read` or `shell` part
+  would lead the line, the first sudo write leads in its place, with that cost. The line is then a
+  costly `local_write`, and its target is the written path, as without sudo. Its summary names the
+  program and the path (`chmod, write /tmp/f`). The line is also decided with the displaced part
+  leading, as before, and the stricter outcome stands. So a `categories:` line, a rule or an
+  escalation on `local_write` or on the path now reaches the line, and one that reached the
+  displaced part still does: `{read: ask}`, or a rule on the repo of
+  `sudo gh pr view 1 -R o/r > /tmp/f`. An ssh hop gives its host to the displaced part, as it did
+  when that part led, so a rule or reserved entry on the host still reaches
+  `ssh prod 'sudo echo hi > /srv/out'`. Before, the costly `read` outranked the write, and only a
+  deny or reserved entry reached the write. Otherwise the parts stay as they were. A part that
+  outranks that `read` still leads, also one that would tie with a costly write, such as an unknown
+  program: `sudo echo hi > /tmp/f; foo` asks as `opaque_exec`. A store path stays `store_write`,
+  and `/dev/null` adds no write, as without sudo.
   A redirection on a compound around a sudo command (`{ sudo echo hi; } > /tmp/f`) or on another
   command of the line (`sudo echo hi | cat > /tmp/f`) is not on the sudo command. There the
-  dominant part decides, as on any line (D-075).
+  dominant part decides, as on any line (D-075). A standing grant and the approvers follow the
+  line's category and target, so a grant for `echo hi > /tmp/f` now covers `sudo echo hi > /tmp/f`.
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and

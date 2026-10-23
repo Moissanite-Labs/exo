@@ -2,15 +2,17 @@
 
 Bash opens the file of `sudo echo hi > /tmp/f` as the calling user, before sudo runs. On main 8bd175a0 the line was
 `read`: sudo made the command's own `read` part costly, so it outranked the write part, which stayed reversible.
-`categories: {local_write: ask}` then allowed the line, while `echo hi > /tmp/f` asked. Only a deny reached the
-write part (#191). Now, where that read leads the line, the write takes its cost and leads instead, so the line is a
-costly `local_write`. A part that outranks the read, such as an unknown program, still leads.
+`categories: {local_write: ask}` then allowed the line, while `echo hi > /tmp/f` asked. Only a deny or reserved entry
+reached the write part (#191). Now, where that read leads the line, the first sudo write takes its cost and leads
+instead, so the line is a costly `local_write`. A part that outranks the read, such as an unknown program, still
+leads. The line is also decided with the displaced part leading, as on main, and the stricter outcome stands, so a
+rule on a gh read's repo or on an ssh host still reaches it.
 
 Classification and decision only; nothing is executed.
 """
 import pytest
 
-from exo.gate import classify, decide, normalize_policies
+from exo.gate import classify, decide, normalize_policies, summarize
 
 
 @pytest.fixture(autouse=True)
@@ -175,4 +177,98 @@ def test_an_ssh_hop_keeps_its_host_part():
     assert c.target == sh("ssh host 'echo hi > /tmp/f'").target
     assert decide(c, pol(deny=["target:host"])).outcome == "deny"
     d = decide(c, pol(reserved=["target:host"]))
-    assert d.outcome == "ask" and ("shell", "host") in d.reserved, d
+    assert d.outcome == "ask" and {("shell", "host"), ("read", "host")} <= set(d.reserved), d
+
+
+@pytest.mark.parametrize("line", ["ssh host 'sudo echo hi > /tmp/f'", "true; ssh host 'sudo echo hi > /tmp/f'"])
+def test_a_reserved_entry_names_the_displaced_part_as_on_main(line):
+    # The hop gives the host to the displaced part, so a reserved entry names it as main did, also when the ssh
+    # command is not alone on the line, and a standing grant keyed on the write does not cover it.
+    d = decide(sh(line), pol(reserved=["tool:bash"]))
+    assert d.outcome == "ask" and ("read", "host") in d.reserved, d
+
+
+# Review of #492 at 9614ba08: the copy of the write took the lead's own target too, so a rule on the repo a gh read
+# names, or on the ssh host, no longer reached the line. Main asked for each of these under the rule.
+GH_ROWS = ["sudo gh pr view 1 -R o/r > /tmp/f", "sudo gh api repos/o/r/contents/x > /tmp/f",
+           "sudo -u root gh pr view 1 -R o/r > /tmp/f", "sudo -E gh pr view 1 -R o/r > /tmp/f",
+           "env sudo gh pr view 1 -R o/r > /tmp/f", "doas gh pr view 1 -R o/r > /tmp/f",
+           "(sudo gh pr view 1 -R o/r > /tmp/f)", "{ sudo gh pr view 1 -R o/r > /tmp/f; }",
+           "cd /x && sudo gh pr view 1 -R o/r > /tmp/f"]
+
+
+@pytest.mark.parametrize("line", GH_ROWS)
+@pytest.mark.parametrize("level", ["ask", "log"])
+def test_a_rule_on_the_displaced_part_still_reaches_the_line(line, level):
+    c = sh(line)
+    assert (c.category, c.target) == ("local_write", "/tmp/f"), (line, c)
+    d = decide(c, pol(rules=[{"match": {"target": "o/r*"}, "decision": level, "reason": "repo"}]))
+    assert (d.outcome, d.rule, d.reason) == (level, "rule", "repo"), d
+    assert decide(sh("sudo gh pr view 1 -R o/r"), pol(rules=[{"match": {"target": "o/r*"}, "decision": level,
+                                                               "reason": "repo"}])).outcome == level
+
+
+@pytest.mark.parametrize("line,target,level", [
+    ("ssh host 'sudo gh api repos/o/r/contents/x > /tmp/f'", "o/r*", "ask"),
+    ("ssh prod 'sudo echo hi > /srv/out'", "prod", "ask"),
+    ("ssh -p 22 prod 'sudo -u root echo hi > /srv/out'", "prod", "ask"),
+    ("ssh prod 'doas echo hi >> /srv/out'", "prod", "ask"),
+    ("ssh prod 'sudo echo hi > /srv/out'", "prod", "log"),
+])
+def test_a_rule_on_the_repo_or_the_host_reaches_an_ssh_line(line, target, level):
+    # The hop gives the host to the part the write displaced, as it gave it to that part when it led on main.
+    allow = {r: {e: "allow" for e in ("private", "internal", "public")} for r in ("reversible", "costly", "irreversible")}
+    d = decide(sh(line), pol(matrix=allow, rules=[{"match": {"target": target}, "decision": level, "reason": "t"}]))
+    assert (d.outcome, d.rule) == (level, "rule"), (line, d)
+
+
+COSTLY_ASK = {"reversible": {"private": "allow", "internal": "allow"}, "costly": {"private": "ask", "internal": "ask"}}
+
+
+@pytest.mark.parametrize("policy,outcome", [
+    ({"categories": {"read": "ask"}}, "ask"),
+    ({"escalate": {"categories": ["read"]}}, "ask"),
+    ({"rules": [{"match": {"category": "read", "reversibility": "costly"}, "decision": "ask", "reason": "r"}]}, "ask"),
+    ({"matrix": COSTLY_ASK, "categories": {"local_write": "allow"}}, "ask"),
+    ({"matrix": COSTLY_ASK, "rules": [{"match": {"target": "/tmp/*"}, "decision": "allow", "reason": "t"}]}, "ask"),
+])
+def test_a_policy_on_the_old_reading_still_reaches_the_line(policy, outcome):
+    # Each of these reached `sudo echo hi > /tmp/f` on main through its costly read, and still does.
+    assert decide(sh("sudo echo hi > /tmp/f"), pol(**policy)).outcome == outcome
+
+
+def test_the_card_names_the_program_and_the_path():
+    c = sh("sudo chmod 777 /etc/shadow > /tmp/f")
+    d = decide(c, pol(matrix={"costly": {"private": "ask"}}))
+    line = summarize(c, d)
+    assert d.outcome == "ask" and "chmod" in line and "/tmp/f" in line, line
+    assert "chmod" in c.as_dict()["summary"] and "/tmp/f" in c.as_dict()["summary"]
+
+
+TMP_ALLOW = pol(matrix=COSTLY_ASK, rules=[{"match": {"target": "/tmp/*"}, "decision": "allow", "reason": "tmp"}])
+
+
+@pytest.mark.parametrize("line", ["sudo echo hi > /srv/b; sudo echo hi > /tmp/a", "sudo echo hi > /srv/b > /tmp/a",
+                                  "doas echo hi > /srv/b; doas echo hi > /tmp/a"])
+def test_the_first_sudo_write_leads(line):
+    c = sh(line)
+    assert (c.category, c.target) == ("local_write", "/srv/b"), (line, c)
+    assert decide(c, pol(rules=[{"match": {"target": "/srv/*"}, "decision": "ask", "reason": "s"}])).outcome == "ask"
+    assert decide(c, TMP_ALLOW).outcome == "ask"
+
+
+@pytest.mark.parametrize("line", ["{ sudo echo hi; } > /tmp/f", "(sudo echo hi) > /tmp/f",
+                                  "sudo echo hi | cat > /tmp/f", "echo hi > /tmp/f; sudo ls"])
+def test_a_write_that_is_not_on_the_sudo_command_does_not_lead(line):
+    c = sh(line)
+    assert (c.category, c.reversibility, c.target) == ("read", "costly", ""), (line, c)
+    assert decide(c, TMP_ALLOW).outcome == "ask"
+
+
+def test_the_parts_stay_when_the_copy_does_not_lead():
+    # The ssh hop's read leads, as on main: it is internal, so no copy of the write is made.
+    c = sh("ssh host 'sudo ls'; sudo echo hi > /tmp/f")
+    assert (c.category, c.target) == ("read", "host")
+    assert [(p.category, p.reversibility, p.exposure, p.target) for p in c.parts] == [
+        ("shell", "reversible", "internal", "host"), ("read", "costly", "private", ""),
+        ("local_write", "reversible", "private", "/tmp/f")]
