@@ -247,6 +247,28 @@ def test_non_outward_grant_is_scoped_to_rule_and_target(tmp_path):
     assert call(ctx2, "mcp_notes_create_page", {"target": "notes:other", "title": "t"})["action"] == "approve"
 
 
+def test_a_grant_on_a_sudo_write_is_keyed_on_the_written_path(tmp_path):
+    # #454: `sudo echo hi > /tmp/f` is a costly local_write with the written path as target. Its grant covers that
+    # path, as one for `echo hi > /tmp/f` would, and a grant for a costly read keyed on the tool no longer covers it.
+    store = tmp_path / "st454"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text("categories: {read: ask, local_write: ask}\n")
+    key = tmp_path / "k454.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": "sudo ls"})
+    assert r["action"] == "approve"
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": "sudo ls -la"}) is None
+    r = call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f"})
+    assert r["action"] == "approve", r
+    answer(ctx, r, "always")
+    grants = json.loads((store / "state" / "approval-grants.json").read_text())
+    assert [(g["rule"], g["target"]) for g in grants] == [("read", "terminal"), ("local_write", "/tmp/f")]
+    assert call(ctx, "terminal", {"command": "echo hi > /tmp/f"}) is None
+    assert call(ctx, "terminal", {"command": "sudo echo hi > /tmp/g"})["action"] == "approve"
+
+
 def test_a_grant_never_covers_a_reserved_part_of_the_line(tmp_path):
     # D-075: the push grant covers the push. A reserved merge on the same line keeps the principal's ask.
     store = tmp_path / "st3"
