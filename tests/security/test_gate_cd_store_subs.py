@@ -85,14 +85,39 @@ def test_a_substitution_runs_where_its_command_runs():
     # bash runs a $( ) where its command runs: in the `cd` itself or before it, the line has not entered the store
     for line in ("echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies",
                  "cd ~/.exo/policies/$(cp a b)",
+                 "cd ~/.exo/policies <<< $(cp a b)",              # its redirections expand before it runs
                  "cd /proc/$(docker inspect -f '{{.State.Pid}}' web) && cat status",
                  "pid=$(docker inspect -f '{{.State.Pid}}' web); cd /proc/$pid && cat status",
                  "V=$(sed -n 1p VERSION); cd ~/.exo && ls"):
         assert _bash(line).category == "read", line
-    # the same text before and after the `cd` fails closed, and so does a subshell, as for the line's own commands
+    # the same text before and after the `cd` is read in each place, and a subshell fails closed, as for the line's
+    # own commands. A here-doc body counts as after every command on its line, also one before the `cd`
     for line in ("echo $(cp a b); cd ~/.exo/policies; echo $(cp a b)",
-                 "(cd ~/.exo/policies) && echo $(cp /tmp/evil gates.yaml)"):
+                 "(cd ~/.exo/policies) && echo $(cp /tmp/evil gates.yaml)",
+                 "cat <<EOF; cd ~/.exo/policies\n$(cp /tmp/evil gates.yaml)\nEOF"):
         assert _bash(line).category == "store_write", line
+
+
+def test_a_copy_of_the_substitution_text_before_the_cd_does_not_turn_the_store_off():
+    # the place of a $( ) in the line decides, not its text: a copy of it before the `cd` once matched it, as a
+    # here-doc body is not a command's own text, and bash takes backslashes out of a backtick's text (#468 review)
+    pol = gate.normalize_policies({"gates": {"deny": ["store_write"]}})
+    for line in ("echo cp /tmp/evil gates.yaml; cd ~/.exo/policies && cat <<EOF\n$(cp /tmp/evil gates.yaml)\nEOF",
+                 "echo cp /tmp/evil gates.yaml; cd ~/.exo/policies && cat <<EOF\n`cp /tmp/evil gates.yaml`\nEOF",
+                 "echo cp /tmp/evil gates.yaml; cd ~/.exo/policies && { cat; } <<EOF\n$(cp /tmp/evil gates.yaml)\nEOF",
+                 "echo cp /tmp/evil gates.yaml; cd ~/.exo/policies && cat <<-EOF\n\t$(cp /tmp/evil gates.yaml)\n\tEOF",
+                 "echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies && cat <<EOF\n$(cp /tmp/evil gates.yaml)\nEOF",
+                 r"echo cp /tmp/evil gates\.yaml; cd ~/.exo/policies && echo `cp /tmp/evil gates\\.yaml`",
+                 r"echo cp /tmp/evil gates\.yaml; cd ~/.exo/policies && x=`cp /tmp/evil gates\\.yaml`",
+                 r'echo cp /tmp/evil gates\.yaml; cd ~/.exo/policies && echo "`cp /tmp/evil gates\\.yaml`"',
+                 r"echo cp /tmp/evil \$x; cd ~/.exo/policies && echo `cp /tmp/evil \\$x`"):
+        c = _bash(line)
+        assert c.category == "store_write", (line, c.category)
+        assert gate.decide(c, pol).outcome == "deny", line
+    dev = gate.normalize_policies({"gates": {"deny": ["target:/dev*"]}})
+    for line in ("echo cp /tmp/evil fd/3; cd /dev && cat <<EOF\n$(cp /tmp/evil fd/3)\nEOF",
+                 r"echo cp /tmp/evil fd\/3; cd /dev && echo `cp /tmp/evil fd\\/3`"):
+        assert gate.decide(_bash(line), dev).outcome == "deny", line
 
 
 def test_a_line_nested_in_a_substitution_keeps_its_own_folder():

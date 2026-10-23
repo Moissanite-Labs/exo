@@ -215,10 +215,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `cd /dev && echo $(cp /tmp/evil fd/3)` were allowed with no ask under the default policy, and could rewrite the
   gate's own policy or grant file, or whatever file a descriptor held. They now ask the principal alone. A
   command the gate does not read as a read (`sed`, `sort`, `curl`) asks there too, as it does unwrapped. A
-  substitution in the `cd` itself or before it, and an `ssh` remote command, keep their own folder. A push, post
-  or delete inside such a substitution keeps the deny it had when it decided the line: an anchored allow rule such
-  as `^git push` no longer lifts a command read from a nested line, and a secret line takes the weight of an
-  irreversible command held anywhere on it.
+  substitution in the `cd` itself or before it, and an `ssh` remote command, keep their own folder, by their place
+  in the line and not by their text. A push, post or delete inside such a substitution keeps the deny it had when it
+  decided the line: an anchored allow rule such as `^git push` no longer lifts a command read from a nested line,
+  and a secret line takes the weight of an irreversible command held anywhere on it.
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
   line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
   secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,

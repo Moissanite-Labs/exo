@@ -1021,9 +1021,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   descriptor folder as the target after `cd /dev`, and a read (`cat`, `grep`, `git log`) stays a read. So the #338
   friction after `cd /proc` or `cd /dev` reaches such substitutions too. A substitution in the `cd` itself or in a
   command before it runs where the line started, so it is read as before
-  (`cd /proc/$(docker inspect -f '{{.State.Pid}}' web) && cat status` stays a read). A text found both before and
-  after the `cd` counts as after. As for the line's own commands, a subshell `cd` and a later `cd` out of the store
-  are not followed, so those fail closed (`(cd ~/.exo) && echo $(sort x)` asks). A line nested in the substitution
+  (`cd /proc/$(docker inspect -f '{{.State.Pid}}' web) && cat status` stays a read). Its place in the line decides,
+  not its text, so a copy of its text before the `cd` changes nothing. One in a here-doc body counts as after every
+  command on its line. As for the line's own commands, a subshell `cd` and a later `cd` out of the store are not
+  followed, so those fail closed (`(cd ~/.exo) && echo $(sort x)` asks). A loop that enters the store runs its
+  earlier commands there on its next pass, which is not followed either (#480). A line nested in the substitution
   keeps its own folder: an `ssh` remote command runs on its host, while a local `bash -c` in the substitution is
   itself a command in the store. A `declare` or `local` value that bash runs again after the `cd`
   (`declare -a x='($(cp /tmp/evil gates.yaml))'`) is classified in the folder as well. Each text is still
@@ -2721,7 +2723,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   tool on a store or secret path keeps the tool's own reading as a part (#448), as a shell line does: a
   `local_write` part for each file `write_file`, `edit_file`, `patch` or `apply_patch` writes, and for a tool read
   by name (`delete_file`, `read_file`, `create_directory`, `move_file`) its own category, target, summary, and the
-  text and title of a post. Its category deny, reserved entry, `target:` entries and matrix cell apply again, and
+  text and title of a post. `move_file` and `copy_file` name their files in `source` and `destination`, so their
+  part has no target. Its category deny, reserved entry, `target:` entries and matrix cell apply again, and
   the posting checks read a post's text. The call keeps its store or secret category, card, approvers and
   no-grant rule, and the ledger view still leaves the parts out. (5) The new parts reach policy patterns that
   main never ran on those calls, so a pattern that does not compile now makes `decide` raise on them, as it
