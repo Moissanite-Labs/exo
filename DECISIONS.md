@@ -6445,6 +6445,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   87 policies. Of 5,394 pairs, nine lower for three supported argument shapes, from `unknown` to `read`.
   There are no malformed-call lowerings, lost reserved hits, lost violations or classifier errors.
   Those nine changes are intentional. The script still exits 1, and the broad run was not repeated.
+  The [saved corpus and summary](docs/evidence/tool-output-gate-2026-10-23.json) include all cases,
+  the compared commits and commands to reproduce this result.
 - **Runtime boundary:** The tool schema requires `reference` and accepts only `reference`, `offset` and `limit`.
   It rejects extra path arguments before execution. The caller's session supplies the lookup scope.
   A real-gate regression verifies that an explicit read-deny policy blocks valid expansion requests.
