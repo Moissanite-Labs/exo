@@ -217,18 +217,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that
-  `approvals.yaml` lets answer `credentials` could approve a write to the policy files. The hook now reads every
-  part of the line. The ask goes to those allowed for its category and for each `credentials` or `store_write`
+  `approvals.yaml` lets answer `credentials` could approve a write to the policy files. The hook now reads the
+  line's `credentials` and `store_write` parts. The ask goes to those allowed for its category and for each such
   part (`gate.call_approvers`), and no standing grant covers a line with such a part, in any mode
   (`gate.no_grant`). So a store write anywhere on the line is the principal's alone, also behind `sudo sh -c`,
-  `bash -c`, `timeout` or `env`, in a subshell, a `$( )` or a heredoc. The line's category and outcome do not
-  change. A secret read alone keeps its delegation. A shell write, delete, copy or archive that touches `keys/` or
-  the run folder (#169) is the principal's alone now for the same reason. A file tool that names a secret and a
-  store file is `credentials` too (`apply_patch` on `~/.ssh/config` and `~/.exo/policies/gates.yaml`, `move_file`
-  from `~/.ssh/id_rsa` to `~/.exo/policies/gates.yaml`, `write_file` or `delete_file` in `keys/`). Each store file
-  it writes, moves, copies or deletes is now a `store_write` part, so it is the principal's alone as well, and a
-  `store_write` deny or `reserved:` entry, or a `target:` entry on that file, reaches it. The hook's error fallback
-  reads the parts too.
+  `bash -c`, `timeout` or `env`, in a subshell, a `$( )` or a heredoc. Other parts do not narrow the approvers
+  yet (#437). The line's category and outcome do not change. A secret read alone keeps its delegation. A shell
+  write, delete, copy or archive in `keys/` or the run folder (#169) that the gate reads as a write is the
+  principal's alone now for the same reason. Some copy spellings read only as a key read and keep the delegation
+  (`docs/GATE.md` "Known limits"). A file tool that names a secret and a store file is `credentials` too
+  (`apply_patch` on `~/.ssh/config` and `~/.exo/policies/gates.yaml`, `move_file` from `~/.ssh/id_rsa` to
+  `~/.exo/policies/gates.yaml`, `write_file` or `delete_file` in `keys/`). Each store file it writes, moves,
+  copies or deletes is now a `store_write` part, and so is a folder holding the store that it moves, renames or
+  deletes. So it is the principal's alone as well, and a `store_write` deny or `reserved:` entry, or a `target:`
+  entry on any of those files, reaches it. The hook's error fallback reads the parts too.
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
   line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
   secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,
