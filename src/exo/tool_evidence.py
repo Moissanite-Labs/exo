@@ -97,10 +97,12 @@ class Evidence:
         info = self.store.get_session(session)
         if info is None or info.agent not in (None, self.agent):
             return
-        meta = self.store.get_meta(session)
-        if META not in meta:
-            self.store.set_meta(session, {**meta, META: {"principal": self.principal, "agent": self.agent,
-                                                       "since": self.store.last_seq(session)}})
+        if META in self.store.get_meta(session):
+            return
+        def initialize(meta: dict[str, Any]) -> None:
+            if META not in meta:
+                meta[META] = {"principal": self.principal, "agent": self.agent, "since": self.store.last_seq(session)}
+        self.store.update_meta(session, initialize)
 
     def _boundary(self, session: str) -> int | None:
         info = self.store.get_session(session)
