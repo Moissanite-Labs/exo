@@ -6,6 +6,7 @@
 """
 import argparse
 import importlib
+import inspect
 import json
 import subprocess
 import sys
@@ -120,6 +121,29 @@ def test_every_command_from_another_module_is_in_the_table():
     assert top - local == set(cli.LAZY)
     for name, (_, handler, _) in cli.LAZY.items():
         assert callable(getattr(cli, handler)), name
+
+
+def handler(name: str):
+    """The function `main` runs for command `name`, or None for one it runs another way (stop, resume, update)."""
+    return getattr(cli, cli.LAZY[name][1]) if name in cli.LAZY else getattr(cli, f'cmd_{name}', None)
+
+
+# A handler whose second argument has a default runs with or without a store, so its signature cannot say which it
+# gets. These pin the choice: `exo ingest` falls back to the store's ledger. `upstream`, `serve` and `chat` do not
+# use one, and `decide`'s second argument is a model router, so it must never be handed the store.
+OPTIONAL_STORE = {'ingest': True, 'upstream': False, 'serve': False, 'chat': False, 'decide': False}
+
+
+@pytest.mark.parametrize('name', [n for n in subparsers(FULL) if handler(n)])
+def test_a_command_gets_the_store_exactly_when_its_handler_takes_it(name):
+    """`STORE_CMDS` is kept by hand (#260). A store command missing from it would be called without its store, and
+    a name added by mistake would get a second argument its handler does not take."""
+    params = list(inspect.signature(handler(name)).parameters.values())
+    if len(params) == 2 and params[1].default is not inspect.Parameter.empty:
+        assert name in OPTIONAL_STORE, f'say in OPTIONAL_STORE whether {name} gets the store'
+        assert (name in cli.STORE_CMDS) is OPTIONAL_STORE[name]
+    else:
+        assert (name in cli.STORE_CMDS) is (len(params) == 2)
 
 
 @pytest.mark.parametrize('name', sorted(OLD_NAMES))
