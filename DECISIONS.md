@@ -1040,13 +1040,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   keyed on `command` that would lift a part must now match the whole line too. And a credentials line took the
   weight of an irreversible command from its direct parts only, so a delete held by a store write in a `$( )`
   (`cd ~/.exo/keys && echo $(rm -f x)`) no longer made it irreversible. It now reads every part. With these, every
-  change makes a line stricter or leaves it alone. gate_diff (#423) ran main 3ddd89e9 against this change, with
-  #464's merged in, over the built-in corpus, 12,780 lines of substitutions around a `cd` into 14 folders, 28 lines
-  from the review and the 2,127 #464 lines, under the 87 built-in policies and 18 more. The #460 script read
-  85,152 actions: 0 lowered, 2,048 pairs reworded. Main's script read 84,688 actions and reports 256 pairs on 64
-  lines as violations lost. In `cd ~/.exo/policies && echo $(echo $(gh pr comment 3 --body hi))` the post's bare
-  violation is now named after the post, since the store write sets the card. Both trees list it, and the #460
-  script counts it as reworded. 399,498 pairs are stricter, nearly all the store-write ask on the forms above.
+  change makes a line stricter or leaves it alone. gate_diff (#423) ran main c27d8739 against this change over the
+  built-in corpus, 12,780 lines of substitutions around a `cd` into 14 folders, 28 lines from the review, the 2,127
+  #464 lines, 1,932 lines with a copy of the substitution's text before the `cd`, 3,000 lines with a compound around
+  the `cd` and a substitution in its redirections, and the 1,716 `unset` lines of the #404 review, under the 87
+  built-in policies and 18 more. The #460 script read 101,842 actions: 0 lowered, 2,048 pairs reworded. Main's script
+  read 101,378 actions and reports 256 pairs on 64 lines as violations lost. In
+  `cd ~/.exo/policies && echo $(echo $(gh pr comment 3 --body hi))` the post's bare violation is now named after the
+  post, since the store write sets the card. Both trees list it, and the #460 script counts it as reworded. 641,599
+  pairs are stricter, nearly all the store-write ask on the forms above.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
