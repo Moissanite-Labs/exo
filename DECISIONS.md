@@ -1493,17 +1493,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `cat /proc/self/[t]ask/*/environ` ask. Other files under `task/` keep their class (`cat /proc/self/task/*/status`).
   The search tools leave a thread's `environ` out of a walk, as they leave out the direct form (#241).
   *Lowered lines.* A thread's environment is decided as `/proc/<pid>/environ` already was, so some lines decide
-  lower than before. A differential of main against the change ran 27,708 actions under 95 policies: the
-  differential's own set, plus task-environ lines, compound lines and file-tool calls, and 19 more policies (a
-  `read` deny, `reserved: [read]`, `/proc` targets, more matrix cells). It found 2,877 lowered pairs on 1,364
-  actions. Each one decides as main decides the same action with `/proc/self/environ`. Four groups, all from how
-  the gate already handles any secret store: (1) A file tool on a store takes the `credentials` class in place of
-  its own, so a deny on `read` or `local_write` (a category line, a `deny:` entry, a rule, a matrix cell) becomes
-  the credentials ask (`read_file /proc/self/task/1/environ` under `categories: {read: deny}`). A `reserved: [read]`
-  entry no longer matches the call. It still asks, and no grant covers it, since it is `credentials`. A shell line
-  keeps the read as a part (D-075), so a `read` deny still denies `cat`. (2) The matrix sees the dominant part only.
-  A credentials line is costly and private and takes the strongest reversibility of its parts, so a deny cell for a
-  read, or for another part of a compound line, no longer applies
+  lower than before. A differential of main against the change ran 28,651 actions under 103 policies: the
+  differential's own set, plus task-environ lines, glob forms, compound lines and file-tool calls, and 27 more
+  policies (among them a `read` deny, `reserved: [read]`, `/proc` targets and more matrix cells). It found 4,878
+  lowered pairs on 1,910 actions. Each one decides as main decides the same action with `/proc/self/environ`. Four
+  groups, all from how the gate already handles any secret store: (1) A file tool on a store takes the `credentials`
+  class in place of its own, so a deny on `read` or `local_write` (a category line, a `deny:` entry, a rule, a matrix
+  cell) becomes the credentials ask (`read_file /proc/self/task/1/environ` under `categories: {read: deny}`). A
+  `reserved: [read]` entry no longer matches the call. It still asks, and no grant covers it, since it is
+  `credentials`. A shell line keeps the read as a part (D-075), so a `read` deny still denies `cat`. (2) The matrix
+  sees the dominant part only. A credentials line is costly and private and takes the strongest reversibility of its
+  parts, so a deny cell for a read, or for another part of a compound line, no longer applies
   (`cat /proc/self/task/1/environ; git push --force origin main` under an `irreversible`, `internal` deny cell
   asks). (3) Before #396 the posting rules checked the dominant part, so a post beside the read lost its listed
   violations. They now read every post (D-075 amendment, #396), so it keeps them, named after its part. The
@@ -2695,8 +2695,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   violations are always all listed. So is the line-wide unseen-body note for a part the posting rules do not cover.
   The scrub compiles its patterns once per policy, since a line now runs it once per post. The posting step only
   adds violations, so no decision is looser than before. The gate differential
-  (#423) bears that out. Over 25,497 actions x 85 policies (the built-in set and nine posting policies) it lowered
-  0 pairs and tightened 1,295, each a `github_post` line going from log or allow to ask. Third-party escalation,
+  (#423) bears that out. Over 28,107 actions x 87 policies (the built-in set and 11 posting policies) it lowered
+  0 pairs and tightened 4,378 on 841 actions, each from log or allow to ask on a line that carries a post. Not all
+  of them are `github_post` lines. A `delete` or `force_push` line whose post fails the rules asks now too: under
+  `categories: {delete: allow}` and footer `F`, `rm -rf build && gh pr comment 5 -R myorg/app --body "$X"` was
+  allowed and now asks. That is right, since the post on the line fails the rules. Third-party escalation,
   the matrix cell and the floors still read the dominant part. So `gh pr comment 5 -R myorg/app --body $'ok\nF' &&
   gh pr comment 6 -R other/repo --body $'fine\nF'` logs, while the second post alone asks for a third party. That
   is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
