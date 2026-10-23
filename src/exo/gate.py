@@ -2786,16 +2786,17 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(classify_shell(split, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
+        forms, big = _builtin_forms(words, cmd)      # also as bash brace-expands them (#438)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
             # #465: a value bash runs again after a `cd` into the store runs there too
             token = _cd_into.set((True, ctx.get("fd_cwd") or "")) if ctx.get("store_cwd") else None
             try:
-                parts += _subscript_parts(words[0].text, words[1:] + k.operands, cmd, depth, ctx.get("subs", []),
-                                          ctx.setdefault("late", []))
+                parts += [p for f in forms for p in _subscript_parts(words[0].text, f[1:] + k.operands, cmd, depth,
+                                                                     ctx.get("subs", []), ctx.setdefault("late", []))]
             finally:
                 if token is not None:
                     _cd_into.reset(token)
-        parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
+        parts += big + _exec_options(before, words, k, cmd, depth, ctx, piped, forms)
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
@@ -3253,6 +3254,38 @@ def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
     return i, flags
 
 
+# a `\<newline>` bash drops before it reads a word; group 1 is what it keeps as written: an escaped character, and a
+# span in quotes (bash keeps the `\<newline>` in '..' and $'..', and the lexer drops it in "..")
+_LINE_JOIN = re.compile(r"""\\\n|(\\.|\$'(?:\\.|[^\\'])*'?|'[^']*'?|"(?:\\.|[^\\"])*"?)""", re.S)
+
+
+def _brace_operands(words: list) -> list | None:
+    """``words``, a builtin and its operands, as the builtin gets them: bash brace-expands each operand first, so
+    `export {PATH,X}=` is `export PATH= X=` (#438). Each word an operand makes is lexed again from its source text,
+    so a quoted brace stays (`export '{PATH,X}='`), and a word made twice stays twice, since a builtin reads its
+    operands by place (`printf {-v,X,-v,PATH}` fills PATH). None past the brace limits (_brace_words)."""
+    out = words[:1]
+    for w in words[1:]:
+        alts = _brace_words(_LINE_JOIN.sub(r"\1", w.raw), pool=2, every=True) if w.brace else [w.raw]
+        if alts is None:
+            return None
+        out += [w] if len(alts) < 2 else [t for a in alts[1:] for kind, t in
+                                          _Lexer("\\" + a if a.startswith("#") else a, scan=False).run() if kind == "w"]
+    return out
+
+
+def _builtin_forms(words: list, cmd: str) -> tuple[list[list], list[Classification]]:
+    """The forms of a name-taking builtin's words (_NAME_BUILTINS) that its checks read: as written and, when an
+    operand holds an unquoted brace, as bash expands them (_brace_operands, #438), so a word that asked still asks.
+    A set past the brace limits is not read in part: it is an opaque part. `unset` asks on any brace (#329)."""
+    prog = words[0].text.rsplit("/", 1)[-1] if words and not words[0].dynamic else ""
+    if prog not in _NAME_BUILTINS or prog == "unset" or not any(w.brace for w in words[1:]):
+        return [words], []
+    if (expanded := _brace_operands(words)) is None:
+        return [words], [_opaque(f"{prog} takes a brace set too large to read, which may name PATH", cmd)]
+    return [words, expanded], []
+
+
 def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
     """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
     `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
@@ -3277,8 +3310,12 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
                         targets.append(val)
                     break
         targets += args[i:]
-    elif prog == "printf" and args[:1] and args[0].text.startswith("-v"):
-        targets = [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+    elif prog == "printf":
+        i = 0
+        while i < len(args) and args[i].text.startswith("-v"):   # bash fills the last one (`-v X -v PATH`, #438)
+            t = args[i]
+            targets += [_Word(text=t.text[2:], dynamic=t.dynamic, glob=t.glob)] if t.text != "-v" else args[i + 1:i + 2]
+            i += 1 if t.text != "-v" else 2
     elif prog in _EXPORTERS:
         i, flags = _builtin_options(args, prog in ("declare", "typeset", "local"))
         if "f" in flags or "F" in flags:                  # names functions, not variables
@@ -3308,14 +3345,14 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
 
 
 def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
-                  piped: str | None) -> list[Classification]:
+                  piped: str | None, forms: list | None = None) -> list[Classification]:
     """Commands a trusted program is told to run (#154): an exec option (`tar --to-command`, `rsync -e`,
     `man -P`, `git rebase -x`...), an ssh `-o ProxyCommand`, a sqlite3/psql shell command, or an environment variable
     such as GIT_SSH_COMMAND set before the program. Each is classified as a nested command; a value the
     gate cannot read (a script file, `.output FILE`) is opaque, and so is a variable that loads code or
     moves where programs and config are found (LD_PRELOAD, PATH...). Git config set on the line (`git -c`,
     `git --config-env`, `git clone --config`, GIT_CONFIG_*) takes _git_config_kind. `words` is empty for a
-    bare assignment."""
+    bare assignment; `forms` are a builtin's words as _builtin_forms gives them."""
     if words and words[0].dynamic:
         return []
     prog, argv = (words[0].text.rsplit("/", 1)[-1] if words else ""), [w.text for w in words]
@@ -3391,10 +3428,15 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     runner = prog in ("pytest", "py.test") or bool(re.fullmatch(r"python[\d.]*", prog)) and argv[1:3] == ["-m", "pytest"]
     sets: list[tuple[str, str | None, bool, bool]] = [(*split_assign(w.text), not words, _kept_text(w.raw))
                                                       for w in assign_words]
+    # the checks below read a builtin's words as written and as bash brace-expands them (_builtin_forms, #438):
+    # `export {PATH,X}=` is `export PATH= X=`
+    forms = forms or [words]
     if prog in _EXPORTERS:
-        sets += [(*split_assign(w.text), True, _kept_text(w.raw)) for w in words[1:] if _ASSIGN.fullmatch(w.text)]
-    named = assigns + (argv[1:] if prog in (*_EXPORTERS, "unset") else []) + \
-        [b for a, b in zip(argv, argv[1:]) if prog in ("test", "[") and a == "-v"]   # where NAME[..] is arithmetic
+        sets += [(*split_assign(w.text), True, _kept_text(w.raw)) for f in forms for w in f[1:]
+                 if _ASSIGN.fullmatch(w.text)]
+    named = assigns + ([w.text for f in forms for w in f[1:]] if prog in (*_EXPORTERS, "unset") else []) + \
+        [b.text for f in forms for a, b in zip(f, f[1:])
+         if prog in ("test", "[") and a.text == "-v"]   # where NAME[..] is arithmetic
     sets += [(name, value, True, literal) for name, value, literal in _hidden_sets(k, named)]
     if prog == "unset":
         # `unset PATH` is `PATH=` for what follows it: with no PATH, bash looks a command up in the
@@ -3428,7 +3470,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             pass                                         # a test runner already runs the project's code
         elif why := _env_hazard(name, value, literal):   # _EXEC_ENV_OPAQUE, and LESS with a `+` command
             parts.append(_opaque(f"{name} {why}", cmd))
-    parts += _indirect_sets(prog, words, cmd)
+    parts += [p for f in forms for p in _indirect_sets(prog, f, cmd)]
     for (kind, num), value in git_env.items():
         if kind == "KEY":
             git_config([f"{value}={git_env.get(('VALUE', num), '')}"], f"GIT_CONFIG_KEY_{num}")
@@ -4676,8 +4718,8 @@ def _run_secrets() -> list[str]:
 
 
 _BRACE_CAP = 1024
-_BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost), once for the secret-store checks
-                       # and once for the Exo-store checks (#224)
+_BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost), once for the secret-store checks,
+                       # once for the Exo-store checks (#224) and once for the names a builtin reads (#438)
 _BRACE_SEQ = re.compile(r"([-+]?\d+)\.\.([-+]?\d+)(?:\.\.([-+]?\d+))?|([A-Za-z])\.\.([A-Za-z])(?:\.\.([-+]?\d+))?")
 _brace_left: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_brace_left", default=None)
 _call_memo: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_call_memo", default=None)
@@ -4700,7 +4742,7 @@ def _brace_budget(fn: _F) -> _F:
     def run(*a: Any, **kw: Any) -> Any:
         if _brace_left.get() is not None:
             return fn(*a, **kw)
-        token, memo = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET]), _call_memo.set({})
+        token, memo = _brace_left.set([_BRACE_BUDGET] * 3), _call_memo.set({})
         try:
             return fn(*a, **kw)
         finally:
@@ -4775,12 +4817,14 @@ def _brace_seq(s: str) -> list[str] | None:
     return [f"{v:0{width}d}" for v in vals]
 
 
-def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
+def _brace_words(tok: str, pool: int = 0, every: bool = False) -> list[str] | None:
     """``tok`` and the words bash brace expansion makes of it, read as bash's brace_gobbler does: a group
     ends at the first top-level `}` after a comma or `..`; quoted or escaped braces, ${...} and $(...) do
     not expand; a group without a comma is a {x..y[..n]} sequence or literal. None past _BRACE_CAP words (fewer
     for a long word: a million characters in all), past what is left of the call's _BRACE_BUDGET, or past 32
-    levels of nesting: callers count that as a hit. ``pool`` 1 charges the Exo-store checks' budget."""
+    levels of nesting: callers count that as a hit. ``pool`` 1 charges the Exo-store checks' budget, 2 the
+    builtin names' (_brace_operands). Each word comes once, unless ``every``: then each word bash makes comes
+    in its place, a repeated one too."""
     if "{" not in tok:
         return [tok]
     left = _brace_left.get()
@@ -4893,7 +4937,7 @@ def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
         return None
     if left is not None and len(words) > 1:
         left[pool] -= sum(map(_brace_cost, words))
-    return list(dict.fromkeys([tok] + words))
+    return [tok] + words if every and words != [tok] else list(dict.fromkeys([tok] + words))
 
 
 def _expand_words(words: list[str]) -> list[str]:
