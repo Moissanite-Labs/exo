@@ -6,6 +6,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `scripts/gate_diff.py` counts a posting violation as often as each tree lists it, so a gate change that lists once
+  what two posts of one name both meet shows as lower (#460). Each seed also runs under each tool table name that
+  ends in `terminal` or `shell`, and in a call holding both `command` and `cmd`. The report shows a few reworded
+  pairs, and counts each one once. The line `and N more on other posts` names no text, so its N counts in each
+  tree's total instead, and a lower total is lower. A built-in line of 25 posts reaches that listing cap.
+- `unset PATH` is now read as the assignment it amounts to (#329). With PATH unset, bash looks a
+  command up in the working folder, so a later `ls` on the line can run a planted `./ls`. The gate
+  already asked on the assignment forms (`PATH= ls`). `unset` and `unset -v` of PATH now ask the
+  same way, as `opaque_exec`. `unset -f` names a function, not the variable, and stays read. An
+  `unset` word the gate cannot read asks too, as a name or as an option: `unset $v`, `unset PAT?`,
+  `unset {PATH,}`, `unset [P]ATH`, `unset \<newline>[P]ATH` and `unset -${f}v PATH`. The exporters
+  read their options the same way, so `export +x -f $V=` and `declare -${f}x $V=` ask as
+  `export $V=` does. A `readonly +x -n r=PATH` no longer asks: bash reads `+x` and `-n` there as
+  names, so it makes no nameref.
 - Bus relay HTTP reads reject out-of-range sequence numbers and page limits with 422 (#455). `since`,
   verification `from` and `to` now fit SQLite's integer range, and message and inbox limits must be 1-1,000.
   Oversized numbers no longer return 500, and a negative limit no longer returns the whole log.
@@ -20,7 +34,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   default retrieval ranker, the learner and the memory plugin all call it, so each query paid for the whole store.
   The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
   the node set they were built from. A `reload()`, or a `refresh()` that sees a node file change, makes a new set
-  and the next `find` builds them again. A repeat query tokenizes only itself. Scores and order are unchanged.
+  and the next `find` builds them again. The reload drops the old tables at once, so they are not held until that
+  `find`. A repeat query tokenizes only itself. Scores and order are unchanged.
 - A thread's environment file is a secret store, like the process's own (#313).
   `/proc/<pid>/task/<tid>/environ` holds the same environment as `/proc/<pid>/environ`, another
   process's included, but the gate read it as an ordinary file, literal path and glob alike.
@@ -33,6 +48,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   a second store's `target:` entry (a post beside it keeps its violations, since #396). Beside a store write the line is
   `credentials`, so a seat delegated `credentials` may answer it, where only the principal
   answered. The D-038 amendment and `docs/GATE.md` "A thread's environment file" list them.
+  #448 and #464 lift the file-tool deny and the matrix deny cells again.
 - The posting rules now read every post on a line, not only the dominant one (#396). `decide` ran
   the footer, the forbidden words and the scrub on the combined classification's text. A compound
   line takes that text from its most severe part. So a post that passed, put first, carried a
@@ -43,8 +59,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   are named after that part, and when two posts both have an unseen body, both are named. Once other
   posts add violations, a decision lists at most 20 and counts the rest. A single post is checked
   exactly as before. The exact-text binding already hashed the whole command, so a grant for one
-  line never covered a changed second body. Third-party escalation, the matrix cell and the floors
-  still read the dominant part (#437).
+  line never covered a changed second body. Third-party escalation, a matrix cell below deny and
+  the floors still read the dominant part (#437).
 - Terminal steer feedback distinguishes sending, queued and delivered, with a queued count beside the composer
   while you type (#361). A matching core delivery event, even before the send reply, or a successful unsteer
   acknowledgement confirms delivery; a send reply alone never does. Approval cards lead with the Ctrl+F answer sequence so they can be answered
@@ -216,6 +232,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   such a line covers that exact line only. A script that calls a local tool the gate does not know after a push or
   a post now asks where it logged. Main's `scripts/gate_diff.py` lowers nothing in 38,632,272 pairs (239,952 actions,
   its built-in corpus and the aimed lines, under 161 policies) and tightens 2,067,718.
+- Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
+  line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
+  secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,
+  `rm -rf ~/work; touch ~/.exo/state/x`, `rm -rf ~/.exo/policies` and `git push --force origin main && rm -rf build`
+  are denied, where they asked. After `cd /dev` or `cd /proc/self/fd`, a store write keeps the descriptor folder
+  as a target, so `target:/dev*` or `target:/proc*` still denies it. A relative key read after `tar -C` into a
+  store (`tar -C ~/.exo/policies -czf - ../keys/seat`) is a `credentials` part, so `deny: [credentials]` denies
+  it. A file tool on a store or secret path keeps its own reading as a part (a `local_write` part for each file
+  a write tool writes), so `deny: [delete]` denies `delete_file ~/.exo/state/x` and `deny: [read]` denies
+  `read_file ~/.ssh/id_rsa`, as for the shell forms. Each call keeps its category, card and approvers, and no
+  decision is lower than before. When the decision fails on a store write or secret (a policy pattern that does
+  not compile), the exo-gate hook's fallback card asks the principal alone, once, in observe mode too.
 - Gate (#436, D-038 amendment): `for NAME do LIST; done` and `select NAME do LIST; done`, with no `in` list and no
   `;` before `do`, are read as `for NAME; do LIST; done`. Bash and POSIX accept that form and run the loop over the
   positional parameters, but the gate read the body as words of the `for` command and classified nothing in it, so
@@ -233,8 +261,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grant covers it. `.exo/update` and `update/allowed_signers` count by name anywhere. `exo update --pin-trust` is
   `store_write` too and keeps its `opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it.
   Reads stay `read`, and a project folder called `update` is unchanged. A file tool's write to the pin is
-  `store_write` alone, so it now asks where a `local_write` deny denied it before, as a file tool's write to
-  `state/` already did. `config.json` is left to #125 (D-074).
+  `store_write`, and since #448 it keeps its `local_write` reading as a part, so a `local_write` deny still
+  denies it. `config.json` is left to #125 (D-074).
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under

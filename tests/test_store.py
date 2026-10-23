@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+import weakref
 
 import pytest
 
@@ -184,6 +185,33 @@ def test_find_cached_ranking_matches_a_fresh_store(template_store):
         for q in QUERIES:
             assert template_store.find(q) == PrincipalStore(template_store.root).find(q)
     assert template_store.find("report decisions format", n=1)[0][0] == "relationship/reporting"
+
+
+def test_reload_frees_the_old_tables_at_once(template_store):
+    """A reload drops the kept tables, so they are not held until the next `find` (#442 review). `find` checks the
+    node set it reads, so a reload during a `find` is still safe."""
+    template_store.find("projects status")
+    counts = weakref.ref(template_store._bm25[2])  # how many nodes hold each word
+    template_store.reload()
+    assert counts() is None
+    assert template_store.find("projects status") == PrincipalStore(template_store.root).find("projects status")
+
+
+def test_a_reload_during_a_find_does_not_keep_stale_tables(template_store, monkeypatch):
+    """A reload that lands while `find` builds its tables leaves those tables tied to the old node set, so the next
+    `find` must build again (#470 review). Without `find`'s check of the set it reads, the stale tables would stay."""
+    build, fired = PrincipalStore._bm25_tables, []
+
+    def racing(nodes):
+        out = build(nodes)
+        if not fired:
+            fired.append(1)
+            (template_store.nodes_dir / "work" / "zebra-deploys.md").write_text(NODE.format(body="Zebra deploys."))
+            template_store.reload()
+        return out
+    monkeypatch.setattr(PrincipalStore, "_bm25_tables", staticmethod(racing))
+    template_store.find("projects status")
+    assert template_store.find("zebra deploy")[0][0] == "work/zebra-deploys"
 
 
 def test_find_follows_every_change_to_the_node_set(template_store, monkeypatch):
