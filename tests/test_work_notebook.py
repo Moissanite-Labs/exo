@@ -377,7 +377,8 @@ def test_gate_classifies_each_notebook_operation(action, category):
     assert decide(classified, {"gates": {"categories": {category: "deny"}}}).outcome == "deny"
 
 
-@pytest.mark.parametrize("invalid", [{}, {"action": None}, {"action": "delete"}, {"action": []}])
+@pytest.mark.parametrize("invalid", [{}, {"action": None}, {"action": "delete"}, {"action": []},
+                                    {"action": "read"}, {"action": "history"}, {"action": "update"}])
 @pytest.mark.parametrize("category", ["credentials", "store_write"])
 def test_malformed_notebook_call_keeps_generic_protected_path_handling(tmp_path, monkeypatch, invalid, category):
     from exo.gate import classify, decide

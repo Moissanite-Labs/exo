@@ -7565,7 +7565,9 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         c = _shell_call(str(args.get("command") or args.get("cmd") or ""))
     elif tool == "execute_code":
         c = classify_code(str(args.get("code") or ""))
-    elif tool == "work_notes" and args.get("action") in ("read", "history", "update"):
+    elif (tool == "work_notes" and args.get("action") in ("read", "history", "update")
+          and set(args) <= {"read": {"action", "revision"}, "history": {"action", "limit"},
+                            "update": {"action", "expected_revision", "document"}}[args["action"]]):
         operation = args.get("action")
         category = "local_write" if operation == "update" else "read"
         c = _make(category, summary=f"session working notes: {operation}")
