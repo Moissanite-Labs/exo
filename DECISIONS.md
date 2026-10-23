@@ -1010,6 +1010,56 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
   `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
   argument, and a path held in a variable or made by a command (`F=~/.exo/update/allowed_signers; cp x "$F"`).
+  *Amendment 2026-10-22 (issue #465):* a writing command after `cd` into the store is a store write, but the `cd`
+  reached only the line's own commands. Each `$( )`, backticks and `<( )` body was classified as a fresh line, so
+  `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the `x=$( )`, `cat <( )`, backtick and nested forms,
+  `cd ~/.exo/state && echo "$(cp /tmp/g.json approval-grants.json)"` and `cd /dev && echo $(cp /tmp/evil fd/3)`
+  were allowed with no ask, under the default policy too, while the unwrapped `cp` asked the principal. Bash runs
+  a substitution where its command runs. Now a substitution of a command after the `cd` into the store or a
+  descriptor folder is classified in that folder, as the same command unwrapped is: a command the gate does not
+  read as a read (a write, and also `sed`, `sort`, `curl` or an interpreter) is a store write, with the
+  descriptor folder as the target after `cd /dev`, and a read (`cat`, `grep`, `git log`) stays a read. So the #338
+  friction after `cd /proc` or `cd /dev` reaches such substitutions too. A substitution in the `cd` itself or in a
+  command before it runs where the line started, so it is read as before
+  (`cd /proc/$(docker inspect -f '{{.State.Pid}}' web) && cat status` stays a read). Its place in the line decides,
+  not its text, so a copy of its text before the `cd` changes nothing. One in a here-doc body counts as after every
+  command on its line. One in the redirections of a compound that holds the `cd` runs before the compound, as bash
+  expands them first (`while read f; do cd ~/.exo/state; done < <(sort list)` stays a read). As for the line's own
+  commands, a subshell `cd`, a later `cd` out of the store and a `cd` in a function body are not followed, so those
+  fail closed (`(cd ~/.exo) && echo $(sort x)` asks). A loop that enters the store runs its earlier commands there
+  on its next pass, which is not followed either (#480). A line nested in the substitution
+  keeps its own folder: an `ssh` remote command runs on its host, while a local `bash -c` in the substitution is
+  itself a command in the store. A `declare` or `local` value that bash runs again after the `cd`
+  (`declare -a x='($(cp /tmp/evil gates.yaml))'`) is classified in the folder as well. Each text is still
+  classified once per depth in a call (#334), now once for each folder as well, so the same `$( )` read outside
+  the store and in it on one line is read in both. This needs the D-075 amendment for #464: without it, a command
+  in such a `$( )` whose matrix cell denies it (a force push, a post, a delete) would lose that deny beside the new
+  store write. Two more checks keep such a command as strict as when it decided the line. A part read from a nested
+  line carries that line as its text, so an anchored allow rule (`{command: '^git push', decision: allow}`)
+  lifted the push in the #191 pass, though it does not lower the line when the push decides it (#394). A rule
+  keyed on `command` that would lift a part must now match the whole line too. And a credentials line takes the
+  weight of an irreversible command from its own parts, so a delete held by a store write in a `$( )`
+  (`cd ~/.exo/keys && echo $(rm -f x)`) no longer made it irreversible. A heavier command deeper in the line is now
+  a credentials part with that weight beside it, which the #191 pass reads, so a deny on its matrix cell holds. The
+  line keeps its own weight, so a policy whose costly cell is stricter than its irreversible one still denies
+  `cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'`, which an earlier commit here made irreversible (#468 review). The
+  credentials part #464 adds for a relative key read on a store-write line weighs the same way, so
+  `cd ~/.exo/state && cat ../keys/seat; echo $(rm -rf x)` denies under an irreversible deny cell or rule as on main,
+  and the unwrapped `cd ~/.exo/state && cat ../keys/seat; git push --force origin main` tightens from ask to deny. With
+  these, every change makes a line stricter or leaves it alone, but for one group gate_diff reports. Under
+  `reserved: ['command:\brm\b']`, `cd ~/.exo/policies && declare -a x='($(ssh prod 'rm -rf /'))'` had its
+  reserved hit on `opaque_exec` and now has it on `store_write`. Both ask, the store write only the principal, and
+  a store write takes no standing grant, so the hit changes nothing. gate_diff (#423) ran main c27d8739 against
+  this change over the built-in corpus, 12,780 lines of substitutions around a `cd` into 14 folders, 28 lines from
+  the review, the 2,127 #464 lines, 1,932 lines with a copy of the substitution's text before the `cd`, 3,000 lines
+  with a compound around the `cd` and a substitution in its redirections, 384 lines with a secret beside a heavier
+  command, 288 with a relative key read beside one, and the 1,716 `unset` lines of the #404 review, under the 87
+  built-in policies and 23 more. The #460 script read 103,366 actions: 0 outcomes lower, 4 pairs with the reserved
+  hit above, 2,048 pairs reworded. Main's script (run before the key-read weight) reports those 4 and 256 pairs on
+  64 lines as violations lost. In
+  `cd ~/.exo/policies && echo $(echo $(gh pr comment 3 --body hi))` the post's bare violation is now named after the
+  post, since the store write sets the card. Both trees list it, and the #460 script counts it as reworded. 685,477
+  pairs are stricter, nearly all the store-write ask on the forms above.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -2781,7 +2831,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   tool on a store or secret path keeps the tool's own reading as a part (#448), as a shell line does: a
   `local_write` part for each file `write_file`, `edit_file`, `patch` or `apply_patch` writes, and for a tool read
   by name (`delete_file`, `read_file`, `create_directory`, `move_file`) its own category, target, summary, and the
-  text and title of a post. Its category deny, reserved entry, `target:` entries and matrix cell apply again, and
+  text and title of a post. `move_file` and `copy_file` name their files in `source` and `destination`, so their
+  part has no target. Its category deny, reserved entry, `target:` entries and matrix cell apply again, and
   the posting checks read a post's text. The call keeps its store or secret category, card, approvers and
   no-grant rule, and the ledger view still leaves the parts out. (5) The new parts reach policy patterns that
   main never ran on those calls, so a pattern that does not compile now makes `decide` raise on them, as it
