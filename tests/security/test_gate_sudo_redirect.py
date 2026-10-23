@@ -157,3 +157,22 @@ def test_the_controls_are_unchanged(line):
     c = sh(line)
     assert (c.category, c.reversibility) == ("local_write", "reversible"), (line, c)
     assert decide(c, pol(categories={"local_write": "ask"})).outcome == "ask"
+
+
+def test_the_line_takes_the_written_path_as_target():
+    # As without sudo, so a rule keyed on the path now reaches the line. Main left the target empty.
+    c = sh("sudo echo hi >> /etc/hosts")
+    assert c.target == sh("echo hi >> /etc/hosts").target == "/etc/hosts"
+    d = decide(c, pol(rules=[{"match": {"target": "/etc/*"}, "decision": "ask", "reason": "etc"}]))
+    assert (d.outcome, d.rule) == ("ask", "rule"), d
+
+
+def test_an_ssh_hop_keeps_its_host_part():
+    # The written path takes the place of the host as the line's target, as for `ssh host 'echo hi > /tmp/f'`. The
+    # hop's own part still names the host, so a deny or reserved entry on the host still reaches the line.
+    c = sh("ssh host 'sudo echo hi > /tmp/f'")
+    assert (c.category, c.reversibility, c.exposure, c.target) == ("local_write", "costly", "internal", "/tmp/f")
+    assert c.target == sh("ssh host 'echo hi > /tmp/f'").target
+    assert decide(c, pol(deny=["target:host"])).outcome == "deny"
+    d = decide(c, pol(reserved=["target:host"]))
+    assert d.outcome == "ask" and ("shell", "host") in d.reserved, d
