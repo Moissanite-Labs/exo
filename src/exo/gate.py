@@ -634,7 +634,8 @@ class _Lexer:
         s, j, out = self.s, self.i + 1, []
         while j < len(s) and s[j] != "`":
             if s[j] == "\\" and j + 1 < len(s):
-                out.append(s[j + 1])
+                if s[j + 1] != "\n":         # bash drops a \⏎ from the body before it parses it (#469)
+                    out.append(s[j + 1])
                 j += 2
                 continue
             out.append(s[j])
@@ -871,7 +872,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
         j = n if j < n and s[j] == "\\" else j
         w.started, w.digits = True, False
         if w.text is not None:
-            text = "`" + re.sub(r"\\(.)", r"\1", s[i + 1:j], flags=re.S) + "`"
+            text = "`" + re.sub(r"\\(.)", lambda m: "" if m[1] == "\n" else m[1], s[i + 1:j], flags=re.S) + "`"
             w.add(text, 0, len(text))
         return j + 1
 

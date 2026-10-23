@@ -1450,6 +1450,30 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   corpus also found 66 `doas` pairs on 22 actions. `deny: [local_write]` still denies it (D-075).
   Left out: `time for NAME do ...`, since the parser does not read `for` after `time` as a reserved word. It asks as
   `opaque_exec`, as `time { ...; }` does.
+  *Amendment 2026-10-23 (issue #469):* bash drops a `\<newline>` from a backquoted body before it parses the
+  body, as it does outside quotes and in `$( )`. The lexer turned the pair into a plain newline. So
+  ``echo `r\<newline>m -rf /data` `` read as two unknown programs, `r` and `m -rf /data`. It was an `opaque_exec`
+  ask, which `categories: {opaque_exec: allow}` allowed and `deny: [delete]` did not deny, while bash runs
+  `rm -rf /data`. `_Lexer._backtick` now drops the pair, and so does its twin in `_nest_end`, which reads a
+  here-doc delimiter past the `$( )` cap. The body then reads as bash reads it: here a `delete`, which
+  `deny: [delete]` denies. Quotes and here-docs inside the body do not keep the pair, since bash drops it first.
+  ``echo `echo 'a\<newline>b'` `` prints `ab`, and a here-doc line `x\<newline>` before its delimiter joins it,
+  so the body runs on to the next delimiter line. A `\\` before a newline is one backslash, so the body holds a
+  `\<newline>` and its own parse joins it, as before.
+  The differential (#423) against main c27d8739, under 110 policies, lowers pairs only on lines with a
+  `\<newline>` in backticks. The built-in corpus lowers 1,290 pairs on 35 of 54,710 actions, all from the new
+  tests. With 12,291 aimed lines (17 commands with the pair at each place, in 10 forms and in here-docs) it lowers
+  583,377 pairs on 10,538 of 79,268 actions. No posting violation is lost. Main read each such line as unknown
+  programs, so it asked for a reason bash never meets. A second check decides 5,915 split lines on this branch and
+  the line bash runs (the pair taken out) on main, under the same policies. Of 650,650 pairs, all but 293 match.
+  54 are stricter, because a `command:` allow rule no longer matches the split text. 191 keep the outcome: in 178
+  a reserved target from a `bash -c` body keeps the pair in its text, and 13 are decided by the matrix, not a
+  rule. 48 are lower: a `command:` ask rule matched text in a here-doc body once the pair was taken out, and the
+  split text does not match it. That text never runs, and main reads the same here-doc outside backticks the same
+  way. After `cd` into the store, a write in backticks with the pair, such as
+  ``cd ~/.exo/policies && echo `cp /tmp/evil gat\<newline>es.yaml` ``, goes from an `opaque_exec` ask to the
+  `read` allow main gives the line bash runs. That is #465, which #468 fixes. With both, the line is a
+  `store_write` ask, so this change merges after #468.
   *Amendment 2026-10-21 (issue #313, follow-up to #199):* on Linux each thread's `/proc/<pid>/task/<tid>/environ`
   holds the same environment as `/proc/<pid>/environ`, another process's included. The store list named only the
   direct form, so `cat /proc/self/task/1/environ` and `read_file` on it were plain reads. The store list now names
