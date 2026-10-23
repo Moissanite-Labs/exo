@@ -149,11 +149,13 @@ A file tool that names a secret and a store file is `credentials` too: `apply_pa
 `~/.exo/policies/gates.yaml`. Each store file such a tool writes, moves, copies or deletes is a
 `store_write` part, so the call is the principal's alone as well. A move, rename or delete of a
 folder that holds the store counts too, as `mv` and `rm` do (`move_file` from `~/.exo` to
-`~/.ssh/x`). A file tool that only reads (`read_file ~/.ssh/id_rsa`), copies the store
-(`copy_file` from `~/.exo` to `~/.ssh/x`, as `cp -r` does), or writes a secret outside the store
-(`write_file ~/.ssh/config`), has no such part and keeps the delegation. With no secret, a file
-tool's move of a folder that holds the store is not read as a store write yet (#494). The hook's
-error fallback reads the parts too (see "The store is credentials").
+`~/.ssh/x`). So does a tool with a camelCase name (`moveFile`, `deleteFile`). Its category is
+`unknown`, because the gate reads its name as one word, but this check splits the name. A file tool
+that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` from `~/.exo` to
+`~/.ssh/x`, as `cp -r` does), or writes a secret outside the store (`write_file ~/.ssh/config`),
+has no such part and keeps the delegation. With no secret, a file tool's move of a folder that
+holds the store is not read as a store write yet (#494). The hook's error fallback reads the
+parts too (see "The store is credentials").
 
 ## Who answered: the connection, not the body (D-039)
 

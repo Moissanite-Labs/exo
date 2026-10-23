@@ -5251,8 +5251,11 @@ def _patch_paths(text: str) -> list[str]:
 
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
                   "src", "dest", "destination")
-# Name words of a file tool that moves or renames what it names, as `mv` does (#447).
-_MOVE_WORDS = frozenset(("move", "rename", "mv"))
+# Name words of a file tool that moves or renames what it names, as `mv` does, or deletes it, as `rm` does (#447).
+# They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` keeps as one word.
+_WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
+                         "revoke", "trash"))
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 @_brace_budget
@@ -5549,8 +5552,9 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         stores: list[str] = []
         if own not in ("read", "web_read"):
             # A delete reaches the store through a folder that holds it, as `rm` does. Beside a secret, so does a
-            # move or rename, as `mv` does (#447). A move of such a folder with no secret is #494.
-            wide = own == "delete" or bool(secret) and not _MOVE_WORDS.isdisjoint(_name_tokens(tool))
+            # move or rename, as `mv` does, and a tool whose camelCase name says so (#447). A move of such a folder
+            # with no secret is #494.
+            wide = own == "delete" or bool(secret) and not _WIDE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
             named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
                      else [args.get(k)]) if isinstance(v, str)]
             stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide)))

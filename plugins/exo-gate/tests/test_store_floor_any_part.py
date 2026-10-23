@@ -290,6 +290,9 @@ FILE_TOOL_STORE_WRITES = [
     ("move_file", {"source": "~/.exo", "destination": "~/.ssh/x"}, "~/.exo"),
     ("rename_file", {"source": "~/.exo", "destination": "~/.ssh/x"}, "~/.exo"),
     ("mcp__filesystem__move_file", {"source": "~/.exo", "destination": "~/.ssh/x"}, "~/.exo"),
+    # The same under a camelCase name, which the name reading keeps as one word, so its own category is unknown
+    ("moveFile", {"source": "~/.exo", "destination": "~/.ssh/x"}, "~/.exo"),
+    ("deleteFile", {"paths": ["~/.ssh/id_rsa", "~/.exo"]}, "~/.exo"),
     # Each store path is a part, not only the first one the scan meets (the #489 review)
     ("copy_file", {"source": "~/.exo/keys/seat.key", "destination": "~/.exo/policies/gates.yaml"},
      "~/.exo/policies/gates.yaml"),
@@ -303,6 +306,7 @@ FILE_TOOL_SECRETS = [
     ("write_file", {"path": "~/.ssh/config", "content": "x"}),
     ("move_file", {"source": "~/.ssh/id_rsa", "destination": "/tmp/k"}),
     ("copy_file", {"source": "~/.exo", "destination": "~/.ssh/x"}),     # a copy reads the store, as `cp -r` does
+    ("copyFile", {"source": "~/.exo", "destination": "~/.ssh/x"}),
     ("apply_patch", {"patch": "*** Begin Patch\n*** Update File: ~/.ssh/config\n@@\n-a\n+b\n*** End Patch\n"}),
 ]
 
@@ -351,7 +355,7 @@ def test_a_file_tools_store_part_only_adds_denies():
     assert r.outcome == "ask" and ("store_write", "~/.exo/policies/gates.yaml") in r.reserved, r
 
 
-@pytest.mark.parametrize("tool", ["move_file", "rename_file", "mcp__filesystem__move_file"])
+@pytest.mark.parametrize("tool", ["move_file", "rename_file", "mcp__filesystem__move_file", "moveFile", "renameFile"])
 def test_a_file_tool_move_of_a_store_folder_beside_a_secret_matches_mv(monkeypatch, tool):
     monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
     approvals = gate.normalize_approvals({"approvers": {"credentials": ["principal", SEAT]}})

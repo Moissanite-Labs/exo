@@ -1031,11 +1031,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `~/.exo/policies/gates.yaml`, `move_file` from `~/.ssh/id_rsa` to `~/.exo/policies/gates.yaml`), so a seat
   delegated `credentials` could answer it. `classify` now adds a `store_write` part for each store file such a tool
   writes, moves, copies or deletes, beside the tool's own part (#448). A folder holding the store that it moves,
-  renames or deletes gets one too, as with `mv` and `rm` (`move_file` from `~/.exo` to `~/.ssh/x`). With no secret,
-  a file tool's move of such a folder is not a store write yet (#494). A file tool's write or delete in `keys/` or
-  the run folder gets a part as well, as its shell spelling does. The call's category, target and card do not
-  change. The hook's error fallback (#464) reads the parts as well. Chosen over ranking store_write first in
-  `_combine`, which would change the line's category, reason and policy matches. The
+  renames or deletes gets one too, as with `mv` and `rm` (`move_file` from `~/.exo` to `~/.ssh/x`). So does a tool
+  with a camelCase name (`moveFile`, `deleteFile`): its category stays `unknown`, because the gate reads its name as
+  one word, but this check splits the name. With no secret, a file tool's move of such a folder is not a store write
+  yet (#494). A file tool's write or delete in `keys/` or the run folder gets a part as well, as its shell spelling
+  does. The call's category, target and card do not change. The hook's error fallback (#464) reads the parts as
+  well. Chosen over ranking store_write first in `_combine`, which would change the line's category, reason and
+  policy matches. The
   gate differential against main 5a9dc394 (`gate_diff`, #423, main's script) finds 0 lowered pairs. On the built-in
   corpus, 55,218 actions x 87 policies, it finds 218 pairs on 89 actions tightened, all `credentials` ask to deny. On
   a focused corpus of 17,930 actions it finds 23,708 pairs on 9,494 actions tightened, also `credentials` ask to deny.
