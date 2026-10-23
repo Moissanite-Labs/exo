@@ -575,6 +575,12 @@ class Gate:
             changed = self.changed_policies()
             approvers = gate.strictest_approvers(c.category, pol.get("approvals"),
                                                  changed.get("approvals") if changed is not None else None)
+            if c.displaced is not None and c.displaced.target:
+                # #454: a sudo write line is also about the repo or host its displaced part names, so only who may
+                # answer that part's category too may answer it.
+                also = gate.strictest_approvers(c.displaced.category, pol.get("approvals"),
+                                                changed.get("approvals") if changed is not None else None)
+                approvers = [a for a in approvers if a in also]
             # persist: this gate keeps "always" grants itself (scoped, expiring, in the store), so the
             # core must not also keep an unscoped one in memory.
             approval_key = "a_" + secrets.token_hex(16)

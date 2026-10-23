@@ -506,6 +506,8 @@ logged with the grant id.
 - Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`).
 - Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
   granted for the exact command only, like an outward act.
+- A sudo write line whose displaced part names a repo or a host (#454) is granted for the exact
+  command only too, so a grant on the written path does not answer a rule on that repo or host.
 - A post whose body the gate did not read never gets a grant, and an older grant does not cover it
   (#208, "What an approval covers").
 - Only the principal can create a grant.
@@ -1094,10 +1096,20 @@ gate does not read:
   outranks that `read` still leads, also one that would tie with a costly write, such as an unknown
   program: `sudo echo hi > /tmp/f; foo` asks as `opaque_exec`. A store path stays `store_write`,
   and `/dev/null` adds no write, as without sudo.
+  A copy made on a nested line (a `$( )`, backticks, `<( )` or an ssh hop) is a part of the line
+  around it. There the parts are ranked as before, each copy as the part it displaced. A part
+  that outranks a `read` still leads: an unknown program (`echo $(sudo echo hi > /tmp/f) $(foo)`
+  asks as `opaque_exec`), or ssh running its stdin. Otherwise the copy leads, and the part that
+  led before is its displaced part. So a rule on the repo of
+  `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line.
   A redirection on a compound around a sudo command (`{ sudo echo hi; } > /tmp/f`) or on another
   command of the line (`sudo echo hi | cat > /tmp/f`) is not on the sudo command. There the
   dominant part decides, as on any line (D-075). A standing grant and the approvers follow the
   line's category and target, so a grant for `echo hi > /tmp/f` now covers `sudo echo hi > /tmp/f`.
+  Where the displaced part names a target of its own, such as a gh read's repo or an ssh host, the
+  approval is bound to the exact command, and only those who may answer both categories may
+  answer it. So a grant or a seat for the written path does not answer a rule on that repo or
+  host.
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and

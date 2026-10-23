@@ -269,6 +269,36 @@ def test_a_grant_on_a_sudo_write_is_keyed_on_the_written_path(tmp_path):
     assert call(ctx, "terminal", {"command": "sudo echo hi > /tmp/g"})["action"] == "approve"
 
 
+def test_a_grant_on_the_written_path_does_not_answer_a_rule_on_the_host_or_repo(tmp_path):
+    # #454: a sudo write line is also decided with the sudo command's own part leading, so a rule on the repo or host
+    # that part names asks. A grant keyed on the written path does not answer that ask, and a seat that may answer
+    # only local_write may not either. An "always" there covers the exact line only. With no repo or host, the
+    # approvers follow the line's category.
+    store = tmp_path / "st454b"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(
+        "categories: {local_write: ask}\nrules: [{match: {target: prod}, decision: ask, reason: host},"
+        " {match: {target: 'o/r*'}, decision: ask, reason: repo}]\n")
+    (store / "policies" / "approvals.yaml").write_text("approvers: {local_write: ['seat:helper']}\n")
+    key = tmp_path / "k454b.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    for path in ("/srv/out", "/tmp/f"):
+        r = call(ctx, "terminal", {"command": f"echo hi > {path}"})
+        assert r["action"] == "approve" and r["approvers"] == ["principal", "seat:helper"], r
+        answer(ctx, r, "always")
+    for line in ("ssh prod 'sudo echo hi > /srv/out'", "sudo gh pr view 1 -R o/r > /tmp/f"):
+        r = call(ctx, "terminal", {"command": line})
+        assert r["action"] == "approve" and r["approvers"] == ["principal"], (line, r)
+        answer(ctx, r, "always")
+        assert call(ctx, "terminal", {"command": line}) is None, line
+    assert call(ctx, "terminal", {"command": "sudo gh pr view 2 -R o/r > /tmp/f"})["action"] == "approve"
+    assert call(ctx, "terminal", {"command": "echo hi > /srv/out"}) is None
+    assert call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f"}) is None
+    r = call(ctx, "terminal", {"command": "sudo echo hi > /tmp/g"})
+    assert r["action"] == "approve" and r["approvers"] == ["principal", "seat:helper"], r
+
+
 def test_a_grant_never_covers_a_reserved_part_of_the_line(tmp_path):
     # D-075: the push grant covers the push. A reserved merge on the same line keeps the principal's ask.
     store = tmp_path / "st3"

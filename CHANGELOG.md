@@ -217,17 +217,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
-- Gate (#454, D-038 amendment): a write redirection on a `sudo` or `doas` command sets the line's category, as on
-  any other command. `sudo echo hi > /tmp/f` was a `read`: sudo made the command's own `read` costly, so it outranked
-  the write, and `categories: {local_write: ask}` allowed the line while `echo hi > /tmp/f` asked. Bash opens the
-  file as the calling user before sudo runs, so the write happens either way. Where that `read` would lead the line,
-  the first sudo write now leads in its place, with its cost. The line is a costly `local_write` with the written
-  path as target, so an ask or log line, a rule or an escalation on `local_write` or on that path reaches it. Its
-  summary names the program and the path. The line is also decided with the displaced `read` leading, as before,
-  and the stricter outcome stands, so `{read: ask}` and a rule on a gh read's repo or on an `ssh` host still reach
-  it. A part that outranks the `read`, such as an unknown program, still leads, and a store path stays
-  `store_write`. This also ends the #436 lowering of `for x do sudo echo hi > /tmp/f; done`. A standing grant and
-  the approvers follow the new category and target.
+- Gate (#454, D-038 amendment): a write redirection on a `sudo` or `doas` command sets the line's category, as on any
+  other command. `sudo echo hi > /tmp/f` was a `read`: sudo made the command's own `read` costly, so it outranked the
+  write, and `categories: {local_write: ask}` allowed the line while `echo hi > /tmp/f` asked. Bash opens the file as
+  the calling user before sudo runs, so the write happens either way. Where that `read` would lead the line, the first
+  sudo write now leads in its place, with its cost. The line is a costly `local_write` with the written path as
+  target, so an ask or log line, a rule or an escalation on `local_write` or on that path reaches it. Its summary
+  names the program and the path. The line is also decided with the displaced `read` leading, as before, and the
+  stricter outcome stands, so `{read: ask}` and a rule on a gh read's repo or on an `ssh` host still reach it. A part
+  that outranks the `read`, such as an unknown program or ssh running its stdin, still leads, also beside a sudo write
+  in a `$( )` or an ssh hop (`echo $(sudo echo hi > /tmp/f) $(foo)` asks), and a store path stays `store_write`. This
+  also ends the #436 lowering of `for x do sudo echo hi > /tmp/f; done`. A standing grant and the approvers follow the
+  new category and target. Where the displaced part names a repo or a host, the approval is bound to the exact
+  command, and only those who may answer both categories may answer it, so a grant on the written path does not answer
+  a rule on that repo or host.
 - Gate store protection (#465, D-038 amendment): after `cd` into the store or a descriptor folder, a `$( )`,
   backticks or `<( )` of a later command is classified in that folder, as the same command unwrapped is. Each
   substitution was classified as a fresh line, so `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the
