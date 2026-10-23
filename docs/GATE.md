@@ -434,8 +434,8 @@ it, where a store write is the principal's alone:
 line, `env; echo x > ~/.exo/policies/gates.yaml` included.
 
 Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
-and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. A path through `/proc/self`
-is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
+and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. On Linux, where `/proc/self`
+is a link, a path through it is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
 either form: `cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` stay reads.
 
 Tests: `tests/security/test_gate_proc_task_environ.py`.

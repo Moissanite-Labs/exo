@@ -360,5 +360,6 @@ def test_threads_capturing_at_once_write_each_key_once(engine, learner):
     finally:
         rt.lock = real
     assert errors == [] and not any(t.is_alive() for t in workers)
+    assert len(arrived) == threads  # every thread was held at the lock
     keys = [(e["body"] or {}).get("capture_key") for e in rt.ledger.iter(kind=CAPTURED)]
     assert len(keys) == 2 and len(set(keys)) == 2

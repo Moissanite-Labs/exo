@@ -129,7 +129,8 @@ def handler(name: str):
 
 
 # A handler whose second argument has a default runs with or without a store, so its signature cannot say which it
-# gets. These pin the choice: `exo ingest` falls back to the store's ledger, and the others do not use one.
+# gets. These pin the choice: `exo ingest` falls back to the store's ledger. `upstream`, `serve` and `chat` do not
+# use one, and `decide`'s second argument is a model router, so it must never be handed the store.
 OPTIONAL_STORE = {'ingest': True, 'upstream': False, 'serve': False, 'chat': False, 'decide': False}
 
 
