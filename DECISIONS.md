@@ -939,10 +939,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   while the posts with copies and their copies list no more than 200. A line past that can list fewer than main
   does, and still asks. A first version had one room for both, so ten posts with copies of twenty names each pushed
   a plain post's violation out (found by an independent review of this round). When decide merges the line's
-  readings, it lists one `and N more on other posts`, last: the most any reading left out that the merged list does
-  not hold, so the merged list holds as many as any reading. The bound is on the count. 200 entries with long
+  readings, it lists one `and N more on other posts`, last, which counts what the readings left out (round 13). The
+  bound is on the count. 200 entries with long
   targets can still pass 1 MiB where main's twenty do not, and main bounds no row either: #485. The docstring of
   `classify` ends on its old last line again, which main's gate_diff tests patch after.
+  2026-10-23, round 13 of the review: that count could fall short or drop out. A copy's finding is in the merged
+  list twice, under the copy's name and as the post's own on the copy's target, and the old count took each such
+  twin for an entry a reading left out. So `gh pr comment 5 -R https://ghe.example.com/myorg/repo -b '<5 names> F'`
+  before 25 plain posts listed 30 entries and no count, where main lists 20 and `and 10 more`, and 5 posts were
+  neither listed nor counted. Each decision now keeps the entries it left out (`Decision.hidden`, out of the ledger
+  view). The merge counts each one the merged list does not hold, as often as one reading holds it. The merged list
+  and its count then hold what the merge lists with no room at all, so that line lists 30 and `and 5 more`.
   Limits: `docs/GATE.md` "Where a gh command lands".
 
 - **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.

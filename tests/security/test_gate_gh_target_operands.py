@@ -8,6 +8,7 @@ number the same way. Now operands are read with gh's own table of options that t
 reading the gate cannot rule out is decided too, the strictest standing, so no line decides lower than before.
 Classification and decision only; nothing is executed.
 """
+from collections import Counter
 from dataclasses import replace
 
 import pytest
@@ -913,6 +914,56 @@ def test_past_the_room_of_posts_with_copies_a_line_can_hide_what_main_lists():
     assert d.outcome == "ask" and not any("ZZOTHER" in v for v in d.violations), d.violations[-2:]
     assert len(d.violations) == 1 + gate._LISTED_WITH_COPIES and d.violations[-1] == "and 1 more on other posts", \
         (len(d.violations), d.violations[-1])
+
+
+# Round 13 (review of 966eb619): the merge of a line's readings counts each entry one of them left out that the merged
+# list does not hold. A copy's finding is in the merged list twice, under the copy's name and as the post's own on the
+# copy's target, and the twins no longer cancel the count. So the merged list and its count hold what the merge would
+# list with no room at all, and more than main holds (main: 20 listed and `and 10 more`, and 20 and `and 40 more`).
+N5 = [f"N{i}X" for i in range(5)]
+N20 = [f"N{i:02d}X" for i in range(20)]
+COUNTED = [
+    ("gh pr comment 5 -R https://ghe.example.com/myorg/repo -b '" + " ".join(N5) + " F'"
+     + "".join(f" && gh pr comment {n} -R pub/p{n} -b x" for n in range(1, 26)),
+     {"gates": {"scopes": {"internal": ["myorg/*"]}}, "posting": {"footer": "F", "scrub": {"names": N5}}}, 30, 5),
+    ("gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app -b '" + " ".join(N20) + " F'"
+     + "".join(f" && gh pr comment {n} -R myorg/p{n} -b x" for n in range(1, 41)),
+     {"gates": {"scopes": {"internal": ["pub/*"]}}, "posting": {"footer": "F", "scrub": {"names": N20}}}, 60, 20),
+]
+
+
+@pytest.mark.parametrize("line, pol, main, left", COUNTED)
+def test_the_merged_count_holds_what_each_reading_left_out(line, pol, main, left, monkeypatch):
+    v = run(line, normalize_policies(pol))[1].violations
+    assert v[-1] == f"and {left} more on other posts", v[-1]
+    assert len(v) - 1 + left > main, len(v)
+    monkeypatch.setattr(gate, "_LISTED_VIOLATIONS", 10 ** 6)
+    monkeypatch.setattr(gate, "_LISTED_WITH_COPIES", 10 ** 6)
+    full = run(line, normalize_policies(pol))[1].violations
+    assert len(v) - 1 + left == len(full) and not Counter(v[:-1]) - Counter(full), (len(v), len(full))
+
+
+def test_a_merge_of_merged_readings_keeps_what_they_left_out():
+    # decide merges a line's other targets, then its floor (#399), so what one merge left out goes into the next.
+    a = gate.Decision("ask", "a", violations=["p1", "and 2 more on other posts"], exposure="public", hidden=["p2", "p3"])
+    b = gate.Decision("ask", "b", violations=["p2", "and 1 more on other posts"], exposure="public", hidden=["p3"])
+    inner = gate._strictest([a, b], ["", ""])
+    assert inner.violations == ["p1", "p2", "and 1 more on other posts"] and inner.hidden == ["p3"], inner
+    outer = gate._strictest([inner, gate.Decision("ask", "c", violations=["p1"], exposure="public")], ["", ""])
+    assert outer.violations == ["p1", "p2", "and 1 more on other posts"], outer.violations
+    assert "hidden" not in outer.as_dict(), outer.as_dict()
+
+
+def test_within_the_room_a_line_lists_what_main_lists_of_a_copied_post():
+    # Five copied posts of twenty names fill 100 of the 200: the last copied post's one violation, the only one main
+    # lists here, is listed, under the repo gh reads (main names it after the URL), and nothing is only counted.
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}},
+                              "posting": {"footer": "F", "scrub": {"names": N20 + ["ZZOTHER"]}}})
+    copied = " && ".join(f"gh pr comment https://api.github.com/pub/repo/pull/{n} -R myorg/app -b '{' '.join(N20)} F'"
+                         for n in range(10, 15))
+    v = run(f"{copied} && gh pr comment 99 -R https://ghe.example.com/pub/r99 -b 'ZZOTHER F'", pol)[1].violations
+    assert "GitHub PR comment on pub/r99#99: internal name: ZZOTHER" in v, v[-3:]
+    assert not v[-1].startswith("and "), v[-1]
 
 
 def test_a_line_where_every_post_has_copies_lists_at_most_the_bound():
