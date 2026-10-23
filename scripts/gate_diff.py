@@ -16,12 +16,16 @@ A pair (action, policy) is lowered when the head's outcome ranks below the base'
 the head keeps the outcome but has fewer reserved hits than the base (or loses a reserved category), or when any of
 the base's posting violations is missing from the head's (compared by text, so one the head words otherwise counts
 too). A violation either tree names after a part of the line (`<post>: v`, as a line of several posts lists them) is
-compared by its text v, so one the head names after its post, or after the post's new name, is kept. Such pairs are
-counted apart as reworded, not lowered. At an equal deny, lost reserved hits and violations are not counted: the
-hook blocks the call, and both only matter for an ask (a reserved hit keeps a standing grant from covering it, a
-violation is named in its message). A classify or decide exception counts as the outcome the hook gives on an error:
-ask, or allow for a read tool whose arguments name no secret. Tightenings are counted only. Actions whose category
-or target changed while every decision stayed the same are counted with a few examples.
+compared by its text v, as often as each tree lists it, so one the head names after its post, or after the post's
+new name, is kept. Such pairs are counted apart as reworded, not lowered, and not as another detail changed. Past
+the cap on the violations decide lists, `and N more on other posts` counts N in each tree's total, and a head whose
+total is lower has lost one too. The texts behind that line are compared by count only, so a head that lists more
+and hides another text there in place of one main hid shows nothing. At an equal deny, lost reserved hits and
+violations are not counted: the hook blocks the call, and both only matter for an ask (a reserved hit keeps a
+standing grant from covering it, a violation is named in its message). A classify or
+decide exception counts as the outcome the hook gives on an error: ask, or allow for a read tool whose arguments
+name no secret. Tightenings are counted only. Actions whose category or target changed while every decision stayed
+the same are counted with a few examples.
 
 An action is {"tool", "args"}, with an optional "cwd": the session folder the hook passes to classify (#209). Each
 action runs as written. A plain command line is the terminal call {"tool": "terminal", "args": {"command": line}}.
@@ -39,12 +43,13 @@ in the summary (unread_tables). To that come the generated forms:
 - compound variants (VARIANTS) of each simple line of the harvest, of the --corpus files, of SEED_COMMANDS and of
   the table lines;
 - each line under the other shell tool names and keys the gate reads (shell_forms: every seed under each, every
-  other line under one in turn);
+  other line under one in turn), and each seed under each TOOLS name of either tree that ends in terminal or shell
+  and in a call that holds both keys, with a harmless line under the other;
 - folder rows (cwd_rows): calls that read a secret store only as resolved from the session folder or from the call's
   own cwd (#209), each of which main decides otherwise without the folder;
 - posts (post_texts) that trip each rule of the default scrub and each forbid and scrub entry of the policies run,
-  as gh comments and titles, under each text and title key of the first outbound tool and the first text key
-  of the others;
+  as gh comments and titles, and twice to one PR behind a delete, under each text and title key of the first
+  outbound tool and the first text key of the others;
 - calls of the other tools (tool_actions): each TOOLS key, each name classify compares a tool with and a name for
   each NAME_HINTS word, store and secret paths under each path key, posts and targets under each text, title and
   target key, payment and account calls with amounts around the budget policies' limits, each value a tool's branch
@@ -99,6 +104,7 @@ SHELL_TOOLS = ("terminal", "shell", "bash", "run_command", "exec_command")
 SHELL_SUFFIXES = ("terminal", "shell")
 SHELL_NAMES = SHELL_TOOLS + ("remote_terminal", "remote_shell", "powershell", "mcp__host__terminal")
 SHELL_KEYS = ("command", "cmd")
+BOTH_KEYS_OTHER = "true"      # the harmless line beside a seed in a call that holds both keys
 
 
 def shell_forms(tools: Iterable[str] = SHELL_TOOLS) -> tuple[tuple[str, str], ...]:
@@ -1646,9 +1652,19 @@ def post_texts(tables: Iterable[dict], policies: Iterable[Any] = ()) -> list[str
 
 
 def post_lines(texts: Iterable[str]) -> list[str]:
-    """Each post as a gh comment body and as a gh issue title."""
+    """Each post as a gh comment body and as a gh issue title, and twice to one PR behind a delete, so main names
+    both posts' violations alike and lists each text twice (#460). Then one line of 25 posts behind a delete, past the
+    cap on the violations decide lists, so a head that hides fewer of them shows."""
     q = shlex.quote
-    return [line for s in texts for line in (f"gh pr comment 3 --body {q(s)}", f"gh issue create --title {q(s)} --body x")]
+    texts = list(texts)
+    out: list[str] = []
+    for s in texts:
+        out += [f"gh pr comment 3 --body {q(s)}", f"gh issue create --title {q(s)} --body x",
+                f"rm -rf build; gh pr comment 5 --body {q(s)}; gh pr comment 5 --body {q(s)}"]
+    if texts:
+        many = [f"gh pr comment {n} --body {q(texts[n % len(texts)])}" for n in range(1, 25)]
+        out.append("; ".join(["rm -rf build", *many, many[0]]))
+    return out
 
 
 def tool_actions(tables: Iterable[dict], shell_tools: Iterable[str] = SHELL_TOOLS, policies: Iterable[Any] = ()
@@ -1877,6 +1893,19 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
     for cmd in seed_lines:
         for tool, key in forms:
             put({"tool": tool, "args": {key: cmd}}, "shell_forms")
+    # A name that ends in terminal or shell is a shell tool unless TOOLS lists it, so a head that adds one to TOOLS
+    # must show: the seeds run under each such name either tree's TOOLS holds. A call may hold both keys, and the
+    # gate reads "command" first, and "cmd" when "command" is empty: a seed under one key and a harmless line or an
+    # empty one under the other shows a head that does not.
+    for cmd in seeds:
+        for tool in sorted(n for n in known if n.endswith(SHELL_SUFFIXES) and n not in shell_tools):
+            put({"tool": tool, "args": {"command": cmd}}, "shell_forms")
+        for tool in dict.fromkeys(t for t, _ in forms if t not in shell_tools):    # a name read by its suffix
+            put({"tool": tool, "args": {"command": "", "cmd": cmd}}, "shell_forms")
+        for tool in shell_tools:
+            put({"tool": tool, "args": {"command": cmd, "cmd": BOTH_KEYS_OTHER}}, "shell_forms")
+            put({"tool": tool, "args": {"command": BOTH_KEYS_OTHER, "cmd": cmd}}, "shell_forms")
+            put({"tool": tool, "args": {"command": "", "cmd": cmd}}, "shell_forms")
     for cmd in dict.fromkeys(wrapped + alone + posts):
         tool, key = shell_form(cmd, forms)
         put({"tool": tool, "args": {key: cmd}}, "shell_forms")
@@ -1964,7 +1993,7 @@ def _row(i: int) -> list:
         try:
             d = gate.decide(c, pol, ctx)
             key = (str(d.outcome), str(d.rule), str(d.reason)[:300],
-                   tuple(sorted({(str(x[0]), str(x[1])) for x in d.reserved})), tuple(sorted(set(map(str, d.violations)))))
+                   tuple(sorted({(str(x[0]), str(x[1])) for x in d.reserved})), tuple(sorted(map(str, d.violations))))
         except Exception as exc:
             nerr += 1
             key = (_on_error(tool, args), "error", f"decide raised {type(exc).__name__}: {exc}"[:300], (), ())
@@ -2135,6 +2164,17 @@ def show_action(a: dict, width: int = 160) -> str:
     return text if len(text) <= width else text[:width - 3] + "..."
 
 
+# The line decide adds when it lists only so many of other posts' violations (#406). It names no text, so it is not
+# compared as one, but its N counts in each tree's total: a head that lists the same texts and hides fewer has lost
+# one past the cap, and a head that lists more and hides none has lost none.
+_MORE_LINE = re.compile(r"and (\d+) more on other posts")
+
+
+def _total(violations: Iterable[str]) -> int:
+    """How many violations a decision holds: one per text it lists, and N per `and N more on other posts`."""
+    return sum(int(m.group(1)) if (m := _MORE_LINE.fullmatch(v)) else 1 for v in violations)
+
+
 def _bare(v: str, names: Iterable[str]) -> str:
     """A violation's text without the part name a line of several posts puts before it (`<name>: v`)."""
     return next((v[len(n) + 2:] for n in names if v.startswith(n + ": ")), v)
@@ -2147,13 +2187,15 @@ def _lost(db: list, dh: list, nb: Iterable[str] = (), nh: Iterable[str] = ()) ->
     a violation after its part (`<post>: v`, as a line of several posts lists them; ``nb`` and ``nh`` are the names
     each tree's parts go by). When the head holds each base text v as often as the base does, under whatever name,
     nothing is lost: "reworded" says so, and the caller does not count it as lowered. One post's violation that
-    moves onto another post that already had it is still lost."""
+    moves onto another post that already had it is still lost, and so is one fewer past the listing cap."""
     kinds = []
     rb, rh = {tuple(x) for x in db[3]}, {tuple(x) for x in dh[3]}
     if rb and (len(rh) < len(rb) or not {c for c, _ in rb} <= {c for c, _ in rh}):
         kinds.append("reserved")
-    if set(db[4]) - set(dh[4]):
-        kept = not Counter(_bare(v, nb) for v in db[4]) - Counter(_bare(h, nh) for h in dh[4])
+    vb, vh = ([v for v in d[4] if not _MORE_LINE.fullmatch(v)] for d in (db, dh))
+    fewer = _total(dh[4]) < _total(db[4])
+    if Counter(vb) - Counter(vh) or fewer:
+        kept = not fewer and not Counter(_bare(v, nb) for v in vb) - Counter(_bare(h, nh) for h in vh)
         kinds.append("reworded" if kept else "violations")
     return kinds
 
@@ -2180,6 +2222,7 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
     cls_examples: list = []
     lowered: list = []
     lowered_actions: list = []
+    reworded: list = []
     footers = {}
     for i, (rb, rh) in enumerate(zip(rb_iter, rh_iter)):
         if isinstance(rb, dict) or isinstance(rh, dict):
@@ -2213,9 +2256,14 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
                 continue
             rkb, rkh = RANK.get(db[0], RANK["ask"]), RANK.get(dh[0], RANK["ask"])
             kinds = ["outcome"] if rkh < rkb else (_lost(db, dh, nb, nh) if rkh == rkb and db[0] != "deny" else [])
-            if "reworded" in kinds:
+            was_reworded = "reworded" in kinds
+            if was_reworded:
                 counts["violations_reworded"] += 1
                 kinds.remove("reworded")
+                if len(reworded) < json_limit:
+                    reworded.append({"action": actions[i], "policy": name, "kinds": kinds,
+                                     "base": {"category": cb, "violations": db[4]},
+                                     "head": {"category": ch, "violations": dh[4]}})
             if kinds:
                 low_here += 1
                 counts["lowered_pairs"] += 1
@@ -2246,7 +2294,7 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
                 tight_here += 1
                 counts["tightened_pairs"] += 1
                 tightened_by[f"{lb} {db[0]} -> {lh} {dh[0]}"] += 1
-            else:
+            elif not was_reworded:        # a reworded pair is counted once, above
                 counts["pairs_detail_changed"] += 1
         counts["lowered_actions"] += low_here > 0
         counts["tightened_actions"] += tight_here > 0
@@ -2261,8 +2309,9 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
             "lowered_by_policy": dict(by_policy.most_common()), "lowered_by_transition": dict(by_transition.most_common()),
             "tightened_by_transition": dict(tightened_by.most_common()), "examples_by_policy": ex_policy,
             "examples_by_transition": ex_transition, "classification_only_examples": cls_examples,
-            "lowered_actions": lowered_actions, "lowered": lowered,
-            "lowered_truncated": counts["lowered_pairs"] > len(lowered) or counts["lowered_actions"] > len(lowered_actions)}
+            "lowered_actions": lowered_actions, "lowered": lowered, "reworded": reworded,
+            "lowered_truncated": counts["lowered_pairs"] > len(lowered) or counts["lowered_actions"] > len(lowered_actions),
+            "reworded_truncated": counts["violations_reworded"] > len(reworded)}
 
 
 def _decision(d: dict) -> str:
@@ -2270,7 +2319,7 @@ def _decision(d: dict) -> str:
     if d["reserved"]:
         extra += f", reserved {len(d['reserved'])}"
     if d["violations"]:
-        extra += f", violations {len(d['violations'])}"
+        extra += f", violations {_total(d['violations'])}"     # with what `and N more on other posts` counts
     return f"{d['category'] or 'error'} {d['outcome']} ({d['rule']}{extra})"
 
 
@@ -2313,6 +2362,17 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
         out.append("Tightened, top transitions (counts only):")
         for tag, n in list(rep["tightened_by_transition"].items())[:groups]:
             out.append(f"  {n:7d}  {tag}")
+    if rep.get("reworded"):
+        out.append("Reworded, examples (the texts each tree lists that the other does not):")
+        seen: dict[str, dict] = {}            # one example per action, as for the lowered ones
+        for e in rep["reworded"]:
+            if len(seen) < max_examples:
+                seen.setdefault(json.dumps(e["action"], sort_keys=True), e)
+        for e in seen.values():
+            lost, gained = Counter(e["base"]["violations"]), Counter(e["head"]["violations"])
+            out.append(f"           [{e['policy']}] {show_action(e['action'], 120)}")
+            out += [f"             base: {v}" for v in (lost - gained).elements()]
+            out += [f"             head: {v}" for v in (gained - lost).elements()]
     if rep["classification_only_examples"]:
         out.append("Classification only, examples:")
         for e in rep["classification_only_examples"][:max_examples]:
@@ -2320,6 +2380,8 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
     if rep.get("lowered_truncated"):
         out.append(f"  (--json keeps the first {len(rep['lowered_actions'])} lowered actions and "
                    f"{len(rep['lowered'])} lowered pairs, in corpus order with the --corpus items first)")
+    if rep.get("reworded_truncated"):
+        out.append(f"  (--json keeps the first {len(rep['reworded'])} reworded pairs, in corpus order)")
     for side, tabs in (rep.get("unread_tables") or {}).items():
         out.append(f"Tables the {side} holds in a form the script does not read (their entries got no lines):")
         out += [f"  {k}: {why}" for k, why in tabs.items()]
