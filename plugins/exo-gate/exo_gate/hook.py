@@ -492,7 +492,8 @@ class Gate:
                 secret = True
             try:        # the call read as a store write or secret, when only the decision failed (a bad policy regex)
                 action = {"tool": tool_name, "args": args}
-                store = (gate.classify(action, cwd=cwd) if cwd else gate.classify(action)).category in gate.NO_GRANT
+                c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
+                store = gate.no_grant(c)    # a part counts too: a store read from a shell call's own folder (#311)
             except Exception:
                 pass
             if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not (secret or store):
