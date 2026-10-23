@@ -418,6 +418,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   arguments), follows argparse's abbreviated long flags, and the client posts one warning naming the
   flags it dropped and where the core's mode stands. Warning only: the flags are still dropped, which
   stays the safe default.
+- Plugin tool/slot adaptation and hook-verdict translation now share the plugin lifecycle bridge, with
+  explicit runtime collaborators and compatibility shims. Approval behavior is unchanged (D-082, #498).
 - A command that reaches the engine after `close()` has begun fails with `closed`. Before, a `peers` command
   handled while close killed background jobs started the peer service again, and close returned with it
   running (D-088, `docs/HARNESS.md`).

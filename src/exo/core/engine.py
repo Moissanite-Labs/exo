@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import inspect
 import os
 import threading
 import time
@@ -38,17 +37,17 @@ from exo.model_spend import resolve_spend_policy
 from exo.core import jobs as jobs_mod
 from exo.core.peer_target import EngineTarget
 from exo.core.ingress import STANDING_LINE, PeerConfig
-from exo.core.plugins import PluginManager, call_plugin, safe_plugin_call
+from exo.core.plugins import PluginManager, call_plugin as call_plugin, safe_plugin_call as safe_plugin_call
 from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.principal import CHANNEL, current_caller, ingress_author, is_principal, require_principal
 from exo.core.approvals import ApprovalDesk
 from exo.core.seats import Seat, list_seats
 from exo.core.sessions import SessionLocked, SessionStore
-from exo.core.slots import NotConfigured
+from exo.core.slots import NotConfigured as NotConfigured
 from exo.core.skills import SkillIndex, register_skill_tool
 from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
-from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
+from exo.core.tools.registry import Block as Block, Registry, ToolContext, default_registry
 from exo.core.tools.executor import (
     ExecutionBroker, ExecutorConfigurationError, load_executor, validate_executor,
 )
@@ -388,103 +387,28 @@ class CoreRuntime:
     # ------------------------------------------------------------ tools and plugins
 
     def _bridge_plugins(self) -> None:
-        pm = self.plugins
-        for name, entry in sorted(pm.tools.items()):
-            self.registry.register(entry.spec, self._plugin_handler(entry.handler), entry.available, replace=True)
-        for slot in (pm.slots.memory, pm.slots.context):
-            if slot is None:
-                continue
-            if slot is pm.slots.memory:  # agent_log: the one log, so the provider keeps no second one (D-028), lazy start too
-                fn = getattr(slot, "initialize", None)
-                if fn is not None:
-                    try:
-                        call_plugin(fn, "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
-                              agent_log=self.log_view)
-                    except NotConfigured as exc:
-                        self.memory_off = str(exc)
-                    except Exception as exc:
-                        # Loud at session start, not on the first exo_note: record why memory is down.
-                        trace.report("memory.initialize", exc, None)
-                        self.memory_init_error = str(exc) or type(exc).__name__
-            for schema in safe_plugin_call(slot, "get_tool_schemas") or []:
-                spec = ToolSpec(name=schema["name"], description=schema.get("description", ""),
-                                parameters=schema.get("parameters") or {"type": "object", "properties": {}},
-                                toolset="memory" if slot is pm.slots.memory else "context")
-                handler = (lambda o, n, mem: lambda args, ctx: o.handle_tool_call(
-                    n, args, session_id=ctx.session, **(self._memory_kw(ctx.session) if mem else {})))(
-                    slot, spec.name, slot is pm.slots.memory)
-                self.registry.register(spec, handler, replace=True)
+        self._plugin_tools = self.plugins.bind_tools(self.registry, home=self.home, agent_log=self.log_view,
+            private=self.store.private, approvals=self.approvals, required=lambda: self.executor_required)
+        self.memory_off, self.memory_init_error = self._plugin_tools.memory_off, self._plugin_tools.memory_init_error
         self.registry.add_hook("pre_tool_call", self._pre_hook)
         self.registry.add_hook("post_tool_call", self._post_hook)
 
     def _memory_kw(self, session: str | None) -> dict[str, Any]:
-        """A memory tool call's keywords; ``agent_context="private"`` in or under a private thread: write nothing
-        (D-028)."""
-        kw = {"exo_home": str(self.home), "agent_log": self.log_view}
-        return {**kw, "agent_context": "private"} if self.store.private(session) else kw
+        return self._plugin_tools.memory_kw(session)
 
     @staticmethod
     def _plugin_handler(fn: Any) -> Any:
-        def run(args: dict[str, Any], ctx: ToolContext) -> Any:
-            kw = {"session_id": ctx.session or "", "task_id": ctx.session or "", "tool_call_id": ctx.call_id}
-            return fn(args, **kw)
-        async def run_async(args: dict[str, Any], ctx: ToolContext) -> Any:
-            return await run(args, ctx)
-        return run_async if inspect.iscoroutinefunction(fn) else run
+        from exo.plugin_lifecycle import plugin_handler
+        return plugin_handler(fn)
 
     def _hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
-        return {"tool_name": call.name, "args": call.arguments, "session_id": ctx.session or "",
-                "task_id": ctx.session or "", "tool_call_id": call.id, "turn_id": ctx.meta.get("turn_id", ""),
-                "author": ctx.meta.get("author", ""),   # who started the turn (D-040): the gate lowers only for
-                                                        # the principal's turn (#598)
-                "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low",
-                "cwd": str(ctx.cwd or "")}   # the folder relative paths resolve from (the gate reads them there, #209)
+        return self._plugin_tools.hook_kw(call, ctx)
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
-        bound_mode = self.registry.executor_required
-        if not self.executor_required and not self.plugins.hooks.has("pre_tool_call"):  # required: create() checks
-            return Block("No tool approval gate is available. Reinstall Exo's plugins or enable exo-gate "
-                         "in core_plugins (and the seat's plugins list), then restart Exo.")
-        # A configured broker binds arguments without relaxing optional policy hooks.
-        required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
-        for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
-                                                     _isolate_arguments=bound_mode,
-                                                     **self._hook_kw(call, ctx)):
-            if not isinstance(verdict, dict):
-                continue
-            if verdict.get("action") == "block":
-                return Block(str(verdict.get("message") or "blocked by a plugin"))
-            if verdict.get("action") == "approve":
-                key = "plugin_rule:" + str(verdict.get("rule_key") or call.name)
-                once = bool(verdict.get("once"))  # e.g. credentials: asked every time, never a standing allow
-                if key in self.approvals.always and not once:
-                    continue
-                who: list[str] = []
-                decision = await self.approvals.ask(  # D-033: who may answer, and the exact text it binds to
-                    ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
-                    options=["allow", "deny"] if once else None, approvers=[str(a) for a in verdict.get("approvers") or []],
-                    binding=str(verdict.get("binding") or ""))
-                choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
-                correlation = {"approval_key": verdict["approval_key"]} if verdict.get("approval_key") else {}
-                # Never dispatch a broker-bound call after its gate approval callback failed.
-                await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
-                                               _fail_closed_plugins=frozenset({"exo-gate"}) if bound_mode else frozenset(),
-                                               decided_by=who[0] if who else "unknown", session_id=ctx.session or "",
-                                               **correlation)
-                if decision == "allow_always" and not once:
-                    if not verdict.get("persist"):  # a plugin that sets persist keeps its own scoped grants (D-033)
-                        self.approvals.always.add(key)
-                elif decision != "allow":
-                    return Block("the user denied this call")
-        return None
+        return await self._plugin_tools.pre_hook(call, spec, ctx)
 
     async def _post_hook(self, call: ToolCall, result: ToolResult, ctx: ToolContext) -> Any:
-        kw = {**self._hook_kw(call, ctx), "result": result.text()}
-        await self.plugins.hooks.afire("post_tool_call", **kw)
-        for text in await self.plugins.hooks.afire("transform_tool_result", **kw):
-            if isinstance(text, str):
-                return ToolResult.of_text(call.id, text, result.is_error)
-        return None
+        return await self._plugin_tools.post_hook(call, result, ctx)
 
     async def run_tool(self, call: ToolCall, lctx: dict[str, Any]) -> ToolResult:
         """The loop's tool runner: a fresh ToolContext per call."""

@@ -24,7 +24,7 @@ from exo.core import trace
 from exo.core.hooks import HookRegistry, accepted
 from exo.core.slots import Slots
 from exo.core.types import Risk, ToolSpec
-from exo.plugin_lifecycle import Resources, dependency_error
+from exo.plugin_lifecycle import PluginToolBridge, Resources, dependency_error
 
 logger = logging.getLogger(__name__)
 
@@ -411,6 +411,13 @@ class PluginManager:
         """Load selected plugins in dependency order; excluded dependencies stay disabled."""
         from exo.plugin_lifecycle import load_all
         return load_all(self, dirs, enabled, disabled, entry_points)
+
+    def bind_tools(self, registry: Any, *, home: Path, agent_log: Any,
+                   private: Callable[[str | None], bool], approvals: Any,
+                   required: Callable[[], bool]) -> PluginToolBridge:
+        """Bind runtime tool/slot adapters without depending on an application engine."""
+        return PluginToolBridge(self, registry, home=home, agent_log=agent_log,
+                                private=private, approvals=approvals, required=required)
 
     def close(self) -> None:
         """Final shutdown: release plugin resources once, in reverse registration order."""

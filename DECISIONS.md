@@ -6360,3 +6360,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     steer sent after close began is refused, `run_turn` refuses before its turn hooks fire, the owner check
     runs again on the opened file, and a file below a secret-store folder is skipped. The fifth, the closing
     check before the peer start, is gone, because `start()` now refuses first.
+
+- **Plugin binding follow-up (2026-10-23, #498):** `exo.plugin_lifecycle.PluginToolBridge` now owns the
+  Hermes-compatible tool/slot adapters and lifecycle-verdict translation previously inside `CoreRuntime`.
+  `PluginManager.bind_tools` takes explicit collaborators, including the existing approval desk and a
+  live required-mode callback. Core helper shims preserve compatibility. This is a behavior-preserving
+  extraction: no approval policy, binding, private-thread rule or protocol contract changed.
+  Broader private-state query cleanup remains open.
+  User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.

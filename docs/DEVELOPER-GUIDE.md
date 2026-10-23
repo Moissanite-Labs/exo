@@ -101,6 +101,14 @@ and reject direct execution attempts. Test seat overrides and alternate executor
 Profiles are runtime selection, not an OS sandbox or separate installation distributions.
 See [HARNESS.md](HARNESS.md) and the sourced [landscape/roadmap](HARNESS-LANDSCAPE.md).
 
+**Plugin runtime binding (D-082).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
+private=..., approvals=..., required=...)` binds the existing tool and slot interfaces through
+`exo.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback;
+metadata is resolved for each call. The bridge translates existing plugin approval verdicts through
+`ApprovalDesk`, preserving bindings, approvers and standing-grant behavior. It does not change the
+execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
+construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
+
 **The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
 commands. Its collaborators have small interfaces:
 
