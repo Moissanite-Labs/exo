@@ -1589,7 +1589,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   so `sudo echo hi > /tmp/f; foo` and `while true; do sudo echo hi > /tmp/f; break; done` would be allowed where
   they asked. A rule on a reversible write would also miss it. Also rejected: ranking the reversible write above the
   costly `read`, which moves the line to the reversible cell of the matrix.
-  *Lowered lines.* The gate differential (#423) lowers 124 pairs on 117 actions of its built-in corpus (57,542
+  *Lowered lines.* The gate differential (#423) lowers 124 pairs on 117 actions of its built-in corpus (57,851
   actions x 87 policies). It also ran 1,564 lines built for this change: sudo and doas with options and behind
   other prefixes, each write redirection, `/dev/null`, store paths, compounds, subshells, `$( )`, `bash -c`, `ssh`,
   `xargs`, heredocs and cd chains. With their generated forms that is 20,816 actions, and it lowers 633 pairs on 570
