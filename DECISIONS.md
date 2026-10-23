@@ -6411,3 +6411,25 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     command once close has begun. A caller that cancelled its own command still gets `CancelledError`.
   - *Count.* The counted core is 16,370 lines (main `080e87ba`: 15,945), which D-083 reports and does not
     assert. Product imports and private-state reads stay at 39 and 8.
+
+## D-084 (2026-10-23) Retained tool-output views with exact bounded expansion
+- **Status:** Implemented for review, stage 1 of #501. Off by default and independent of harness presets.
+- **Decision:** Render deterministic excerpts through a `TurnContext` decorator. Leave the authoritative
+  transcript, emitted results, memory hooks and summary input unchanged. Expand sanitized text in bounded
+  JSON pages through an ordinary registry tool, preserving gate and executor dispatch. Reuse session storage;
+  do not create a second output archive. Check visible source/result identity before issuing references.
+  Classify the new `tool_output` name as `read`; explicit read-deny policies still block expansion.
+- **Scope:** Single text-part, non-error results above the configured threshold. Preserve distinct diagnostic
+  and source-label lines or leave the result whole. Expansion pages and multipart/image results stay whole.
+  Delegated views use the optional `for_child(context, tools=names)` contract and require the expansion tool.
+- **Ownership:** Bind new evidence to the configured principal, agent and session in existing session metadata.
+  Pre-enable history and fork copies remain uncompressed. References identify a message and result index,
+  not only a reusable tool-call ID. Undo and a bounded recent-message window revoke access. Reads reapply
+  known-key redaction and refuse stale fingerprints. These checks do not change the rest of memory's access.
+- **Rejected:** Storing a duplicate transcript, private compressor overrides, transforming persisted results,
+  silently dropping errors, or promising recovery of bytes discarded before logging. Earlier capture is a
+  separate stage with its own disk and retention limits. Summary-model cost and task-quality gains are unproven.
+- **Validation:** Exact pagination including JSON escaping, restart, session/principal/private/fork isolation,
+  undo/expiry, source mutation, reused call IDs, real engine/child dispatch, executor refusal, cancellation,
+  disabled imports/state and bounded synthetic footprint measurements. No provider or network calls.
+- **Docs:** `docs/TOOL-OUTPUT.md`, user/developer guide §1 and `docs/DOCS-MAP.md`. No core line-budget increase.

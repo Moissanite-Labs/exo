@@ -109,6 +109,13 @@ Metadata is resolved for each call. The bridge translates existing plugin approv
 execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
 construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
 
+**Retained tool output (D-084).** `exo.tool_evidence` decorates `TurnContext.build` when
+`tool_output.enabled` is true. It renders copies and expands retained sanitized text through
+the normal registry/executor path. `for_child(context, tools=names)` is an optional context
+method for delegated views. Preserve the allowed toolset and keep the transcript unchanged.
+Use `SessionStore`'s public scoped reads. See [TOOL-OUTPUT.md](TOOL-OUTPUT.md) for ownership,
+limits and tests. This adds no output archive and does not recover previously truncated bytes.
+
 **The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
 commands. Its collaborators have small interfaces:
 

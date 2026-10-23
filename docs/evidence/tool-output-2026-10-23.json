@@ -1,0 +1,143 @@
+{
+  "base_commit": "d539919839b7bc90e208fa2f0595dddc47d31083",
+  "fixtures": [
+    {
+      "fixture": "build_log",
+      "render_cpu_median_ms": 11.771650999999938,
+      "render_max_ms": 40.29816700040101,
+      "render_median_ms": 13.18613550029113,
+      "render_storage_growth_bytes": 0,
+      "saved_percent": 95.55,
+      "session_metadata_bytes": 78,
+      "sha256": "f5fb0bea55b65183a72f87bd5c56ab9a734d0c2dab03e2ecd5f28549f5f590b7",
+      "source_chars": 60048,
+      "view_chars": 2672
+    },
+    {
+      "fixture": "json",
+      "render_cpu_median_ms": 3.468506499999968,
+      "render_max_ms": 35.745809999752964,
+      "render_median_ms": 3.465854000296531,
+      "render_storage_growth_bytes": 0,
+      "saved_percent": 92.61,
+      "session_metadata_bytes": 78,
+      "sha256": "e0cdba80fe4e2472dad32476aff1d756619a0a3e092cd01ef4f9b6a5f7c2bee2",
+      "source_chars": 35790,
+      "view_chars": 2645
+    },
+    {
+      "fixture": "diff",
+      "render_cpu_median_ms": 2.154871499999933,
+      "render_max_ms": 5.025931000091077,
+      "render_median_ms": 2.152712499992049,
+      "render_storage_growth_bytes": 0,
+      "saved_percent": 90.21,
+      "session_metadata_bytes": 78,
+      "sha256": "51ec3ebe434cbe3de85da432a39d9597c43b1d97662d1ea0360fab8a120e7cc3",
+      "source_chars": 27025,
+      "view_chars": 2645
+    },
+    {
+      "fixture": "malformed_text",
+      "render_cpu_median_ms": 1.3926119999998487,
+      "render_max_ms": 4.363789999842993,
+      "render_median_ms": 1.390360499954113,
+      "render_storage_growth_bytes": 0,
+      "saved_percent": 82.37,
+      "session_metadata_bytes": 78,
+      "sha256": "e89fda98ac201dfefe79e20f5dc01d7f28962e0f87b4d4cf4223b9ebbae2a876",
+      "source_chars": 15000,
+      "view_chars": 2645
+    },
+    {
+      "fixture": "distinct_errors",
+      "render_cpu_median_ms": 0.8299960000002216,
+      "render_max_ms": 2.82473100014613,
+      "render_median_ms": 0.8287344999189372,
+      "render_storage_growth_bytes": 0,
+      "saved_percent": 0.0,
+      "session_metadata_bytes": 78,
+      "sha256": "8ed3d309e22bdb55b0e8fc6218a26bc05efb0649167585414a2ad3f3fd0c324f",
+      "source_chars": 31889,
+      "view_chars": 31889
+    }
+  ],
+  "measured_at": "2026-10-23T16:59:50.693879+00:00",
+  "module_sha256": "23292445802ac2faca1f044527995df0470d05a373a9ce8d127545614f43900c",
+  "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+  "python": "3.11.17",
+  "runtime_sha256": "b162120c08c6e2ddad2726ac02eb0020023f47965aafc02ef73897a7712a99e6",
+  "samples": [
+    {
+      "compose_close_ms": 63.21356799981004,
+      "compose_ms": 62.083269999675395,
+      "enabled": false,
+      "feature_imported": false,
+      "registered_tools": 13
+    },
+    {
+      "compose_close_ms": 151.53318899956503,
+      "compose_ms": 148.72126299997035,
+      "enabled": true,
+      "feature_imported": true,
+      "registered_tools": 14
+    },
+    {
+      "compose_close_ms": 81.93987400045444,
+      "compose_ms": 80.35642400045617,
+      "enabled": true,
+      "feature_imported": true,
+      "registered_tools": 14
+    },
+    {
+      "compose_close_ms": 113.30390799957968,
+      "compose_ms": 110.79740399964066,
+      "enabled": false,
+      "feature_imported": false,
+      "registered_tools": 13
+    },
+    {
+      "compose_close_ms": 67.78678800037596,
+      "compose_ms": 60.41435400038608,
+      "enabled": false,
+      "feature_imported": false,
+      "registered_tools": 13
+    },
+    {
+      "compose_close_ms": 58.90316299974074,
+      "compose_ms": 53.08701400008431,
+      "enabled": true,
+      "feature_imported": true,
+      "registered_tools": 14
+    },
+    {
+      "compose_close_ms": 100.62081900014164,
+      "compose_ms": 96.18621700064978,
+      "enabled": true,
+      "feature_imported": true,
+      "registered_tools": 14
+    },
+    {
+      "compose_close_ms": 77.30249799988087,
+      "compose_ms": 75.78716199986957,
+      "enabled": false,
+      "feature_imported": false,
+      "registered_tools": 13
+    },
+    {
+      "compose_close_ms": 95.7090669999161,
+      "compose_ms": 91.54088299965224,
+      "enabled": false,
+      "feature_imported": false,
+      "registered_tools": 13
+    },
+    {
+      "compose_close_ms": 84.5857510003043,
+      "compose_ms": 82.66613799969491,
+      "enabled": true,
+      "feature_imported": true,
+      "registered_tools": 14
+    }
+  ],
+  "scope": "Offline synthetic fixtures; composition without provider calls or service start. No task-quality claim."
+}

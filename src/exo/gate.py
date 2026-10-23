@@ -7393,7 +7393,7 @@ TOOLS: dict[str, str] = {
         "vision_analyze", "video_analyze", "read_terminal", "read_window_below", "x_search", "clarify",
         "show_tip", "gui_tour", "focus_pane", "desktop_preview", "drive_preview", "feishu_doc_read",
         "setup_choose", "browser_vault_list", "todo_list", "list_dir", "grep", "glob",
-        "skill", "memory_zoom", "exo_trace", "ui")},  # Exo's own read-only tools: load a skill, zoom, trace, a panel
+        "skill", "memory_zoom", "tool_output", "exo_trace", "ui")},  # Exo's own read-only views and panels
     **{t: "local_write" for t in ("write_file", "patch", "apply_patch", "memory", "skill_manage", "apply_layout",
                                     "annotate_preview", "desktop_project", "edit_file")},
     **{t: "generate" for t in ("image_generate", "video_generate", "text_to_speech")},

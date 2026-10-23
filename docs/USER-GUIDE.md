@@ -57,6 +57,11 @@ It does not run project setup code or change tool permissions. It skips a file t
 user owns or can write, also when you run Exo as root. See [profiles](HARNESS.md) and
 [workspace instructions](WORKSPACE-INSTRUCTIONS.md) for settings and scope.
 
+To shorten large tool results in the model's context, run
+`exo config set tool_output '{"enabled":true}'` and restart Exo. The model can expand
+the retained original in pages when it needs details. This works in `lean` too.
+It cannot recover output discarded by a tool's existing limits. See [tool output](TOOL-OUTPUT.md).
+
 If Claude Code is installed (the `claude` command is on your PATH) and logged in, you need no key. While the
 main model has no key (by default Anthropic, then OpenRouter) and you have not chosen one, Exo uses your Claude
 Code login as the main model: `claude-cli:sonnet`. The status line shows it. Cost reads `unknown`, because a
