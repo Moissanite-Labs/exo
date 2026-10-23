@@ -6,6 +6,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
+  its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
+  each tree's violation total with what `and N more on other posts` counts.
+- `scripts/gate_diff.py` counts a posting violation as often as each tree lists it, so a gate change that lists once
+  what two posts of one name both meet shows as lower (#460). Each seed also runs under each tool table name that
+  ends in `terminal` or `shell`, and in a call holding both `command` and `cmd`. The report shows a few reworded
+  pairs, and counts each one once. The line `and N more on other posts` names no text, so its N counts in each
+  tree's total instead, and a lower total is lower. A built-in line of 25 posts reaches that listing cap.
 - `unset PATH` is now read as the assignment it amounts to (#329). With PATH unset, bash looks a
   command up in the working folder, so a later `ls` on the line can run a planted `./ls`. The gate
   already asked on the assignment forms (`PATH= ls`). `unset` and `unset -v` of PATH now ask the
@@ -229,6 +237,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (#464), so a deny on `local_write`, `delete` or `target:/dev*` still applies. Not covered: the folders in
   `$EXO_PLUGIN_DIRS`, which developers point at a checkout, and, as for the rest of the store, a relative path written
   by a tool whose working folder is in the plugins folder.
+- Gate store protection (#465, D-038 amendment): after `cd` into the store or a descriptor folder, a `$( )`,
+  backticks or `<( )` of a later command is classified in that folder, as the same command unwrapped is. Each
+  substitution was classified as a fresh line, so `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the
+  `x=$( )`, `cat <( )` and backtick forms, `cd ~/.exo/state && echo "$(cp /tmp/g.json approval-grants.json)"` and
+  `cd /dev && echo $(cp /tmp/evil fd/3)` were allowed with no ask under the default policy, and could rewrite the
+  gate's own policy or grant file, or whatever file a descriptor held. They now ask the principal alone. A
+  command the gate does not read as a read (`sed`, `sort`, `curl`) asks there too, as it does unwrapped. A
+  substitution in the `cd` itself or before it keeps its own folder, by its place in the line and not by its text,
+  and so does an `ssh` remote command. One in a here-doc body counts as after every command on its line, and one in
+  a compound's own redirections runs before the compound. A push, post or delete inside such a substitution keeps
+  the deny it had when it decided the line: an anchored allow rule such as `^git push` no longer lifts a command
+  read from a nested line, and a deny on the matrix cell of an irreversible command held anywhere on a secret line
+  holds, while the line keeps the weight of its own parts.
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
   line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
   secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,
