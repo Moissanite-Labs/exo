@@ -1037,10 +1037,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   store write. Two more checks keep such a command as strict as when it decided the line. A part read from a nested
   line carries that line as its text, so an anchored allow rule (`{command: '^git push', decision: allow}`)
   lifted the push in the #191 pass, though it does not lower the line when the push decides it (#394). A rule
-  keyed on `command` that would lift a part must now match the whole line too. And a credentials line took the
-  weight of an irreversible command from its direct parts only, so a delete held by a store write in a `$( )`
-  (`cd ~/.exo/keys && echo $(rm -f x)`) no longer made it irreversible. It now reads every part. With these, every
-  change makes a line stricter or leaves it alone. gate_diff (#423) ran main c27d8739 against this change over the
+  keyed on `command` that would lift a part must now match the whole line too. And a credentials line takes the
+  weight of an irreversible command from its own parts, so a delete held by a store write in a `$( )`
+  (`cd ~/.exo/keys && echo $(rm -f x)`) no longer made it irreversible. A heavier command deeper in the line is now
+  a credentials part with that weight beside it, which the #191 pass reads, so a deny on its matrix cell holds. The
+  line keeps its own weight, so a policy whose costly cell is stricter than its irreversible one still denies
+  `cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'`, which an earlier commit here made irreversible (#468 review). With
+  these, every change makes a line stricter or leaves it alone, but for one group gate_diff reports. Under
+  `reserved: ['command:\brm\b']`, `cd ~/.exo/policies && declare -a x='($(ssh prod 'rm -rf /'))'` had its reserved
+  hit on `opaque_exec` and now has it on `store_write`. Both ask, the store write only the principal, and a store
+  write takes no standing grant, so the hit changes nothing. gate_diff (#423) ran main c27d8739 against this change over the
   built-in corpus, 12,780 lines of substitutions around a `cd` into 14 folders, 28 lines from the review, the 2,127
   #464 lines, 1,932 lines with a copy of the substitution's text before the `cd`, 3,000 lines with a compound around
   the `cd` and a substitution in its redirections, and the 1,716 `unset` lines of the #404 review, under the 87
