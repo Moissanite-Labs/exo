@@ -323,7 +323,8 @@ What the gate asks about, and why:
   it cannot read asks instead (#208, above).
 - **Code the gate cannot see into asks (D-038).** A script file, `python -c`, `node -e`, a heredoc fed to a shell,
   `make`, `npm run` or `npm test`, `npx`, `xargs`, `find -exec`, a variable or `$( )` in the program's place, a shell
-  function, `source`, or a program the gate does not know: each asks once, for that exact command. Read the whole
+  function, `source`, or a program the gate does not know: each asks once, for that exact command, also beside a
+  push or post that would only log (#471). Read the whole
   command before you allow it: the card names only the most severe part of the line, and approving runs all of it,
   including code the gate could not see into. Plain work still
   runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like. These are

@@ -652,6 +652,31 @@ Any indirection walked past it. It now works the other way round. A small lexer
 (`exo.gate._Lexer`) reads quotes, escapes, `$( )`, backticks, `$VAR`, redirections and heredocs,
 and splits the line into simple commands. Each simple command has one program position (after
 assignments, reserved words such as `if` and `do`, and prefixes such as `sudo`, `env`, `timeout`).
+A word is an assignment when its `NAME=` is unquoted in the source, as in bash: only the value may
+be quoted, so `X='a b' cmd`, `X="$Y" cmd`, `X=a\ b cmd` and `X=$'a b' cmd` run `cmd`, while
+`'X=a' cmd`, `"X"=a cmd` and `X\=a cmd` run a program named `X=a` (#471). Before, a quoted
+assignment was read as the program, an unknown one, so the command after it was never read:
+`git push origin feature && X='a b' rm -rf /srv/data` logged, also under `deny: [delete]`. That
+reading is kept beside the command's own, so `X='a b' ls` still asks as an unknown program. It is
+kept when an `env -S` or `--split-string` follows too, so the quoted word is still scanned for
+store paths first and its value still reaches the env-inject check: `X="$HOME/.exo/state/notes.md"
+ls` and `X="$HOME/.exo/state/notes.md" env -S 'ls'` stay store_write, and `GIT_SSH_COMMAND='rm -rf
+/srv/data' env -S 'git fetch'` is still denied under `deny: [delete]`. The setter check of a
+`command` rule (#394, below) counts a setter under either reading, so `X="$Y" ls` (a program from a
+variable, before) is still one. A line continuation in the name (`X\<newline>='a b' cmd`) is no
+quoting: bash drops it first, and so does this check. The parts read from the command behind such
+a word carry the signal `quoted assignment`, and `decide` also decides the line with the part
+`_combine` would put on top without them, keeping the stricter outcome. So a command read there
+that now outranks a post (`gh pr comment 5 ... && X='a b' rm -rf /srv/data`) does not lower what
+the post's matrix cell, category line or third-party escalation gave, which read the dominant part
+only (#437). The whole call is also read as before, each quoted prefix assignment the program
+(`Classification.before`), and `decide` decides that reading too: the stricter outcome stands, and
+at an equal one the reserved parts and violations of both. That covers what a quoted word changes
+for the commands after it. A `cd` behind one (`X='a b' cd /dev && yarn publish`) moves their
+folder, as bash runs it, so their store write may outrank the publish that a matrix cell denied;
+read as before, the `cd` was an unknown program and the publish still decides. A reserved word
+after one (`X='a b' coproc env | cat`) is read as after an unquoted assignment, a coprocess, where
+bash runs a program named `coproc`; read as before, the environment dump is still a secret read.
 A loop body starts where bash starts it (#436). Bash and POSIX take `do` as the reserved word right
 after the name in `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before
 it, and run the loop over the positional parameters. So the gate reads
@@ -682,6 +707,13 @@ gate does not read:
   `python -c`, `node -e`, `perl -e`, `ruby -e`, `osascript`; `make`, `npm run`, `npm test`,
   `npx`, `uvx`; `xargs`; `find -exec`; `eval`, `source`, `.`, `alias`, `trap`, shell functions;
   git aliases and command-running git config; gh aliases and extensions; an unknown program.
+  An unknown program asks beside a more severe part that logs too (#471):
+  `git push origin feature && mytool --wipe` and `git push origin feature; kill -9 1` ask, as
+  `mytool --wipe` does alone. Its `unknown program` signal stays on the line, and `decide` asks on
+  it as on `indirection`, unless a category line names `opaque_exec` below ask (a rule on
+  `opaque_exec` lowers it only when that rule matches the line's dominant part, as for
+  `indirection`). So a script that calls a local tool the gate does not know after a push or a post
+  now asks, where it logged.
 - Where the gate can see inside (a `bash -c` string, a heredoc or pipe fed to a shell, the code
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too, within a bounded inspection depth (four levels,
@@ -702,7 +734,8 @@ gate does not read:
   ask rule for `git push` after it, `gh pr comment 3 --body x && git push --force origin main` is
   denied. Only a deny reaches the parts: allow, log and ask lines and rules, the opaque bump,
   third-party escalation and the floors see the dominant part (a `reserved:` entry gives an ask on
-  any part). The posting checks are the one exception: they read every post on the line (#396,
+  any part, and the opaque bump also fires on the `indirection` or `unknown program` signal of any
+  part, #471). The posting checks are the one exception: they read every post on the line (#396,
   "Every post on a line"). Third-party escalation on a part is open as #437. A part carries the
   tool of the call it came in on (`tool:execute_code` matches the `execute_code` tool, not
   `python -c` run from bash) and the views of its line, so the
@@ -1040,7 +1073,8 @@ gate does not read:
   it can turn `x.path` into `include.path`. A key the gate cannot read, a `--config-env` value
   (it comes from a variable) for an exec key, and `git clone --template` or `git init
   --template` are opaque. `env` and `sudo` read `NAME=VALUE` from their
-  own argv, so a quoted one after them (`env 'LD_PRELOAD=x' ls`) is an assignment. `IFS` is left
+  own argv, so after them a word quoted whole (`env 'LD_PRELOAD=x' ls`) is an assignment too;
+  elsewhere only its value may be quoted (#471). `IFS` is left
   out: it does not change how literal words split, and `while IFS= read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,

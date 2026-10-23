@@ -198,6 +198,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#471, D-038 amendment): a quoted prefix assignment no longer hides the command after it. Bash reads
+  `X='a b' cmd`, `X="a b" cmd` and `X=a\ b cmd` as an assignment and runs `cmd`, but the gate read the quoted word
+  as the program, an unknown one, and never read `cmd`. Beside a push that logs, that unknown program's ask was
+  dropped too: the opaque floor fired only on `indirection`. So `git push origin feature && X='a b' rm -rf
+  /srv/data` logged, also under `deny: [delete]`, and `gh pr comment 5 ... && X='a b' gh pr comment 6 ... --body
+  'Zork leaked'` walked past the posting rules. A word is now an assignment when its `NAME=` is unquoted in the
+  source (only the value may be quoted, so `'X=a' cmd` still runs a program named `X=a`). The old reading is kept
+  beside the command's, also before an `env -S` or `--split-string`, so `X='a b' ls` still asks, a store path in the
+  value is still a store write and an env-inject value (`GIT_SSH_COMMAND='rm -rf /srv/data' env -S 'git fetch'`) is
+  still read, and a setter under either reading (`X="$Y" ls`) still counts for a `command` rule (#394). The line is
+  also decided with the part main put on top, and the whole call is also read and decided as before, each quoted
+  word the program, the stricter outcome standing: a `cd` behind one (`X='a b' cd /dev && yarn publish`), a
+  `coproc` after one or a value `declare` reads again leaves no decision lower than before.
+  An unknown program now asks beside a more severe part that logs (`git push origin feature && mytool --wipe`,
+  `git push origin feature; kill -9 1`), unless a category line names `opaque_exec` below ask, and an "always" on
+  such a line covers that exact line only. A script that calls a local tool the gate does not know after a push or
+  a post now asks where it logged. Main's `scripts/gate_diff.py` lowers nothing in 38,632,272 pairs (239,952 actions,
+  its built-in corpus and the aimed lines, under 161 policies) and tightens 2,067,718.
 - Gate (#436, D-038 amendment): `for NAME do LIST; done` and `select NAME do LIST; done`, with no `in` list and no
   `;` before `do`, are read as `for NAME; do LIST; done`. Bash and POSIX accept that form and run the loop over the
   positional parameters, but the gate read the body as words of the `for` command and classified nothing in it, so

@@ -137,6 +137,9 @@ class Classification:
     # The signals this part carried before _combine gave it every part's (#396), so the posting checks can tell its
     # own unseen body from another post's. None for a part never combined: its signals are then its own.
     own_signals: list[str] | None = field(default=None, repr=False, compare=False)
+    # The same call read with each quoted prefix assignment as the program, as before #471, when the call has one
+    # (classify): decide decides that reading too and keeps the stricter.
+    before: "Classification | None" = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
@@ -147,6 +150,7 @@ class Classification:
         d.pop("setters")
         d.pop("inherits")
         d.pop("own_signals")
+        d.pop("before")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -191,6 +195,11 @@ def _make(category: str, tool: str = "", **kw) -> Classification:
 # part made for that command carries it (Classification.own), the parts of a nested line their own command's text.
 # _classify_shell fills the slot for each simple command and empties it for the rest. None outside a shell line.
 _own_text: contextvars.ContextVar[list[str | None] | None] = contextvars.ContextVar("exo_gate_own_text", default=None)
+# #471: True while classify reads a call as before #471, each quoted prefix assignment as the program
+# (_strip_prefix_words); and the one-item list classify sets for the first reading, which notes that a quoted one was
+# read as an assignment.
+_as_before: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_as_before", default=False)
+_quoted_seen: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_quoted_seen", default=None)
 
 
 class _StandIn(str):
@@ -337,6 +346,7 @@ _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
 _ASSIGN = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=.*", re.S)
+_ASSIGN_HEAD = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=")   # its NAME= as written in the source, unquoted
 # `name()` is looked for only where a word starts, so a long word is not rescanned from each character
 _FUNC_NAMES = re.compile(r"\bfunction\s+([^\s(){};&|<>]+)|(?<![^\s(){};&|<>'\"])([^\s(){};&|<>'\"]+)\s*\(\s*\)")
 _ANSI_C = re.compile(rb"\\(?:([abeEfnrtv\\'\"?])|([0-7]{1,3})|x\{([0-9A-Fa-f]*)\}?|x([0-9A-Fa-f]{1,2})"
@@ -2226,13 +2236,21 @@ def _http_kind(argv: list[str], cmd: str) -> Classification:
     return _make("web_post", summary=f"{method} to {host}", **kw)
 
 
-def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
+def _strip_prefix_words(words: list, quoted_value: bool | None = None) -> tuple[list, bool, str | None]:
     """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text).
-    env and sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too."""
+    A word is an assignment when its NAME= is unquoted in the source; only the value may be quoted, so
+    `X='a b' cmd` runs cmd and `'X=a' cmd` runs `X=a` (#471). With quoted_value False (by default while
+    classify reads a call as before, _as_before), any quoted word is the program, as before #471. env and
+    sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too."""
+    if quoted_value is None:
+        quoted_value = not _as_before.get()
     sudo = own_argv = False
     while words:
         t = words[0].text
-        if (own_argv or not words[0].quoted) and _ASSIGN.fullmatch(t):
+        if (own_argv or not words[0].quoted or quoted_value and _ASSIGN_HEAD.match(
+                re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", words[0].raw))) and _ASSIGN.fullmatch(t):
+            if words[0].quoted and not own_argv and (seen := _quoted_seen.get()) is not None:
+                seen[0] = True
             words = words[1:]
             continue
         base = t.rsplit("/", 1)[-1]
@@ -2493,7 +2511,14 @@ def _sets_state(k: _Cmd) -> bool:
         return False
     if all(_ASSIGN.fullmatch(w.text) for w in words):
         return True
-    rest, _, split = _strip_prefix_words(words)
+    # #471: a quoted prefix assignment was read as the program before (`X="$Y" ls`, a program from a variable); a
+    # setter under either reading counts, so an allow rule must still name it
+    return any(_program_sets_state(words, r[0], r[2]) for r in (_strip_prefix_words(words),
+                                                                _strip_prefix_words(words, False)))
+
+
+def _program_sets_state(words: list, rest: list, split: str | None) -> bool:
+    """_sets_state for the words left after the prefixes (``rest``) in one reading of them."""
     if split is not None:
         return False                              # `env -S`: a command line, read as one
     if not rest:                                  # prefixes only: `exec 3>f` sets the fds later commands get
@@ -2766,6 +2791,9 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
         words = []                                   # a for header lists words, not programs
     before = words
+    # #471: the old reading below scans the folder as it was before a `cd` the new reading reads, and signs the
+    # late parts the new reading adds
+    n_late, octx = len(ctx.get("late", [])), dict(ctx)
     words, sudo, split = _strip_prefix_words(words)
     parts: list[Classification] = []
     if split is not None:
@@ -2781,6 +2809,19 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
+    # #471: before, a quoted prefix assignment (`X='a b' cmd`) was read as the program, an unknown one that asks, and
+    # cmd was not read. That reading stays beside cmd's, and the parts read from cmd are signed, so decide also decides
+    # the line with the parts read before on top (_QUOTED): no decision is looser than before. Also when cmd is an
+    # `env -S` (words is [] then), so the quoted word's value is still scanned for store paths and env-inject names.
+    old = _strip_prefix_words(before, False)[0]
+    old_parts: list[Classification] = []
+    if len(old) > len(words):
+        memo: dict = {}
+        if "late" in ctx:
+            ctx["late"][n_late:] = [_signed(p, _QUOTED, memo) for p in ctx["late"][n_late:]]
+        old_parts = _classify_program(old, k, cmd, depth, ctx, piped) + \
+            _exec_options(before, old, k, cmd, depth, ctx, piped)
+        parts = [_signed(p, _QUOTED, memo) for p in parts] + old_parts
     if sudo:
         parts[0].signals.append("sudo")
         if parts[0].reversibility == "reversible":
@@ -2800,7 +2841,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_opaque(f"writes to a path from a variable ({t.text[:60]})", cmd))
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
-    hit = _store_touch(k, words, parts, ctx)
+    # #471: the quoted assignment word is scanned as before, first, with that reading's parts and folder, so a store
+    # path in its value (or the folder a `cd` left) still counts as main read it; then cmd, with its own
+    old_ids = {id(p) for p in old_parts}
+    hit = (_store_touch(k, old, [p for p in parts if _QUOTED not in p.signals], octx) if len(old) > len(words)
+           else "") or _store_touch(k, words, [p for p in parts if id(p) not in old_ids], ctx)
     if hit:
         # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
         # command is known to write there (`gh ... --body-file /dev/stdin` reads it), so the card says just that
@@ -2815,6 +2860,19 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         for p in parts:
             p.signals += ["indirection", "locale translation"]
     return parts
+
+
+_QUOTED = "quoted assignment"     # a part read from the command behind a quoted prefix assignment (#471)
+
+
+def _signed(c: Classification, signal: str, memo: dict) -> Classification:
+    """A copy of ``c`` and of the parts it was built from, each carrying ``signal`` (#471). Parts are shared, so they
+    are copied, each once (memo)."""
+    if id(c) not in memo:
+        memo[id(c)] = replace(c, signals=[*c.signals, signal], parts=[],
+                              own_signals=None if c.own_signals is None else [*c.own_signals, signal])
+        memo[id(c)].parts = [_signed(p, signal, memo) for p in c.parts]
+    return memo[id(c)]
 
 
 def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
@@ -3333,10 +3391,11 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             elif kind:
                 parts.append(_opaque(f"{what} sets {key}, which {_GIT_CONFIG_DOES[kind]}"[:120], cmd))
 
-    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env, sudo or timeout; a partly
-    # quoted one is left in `words`), export's arguments, a bare assignment the rest of the line inherits, and
-    # the ones hidden in an expansion, arithmetic or a redirection (`${PATH:=.}`, `$((PATH=10))`, `{PATH}>f`);
-    # never an argument that merely looks like one (`grep EDITOR=x`). Only a real program position runs a value.
+    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env, sudo or timeout; one whose name
+    # is quoted is left in `words` and read here too, #471), export's arguments, a bare assignment the rest of the
+    # line inherits, and the ones hidden in an expansion, arithmetic or a redirection (`${PATH:=.}`, `$((PATH=10))`,
+    # `{PATH}>f`); never an argument that merely looks like one (`grep EDITOR=x`). Only a real program position runs
+    # a value.
     n = len(before) - len(words)
     while n < len(before) and _ASSIGN.fullmatch(before[n].text):
         n += 1
@@ -5384,11 +5443,31 @@ def _args_of(action: Any) -> tuple[str, dict]:
     return str(tool), dict(args or {})
 
 
-@_brace_budget
-@_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args. ``cwd`` is the folder the
     tool runs in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
+    # #471: a call that reads a quoted prefix assignment as one (`X='a b' cmd`) is also read as before, with the word
+    # as the program, in a call of its own (Classification.before): what that reading changes for the commands after
+    # it (a `cd`, a `coproc`) then leaves the line as before, and decide keeps the stricter of the two.
+    seen = [False]
+    token = _quoted_seen.set(seen)
+    try:
+        c = _classify_call(action, cwd)
+    finally:
+        _quoted_seen.reset(token)
+    if seen[0]:
+        token2 = _as_before.set(True)
+        try:
+            c.before = _classify_call(action, cwd)
+        finally:
+            _as_before.reset(token2)
+    return c
+
+
+@_brace_budget
+@_in_tool_folder
+def _classify_call(action: Any, cwd: str | None = None) -> Classification:
+    """classify, in one reading of the quoted prefix assignments."""
     tool, args = _args_of(action)
     if _runs_shell(tool, args):
         c = classify_shell(str(args.get("command") or args.get("cmd") or ""))
@@ -5855,8 +5934,10 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     view but not the text, reserved actions, escalations (budget, third party, listed categories),
     posting violations (a body the gate cannot read is one) and the operator floor. A deny entry wins
     over everything, and so does a category line or rule that denies any part of a compound line. A line
-    with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
-    `context` may carry `spent_today` for the daily budget.
+    with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands. So is a line with a part read
+    behind a quoted prefix assignment, also decided with the part on top that the gate read there before #471, and
+    the call read as before #471 (Classification.before) is decided too: the stricter outcome stands, and at an equal
+    one the reserved parts and violations of both. `context` may carry `spent_today` for the daily budget.
 
     On a compound line, a rule keyed on `command` that would lower the line (its decision is below the matrix cell
     and category line, or it is an allow or log rule that names opaque_exec) must match the line as before and also
@@ -5871,7 +5952,21 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     command, beside parts the gate made for it, is decided as before (_one_text).
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
-    ctx = dict(context or {})
+    d = _decide_line(c, pol, dict(context or {}))
+    if c.before is not None:
+        # #471: the call read as before, each quoted prefix assignment the program; the folder a `cd` behind one left
+        # and the parts read after it then decide as they did before
+        alt = _decide_line(c.before, pol, dict(context or {}))
+        if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
+            return alt
+        if alt.outcome == d.outcome:
+            d.reserved = list(dict.fromkeys(d.reserved + alt.reserved))
+            d.violations = list(dict.fromkeys(d.violations + alt.violations))
+    return d
+
+
+def _decide_line(c: Classification, pol: Mapping, ctx: dict) -> Decision:
+    """decide() for one reading of the call, under normalized policies."""
     if _one_text(c):
         return _decide(c, pol, ctx, None)
     passed: list[Mapping] = []
@@ -5956,7 +6051,9 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     # #188: a command bash runs only as it reads a value again may outrank a deny on the line; naming opaque_exec
     # does not lower that ask.
     reread = "reread" in eff.signals
-    if (eff.category == "opaque_exec" or "indirection" in eff.signals) and (reread or not opaque_named):
+    # #471: an unknown program on the line asks too, also beside a more severe part that logs.
+    if (eff.category == "opaque_exec" or "indirection" in eff.signals or "unknown program" in eff.signals) and \
+            (reread or not opaque_named):
         bump("ask", "runs code the gate cannot fully see (" + (c.summary or "indirection") + ")", "opaque")
     reserved = _part_hits(gates.get("reserved") or [], eff)
     if reserved:
@@ -6053,6 +6150,21 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     d = Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
                  exposure=eff.exposure, third_party=eff.third_party,
                  reserved=list(dict.fromkeys((p.category, p.target) for p, _ in reserved)))
+    if _QUOTED in c.signals:
+        # #471: the parts read behind a quoted prefix assignment were hidden before, and the other parts decided the
+        # steps that read the dominant part (the matrix cell, category lines, rules, escalation). Decide the line with
+        # the one of those _combine would put on top too, and keep the stricter. Its text is left to that part, which
+        # the posting checks still read, so no violation is listed twice.
+        seen = [p for p in _each_part(c) if _QUOTED not in (p.signals if p.own_signals is None else p.own_signals)]
+        top = next((p for p in seen if p.category == "credentials"), None) or \
+            next((p for p in seen if p.category == "store_write"), None) or _most_severe(seen)
+        if top is not None and top is not c:
+            alt = _decide(replace(c, category=top.category, reversibility=top.reversibility, exposure=top.exposure,
+                                  third_party=top.third_party, cost=top.cost, summary=top.summary, target=top.target,
+                                  link=top.link, text="", title="", text_file="", own=top.own, own_signals=[],
+                                  signals=[x for x in c.signals if x != _QUOTED]), pol, ctx, passed)
+            if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
+                d = alt
     if "locale translation" in c.signals and c.category != "opaque_exec":
         # A $".." word can turn into any code (#136): decide the line as opaque_exec too, and keep the stricter.
         # `replace` keeps the parts as classifications, so their deny and reserved entries still apply. That
@@ -6425,7 +6537,8 @@ DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, 
 def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
     and code the gate cannot see into (D-038), so one "always" never covers a different script."""
-    return is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
+    return is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals \
+        or "unknown program" in c.signals
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:

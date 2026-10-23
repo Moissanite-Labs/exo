@@ -501,6 +501,8 @@ class Gate:
         action = {"tool": tool, "args": args}
         c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
         self._load_body_file(c)
+        if c.before is not None:          # the call read as before #471, which decide reads too
+            self._load_body_file(c.before)
         today = _dt.date.today().isoformat()
         ctx = {"spent_today": self._spent.get(today, 0.0)}
         d = gate.decide(c, self.policies(), ctx)
