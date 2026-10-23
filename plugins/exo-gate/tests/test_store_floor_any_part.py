@@ -239,3 +239,95 @@ def test_a_narrower_approvals_file_mid_session_narrows_a_secret_read(tmp_path):
     os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
     assert run(ctx, "env")["approvers"] == ["principal"]      # narrower applies at once (#211)
     assert run(ctx, "env; echo x > ~/.exo/policies/gates.yaml")["approvers"] == ["principal"]
+
+
+# A file tool that names a secret and a store file is credentials (the #467 review). Each store file it writes,
+# moves, copies or deletes is a store write part now, so it is the principal's alone, as its shell spelling is.
+PATCH = ("*** Begin Patch\n*** Update File: ~/.ssh/config\n@@\n-a\n+b\n*** Update File: ~/.exo/policies/gates.yaml\n"
+         "@@\n-a\n+b\n*** End Patch\n")
+FILE_TOOL_STORE_WRITES = [
+    ("apply_patch", {"patch": PATCH}, "~/.exo/policies/gates.yaml"),
+    ("move_file", {"source": "~/.ssh/id_rsa", "destination": "~/.exo/policies/gates.yaml"}, "~/.exo/policies/gates.yaml"),
+    ("move_file", {"source": "~/.exo/policies/gates.yaml", "destination": "~/.ssh/id_rsa"}, "~/.exo/policies/gates.yaml"),
+    ("copy_file", {"source": "~/.kube/config", "destination": "~/.exo/policies/default.yaml"},
+     "~/.exo/policies/default.yaml"),
+    ("mcp__fs__move_file", {"source": "~/.ssh/id_rsa", "destination": "~/.exo/state/x"}, "~/.exo/state/x"),
+    ("write_file", {"path": "~/.exo/policies/gates.yaml", "source": "~/.ssh/id_rsa", "content": "x"},
+     "~/.exo/policies/gates.yaml"),
+    # keys/ and the run folder are secret stores and store paths, so the write stays credentials, as with `cp` (#169)
+    ("write_file", {"path": "~/.exo/keys/seat.key", "content": "x"}, "~/.exo/keys/seat.key"),
+    ("apply_patch", {"patch": "*** Begin Patch\n*** Add File: ~/.exo/keys/seat.key\n+x\n*** End Patch\n"},
+     "~/.exo/keys/seat.key"),
+    ("delete_file", {"path": "~/.exo/keys"}, "~/.exo/keys"),
+    ("delete_file", {"path": "~/.exo/run/exod.token"}, "~/.exo/run/exod.token"),
+]
+# A file tool on a secret alone keeps the delegation: a read, or a write outside the store.
+FILE_TOOL_SECRETS = [
+    ("read_file", {"path": "~/.ssh/id_rsa"}),
+    ("read_file", {"path": "~/.exo/keys/seat.key"}),
+    ("write_file", {"path": "~/.ssh/config", "content": "x"}),
+    ("move_file", {"source": "~/.ssh/id_rsa", "destination": "/tmp/k"}),
+    ("apply_patch", {"patch": "*** Begin Patch\n*** Update File: ~/.ssh/config\n@@\n-a\n+b\n*** End Patch\n"}),
+]
+
+
+def call(ctx, tool, args):
+    [cb] = ctx.hooks["pre_tool_call"]
+    return asyncio.run(cb(tool_name=tool, args=args, session_id="s1", tool_call_id="c1", turn_id="t1"))
+
+
+@pytest.mark.parametrize("tool,args,store", FILE_TOOL_STORE_WRITES)
+def test_a_file_tool_on_a_secret_and_the_store_is_the_principals(tmp_path, monkeypatch, tool, args, store):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    c = gate.classify({"tool": tool, "args": args})
+    assert c.category == "credentials", (tool, c)                    # the category does not move
+    assert store in [p.target for p in gate._each_part(c) if p.category == "store_write"], (tool, c)
+    for how in sorted(DELEGATIONS):
+        _, ctx, _ = make_gate(tmp_path / how, DELEGATIONS[how])
+        r = call(ctx, tool, args)
+        assert r["action"] == "approve" and r["approvers"] == ["principal"], (how, tool, r)
+        assert r.get("once") is True and r.get("binding"), r
+
+
+@pytest.mark.parametrize("tool,args", FILE_TOOL_SECRETS)
+def test_a_file_tool_on_a_secret_alone_keeps_the_delegation(tmp_path, monkeypatch, tool, args):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    c = gate.classify({"tool": tool, "args": args})
+    assert c.category == "credentials" and not any(p.category == "store_write" for p in gate._each_part(c)), c
+    _, ctx, _ = make_gate(tmp_path)
+    r = call(ctx, tool, args)
+    assert r["action"] == "approve" and r["approvers"] == ["principal", SEAT], (tool, r)
+
+
+def test_a_file_tools_store_part_only_adds_denies():
+    # The new part is a store write with the store file as its target, so a deny entry for either now reaches it.
+    # Nothing else on the call changes: its category, target, card and default outcome.
+    def pol(**g):
+        return gate.normalize_policies({"gates": g})
+    action = {"tool": "move_file", "args": {"source": "~/.ssh/id_rsa", "destination": "~/.exo/policies/gates.yaml"}}
+    c = gate.classify(action)
+    assert (c.category, c.target) == ("credentials", "~/.ssh/id_rsa")
+    assert gate.decide(c).outcome == "ask"
+    for deny in (["store_write"], ["target:*/.exo/policies/*"]):
+        d = gate.decide(c, pol(deny=deny))
+        assert (d.outcome, d.rule) == ("deny", "deny"), (deny, d)
+    r = gate.decide(c, pol(reserved=["store_write"]))
+    assert r.outcome == "ask" and ("store_write", "~/.exo/policies/gates.yaml") in r.reserved, r
+
+
+def test_the_error_fallback_reads_every_part(tmp_path, monkeypatch):
+    # #467's fallback, when only the decision fails: a store write or secret part asks the principal alone, once, in
+    # observe mode too. No call puts one under another category yet (#452 will), so a part added by hand stands in.
+    classify = gate.classify
+
+    def read_with_a_secret_part(action, cwd=None):
+        c = classify({"tool": "read_file", "args": {"path": "README.md"}})
+        c.parts = [*c.parts, classify({"tool": "read_file", "args": {"path": "~/.ssh/id_rsa"}})]
+        return c
+    for mode in ("enforce", "observe"):
+        g, ctx, _ = make_gate(tmp_path / mode, mode=mode)
+        monkeypatch.setattr(g, "_rules", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        monkeypatch.setattr(hook.gate, "classify", read_with_a_secret_part)
+        r = g.pre_tool_call("read_file", {"path": "README.md"})
+        monkeypatch.undo()
+        assert r["action"] == "approve" and (r["approvers"], r["once"]) == (["principal"], True), (mode, r)

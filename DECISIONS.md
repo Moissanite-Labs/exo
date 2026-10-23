@@ -1010,27 +1010,35 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
   `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
   argument, and a path held in a variable or made by a command (`F=~/.exo/update/allowed_signers; cp x "$F"`).
-  *Amendment 2026-10-22 (issue #447):* who may answer an ask, and whether a grant may cover it, read only the
-  category that leads the line. `_combine` ranks credentials above store_write, so
-  `env; echo x > ~/.exo/policies/gates.yaml` and `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml`
-  were `credentials`, and a seat that `approvals.yaml` delegates `credentials` to could approve a write to the
-  policy files. The outcome stayed ask, so the #423 differential could not count it. Now the hook reads every part
-  of the line. `gate.call_approvers` keeps only those allowed for the line's category and for each `credentials` or
-  `store_write` part, so a store write part leaves the principal alone. `gate.no_grant` keeps a standing grant off a
-  line with such a part, observe mode enforces it, and `binds_exact` binds it to the exact line. This holds behind a
-  wrapper (`sudo`, `doas`, `env`, `timeout`, `nice`, `command`, `bash -c`, `eval`, `xargs`), in a compound, a
-  subshell, a `$( )`, a heredoc or a `cd` chain, wherever the gate reads the store write as a part. The line's
-  category, its matrix cell and its outcome do not change. Reading every part for the matrix, third party and
-  floors is #437. This is the follow-up the #169 amendment named: a shell write, delete, copy or archive that touches `keys/`
-  or the run folder stays `credentials`, but its store write part makes it principal-only. It also settles point (5)
-  of the #313 amendment. A secret read alone keeps its delegation. So does a file tool's write or delete in `keys/`
-  or the run folder, which has no store write part. Chosen over ranking store_write first in `_combine`, which
-  would change the line's category, reason and policy matches. The gate differential against main (`gate_diff`,
-  #423) finds 0 lowered and 0 tightened pairs, since classify and decide do not change: 53,511 built-in actions and
-  3,565 focused ones (8 secret reads beside 8 store writes in 24 shapes, `keys/` and run-folder writes, controls)
-  under 87 policies. A count of the hook's terms over the same actions finds the approvers narrowed to the
-  principal on 469 built-in and 3,312 focused actions, each `credentials` with a `store_write` part. None widens,
-  and no once-only flag or exact binding changes.
+  *Amendment 2026-10-22 (issue #447):* who may answer an ask, and whether a grant may cover it, read only the category
+  that leads the line. `_combine` ranks credentials above store_write, so `env; echo x > ~/.exo/policies/gates.yaml`
+  and `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that
+  `approvals.yaml` delegates `credentials` to could approve a write to the policy files. The outcome stayed ask, so
+  the #423 differential could not count it. Now the hook reads every part of the line. `gate.call_approvers` keeps
+  only those allowed for the line's category and for each `credentials` or `store_write` part, so a store write part
+  leaves the principal alone. `gate.no_grant` keeps a standing grant off a line with such a part, observe mode
+  enforces it, and `binds_exact` binds it to the exact line. This holds behind a wrapper (`sudo`, `doas`, `env`,
+  `timeout`, `nice`, `command`, `bash -c`, `eval`, `xargs`), in a compound, a subshell, a `$( )`, a heredoc or a `cd`
+  chain, wherever the gate reads the store write as a part. The line's category, its matrix cell and its outcome do
+  not change. Reading every part for the matrix, third party and floors is #437. This is the follow-up the #169
+  amendment named: a shell write, delete, copy or archive that touches `keys/` or the run folder stays `credentials`,
+  but its store write part makes it principal-only. It also settles point (5) of the #313 amendment. A secret read
+  alone keeps its delegation. A file tool that names a secret and a store file was `credentials` with no store write
+  part (the #467 review: `apply_patch` on `~/.ssh/config` and `~/.exo/policies/gates.yaml`, `move_file` from
+  `~/.ssh/id_rsa` to `~/.exo/policies/gates.yaml`), so a seat delegated `credentials` could answer it. `classify` now
+  adds a `store_write` part for each store file such a tool writes, moves, copies or deletes, beside the tool's own
+  part (#448). A file tool's write or delete in `keys/` or the run folder gets one too, as its shell spelling does.
+  The call's category, target and card do not change. The hook's error fallback (#464) reads the parts as well. Chosen
+  over ranking store_write first in `_combine`, which would change the line's category, reason and policy matches. The
+  gate differential against main c27d8739 (`gate_diff`, #423) finds 0 lowered pairs. On the built-in corpus, 54,206
+  actions x 87 policies, it finds 116 pairs on 50 actions tightened, all `credentials` ask to deny. On a focused
+  corpus of 4,029 actions (file tools under 9 names that name one of 8 secrets and one of 7 store paths, the same with
+  4 paths outside the store as controls, and shell spellings with a line continuation, `ssh`, `execute_code` or a
+  `cwd` argument), it finds 2,592 pairs on 1,080 actions tightened, also `credentials` ask to deny. These are the file
+  tools' new store write parts under a `store_write` deny or category line, or a `target:` deny on the store. A
+  `reserved: [store_write]` entry now also hits them, with the same outcome. A count of the hook's terms on main and
+  here over the same corpora finds the approvers narrowed to the principal on 519 built-in and 2,520 focused
+  actions, each `credentials` with a `store_write` part. None widens, and no once-only flag or exact binding changes.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,

@@ -5423,6 +5423,14 @@ def _args_of(action: Any) -> tuple[str, dict]:
     return str(tool), dict(args or {})
 
 
+def _store_part(path: str, summary: str) -> Classification:
+    """The store write part of a file tool that also names a secret (#447): the call stays credentials, and
+    call_approvers reads the part, so only the principal answers it, as for `cat ~/.ssh/id_rsa > <store file>`."""
+    c = _make("store_write", summary=summary[:120], target=path, link=path)
+    c.signals.append("exo store")
+    return c
+
+
 @_brace_budget
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
@@ -5448,6 +5456,8 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         if cat != "local_write":    # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
+        if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
+            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p)]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -5472,10 +5482,10 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         if secret:
             cat = "credentials"
         store = ""
-        if not secret and cat not in ("read", "web_read"):
+        if own not in ("read", "web_read"):
             store = next((v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
-                          else [args.get(k)]) if isinstance(v, str) and is_store_path(v, ancestors=cat == "delete")), "")
-            if store:
+                          else [args.get(k)]) if isinstance(v, str) and is_store_path(v, ancestors=own == "delete")), "")
+            if store and not secret:
                 cat = "store_write"
         target = _first(args, _TARGET_KEYS)
         text = _first(args, _TEXT_KEYS) if cat in OUTBOUND else ""
@@ -5495,13 +5505,15 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         if secret:
             c.signals.append("secret store")
             c.summary, c.target = f"{tool} {secret}"[:120], secret
-        if store:
+        if store and not secret:
             c.signals.append("exo store")
             c.summary, c.target = f"{tool} {store}"[:120], store
         if cat != own:  # #448: the tool's own reading stays a part, so its deny, reserved and matrix entries apply
             out = own in OUTBOUND
             c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
+        if store and secret:    # #447: the store path beside a secret is a part, so only the principal answers
+            c.parts.append(_store_part(store, f"{tool} {store}"))
     c.tool = tool
     if c.category in ("web_post", "web_read") and c.target and _is_local_host(c.target):
         c.exposure, c.third_party = "private", False
