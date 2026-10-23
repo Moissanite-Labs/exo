@@ -81,12 +81,35 @@ def test_a_substitution_text_read_both_outside_and_inside_the_store_on_one_line(
     assert _bash("bash -c 'echo $(cp a b)'; bash -c 'cd ~/project && echo $(cp a b)'").category != "store_write"
 
 
-def test_order_and_subshells_are_not_followed():
-    # as for the line's own commands after `cd` (D-038), the gate does not follow the order or a subshell: it fails
-    # closed, so a $( ) before the `cd` counts too
+def test_a_substitution_runs_where_its_command_runs():
+    # bash runs a $( ) where its command runs: in the `cd` itself or before it, the line has not entered the store
     for line in ("echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies",
+                 "cd ~/.exo/policies/$(cp a b)",
+                 "cd /proc/$(docker inspect -f '{{.State.Pid}}' web) && cat status",
+                 "pid=$(docker inspect -f '{{.State.Pid}}' web); cd /proc/$pid && cat status",
+                 "V=$(sed -n 1p VERSION); cd ~/.exo && ls"):
+        assert _bash(line).category == "read", line
+    # the same text before and after the `cd` fails closed, and so does a subshell, as for the line's own commands
+    for line in ("echo $(cp a b); cd ~/.exo/policies; echo $(cp a b)",
                  "(cd ~/.exo/policies) && echo $(cp /tmp/evil gates.yaml)"):
         assert _bash(line).category == "store_write", line
+
+
+def test_a_line_nested_in_a_substitution_keeps_its_own_folder():
+    # an ssh remote command runs on the host, not in the local store folder; a local shell still runs there
+    for line in ("cd ~/.exo/policies && diff gates.yaml <(ssh prod 'cat /etc/exo/gates.yaml | sort')",
+                 'cd ~/.exo && echo "$(ssh prod \'ls /srv; sort /srv/x\')"'):
+        assert _bash(line).category == "read", line
+    assert _bash("cd ~/.exo/policies && echo $(bash -c 'cp /tmp/evil gates.yaml')").category == "store_write"
+
+
+@pytest.mark.parametrize("line", ["cd ~/.exo/policies && declare -a x='($(cp /tmp/evil gates.yaml))'",
+                                  "cd ~/.exo/policies && local -a x='(`cp /tmp/evil gates.yaml`)'"])
+def test_a_value_bash_runs_again_after_cd_into_the_store_runs_there(line):
+    c = _bash(line)
+    assert c.category == "store_write", (line, c)
+    assert gate.decide(c, gate.normalize_policies({"gates": {"deny": ["store_write"]}})).outcome == "deny"
+    assert _bash("declare -a x='($(cp /tmp/evil gates.yaml))'; cd ~/.exo/policies").category != "store_write"
 
 
 def test_a_command_in_a_substitution_keeps_the_decision_it_had_as_the_line_s_command():

@@ -2778,8 +2778,14 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
-            parts += _subscript_parts(words[0].text, words[1:] + k.operands, cmd, depth, ctx.get("subs", []),
-                                      ctx.setdefault("late", []))
+            # #465: a value bash runs again after a `cd` into the store runs there too
+            token = _cd_into.set((True, ctx.get("fd_cwd") or "")) if ctx.get("store_cwd") else None
+            try:
+                parts += _subscript_parts(words[0].text, words[1:] + k.operands, cmd, depth, ctx.get("subs", []),
+                                          ctx.setdefault("late", []))
+            finally:
+                if token is not None:
+                    _cd_into.reset(token)
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
@@ -4293,30 +4299,44 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     parts: list[Classification] = []
     prev: _Cmd | None = None
     slot = _own_text.get() or [None]      # classify_shell gives each line its own
-    for k in cmds:
-        piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
-        # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
-        ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
-        slot[0] = k.own
-        got = _classify_simple(k, cmd, depth, ctx, piped)
-        if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
-            got = _given_stdin(got, _stdin_own(k), ctx)
-        parts += got
-        prev = k
+    # #465: the commands up to the one that entered the store, and those after it, by their own texts. A $( ) runs
+    # where its command runs, so one in the `cd` itself or before it does not run in the store.
+    entered, before, after = bool(into), [], []
+    token = _cd_into.set(None) if into else None     # a line nested in this one (ssh, bash -c) has its own folder
+    try:
+        for k in cmds:
+            piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
+            # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
+            ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
+            slot[0] = k.own
+            got = _classify_simple(k, cmd, depth, ctx, piped)
+            if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
+                got = _given_stdin(got, _stdin_own(k), ctx)
+            parts += got
+            prev = k
+            (after if entered else before).append(k.own or "")
+            entered = entered or bool(ctx.get("store_cwd"))
+    finally:
+        if token is not None:
+            _cd_into.reset(token)
     slot[0] = None
     # A $( ) runs where the gate no longer knows which command it is in, so on a line where one has a stdin of its
     # own, a shell inside a $( ) reads a stdin the gate cannot name (`curl .. | echo $(bash)`).
     given = bool(subs) and any(k.fed or k.piped_in or _own_stdin(k) for k in cmds)
-    # #465: a $( ), backticks or <( ) runs in the folder a `cd` on the line entered, so a write there is a store write
-    # as it is unwrapped. As for the line's own commands, neither the order nor a subshell is followed: fails closed.
-    token = _cd_into.set((True, ctx.get("fd_cwd") or "")) if subs and ctx.get("store_cwd") else None
-    try:
-        for sub in subs:
+    # #465: a $( ), backticks or <( ) of a command after the `cd` into the store runs there, so a non-read command in
+    # it is a store write, as it is unwrapped. A text found only before that `cd` runs where the line started. As for
+    # the line's own commands, a subshell or a later `cd` out is not followed: fails closed.
+    early, late_text = "\n".join(before), "\n".join(after)
+    there = (True, ctx.get("fd_cwd") or "") if ctx.get("store_cwd") else None
+    for sub in subs:
+        seed = there if there and (sub in late_text or sub not in early) else None
+        token = _cd_into.set(seed) if seed else None
+        try:
             got = [classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd)]
-            parts += _given_stdin(got, lambda: None, ctx) if given else got
-    finally:
-        if token is not None:
-            _cd_into.reset(token)
+        finally:
+            if token is not None:
+                _cd_into.reset(token)
+        parts += _given_stdin(got, lambda: None, ctx) if given else got
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
