@@ -232,8 +232,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`apply_patch` on `~/.ssh/config` and `~/.exo/policies/gates.yaml`, `move_file` from `~/.ssh/id_rsa` to
   `~/.exo/policies/gates.yaml`, `write_file` or `delete_file` in `keys/`). Each store file it writes, moves,
   copies or deletes is now a `store_write` part, and so is a folder holding the store that it moves, renames or
-  deletes. So it is the principal's alone as well, and a `store_write` deny or `reserved:` entry, or a `target:`
-  entry on any of those files, reaches it. The hook's error fallback reads the parts too.
+  deletes, also under a camelCase name (`moveFile`). So it is the principal's alone as well, and a `store_write`
+  deny or `reserved:` entry, or a `target:` entry on any of those files, reaches it. The hook's error fallback
+  reads the parts too.
 - Gate store protection (#465, D-038 amendment): after `cd` into the store or a descriptor folder, a `$( )`,
   backticks or `<( )` of a later command is classified in that folder, as the same command unwrapped is. Each
   substitution was classified as a fresh line, so `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the
