@@ -217,7 +217,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
--  Gate (#446, D-038 amendment): a secret-store path spelt with a doubled slash, a `.` or a `x/..` between its parts
+- Gate (#446, D-038 amendment): a secret-store path spelt with a doubled slash, a `.` or a `x/..` between its parts
   now asks. The shell and the kernel read `~/.kube//config` and `~/.kube/./config` as `~/.kube/config`, but the store
   list was matched as written, so `cat ~/.kube//config`, `cat ~/.kube/./config` and `read_file ~/.kube//config` were
   plain reads. The same held for `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.config/gcloud` and the other
