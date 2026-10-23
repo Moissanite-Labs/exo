@@ -187,3 +187,24 @@ def test_a_deeper_irreversible_command_does_not_lift_the_secret_line_s_own_cell(
     c = _bash(line)
     assert c.category == "credentials" and c.reversibility == "costly", (line, c)
     assert gate.decide(c, gate.normalize_policies({"gates": policy})).outcome == "deny", (line, policy)
+
+
+@pytest.mark.parametrize("policy", [
+    {"rules": [{"match": {"category": "credentials", "reversibility": "irreversible"}, "decision": "deny"}]},
+    {"matrix": {"irreversible": {"private": "deny"}}},
+    {"matrix": {"irreversible": {"private": "deny"}}, "categories": {"delete": "allow"}},
+    {"rules": [{"match": {"target": "*keys*", "reversibility": "irreversible"}, "decision": "deny"}]},
+])
+@pytest.mark.parametrize("line", ["cd ~/.exo/state && cat ../keys/seat; echo $(rm -rf x)",
+                                  "cd ~/.exo/state && cat ../keys/seat; echo `rm -rf x`",
+                                  "cd ~/.exo/state && cat ../keys/seat; diff <(rm -rf x) y",
+                                  "cd ~/.exo/state && cat ../keys/seat; echo $(git push --force origin main)",
+                                  "cd ~/.exo/state && echo $(cat ../keys/seat; rm -rf x)",
+                                  "cd ~/.exo/state && x=$(cat ../keys/seat) && echo $(rm -rf x)",
+                                  "cd ~/.exo/state && cat ../keys/seat; git push --force origin main"])
+def test_a_relative_key_read_on_a_store_write_line_weighs_as_a_secret_line(policy, line):
+    # #468 review: the key read beside a store write was a credentials part at the default weight, so a deny on an
+    # irreversible command in a $( ) on such a line asked, where main denied. It weighs as a secret line now.
+    c = _bash(line)
+    assert c.category == "store_write", (line, c.category)
+    assert gate.decide(c, gate.normalize_policies({"gates": policy})).outcome == "deny", (line, policy)

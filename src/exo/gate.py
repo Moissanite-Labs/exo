@@ -4410,8 +4410,11 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
     found = _cd_store_read(cmds, subs) if c.category != "credentials" else ""
     if found and c.category == "store_write":
-        c.parts = [*c.parts, _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
-                                   own=None, signals=["secret store"])]
+        # it weighs as a secret line does: its own parts' weight, and a heavier command deeper in it beside (#468 review)
+        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
+        seat = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
+                     reversibility=max(rev, "costly", key=REVERSIBILITY.index), own=None, signals=["secret store"])
+        c.parts = [*c.parts, weigh(seat)]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     elif found:
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
