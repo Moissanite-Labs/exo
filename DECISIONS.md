@@ -1036,15 +1036,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the run folder gets a part as well, as its shell spelling does. The call's category, target and card do not
   change. The hook's error fallback (#464) reads the parts as well. Chosen over ranking store_write first in
   `_combine`, which would change the line's category, reason and policy matches. The
-  gate differential against main c27d8739 (`gate_diff`, #423) finds 0 lowered pairs. On the built-in corpus, 54,206
-  actions x 87 policies, it finds 116 pairs on 50 actions tightened, all `credentials` ask to deny. On a focused
-  corpus of 4,029 actions (file tools under 9 names that name one of 8 secrets and one of 7 store paths, the same with
-  4 paths outside the store as controls, and shell spellings with a line continuation, `ssh`, `execute_code` or a
-  `cwd` argument), it finds 2,592 pairs on 1,080 actions tightened, also `credentials` ask to deny. These are the file
-  tools' new store write parts under a `store_write` deny or category line, or a `target:` deny on the store. A
-  `reserved: [store_write]` entry now also hits them, with the same outcome. A count of the hook's terms on main and
-  here over the same corpora finds the approvers narrowed to the principal on 519 built-in and 2,520 focused
-  actions, each `credentials` with a `store_write` part. None widens, and no once-only flag or exact binding changes.
+  gate differential against main 5a9dc394 (`gate_diff`, #423, main's script) finds 0 lowered pairs. On the built-in
+  corpus, 55,218 actions x 87 policies, it finds 218 pairs on 89 actions tightened, all `credentials` ask to deny. On
+  a focused corpus of 17,930 actions it finds 23,708 pairs on 9,494 actions tightened, also `credentials` ask to deny.
+  That corpus has file tools under 13 names that move, rename, copy or delete a store file or a folder holding the
+  store beside one of 7 secrets or a plain path, in both directions, under three key pairs and in `paths` or `files`
+  lists, calls with two store paths, and shell spellings behind wrappers, in compounds, a `$( )`, a heredoc, `ssh`,
+  `execute_code` and after a `cd` into the store. The tightened pairs are the file tools' new store write parts under
+  a `store_write` deny or category line, or a `target:` deny on the store. A `reserved: [store_write]` entry now also
+  hits them, with the same outcome. A count of the hook's terms on main and here over the same corpora, under three
+  `approvals.yaml` tables that delegate to a seat, finds the approvers narrowed to the principal on 579 built-in and
+  10,840 focused actions, each `credentials` with a `store_write` part. None widens, and no once-only flag, exact
+  binding or category changes.
   *Amendment 2026-10-22 (issue #465):* a writing command after `cd` into the store is a store write, but the `cd`
   reached only the line's own commands. Each `$( )`, backticks and `<( )` body was classified as a fresh line, so
   `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the `x=$( )`, `cat <( )`, backtick and nested forms,
