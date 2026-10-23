@@ -144,6 +144,8 @@ POSTS = [
     "declare 'BASH_CMDS[ls]=/proc/self/fd/3'; gh pr comment 1 --body Zork",
     "printf -v 'a[BASH_CMDS=3]' /proc/self/fd/3; gh pr comment 1 --body Zork",    # set in a subscript
     "gh pr comment 1 --body Zork && ssh host 'hash -p /dev/fd/3 ls'",
+    # a rebind over ssh inside a line ssh runs: the marked part is checked the same way, however deep
+    "ssh host 'hash -p /proc/self/fd/3 ls; ssh b \"hash -p /dev/fd/3 ls\"'; gh pr comment 1 --body Zork",
 ]
 
 
@@ -218,6 +220,11 @@ def test_a_rebind_beside_a_force_push_keeps_the_push_deny():
     "ssh -E ~/.exo/state/log host 'rm x; hash -p /x ls'",
     "ssh -E ~/.exo/state/log host 'hash -p /x ls; sudo sort x'",   # sudo made it more than the read hash was
     "ssh -E ~/.exo/state/log host './tool; hash -p /x ls'",        # the line's own part is ./tool's, not the rebind's
+    # only BASH_CMDS and BASH_ALIASES are marked: a store path in another variable the gate reads as opaque is
+    # still checked as on main, however the line sets it
+    "export LD_PRELOAD=~/.exo/state/x",
+    "printf -v LD_PRELOAD ~/.exo/state/x",
+    "printf -v 'a[LD_PRELOAD=1]' ~/.exo/state/x",
 ])
 def test_a_store_write_beside_hash_is_still_one(line, monkeypatch):
     monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))     # so a cd into ~/.exo enters the store
@@ -234,3 +241,19 @@ def test_a_credentials_floor_is_not_taken_for_a_rebind():
     assert c.category == "credentials", c
     assert any(p.category == "store_write" for p in _walk(c)), c.parts
     assert decide(c, normalize_policies({"gates": {"categories": {"store_write": "deny"}}})).outcome == "deny"
+
+
+# Known limit (docs/GATE.md, D-038 amendment group 4): a rebind and plain shell commands in a line that ssh, man -P or
+# less runs count as reads, so the words around that line are not checked for store paths, whichever comes first.
+# Main checked them only when the shell command came first. Reading ssh's own options (-E) in every case is left to
+# its own issue, which turns the ssh lines here into store writes.
+@pytest.mark.parametrize("line", [
+    "ssh -E ~/.exo/state/log host 'sort x; hash -p /x ls'",
+    "ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'",
+    "man -P 'sort x; hash -p /x ls' -l ~/.exo/state/x",
+    "less ~/.exo/state/x '+!sort x; hash -p /x ls'",
+])
+def test_known_limit_words_around_a_rebind_and_a_shell_command(line):
+    c = classify(sh(line))
+    assert c.category == "opaque_exec", c
+    assert decide(c, POLICY).outcome == "ask"
