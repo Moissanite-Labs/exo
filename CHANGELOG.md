@@ -21,7 +21,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Fixed
 - Plugin tool/slot adaptation and hook-verdict translation now share the plugin lifecycle bridge, with
   explicit runtime collaborators and compatibility shims. Counted core size falls by 67 lines and the
-  headroom allowance returns to 1,000; approval behavior is unchanged (D-077/D-082, #498).
+  headroom allowance returns to 1,000. Approval behavior is unchanged (D-077/D-082, #498).
 - `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
   its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
   each tree's violation total with what `and N more on other posts` counts.
