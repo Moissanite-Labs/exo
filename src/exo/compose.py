@@ -47,6 +47,13 @@ def create(seat: str | None = None) -> CoreEngine:
     plan = resolve(cfg.data)
     cfg = Config(plan.settings, cfg.home)  # runtime overlay only; never persist suppressed settings
     executor, executor_required = load_executor()  # required failures precede all plugin imports
+    discovery = None
+    if plan.enabled("skills") and "skill_discovery" in cfg.data:
+        from exo.skill_discovery import Settings
+        discovery = Settings.of(cfg.data["skill_discovery"])
+        if executor_required and discovery.enabled:
+            raise ExecutorConfigurationError("skill discovery needs executor-backed metadata reads in required mode; "
+                                             "disable skill_discovery until that executor supports them")
     instructions = cfg.get("workspace_instructions", {})
     instruction_provider = None
     if plan.enabled("instructions") or "workspace_instructions" in cfg.data:
@@ -136,12 +143,20 @@ def create(seat: str | None = None) -> CoreEngine:
             factories["attach_scheduler"] = Scheduler
         eng = CoreEngine(cfg.home, models, plugins=pm, executor=executor, executor_required=executor_required,
                           cwd=cfg.get("cwd"), seat=st, skill_folders=folders, skills_enabled=plan.enabled("skills"),
+                          skills_prompt=not (discovery and discovery.enabled),
                           mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
                           delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False,
                           peers=cfg.get("peers"), jobs=cfg.get("jobs"), **factories,
                           tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
                                 if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
         eng.harness_plan = plan
+        if discovery and discovery.enabled:
+            from exo.skill_discovery import SkillDiscovery
+            eng.skill_discovery = SkillDiscovery(eng.skills, discovery,
+                {entry.name: entry.description for entry in pm.skills.values() if entry.description
+                 and entry.name in eng.skills.skills
+                 and Path(entry.path).resolve() == eng.skills.skills[entry.name].path.resolve()})
+            eng.loop.turn_extra = eng.skill_discovery.render
         eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is
         if eng.peers is not None:
             eng.peers.autostart = True

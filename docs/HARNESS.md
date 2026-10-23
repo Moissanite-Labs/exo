@@ -108,6 +108,9 @@ trusted host code and can allocate their own resources. `web` controls the plugi
 registration. An explicit `exo web` still launches the separately installed browser client.
 
 Workspace guidance is described in [WORKSPACE-INSTRUCTIONS.md](WORKSPACE-INSTRUCTIONS.md).
+Optional [skill discovery](SKILL-DISCOVERY.md) ranks enabled skill descriptions within a hard
+character budget. It is configured separately and remains off in every preset until selected.
+The skill loader still accepts explicit enabled names outside the shortlist.
 Required-executor mode currently refuses enabled workspace instructions because those
 reads do not yet go through the executor. Disable `instructions` there until an executor
 read adapter is implemented. The rest of the profile remains usable.

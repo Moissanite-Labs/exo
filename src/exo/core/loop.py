@@ -116,6 +116,7 @@ class Loop:
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
         self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
         self.workspace_extra: Callable[[str | None, str], str] | None = None
+        self.turn_extra: Callable[[str, str], str] | None = None
         self.closing = False
         self._state: dict[str, _SessionState] = {}
 
@@ -306,7 +307,7 @@ class Loop:
     async def _system(self, session: str, query: str) -> tuple[str, str]:
         """(system text, recall). Recall is folded into the system text unless the context engine takes it."""
         base = await self.base_system(session)
-        parts = [base]
+        parts = [base, self.turn_extra(session, query) if self.turn_extra else ""]
         # recalled memory is data (D-040): it may quote a peer, so its pinned-block tags are escaped (#279)
         recall = provenance.defuse_pins(await self._memory("prefetch", query, session_id=session) or "")
         if recall and not self._takes_recall():

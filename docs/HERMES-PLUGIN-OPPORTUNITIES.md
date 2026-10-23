@@ -175,6 +175,9 @@ reviewed contract before it can participate in strict model-spend admission.
 
 ### 11. Budgeted skill discovery
 
+An opt-in implementation is available for review under [#504](https://github.com/aska-digital/exo/issues/504).
+See [SKILL-DISCOVERY.md](SKILL-DISCOVERY.md) for configuration, coverage and current limits.
+
 **Inspiration:** Skill Retrieval. Rank skill descriptions locally, within a configurable context
 budget, and leave full skill contents behind the existing progressive-load interface. Explicitly
 requested skills must remain reachable even when they did not appear in the ranked shortlist.

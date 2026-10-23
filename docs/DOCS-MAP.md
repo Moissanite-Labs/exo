@@ -31,6 +31,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 
 | Feature | Technical doc | User guide | Developer guide | Whitepaper |
 |---|---|---|---|---|
+| D-083 Optional budgeted skill discovery (In progress) | `docs/SKILL-DISCOVERY.md`, `docs/HARNESS.md` | §1 "Skills in large collections" | §6 "Budgeted discovery" | MISSING (next batch) |
 | D-082 Modular harness profiles, plugin dependencies/cleanup, runtime binding and scoped workspace instructions (In progress) | `docs/HARNESS.md`, `docs/WORKSPACE-INSTRUCTIONS.md`, `docs/HARNESS-LANDSCAPE.md`, `docs/evidence/harness-footprint-2026-10-23.json` | §1 "Choose how much Exo loads" | §1 "Harness composition", §4 "Dependencies and cleanup" | MISSING (next batch) |
 | D-082 Hermes plugin catalog follow-up (Proposed) | `docs/HERMES-PLUGIN-OPPORTUNITIES.md` | n/a (research only) | n/a (no extension contract changed) | n/a (proposals) |
 | D-001 Work lives in this repo, phases leave handoffs | `DECISIONS.md` D-001 (process) | n/a | §8 | n/a |
