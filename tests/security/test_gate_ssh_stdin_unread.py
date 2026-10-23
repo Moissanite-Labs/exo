@@ -6,8 +6,10 @@ can read), an output process substitution (the commands in a >( ) are fed what t
 writes), and a remote ssh hop (`ssh a ssh b` passes its stdin to `ssh b`, whose login shell runs it).
 Each now asks like `ssh host < file` does, and a known text fed through a hop is read as shell. A hop
 is found anywhere in the remote command and through more than one hop, a $( ) inherits the stdin of
-the command it is in, and a command in a >( ) body that sets its own stdin is not fed. The command
-strings are data for the classifier; nothing here runs them.
+the command it is in, a command in a >( ) body that sets its own stdin is not fed, and the command a
+wrapper runs reads the wrapper's stdin. The part that runs the stdin sits beside ssh's own part, which
+keeps the reading it had before, so a wrapper around ssh still marks it and a reserved entry still
+finds it. The command strings are data for the classifier; nothing here runs them.
 """
 import pytest
 
@@ -54,7 +56,8 @@ def test_a_remote_hop_runs_the_stdin_on_the_inner_host(command):
     c = gate.classify_shell(command)
     assert c.category == "delete", c
     assert c.exposure == "internal" and "remote host" in c.signals, c
-    assert any("runs its stdin" in p.summary and "inner" in p.summary for p in gate._each_part(c)), c
+    assert any(p.summary.startswith("ssh prod-db passes its stdin to an ssh") for p in gate._each_part(c)), c
+    assert any(p.target == "inner" for p in gate._each_part(c)), c
     for policy in DELETE_DENY_FORMS:
         assert gate.decide(c, policy).outcome == "deny", policy
     assert gate.decide(c, INNER_DENY).outcome == "deny"
@@ -366,6 +369,8 @@ OPAQUE_ALLOW_OR_LOG = [
      "ask"),
     ("{ sudo ssh prod-db; make test; } < cmds.sh", "sudo ssh prod-db < cmds.sh; make test",
      {"reserved": ["command:sudo"]}, "ask"),
+    # a wrapper's own `<` now reaches the ssh it runs: decided as the same wrapper around a shell that reads it
+    ("nsenter -t 1 ssh prod-db < cmds.sh", "nsenter -t 1 bash < cmds.sh", {"reserved": ["command:nsenter"]}, "ask"),
 ])
 def test_a_line_lowered_on_purpose_is_decided_as_its_direct_form(command, direct, entry, outcome):
     """Under a policy that allows or logs opaque_exec, these lines decide lower than on main: the newly
@@ -380,7 +385,7 @@ def test_a_line_lowered_on_purpose_is_decided_as_its_direct_form(command, direct
 
 
 @pytest.mark.parametrize("hop, shell, rule", [
-    ("ssh jump 'sudo ssh prod-db' < cmds.sh", "ssh jump 'sudo bash' < cmds.sh", "^ssh "),
+    ("ssh jump 'cd /; ssh prod-db' < cmds.sh", "ssh jump 'cd /; bash' < cmds.sh", "^ssh "),
     ("cat cmds.sh | ssh jump ssh prod-db", "cat cmds.sh | ssh jump bash", "^cat "),
     ("cat cmds.sh | ssh jump 'cd /; ssh prod-db'", "cat cmds.sh | ssh jump 'cd /; bash'", "^cat "),
 ])
@@ -458,19 +463,136 @@ COSTLY_DENY = {"gates": {"rules": [{"match": {"category": ["local_write", "shell
                                     "decision": "deny", "reason": "run by sudo or a privileged wrapper"}]}}
 
 
+@pytest.mark.parametrize("command", [
+    # sudo and the privileged wrappers make the first part of their command costly: ssh's own part, as on main
+    "{ sudo ssh prod-db; } < cmds.sh",
+    "{ git push origin main; sudo ssh prod-db; } < cmds.sh",
+    "echo hi > >(sudo ssh prod-db); gh pr comment 3 --body hi",
+    "{ nsenter -t 1 ssh prod-db; } < cmds.sh",
+    "echo 'rm -rf /data' | ssh prod-db sudo ssh inner",
+    "ssh jump 'sudo ssh prod-db' < cmds.sh",
+    "echo 'rm -rf /data' | sudo ssh jump ssh prod-db",
+    # the direct form, which main asked about: ssh's own part was built into the part of its stdin
+    "sudo ssh prod-db < cmds.sh",
+    "cat cmds.sh | nsenter -t 1 ssh prod-db",
+])
+def test_a_rule_on_costly_parts_still_finds_the_part_sudo_runs(command):
+    """ssh's own part stays a part of the line beside the one that runs its stdin, so a rule that denies a part
+    sudo or a privileged wrapper runs denies the line, as it did on main where the gate did not read the stdin."""
+    c = gate.classify_shell(command)
+    assert gate.decide(c, COSTLY_DENY).outcome == "deny", c
+    assert gate.decide(c, {"gates": {"categories": {"shell": "deny"}}}).outcome == "deny", c
+    assert gate.decide(c).outcome == "ask", c
+
+
+@pytest.mark.parametrize("command, hits", [
+    # the hop's own part keeps the target and category main gave it, beside the part that runs the stdin
+    ("echo ls | ssh jump 'ssh prod-db; sudo ls'", {("read", "jump"), ("shell", "jump")}),
+    ("echo ls | ssh jump 'ssh prod-db; make test'", {("opaque_exec", "jump"), ("shell", "jump")}),
+    ("echo 'rm -rf /data' | ssh jump xargs ssh prod-db", {("opaque_exec", "jump"), ("shell", "jump")}),
+])
+def test_a_hop_keeps_the_reserved_hits_of_its_own_part(command, hits):
+    c = gate.classify_shell(command)
+    d = gate.decide(c, {"gates": {"reserved": ["target:jump"]}})
+    assert d.outcome == "ask" and hits <= set(d.reserved), d
+
+
 @pytest.mark.parametrize("command, direct", [
-    # sudo and the privileged wrappers make only the first part of their command costly, which is now the new one
-    ("{ sudo ssh prod-db; } < cmds.sh", "sudo ssh prod-db < cmds.sh"),
-    ("{ git push origin main; sudo ssh prod-db; } < cmds.sh", "git push origin main; sudo ssh prod-db < cmds.sh"),
-    ("echo hi > >(sudo ssh prod-db); gh pr comment 3 --body hi", "sudo ssh prod-db < cmds.sh; gh pr comment 3 --body hi"),
-    # main does not read a `<` a wrapper has; the same wrapper around a shell that reads it is the direct form
-    ("{ nsenter -t 1 ssh prod-db; } < cmds.sh", "{ nsenter -t 1 bash; } < cmds.sh"),
+    ("sudo ssh jump 'tee >(ssh prod-db)'", "sudo ssh jump 'ssh prod-db < cmds.sh'"),
+    ("echo hi | sudo ssh jump 'cat x | echo $(ssh prod-db)'", "sudo ssh jump 'ssh prod-db < cmds.sh'"),
+    ("nsenter -t 1 bash -c 'echo hi > >(ssh prod-db)'", "nsenter -t 1 bash -c 'ssh prod-db < cmds.sh'"),
 ])
 def test_a_line_lowered_on_purpose_under_a_rule_on_costly_parts(command, direct):
-    """D-038 amendment for #316, (b): such a rule no longer finds the plain ssh part and the line asks, as main
-    decides the direct form. A category line that denies shell still sees that part."""
+    """D-038 amendment for #316, (b): sudo or a privileged wrapper makes costly only the deciding part of a nested
+    line it runs. A >( ) or $( ) in that line now reads the ssh as fed, so the new part decides it and the line asks,
+    as main decides the same line with a direct `<`. A category line that denies shell still sees the ssh part."""
     c, d = gate.classify_shell(command), gate.classify_shell(direct)
     assert gate.decide(c, COSTLY_DENY).outcome == gate.decide(d, COSTLY_DENY).outcome == "ask", (c, d)
     assert gate.decide(c, {"gates": {"categories": {"shell": "deny"}}}).outcome == "deny"
-    for policy in OPAQUE_ALLOW_OR_LOG:
-        assert gate.decide(c, policy).outcome == gate.decide(d, policy).outcome, policy
+
+
+def test_the_direct_form_keeps_its_reserved_hits():
+    """ssh's own part beside the part that runs the stdin keeps the target it had inside it (none): the hop part
+    names the host, so each hit main listed is still listed."""
+    c = gate.classify_shell("echo 'rm -rf /data' | ssh prod-db")
+    d = gate.decide(c, {"gates": {"reserved": ["command:\\brm\\b"]}})
+    assert set(d.reserved) == {("delete", "/data"), ("opaque_exec", ""), ("shell", ""), ("shell", "prod-db"),
+                               ("read", "")}, d
+
+
+def test_a_rule_for_the_outer_ssh_does_not_name_the_sudo_part_of_a_hop():
+    """#394: the remote command's own part is a command of the line. sudo makes it costly, so alone it logs,
+    and a rule written for the outer ssh does not lower the line past it (main logs it)."""
+    c = gate.classify_shell("ssh jump 'sudo ssh prod-db' < cmds.sh")
+    allow = {"gates": {"rules": [{"match": {"command": "^ssh ", "category": "opaque_exec"}, "decision": "allow"}]}}
+    assert gate.decide(c, allow).outcome == "ask", c
+
+
+# --- the wrapper's own stdin reaches the command it runs (_wrapped) ---
+
+@pytest.mark.parametrize("command", [
+    "uv run ssh prod-db < cmds.sh",
+    "cat cmds.sh | uv run ssh prod-db",
+    "poetry run ssh prod-db 0<&3",
+    "pdm run ssh prod-db <> cmds.sh",
+    "hatch run -- ssh prod-db < cmds.sh",
+    "cat cmds.sh | pipenv run ssh prod-db",
+    "uv run --with x ssh prod-db < cmds.sh",
+])
+def test_a_run_wrapper_s_stdin_reaches_the_ssh_it_runs(command):
+    """main read `uv run ssh host < cmds.sh` as plain ssh: the wrapper's `<` and pipe did not reach its command."""
+    c = gate.classify_shell(command)
+    assert c.category == "opaque_exec", c
+    assert any("runs its stdin" in p.summary for p in gate._each_part(c)), c
+    assert gate.decide(c).outcome == "ask"
+    assert gate.decide(c, HOST_DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    "uv run ssh prod-db < /dev/null",
+    "uv run ssh -n prod-db < cmds.sh",
+    "uv run ssh prod-db uptime < cmds.sh",
+    "cat cmds.sh | uv run ssh prod-db uptime",
+])
+def test_a_run_wrapper_s_stdin_that_ssh_does_not_run_keeps_its_reading(command):
+    c = gate.classify_shell(command)
+    assert not any("runs its stdin" in p.summary for p in gate._each_part(c)), c
+    assert gate.decide(c, DENY).outcome == "allow"
+
+
+def test_a_known_text_piped_into_a_run_wrapper_is_read():
+    c = gate.classify_shell("echo 'rm -rf /data' | uv run ssh prod-db")
+    assert c.category == "delete", c
+    for policy in DELETE_DENY_FORMS:
+        assert gate.decide(c, policy).outcome == "deny", policy
+
+
+# --- a -n, -N or -f before a word that may expand is sure (the everyday `while read h; do ssh -n "$h" ..` loop) ---
+
+@pytest.mark.parametrize("command", [
+    'while read h; do ssh -n "$h" uptime; done < hosts.txt',
+    'ssh -n "$h" uptime < hosts.txt',
+    'ssh -f "$h" uptime < cmds.sh',
+    'ssh -N -L 5432:db:5432 $h < cmds.sh',
+    'ssh -n -- "$h" < cmds.sh',
+    'echo hi > >(ssh -n "$h")',
+])
+def test_a_flag_before_a_word_that_may_expand_is_sure(command):
+    """ssh's -n, -N or -f before such a word is an option whatever the word becomes, so ssh does not read its stdin.
+    main read the stdin of the direct form as run (#240), and the loop asked once a compound's feed was read."""
+    c = gate.classify_shell(command)
+    assert not any("runs its stdin" in p.summary or "ssh that runs it" in p.summary for p in gate._each_part(c)), c
+    assert gate.decide(c, DENY).outcome == "allow"
+
+
+@pytest.mark.parametrize("command", [
+    "ssh $OPTS -n host < cmds.sh",
+    'ssh -o "$X" -n host < cmds.sh',
+    'ssh "$h" -n < cmds.sh',
+    "echo 'rm -rf /data' | ssh $X -n prod-db ssh inner",
+])
+def test_a_flag_after_a_word_that_may_expand_is_not_sure(command):
+    """The word may end the options or turn the flag into a word of the remote command."""
+    c = gate.classify_shell(command)
+    assert any("runs its stdin" in p.summary for p in gate._each_part(c)), c
+    assert gate.decide(c).outcome == "ask"

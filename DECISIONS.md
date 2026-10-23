@@ -1572,7 +1572,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `and N more on other posts` names no text, so it is not compared as one. Its N counts in each tree's total, and
   a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
   posts reaches the cap.
-  *Amendment 2026-10-22 (issue #316, follow-up to #240):* ssh's stdin reached its login shell in four more ways the
+  *Amendment 2026-10-22 (issue #316, follow-up to #240):* ssh's stdin reached its login shell in five more ways the
   gate did not see, so the line read as plain `ssh` and was allowed, even under category denies. (1) A compound fed a
   stdin the gate cannot read: the closer's `<` from anything but a lone `/dev/null`, or a pipe in whose text is not
   known (`{ ssh host; } < cmds.sh`). Where `_feed_compound` fed such commands nothing, it now marks them
@@ -1583,54 +1583,63 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   sets its own stdin is not fed. (3) A `$( )`, backticks or `<( )` inherits the stdin of the command it sits in. On a
   fed line, or where a pipe or a compound feeds a command, it is read as fed. A command's own `<` is set up after its
   words are expanded, so it does not count. (4) A remote hop. An ssh that passes its stdin on (no `-n`, `-N` or `-f`)
-  has its remote command read as a line fed that stdin. An ssh there with no stdin of its own runs it on the next
-  host, wherever it sits, behind a wrapper and over more hops (`ssh a 'cd /; ssh b'`, `ssh a ssh b ssh c`). The ssh
-  part that runs its fed line's stdin carries the signal `runs its line's stdin`, and the ssh around takes it off its
-  remote command's result, so it names one line. A known text is read as for the direct form. The command a wrapper
-  runs (`uv run`, `flock`, `nsenter`, `xargs`...) keeps the wrapper's stdin for this reading (`_wrapped`): a
-  compound's feed reaches it (`{ uv run ssh host; } < cmds.sh`), and a wrapper with a stdin of its own keeps a fed
-  line's mark from it (`>(uv run ssh host < /dev/null)`). The fed mark is a context variable that names one line
-  (`_fed_stdin`), not a classify_shell argument, so code that wraps `classify_shell(cmd, depth)` keeps working. As for
-  #240, these lines take the category of what runs.
-  *Lowered on purpose:* the part the new reading adds is `opaque_exec` and runs on the remote host (`internal`), or is
-  a command of a known text a hop reads. It can become the line's deciding part (the most severe part, or the first of
-  equal ones), and the steps of `decide` that looked at the part it displaced now look at it. In a hop whose outer ssh
-  sets its stdin itself or is piped into, its own text is the one that shows where the stdin comes from, as for a
-  remote `bash` (#394). A line then decides lower than on main in three ways. (a) A policy that allows or logs
-  `opaque_exec`, by a category line or a rule (also one keyed on the outer ssh's text), decides it lower than the
-  displaced part did. That part is `sudo`'s or a privileged wrapper's part, which the matrix logs (`{ sudo ssh
-  prod-db; } < cmds.sh`, `{ nsenter -t 1 ssh prod-db; } < cmds.sh`), or a `git push` or `gh pr merge` the matrix logs
-  (`{ ssh prod-db; git push origin main; } < cmds.sh`). It can also be the ask a `shell` line with an opaque part gets
-  (`{ sudo ssh prod-db; make test; } < cmds.sh` under a rule that logs `opaque_exec`). (b) A rule that denies a part
-  by its reversibility no longer finds the plain ssh part: `sudo` and the privileged wrappers make `costly` only the
-  part they get for their command, not the parts it was built from, and that part is now the new one. So under
-  `{match: {category: [shell, read], reversibility: costly}, decision: deny}`, `{ sudo ssh prod-db; } < cmds.sh` and
-  `{ git push origin main; sudo ssh prod-db; } < cmds.sh` ask instead of deny. (c) A reserved hit on the displaced
-  part goes with it, and the line still asks: under `reserved: [target:jump]`, `echo ls | ssh jump 'ssh prod-db; sudo
-  ls'` keeps the hit on the hop to `jump`. Main decides each such line as it decides the line where the same ssh reads
-  its stdin directly (`sudo ssh prod-db < cmds.sh`, `ssh prod-db < cmds.sh; git push origin main`, `git push origin
-  main; sudo ssh prod-db < cmds.sh`), a hop as a remote `bash` in the inner ssh's place (`ssh jump 'sudo bash' <
-  cmds.sh`), and a wrapper whose direct form it does not read (below) as the same wrapper around `bash` (`{ nsenter -t
-  1 bash; } < cmds.sh`) or as the line without a run wrapper (`ssh prod-db < cmds.sh; git push origin main` for `{ uv
-  run ssh prod-db; git push origin main; } < cmds.sh`). `deny` entries and category lines that deny a category still
-  see every part: `deny: [vcs_push]` still denies the push line, and `categories: {shell: deny}` the sudo line. The
-  #423 differential against main 39cafcba ran twice, and every lowered pair is one of these kinds. Its built-in
-  corpus, 53,872 actions under the 87 policies built into the script, lowers 109 pairs on 39 actions: 76 of kind (a)
-  and 33 of kind (b). A focused corpus of 31,000 actions (the issue's spellings behind wrappers, in compounds, loops,
-  `>( )`, `$( )`, heredocs, hops and cd chains, and their forms) under 111 policies lowers 6,823 pairs on 3,221
-  actions. Those policies are the 87 and 24 more with host scopes, host targets, reserved entries and rules that name
-  `ssh`, `sudo` or `opaque_exec`. (a) 3,982 pairs on 1,987 actions are under the 6 policies that allow or log
-  `opaque_exec`, each decided by the new `opaque_exec` part. (b) 2,589 pairs are under the rule on `costly` parts,
-  each line with `sudo` or a privileged wrapper before the ssh. (c) 252 pairs on 200 actions still ask and lose a
-  reserved hit, under 3 reserved policies. Known limits: a nested shell in a fed line reads its own line unmarked
-  (`>(bash -c 'ssh host')`, `flock -c`, `env -S` ask anyway). On a fed line a `$( )` is read as fed even where the
-  command it sits in reads a pipe, which fails closed. As on main, a `<` or a pipe whose text the gate cannot read
-  that a wrapper itself has does not reach the command it runs (`uv run ssh host < cmds.sh`, `cat cmds.sh | nsenter -t
-  1 ssh host` keep their reading). Rejected: parsing the remote command for one ssh as its first command, the first
-  draft, which missed `ssh a 'cd /; ssh b'` and a second hop. Rejected too: keeping the displaced part as the deciding
-  part, which would make these lines decide unlike their direct form.
-  *Revisit if:* `sudo` and the privileged wrappers mark every part they run `costly` ((b) then goes), or a wrapper
-  passes its own `<` and pipe to the command it runs.
+  gives it to its remote command. That command is read a second time, as a line fed that stdin, and when an ssh there
+  with no stdin of its own runs it, wherever it sits, behind a wrapper and over more hops (`ssh a 'cd /; ssh b'`, `ssh
+  a ssh b ssh c`), the outer ssh is a hop. The ssh part that runs its fed line's stdin carries the signal `runs its
+  line's stdin`, which only that second reading looks for. A known text is read as for the direct form. (5) The
+  command a wrapper runs (`uv run`, `flock`, `nsenter`, `xargs`...) gets the wrapper's stdin (`_wrapped`): a
+  compound's feed, the wrapper's own `<` from anything but `/dev/null` and a pipe into it reach it (`{ uv run ssh
+  host; } < cmds.sh`, `uv run ssh host < cmds.sh`, `cat cmds.sh | uv run ssh host`), and a wrapper with a stdin of its
+  own keeps a fed line's mark from it (`>(uv run ssh host < /dev/null)`). The fed mark is a context variable that
+  names one line (`_fed_stdin`), not a classify_shell argument, so code that wraps `classify_shell(cmd, depth)` keeps
+  working. As for #240, these lines take the category of what runs. The part that runs the stdin is a part of the line
+  beside ssh's own part, not built into it, and ssh's own part keeps the reading it had before #316 (in a hop, the
+  remote command read unfed). So sudo or a privileged wrapper around ssh still makes that part `costly`, and a `deny`
+  or `reserved` entry still finds the targets and categories it found. The direct #240 form is built the same way, so
+  `sudo ssh host < cmds.sh` is now denied under a rule that denies `costly` `shell` parts, where it asked. Last, a
+  `-n`, `-N` or `-f` before a word that may expand to no word or several is an option whatever the word becomes, so
+  ssh does not read its stdin then: `while read h; do ssh -n "$h" uptime; done < hosts.txt` keeps its reading, where
+  it asked once the compound's feed was read.
+  *Lowered on purpose:* the new part is `opaque_exec`, or what a known text reads as, and runs on the remote host. It
+  can be the line's deciding part (the most severe part, or the first of equal ones), and the steps of `decide` that
+  read only that part then read it. A line decides lower than on main in three ways. (a) A policy that allows or logs
+  `opaque_exec`, by a category line or a rule (also one keyed on the text that shows where the stdin comes from),
+  decides it lower than the displaced part did. That part is sudo's or a privileged wrapper's, which the matrix logs
+  or the opaque floor asks about (`{ sudo ssh host; } < cmds.sh`, `nsenter -t 1 ssh host < cmds.sh`), a `git push` or
+  `gh pr merge` the matrix logs (`{ ssh host; git push origin main; } < cmds.sh`), or a `shell` part a category line
+  logs (`uv run ssh host < cmds.sh` under `categories: {shell: log, opaque_exec: allow}`). Main decides the line where
+  the same ssh reads its stdin directly the same way (`sudo ssh host < cmds.sh`, `ssh host < cmds.sh; git push origin
+  main`), and a privileged wrapper as the same wrapper around a shell that reads it (`nsenter -t 1 bash < cmds.sh`).
+  (b) sudo and the privileged wrappers make `costly` only the deciding part of a nested line they run (a remote
+  command, a `bash -c` line). Where a `>( )` or a `$( )` in that line now reads an ssh as fed, the new part decides
+  that line, so a rule that denies `costly` `shell` or `read` parts asks instead: `sudo ssh jump 'tee >(ssh host)'`,
+  as main decides `sudo ssh jump 'ssh host < f'`. (c) The flag before a word that may expand: `ssh -n "$h" uptime <
+  hosts.txt` took the #240 reading (`opaque_exec`, ask) and now takes its own (`read`, allow), since ssh never reads
+  its stdin then. `deny` entries, `reserved` entries and category lines that deny a category still see every part. The
+  #423 differential against main c27d8739, each tree in its own process, finds only these kinds. Its built-in corpus,
+  54,824 actions under the 87 policies built into the script, lowers 4,721 pairs on 133 actions: 145 of kind (a), 6 of
+  kind (b) and 4,570 of kind (c), most of them the test lines for (c) in the compound forms the script makes of each
+  line. 72 of the (c) pairs lose the reserved hit on the `opaque_exec` part that is gone, and still ask. A focused
+  corpus of 69,359 actions (the issue's spellings with other hosts, files and options, behind 30 wrappers and 8 pairs
+  of them, in twelve compound forms, nine `>( )` forms, hops with thirty remote commands, `$( )` forms and everyday
+  ssh lines, and their forms) under 112 policies (the 87 and 25 more with host scopes, host targets, reserved and deny
+  entries, and rules that name `ssh`, `sudo`, `uv run`, `opaque_exec` or a reversibility) lowers 32,616 pairs on
+  12,228 actions: 32,542 of kind (a) and 74 of kind (b), with no reserved hit or posting violation lost. Kind (a)
+  there also takes in a known text a hop reads under a policy that allows its category (`gh pr comment 7 --body done
+  && echo 'rm -rf /srv/app' | sudo ssh bastion 'timeout 5 ssh db1'` under a policy that allows every category goes
+  from the post's third-party ask to `allow`, as the line with `sudo ssh db1` in place of the hop does), and a rule
+  that allows `opaque_exec` keyed on a run wrapper's own text (`^uv run`). The rework's own focused corpus, 31,000
+  actions under 111 policies, lowers 5,955 pairs on 2,130 actions: 4,360 of kind (a), 3 of kind (b) and 1,590 of kind
+  (c). Two more pairs keep their outcome and a `read` hit but list it once where main listed it twice, since ssh's own
+  part keeps no target where ssh reads its stdin (`while read h; do ssh "$h" uptime; done < hosts.txt` under
+  `reserved: [read]`). Known limits: a nested shell in a fed line reads its own line unmarked (`>(bash -c 'ssh
+  host')`, `flock -c`, `env -S` ask anyway). On a fed line a `$( )` is read as fed even where the command it sits in
+  reads a pipe, which fails closed. A stdin set earlier by `exec < file` is still not seen. Rejected: parsing the
+  remote command for one ssh as its first command, the first draft, which missed `ssh a 'cd /; ssh b'` and a second
+  hop. Rejected too: building the new part into ssh's own part and reading a hop's remote command only as fed, an
+  earlier draft of this change, which lost sudo's `costly` mark and the reserved hits of the part it displaced. And
+  keeping the displaced part as the deciding part, which would make these lines decide unlike their direct form.
+  *Revisit if:* sudo and the privileged wrappers mark every part they run `costly` ((b) then goes).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
