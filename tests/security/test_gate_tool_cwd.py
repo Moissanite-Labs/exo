@@ -382,7 +382,38 @@ def test_the_read_keeps_its_own_cell_beside_the_weight(cmd, folder, _home):
     assert gate.decide(c, pol).outcome == "deny"
 
 
-EVERYDAY =["ls *", "ls config", "wc -l *", "grep -r foo *", "du -sh *", "rg -n config src", "file *"]
+NAME_RULE = {"gates": {"rules": [{"match": {"category": "credentials", "target": "config"}, "decision": "deny"}]}}
+PATH_ENTRY = {"gates": {"deny": ["target:*/.kube/*"]}}
+LIFT = {"gates": {"matrix": {"irreversible": {"private": "deny"}},
+                  "rules": [{"match": {"command": "git push"}, "decision": "allow"}]}}
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("cmd", ["cat config", f"cat config; {FORCE}"])
+def test_a_rule_on_the_bare_name_reaches_only_the_cd_form(cmd, tool, key):
+    """A limit in GATE.md: the part's target is the folder joined with the name, and the cd form's is the name
+    alone. So a rule on `config` denies only the cd form, and an entry on the path only the folder form. The other
+    form still asks. Main allows `cat config` here."""
+    c = _bash_in(cmd, "~/.kube", tool=tool, key=key)
+    cd = _bash(f"cd ~/.kube && {cmd}")
+    assert (gate.decide(c, _pol(NAME_RULE)).outcome, gate.decide(cd, _pol(NAME_RULE)).outcome) == ("ask", "deny")
+    assert (gate.decide(c, _pol(PATH_ENTRY)).outcome, gate.decide(cd, _pol(PATH_ENTRY)).outcome) == ("deny", "ask")
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir"), ("exec_command", "workdir")])
+@pytest.mark.parametrize("folder", ["~/.ssh", "~/.exo/keys"])
+def test_a_rule_that_names_a_line_of_one_command_lifts_its_parts_deny(folder, tool, key, _home):
+    """A limit in GATE.md: the call's text has no `cd`, so an allow rule keyed on `command` that names a line of one
+    command lifts the matrix deny on its parts, as on any such line (#394). The call still asks. Its cd form is
+    denied, since the rule does not name the `cd`. On a line of two commands the deny stands."""
+    _held(_home)
+    c = _bash_in(FORCE, folder, tool=tool, key=key)
+    assert _store_parts(c) and gate.decide(c, _pol(LIFT)).outcome == "ask"
+    assert gate.decide(_bash(f"cd {folder} && {FORCE}"), _pol(LIFT)).outcome == "deny"
+    assert gate.decide(_bash_in(f"cat *; {FORCE}", folder, tool=tool, key=key), _pol(LIFT)).outcome == "deny"
+
+
+EVERYDAY = ["ls *", "ls config", "wc -l *", "grep -r foo *", "du -sh *", "rg -n config src", "file *"]
 
 
 @pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])

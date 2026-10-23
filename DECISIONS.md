@@ -1524,20 +1524,26 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `rm -rf` beside a store read. Those lines put the command plain, behind `sudo`, `env`, `timeout`, `nohup`,
   `bash -c`, `ssh` and `mosh`, in a `$( )` and in a here-doc, each as a `cd` form and with `cwd` and `workdir` in 8
   folders. Under 22 policies and three approval tables, none of them decides lower than before this weight or than
-  main, and no approver set widens. No folder form in a store decides lower than its `cd` form, except where the
-  store-write checks do not read the folder (#453, in the limits below). Rejected: the folder argument among the
+  main, and no approver set widens. A folder form in a store can still decide lower than its `cd` form in four cases,
+  none lower than main, each in the limits below: under `deny: [store_write]` (#453), a line that reads a secret
+  itself under a `target:` entry on the folder, a rule or entry on the bare name, and a rule keyed on the text of a
+  line of one command. A check of this change found the last two. Rejected: the folder argument among the
   #209 folders, which replaces the line. Keeping the old reading costs a second reading of the line and a second
   decision, both only where the line read in its folder has a `credentials` part. That reading is a whole
   classification, so nothing has to be found among the parts. A `cd` on the line is read as before. Limits: the
   session's own folder (#209) is not a target. The file tools ignore a folder argument. A name that climbs out of a
   repo's `.claude` worktree back into it is not caught (`cat ../../settings.local.json`), as before. The store-write
   checks do not read the folder argument (`echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`,
-  #453). A differential against main (`gate_diff`, #423, at 3ddd89e9, whose gate is the same as 39cafcba's) finds 0
-  lowered pairs: 4,803,183 pairs on its built-in corpus (55,209 actions under 87 policies), and 1,905,648 pairs on
-  21,904 folder-argument actions (68 lines under 42 folder spellings and 9 tool and key forms, with both keys,
-  relative folders and session folders in a store). On the 21,292 actions of that corpus, under 9 policies and three
-  approval tables, no call gets a wider approver set or loses `no_grant`, `binds_exact`, a reserved hit or a
-  violation. No lowering is intended.
+  #453). A line that reads a secret itself keeps that reading, so a `target:` entry on the folder does not reach it.
+  The part's target is the folder joined with the name, where a `cd` form's is the name alone, so a rule on
+  `target: config` reaches only the `cd` form. The call's text has no `cd`, so an allow rule keyed on `command` that
+  names a line of one command (`git push --force origin main` in `~/.ssh`) lifts the matrix deny on its parts, as on
+  any such line (#394), where the `cd` form keeps it. Each of these still asks. A differential against main
+  (`gate_diff`, #423, at 3ddd89e9, whose gate is the same as 39cafcba's) finds 0 lowered pairs: 4,803,183 pairs on
+  its built-in corpus (55,209 actions under 87 policies), and 1,905,648 pairs on 21,904 folder-argument actions (68
+  lines under 42 folder spellings and 9 tool and key forms, with both keys, relative folders and session folders in
+  a store). On the 21,292 actions of that corpus, under 9 policies and three approval tables, no call gets a wider
+  approver set or loses `no_grant`, `binds_exact`, a reserved hit or a violation. No lowering is intended.
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the

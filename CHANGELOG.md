@@ -97,8 +97,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   write, as a key read after `tar -C` is since #464, so `deny: [credentials]` denies it. When the
   decision fails, the exo-gate hook's fallback reads these parts too, so it asks the principal
   alone, once, in observe mode too. The store read from the folder weighs as the one after a `cd`
-  does since #468: a force push or `rm -rf` on the line adds its weight beside the read. So a deny
-  on `irreversible`, by a matrix cell or a rule, denies the call as it denies the `cd` form.
+  does since #468: a force push or `rm -rf` on the line adds its weight beside the read. So a matrix
+  cell on `irreversible`, or a rule on `credentials` and `irreversible`, denies the call as it denies
+  the `cd` form. GATE.md lists the cases where the two forms still differ.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
