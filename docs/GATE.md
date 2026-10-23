@@ -1428,6 +1428,16 @@ on the line is read as before. Limits:
   `target:` entry on the folder does not reach it: under `deny: [target:*/.ssh]`, `cat id_rsa` with
   `~/.ssh` as `cwd` asks, where `cd ~/.ssh && cat id_rsa` is denied. That is no lower than main.
   `deny: [credentials]` denies both.
+- The part's target is the folder joined with the name (`~/.kube/config`). A `cd` form's target is
+  the name alone (`config`). So a rule or `target:` entry on the name alone, such as a deny rule on
+  `credentials` and `target: config`, reaches only the `cd` form. One on the path, such as
+  `deny: ["target:*/.kube/*"]`, reaches only the folder form. The other form still asks.
+- The call's text has no `cd`. A rule keyed on `command` that names a line of one command lifts a
+  matrix deny on its parts, as on any such line (#394). So under
+  `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
+  `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` asks. Its `cd` form is
+  denied, since the rule does not name the `cd`. Main asks or allows there. On a line of two or more
+  commands, such as `cat *; git push --force origin main`, the deny stands.
 
 Tests: `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
 
