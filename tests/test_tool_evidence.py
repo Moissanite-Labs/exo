@@ -601,6 +601,49 @@ def test_real_gate_classifies_pages_as_reads_and_enforces_read_deny(tmp_path, mo
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("args", [{}, {"reference": None}, {"reference": []}, {"reference": 7},
+    {"reference": "ref", "offset": True}, {"reference": "ref", "offset": -1},
+    {"reference": "ref", "offset": "0"}, {"reference": "ref", "limit": True},
+    {"reference": "ref", "limit": 0}, {"reference": "ref", "limit": 24001},
+    {"reference": "ref", "session": "other"}])
+def test_malformed_tool_output_arguments_keep_generic_gate_classification(args):
+    from exo import gate
+    assert gate.classify((TOOL, args)).category == "unknown"
+
+
+@pytest.mark.parametrize("category", ["credentials", "store_write"])
+@pytest.mark.parametrize("key", ["path", "file_path"])
+@pytest.mark.parametrize("reference_arg", [{}, {"reference": "ref", "limit": 512}])
+def test_unsupported_tool_output_paths_preserve_generic_gate_floors(tmp_path, monkeypatch, category, key, reference_arg):
+    from exo import gate
+    home = tmp_path / "exo-home"
+    (home / "state").mkdir(parents=True)
+    monkeypatch.setenv("EXO_HOME", str(home))
+    path = "~/.ssh/id_ed25519" if category == "credentials" else str(home / "state" / "custom.json")
+    args = {**reference_arg, key: path}
+    classified = gate.classify((TOOL, args))
+    generic = gate.classify(("evidence_probe", args))
+    assert classified.category == generic.category == category
+    assert [part.category for part in classified.parts] == [part.category for part in generic.parts] == ["unknown"]
+    policy = {"gates": {"categories": {category: "allow"}}}
+    assert gate.decide(classified, policy).outcome == gate.decide(generic, policy).outcome == "ask"
+
+
+def test_registered_expansion_rejects_unsupported_arguments_before_reading(evidence, monkeypatch):
+    obj, sid = evidence
+    ref = reference(obj.render(sid, recorded(obj, sid, source("log")))[-1].tool_results[0].text())
+    registry = Registry()
+    obj.install(registry)
+    monkeypatch.setattr(obj, "read", lambda *args, **kwargs: pytest.fail("unsupported arguments reached expansion"))
+
+    async def run():
+        for key in ("path", "file_path", "files", "destination", "session"):
+            result = await registry.call(ToolCall("invalid", TOOL, {"reference": ref, key: "~/.ssh/id_ed25519"}),
+                                         ToolContext(session=sid))
+            assert result.is_error and "unknown argument" in result.text()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("count,size,compressed", [(65, 9000, 64), (12, 100000, 10)])
 def test_build_work_limits_leave_later_results_intact(evidence, count, size, compressed):
     obj, sid = evidence

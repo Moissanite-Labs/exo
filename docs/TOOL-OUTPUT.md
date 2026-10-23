@@ -62,8 +62,9 @@ sanitized text. JSON escaping can shorten a page below the requested limit so th
 control characters and Unicode cannot make the registry truncate the JSON envelope.
 
 The runtime supplies the session. The tool accepts no session or file path. Normal
-gate and executor dispatch still apply. The gate classifies `tool_output` as `read`,
-so an explicit read-deny policy blocks it. An executor may refuse this tool. Expansion
+gate and executor dispatch still apply. The gate classifies supported `tool_output` calls as `read`,
+so an explicit read-deny policy blocks them. Unsupported argument shapes retain generic gate
+classification and fail schema validation before execution. An executor may refuse this tool. Expansion
 does not read arbitrary host files or bypass the selected executor.
 
 Known provider keys are redacted before rendering and expansion, in addition to
