@@ -217,6 +217,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#438, D-038 amendment): bash expands a brace set before `export` reads a name in it, so
+  `export {PATH,X}=; ls` is `export PATH= X=; ls`. It empties PATH, and the `ls` runs a planted `./ls`. The gate
+  read the word as the name `{PATH,X}` and allowed the line. The same held for `declare`, `typeset`, `readonly`,
+  `local`, `read {X,PATH}`, `printf -v {PATH,X}` and `test {-v,'a[PATH=0]'}`. A command in the subscript of a name
+  a set makes was not read either, so `deny: [delete]` allowed `printf {-v,'a[$(rm -rf x)]'} x`. The gate now
+  expands the operands of the builtins that take a name as bash does, and reads the words bash makes as well as the
+  words as written. So these lines ask or deny as the lines bash runs do, and `export {LD_PRELOAD,X}=/tmp/x.so` or
+  `export {GIT_SSH_COMMAND,X}='rm -rf x'` is read as its variable. A set of other names keeps its class:
+  `export {A,B}=1; ls` reads as `export A=1 B=1; ls`. A line that asked before still asks. A quoted or escaped
+  brace is not expanded (`export '{PATH,X}='`). bash fills the last name `printf -v` is given, and the gate read
+  only the first. It now reads each, so `printf -v X -v PATH .; ls` asks. A glob in a name joined to `-v`
+  (`printf -vPAT? .`, which a file named `-vPATH` turns into `printf -vPATH .`) now asks as one apart does.
 - Gate store protection (#465, D-038 amendment): after `cd` into the store or a descriptor folder, a `$( )`,
   backticks or `<( )` of a later command is classified in that folder, as the same command unwrapped is. Each
   substitution was classified as a fresh line, so `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the

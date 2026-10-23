@@ -1007,9 +1007,9 @@ gate does not read:
   reads a word, so `unset \<newline>[P]ATH` asks too. A word wholly in double quotes is
   read as before (`unset "arr[$k]"`), and so is `unset 'arr[1]'`. `unset -n PATH` asks too, to
   be safe. bash leaves a plain `PATH` set under `-n`, but it unsets a `PATH` that an earlier
-  command made a nameref. The
-  line sets one before the program, through a prefix, exported or bare (`export -p` and
-  `readonly -p` assign too, while `declare -p` only prints), as a parameter-expansion assignment
+  command made a nameref. A line sets such a variable before the program, through a prefix,
+  exported or bare (`export -p` and `readonly -p` assign too, while `declare -p` only prints), as
+  a parameter-expansion assignment
   (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
   `-a`) or `printf -v` fills, as a `for` variable, through a nameref (`declare -n r=PATH`), or as
   an integer through arithmetic, an array subscript, or a `{PATH}>` redirection (`$((PATH=10))`,
@@ -1035,8 +1035,24 @@ gate does not read:
   the gate cannot read (`declare -${f}x $V=`). The options end at that word, so a `-f` or `-p`
   after it does not count. `export` and `readonly` read `+x` as a name, and the words after it
   as names too. So `export +x -f $V=` asks, and `readonly +x -n r=PATH` makes no nameref
-  (#329). An exporter name in a brace (`export {PATH,X}=`) is not read yet (#438), and neither
-  is a leading `[` in a `read` or exporter name (`read [P]ATH`).
+  (#329). bash expands a brace set in the operands of a builtin that takes a name (an exporter,
+  `read`, `printf`, `test` and `[`, and `wait`) before the builtin reads them. The gate reads the
+  words bash makes, as well as the words as written (#438). So `export {PATH,X}=` reads as
+  `export PATH= X=` and asks, and so do `declare -x {PATH,X}=`, `export {P,}ATH=`,
+  `read {X,PATH}` and `printf -v {PATH,X} .`. An option in a set counts too:
+  `test {-v,'a[PATH=0]'}` sets PATH as `test -v 'a[PATH=0]'` does, and a command in the
+  subscript of a name the set makes is read as in `printf -v 'a[$(cmd)]'` (#179). A set of other
+  names keeps the class of the names it makes: `export {A,B}=1` reads as `export A=1 B=1`. A word
+  that asked before still asks, such as `export X{A,B}=1`, whose brace after the first character
+  the lexer reads as a glob. `unset` asks on any unquoted brace, as above. A quoted or escaped
+  brace does not expand (`export '{PATH,X}='`), and bash refuses that word as a name. bash drops
+  a `\<newline>` outside quotes before it expands a set and keeps one in single quotes or `$'..'`,
+  and so does the gate. The expansion is the one "Secret-store paths" describes, with a budget of
+  its own. A set past its limits asks as `opaque_exec`. bash fills the last name `printf -v` is
+  given, so the gate reads each one, in its place (`printf -v X -v PATH .` and
+  `printf {-v,X,-v,PATH} .` ask). A glob in a name joined to `-v` asks as one apart does:
+  `printf -vPAT? .` is `printf -vPATH .` when a file named `-vPATH` is in the folder. A leading
+  `[` in a `read` or exporter name (`read [P]ATH`) is not read yet.
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
   `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
@@ -1473,10 +1489,9 @@ denies `opaque_exec` (#191) denies the line.
 
 The gate reads the common ways a line sets a variable. A shell's rarer expansion forms can still
 set one unseen: an unquoted here-doc body fed to a builtin (`${NAME:=v}` or `$((NAME=n))` in
-it), a brace expansion in a name (`export {PATH,FOO}=x`), indirect expansion (`${!ref:=v}`),
-arithmetic in a substring offset (`${x:PATH=1}`), the old `$[...]` arithmetic, an integer
-variable (`declare -i x; x=PATH=5`), `wait -p NAME` and `{NAME}<<<x`. This is one more reason
-the sandbox is the real fix.
+it), indirect expansion (`${!ref:=v}`), arithmetic in a substring offset (`${x:PATH=1}`), the
+old `$[...]` arithmetic, an integer variable (`declare -i x; x=PATH=5`), `wait -p NAME` and
+`{NAME}<<<x`. This is one more reason the sandbox is the real fix.
 
 ## The store is credentials (D-038)
 

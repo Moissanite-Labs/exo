@@ -1465,6 +1465,56 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   101 are `unset \<newline>"arr[$k]"` forms. The double-quote check reads the raw word, so a `\<newline>` before it
   makes the word one the gate cannot read, and the line `opaque_exec`, as `unset a[$i]` is. That was so before this
   fix too.
+  *Amendment 2026-10-23 (issue #438, follow-up to #329):* `export {PATH,X}=; ls` was `read` (allow). bash expands a
+  brace set before `export` reads a name in it, so the line is `export PATH= X=; ls`. PATH is then empty, and the `ls`
+  runs a planted `./ls` (#329). The same held for `declare`, `typeset`, `readonly` and `local`, with options or not,
+  for `read {X,PATH}` and for `printf -v {PATH,X}`. It held for an option in a set too: `test {-v,'a[PATH=0]'}; ls`
+  sets PATH to `0` through the subscript, as `test -v 'a[PATH=0]'; ls` does. A command in the subscript of a name a
+  set makes was not read either (#179), so `deny: [delete]` allowed `printf {-v,'a[$(rm -rf build)]'} x`, which runs
+  the `rm`. The gate read each word as written, the name `{PATH,X}`. *Expansion.* When an operand of a builtin that
+  takes a name (`_NAME_BUILTINS`: an exporter, `read`, `printf`, `test`, `[` and `wait`) holds an unquoted brace, the
+  gate now expands the operands with `_brace_words`, the expansion the secret-store and store-write checks run on a
+  word's source text with its quotes, and lexes each word it makes again. Each word stays in its place, and a word the
+  set makes twice stays twice, since a builtin reads its words by place (`printf {-v,X,-v,PATH} .` fills PATH). bash
+  drops a `\<newline>` outside quotes before it expands the set, and the gate drops it too. One in single quotes or
+  `$'..'` stays, so `export {PATH,X}='.venv/\<newline>bin'` is not the trusted `.venv/bin`. The builtin's checks read
+  those words as well as the words as written: the names it sets, a subscript in them, and a value `declare` reads
+  again. So `export {PATH,X}=` asks as `export PATH= X=` does, `export {LD_PRELOAD,X}=/tmp/x.so` asks, and
+  `deny: [delete]` denies `export {GIT_SSH_COMMAND,X}='rm -rf build'; git fetch` and
+  `printf {-v,'a[$(rm -rf build)]'} x`. A set of other names keeps its class: `export {A,B}=1; ls` reads as
+  `export A=1 B=1; ls`, and `test -f {a,b}.txt` stays `read`. A quoted `}` stays in its member, so
+  `export {"}",PATH}=` names PATH. A quoted or escaped brace does not expand, and bash refuses that word as a name, so
+  `export '{PATH,X}='` stays `read`. These words take a third brace budget of 4,096 words per call, so the
+  secret-store and store-write checks keep theirs. A set past the limits is not read in part: the builtin gets an
+  `opaque_exec` part, "takes a brace set too large to read". One word past 1,024 words asked on main already, as a
+  store path. The secret-store checks expand a word they meet twice once, and this budget counts each word, so a line
+  whose sets make more than 4,096 words in all asks, even when one small set repeats. *printf.* bash fills the last
+  name `printf -v` is given, and the gate read only the first. It now reads each, so `printf -v X -v PATH .; ls` and
+  `printf -v{X,PATH} .; ls` ask. A glob in a name joined to `-v` now asks as one apart does: a file named `-vPATH`
+  makes `printf -vPAT? .` set PATH. *Kept.* A word that asked on main still asks, since the words as written are still
+  read. The lexer reads a brace after a word's first character as a glob, so `export X{A,B}=1; ls`,
+  `export X={a,b}; ls` and `export PATH=/usr/bin{,}; ls` ask as words the gate cannot read. `unset` asks on any
+  unquoted brace (#329), so `unset {PATH,}` and `unset {A,B}` ask as before, and its words are not expanded. A `for`
+  name is not expanded either, since bash refuses `for {PATH,X} in`. Rejected: reading only the words bash makes. It
+  would lower the lines above to the decision of the line bash runs, a change that needs its own differential.
+  Rejected too: reading any brace in a name as a name the gate cannot read. `export {A,B}=1; ls` would ask.
+  *Policies that allow a category.* A line now in `opaque_exec`, or in `delete` through a command it now reads, loses
+  an ask that a policy puts on another category while it allows or logs that one (`export {PATH,X}=; ls` under
+  `categories: {opaque_exec: allow, read: ask}`, `export {GIT_SSH_COMMAND,X}='rm -rf build'; git fetch` under
+  `{delete: allow, read: ask}`). Main does the same for the line bash runs (`export PATH=; ls`,
+  `export GIT_SSH_COMMAND='rm -rf build'; git fetch`), so this is the mixed category case the #329 amendment names.
+  Differential (#423) against main 5a9dc394. Built-in corpus: 55,313 actions x 87 policies, lowered 0 pairs, tightened
+  15,465 pairs on 197 actions. A focused corpus of 930 lines holds the issue's rows, sequence, quoted, nested and
+  line-joined sets, and options and subscripts in a set for each of these builtins. It runs them under `sudo`, `doas`,
+  `env`, `timeout`, `nice`, `command`, `builtin`, `time`, `bash -c`, `sh -c`, `ssh`, `xargs`, compounds, subshells,
+  `$( )`, here-docs, functions, `eval`, `cd` chains and quoting, beside everyday lines with braces: 2,098 actions x 87
+  policies, lowered 0 pairs, tightened 90,573 pairs on 1,264 actions. Under 6 mixed category policies
+  (`{opaque_exec: allow, read: ask}`, `{delete: allow, read: ask}` and the like), the built-in corpus lowers 513 pairs
+  on 176 actions and the focused corpus 2,824 pairs on 986 actions. Each is a line that is now `opaque_exec` or
+  `delete` under a policy that allows or logs that category: the mixed category case above. Left out: a leading `[` in
+  a `read` or exporter name (`read [P]ATH`) is still not read. `mapfile`, `getopts` and `let` ask already, and
+  `wait -p NAME` is a known limit. A `-i` value that assigns (`declare -i X=PATH=0`, with a brace or not) is not read
+  either. It is the integer-variable limit "Known limits" lists, left for its own issue.
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the
