@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "gate_diff.py"
 DELETE_LINE = '    "delete":            ("irreversible", "private", False),\n'
 CLASSIFY_DOC_END = '(_in_tool_folder sets it)."""\n'      # the first line of gate.classify's body comes after it
+# _decide lists the other posts' violations after this line. The mutant before it lists each text once (#460, #462)
+ROOM = "    room, seen, listed = max(_LISTED_VIOLATIONS - len(violations), 0), [0, 0], []\n"
+ONCE = "    named, held = [list(t) for t in zip(*dict.fromkeys(zip(named, held)))] or [[], []]\n"
 
 
 def _tree(tmp_path: Path, name: str, patch: tuple[str, str] | None = None,
@@ -980,9 +983,8 @@ def test_one_line_holds_more_posts_than_decide_lists():
 
 def test_a_head_that_lists_a_text_once_where_main_lists_it_twice_is_lowered(tmp_path):
     # Through _row: the rows keep each text as often as decide lists it.
-    room = "    room = max(_LISTED_VIOLATIONS - len(violations), 0)\n"
     base = _tree(tmp_path, "base")
-    head = _tree(tmp_path, "head", (room, "    named = list(dict.fromkeys(named))\n" + room))
+    head = _tree(tmp_path, "head", (ROOM, ONCE + ROOM))
     corpus = tmp_path / "mine.txt"
     corpus.write_text("rm -rf build; gh pr comment 5 --body 'hi there'; gh pr comment 5 --body 'hi again'\n",
                       encoding="utf-8")
@@ -994,9 +996,8 @@ def test_a_head_that_lists_a_text_once_where_main_lists_it_twice_is_lowered(tmp_
 
 def test_a_head_that_hides_fewer_violations_past_the_cap_is_lowered(tmp_path):
     # The same head past the listing cap: both trees list the same 20 texts, and only `and N more` falls (#462 review)
-    room = "    room = max(_LISTED_VIOLATIONS - len(violations), 0)\n"
     base = _tree(tmp_path, "base")
-    head = _tree(tmp_path, "head", (room, "    named = list(dict.fromkeys(named))\n" + room))
+    head = _tree(tmp_path, "head", (ROOM, ONCE + ROOM))
     posts = "; ".join(f"gh pr comment {n} --body 'hi there'" for n in range(1, 25))
     corpus = tmp_path / "mine.txt"
     corpus.write_text(f"rm -rf build; {posts}; gh pr comment 1 --body 'hi there'\n", encoding="utf-8")
