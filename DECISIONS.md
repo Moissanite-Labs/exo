@@ -6413,7 +6413,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     assert. Product imports and private-state reads stay at 39 and 8.
 
 ## D-084 (2026-10-23) Retained tool-output views with exact bounded expansion
-- **Status:** Implemented for review, stage 1 of #501. Off by default and independent of harness presets.
+- **Status:** In progress, stage 1 of #501 implemented for review. Off by default and independent of harness presets.
 - **Decision:** Render deterministic excerpts through a `TurnContext` decorator. Leave the authoritative
   transcript, emitted results, memory hooks and summary input unchanged. Expand sanitized text in bounded
   JSON pages through an ordinary registry tool, preserving gate and executor dispatch. Reuse session storage;
@@ -6422,7 +6422,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Scope:** Single text-part, non-error results above the configured threshold. Preserve distinct diagnostic
   and source-label lines or leave the result whole. Expansion pages and multipart/image results stay whole.
   Delegated views use the optional `for_child(context, tools=names)` contract and require the expansion tool.
-- **Ownership:** Bind new evidence to the configured principal, agent and session in existing session metadata.
+- **Ownership:** Atomically bind new evidence to the configured principal, agent and session in existing metadata.
+  The first writer owns the binding; initialization preserves unrelated metadata and snapshots its sequence in one transaction.
   Pre-enable history and fork copies remain uncompressed. References identify a message and result index,
   not only a reusable tool-call ID. Undo and a bounded recent-message window revoke access. Reads reapply
   known-key redaction and refuse stale fingerprints. These checks do not change the rest of memory's access.

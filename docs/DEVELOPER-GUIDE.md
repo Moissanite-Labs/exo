@@ -115,6 +115,9 @@ the normal registry/executor path. `for_child(context, tools=names)` is an optio
 method for delegated views. Preserve the allowed toolset and keep the transcript unchanged.
 Use `SessionStore`'s public scoped reads. See [TOOL-OUTPUT.md](TOOL-OUTPUT.md) for ownership,
 limits and tests. This adds no output archive and does not recover previously truncated bytes.
+Shared metadata edits use `SessionStore.update_meta(session, callback)` so concurrent writers
+preserve other keys. The callback edits the current dictionary inside one transaction and may read
+the store; `set_meta` replaces the complete object and must not be used for concurrent runtime edits.
 
 **The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
 commands. Its collaborators have small interfaces:

@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 
 import pytest
@@ -133,6 +135,136 @@ def test_session_private_fork_principal_and_agent_boundaries(evidence):
     for target in (sid, child):
         with pytest.raises(ToolError, match="unavailable"):
             obj.read(target, private_ref)
+
+
+def test_binding_first_writer_wins_across_connections(tmp_path, monkeypatch):
+    path = tmp_path / "sessions.sqlite"
+    first, second = SessionStore(path), SessionStore(path)
+    sid = first.create_session(agent="default").id
+    first.set_meta(sid, {"unrelated": {"keep": True}})
+    first.append_message(sid, Message.user("existing history"))
+    alice = Evidence(first, Options(enabled=True), "alice", "default")
+    bob = Evidence(second, alice.options, "bob", "default")
+    snapshot, competing, release = threading.Event(), threading.Event(), threading.Event()
+    last_seq, transaction = first.last_seq, second._tx
+
+    def boundary(session):
+        snapshot.set()
+        assert release.wait(5)
+        return last_seq(session)
+
+    def competing_write(fn):
+        competing.set()
+        return transaction(fn)
+
+    monkeypatch.setattr(first, "last_seq", boundary)
+    monkeypatch.setattr(second, "_tx", competing_write)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            winner = pool.submit(alice.begin, sid)
+            assert snapshot.wait(5)
+            follower = pool.submit(bob.begin, sid)
+            try:
+                assert competing.wait(5)
+                assert not follower.done()
+            finally:
+                release.set()
+            winner.result(timeout=5)
+            follower.result(timeout=5)
+        second.lock(sid, "finished")
+        bob.begin(sid)
+        assert first.get_meta(sid) == {
+            "unrelated": {"keep": True}, "locked": "finished",
+            META: {"principal": "alice", "agent": "default", "since": 1}}
+        records = recorded(alice, sid, source("log"))
+        ref = reference(alice.render(sid, records)[-1].tool_results[0].text())
+        with pytest.raises(ToolError, match="unavailable"):
+            bob.read(sid, ref)
+    finally:
+        release.set()
+        first.close()
+        second.close()
+
+
+def test_metadata_initialization_preserves_updates_and_rolls_back(tmp_path, monkeypatch):
+    path = tmp_path / "sessions.sqlite"
+    first, second = SessionStore(path), SessionStore(path)
+    sid = first.create_session(agent="default").id
+    lookup = first.get_session
+
+    def concurrent_metadata(session):
+        info = lookup(session)
+        second.lock(session, "finished")
+        second.update_meta(session, lambda meta: meta.update(unrelated=["keep"]))
+        return info
+
+    monkeypatch.setattr(first, "get_session", concurrent_metadata)
+    try:
+        Evidence(first, Options(enabled=True), "alice", "default").begin(sid)
+        assert first.get_meta(sid) == {
+            "locked": "finished", "unrelated": ["keep"],
+            META: {"principal": "alice", "agent": "default", "since": 0}}
+
+        def failed(meta):
+            meta["failed"] = True
+            raise RuntimeError("initialization failed")
+
+        with pytest.raises(RuntimeError, match="initialization failed"):
+            first.update_meta(sid, failed)
+        assert "failed" not in first.get_meta(sid)
+        assert second.update_meta(sid, lambda meta: meta.setdefault("value", "returned")) == "returned"
+        assert first.get_meta(sid)["value"] == "returned"
+        with pytest.raises(KeyError):
+            first.update_meta("missing-session", failed)
+    finally:
+        first.close()
+        second.close()
+
+
+@pytest.mark.parametrize("binding_first", [True, False])
+def test_lock_and_binding_transactions_preserve_both_write_orders(tmp_path, monkeypatch, binding_first):
+    path = tmp_path / "sessions.sqlite"
+    first, second = SessionStore(path), SessionStore(path)
+    sid = first.create_session(agent="default").id
+    alice = Evidence(first, Options(enabled=True), "alice", "default")
+    paused, following = (first, second) if binding_first else (second, first)
+    paused_update, following_update = paused.update_meta, following.update_meta
+    captured, attempted, release = threading.Event(), threading.Event(), threading.Event()
+
+    def pause_after_snapshot(session, callback):
+        def update(meta):
+            captured.set()
+            assert release.wait(5)
+            return callback(meta)
+        return paused_update(session, update)
+
+    def competing_update(session, callback):
+        attempted.set()
+        return following_update(session, callback)
+
+    monkeypatch.setattr(paused, "update_meta", pause_after_snapshot)
+    monkeypatch.setattr(following, "update_meta", competing_update)
+    binding, lock = lambda: alice.begin(sid), lambda: second.lock(sid, "finished")
+    lead, follow = (binding, lock) if binding_first else (lock, binding)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            leading = pool.submit(lead)
+            assert captured.wait(5)
+            following_task = pool.submit(follow)
+            try:
+                assert attempted.wait(5)
+                assert not following_task.done()
+            finally:
+                release.set()
+            leading.result(timeout=5)
+            following_task.result(timeout=5)
+        Evidence(second, alice.options, "bob", "default").begin(sid)
+        assert first.get_meta(sid) == {
+            "locked": "finished", META: {"principal": "alice", "agent": "default", "since": 0}}
+    finally:
+        release.set()
+        first.close()
+        second.close()
 
 
 def test_pre_enable_records_and_fork_copies_are_not_claimed(evidence):

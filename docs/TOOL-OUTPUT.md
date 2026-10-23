@@ -1,5 +1,7 @@
 # Retained tool-output views (D-084)
 
+**Status: In progress.** Stage 1 of issue #501 is implemented for review.
+
 Large tool results can be shown to the model as short excerpts while the original
 retained text stays in the session transcript. The `tool_output` tool reads exact
 pages when the model needs more detail. This feature is off by default.
@@ -71,8 +73,9 @@ reference. This feature does not promise to recognize arbitrary secrets in tool 
 
 ## Ownership and retention
 
-The first enabled context build records the configured principal, engine agent and
-current sequence boundary in that session's metadata. Only subsequent tool results
+The first enabled context build atomically records the configured principal, engine agent and
+current sequence boundary in that session's metadata. The first writer keeps ownership;
+initialization preserves unrelated metadata. Only subsequent tool results
 qualify. Earlier results remain unchanged. This avoids assigning old data to whichever
 principal happens to enable the feature. Ownership comes from application configuration,
 not tool arguments, message text or a model's claim.
@@ -108,7 +111,9 @@ or establish a sandbox between processes sharing the same user account.
 `exo.tool_evidence.EvidenceContext` decorates the public `TurnContext.build` interface.
 Its optional `for_child(context, tools=names)` method wraps a child's context only when
 expansion is available. Contexts without that method keep the previous child behavior.
-`Evidence` uses `SessionStore`'s public message, sequence and metadata methods. Each
+`Evidence` uses `SessionStore`'s public message, sequence and metadata methods.
+`update_meta` initializes an absent key and its sequence snapshot in one transaction;
+session locking and context updates use that same atomic metadata contract. Each
 expansion reads the target message and preceding source call, without scanning history.
 
 Run `tests/test_tool_evidence.py` for exact pages, restart, undo, principal/session/fork
