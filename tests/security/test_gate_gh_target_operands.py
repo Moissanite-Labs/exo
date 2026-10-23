@@ -834,7 +834,8 @@ def test_a_post_on_another_target_is_named_without_its_user_and_password(policy,
 
 # Round 10: each copy of a post repeated the post's violations, so a post with many of them pushed another post's
 # violation past the twenty listed, where main listed it. A copy lists only what neither its post nor another copy of
-# it lists, right after its post, and a line with copies is not cut, so the line lists what main lists.
+# it lists, right after its post, and the entries of posts with copies and of copies have a room of their own, so the
+# line lists what main lists.
 @pytest.mark.parametrize("line, names", [
     ("gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app -b 'N0X N1X N2X N3X N4X N5X'", 6),
     ("gh pr comment 5 -R https://ghe.example.com/pub/repo -b 'N0X N1X N2X N3X N4X N5X N6X N7X N8X'", 9),
@@ -848,9 +849,9 @@ def test_copies_of_a_post_do_not_push_another_post_out_of_the_list(line, names):
     assert len(d.violations) == names + 2 and not any(v.startswith("and ") for v in d.violations), d.violations
 
 
-def test_a_copys_own_violations_are_listed_and_nothing_is_cut():
+def test_a_copys_own_violations_are_listed_and_the_other_post_s_too():
     # A copy that finds more than its post (here its text is given ten more names) lists that right after its post,
-    # and a line with copies lists every violation, so the other post's is there too.
+    # in the room of posts with copies, so the other post's is listed in its own room.
     pol = normalize_policies({"posting": {"footer": "F", "scrub": {
         "names": [f"N{i}X" for i in range(9)] + [f"M{i}X" for i in range(10)] + ["ZZOTHER"]}}})
     c = classify(sh("gh pr comment 5 -R https://ghe.example.com/pub/repo -b '" + " ".join(f"N{i}X" for i in range(9))
@@ -1014,4 +1015,20 @@ def test_a_line_read_two_ways_lists_one_hidden_count():
     posts = " && ".join(f"gh pr comment {n} -R pub/r -b x" for n in range(1, 31))
     d = run(f"gh -R pub/repo pr comment 5 -b x && {posts}", normalize_policies({"posting": {"footer": "F"}}))[1]
     hidden = [v for v in d.violations if v.startswith("and ")]
-    assert len(hidden) == 1 and d.violations[-1] == hidden[0], d.violations
+    assert hidden == ["and 10 more on other posts"] and d.violations[-1] == hidden[0], d.violations
+    named = [v for v in d.violations if v.startswith("GitHub PR comment on pub/r#")]
+    assert len(named) + 10 == 30, named      # each of the thirty posts is listed or counted, once
+
+
+def test_copied_posts_do_not_push_a_plain_post_out_of_its_room():
+    # Round 11 review: with one room, ten posts with copies of twenty names each filled it, and the plain post's
+    # violation that main lists was cut. Each kind of post has its own room now.
+    names = [f"NM{i:02d}X" for i in range(20)]
+    pol = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}},
+                              "posting": {"footer": "F", "scrub": {"names": names + ["ZZOTHER"]}}})
+    for k in (10, 11):
+        copied = " && ".join(f"gh pr comment https://api.github.com/pub/repo/pull/{n} -R myorg/app -b '{' '.join(names)} F'"
+                             for n in range(10, 10 + k))
+        d = run(f"gh pr comment 1 -R pub/a -b 'F' && {copied} && gh pr comment 2 -R pub/r -b 'ZZOTHER F'", pol)[1]
+        assert "GitHub PR comment on pub/r#2: internal name: ZZOTHER" in d.violations, (k, d.violations[-3:])
+        assert len(d.violations) <= 1 + 20 + gate._LISTED_WITH_COPIES + 1, len(d.violations)

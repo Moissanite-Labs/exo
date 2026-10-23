@@ -6578,14 +6578,16 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     # that a line of many posts keeps its reason and its card short. A gh post's copy on another
     # target it may land on (#399, alt_copy) lists, right after its post, only what neither the
     # post nor another copy of it lists. The gate cannot tell which of a post's targets main read
-    # it on, so a line with copies lists, past that room, as many more as its posts with copies and
-    # their copies list: every entry main lists keeps its place within the room. It lists at most
-    # _LISTED_WITH_COPIES, so the card, the ledger row and the decision model's input stay bounded.
+    # it on, so the entries of posts with copies and of the copies have a room of their own,
+    # _LISTED_WITH_COPIES, beside the room the other posts' entries have, as on main. Each list
+    # keeps the line's order, so every entry main lists is listed while the posts with copies list
+    # no more than that (#439 round 11). The count stays bounded, the ledger row by count only (#485).
     checked, post_unseen_seen = False, False
     named: list[str] = []
+    held: list[bool] = []       # per named entry: of a post with copies or of a copy
     found_on: dict[int, list[str]] = {}
     post_of = {id(k): id(q) for q in _each_part(eff) for k in q.parts if k.alt_copy}
-    copied, held = set(post_of.values()), 0
+    copied = set(post_of.values())
     for p in _each_part(eff):
         p_unseen = post_unseen(p)
         if p.category not in applies_to and not (p.category in ("github_close", "vcs_merge")
@@ -6609,12 +6611,16 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
             violations += found
         else:
             named += [f"{redact_userinfo(p.summary or p.category)}: {v}" for v in found]
-            held += len(found) if p.alt_copy or id(p) in copied else 0
+            held += [p.alt_copy or id(p) in copied] * len(found)
     if unseen and not post_unseen_seen and (checked or line_applies):
         violations.append(UNSEEN_BODY)  # a body on a part the posting rules do not cover is still unseen
-    room = max(_LISTED_VIOLATIONS - len(violations), 0)
-    room = min(room + held, _LISTED_WITH_COPIES) if post_of else room
-    violations += named[:room] + ([f"and {len(named) - room} more on other posts"] if len(named) > room else [])
+    room, seen, listed = max(_LISTED_VIOLATIONS - len(violations), 0), [0, 0], []
+    for v, h in zip(named, held):
+        if seen[h] < (_LISTED_WITH_COPIES if h else room):
+            listed.append(v)
+        seen[h] += 1
+    left = len(named) - len(listed)
+    violations += listed + ([f"and {left} more on other posts"] if left else [])
     if violations:
         bump("ask", "posting rules: " + "; ".join(violations), "posting")
 
@@ -6667,16 +6673,19 @@ def _strictest(ds: list[Decision], why: list[str]) -> Decision:
     violation two posts of one name both meet is listed as often as one decision lists it."""
     i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
     violations: list[str] = []
-    hidden = 0                  # the most `and N more on other posts` of any reading, listed once, last
     for d in ds:
         more = Counter(d.violations) - Counter(violations)
         for v in d.violations:
-            if m := _HIDDEN.fullmatch(v):
-                hidden = max(hidden, int(m.group(1)))
-            elif more[v] > 0:
+            if not _HIDDEN.fullmatch(v) and more[v] > 0:
                 violations.append(v)
                 more[v] -= 1
-    violations += [f"and {hidden} more on other posts"] if hidden else []
+    # One `and N more on other posts`, last: of what a reading left out, at least N is not in the merged list, and the
+    # merged list with N holds as many as any reading does with its own count.
+    merged, hidden = Counter(violations), 0
+    for d in ds:
+        n = sum(int(m.group(1)) for v in d.violations if (m := _HIDDEN.fullmatch(v)))
+        hidden = max(hidden, n - sum((merged - Counter(v for v in d.violations if not _HIDDEN.fullmatch(v))).values()))
+    violations += [f"and {hidden} more on other posts"] if hidden > 0 else []
     return replace(ds[i], reason=ds[i].reason + why[i], violations=violations,
                    exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
                    third_party=any(d.third_party for d in ds),
