@@ -452,15 +452,17 @@ stderr and in the summary, since its entries may get no lines. To these come gen
 - each line under the other tool names and keys the gate reads as a shell line: `shell`, `bash`, `run_command` and
   `exec_command` with the line under `command` or `cmd`, and a name the tool table does not hold that ends in
   `terminal` or `shell` (`powershell`, `remote_shell`) with the line under `command`. Every seed line runs under each
-  of them, every other line under one.
+  of them, every other line under one. Each seed also runs under each tool table name that ends in `terminal` or
+  `shell` (`read_terminal`), so a head that adds such a name to the table shows, and in a call that holds both keys,
+  with `true` under the other one, since the gate reads `command` first.
 - folder rows: calls that read a secret store only as resolved from a folder (#209), such as `cat keys` in `~/.exo`,
   `ls` in `~/.exo/keys`, `cat settings.json` in `~/.claude`, and file tool calls like them. Each line runs under
   every shell form, once with the folder as the session folder and once as the call's own `cwd`. Main decides each
   row otherwise without its folder, and a test checks that, so a head that stops reading the folder shows.
-- posts that trip each posting rule: a home path, an internal id and a model id for the default scrub, and each
-  forbid entry, forbidden word, agent name and scrub pattern of the policies the run uses. Each runs as a `gh`
-  comment and title, under each text and title key of the first outbound tool, and under the first text key of
-  the others.
+- posts that trip each posting rule (each also twice to one PR behind a delete, so main lists its texts twice): a
+  home path, an internal id and a model id for the default scrub, and each forbid entry, forbidden word, agent name
+  and scrub pattern of the policies the run uses. Each runs as a `gh` comment and title, under each text and title
+  key of the first outbound tool, and under the first text key of the others.
 - calls of the other tools: each tool of the tool table and each tool name the classifier names, with no arguments,
   and a tool name for each name hint word (`mcp_acme_trash_item`). A store path and a secret path under each path key
   (`path`, `file_path`, `destination` and the rest), and for an outbound tool, a post with a forbidden word or a
@@ -500,15 +502,18 @@ main's in the order allow, log, ask, deny, a reserved hit lost, or a posting vio
 not (one the head words otherwise counts too). A line of several posts lists a violation after the name of its post
 (`<post>: <text>`). Either tree may do so, and the post's name may change with its target, so the texts are compared
 without the name. A violation the head keeps under its post's name, or under a new one, is kept. The summary counts
-those pairs as reworded, and they do not exit 1. A text the head lists fewer times than main does, one post's
-violation lost while another post still has it, is lower. At an equal deny, lost reserved hits and violations are
-not counted. The call is blocked, and both only matter for an ask: a reserved hit keeps a standing grant from
-covering it, and a violation is named in its message. A classify or decide that raises counts as the hook's answer
-to an error: ask, or allow for a read tool. The summary groups the lowered pairs by transition, such as `store_write
-ask -> read allow`, and by policy. Tightenings are only counted. `--json` writes the lowered actions and pairs, the
-first 5,000 of each in corpus order. The `--corpus` lines come first in that order, so the cap keeps them before the
-built-in lines. Fix each lowered line, or name it in the decision amendment the change records, with the reason it
-is safe.
+those pairs as reworded, shows a few with the texts each tree lists that the other does not, and they do not exit 1.
+A reworded pair is not also counted as another detail changed. The line `and N more on other posts`, which stands
+for the violations a long list leaves out, names no text, so it is not compared as one. Its N counts in each tree's
+total, and a head whose total is lower than main's is lower, so a post skipped past the cap still shows. A text the
+head lists fewer times than main does is lower: one post's violation lost while another post still has it, or one
+of two posts of one name skipped. At an equal deny, lost reserved hits and violations are not counted. The call is blocked, and both
+only matter for an ask: a reserved hit keeps a standing grant from covering it, and a violation is named in its
+message. A classify or decide that raises counts as the hook's answer to an error: ask, or allow for a read tool.
+The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
+Tightenings are only counted. `--json` writes the lowered actions and pairs and the reworded pairs, the first 5,000
+of each in corpus order. The `--corpus` lines come first in that order, so the cap keeps them before the built-in
+lines. Fix each lowered line, or name it in the decision amendment the change records, with the reason it is safe.
 
 Exit 2 means a tree could not run or the script failed, such as on a folder that does not exist or a policy file
 that raises. A tree that dies or runs past `--timeout` (an hour by default) is stopped with exit 2 too. So is a run
