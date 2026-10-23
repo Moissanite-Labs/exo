@@ -6,6 +6,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- `exo inbox [--json]`: a bounded local view of agent work, schedules, questions, historical approvals
+  and findings. It starts no runtime and reports unavailable sources and live state as unknown (D-085, #505).
 - Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
   explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
   The approval gate and required executor constraints remain enforced. Existing configurations

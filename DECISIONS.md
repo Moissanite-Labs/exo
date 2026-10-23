@@ -2929,7 +2929,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.
 
 ## D-082 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
-- **Status:** Implemented for review ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
+- **Status:** In progress, implemented for review ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
   letting users choose how lean or capable Exo should be. Comparative performance is not yet established.
 - **Evidence:** `docs/HARNESS-LANDSCAPE.md` records the current Pi, Codex, Hermes, OpenCode, DeepSeek Harness,
   Claude Code, Aider and Goose sources, concrete user requests, licenses and remaining work. The strongest
@@ -2977,3 +2977,27 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   extraction: no approval policy, binding, private-thread rule or protocol contract changed. It restores
   the standard core allowance (D-077 amendment above). Broader private-state query cleanup remains open.
   User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
+
+## D-085 (2026-10-23) A bounded local operations inbox
+- **Status:** In progress, implemented for review ([#505](https://github.com/aska-digital/exo/issues/505)), following the
+  principal's request for a harness that makes ongoing work easy to inspect.
+- **Decision:** `exo inbox [--json]` is a lazy, read-only maintenance command over existing Exo state. It
+  reports sessions, tasks, jobs, schedules, questions, historical approvals and findings with explicit
+  source coverage. It constructs no runtime and starts no calls, polling, recovery or repair.
+- **Scope:** Runtime records belong to an Exo home and agent. The selected principal controls only the
+  question store. It cannot establish historical ownership of runtime records. No other stores are scanned.
+  Agent-less findings are omitted. Shared unbound schedules are labeled. Persisted active records and
+  unresolved approval events have unknown current state. PID existence or death proves no outcome.
+- **Bounds:** Per-section limits, a shared SQLite time budget, bounded event and question replay, and
+  isolated source errors. Databases use `mode=ro` and `query_only` without schema constructors. SQLite may
+  create coordination sidecars. Existing session reads and the question reducer are reused. Narrow SELECT
+  adapters cover tables whose manager APIs lack bounded scoped reads. This is a local maintenance reader
+  of Exo's own state. Interactive clients continue to use the protocol.
+- **Rejected:** Starting the core to inspect state: engine query dispatch starts services. Replaying old
+  approval events as current requests. Treating a missing source as an empty successful queue. Adding a
+  persistent inbox database or daemon. SQLite immutable mode, which would ignore concurrent WAL writes.
+- **Validation:** Scoped sources, historical/live separation, read-only writes refused, missing and older
+  schemas, malformed/oversized question history, row limits, lazy CLI and import boundaries, Ruff and types.
+  Independent review added malformed metadata, oversized labels and timestamps, and bounded normalization
+  checks. SQLite rows are capped at 64 KiB and output fields are normalized before emission.
+- **Docs:** `docs/INBOX.md`, commands, user guide §11, developer guide §1, docs map and changelog.

@@ -90,6 +90,12 @@ Metadata is resolved for each call. The bridge translates existing plugin approv
 execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
 construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
 
+**Local operations inspection (D-085).** `exo inbox` is a lazy maintenance command in `exo.inbox`, outside
+the runtime. Its bounded read adapters observe Exo's own persisted schemas without constructing service
+managers. It never makes protocol calls: current engine query dispatch starts runtime services. Keep agent
+scope, unknown live states and per-source failures explicit. Test missing/older sources and read budgets.
+Do not treat the configured principal as proof of historical ownership. See [INBOX.md](INBOX.md).
+
 **The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
 commands. Its collaborators have small interfaces:
 
