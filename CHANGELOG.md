@@ -79,15 +79,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
   start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
   subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
-- Peer presence forgery (#132). `PeerNode.deliver` checked a peer envelope's signature against the verify
-  key in the sender's presence file, and took the sender's principal from the same file. Any same-user
-  process can write a presence file, so a forged one (any seat, any principal, the writer's own key) plus
-  a self-signed envelope arrived framed as the principal typing in another client. Signatures are now
-  checked against the seat's pinned key in the home's keys dir (the `.pub` beside the seat's key file, or
-  the key registry's pin), and receipts the same; the presence key is a discovery hint only, and a sender
-  with no pinned key is held as an unknown principal, never trusted as the principal or as a fellow seat
-  of the principal. Seats that share a home already have each other's keys there; a peer whose key is not
-  pinned can be pinned with `exo keys pin`.
+- Peer presence forgery (#132). `PeerNode.deliver` checked a peer envelope's signature against the verify key in
+  the sender's presence file, and took the sender's principal from the same file. Any same-user process can write
+  a presence file, so a forged one (any seat, any principal, the writer's own key) plus a self-signed envelope
+  arrived framed as the principal typing in another client. The receiver now checks a peer only against keys in
+  its own home: its own key for its own seat name, the key registry's entry for the name, else the `.pub` beside
+  the seat's key file in `keys/`, or a peer pin. The principal comes from the seat file there, else from this
+  home's principal. A sender with no key here is held as `other`, its card says `key not pinned`, and `rules`
+  never match it. A registry entry decides for its name, so a key replaced with `exo keys pin --replace` is
+  refused. A `from` that is not a seat name is denied before any key lookup. A receipt must name the seat the
+  message went to, come from that seat's daemon and verify against that seat's keys here. Seats that share one
+  home hold each other's keys, so nothing changes for them. A seat of another home is pinned with the new
+  `exo keys pin --peer SEAT PUB`. Its messages are then checked against that key and held as `other`, and its key
+  never signs a ledger. A seat of another home with the receiver's own name is denied until it is pinned that way
+  (D-026 and D-040 amendments).
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

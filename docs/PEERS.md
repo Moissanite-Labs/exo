@@ -19,12 +19,15 @@ the other changes course at its next step. In Exo this works between Exo session
 
 | Sender | Default |
 |---|---|
-| you, typing `/send` from a client of the same principal | auto |
-| another session of the same principal, same machine | auto |
+| you, typing `/send` from a client of the same principal, on a seat whose key this home holds | auto |
+| another session of the same principal, on a seat whose key this home holds | auto |
 | a different or unknown principal | hold |
-| a local peer whose key is not pinned in this home's `keys/` | hold |
+| a seat of another home, pinned with `exo keys pin --peer` | hold |
+| a local peer whose key this home does not hold (the card says `key not pinned`) | hold |
 | a bus seat (signed by its pinned key) | hold |
-| bad or missing signature, or a bus seat whose key changed | deny (cannot be changed) |
+| bad or missing signature, a key other than the one this home holds for that name, a sender name that is not a seat name, or a bus seat whose key changed | deny (cannot be changed) |
+
+"Holds" means a key of this home, never one from a presence file. See "Peer keys" below (#132).
 
 Hold means an approval card (TUI and web) shows the sender and text. Allow delivers it; deny drops it;
 nothing happens in 30 minutes and it expires. A held message never enters the model's context. When the sender
@@ -42,6 +45,44 @@ policy = { other = "deny" }      # by trust: principal, same-principal, other, r
 rules = [{ from = "razi*", outcome = "auto" }]   # a bus seat is matched by its seat id
 enabled = true
 ```
+
+A rule matches a local peer only when this home holds its key. A presence file can claim any name, so a sender
+whose key is not held here gets the policy for its trust, whatever the rules say.
+
+## Peer keys (#132)
+
+Each daemon's presence file sits in a folder that any program running as you can write. So the receiver never
+trusts the key or the principal a presence file names. It checks each message against keys in its own home:
+
+- **A key of this home.** For the receiver's own seat name, its own key. For any name, the key registry's entry for
+  it (`$EXO_HOME/keys/registry.json`), else the `.pub` beside the seat's key file in `keys/`. Seats that share one
+  home find each other's keys there, so nothing changes for them. A registry entry decides for its name: a key you
+  replaced with `exo keys pin NAME PUB --replace` is refused, even while its old `.pub` is still in `keys/`.
+- **A peer pin.** `exo keys pin --peer SEAT PUB` pins a seat of another home. That key checks the seat's messages
+  and receipts. It never signs a ledger (D-040).
+- **No key for the name.** The presence file's key shows only that the signature is consistent. The message is held
+  as `other`, and its approval card says `key not pinned`.
+
+The trust level comes from this home too:
+
+- A seat checked against a key of this home has the principal its seat file names. With no seat file, or a seat
+  file that names none, it has this home's principal (`EXO_PRINCIPAL`). An unseated daemon and a Hermes profile that
+  run on this home are such seats. The receiver's own seat name has the receiver's principal. When that principal is
+  the receiver's, the message is `principal` (you typed it) or `same-principal`.
+- A seat checked against a peer pin is `other`, because this home has no record of whose seat it is. A `rules`
+  entry for its name can deliver it.
+- Once this home holds a key for a name, a message under that name signed by any other key is denied. That covers
+  a seat of another home that has this seat's own name: two unseated homes are both `exo`. Pin the other one's key
+  with `exo keys pin --peer exo PUB`, and its messages are held as `other`.
+- A sender name that is not a seat name (lowercase letters, digits, `-` and `_`) is denied before any key is looked
+  up, so a path in the name never reads a file.
+- A receipt must name the seat the message went to, come from that seat's daemon, and verify against a key this
+  home holds for that seat. A receipt from a seat whose key is not held here is dropped, so the sender's client
+  shows no later outcome for that message.
+
+To pin a peer from another home, read its public key there: `cat <that home>/keys/<seat>.pub` (a Hermes profile's
+key is in the `EXO_HOME` it runs with). Then, in this home, run `exo keys pin --peer <seat> <key>`. Messages from it
+are held as `other` until a `rules` entry lets them through.
 
 ## Bus seats (D-040)
 
@@ -92,11 +133,8 @@ peer client is refused. The system prompt carries a standing line saying the sam
   folder; set `EXO_PEERS_DIR` to a short path to share one.
 - A message is a bus-format envelope signed with the sender seat's key. Sender session, target session,
   who wrote it and a nonce are inside the signed `attach`. The receiver checks id, signature, age and
-  replay. The signature is checked against the seat's pinned key in this home's `keys/` (the `.pub` beside
-  the seat's key file, or the key registry's pin for the seat), never against the key in the sender's
-  presence file: the presence dir is a shared runtime dir any same-user process can write, so its key and
-  its principal claim are a discovery hint only. A sender with no pinned key is held as an unknown
-  principal, whatever its presence file says (#132). Receipts are checked the same way.
+  replay. The signature and the sender's principal come from this home, never from the sender's presence file
+  ("Peer keys" above). The presence file says where a daemon listens.
 - Local delivery goes over the target daemon's socket with the `peers` protocol command (actions `list`,
   `send`, `deliver`, `receipt`, and `bus` for the bus channel; one command because the protocol has no command slots
   left). Events:
@@ -134,3 +172,8 @@ has no `/peers` view yet. Bus sends are posted and not receipted. A bus seat's f
 serves it (trust on first use); pin it by hand first if the relay is not yours. On the machine itself the gate
 guards where those keys come from: a tool call that writes `$EXO_HOME/bus/` or the keys folder asks the principal
 (`docs/GATE.md` "The store is credentials", #210).
+
+The peer keys of #132 stop a forged presence file only for programs that go through the gate. A program running as
+you outside the gate can still read a seat's key file, or write `keys/` and the seat files, and then speak as that
+seat. And any client of a daemon's socket that runs as you can ask it to `peers send` (D-039). That message arrives
+as `same-principal` automation, never as you typing: that is by design.
