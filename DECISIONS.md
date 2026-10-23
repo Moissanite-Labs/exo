@@ -1053,7 +1053,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   changed: commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `uniq`, `xxd`, `bat`,
   `python3 -m json.tool`, `rsync -an`, a `grep` into a file elsewhere) ask the principal when they name a store path,
   as for `policies/` on main. GATE.md lists them as known friction. Reading them as reads is left for a later change
-  (#482). The gate differential against main c27d8739 (#423) runs 91,361 actions under 95 policies. The corpus is the
+  (#482). The gate differential against main 5a9dc394 (#423) runs 92,317 actions under 95 policies. The corpus is the
   built-in one, a corpus of these sends under wrappers (`sudo`, `env`, `timeout`, `bash -c`, `ssh`, `mosh`), in
   compounds, `$( )` and here-docs, the reads above, and a checker's corpus of tools the gate reads as file writes by
   their name and more here-doc forms. The policies are the 87 built-in ones and 8 more, with denies on targets,
@@ -1072,7 +1072,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the gate reads as a file tool by its name although it sends, such as `upload_file`) and a line in `/dev` (2,074
   pairs). #467 lifts both. A second corpus of 8,949 here-doc lines (a plugin, `policies/`, `state/` or `update/` file
   sent by `mail -A`, `mutt -a`, `curl -T` or `gh`, with a home path, a key or a footer in the body, under the wrappers
-  above) runs 27,132 actions under the same 95 policies and lowers none.
+  above) runs 27,132 actions under the same 95 policies and lowers none. Since #468 (#465), main reads a `$( )`,
+  backticks or `<( )` after a `cd` into the store in that folder, so such a write into the plugins folder asks on main
+  and here alike. 1,303 lines that put #468's forms into the folder, or a plugin file into a `$( )` after a `cd`
+  elsewhere, run 2,623 actions under the same 95 policies. They lower 67 pairs, all in the group above: a `sudo ssh`
+  send of a plugin file, also in a `$( )` after a `cd` into the store or `/dev`, where main's line is a store write
+  that the costly `shell` part denies.
   *Amendment 2026-10-22 (issue #465):* a writing command after `cd` into the store is a store write, but the `cd`
   reached only the line's own commands. Each `$( )`, backticks and `<( )` body was classified as a fresh line, so
   `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the `x=$( )`, `cat <( )`, backtick and nested forms,
