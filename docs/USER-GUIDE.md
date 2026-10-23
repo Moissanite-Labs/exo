@@ -332,7 +332,8 @@ What the gate asks about, and why:
   trusted by name, so a test runner still runs your project's files. Options of trusted programs that run a
   command (`tar --to-command`, `rsync -e`, `ssh -o ProxyCommand` and the like) are read as the command they run
   (#164). A variable that loads code or changes where programs and config are found asks when the line sets it
-  (`LD_PRELOAD`, `PATH`, `PYTHONPATH`, `HOME`, git config through `git -c` or `GIT_CONFIG_*`; #231). Common setups
+  (`LD_PRELOAD`, `PATH`, `PYTHONPATH`, `HOME`, git config through `git -c` or `GIT_CONFIG_*`; #231), and so does
+  `unset PATH`, since bash then looks programs up in the current folder (#329). Common setups
   still run: `PATH=$PATH:./node_modules/.bin`, a virtualenv's `bin` first in `PATH`, `PYTHONPATH=src python -m
   pytest` and `GIT_CONFIG_GLOBAL=/dev/null`. Any other folder in `PATH`, such as
   `export PATH="$HOME/.local/bin:$PATH"`, asks. A `$( )` inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the
