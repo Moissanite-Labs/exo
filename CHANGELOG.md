@@ -22,6 +22,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Plugin tool/slot adaptation and hook-verdict translation now share the plugin lifecycle bridge, with
   explicit runtime collaborators and compatibility shims. Counted core size falls by 67 lines and the
   headroom allowance returns to 1,000; approval behavior is unchanged (D-077/D-082, #498).
+- `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
+  its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
+  each tree's violation total with what `and N more on other posts` counts.
 - `scripts/gate_diff.py` counts a posting violation as often as each tree lists it, so a gate change that lists once
   what two posts of one name both meet shows as lower (#460). Each seed also runs under each tool table name that
   ends in `terminal` or `shell`, and in a call holding both `command` and `cmd`. The report shows a few reworded
@@ -230,6 +233,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate store protection (#465, D-038 amendment): after `cd` into the store or a descriptor folder, a `$( )`,
+  backticks or `<( )` of a later command is classified in that folder, as the same command unwrapped is. Each
+  substitution was classified as a fresh line, so `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the
+  `x=$( )`, `cat <( )` and backtick forms, `cd ~/.exo/state && echo "$(cp /tmp/g.json approval-grants.json)"` and
+  `cd /dev && echo $(cp /tmp/evil fd/3)` were allowed with no ask under the default policy, and could rewrite the
+  gate's own policy or grant file, or whatever file a descriptor held. They now ask the principal alone. A
+  command the gate does not read as a read (`sed`, `sort`, `curl`) asks there too, as it does unwrapped. A
+  substitution in the `cd` itself or before it keeps its own folder, by its place in the line and not by its text,
+  and so does an `ssh` remote command. One in a here-doc body counts as after every command on its line, and one in
+  a compound's own redirections runs before the compound. A push, post or delete inside such a substitution keeps
+  the deny it had when it decided the line: an anchored allow rule such as `^git push` no longer lifts a command
+  read from a nested line, and a deny on the matrix cell of an irreversible command held anywhere on a secret line
+  holds, while the line keeps the weight of its own parts.
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
   line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
   secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,
