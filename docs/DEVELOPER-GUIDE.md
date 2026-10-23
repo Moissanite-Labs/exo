@@ -482,7 +482,8 @@ stderr and in the summary, since its entries may get no lines. To these come gen
   `terminal` or `shell` (`powershell`, `remote_shell`) with the line under `command`. Every seed line runs under each
   of them, every other line under one. Each seed also runs under each tool table name that ends in `terminal` or
   `shell` (`read_terminal`), so a head that adds such a name to the table shows, and in a call that holds both keys,
-  with `true` under the other one, since the gate reads `command` first.
+  with `true` or an empty string under the other one, since the gate reads `command` first and `cmd` when
+  `command` is empty. A name read by its suffix also gets each seed under `cmd` beside an empty `command`.
 - folder rows: calls that read a secret store only as resolved from a folder (#209), such as `cat keys` in `~/.exo`,
   `ls` in `~/.exo/keys`, `cat settings.json` in `~/.claude`, and file tool calls like them. Each line runs under
   every shell form, once with the folder as the session folder and once as the call's own `cwd`. Main decides each
@@ -533,11 +534,13 @@ without the name. A violation the head keeps under its post's name, or under a n
 those pairs as reworded, shows a few with the texts each tree lists that the other does not, and they do not exit 1.
 A reworded pair is not also counted as another detail changed. The line `and N more on other posts`, which stands
 for the violations a long list leaves out, names no text, so it is not compared as one. Its N counts in each tree's
-total, and a head whose total is lower than main's is lower, so a post skipped past the cap still shows. A text the
-head lists fewer times than main does is lower: one post's violation lost while another post still has it, or one
-of two posts of one name skipped. At an equal deny, lost reserved hits and violations are not counted. The call is blocked, and both
-only matter for an ask: a reserved hit keeps a standing grant from covering it, and a violation is named in its
-message. A classify or decide that raises counts as the hook's answer to an error: ask, or allow for a read tool.
+total, and a head whose total is lower than main's is lower, so a post skipped past the cap still shows. The texts
+behind that line are compared by count only, so a head that lists more and hides another text there in place of
+one main hid shows nothing. A text the head lists fewer times than main does is lower: one post's violation lost
+while another post still has it, or one of two posts of one name skipped. At an equal deny, lost reserved hits and
+violations are not counted. The call is blocked, and both only matter for an ask: a reserved hit keeps a standing
+grant from covering it, and a violation is named in its message. A classify or decide that raises counts as the
+hook's answer to an error: ask, or allow for a read tool.
 The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
 Tightenings are only counted. `--json` writes the lowered actions and pairs and the reworded pairs, the first 5,000
 of each in corpus order. The `--corpus` lines come first in that order, so the cap keeps them before the built-in
