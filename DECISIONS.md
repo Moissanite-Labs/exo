@@ -1517,7 +1517,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   two posts of one name both meet is lower. Each seed also runs under each tool table name of either tree that ends
   in `terminal` or `shell`, since adding such a name to the table stops the gate reading it as a shell, and in a call
   that holds both `command` and `cmd`. The report shows a few reworded pairs, and `--json` lists them. The line
-  `and N more on other posts` is not compared: it names no text, and a head that lists every text has none.
+  `and N more on other posts` names no text, so it is not compared as one. Its N counts in each tree's total, and
+  a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
+  posts reaches the cap.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

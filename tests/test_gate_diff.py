@@ -915,12 +915,22 @@ def test_a_text_main_lists_twice_counts_twice(tmp_path):
     (["A", "B", "and 2 more on other posts"], ["A", "B", "C", "D"], 0),     # the head lists what main hid
     (["A", "B", "and 1 more on other posts"], ["A", "and 2 more on other posts"], 1),    # B is gone
     (["A", "and 1 more on other posts"], ["A", "and 3 more on other posts"], 0),
+    (["A", "B", "and 3 more on other posts"], ["A", "B", "and 2 more on other posts"], 1),  # one fewer past the cap
+    (["A", "B", "and 1 more on other posts"], ["A", "B"], 1),                               # the line gone
 ])
-def test_the_line_that_counts_hidden_violations_is_not_compared(tmp_path, base, head, lowered):
+def test_the_line_that_counts_hidden_violations_counts_in_the_total(tmp_path, base, head, lowered):
     _stream(tmp_path / "b.gz", [["github_post", "x", None, [_d("ask", violations=base)], [0], 0, []]], ["p"])
     _stream(tmp_path / "h.gz", [["github_post", "x", None, [_d("ask", violations=head)], [0], 0, []]], ["p"])
     rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
     assert rep["counts"]["lowered_pairs"] == lowered, rep["counts"]
+
+
+def test_a_reworded_pair_that_hides_fewer_is_lowered(tmp_path):
+    base, head = ["p: A", "and 2 more on other posts"], ["q: A", "and 1 more on other posts"]
+    _stream(tmp_path / "b.gz", [["github_post", "x", None, [_d("ask", violations=base)], [0], 0, ["p"]]], ["p"])
+    _stream(tmp_path / "h.gz", [["github_post", "x", None, [_d("ask", violations=head)], [0], 0, ["q"]]], ["p"])
+    rep = gate_diff.compare(tmp_path / "b.gz", tmp_path / "h.gz", [{"tool": "terminal", "args": {"command": "x"}}])
+    assert rep["counts"]["lowered_violations"] == 1 and rep["counts"]["violations_reworded"] == 0, rep["counts"]
 
 
 def test_a_reworded_pair_is_shown_and_counted_once(tmp_path):
@@ -943,6 +953,12 @@ def test_each_post_also_runs_twice_to_one_pr():
     assert "rm -rf build; gh pr comment 5 --body x; gh pr comment 5 --body x" in gate_diff.post_lines(["x"])
 
 
+def test_one_line_holds_more_posts_than_decide_lists():
+    long = [line for line in gate_diff.post_lines(["x", "y"]) if line.count("gh pr comment") > 20]
+    assert len(long) == 1 and long[0].count("gh pr comment") == 25 and long[0].startswith("rm -rf build; "), long
+    assert gate_diff.post_lines([]) == []
+
+
 def test_a_head_that_lists_a_text_once_where_main_lists_it_twice_is_lowered(tmp_path):
     # Through _row: the rows keep each text as often as decide lists it.
     room = "    room = max(_LISTED_VIOLATIONS - len(violations), 0)\n"
@@ -951,6 +967,20 @@ def test_a_head_that_lists_a_text_once_where_main_lists_it_twice_is_lowered(tmp_
     corpus = tmp_path / "mine.txt"
     corpus.write_text("rm -rf build; gh pr comment 5 --body 'hi there'; gh pr comment 5 --body 'hi again'\n",
                       encoding="utf-8")
+    proc, rep = _gate_diff(base, head, tmp_path, "--only-corpus", "--no-variants", "--corpus", str(corpus),
+                           "--pick", "posting_footer", "--jobs", "1")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert rep["counts"]["lowered_violations"] == 1, rep["counts"]
+
+
+def test_a_head_that_hides_fewer_violations_past_the_cap_is_lowered(tmp_path):
+    # The same head past the listing cap: both trees list the same 20 texts, and only `and N more` falls (#462 review)
+    room = "    room = max(_LISTED_VIOLATIONS - len(violations), 0)\n"
+    base = _tree(tmp_path, "base")
+    head = _tree(tmp_path, "head", (room, "    named = list(dict.fromkeys(named))\n" + room))
+    posts = "; ".join(f"gh pr comment {n} --body 'hi there'" for n in range(1, 25))
+    corpus = tmp_path / "mine.txt"
+    corpus.write_text(f"rm -rf build; {posts}; gh pr comment 1 --body 'hi there'\n", encoding="utf-8")
     proc, rep = _gate_diff(base, head, tmp_path, "--only-corpus", "--no-variants", "--corpus", str(corpus),
                            "--pick", "posting_footer", "--jobs", "1")
     assert proc.returncode == 1, proc.stdout + proc.stderr

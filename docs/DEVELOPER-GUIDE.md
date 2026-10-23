@@ -504,9 +504,10 @@ not (one the head words otherwise counts too). A line of several posts lists a v
 without the name. A violation the head keeps under its post's name, or under a new one, is kept. The summary counts
 those pairs as reworded, shows a few with the texts each tree lists that the other does not, and they do not exit 1.
 A reworded pair is not also counted as another detail changed. The line `and N more on other posts`, which stands
-for the violations a long list leaves out, is not compared, since it names no text. A text the head lists fewer
-times than main does is lower: one post's violation lost while another post still has it, or one of two posts of one
-name skipped. At an equal deny, lost reserved hits and violations are not counted. The call is blocked, and both
+for the violations a long list leaves out, names no text, so it is not compared as one. Its N counts in each tree's
+total, and a head whose total is lower than main's is lower, so a post skipped past the cap still shows. A text the
+head lists fewer times than main does is lower: one post's violation lost while another post still has it, or one
+of two posts of one name skipped. At an equal deny, lost reserved hits and violations are not counted. The call is blocked, and both
 only matter for an ask: a reserved hit keeps a standing grant from covering it, and a violation is named in its
 message. A classify or decide that raises counts as the hook's answer to an error: ask, or allow for a read tool.
 The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
