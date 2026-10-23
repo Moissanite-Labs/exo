@@ -377,6 +377,22 @@ def test_gate_classifies_each_notebook_operation(action, category):
     assert decide(classified, {"gates": {"categories": {category: "deny"}}}).outcome == "deny"
 
 
+@pytest.mark.parametrize("invalid", [{}, {"action": None}, {"action": "delete"}, {"action": []}])
+@pytest.mark.parametrize("category", ["credentials", "store_write"])
+def test_malformed_notebook_call_keeps_generic_protected_path_handling(tmp_path, monkeypatch, invalid, category):
+    from exo.gate import classify, decide
+    home = tmp_path / "exo-home"
+    (home / "state").mkdir(parents=True)
+    monkeypatch.setenv("EXO_HOME", str(home))
+    path = "~/.ssh/id_ed25519" if category == "credentials" else str(home / "state" / "custom.json")
+    args = {"path": path, **invalid}
+    malformed = classify({"tool": "work_notes", "args": args})
+    generic = classify({"tool": "notebook_probe", "args": args})
+    assert malformed.category == generic.category == category
+    policy = {"gates": {"categories": {category: "allow"}}}
+    assert decide(malformed, policy).outcome == decide(generic, policy).outcome == "ask"
+
+
 def test_prompt_callback_preserves_workspace_instructions(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     (tmp_path / "AGENTS.md").write_text("PROJECT_GUIDANCE")
