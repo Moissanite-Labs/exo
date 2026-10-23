@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `scripts/gate_diff.py` counts a posting violation as often as each tree lists it, so a gate change that lists once
+  what two posts of one name both meet shows as lower (#460). Each seed also runs under each tool table name that
+  ends in `terminal` or `shell`, and in a call holding both `command` and `cmd`. The report shows a few reworded
+  pairs, and counts each one once. The line `and N more on other posts` names no text, so its N counts in each
+  tree's total instead, and a lower total is lower. A built-in line of 25 posts reaches that listing cap.
 - `unset PATH` is now read as the assignment it amounts to (#329). With PATH unset, bash looks a
   command up in the working folder, so a later `ls` on the line can run a planted `./ls`. The gate
   already asked on the assignment forms (`PATH= ls`). `unset` and `unset -v` of PATH now ask the
