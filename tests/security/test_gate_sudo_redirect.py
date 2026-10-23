@@ -12,7 +12,7 @@ Classification and decision only; nothing is executed.
 """
 import pytest
 
-from exo.gate import classify, decide, normalize_policies, summarize
+from exo.gate import binds_exact, classify, decide, normalize_policies, summarize
 
 
 @pytest.fixture(autouse=True)
@@ -272,3 +272,64 @@ def test_the_parts_stay_when_the_copy_does_not_lead():
     assert [(p.category, p.reversibility, p.exposure, p.target) for p in c.parts] == [
         ("shell", "reversible", "internal", "host"), ("read", "costly", "private", ""),
         ("local_write", "reversible", "private", "/tmp/f")]
+
+
+# Re-check of #492 at b358eb59: the copy a nested line (a $( ), backticks, <( ), an ssh hop) leads with is a costly
+# local_write part of the line around it. There it took the lead from a part it ties with, which led on main as the
+# first of the tie, so these lines were allowed or logged under the default policy. _combine ranks them as on main.
+@pytest.mark.parametrize("line", ["echo $(sudo echo hi > /tmp/f) $(foo)", "cat <(sudo echo hi > /tmp/f) <(foo)",
+                                  "echo $(sudo echo hi > /tmp/f) `foo`", "x=$(sudo echo hi > /tmp/f) y=$(foo)",
+                                  "echo $(doas echo hi > /tmp/f) $(./run)", "echo $(sudo echo hi > /tmp/f) $(sudo foo)",
+                                  "echo $(sudo echo hi > /tmp/f) > >(foo)", "ssh h1 'sudo echo hi > /tmp/f'; ssh h2 foo"])
+def test_an_unknown_program_beside_a_nested_sudo_write_still_leads(line):
+    c = sh(line)
+    assert c.category == "opaque_exec", (line, c)
+    assert decide(c, pol()).outcome == "ask"
+
+
+@pytest.mark.parametrize("line", ["ssh -p 2? prod 'sudo echo hi > /tmp/f' < x.sh",
+                                  "echo ls | ssh -p 2* prod 'sudo gh pr view 1 -R o/r > /tmp/f'"])
+def test_ssh_running_its_stdin_still_leads_beside_a_sudo_write(line):
+    # A word ssh may expand among its options leaves the remote command uncountable, so ssh's stdin is read as
+    # commands on the host too (#240). That part leads, as on main, so a deny on it with the host still denies.
+    c = sh(line)
+    assert (c.category, c.target) == ("opaque_exec", "prod"), (line, c)
+    rule = {"match": {"category": "opaque_exec", "target": "prod"}, "decision": "deny", "reason": "host"}
+    assert decide(c, pol(rules=[rule])).outcome == "deny"
+
+
+ALL_ALLOW = {r: {e: "allow" for e in ("private", "internal", "public")} for r in ("reversible", "costly", "irreversible")}
+
+
+@pytest.mark.parametrize("line,target", [
+    ("sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)", "a/b*"),
+    ("sudo gh pr view 9 -R a/b; echo $(sudo gh pr view 1 -R o/r > /tmp/f)", "a/b*"),
+    ("x=$(sudo gh pr view 9 -R a/b) y=$(sudo echo hi > /tmp/f)", "a/b*"),
+    ("doas gh repo view a/b; cat <(doas echo hi >> /srv/x)", "a/b*"),
+    ("ssh prod 'sudo ls'; ssh h1 'sudo echo hi > /tmp/f'", "prod"),
+    ("ssh prod 'sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)'", "a/b*"),
+])
+@pytest.mark.parametrize("level", ["ask", "log"])
+def test_a_nested_copy_displaces_the_part_main_led_with(line, target, level):
+    # The nested copy still leads, and the line is also decided with the part main led with, so a rule on it reaches.
+    c = sh(line)
+    assert c.category == "local_write", (line, c)
+    d = decide(c, pol(matrix=ALL_ALLOW, rules=[{"match": {"target": target}, "decision": level, "reason": "t"}]))
+    assert (d.outcome, d.rule) == (level, "rule"), (line, d)
+
+
+def test_a_category_line_on_the_part_main_led_with_reaches_a_nested_copy():
+    c = sh("sudo chmod 777 /x; echo $(sudo echo hi > /tmp/f)")
+    assert c.category == "local_write"
+    assert decide(c, pol(categories={"shell": "ask"})).outcome == "ask"
+    assert decide(c, pol(categories={"local_write": "ask"})).outcome == "ask"
+
+
+@pytest.mark.parametrize("line,exact", [
+    ("sudo gh pr view 1 -R o/r > /tmp/f", True), ("ssh prod 'sudo echo hi > /srv/out'", True),
+    ("sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)", True), ("sudo echo hi > /tmp/f", False),
+    ("sudo chmod 777 /x > /tmp/f", False), ("echo hi > /tmp/f", False)])
+def test_a_displaced_part_with_a_target_binds_the_approval_to_the_line(line, exact):
+    # A standing grant is keyed on the line's category and target. One on the written path must not answer a rule on
+    # the repo or host the displaced part names, so such a line binds its approval to the exact command.
+    assert binds_exact(sh(line)) is exact, line

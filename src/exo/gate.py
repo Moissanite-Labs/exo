@@ -3740,6 +3740,18 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     credentials = [p for p in parts if p.category == "credentials"]
     store = [p for p in parts if p.category == "store_write"]
     c = credentials[0] if credentials else (store[0] if store else (_most_severe(parts) or _make("shell", command=cmd)))
+    if c.displaced is not None:
+        # #454: the copy of a sudo write that a nested line (a $( ), an ssh hop) leads with is a costly write here, so
+        # it would also take the lead from a part it ties with, which led before as the first of the tie. So the
+        # parts are ranked as before too, each copy as the part it displaced. A part that outranks a read leads
+        # again: an unknown program (`echo $(sudo echo hi > /tmp/f) $(foo)`), or ssh running its stdin. Any other is
+        # the part the copy displaces, so a rule on the repo of `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)`
+        # still reaches the line.
+        before = max([p.displaced or p for p in parts], key=_severity)
+        if _severity(before)[3]:
+            c = before
+        else:
+            c.displaced = before
     if c.own_signals is None:
         c.own_signals = list(c.signals)
     c.signals = list(dict.fromkeys(c.signals + signals))
@@ -6575,8 +6587,11 @@ DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, 
 
 def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
-    and code the gate cannot see into (D-038), so one "always" never covers a different script."""
-    return is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
+    and code the gate cannot see into (D-038), so one "always" never covers a different script. Also a sudo write
+    line whose displaced part names a target of its own (#454): a grant keyed on the written path must not answer a
+    rule on the repo or host that part names."""
+    return is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals or \
+        bool(c.displaced is not None and c.displaced.target)
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:
