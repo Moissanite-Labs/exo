@@ -97,10 +97,10 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
   counted core lines 15,857 before, 15,790 after, 67 fewer. `PluginManager.bind_tools` supplies
   `exo.plugin_lifecycle.PluginToolBridge` with the registry, home, agent log, privacy predicate,
   approval desk and a callback for required-executor mode. The bridge translates existing plugin
-  tool/slot signatures and lifecycle verdicts; it does not own engine state or change gate policy.
+  tool/slot signatures and lifecycle verdicts. It does not own engine state or change gate policy.
   `CoreRuntime` keeps its tool runner and private compatibility methods. A directly constructed
   runtime gets the same plugin behavior without importing application/context composition.
-  This consolidates the existing plugin lifecycle boundary; no counted module was excluded.
+  This consolidates the existing plugin lifecycle boundary. No counted module was excluded.
   Private-state queries and other inward imports listed above remain separate follow-up work.
 
 ## Budget policy
