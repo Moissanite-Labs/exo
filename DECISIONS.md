@@ -6434,3 +6434,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   undo/expiry, source mutation, reused call IDs, real engine/child dispatch, executor refusal, cancellation,
   disabled imports/state and bounded synthetic footprint measurements. No provider or network calls.
 - **Docs:** `docs/TOOL-OUTPUT.md`, user/developer guide §1 and `docs/DOCS-MAP.md`. No core line-budget increase.
+
+- **Integration evidence:** `scripts/smoke_optional_features.py` checks the enabled and disabled
+  combinations after D-083, D-085 and D-086 are present. The recorded local integration and
+  source fingerprints live in `docs/evidence/optional-features-smoke-2026-10-23.json`.
+  Tool-output CPU/startup samples were refreshed after the current-main and metadata changes.
+  These offline fixtures do not establish task quality or replace the principal canary.
