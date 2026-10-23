@@ -4993,6 +4993,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   in that session. Record presence is not claim verification. Notes always have agent authorship,
   are scoped to the engine agent and recorded principal, and cannot grant permission or execute steps.
   Tool calls and command reads use the existing gate and executor. No new approval or ledger path.
+- **Gate classification:** Valid `read` and `history` actions are `read`. Valid `update` is `local_write`.
+  Calls without a valid action keep generic classification, including secret and store path checks.
 - **Limits:** Strict nested fields, document byte limits, bounded snapshots and history listings.
   A per-session revision ceiling refuses further writes without deleting history. The feature owns
   no separate database, workers, model calls or automatic retention job.

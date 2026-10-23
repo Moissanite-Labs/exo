@@ -149,8 +149,10 @@ caps bound each session's notebook growth.
 
 The model's tool call must appear as a visible assistant call in the same
 session and turn, matching the tool context's call ID. `/work` is a principal-only
-read path. Both dispatch through the registry. The gate classifies reads as
-`read` and updates as `local_write`, so existing category policies still apply.
+read path. Both dispatch through the registry. The gate classifies valid `read`
+and `history` actions as `read`, and `update` as `local_write`. Calls without a
+valid action retain generic classification, including secret and store path
+checks. Existing category policies still apply.
 The configured executor can refuse notebook operations without a host fallback.
 
 Notes cannot create goals independently, execute steps, answer questions, grant
