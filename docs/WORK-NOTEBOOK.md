@@ -172,32 +172,38 @@ composition in a fresh Python process.
 ### Gate comparison, 2026-10-23
 
 Main's unchanged `scripts/gate_diff.py` at `5a9dc394` compared that main checkout
-with notebook code at `e5677363`. The focused corpus contains 43 `work_notes`
-calls generated from both trees, plus explicit valid and invalid actions. All
-87 built-in policies ran, covering 3,741 action/policy pairs.
+with notebook code at `042c896e`. The focused corpus contains 152 `work_notes`
+calls generated from both trees, plus explicit actions and 108 combinations of
+supported actions with unsupported keys. All 87 built-in policies ran, covering
+13,224 action/policy pairs.
 
 An earlier full integration comparison found 2,167 lowerings on 32 calls without
 an action. Those calls had lost generic secret or store checks. Every one is in
-this focused corpus, and none has a lowering after the fix. The focused corpus
-differs from the full integration corpus and does not test other new tools.
+this focused corpus, and none has a lowering after the fix. All 35 previously
+lowered notebook calls are included, including three valid read/history calls.
+The focused corpus does not test other new tools.
 
 | Result | Count |
 | --- | --- |
-| Missing or invalid action lowerings | 0 |
-| Intentional lowerings for `read` and `history` | 6 |
+| Lowerings among sampled missing or invalid actions | 0 |
+| Lowerings for supported actions with unsupported keys | 0 |
+| Intentional lowerings for `read` and `history` | 9 |
 | Tightenings for `update` | 4 |
 | Reserved protections or posting violations lost | 0 |
 | Classification or decision errors | 0 |
 
-The six intentional differences come from policies targeting the formerly
-unknown tool category: deny, ask and log each become allow for `read` and
-`history`. These actions now use the existing `read` category. `update` becomes
-`local_write`, producing three denials and one ask where main allowed it.
-The comparison exits 1 for the six documented differences.
+The nine intentional differences come from policies targeting the formerly
+unknown tool category: deny, ask and log each become allow for `read`, `history`
+and `history` with a limit. These calls now use the existing `read` category.
+`update` becomes `local_write`, producing three denials and one ask where main
+allowed it. The comparison exits 1 for the nine documented differences.
+
+The classifier checks action names and supported keys, not the complete value
+schema. The registry and tool handler still reject invalid field values.
 
 The [comparison evidence](evidence/work-notebook-gate-2026-10-23.json) includes
 the exact corpus, policies, counts and every lowered pair. To repeat it with
-a main checkout at `5a9dc394` and notebook code at `e5677363`:
+a main checkout at `5a9dc394` and notebook code at `042c896e`:
 
 ```sh
 notebook_gate_main=/path/to/main-checkout
