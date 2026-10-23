@@ -29,6 +29,11 @@ ASK = [
     "hash -lp /tmp/x ls; ls",
     "hash -dp /tmp/x ls; ls",
     "hash -p/tmp/x ls; ls",                  # the path attached to -p
+    "hash -lp/tmp/x ls && ls",               # and to -p in a cluster (exo-36, #409: `elif j == 1` passed every test)
+    "hash -rp/tmp/x ls; ls",
+    "hash -dp/tmp/x ls; ls",
+    "command hash -rp/tmp/x ls; ls",
+    "builtin hash -dp./tool git; git log",
     "hash -l -p /tmp/x ls; ls",              # -p in a later option word
     "hash -d -p /tmp/x git; git log",
     "hash '-p' /tmp/x ls; ls",
@@ -90,6 +95,8 @@ def test_hash_without_a_rebind_stays_read(line):
     ("builtin hash -p ./tool git; git log", "hash -p makes git run ./tool"),
     ("hash -p/tmp/x ls; ls", "hash -p makes ls run /tmp/x"),
     ("hash -dp /tmp/x ls; ls", "hash -p makes ls run /tmp/x"),
+    ("hash -lp/tmp/x ls && ls", "hash -p makes ls run /tmp/x"),
+    ("builtin hash -dp./tool git; git log", "hash -p makes git run ./tool"),
     # the cards named `--`, `-l`, `-p` and `./ls` here (exo-36, #409)
     ("hash -p /tmp/x -- ls; ls", "hash -p makes ls run /tmp/x"),
     ("hash -p /tmp/x -l ls; ls", "hash -p makes ls run /tmp/x"),
@@ -132,7 +139,6 @@ POSTS = [
     "ssh -t host 'hash -p ~/.exo/state/x ls'; gh pr comment 1 --body Zork",
     "ssh host 'sudo hash -p /proc/self/fd/3 ls'; gh pr comment 1 --body Zork",
     "ssh a ssh b 'hash -p /proc/self/fd/3 ls'; gh pr comment 1 --body Zork",
-    "ssh host 'hash -p /proc/self/fd/3 ls; sort x'; gh pr comment 1 --body Zork",
     "mosh host -- hash -p /proc/self/fd/3 ls; gh pr comment 1 --body Zork",
     "ssh -o ProxyCommand='hash -p /dev/fd/3 ls' host ls; gh pr comment 1 --body Zork",
     "man -P 'hash -p /proc/self/fd/3 ls' ls; gh pr comment 1 --body Zork",
@@ -214,12 +220,24 @@ def test_a_rebind_beside_a_force_push_keeps_the_push_deny():
     "ssh host 'hash -p /x ls; eval /proc/self/fd/3'",
     "ssh host 'hash -p /x ls; eval y' /proc/self/fd/3",
     "ssh host ./hash ~/.exo/state/x",
-    # a part beside the rebind that is more than a read or a shell command keeps the check of the words: here
-    # ssh's own log file (-E) in the store
+    # a part beside the rebind that is more than a read keeps the check of the words: here ssh's own log file (-E)
+    # in the store
     "ssh -E ~/.exo/state/log host 'hash -p /x ls; eval y'",
     "ssh -E ~/.exo/state/log host 'rm x; hash -p /x ls'",
     "ssh -E ~/.exo/state/log host 'hash -p /x ls; sudo sort x'",   # sudo made it more than the read hash was
     "ssh -E ~/.exo/state/log host './tool; hash -p /x ls'",        # the line's own part is ./tool's, not the rebind's
+    # a plain shell command does too, in either order, as one before the rebind did on main (exo-36, #409). ssh's own
+    # -E, -S and UserKnownHostsFile name a local file it writes, whatever line it runs
+    "ssh -E ~/.exo/state/log host 'sort x && hash -p /x ls'",
+    "ssh -E ~/.exo/state/log host 'sort x; hash -p /x ls'",
+    "ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'",
+    "ssh -S ~/.exo/state/sock host 'hash -p /x ls; sort x'",
+    "ssh -o UserKnownHostsFile=~/.exo/state/kh host 'sort x && hash -p /x ls'",
+    "ssh -E ~/.exo/state/log a ssh b 'hash -p /x ls; sort x'",
+    "ssh -o ProxyCommand='hash -p /x ls; sort x' -E ~/.exo/state/log host ls",
+    "man -P 'sort x; hash -p /x ls' -l ~/.exo/state/x",
+    "less ~/.exo/state/x '+!sort x; hash -p /x ls'",
+    "more ~/.exo/state/x '+!hash -p /x ls; sort x'",
     # only BASH_CMDS and BASH_ALIASES are marked: a store path in another variable the gate reads as opaque is
     # still checked as on main, however the line sets it
     "export LD_PRELOAD=~/.exo/state/x",
@@ -232,6 +250,25 @@ def test_a_store_write_beside_hash_is_still_one(line, monkeypatch):
     assert c.category == "store_write", c
     assert decide(c, normalize_policies({"gates": {"categories": {"store_write": "deny"}}})).outcome == "deny"
     assert decide(c, normalize_policies({"gates": {"categories": {"opaque_exec": "allow"}}})).outcome == "ask"
+    r = decide(c, normalize_policies({"gates": {"reserved": ["store_write"]}}))   # so no standing grant covers it
+    assert r.outcome == "ask" and any(cat == "store_write" for cat, _ in r.reserved), r
+
+
+# Over ssh, a plain shell command beside the rebind keeps the check of ssh's words, so the descriptor path there is
+# a store write, as main makes it with the shell command first. The post keeps its deny cell (#464) and its posting
+# violations, named after the post (exo-36, #409).
+@pytest.mark.parametrize("line", [
+    "ssh host 'hash -p /proc/self/fd/3 ls; sort x'; gh pr comment 1 --body Zork",
+    "ssh host 'sort x; hash -p /proc/self/fd/3 ls'; gh pr comment 1 --body Zork",
+])
+def test_a_post_beside_a_rebind_and_a_shell_command_over_ssh_keeps_its_deny(line):
+    c = classify(sh(line))
+    assert c.category == "store_write", c
+    assert decide(c, normalize_policies({"gates": {"matrix": {"costly": {"public": "deny"}}}})).outcome == "deny"
+    d = decide(c, POLICY)
+    assert d.outcome == "ask", d
+    assert d.violations == ["GitHub PR comment on #1: missing footer: F",
+                            "GitHub PR comment on #1: forbidden word: Zork"], d
 
 
 def test_a_credentials_floor_is_not_taken_for_a_rebind():
@@ -241,19 +278,3 @@ def test_a_credentials_floor_is_not_taken_for_a_rebind():
     assert c.category == "credentials", c
     assert any(p.category == "store_write" for p in _walk(c)), c.parts
     assert decide(c, normalize_policies({"gates": {"categories": {"store_write": "deny"}}})).outcome == "deny"
-
-
-# Known limit (docs/GATE.md, D-038 amendment group 4): a rebind and plain shell commands in a line that ssh, man -P or
-# less runs count as reads, so the words around that line are not checked for store paths, whichever comes first.
-# Main checked them only when the shell command came first. Reading ssh's own options (-E) in every case is left to
-# its own issue, which turns the ssh lines here into store writes.
-@pytest.mark.parametrize("line", [
-    "ssh -E ~/.exo/state/log host 'sort x; hash -p /x ls'",
-    "ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'",
-    "man -P 'sort x; hash -p /x ls' -l ~/.exo/state/x",
-    "less ~/.exo/state/x '+!sort x; hash -p /x ls'",
-])
-def test_known_limit_words_around_a_rebind_and_a_shell_command(line):
-    c = classify(sh(line))
-    assert c.category == "opaque_exec", c
-    assert decide(c, POLICY).outcome == "ask"

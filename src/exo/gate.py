@@ -3755,12 +3755,14 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
 
 def _store_quiet(p: Classification) -> bool:
     """A part the store check takes as a read: a read, or an opaque part that only records a path for a later name
-    to run (_REBINDS) and was built from such parts and plain shell ones alone (`ssh host 'hash -p /x ls; sort x'`
-    and its hop). A shell part made costly (`sudo make`) outranked the read the rebind was, so it keeps the check. The
+    to run (_REBINDS) and was built from such parts and the plain shell part of an ssh or mosh hop alone
+    (`ssh host 'hash -p /x ls'`). Any other shell part keeps the check of the words around the line, whatever its
+    order, as a plain one before the rebind did on main: ssh's own `-E ~/.exo/state/log` is a store write. The
     category is checked too: a credentials floor carries every signal of the line as its own."""
     own = p.signals if p.own_signals is None else p.own_signals
     return p.category == "read" or p.category == "opaque_exec" and _REBINDS in own and all(
-        q.category == "shell" and q.reversibility == "reversible" or _store_quiet(q) for q in p.parts)
+        q.category == "shell" and q.reversibility == "reversible" and "remote host" in (
+            q.signals if q.own_signals is None else q.own_signals) or _store_quiet(q) for q in p.parts)
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
