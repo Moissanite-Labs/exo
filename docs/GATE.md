@@ -994,7 +994,20 @@ gate does not read:
   `PATH=$PATH: ls`), any other folder in `PATH`, appended or not, since it supplies every program
   the folders before it lack (`export PATH="$HOME/.local/bin:$PATH"`), `PYTHONPATH` before any
   other program (`PYTHONPATH=/tmp/p python3 -m json.tool x` loads a `json` module from there) or
-  exported, and `GIT_CONFIG_GLOBAL` set to a file. The
+  exported, and `GIT_CONFIG_GLOBAL` set to a file. `unset PATH` and `unset -v PATH` ask as
+  `PATH=` does, since with no `PATH` bash looks a command up in the current folder (#329).
+  `unset -f PATH` stays `allow`: `-f` names a function, and with `-v` it is an error. The gate
+  takes `-f` only from an option word it can read, before any word it cannot. A `+x` word, `--`
+  or a name ends unset's options, so a later `-f` is a name (`unset +f -f PATH` asks). An
+  `unset` with a word the gate cannot read asks too, as a name or as an option: a name made by a
+  variable or a substitution (`unset "$v"`, `unset $(echo PATH)`), an option word with one
+  (`unset -${f}v PATH`), a `$` outside double quotes, which bash may split into more names
+  (`unset a[$i]`), a glob (`unset PAT?`, `unset [P]ATH`, and an unquoted subscript such as
+  `unset arr[1]`), or an unquoted brace (`unset {PATH,}`). bash drops a `\<newline>` before it
+  reads a word, so `unset \<newline>[P]ATH` asks too. A word wholly in double quotes is
+  read as before (`unset "arr[$k]"`), and so is `unset 'arr[1]'`. `unset -n PATH` asks too, to
+  be safe. bash leaves a plain `PATH` set under `-n`, but it unsets a `PATH` that an earlier
+  command made a nameref. The
   line sets one before the program, through a prefix, exported or bare (`export -p` and
   `readonly -p` assign too, while `declare -p` only prints), as a parameter-expansion assignment
   (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
@@ -1018,7 +1031,12 @@ gate does not read:
   parent's value as `${_}`, so classify, which runs in the gate hook, cannot be stalled by a
   long run of unclosed or nested expansions. A name the gate cannot read (`export $X=...`,
   `read -r "$v"`, `declare -n r=$X`, a nameref with no target, or a glob the shell expands
-  first such as `export PAT?=.` or `read HOM[E]`) is opaque too.
+  first such as `export PAT?=.` or `read HOM[E]`) is opaque too. So is an exporter option word
+  the gate cannot read (`declare -${f}x $V=`). The options end at that word, so a `-f` or `-p`
+  after it does not count. `export` and `readonly` read `+x` as a name, and the words after it
+  as names too. So `export +x -f $V=` asks, and `readonly +x -n r=PATH` makes no nameref
+  (#329). An exporter name in a brace (`export {PATH,X}=`) is not read yet (#438), and neither
+  is a leading `[` in a `read` or exporter name (`read [P]ATH`).
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
   `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
