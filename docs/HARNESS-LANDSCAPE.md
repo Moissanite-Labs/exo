@@ -113,6 +113,12 @@ tests as these phases proceed rather than introducing parallel implementations. 
 tool-composition/codemode only after policy, cancellation, structured results and accounting remain correct
 for nested calls. Its payoff must be measured against extra runtime and debugging complexity.
 
+The [Hermes plugin catalog follow-up](HERMES-PLUGIN-OPPORTUNITIES.md) ranks eleven additions from the
+2026-10-23 catalog snapshot. It includes reversible tool-output compression, setup migration, document
+conversion, durable task questions and optional trace export. Each proposal names existing Exo support,
+the remaining gap and acceptance criteria. Capability packs and a versioned observer API support
+independent installation. These are proposed features, separate from the implementation above.
+
 ## Evaluation plan: earn comparisons
 
 Maintain two tracks: deterministic harness conformance without network/model keys, and real-model task
