@@ -1595,11 +1595,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   working. As for #240, these lines take the category of what runs. The part that runs the stdin is a part of the line
   beside ssh's own part, not built into it, and ssh's own part keeps the reading it had before #316 (in a hop, the
   remote command read unfed). So sudo or a privileged wrapper around ssh still makes that part `costly`, and a `deny`
-  or `reserved` entry still finds the targets and categories it found. The direct #240 form is built the same way, so
-  `sudo ssh host < cmds.sh` is now denied under a rule that denies `costly` `shell` parts, where it asked. Last, a
+  or `reserved` entry still finds the targets and categories it found: ssh's own part names the host as it did where
+  ssh read no stdin. The direct #240 form is built the same way. There the part that led when #240 built the parts
+  into one still leads on equal parts and takes the host, so the line decides and lists its hits as on main. So `sudo
+  ssh host < cmds.sh` is now denied under a rule that denies `costly` `shell` parts, where it asked. Last, a
   `-n`, `-N` or `-f` before a word that may expand to no word or several is an option whatever the word becomes, so
   ssh does not read its stdin then: `while read h; do ssh -n "$h" uptime; done < hosts.txt` keeps its reading, where
-  it asked once the compound's feed was read.
+  it asked once the compound's feed was read. A `--` before the host ends the options, so a letter after it does not
+  count: in `ssh -- -n "$h" < f` ssh takes `-n` as the host, and the line asks as on main.
   *Lowered on purpose:* the new part is `opaque_exec`, or what a known text reads as, and runs on the remote host. It
   can be the line's deciding part (the most severe part, or the first of equal ones), and the steps of `decide` that
   read only that part then read it. A line decides lower than on main in three ways. (a) A policy that allows or logs

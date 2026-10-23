@@ -3081,12 +3081,16 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         elif hop:
             # #316: ssh passes its stdin on to the remote command, and an ssh in it runs it on the next host.
             fed = [_runs_stdin(_opaque(f"ssh {dest} passes its stdin to an ssh that runs it as commands"[:120], cmd), k)]
-        stdin = None
+        # Where the line gives ssh a stdin itself, #240 built the parts that run it into ssh's own part, and the
+        # part that led took the host as its target. One of them could lead while ssh's own part was still private
+        # (`echo 'gh pr merge 1' | ssh $H x`).
+        stdin, direct, lead = None, reads and _stdin_given(k, piped, unread=False), False
         if fed:
             if fed_line:
                 fed[0].signals.append(_LINE_STDIN)
             if depth < _DEPTH:
                 fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
+            lead = direct and _lead([c, *fed]) is not c
             # A part beside ssh's own, not built into it (#316): sudo or a privileged wrapper around ssh still marks
             # ssh's own part costly, as when ssh reads no stdin, and the line takes the more severe part.
             stdin = _combine(fed, cmd)
@@ -3123,7 +3127,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 p.exposure = "internal"
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
-        if not reads:                         # else ssh's own part is no more than the hop parts, as before #316
+        if not lead:                          # ssh's own part names the host, as when it led before #316
             c.target = dest if "unread hops" in c.signals else (c.target or dest)
         if not here:
             c.signals.append("remote host")
@@ -3133,9 +3137,14 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         for p in _each_part(stdin):
             if EXPOSURE.index(p.exposure) < 1:
                 p.exposure = "internal"
-        stdin.target = stdin.target or dest
+        if lead:
+            stdin.target = dest if "unread hops" in c.signals else (stdin.target or dest)
+        elif not direct:                      # the part #316 adds names the host
+            stdin.target = stdin.target or dest
         stdin.signals.append("remote host")
-        return [c, stdin]
+        # The line keeps the first of equal parts. Both parts now run on the remote host, so they can be equal where
+        # the part that runs the stdin led before: it comes first then, and the line is decided as before.
+        return [stdin, c] if lead and _severity(stdin) == _severity(c) else [c, stdin]
     if prog in ("vercel", "netlify"):
         if "login" in argv:
             return [_make("credentials", summary=f"{prog} login", command=cmd)]
@@ -3278,10 +3287,11 @@ def _ssh_options(args: list[str], i: int, after: bool = False) -> tuple[int, str
     return i, letters
 
 
-def _stdin_given(k: _Cmd, piped: str | None) -> bool:
+def _stdin_given(k: _Cmd, piped: str | None, unread: bool = True) -> bool:
     """Whether the line gives the command a stdin: a pipe in, a heredoc or here-string, a `<` from anything but
-    /dev/null, or a compound around it fed a stdin whose text the gate cannot read (k.stdin_unknown, #316)."""
-    return bool(k.piped_in or piped is not None or k.heredocs or k.herestrings or k.stdin_unknown
+    /dev/null, or, with `unread`, a compound or wrapper around it fed a stdin whose text the gate cannot read
+    (k.stdin_unknown, #316)."""
+    return bool(k.piped_in or piped is not None or k.heredocs or k.herestrings or (unread and k.stdin_unknown)
                 or any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs))
 
 
@@ -3308,7 +3318,8 @@ def _ssh_sure_flags(words: list, i: int, flags: str) -> tuple[str, int, list[boo
     """(ssh's flag letters the gate is sure of, where its options after the host end, which of its words may expand
     to no word or several). Such a word among the options and the host may end the options early or move later
     ones into the remote command, so only the letters before it are sure: `-n` is an option in `ssh -n "$h"
-    uptime`, not in `ssh $OPTS -n host`. `i` is the host's index in words[1:], `flags` the letters before it."""
+    uptime`, not in `ssh $OPTS -n host`. A `--` ends ssh's options, so no letter after it is sure: `-n` is the host in
+    `ssh -- -n "$h"`. `i` is the host's index in words[1:], `flags` the letters before it."""
     texts = [w.text for w in words[1:]]
     wild = [w.dynamic or (not w.quoted and (w.glob or bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
             for w in words[1:]]
@@ -3316,7 +3327,8 @@ def _ssh_sure_flags(words: list, i: int, flags: str) -> tuple[str, int, list[boo
     first = next((n for n, x in enumerate(wild[:j]) if x), j)
     if first > i:
         return flags + _ssh_options(texts[:first], i + 1, after=True)[1], j, wild
-    return _ssh_options(texts[:first], 0)[1], j, wild
+    sure = texts[:first]
+    return _ssh_options(sure[:sure.index("--")] if "--" in sure else sure, 0)[1], j, wild
 
 
 def _ssh_forwards(words: list, k: _Cmd, piped: str | None, i: int, flags: str, fed: bool = False) -> bool:
@@ -3838,12 +3850,17 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     return ""
 
 
+def _lead(parts: list[Classification]) -> Classification | None:
+    """The part _combine keeps: the first credentials part, else the first store write, else the most severe."""
+    credentials = [p for p in parts if p.category == "credentials"]
+    store = [p for p in parts if p.category == "store_write"]
+    return credentials[0] if credentials else (store[0] if store else _most_severe(parts))
+
+
 def _combine(parts: list[Classification], cmd: str) -> Classification:
     """The most severe part, with every part's signals. A store write outranks everything but credentials."""
     signals = [s for p in parts for s in p.signals]
-    credentials = [p for p in parts if p.category == "credentials"]
-    store = [p for p in parts if p.category == "store_write"]
-    c = credentials[0] if credentials else (store[0] if store else (_most_severe(parts) or _make("shell", command=cmd)))
+    c = _lead(parts) or _make("shell", command=cmd)
     if c.own_signals is None:
         c.own_signals = list(c.signals)
     c.signals = list(dict.fromkeys(c.signals + signals))
