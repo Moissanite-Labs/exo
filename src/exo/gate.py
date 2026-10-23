@@ -98,6 +98,7 @@ OUTBOUND = ("github_post", "message_send", "email_send", "social_post", "web_pos
 POSTING_DEFAULT = ("github_post", "message_send", "email_send", "social_post")
 # The most posting violations a decision lists when other posts on the line add theirs (#396). The rest are counted.
 _LISTED_VIOLATIONS = 20
+_LISTED_WITH_COPIES = 200   # at most this many other posts' violations on a line with a post's copies (#439)
 
 
 class PolicyError(ValueError):
@@ -6576,12 +6577,15 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     # another part's are named after it, and only so many of those are listed (_LISTED_VIOLATIONS)
     # that a line of many posts keeps its reason and its card short. A gh post's copy on another
     # target it may land on (#399, alt_copy) lists, right after its post, only what neither the
-    # post nor another copy of it lists. A line with such copies lists every violation: the gate
-    # cannot tell which of a post's targets main read it on, so no cap may cut that one's.
+    # post nor another copy of it lists. The gate cannot tell which of a post's targets main read
+    # it on, so a line with copies lists, past that room, as many more as its posts with copies and
+    # their copies list: every entry main lists keeps its place within the room. It lists at most
+    # _LISTED_WITH_COPIES, so the card, the ledger row and the decision model's input stay bounded.
     checked, post_unseen_seen = False, False
     named: list[str] = []
     found_on: dict[int, list[str]] = {}
     post_of = {id(k): id(q) for q in _each_part(eff) for k in q.parts if k.alt_copy}
+    copied, held = set(post_of.values()), 0
     for p in _each_part(eff):
         p_unseen = post_unseen(p)
         if p.category not in applies_to and not (p.category in ("github_close", "vcs_merge")
@@ -6605,9 +6609,11 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
             violations += found
         else:
             named += [f"{redact_userinfo(p.summary or p.category)}: {v}" for v in found]
+            held += len(found) if p.alt_copy or id(p) in copied else 0
     if unseen and not post_unseen_seen and (checked or line_applies):
         violations.append(UNSEEN_BODY)  # a body on a part the posting rules do not cover is still unseen
-    room = len(named) if post_of else max(_LISTED_VIOLATIONS - len(violations), 0)
+    room = max(_LISTED_VIOLATIONS - len(violations), 0)
+    room = min(room + held, _LISTED_WITH_COPIES) if post_of else room
     violations += named[:room] + ([f"and {len(named) - room} more on other posts"] if len(named) > room else [])
     if violations:
         bump("ask", "posting rules: " + "; ".join(violations), "posting")
@@ -6652,18 +6658,25 @@ def _strictness(d: Decision) -> tuple:
     return OUTCOMES.index(d.outcome), EXPOSURE.index(d.exposure), d.third_party
 
 
+_HIDDEN = re.compile(r"and (\d+) more on other posts")
+
+
 def _strictest(ds: list[Decision], why: list[str]) -> Decision:
     """The strictest of several decisions of one line, with the widest exposure, a third party if any has one, and
     every violation and reserved part any of them met (#399). ``why[i]`` ends the reason when ``ds[i]`` stands. A
     violation two posts of one name both meet is listed as often as one decision lists it."""
     i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
     violations: list[str] = []
+    hidden = 0                  # the most `and N more on other posts` of any reading, listed once, last
     for d in ds:
         more = Counter(d.violations) - Counter(violations)
         for v in d.violations:
-            if more[v] > 0:
+            if m := _HIDDEN.fullmatch(v):
+                hidden = max(hidden, int(m.group(1)))
+            elif more[v] > 0:
                 violations.append(v)
                 more[v] -= 1
+    violations += [f"and {hidden} more on other posts"] if hidden else []
     return replace(ds[i], reason=ds[i].reason + why[i], violations=violations,
                    exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
                    third_party=any(d.third_party for d in ds),

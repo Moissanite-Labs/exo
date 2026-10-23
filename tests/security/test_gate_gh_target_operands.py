@@ -12,6 +12,7 @@ from dataclasses import replace
 
 import pytest
 
+from exo import gate
 from exo.gate import UNSEEN_BODY, _each_part, body_unseen, classify, decide, fill_body, normalize_policies, summarize
 
 POST = {"footer": "F", "scrub": {"names": ["SECRETX"]}}
@@ -862,7 +863,8 @@ def test_a_copys_own_violations_are_listed_and_nothing_is_cut():
 
 
 # Round 10, second pass: under a scope a post's copy can find what its post does not (main read the post on the copy's
-# target, a public one). The line lists that, and nothing is cut, whatever target main read each post on.
+# target, a public one). The line lists that, whatever target main read each post on. Round 11: past the room main
+# had, it lists as many more as the post and its copies list, so every entry main lists keeps its place.
 NAMES13 = " ".join(f"N{i}X" for i in range(1, 12)) + " ZZOTHER YYTHIRD"
 SCOPED = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "posting": {"footer": "F", "scrub": {
     "names": [f"N{i}X" for i in range(12)] + ["ZZOTHER", "YYTHIRD"]}}})
@@ -873,15 +875,36 @@ SCOPED = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}}, "po
     ("gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app -b 'N0X'", "internal name: N0X"),
     ("gh pr comment \"$U\" -R myorg/app -b 'N0X F'", "internal name: N0X"),
 ])
-def test_a_line_with_copies_lists_what_main_lists_under_a_scope(post, text):
-    c, d = run(f"gh pr comment 1 -R pub/a -b 'F' && {post} && gh pr comment 2 -R pub/r -b '{NAMES13}'"
-               f" && gh pr comment 3 -R pub/s -b '{NAMES13}'", SCOPED)
-    v = d.violations
+def test_a_line_with_copies_lists_what_main_lists_under_a_scope(post, text, monkeypatch):
+    line = (f"gh pr comment 1 -R pub/a -b 'F' && {post} && gh pr comment 2 -R pub/r -b '{NAMES13}'"
+            f" && gh pr comment 3 -R pub/s -b '{NAMES13}'")
+    v = run(line, SCOPED)[1].violations
     assert any(x.endswith(text) for x in v), v
-    for n in NAMES13.split():
-        for post_name in ("pub/r#2", "pub/s#3"):
-            assert f"GitHub PR comment on {post_name}: internal name: {n}" in v, (n, post_name, v)
-    assert not any(x.startswith("and ") for x in v), v
+    for n in NAMES13.split():         # main lists the first other post whole, within its twenty
+        assert f"GitHub PR comment on pub/r#2: internal name: {n}" in v, (n, v)
+    monkeypatch.setattr(gate, "_LISTED_VIOLATIONS", 10 ** 6)
+    monkeypatch.setattr(gate, "_LISTED_WITH_COPIES", 10 ** 6)
+    full = run(line, SCOPED)[1].violations
+    assert v[:-1] == full[:len(v) - 1] and v[-1] == f"and {len(full) - len(v) + 1} more on other posts", (v, full)
+    assert len(v) - 1 > 20, v         # the post's and its copies' entries come on top of main's twenty
+
+
+def test_one_copy_keeps_a_long_line_of_posts_as_short_as_main_lists_it():
+    # Round 11 (review of 1c6d57c6): one copy no longer lifts the cap for every post on the line, so the card, the
+    # ledger row and the decision model's input do not grow with the line.
+    pol = normalize_policies({"posting": {"footer": "F"}})
+    posts = " && ".join(f"gh pr comment {n} -R pub/r -b x" for n in range(1, 301))
+    c, d = run(f"gh pr comment 5 -R https://ghe.example.com/pub/repo -b x && {posts}", pol)
+    assert c.alt_targets and d.outcome == "ask", (c, d)
+    assert len(d.violations) <= 1 + 20 + 2 + 1 and d.violations[-1].startswith("and "), d.violations
+
+
+def test_a_line_where_every_post_has_copies_lists_at_most_the_bound():
+    pol = normalize_policies({"posting": {"footer": "F"}})
+    posts = " && ".join(f"gh pr comment {n} -R https://ghe.example.com/pub/r{n} -b x" for n in range(1, 301))
+    d = run(posts, pol)[1]
+    assert d.outcome == "ask" and len(d.violations) <= 1 + gate._LISTED_WITH_COPIES + 1, len(d.violations)
+    assert d.violations[-1].startswith("and "), d.violations[-1]
 
 
 def test_two_copies_of_a_post_list_a_finding_once():
@@ -983,3 +1006,12 @@ def test_each_other_target_gets_the_own_text_pass(named, outcome):
     assert decide(replace(c, alt_targets=[]), pol).outcome == "allow"
     assert decide(replace(c, alt_targets=[], target="myorg/app#5"), pol).outcome == outcome
     assert d.outcome == outcome, d
+
+
+def test_a_line_read_two_ways_lists_one_hidden_count():
+    # Round 11 nit: the line as gh reads it and as read before #399 each counted what they left out, and both counts
+    # were listed. The larger one stands, once, last.
+    posts = " && ".join(f"gh pr comment {n} -R pub/r -b x" for n in range(1, 31))
+    d = run(f"gh -R pub/repo pr comment 5 -b x && {posts}", normalize_policies({"posting": {"footer": "F"}}))[1]
+    hidden = [v for v in d.violations if v.startswith("and ")]
+    assert len(hidden) == 1 and d.violations[-1] == hidden[0], d.violations

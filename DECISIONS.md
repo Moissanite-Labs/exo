@@ -921,7 +921,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   lines. A copy now lists, right after its post, only what neither the post nor another copy of it lists. A copy
   can still find what its post does not: under a scope its target may be public where the post's is internal, and
   main may have read the post on that target. A post read on another target than main's can also list more than
-  main does. So a line with such copies lists every violation, with no cap, and its list holds what main lists.
+  main does. So a line with such copies lists every violation, with no cap, and its list holds what main lists
+  (round 11 bounds it).
   When decide merges the line's readings, a text two posts of one name both meet stays listed as often as one
   reading lists it, as main lists it, where the merge kept it once. The ledger view (`Classification.as_dict`)
   hides a user and password in `alt_targets` too. gate_diff, main 39cafcba against this change: the built-in
@@ -929,6 +930,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   under 93 policies: 0 lowered with the #460 script. Main's script at 3ddd89e9 counts 80 pairs on 16 of those
   lines, and on each the one text missing is main's `and N more on other posts`, which a line that lists every
   violation has no need of. #460 stops counting that line.
+  2026-10-23, round 11 of the review: one copy lifted the cap for every post on the line, so the card, the ledger
+  row and the decision model's input grew with the line. One copy and 500 posts of 20 names each gave a 1.1 MB
+  reason, past the ledger authority's 1 MiB limit, so no row was written. Now the room past the twenty grows only by
+  what the posts with copies and their copies list. Main's list differs from this one only in those entries, so
+  every entry main lists keeps its place within the room. A line lists at most 200 other posts' violations
+  (`_LISTED_WITH_COPIES`), so a line where every post has a copy and the entries pass 200 can list fewer than main
+  does. It still asks. When decide merges the line's readings, it lists one `and N more on other posts`, the
+  largest, last. Main bounds no line's ledger row or model input either: #485. The docstring of `classify` ends on
+  its old last line again, which main's gate_diff tests patch after.
   Limits: `docs/GATE.md` "Where a gh command lands".
 
 - **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.

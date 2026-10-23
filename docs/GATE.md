@@ -238,9 +238,11 @@ Each other reading is a copy of the action among the line's parts, with its own 
 `target:` deny or reserved entry matches it also when the gh call is not the line's most severe
 part. The posting rules list a post's violations under the post's own name, and right after
 them what a copy finds that neither the post nor another copy of it does (under a scope a copy's
-target can be public where the post's is internal). A line with such copies lists every
-violation, with no cap of twenty. Its question merges the readings of the line, so a copy's
-finding can show both under the copy's name and under the post's. The ledger row lists the other targets as `alt_targets`, with a user and password in a
+target can be public where the post's is internal). On a line with such copies, the room past
+the twenty grows by what the posts with copies and their copies list, so it lists all that main
+lists, and at most 200 entries from other posts in all. Its question merges the readings of the
+line, so a copy's finding can show both under the copy's name and under the post's, and it lists
+one `and N more on other posts`, the largest. The ledger row lists the other targets as `alt_targets`, with a user and password in a
 URL as `***@`. The question the principal sees
 names each of them, also when none decides the line:
 `merge PR on pub/repo#7 (costly, internal). It may land on myorg/app#7 instead.`
