@@ -1044,16 +1044,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line keeps its own weight, so a policy whose costly cell is stricter than its irreversible one still denies
   `cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'`, which an earlier commit here made irreversible (#468 review). With
   these, every change makes a line stricter or leaves it alone, but for one group gate_diff reports. Under
-  `reserved: ['command:\brm\b']`, `cd ~/.exo/policies && declare -a x='($(ssh prod 'rm -rf /'))'` had its reserved
-  hit on `opaque_exec` and now has it on `store_write`. Both ask, the store write only the principal, and a store
-  write takes no standing grant, so the hit changes nothing. gate_diff (#423) ran main c27d8739 against this change over the
-  built-in corpus, 12,780 lines of substitutions around a `cd` into 14 folders, 28 lines from the review, the 2,127
-  #464 lines, 1,932 lines with a copy of the substitution's text before the `cd`, 3,000 lines with a compound around
-  the `cd` and a substitution in its redirections, and the 1,716 `unset` lines of the #404 review, under the 87
-  built-in policies and 18 more. The #460 script read 101,842 actions: 0 lowered, 2,048 pairs reworded. Main's script
-  read 101,378 actions and reports 256 pairs on 64 lines as violations lost. In
+  `reserved: ['command:\brm\b']`, `cd ~/.exo/policies && declare -a x='($(ssh prod 'rm -rf /'))'` had its
+  reserved hit on `opaque_exec` and now has it on `store_write`. Both ask, the store write only the principal, and
+  a store write takes no standing grant, so the hit changes nothing. gate_diff (#423) ran main c27d8739 against
+  this change over the built-in corpus, 12,780 lines of substitutions around a `cd` into 14 folders, 28 lines from
+  the review, the 2,127 #464 lines, 1,932 lines with a copy of the substitution's text before the `cd`, 3,000 lines
+  with a compound around the `cd` and a substitution in its redirections, 384 lines with a secret beside a heavier
+  command, and the 1,716 `unset` lines of the #404 review, under the 87 built-in policies and 21 more. The #460
+  script read 102,784 actions: 0 outcomes lower, 4 pairs with the reserved hit above, 2,048 pairs reworded. Main's
+  script read 102,143 actions and reports those 4 and 256 pairs on 64 lines as violations lost. In
   `cd ~/.exo/policies && echo $(echo $(gh pr comment 3 --body hi))` the post's bare violation is now named after the
-  post, since the store write sets the card. Both trees list it, and the #460 script counts it as reworded. 641,599
+  post, since the store write sets the card. Both trees list it, and the #460 script counts it as reworded. 669,724
   pairs are stricter, nearly all the store-write ask on the forms above.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
