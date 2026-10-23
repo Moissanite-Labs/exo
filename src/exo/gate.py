@@ -4918,6 +4918,15 @@ def _real(path: str, memo: dict[str, str]) -> str:
     return memo[path]
 
 
+def _lexical(path: str) -> list[str]:
+    """``path`` as written and, when it differs, as the kernel reads it before any link: `//` and `/./` collapsed and
+    `x/..` resolved (#446). The store names match either form, so `~/.kube//config`, `~/.kube/./config` and
+    `~/.kube/x/../config` are `~/.kube/config`. A link before a `..` may lead elsewhere; then the lexical form asks
+    when it need not, which fails closed. The callers spell out `~` and `$HOME` first."""
+    norm = os.path.normpath(path)
+    return [path] if norm == path else [path, norm]
+
+
 def is_sensitive_path(path: str) -> bool:
     """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
     stores and run folders, signing keys, token and client-secret files, .env files). Never reads the file. A
@@ -4933,7 +4942,8 @@ def _sensitive_words(words: list[str]) -> bool:
     below the folder it was read from, only the part below it, so a folder like a repo's `.claude` does not count).
     A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads."""
     words = [w for w in (w.strip() for w in _expand_words(words)) if w]
-    if any(_SENSITIVE_PATH.search(w.replace("\\", "/")) for w in words if not w.endswith(".pub")):
+    # by name: each word as written and in its lexical form (#446), so `~/.kube//config` is `~/.kube/config`
+    if any(_SENSITIVE_PATH.search(f) for w in words for f in _lexical(w.replace("\\", "/")) if not f.endswith(".pub")):
         return True
     scope = _scope.get() or _Scope()
     if scope.roots is None:
@@ -5072,12 +5082,26 @@ def _glob_words(words: list[str]) -> bool:
 _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
 
 
-def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
+def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str], hop: bool = True) -> bool:
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
     proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ, or a thread's (#199, #313)
     if proc and (proc[1] is None or _glob_names(proc[1], ("task",))) and _glob_names(proc[2], ("environ",)):
         return True
+    # #446: a top folder that could be /proc (`/pro?`, `/[p]roc`, `/p*`, and `//proc`, which normpath keeps) is it
+    top, _, rest = tok.lstrip("/").partition("/")
+    if tok[:1] == "/" and rest and f"/proc/{rest}" != tok and _glob_names(top, ("proc",)) and \
+            _glob_word(f"/proc/{rest}", home, samples, secrets, runs, hop):
+        return True
+    # A process's root link (`/proc/self/root`, `/proc/1/root`, a thread's `task/<tid>/root`) leads to `/`, so
+    # `/proc/self/root/pro?/1/environ` and `/proc/self/root/proc/self/env*` are read from there. One such step: a
+    # second root link after it counts (fails closed), so `/*/*/*/...` is not read again at each third part
+    parts = tok.split("/")                               # '', 'proc', <pid>, then `root` or `task`, <tid>, `root`
+    for k in (3, 5):
+        if parts[1:2] == ["proc"] and len(parts) > k + 1 and (k == 3 or _glob_names(parts[3], ("task",))) and \
+                _glob_names(parts[k], ("root",)) and \
+                (not hop or _glob_word("/" + "/".join(parts[k + 1:]), home, samples, secrets, runs, False)):
+            return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
@@ -5201,7 +5225,7 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
-    if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
+    if any(map(_STORE_NAMES.search, _lexical(p))) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
         return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
     if not p.startswith("/"):
         return False                     # relative: names only; the tool's working folder is not known here
