@@ -5067,10 +5067,22 @@ def _glob_hits_secret(tok: str) -> bool:
 
 
 def _glob_words(words: list[str]) -> bool:
-    """_glob_hits_secret for any of ``words``, which are already brace-expanded."""
+    """_glob_hits_secret for any of ``words``, which are already brace-expanded. An absolute word whose folder part
+    before the glob holds a `..` is also read with that part resolved, as a word without a glob is (#209): a link
+    before the `..` leads elsewhere, so `/dev/fd/../env*` and `/proc/thread-self/../../env*` are a process's own
+    `/proc/<pid>/env*` (#446)."""
     words = [w for w in _expand_words(words) if re.search(r"[*?\[]", w)]
     if not words:
         return False
+    for w in list(words):
+        lit = re.split(r"[*?\[]", w, maxsplit=1)[0].rpartition("/")[0]
+        if lit[:1] == "/" and ".." in lit.split("/"):
+            try:
+                real = os.path.realpath(lit)
+            except (OSError, ValueError):
+                continue
+            if real != os.path.normpath(lit):
+                words.append(real.rstrip("/") + w[len(lit):])
     home = _home()
     samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
                                                                        _dynamic_secret_paths()[1]]
@@ -5082,8 +5094,37 @@ def _glob_words(words: list[str]) -> bool:
 _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
 
 
+def _root_links(path: str) -> Iterator[str]:
+    """What follows each process root link in the absolute ``path`` (`/proc/<pid>/root`, a thread's
+    `task/<tid>/root`, a glob that could be `proc`, `task` or `root` too), spelt from `/`, where the link leads (#446).
+    A process's working folder link (`cwd`) counts too: for pid 1 and most daemons it is `/`. The parts up to the
+    link are walked as the kernel walks them (`//`, `.` and `..`); what follows is left as written, since `..` right
+    after the link stays at `/`: `/proc/self/root/../pro?/1/environ` is `/pro?/1/environ`. A link with nothing left
+    below it once its `..` parts are taken back (`/proc/self/root/..`) is skipped."""
+    if path[:1] != "/":
+        return
+    parts, up, last = path.split("/"), 0, 0
+    at: list[str] = []
+    for j in range(len(parts) - 1, 0, -1):   # `last`: the last part no `..` after it takes back
+        if parts[j] == "..":
+            up += 1
+        elif parts[j] not in ("", "."):
+            if not up:
+                last = j
+                break
+            up -= 1
+    for i, s in enumerate(parts[1:last], 1):
+        if s == "..":
+            del at[-1:]
+        elif s not in ("", "."):
+            at.append(s)
+            if (len(at) == 3 or len(at) == 5 and _glob_names(at[2], ("task",))) and _glob_names(at[0], ("proc",)) \
+                    and _glob_names(s, ("root", "cwd")):
+                yield "/" + "/".join(parts[i + 1:])
+
+
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str], hop: bool = True) -> bool:
-    raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
+    raw, written = tok.rpartition("/")[0], tok           # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
     proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ, or a thread's (#199, #313)
     if proc and (proc[1] is None or _glob_names(proc[1], ("task",))) and _glob_names(proc[2], ("environ",)):
@@ -5093,14 +5134,13 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     if tok[:1] == "/" and rest and f"/proc/{rest}" != tok and _glob_names(top, ("proc",)) and \
             _glob_word(f"/proc/{rest}", home, samples, secrets, runs, hop):
         return True
-    # A process's root link (`/proc/self/root`, `/proc/1/root`, a thread's `task/<tid>/root`) leads to `/`, so
-    # `/proc/self/root/pro?/1/environ` and `/proc/self/root/proc/self/env*` are read from there. One such step: a
-    # second root link after it counts (fails closed), so `/*/*/*/...` is not read again at each third part
-    parts = tok.split("/")                               # '', 'proc', <pid>, then `root` or `task`, <tid>, `root`
-    for k in (3, 5):
-        if parts[1:2] == ["proc"] and len(parts) > k + 1 and (k == 3 or _glob_names(parts[3], ("task",))) and \
-                _glob_names(parts[k], ("root",)) and \
-                (not hop or _glob_word("/" + "/".join(parts[k + 1:]), home, samples, secrets, runs, False)):
+    # A process's root link (`/proc/self/root`, `/proc/1/root`, a thread's `task/<tid>/root`) leads to `/`, and so may
+    # its `cwd`, so `/proc/self/root/pro?/1/environ`, `/proc/1/cwd/pro?/1/environ` and
+    # `/proc/self/root/../pro?/1/environ` are read from there. One such step: a second link after it counts (fails
+    # closed), so `/*/*/*/...` is not read again at each third part, and past 16 links (`/proc/1/*/../*/../x`) the
+    # word counts, so the work stays linear
+    for n, rest in enumerate(_root_links(written)):
+        if not hop or n >= 16 or _glob_word(rest, home, samples, secrets, runs, False):
             return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)

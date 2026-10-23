@@ -49,6 +49,24 @@ def test_the_controls_keep_asking(line):
     assert bash(line) == ("credentials", "ask")
 
 
+@pytest.mark.parametrize("call", [
+    # rows added to the issue later: numeric pids, so no `/proc/self` link resolves the gap
+    "cat /proc/1/task//1/environ",
+    "cat /proc/1/task/1/./environ",
+    "cat /proc/1/task/1/../../task/1/environ",
+    "cat /*/*/*/*/environ",
+    {"tool": "read_file", "args": {"path": "/proc/1/task/1//environ"}},
+    # #476, rows 1 and 2: a leading `//`, and a glob after a process's root link
+    "cat //proc/self/*/*/environ",
+    "cat //proc/1/*/*/environ",
+    "cat /proc/self/root/*/1/environ",
+    "cat /proc/self/root/p*/1/environ",
+    "cat /proc/*/*/*/*/environ",
+])
+def test_the_later_rows_ask(call):
+    assert (bash(call) if isinstance(call, str) else decided(call)) == ("credentials", "ask")
+
+
 # --- every store name with more than one part ---------------------------------------------------------------------
 
 # Each multi-part name in the secret-store list, with a doubled slash, a `.` part and a `..` that comes back.
@@ -80,6 +98,21 @@ def test_a_store_name_split_by_a_lexical_part_asks(path):
     "cat --kubeconfig=~/.kube//config",
 ])
 def test_more_spellings_ask(line):
+    assert bash(line) == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("line", [
+    "cat ~/.kube/\\\n/config",                  # bash drops a `\<newline>`, leaving `//`
+    "cat /pro\\\n?/self/environ",
+    'cat ~/.kube/""/config',                     # quotes that leave an empty part
+    "cat ~/.kube/'.'/config",
+    "cat ~/.kube/\\./config",
+    'cat "$HOME"/.kube//config',
+    "cat ${HOME}/.kube/./config",
+    "cat < ~/.kube//config",
+    "cd ~ && cat .config//gh/hosts.yml",
+])
+def test_quoted_and_continued_spellings_ask(line):
     assert bash(line) == ("credentials", "ask")
 
 
@@ -189,9 +222,83 @@ def test_a_thread_environ_spelt_oddly_asks(call):
     assert (bash(call) if isinstance(call, str) else decided(call)) == ("credentials", "ask")
 
 
+@pytest.mark.parametrize("line", [
+    "cat /proc/self/root/../pro?/1/environ",     # `..` at `/` stays there, so this is /proc/1/environ
+    "cat /proc/self/root/../proc/1/env*",
+    "cat /proc/1/root/../../pro?/1/environ",
+    "cat /proc/1/task/1/root/../pro?/1/environ",
+    "cat /proc/self/./root/./../pro?/1/environ",
+    "cat /proc/1/*/../root/../pro?/1/environ",   # the parts before the link are walked as the kernel walks them
+])
+def test_dotdot_right_after_a_process_root_link_stays_at_root(line):
+    assert bash(line) == ("credentials", "ask")
+
+
+def test_dotdot_after_a_root_link_into_a_home_store_asks(env):
+    assert bash(f"cat /proc/self/root/..{env}/.kube/conf*") == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("line", [
+    "cat /proc/1/cwd/pro?/1/environ",            # pid 1's working folder is `/`, as for most daemons
+    "cat /proc/*/cwd/pro?/*/environ",
+    "cat /proc/1/task/1/cwd/pro?/1/environ",
+    "cat /proc/1/c?d/[p]roc/self/environ",
+    "cat /proc/self/cwd/../pro?/1/environ",      # `..` from a folder one level down is `/`
+    "cd / && cat /proc/self/cwd/pro?/1/environ",
+])
+def test_a_glob_below_a_process_working_folder_link_asks(line):
+    assert bash(line) == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("line", [
+    "ls /proc/self/cwd/*",
+    "ls /proc/1/cwd/",
+    "ls -l /proc/*/cwd",
+    "ls /proc/self/cwd/src/*.py",
+    "cat /proc/self/cwd/../etc/host*",
+])
+def test_a_glob_below_a_process_working_folder_link_that_names_no_store_stays_a_read(line):
+    assert bash(line) == ("read", "allow")
+
+
+@pytest.mark.parametrize("line", [
+    "cat /proc/thread-self/../../env*",          # thread-self is /proc/<pid>/task/<tid>, so `../..` is /proc/<pid>
+    "cat /proc/thread-self/../../root/pro?/1/environ",
+    "cat /dev/fd/../env*",                       # /dev/fd is /proc/self/fd
+])
+@pytest.mark.skipif(not (os.path.islink("/proc/thread-self") and os.path.islink("/dev/fd")),
+                    reason="needs /proc/thread-self and /dev/fd to be links, as on Linux")
+def test_a_glob_after_a_link_and_dotdot_is_read_resolved_too(line):
+    # The lexical form drops the link and its parent; the folder part before the glob is also resolved (#209).
+    assert bash(line) == ("credentials", "ask")
+
+
+def test_a_glob_after_a_link_into_a_store_and_dotdot_asks(env, tmp_path):
+    (env / ".kube" / "sub").mkdir(parents=True)
+    os.symlink(env / ".kube" / "sub", tmp_path / "k")
+    assert bash(f"cat {tmp_path}/k/../conf*") == ("credentials", "ask")
+    assert bash(f"cat {tmp_path}/../conf*") == ("read", "allow")
+
+
 def test_a_long_run_of_glob_parts_is_read_once():
     # `*` could be `proc` and `root` at once: the root step is taken once, so 4,000 parts do not recurse 1,300 deep.
     assert bash("ls " + "/*" * 4000) == ("credentials", "ask")
+    # Each `*` before a `..` could be a root link too: past 16 of them the word counts, so the work stays linear.
+    assert bash("ls /proc/1" + "/*/.." * 3000 + "/x") == ("credentials", "ask")
+
+
+def test_links_taken_back_by_dotdot_are_skipped_in_linear_time(monkeypatch):
+    # Each `*` could be a root link, and the `..` after it takes it back. The word is walked once: no candidate link
+    # spells the rest of the word out again, so the text normpath reads stays a small multiple of the line.
+    seen, normpath = [0], os.path.normpath
+
+    def counting(p):
+        seen[0] += len(p)
+        return normpath(p)
+    line = "ls /proc/1" + "/*/.." * 3000
+    monkeypatch.setattr(os.path, "normpath", counting)
+    assert bash(line) == ("read", "allow")
+    assert seen[0] < 50 * len(line)
 
 
 @pytest.mark.parametrize("line", [
@@ -200,6 +307,9 @@ def test_a_long_run_of_glob_parts_is_read_once():
     "ls /proc/*/task/*/root/*",
     "ls /proc/self/root/p*/*/status",
     "cat /proc/self/root/etc/host*",
+    "ls /proc/self/root/..",
+    "ls /proc/self/root/../usr/*",
+    "cat /proc/self/root/../etc/host*",
 ])
 def test_a_glob_below_a_process_root_link_that_names_no_store_stays_a_read(line):
     assert bash(line) == ("read", "allow")
@@ -259,6 +369,7 @@ STRICT = [
     {"gates": {"matrix": {"reversible": {"private": "deny"}, "irreversible": {"public": "deny"}}}},
     {"gates": {"deny": ["target:/dev*", "target:*/.ssh/*"]}},
     {"gates": {"reserved": ["read", "local_write"]}},
+    {"gates": {"deny": ["store_write"]}},
     {"posting": {"forbid_words": ["secret"]}},
     {"gates": {"rules": [{"match": {"category": ["read"], "reversibility": "costly"}, "decision": "deny",
                           "reason": "a read run by a privileged wrapper"}]}},
@@ -282,6 +393,8 @@ def full(call, policy):
     ("cat ~/.kube/./config; cat ~/.ssh/id_rsa", "cat ~/.kube/config; cat ~/.ssh/id_rsa"),
     ("cd /dev && echo x > .exo//state/x.json", "cd /dev && echo x > .exo/state/x.json"),
     ("sudo ssh host cat ~/.kube//config", "sudo ssh host cat ~/.kube/config"),
+    ({"tool": "cat", "args": {"path": "/proc/self/root/*/1/environ"}},
+     {"tool": "cat", "args": {"path": "/proc/self/root/proc/1/environ"}}),
 ])
 def test_a_lowered_line_decides_as_its_plain_spelling(odd, plain, policy):
     assert full(odd, policy) == full(plain, policy)
