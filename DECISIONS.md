@@ -437,6 +437,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   session here can take a message"), although the card says allow delivers it. Allow now opens a new thread of the
   seat, titled after the sender, and delivers the message there. If that thread cannot open, the message closes as
   not delivered and the principal gets a notice. Deny and expiry open no thread.
+  *Amendment 2026-10-23 (#132, pinned peer keys):* "auto for the same principal" read the sender's key and principal
+  from its presence file, which any same-user process can write. A forged one plus a self-signed envelope arrived as
+  the principal typing in another client. The receiver now checks a peer only against keys in its own home: its own
+  key for its own seat name, the registry's entry for the name, else the `.pub` beside the seat's key file in `keys/`,
+  plus a peer pin (`exo keys pin --peer`, a `peers` map apart from the D-040 signers). A registry entry decides for its
+  name, so a key rotated out with `--replace` stays out. A seat checked against a key of this home takes its
+  principal from its seat file here, else this home's principal (`EXO_PRINCIPAL`). A seat checked against a peer
+  pin is `other`: this home has no record of whose it is. A sender with no key here is held as `other`, its card
+  says `key not pinned`, and `rules` never match it. A name that holds a key here is checked against those keys
+  alone, so another key is denied. That includes a seat of another home with the receiver's own name (two unseated
+  homes are both `exo`): its key can be pinned as a peer, and it is then held as `other`. To pin a peer of another
+  home, read `<that home>/keys/<seat>.pub` and run `exo keys pin --peer <seat> <key>` here. A `from` that is not a
+  seat id is denied before any key lookup. A receipt must name the seat the message went to, come from that
+  seat's daemon and verify against that seat's keys here, never a presence key. Not changed: under D-039 any
+  same-uid socket client can ask a daemon to `peers send`, which arrives as `same-principal` automation, by design.
+  A process outside the gate can still read seat keys or write `keys/`. Rejected: holding a same-name seat with a
+  different key as `other` without a pin, which would let any presence file under a pinned name reach the card.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -1751,6 +1768,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Keys:** `$EXO_HOME/keys/registry.json` (0600) pins local signing keys (on creation in `keys/`), bus seat keys,
   and principal ids. `exo log verify` and `exo memory verify` pass it as `trusted`: an unpinned key fails, and so
   does a seat signing as another pinned name. `exo keys` lists and pins.
+  *Amendment 2026-10-23 (#132):* the registry gets a `peers` map for peer seats of other homes, pinned with
+  `exo keys pin --peer SEAT PUB`. Before it, the way to pin a peer was `exo keys pin NAME PUB`, which made the peer's
+  key a ledger signer here, principal-authored events included. `owners` and `allows` read `keys` alone, so a peer
+  pin never signs a ledger. The peer rules are in D-026's amendment of the same date.
 - **Head anchor:** each append writes seq, count and chain hash to `<ledger>.head` and
   `$EXO_HOME/keys/heads/<hash>.json` (0600). Verify fails when the ledger no longer reaches an anchor or its hash
   there differs, or when a trigger was missing on open. Append refuses to write past a broken anchor.

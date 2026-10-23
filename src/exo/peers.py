@@ -36,10 +36,11 @@ from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.ingress import Ingress, IngressPath, PeerConfig, Receipt, Target
 from exo.core.private import atomic_write
-from exo.core.seats import ensure_key, key_path, load as _load_seat
+from exo.core.seats import ID_RE, ensure_key, key_path, load as _load_seat, seats_dir
 from exo.core.sessions import new_id
 from exo.core.tools.registry import ToolContext, ToolError
 from exo.core.types import ToolSpec
+from exo.keyring import KeyRegistry, keys_dir
 from exo.protocol import schema as s
 
 if TYPE_CHECKING:
@@ -262,7 +263,7 @@ class PeerNode:
         self.seat, self.signer, self.target, self.sessions = seat, signer, target, sessions
         self.directory = directory or Directory()
         self.socket, self.platform, self.principal, self.cwd = socket, platform, principal or "", cwd
-        self.home = Path(home) if home else None  # the principal-owned home: where seat keys are pinned
+        self.home = Path(home).expanduser() if home else None  # the principal-owned home: where seat keys are pinned
         self.config = config or PeerConfig()
         self.bus = bus
         self.rpc: Rpc = rpc or call_socket
@@ -271,7 +272,7 @@ class PeerNode:
         self.started = crypto.now_ts()
         self.path = IngressPath(target, self._policy, hold_seconds=self.config.hold_minutes * 60)
         self._seen: OrderedDict[str, None] = OrderedDict()
-        self._sent: OrderedDict[str, tuple[str | None, str]] = OrderedDict()  # msg id -> (sender session, peer name)
+        self._sent: OrderedDict[str, tuple[str | None, str, str]] = OrderedDict()  # msg id -> (session, peer, its seat)
 
     # ---------------------------------------------------------------- presence
 
@@ -290,48 +291,82 @@ class PeerNode:
     # ---------------------------------------------------------------- policy
 
     def _policy(self, ing: Ingress) -> tuple[str, str]:
-        return gate.decide_peer(ing.trust, ing.sender, {"policy": self.config.policy, "rules": self.config.rules})
+        # A rule names a sender, and a presence file can claim any name: rules match only a sender whose key this
+        # home pins (#132). An unpinned sender gets the policy for its trust.
+        rules = self.config.rules if ing.meta.get("pinned") else []
+        return gate.decide_peer(ing.trust, ing.sender, {"policy": self.config.policy, "rules": rules})
 
-    def _pinned_pubs(self, seat: str) -> list[str]:
-        """The seat's pinned verify keys, from this home's keys dir alone: the ``.pub`` beside the seat's key
-        file (``core/seats.py``) and the key registry's pins for the seat. The presence file's ``pub`` is
-        never one of these: the presence dir is a shared runtime dir any same-user process can write, so a
-        key read from it proves nothing (#132)."""
-        if self.home is None or not seat:
-            return []
-        if seat == self.seat:
-            return [self.signer.pub]
-        paths: list[Path] = []
+    def _pins(self, seat: str) -> tuple[list[str], list[str]]:
+        """The keys this home holds for ``seat`` (#132), never a presence file's: ``(here, peer)``. ``here`` is this
+        daemon's own key when ``seat`` is its seat, plus this home's key for the name: its key registry entry, else
+        the ``.pub`` beside the seat's key file in ``keys/`` (``core/seats.py``). A registry entry is the authority
+        for its name, so a key rotated out with ``exo keys pin --replace`` is not read back from a leftover ``.pub``.
+        ``peer`` is what ``exo keys pin --peer`` pinned for a seat of another home. Call it with a seat id only."""
+        own = [self.signer.pub] if seat == self.seat else []
+        if self.home is None:
+            return own, []
         try:
-            paths.append(_load_seat(self.home, seat).key_path(self.home))
+            reg = KeyRegistry.load(self.home, create=False)
+        except Exception:  # unreadable: it cannot say which keys are pinned, or which a .pub still holds
+            return own, []
+        paths = [key_path(self.home, seat)]
+        try:
+            paths.insert(0, _load_seat(self.home, seat).key_path(self.home))
         except Exception:
             pass
-        paths.append(key_path(self.home, seat))
-        out: list[str] = []
+        here, kdir = list(own), keys_dir(self.home).resolve()
         for p in paths:
-            try:
-                pub = crypto.load_pub(p.with_suffix(".pub"))
-            except OSError:
+            if p.parent.resolve() != kdir:  # a seat file may name a key elsewhere: only keys/ pins (#132)
                 continue
-            if pub and pub not in out:
-                out.append(pub)
-        try:
-            from exo.keyring import KeyRegistry
-            out += [p for p in KeyRegistry.load(self.home, create=False).keys.get(seat, []) if p not in out]
-        except Exception:
-            pass  # a broken registry is not a key source; the .pub files above still are
-        return out
+            pub = p.with_suffix(".pub")
+            try:  # is_file: never a FIFO or a folder, so the read cannot block
+                found = reg.keys.get(p.stem) or ([crypto.load_pub(pub)] if pub.is_file() else [])
+            except (OSError, ValueError):
+                found = []
+            here += [k for k in found if k and k not in here]
+        return here, list(reg.peers.get(seat, []))
 
-    def _trust(self, meta: dict[str, Any], sender: Presence | None, ok: bool, pinned: bool = False) -> str:
-        if not ok or sender is None:
+    def _verify(self, env: dict[str, Any], seat: str, sender: Presence | None) -> tuple[str, str]:
+        """``(why, pin)``: why the envelope fails ('' when good), and the pin it verified against: ``here``, ``peer``
+        or '' when this home holds no key for the seat. Then the presence key only shows the signature is
+        consistent. A name that holds a key here is checked against those keys alone (#132)."""
+        if not ID_RE.fullmatch(seat):  # a path, an empty or a NUL name: never looked up as a key file (#132)
+            return "the sender is not a seat name", ""
+        if sender is None or sender.seat != seat:
+            return verify_envelope(env, "", self._seen), ""
+        here, peer = self._pins(seat)
+        if not here and not peer:
+            return verify_envelope(env, sender.pub, self._seen), ""
+        why = ""
+        for pub in here + peer:
+            why = verify_envelope(env, pub, self._seen)
+            if not why:
+                return "", "here" if pub in here else "peer"
+        return why, ""
+
+    def _principal(self, seat: str) -> str | None:
+        """The seat's principal as this home records it, never as a presence file claims (#132): this seat's own,
+        else its seat file's. A seat file with none, or a key of this home with no seat file (an unseated daemon,
+        a Hermes profile on this home), runs as this home's principal. None for a seat file that cannot be read."""
+        if seat == self.seat or self.home is None:
+            return self.principal if seat == self.seat else None
+        d = seats_dir(self.home)
+        if not any(p.exists() for p in (d / f"{seat}.toml", d / f"{seat}.json", d / seat)):
+            return os.environ.get("EXO_PRINCIPAL", "")
+        try:
+            return _load_seat(self.home, seat).principal or os.environ.get("EXO_PRINCIPAL", "")
+        except Exception:
+            return None
+
+    def _trust(self, meta: dict[str, Any], seat: str, ok: bool, pin: str) -> str:
+        if not ok:
             return "unverified"
-        if not pinned:
-            # The signature checked out against the presence file's own key, which any same-user process
-            # can write, and the sender's principal comes from the same file: presence data alone never
-            # earns trust, so the sender is an unknown principal whatever the file claims (#132).
+        if pin != "here":
+            # Only a key of this home says whose seat this is. An unpinned key came from the presence file, which
+            # any same-user process can write, and a peer pin names another home's seat (#132).
             return "other"
-        same = (sender.principal or "") == (self.principal or "")
-        if not same:
+        principal = self._principal(seat)
+        if principal is None or principal != (self.principal or ""):
             return "other"
         return "principal" if meta.get("via") == "human" else "same-principal"
 
@@ -412,7 +447,7 @@ class PeerNode:
         env = make_envelope(self.signer, to=row["name"], text=text, session=session, daemon=self.daemon,
                             to_session=row["session"], via=via)
         mid = msg_id(env)
-        self._sent[mid] = (session, row["name"])
+        self._sent[mid] = (session, row["name"], row["seat"])
         while len(self._sent) > 500:
             self._sent.popitem(last=False)
         try:
@@ -452,24 +487,15 @@ class PeerNode:
         if sender is None and meta.get("daemon") == self.daemon:  # a message between two sessions of this daemon
             sender = self.presence()
         seat = str(env.get("from") or "")
-        pinned = self._pinned_pubs(seat) if sender is not None and sender.seat == seat else []
-        if pinned:
-            why = "no public key for the sender"
-            for pub in pinned:  # the pin is the only key source; the presence key is not consulted (#132)
-                why = verify_envelope(env, pub, self._seen)
-                if not why:
-                    break
-        else:  # no pin for this seat: the presence key is a discovery hint, enough to check the
-            # signature for consistency, never enough to earn trust (see _trust)
-            pub = sender.pub if sender and sender.seat == seat else ""
-            why = verify_envelope(env, pub, self._seen)
-        trust = self._trust(meta, sender, not why, pinned=bool(pinned))
+        why, pin = self._verify(env, seat, sender)
+        trust = self._trust(meta, seat, not why, pin)
         sid = meta.get("session")
         name = f"{env.get('from')}/{short(sid)}" if sid else str(env.get("from"))
         ing = Ingress("peer", name, trust, str(env.get("body") or ""), session=meta.get("to_session"),
                       id=msg_id(env), meta={"kind": "msg", "from_session": sid, "from_seat": env.get("from"),
                                             "from_daemon": meta.get("daemon"), "via": meta.get("via"),
-                                            "verify": why})
+                                            "verify": why, "pinned": bool(pin),
+                                            "note": "" if pin or why else "key not pinned"})
         receipt = await self.path.submit(ing)
         return receipt.to_dict()
 
@@ -489,18 +515,20 @@ class PeerNode:
             trace.report("peers receipt to sender", exc)
 
     async def receipt(self, doc: dict[str, Any]) -> dict[str, Any]:
-        """A later receipt for a message this daemon sent. Verified against the receiver seat's pinned key
-        when one is pinned in this home; the presence key only when none is (#132)."""
-        mid = str(doc.get("msg_id") or "")
+        """A later receipt for a message this daemon sent (#132). ``by`` must be the seat the message went to and the
+        seat of the daemon sending the receipt, and the signature must verify against a key this home pins for that
+        seat. A presence key never verifies a receipt."""
+        mid, by = str(doc.get("msg_id") or ""), str(doc.get("by") or "")
+        sent = self._sent.get(mid)
         who = self.directory.get(str(doc.get("daemon") or ""))
-        pubs = self._pinned_pubs(str(doc.get("by") or ""))
-        if not pubs and who is not None:
-            pubs = [who.pub]
-        if mid not in self._sent or who is None or not any(crypto.verify_doc(doc, p) for p in pubs) \
+        if sent is None or who is None or not ID_RE.fullmatch(by) or by != sent[2] or who.seat != by \
                 or doc.get("state") not in ("released", "denied", "expired", "delivered"):
             return {"ok": False}
-        session, peer = self._sent[mid]
-        await self._publish_out(session, {"msg_id": mid, "state": doc["state"], "to": peer, "detail": doc.get("detail", "")})
+        here, peer = self._pins(by)
+        if not any(crypto.verify_doc(doc, p) for p in here + peer):
+            return {"ok": False}
+        session, peer_name, _ = sent
+        await self._publish_out(session, {"msg_id": mid, "state": doc["state"], "to": peer_name, "detail": doc.get("detail", "")})
         return {"ok": True}
 
 

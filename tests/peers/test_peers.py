@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 import functools
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -50,13 +48,6 @@ class Scripted:
             turn = "changed course" if peer else "done"
         async for ev in FakeProvider([turn]).stream(messages, tools):
             yield ev
-
-
-@pytest.fixture
-def run_dir():
-    d = tempfile.mkdtemp(prefix="exop", dir="/tmp")  # unix socket paths must stay short
-    yield Path(d)
-    shutil.rmtree(d, ignore_errors=True)
 
 
 class Daemon:
@@ -107,8 +98,8 @@ async def until(fn, secs=3.0):
 
 
 def pin_peer(home, seat, pub):
-    """Pin a peer seat's key in a home's keys dir, as the principal's setup does (#132): a daemon's
-    messages earn trust only against the pinned key, never against its presence file."""
+    """Put a seat's ``.pub`` in a home's ``keys/``, where seats that share one home find each other's keys (#132):
+    a daemon's messages earn trust only against a key the receiving home holds, never against its presence file."""
     p = key_path(home, seat).with_suffix(".pub")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(pub + "\n")
@@ -377,15 +368,21 @@ class StubTarget(Target):
         self.seen.append(held.ing)
 
 
-def victim_node(run_dir, principal="ada"):
+def victim_node(run_dir, principal="ada", config=None):
     """A beta node whose home holds only beta's own key, as PeerService.start builds it."""
     home = run_dir / "home"
     signer = crypto.Signer.from_file("beta", ensure_key(key_path(home, "beta")))
     stub = StubTarget()
     node = PeerNode(seat="beta", signer=signer, target=stub, sessions=lambda: [],
                     directory=Directory(run_dir / "peers"), socket="/tmp/beta.sock", principal=principal,
-                    home=home, config=PeerConfig())
+                    home=home, config=config or PeerConfig())
     return node, stub, home
+
+
+def seat_file(home, name, principal=None):
+    """A seat file in the home, which is where the receiver reads a seat's principal from (#132)."""
+    (home / "seats").mkdir(parents=True, exist_ok=True)
+    (home / "seats" / f"{name}.toml").write_text(f'name = "{name}"\n' + (f'principal = "{principal}"\n' if principal else ""))
 
 
 def announce(run_dir, seat, daemon, signer, principal):
@@ -427,6 +424,7 @@ async def test_a_peer_earns_trust_only_against_its_pinned_key(run_dir):
     out = await node.deliver(env)
     assert out["state"] == "held" and stub.seen[-1].trust == "other"  # presence alone earns nothing
     pin_peer(home, "alpha", real.pub)
+    seat_file(home, "alpha", "ada")  # this home records alpha as a seat of ada
     for via, trust in (("human", "principal"), ("agent", "same-principal")):
         env = make_envelope(real, to="beta", text="hello", session=None, daemon="alpha-7777",
                             to_session="s_stub", via=via)
@@ -439,7 +437,7 @@ async def test_a_receipt_is_checked_against_the_pinned_key(run_dir):
     """Receipts take the same key path as deliveries (#132): a forged presence cannot fake an outcome
     for a message this daemon sent once the receiver's real key is pinned."""
     node, stub, home = victim_node(run_dir)
-    node._sent["pm_1"] = (None, "alpha")
+    node._sent["pm_1"] = (None, "alpha", "alpha")
     real, attacker = crypto.Signer("alpha", crypto.keygen()), crypto.Signer("alpha", crypto.keygen())
     announce(run_dir, "alpha", "alpha-7777", attacker, "ada")  # the presence file claims the attacker's key
 

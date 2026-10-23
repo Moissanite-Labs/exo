@@ -205,8 +205,9 @@ class HermesTarget(Target):
 
     async def on_held(self, held: Held) -> None:
         ing = held.ing
-        text = ing.body.strip().replace("\n", " ")
-        self.host.show(f"[peers] message from {ing.sender} ({ing.trust}) is held for you: \"{text[:300]}\". "
+        text, note = ing.body.strip().replace("\n", " "), ing.meta.get("note")  # note: "key not pinned" (#132)
+        self.host.show(f"[peers] message from {ing.sender} ({ing.trust}{f', {note}' if note else ''}) is held for you: "
+                       f"\"{text[:300]}\". "
                        f"/peer-release {ing.id} delivers it, /peer-deny {ing.id} drops it. It expires on its own.")
 
     async def record(self, ing: Ingress, receipt: Receipt, notify: bool) -> None:
