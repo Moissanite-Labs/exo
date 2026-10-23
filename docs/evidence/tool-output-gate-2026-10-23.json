@@ -1,0 +1,528 @@
+{
+  "date": "2026-10-23",
+  "scope": "Focused tool_output comparison using the unchanged gate_diff.py from main. This is not a rerun of the full broad corpus.",
+  "base_commit": "5a9dc394f7406fe58f3c257e8227649ca9a56f72",
+  "head_commit": "7bc03958466c69ccd95eeb2f9df98f319dbc36b0",
+  "script_commit": "5a9dc394f7406fe58f3c257e8227649ca9a56f72",
+  "gate_sha256": {
+    "base": "0947b2c48e62daf8f5b0b7e1b763a98394db6a29566b16dcf3b654f26d2f8643",
+    "head": "51d798cf2ad99920f596dc69e90517bc80185d72ccb0af508b0859a024d182bb"
+  },
+  "reproduce_from_checkout_containing_this_artifact": [
+    "git worktree add --detach ../exo-gate-base 5a9dc394f7406fe58f3c257e8227649ca9a56f72",
+    "git worktree add --detach ../exo-gate-head 7bc03958466c69ccd95eeb2f9df98f319dbc36b0",
+    "python3 -c 'import json; print(json.dumps(json.load(open(\"docs/evidence/tool-output-gate-2026-10-23.json\"))[\"corpus\"]))' > /tmp/exo-tool-output-corpus.json",
+    "python3 ../exo-gate-base/scripts/gate_diff.py --base ../exo-gate-base --head ../exo-gate-head --only-corpus --no-variants --corpus /tmp/exo-tool-output-corpus.json --jobs 1 --json /tmp/exo-tool-output-gate-report.json --json-limit 10000 --max-examples 0 --timeout 120"
+  ],
+  "expected_exit_code": 1,
+  "interpretation": "Nine intentional unknown-to-read policy lowerings across three supported argument shapes. No malformed-call lowerings, lost reserved hits, lost posting violations or classifier errors.",
+  "prior_comparison_coverage": {
+    "head_commit": "cdf54caf6827add0e0802e2109be5b968378d68f",
+    "tool_output_lowered_pairs": 1144,
+    "tool_output_lowered_actions": 27,
+    "all_previously_lowered_actions_included": true,
+    "previously_lowered_corpus_indices": [
+      0,
+      1,
+      3,
+      5,
+      7,
+      9,
+      11,
+      12,
+      13,
+      15,
+      17,
+      18,
+      19,
+      21,
+      23,
+      25,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      38
+    ],
+    "malformed_actions": 26,
+    "malformed_lowered_pairs_after_fix": 0
+  },
+  "corpus_generation": "main build_corpus(head, base), filtered to tool_output, plus supported reference/page cases, invalid types/bounds and valid-reference calls with unsupported protected-path arguments, deduplicated.",
+  "policy_count": 87,
+  "counts": {
+    "actions": 62,
+    "pairs_same": 5154,
+    "lowered_pairs": 9,
+    "lowered_actions": 3,
+    "lowered_outcome": 9,
+    "lowered_reserved": 0,
+    "lowered_violations": 0,
+    "violations_reworded": 0,
+    "tightened_pairs": 0,
+    "tightened_actions": 0,
+    "pairs_detail_changed": 231,
+    "classification_only_actions": 0,
+    "base_classify_errors": 0,
+    "base_decide_errors": 0,
+    "head_classify_errors": 0,
+    "head_decide_errors": 0
+  },
+  "lowered_by_policy": {
+    "categories_deny": 3,
+    "categories_ask": 3,
+    "categories_log": 3
+  },
+  "lowered_by_transition": {
+    "unknown deny -> read allow": 3,
+    "unknown ask -> read allow": 3,
+    "unknown log -> read allow": 3
+  },
+  "lowered_calls": [
+    {
+      "corpus_index": 37,
+      "policies": [
+        "categories_deny",
+        "categories_ask",
+        "categories_log"
+      ],
+      "transitions": [
+        "unknown deny -> read allow",
+        "unknown ask -> read allow",
+        "unknown log -> read allow"
+      ]
+    },
+    {
+      "corpus_index": 38,
+      "policies": [
+        "categories_deny",
+        "categories_ask",
+        "categories_log"
+      ],
+      "transitions": [
+        "unknown deny -> read allow",
+        "unknown ask -> read allow",
+        "unknown log -> read allow"
+      ]
+    },
+    {
+      "corpus_index": 39,
+      "policies": [
+        "categories_deny",
+        "categories_ask",
+        "categories_log"
+      ],
+      "transitions": [
+        "unknown deny -> read allow",
+        "unknown ask -> read allow",
+        "unknown log -> read allow"
+      ]
+    }
+  ],
+  "policy_errors": {
+    "base": {},
+    "head": {}
+  },
+  "unread_tables": {},
+  "incomplete": [],
+  "corpus": [
+    {
+      "tool": "tool_output",
+      "args": {}
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "dest": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "dest": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "destination": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "destination": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "dir": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "dir": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "directory": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "directory": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "file": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "file": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "file_path": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "file_path": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "filename": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "filename": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "files": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "files": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "path": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "path": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "paths": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "paths": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "root": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "root": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "source": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "source": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "src": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "src": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "channel": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "channel": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "chat_id": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "chat_id": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "message": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "message": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "target": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "target": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "text": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "text": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "offset": 0,
+        "limit": 512
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "offset": 100000,
+        "limit": 24000
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": null
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": []
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": 7
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "offset": true
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "offset": -1
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "offset": "0"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "limit": true
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "limit": 0
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "limit": 24001
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "session": "other"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "path": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "path": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "file_path": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "file_path": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "files": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "files": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "destination": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "destination": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "source": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "source": "~/.exo/state/gate-grants.json"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "directory": "~/.ssh/id_rsa"
+      }
+    },
+    {
+      "tool": "tool_output",
+      "args": {
+        "reference": "te1:m_example:0:0000000000000000000000000000000000000000000000000000000000000000",
+        "directory": "~/.exo/state/gate-grants.json"
+      }
+    }
+  ]
+}
