@@ -1446,14 +1446,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   nested line, which read it into the text `ssh` runs on another host and spent the #269 budget at every level. The
   next version added the part, but also put `workdir` among the #209 folders, which made the whole call `credentials`
   again for `workdir`. exo-36 found 54 matrix denies that went to ask there, and 114 calls with a wider approver set.
-  A check of the version after that found three more points. A NUL in the folder, or a relative folder while the
+  A check of the version after that found these gaps. A NUL in the folder, or a relative folder while the
   gate's own folder is gone, made `classify` raise, so the hook asked as for a call it could not classify, which any
   seat may answer, where the line alone was denied. A store folder inside a repo's `.claude` worktree was not read.
   With both folder arguments, the part named the first folder even when the name resolved into a store from the other,
-  so a target entry on the store missed it. Rejected: the folder argument among the #209 folders, which replaces the
-  line. Keeping the old reading costs a second reading of the line and a second decision, both only where the line
-  read in its folder has a `credentials` part. That reading is a whole classification, so nothing has to be found
-  among the parts. A `cd` on the line still makes the whole line `credentials`, as before. Limits: the session's own
+  so a target entry on the store missed it. *With #464.* Main's #464 made a store read after a `cd` on a store-write
+  line a `credentials` part beside the write. Its hook fallback, for a call whose decision fails, read the call's top
+  category only. This change had left the folder's read off a store-write line, so `deny: [credentials]` denied
+  `cd ~/.kube && cat config; echo x > ~/.exo/policies/a` and only asked for the same line with `~/.kube` as `cwd`.
+  That read is now a `credentials` part beside the write too. The line stays `store_write`, so only the principal
+  answers it. The fallback now reads `no_grant`, so a call with the folder's part asks the principal alone, once, in
+  every mode. abu-aska found the gap on a trial merge: `cat config` with `~/.kube` as `cwd`, under a deny entry
+  whose pattern does not compile, ran in observe mode. Rejected: the folder argument among the #209 folders, which
+  replaces the line. Keeping the old reading costs a second reading of the line and a second decision, both only
+  where the line read in its folder has a `credentials` part. That reading is a whole classification, so nothing
+  has to be found among the parts. A `cd` on the line is read as before. Limits: the session's own
   folder (#209) is not a target. The file tools ignore a folder argument. A name that climbs out of a repo's `.claude`
   worktree back into it is not caught (`cat ../../settings.local.json`), as before. The store-write checks do not read
   the folder argument (`echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`, #453). A

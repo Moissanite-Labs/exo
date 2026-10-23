@@ -5469,9 +5469,9 @@ def _shell_call(cmd: str) -> Classification:
         if read is not None:                    # the line alone, as a call of its own in the session's folder
             c = _line_alone(cmd, scope, {k: v for k, v in seen.items() if k[:1] == ("parse",)})
             c.also = whole
-        if c.category == "store_write" or any(p.category == "credentials" for p in _each_part(c)):
+        if any(p.category == "credentials" for p in _each_part(c)):
             return c
-        found = _tool_folder_read(cmd, folders, read)
+        found = _tool_folder_read(cmd, folders, read)  # a store write stays the line's result, as for `tar -C` (#464)
     finally:
         _shell_seen.reset(memo)
         _scope.reset(token)

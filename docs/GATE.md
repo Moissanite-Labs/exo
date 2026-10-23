@@ -1369,6 +1369,8 @@ in one of three ways:
 
 The credentials floor reads every part, so the call asks and no rule, category line, matrix cell or
 scope lowers it. `gate.no_grant` keeps a standing grant off it, and observe mode still enforces it.
+When `decide` fails on the call (a policy pattern that does not compile), the exo-gate hook's
+fallback card reads the parts too, so it still asks the principal alone, once, in every mode (#464).
 `gate.call_approvers` sends it to those who may answer both its category and credentials. The line's
 own deny entries, target rules, matrix deny cells, posting checks and reserved entries still apply.
 So `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir` is still
@@ -1394,8 +1396,11 @@ by its name inside the checkout (`x/.kube`, `x/.config/gh`, `x/.docker`) is not 
 folder itself, `~/.claude` and a `.claude` folder with no `.git` beside it are stores, so any call
 there asks, as a `cd` there does.
 
-A line that already reads a store, or writes the Exo store, keeps that reading. A `cd` on the line
-still makes the whole line `credentials`, as before. Limits:
+A line that already reads a store keeps that reading. A line that writes the Exo store stays
+`store_write`, and a store read from its folder is a `credentials` part beside the write, as a key
+read after `tar -C` is (#464). So `cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd`
+is denied by `deny: [credentials]`, as its `cd` form is, and only the principal answers it. A `cd`
+on the line is read as before. Limits:
 
 - The session's own folder (the `cwd` the core passes with every call, #209) is not a target. A
   session started inside a store folder reads it by relative names as before.
@@ -1404,6 +1409,10 @@ still makes the whole line `credentials`, as before. Limits:
   (`cat ../../settings.local.json` from `<repo>/.claude/worktrees/x`), as before. A `cd` there asks.
 - The store-write checks do not read the folder argument. `echo x > gates.yaml` with
   `~/.exo/policies` as `cwd` stays a `local_write`, as before (#453).
+- A line that reads a secret itself keeps that reading, and the folder adds no part to it. So a
+  `target:` entry on the folder does not reach it: under `deny: [target:*/.ssh]`, `cat id_rsa` with
+  `~/.ssh` as `cwd` asks, where `cd ~/.ssh && cat id_rsa` is denied. That is no lower than main.
+  `deny: [credentials]` denies both.
 
 Tests: `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
 
@@ -1646,7 +1655,8 @@ writing subcommand, and any writing command after `cd` into the store. `rm -rf ~
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
 policy pattern that does not compile, for example), the hook's fallback card still asks the
-principal alone, once, in observe mode too (#464). Other calls keep their fallback: a read tool
+principal alone, once, in observe mode too (#464). A store read that a shell call's own folder adds
+as a part counts too (`gate.no_grant`, #311). Other calls keep their fallback: a read tool
 runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,

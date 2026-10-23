@@ -248,7 +248,7 @@ def test_a_seat_that_answers_credentials_does_not_answer_the_force_push(folder, 
 ])
 def test_the_reading_from_before_still_decides_when_it_is_stricter(raw, _home):
     """`cat *` in ~/.exo/keys was credentials as a whole with `cwd` (#209), and a deny cell for that is still met.
-    The line alone is a read: its own cell would allow it, and the part alone would only ask."""
+    The line alone is a read, and its own cell would allow it. Since #464 the part's own cell denies it too."""
     _held(_home)
     for key in ("cwd", "workdir"):
         c = _bash_in("cat *", "~/.exo/keys", key=key)
@@ -262,6 +262,51 @@ def test_the_reading_from_before_keeps_its_reserved_hits(_home):
     d = gate.decide(c, _pol({"gates": {"reserved": ["credentials", "read"]}}))
     was = gate.decide(c.also, _pol({"gates": {"reserved": ["credentials", "read"]}}))
     assert d.outcome == "ask" and set(was.reserved) <= set(d.reserved)
+
+
+# --- a line that writes the Exo store (#464) ---------------------------------------------------------------------
+
+WRITES = ["cat config; echo x > ~/.exo/policies/a", "cat config && touch ~/.exo/state/x", "cp config ~/.exo/state/c",
+          "tar czf - . > ~/.exo/state/o.tgz", "cat * > ~/.exo/policies/gates.yaml"]
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir"), ("exec_command", "workdir")])
+@pytest.mark.parametrize("folder", ["~/.kube", "~/.ssh", "~/.config/gh", "~/.exo/run"])
+@pytest.mark.parametrize("cmd", WRITES)
+def test_a_store_write_keeps_the_folders_read_as_a_part(cmd, folder, tool, key, _home):
+    """Since #464 a store read after a `cd` on a store-write line is a credentials part beside the write. The
+    folder's read was left off such a line, so `deny: [credentials]` denied the cd form and only asked for this
+    one. The line stays store_write, so only the principal answers it, also where credentials go to a seat."""
+    _held(_home)
+    c = _bash_in(cmd, folder, tool=tool, key=key)
+    assert c.category == "store_write" and _store_parts(c), (cmd, folder)
+    cd = _bash(f"cd {folder} && {cmd}")
+    for raw in ({"gates": {"deny": ["credentials"]}}, {"gates": {"categories": {"credentials": "deny"}}}):
+        assert gate.decide(c, _pol(raw)).outcome == gate.decide(cd, _pol(raw)).outcome == "deny", raw
+    assert gate.decide(c).outcome == "ask"
+    table = gate.normalize_approvals({"approvers": {"default": ["principal"],
+                                                    "credentials": ["principal", "seat:builder"]}})
+    assert gate.call_approvers(c, table) == ["principal"]
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+def test_a_target_entry_on_the_folder_denies_a_store_write_there(tool, key):
+    c = _bash_in("cat * > ~/.exo/policies/gates.yaml", "~/.ssh", tool=tool, key=key)
+    assert gate.decide(c, _pol({"gates": {"deny": ["target:*/.ssh"]}})).outcome == "deny"
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("cmd", ["cat id_rsa", "cat ./id_rsa"])
+def test_a_line_that_reads_a_secret_itself_keeps_its_own_target(cmd, tool, key):
+    """A limit in GATE.md: the line's own secret read wins, and the folder adds no part to it, so a target entry
+    on the folder only asks where the cd form denies. That is no lower than main. `deny: [credentials]` denies
+    both."""
+    c = _bash_in(cmd, "~/.ssh", tool=tool, key=key)
+    cd = _bash(f"cd ~/.ssh && {cmd}")
+    folder = _pol({"gates": {"deny": ["target:*/.ssh"]}})
+    assert c.category == "credentials"
+    assert (gate.decide(c, folder).outcome, gate.decide(cd, folder).outcome) == ("ask", "deny")
+    assert gate.decide(c, _pol({"gates": {"deny": ["credentials"]}})).outcome == "deny"
 
 
 EVERYDAY = ["ls *", "ls config", "wc -l *", "grep -r foo *", "du -sh *", "rg -n config src", "file *"]
