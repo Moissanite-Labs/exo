@@ -410,6 +410,8 @@ class _Cmd:
     pipe_src: Callable[[], str | None] | None = None   # piped from simple commands: the pipeline text up to it
     fed: bool = False            # its stdin comes from a compound around it or piped into it (_feed_compound)
     subs_met: int = 0            # how many of the line's subs lie in its text and before it, in the lexer's order (#465)
+    opens: tuple | None = None   # on a compound's closer: (the compound's first command, the subs met before the
+                                 # closer's redirections), which bash expands before the compound runs (#465)
 
 
 class _Lexer:
@@ -1115,6 +1117,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     opened: list = []       # compounds still open: (opener, index of their first command, command piped in)
     tops: dict = {}         # opener -> its indexes in opened, so a closer finds its opener without a scan
     shut = None             # the open compound the current command closes
+    shut_met = 0            # the subs met by the closer of shut
     loop = None             # the reserved word `for` or `select` that opened the latest loop
     lead = True             # every word of cur so far is a reserved word
     head, pre = True, 0     # the next word is in command position, as with lead and also after `coproc [NAME]`,
@@ -1134,6 +1137,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
             cur.own = lx._source(at, o_end)
             cur.subs_met = lx.met[o_tok]
+            cur.opens = (shut[1], shut_met) if shut is not None else None
             if cur.piped_in and p_at >= 0:
                 cur.pipe_src = functools.partial(pipes.text, p_at, o_end)   # read only by _stdin_own
             cmds.append(cur)
@@ -1150,8 +1154,8 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
         opened.append(entry)
 
     def close(j: int) -> None:
-        nonlocal shut
-        shut = opened[j]
+        nonlocal shut, shut_met
+        shut, shut_met = opened[j], lx.met[i]
         del opened[j:]
         for stack in tops.values():
             while stack and stack[-1] >= j:
@@ -4334,10 +4338,10 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     slot = _own_text.get() or [None]      # classify_shell gives each line its own
     # #465: a $( ) runs where its command runs, so one in the `cd` that entered the store or before it does not run
     # there. They are the first subs_met of the line's subs, which the lexer lists in the order of the line.
-    upto = 0 if into else -1
+    upto, at = (0, -1) if into else (-1, -1)
     token = _cd_into.set(None) if into else None     # a line nested in this one (ssh, bash -c) has its own folder
     try:
-        for k in cmds:
+        for n, k in enumerate(cmds):
             piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
             # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
             ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
@@ -4348,7 +4352,7 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
             parts += got
             prev = k
             if upto < 0 and ctx.get("store_cwd"):
-                upto = k.subs_met
+                upto, at = k.subs_met, n
     finally:
         if token is not None:
             _cd_into.reset(token)
@@ -4357,11 +4361,13 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     # own, a shell inside a $( ) reads a stdin the gate cannot name (`curl .. | echo $(bash)`).
     given = bool(subs) and any(k.fed or k.piped_in or _own_stdin(k) for k in cmds)
     # #465: a $( ), backticks or <( ) after the `cd` into the store runs there, so a non-read command in it is a store
-    # write, as it is unwrapped. One in a here-doc body counts as after every command on its line. As for the line's
+    # write, as it is unwrapped. One in a here-doc body counts as after every command on its line. One in the
+    # redirections of a compound that holds the `cd` runs before the compound (`done < <(sort x)`). As for the line's
     # own commands, a subshell or a later `cd` out is not followed: fails closed.
     there = (True, ctx.get("fd_cwd") or "") if ctx.get("store_cwd") else None
+    early = [range(k.opens[1], k.subs_met) for k in cmds if k.opens and k.opens[0] <= at] if there else []
     for j, sub in enumerate(subs):
-        seed = there if there and j >= upto else None
+        seed = there if there and j >= upto and not any(j in r for r in early) else None
         token = _cd_into.set(seed) if seed else None
         try:
             got = [classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd)]
