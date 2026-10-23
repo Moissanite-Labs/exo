@@ -277,7 +277,7 @@ class PrincipalStore:
                         n = self.parse_node(Path(d) / f)
                         if n and n.get('id'):
                             nodes[n['id']] = n
-        self._nodes = nodes
+        self._nodes, self._bm25 = nodes, None  # free the old set's tables now; the next `find` builds new ones
         return nodes
 
     def refresh(self) -> bool:
