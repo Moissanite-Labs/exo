@@ -471,6 +471,12 @@ Details and the cost rules: `docs/TRACE.md`.
 
 ## 11. Your store and the ledger
 
+**Check work across Exo.** Run `exo inbox` for a local snapshot of sessions, delegated tasks, background jobs,
+schedules, questions, historical approvals and findings. It starts no core. `--agent NAME` selects the agent.
+`--json` includes source coverage for scripts. Running and waiting state stays unknown until you inspect the
+live client. `--principal` and `--root` select only the question store. See [INBOX.md](INBOX.md) for limits
+and the meaning of each section.
+
 Everything Exo knows about you sits in a **principal store**: a folder of small notes (nodes) and a signed ledger, a
 log nobody can edit without it showing. These commands work on them from a shell. You rarely need them. The agent
 reads and writes the store for you. They help when you want to look, check, or move things.
