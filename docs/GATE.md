@@ -470,10 +470,10 @@ it, where a store write is the principal's alone:
 `cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`. Main does the same for any secret on the
 line, `env; echo x > ~/.exo/policies/gates.yaml` included.
 
-Other spellings. A path through `/proc/self` is resolved first, so `cat /proc/self/task//1/environ` asks. Since
-#446 a doubled slash, a `.` or a `x/..` inside the name and a glob in the `/proc` name itself are read too (see
-"Other spellings of a store path" above): `cat /proc/1/task/1//environ`, `read_file /proc/1/task/1//environ`,
-`cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` ask.
+Other spellings. Since #446 a doubled slash, a `.` or a `x/..` inside the name and a glob in the `/proc` name
+itself are read too (see "Other spellings of a store path" above). So `cat /proc/self/task//1/environ`,
+`cat /proc/1/task/1//environ`, `cat /proc/1//environ`, `read_file /proc/1/task/1//environ`,
+`cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` ask, whether or not `/proc/self` is a link.
 
 Tests: `tests/security/test_gate_proc_task_environ.py`.
 
