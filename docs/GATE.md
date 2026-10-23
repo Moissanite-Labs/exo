@@ -701,7 +701,10 @@ gate does not read:
   no longer hides a delete or force push from a matrix deny (`rm -rf ~/work; touch ~/.exo/state/x`
   under `matrix: {irreversible: {private: deny}}`). There an allow, log or ask
   rule keyed on `command` counts for a part only when its regex matches the line, as before, and
-  also the part's own text (#394, next item). A deny rule's regex matches the whole line. So a rule
+  also the part's own text (#394, next item). For a part read from a `$( )` or another nested
+  line, it must match the whole line too, so an anchored rule such as `'^git push'` does not lift a
+  push inside `echo $(git push --force origin main)` (#465), as it does not lower that line when the
+  push decides it. A deny rule's regex matches the whole line. So a rule
   written for another command on the line does not lift the part's deny: under
   `categories: {github_post: deny}`, an allow rule for `'^git push --force origin main$'` and an
   ask rule for `git push` after it, `gh pr comment 3 --body x && git push --force origin main` is
@@ -1538,7 +1541,8 @@ from its own process. On Linux a write through one reopens that file for writing
 path or below it is a `store_write`, however it is spelt: a redirection, `tee`, `cp`, `dd of=`, a link
 to it (`ln -s /proc/self/fd/3 x`), a file tool's path, `//dev/fd/3`, `/dev/fd/$fd`, or a relative
 `dev/fd/3` (after `cd /`). So is a writing command after a `cd` into one, or into `/dev`, `/proc`,
-`/proc/<pid>` or `/proc/<pid>/task/<tid>` (`cd /dev && printf x > fd/3`). The writer's own stdout and
+`/proc/<pid>` or `/proc/<pid>/task/<tid>` (`cd /dev && printf x > fd/3`), also one in a `$( )`,
+backticks or `<( )` of a later command (#465: `cd /dev && echo $(cp /tmp/evil fd/3)`). The writer's own stdout and
 stderr stay ordinary (`> /dev/fd/1`, `> /proc/self/fd/2`, `> /dev/stdout`). A store path opened for
 reading on a descriptor other than stdin (`3< f`, `exec 2< f`, `{ ...; } 1< f`) is a `store_write`
 too, because `> /dev/fd/3` or `> /dev/stdout` later on the line, or in a later call of a persistent
@@ -1568,8 +1572,15 @@ Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
 `sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `git -C <store>` with a
-writing subcommand, and any writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
-`store_write` always asks, no policy lowers it, no standing grant covers it, and only the
+writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
+`<( )` of a later command on that line (#465: `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`). There,
+as unwrapped, a command the gate does not read as a read (`sed -n`, `sort`, `curl`) counts as a write. A
+substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own folder. Its
+place in the line decides, not its text, and one in a here-doc body counts as after every command on its line.
+One in the redirections of a compound that holds the `cd` (`done < <(sort list)`) runs before it. A subshell
+`cd`, a later `cd` out and a `cd` in a function body fail closed. A loop that enters the store is not followed
+(#480).
+`rm -rf ~/.exo` counts (an ancestor). A `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
 policy pattern that does not compile, for example), the hook's fallback card still asks the
@@ -1594,7 +1605,8 @@ still denies the line (D-075, #191), and so does a matrix cell that denies the p
 it was before #133. A file tool's write or delete (`write_file`, `edit_file`, `patch`,
 `apply_patch`, `create_directory`, `move_file`, a delete tool) is `store_write` and keeps the
 tool's own reading as a part (#448): a `local_write` part for each file a write tool writes, or
-the tool's own category (`delete`). So a `local_write` or `delete` deny, a `reserved:` entry, a
+the tool's own category (`delete`). `move_file` and `copy_file` name their files in `source` and
+`destination`, so that part has no target. So a `local_write` or `delete` deny, a `reserved:` entry, a
 `target:` entry on another file the patch writes and a matrix cell on it still apply. A file tool on a secret store keeps its reading beside `credentials` the
 same way (`read_file ~/.ssh/id_rsa` is denied under `deny: [read]`, as `cat ~/.ssh/id_rsa` is).
 After `cd /dev` or `cd /proc/self/fd`, a line naming a store path (`printf x > update/allowed_signers`)
