@@ -7393,7 +7393,7 @@ TOOLS: dict[str, str] = {
         "vision_analyze", "video_analyze", "read_terminal", "read_window_below", "x_search", "clarify",
         "show_tip", "gui_tour", "focus_pane", "desktop_preview", "drive_preview", "feishu_doc_read",
         "setup_choose", "browser_vault_list", "todo_list", "list_dir", "grep", "glob",
-        "skill", "memory_zoom", "tool_output", "exo_trace", "ui")},  # Exo's own read-only views and panels
+        "skill", "memory_zoom", "exo_trace", "ui")},  # Exo's own read-only views and panels
     **{t: "local_write" for t in ("write_file", "patch", "apply_patch", "memory", "skill_manage", "apply_layout",
                                     "annotate_preview", "desktop_project", "edit_file")},
     **{t: "generate" for t in ("image_generate", "video_generate", "text_to_speech")},
@@ -9302,6 +9302,11 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
             operation = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
             c = _opaque(f"cronjob_manage mutation: {action}", operation)
             c.tool = tool
+    elif (tool == "tool_output" and set(args) <= {"reference", "offset", "limit"}
+          and isinstance(args.get("reference"), str)
+          and type(args.get("offset", 0)) is int and args.get("offset", 0) >= 0
+          and type(args.get("limit", 1)) is int and 1 <= args.get("limit", 1) <= 24000):
+        c = _make("read", tool=tool, summary="expand retained tool output")
     else:
         old_tokens = [p for p in re.split(r"[_\-.:/]+", tool.lower()) if p]
         cat = own = TOOLS.get(tool) or (_classify_name_tokens(old_tokens) if legacy_name else classify_by_name(tool))
