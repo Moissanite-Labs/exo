@@ -225,6 +225,32 @@ class GrantStore:
             self._write(rows)
 
 
+# #485: the ledger authority refuses a document over 1 MiB, and a route can refuse an oversized request, so a
+# row or a decision-model input built from a long line can be lost whole. Every string in either is cut at this
+# length and marked with the full length and hash, so the record is always written and still identifies the call.
+_ROW_TEXT_LIMIT = 2048
+
+
+def _cut(text: str) -> str:
+    if len(text) <= _ROW_TEXT_LIMIT:
+        return text
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return text[:_ROW_TEXT_LIMIT] + f" [cut: {len(text)} chars in full, sha256 {digest}]"
+
+
+def _bounded(value: Any) -> Any:
+    """``value`` with each long string in it cut by :func:`_cut` (#485). Mappings, lists and tuples keep their
+    shape; anything else passes through. Applied to a ledger row and to the decision model's input, never to
+    the classification or the decision themselves."""
+    if isinstance(value, str):
+        return _cut(value)
+    if isinstance(value, Mapping):
+        return {k: _bounded(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_bounded(v) for v in value]
+    return value
+
+
 class LedgerSink:
     """Appends `action` events to the principal's ledger. A no-op (plain logging) when no store
     or no signing key is configured. The required gate checks the returned event id
@@ -254,6 +280,7 @@ class LedgerSink:
         return self._ledger
 
     def append(self, body: Mapping, session: str | None = None, refs: tuple = ()) -> Optional[str]:
+        body = _bounded(dict(body))      # #485: a long field must not cost the row
         logger.info("exo-gate %s", json.dumps(body, sort_keys=True, default=str)[:2000])
         with self._lock:
             led = self._open()
@@ -438,8 +465,8 @@ class Gate:
             return None
         try:
             from exo.core.models.decision import ask_choice_result
-            state = {"tool": tool, "classification": c.as_dict(), "risk": risk, "rule_outcome": d.outcome,
-                     "reason": d.reason}
+            state = _bounded({"tool": tool, "classification": c.as_dict(), "risk": risk,
+                              "rule_outcome": d.outcome, "reason": d.reason})   # #485: bounded like a ledger row
             res = await asyncio.wait_for(
                 ask_choice_result(router, state, "How strictly should this tool call be gated?",
                                   list(gate.OUTCOMES), spare="main"), timeout=20)
