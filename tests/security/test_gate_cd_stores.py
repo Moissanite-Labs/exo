@@ -641,6 +641,29 @@ def test_many_levels_up_stays_linear(env, folder, name, monkeypatch):
     assert counts[1] < 6 * counts[0], counts
 
 
+@pytest.mark.parametrize("env, folder, name", [
+    ({"HOME": "/"}, "/~", "proc"),
+    ({"EXO_HOME": "/srv/exo-home"}, "/exo-home", "keys"),
+], ids=["home-at-root", "exo-home-outside-home"])
+def test_many_levels_up_stays_linear_in_time(env, folder, name, monkeypatch):
+    """The same, timed in CPU time at ten times the size: a Python call count does not see a quadratic step inside
+    one C call, such as a regex over the whole path."""
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    if "EXO_HOME" not in env:
+        monkeypatch.delenv("EXO_HOME")
+    lines = [_ups_line(n, folder, name) for n in (20000, 80000)]
+    for _ in range(3):      # CPU time; a retry only when over the bound, so load can't fail it but a quadratic step does
+        took = []
+        for line in lines:
+            start = time.process_time()
+            _bash(line)
+            took.append(time.process_time() - start)
+        if took[1] < 6 * took[0] + 0.5:
+            break
+    assert took[1] < 6 * took[0] + 0.5, took
+
+
 @pytest.mark.parametrize("line", list(SHAPES.values()), ids=list(SHAPES))
 def test_work_is_linear(line, monkeypatch):
     """The check adds one pass over the words: a few set lookups per word, one fnmatch over the small store-name

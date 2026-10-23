@@ -1834,6 +1834,29 @@ def _given_stdin(parts: list[Classification], src: Callable[[], str | None], ctx
     return [walk(p) for p in parts]
 
 
+def _run_privileged(c: Classification) -> None:
+    """Count c, a part a privileged wrapper (sudo, doas, chroot...) runs, as costly where it is reversible, as main
+    does, and add to its parts a costly copy of each reversible part it was built from, nested ones included: what
+    the wrapper runs over ssh or through a shell runs as privileged as the rest (`sudo ssh host 'cat ${x}rc'`), so a
+    rule on costly parts still matches the command inside when the line reads as a secret or a store write. The
+    parts themselves stay as they are, so a rule or entry on reversible parts still matches them. A copy holds no
+    parts (each nested part gets its own) and no post (the posting checks read the original's once). None is made
+    where a costly part a rule cannot tell from it is already there (a wrapper inside a wrapper): linear in the
+    parts."""
+    c.reversibility = max(c.reversibility, "costly", key=REVERSIBILITY.index)
+
+    def key(p: Classification) -> tuple:
+        return p.category, p.tool, p.target, p.exposure, p.third_party, p.command, p.own, tuple(p._command_views)
+    parts, copies = list(_each_part(c))[1:], []
+    have = {key(p) for p in parts if p.reversibility == "costly"}
+    for p in parts:
+        if p.reversibility == "reversible" and key(p) not in have:
+            have.add(key(p))
+            copies.append(replace(p, reversibility="costly", parts=[], text="", title="", text_file="", own_signals=[
+                s for s in (p.signals if p.own_signals is None else p.own_signals) if s != "unseen_body"]))
+    c.parts = c.parts + copies
+
+
 def _git_config_kind(key: str, value: str) -> str:
     """What a git config pair makes git do: "exec" for an exec key (an alias, the pager, the editor,
     core.sshCommand, a hook path, a filter, any key whose last part ends in `command` or `cmd`...) or a
@@ -2373,7 +2396,7 @@ def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words)
     if prog in _PRIVILEGED_WRAPPERS:
         head.signals.append(prog)
         for p in parts:
-            p.reversibility = "costly" if p.reversibility == "reversible" else p.reversibility
+            _run_privileged(p)
     return parts
 
 
@@ -2783,8 +2806,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
     if sudo:
         parts[0].signals.append("sudo")
-        if parts[0].reversibility == "reversible":
-            parts[0].reversibility = "costly"
+        _run_privileged(parts[0])
     if k.heredocs:
         # dash and ash may end the body early and run the rest: read it as commands too. Once per line, under
         # _once's key for a shell reading it: a compound's heredoc reaches every command inside it.
@@ -4019,9 +4041,9 @@ def _could_be(s: str, name: str) -> bool:
 
 
 def _dotdot(q: str) -> str:
-    """The relative name ``q`` with its leading parts that could be `..` (`.?`, `.*.`, also after a `./`) read as
-    `..`, or '' when it has none."""
-    qs = [s for s in q.split("/") if s != "."]
+    """The relative name ``q`` with its leading parts that could be `..` (`.?`, `.*.`, also after a `./` or `.//`)
+    read as `..`, or '' when it has none."""
+    qs = [s for s in q.split("/") if s not in ("", ".")]
     n = next((j for j, s in enumerate(qs) if not _could_be(s, "..")), len(qs))
     return "/".join([".."] * n + qs[n:]) if n else ""
 
@@ -4107,13 +4129,20 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 if name == "":
                     lo[""] = min(lo.get("", n), n)
 
-    split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in _brace_alts(t)
+    def alts(t: str) -> list:
+        """The target's brace alternatives, a relative one with a glob (`$PWD/` and the like read as `./`) also with
+        its leading parts that could be `..` read as `..` (#269): normpath makes `cd .?/..` `.`, and when `.?` is `..`
+        it is `../..`."""
+        return [x for a in _brace_alts(t) for h in [here(a)] for x in [a] + ([u for u in [_dotdot(h)] if u] if h[:1] not
+                in ("/", "~", "$") and "/.." in "/" + h and _GLOBBY.search(h) else [])]
+
+    split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in alts(t)
              for p, parts in [folders(alt)]]
     for _, parts, _ in split:
         index(parts)
     # `cd ..`, `cd ../..`, `cd .. && cd ..`: every number of levels up to all of them together (order is not
     # followed); past 64, any number. A part counts when it could be `..` (`.?`, and `.$(:).` read as `.*.` and `..`)
-    total = sum(len(parts) for t in targets if "." in here(t) for alt in _brace_alts(t) for _, parts in [folders(alt)]
+    total = sum(len(parts) for t in targets if "." in here(t) for alt in alts(t) for _, parts in [folders(alt)]
                 if all(_could_be(s, "..") for s in parts))
     ups = set(range(min(total, 65) + 1))
 
@@ -5163,14 +5192,17 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
 # `principals` (`exo init --root`, `exo import-store --root`) and the bus folder and files (_bus_paths).
 # $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
+# The file names that end a path, one string per name ("\0": any text), which _STORE_NAMES and _store_glob share.
+_EXO_STORE_FILES = (
+    *(f"policies/{n}.{e}" for n in ("gates", "budget", "interruptions", "approvals", "posting", "brief", "consolidate")
+      for e in ("yaml", "yml", "md")),
+    "policies/internal-names.txt", "state/approval-grants.json", "state/gate-grants.json", "seat.toml", "seat.json",
+    "exod.sock", "agent-\0.sock", "bus/registry.json", "update/allowed_signers",
+    *(f"{n}.sqlite{x}" for n in ("ledger", "schedule", "bus/relay") for x in ("", "-wal", "-shm", "-journal")))
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
-    r"\.exo/bus(/|$)|bus/registry\.json$|bus/relay\.sqlite(-wal|-shm|-journal)?$|"
-    r"\.exo/update(/|$)|update/allowed_signers$|"
-    r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
-    r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
-    r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
-    r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
+    r"\.exo/(bus|update)(/|$)|(" + "|".join("[^/]*".join(map(re.escape, f.split("\0"))) for f in _EXO_STORE_FILES) +
+    ")$)")
 _HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "update")
 _STORE_PROTECTED = ("policies", "state", "keys")
 # #210: $EXO_HOME/bus, and the bus settings that move a file the gate trusts out of it: the registry, the relay
@@ -5241,12 +5273,8 @@ def is_store_path(path: str, ancestors: bool = False) -> bool:
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
 # counts too) and file names that end a path.
 _STORE_GLOB_DIRS = tuple([".exo", *p, n] for p in ((), ("principals", "\0")) for n in _HOME_PROTECTED +
-                         ("ledger.sqlite\0",))
-_STORE_GLOB_FILES = tuple(x.split("/") for x in [f"policies/{n}.{e}" for n in (
-    "gates", "budget", "interruptions", "approvals", "posting", "brief", "consolidate") for e in ("yaml", "yml", "md")] +
-    ["policies/internal-names.txt", "state/approval-grants.json", "state/gate-grants.json", "seat.toml", "seat.json",
-     "exod.sock", "agent-\0.sock"] + [f"{n}.sqlite{x}" for n in ("ledger", "schedule") for x in ("", "-wal", "-shm",
-                                                                                            "-journal")])
+                         ("ledger.sqlite\0",)) + ([".exo", "bus"],)
+_STORE_GLOB_FILES = tuple(f.split("/") for f in _EXO_STORE_FILES)
 
 
 def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> bool:
@@ -5255,7 +5283,8 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
     store roots' protected folders (with ``inside``: the roots, as _in_store_dir) and the names _STORE_NAMES matches
     anywhere. As for a read (_glob_word), a match needs a part with three characters of its own before its
     extension (`$(date).json` could be `seat.json` too), so `cp x ~/.exo/$(printf policies)/a` counts and
-    `cp x out/$(date).json` does not. Linear in the parts."""
+    `cp x out/$(date).json` does not. A file name must have them itself: its folder alone does not make
+    `cp x src/state/$(date +%F).json` a write to `state/approval-grants.json`. Linear in the parts."""
     p = _expand_text(glob).strip().replace("\\", "/")
 
     def could(g: str, s: str) -> bool:
@@ -5290,8 +5319,9 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
         gs = form.split("/")
         if any(fits(gs, 0, t, short=ancestors) for t in tops):
             return True
+        named = own(gs[-1])                 # a store file's folder alone (`src/state/$(..)`) is not its name
         for j in range(1 if form.startswith("/") else 0, len(gs)):
-            if any(fits(gs, j, d) for d in dirs) or any(fits(gs, j, f, whole=True) for f in files):
+            if any(fits(gs, j, d) for d in dirs) or named and any(fits(gs, j, f, whole=True) for f in files):
                 return True
     return False
 

@@ -1352,32 +1352,6 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
   rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
   here-doc body leads past the end, past a deny-listed command.
-  *Amendment 2026-10-20 (issues #225, #269, #309, #341):* #307 and #305 left store names an expansion still hid,
-  and relative names that still reached the run folder. *One reading of an expansion.* `_unknown_forms` (#307) is
-  the one place a word's expansions are read, and it now reads more: `$(( ))` and `$[ ]` as substitutions; a
-  substitution as `*` at either end of a word too, except at its start with text after it (`$(pwd)/config` is not
-  `*/config`), while a variable stays `*` only between literal text, as #307 had it (`cat $f` stays a read); one that
-  starts a name part as `.*`, since output may start with the dot a glob's `*` does not match; and the default word
-  of an unknown variable (`${x:-word}`, `-`, `=`, `:=`, `+`, `:+`, on an array element too) as its value (#341).
-  Its forms (`_unknown_words`, once per spelling per call) feed the secret-store checks as before, the #192 working-folder targets and names, and
-  the Exo-store write checks (#309: `_unknown_store`, each form as a path and, with a `*`, as a glob matched one part
-  at a time against the protected folders and names, `_store_glob`, which needs three characters of a part's own as
-  a glob read does). *Relative names from `$EXO_HOME`.* `_exo_relative` (#305) now reads a target spelt with a glob
-  or an expansion as the store folders it could be, below the store's own folder too, along each tail of a
-  principal's `principals/<name>/run/jobs` path it fits (`~/.exo/r?n/jobs`, `~/.exo/r$(printf u)n/jobs`, `cd r?n/jobs`
-  from the store; a target that fits none is left out), a part that could be `..` as `..` (`.?`, `.$(:).`, after a
-  `./` too, and `.?/..` both as `.` and as `../..`), and a name
-  that could be the run folder by a glob (`ru?`) or a folder that holds one (`$EXO_HOME` or a `.exo` folder, its
-  `principals`, a principal's store), as `.` in `$EXO_HOME` already asked. Rejected: keeping the first draft's second
-  reading of substitutions (a `cuts` list on each lexed word, and a run-folder state machine in `_cd_store_read`)
-  beside #307's and #305's, which would have been two mechanisms for each thing; and asking for any expansion in a
-  path-like word, which would ask on `cat notes$(date +%F).txt`. The cost, failing closed:
-  `cd ~/.kube && echo $(date)` (a word that is a substitution alone in a store folder), `cd ~/.exo && ls
-  principals`, in `run/jobs` `ls ../..` and `cat $(ls)`, `cat ${x}rc` (`.*rc`) and `cp x state/$(date +%F).json`
-  (a store file's folder and stem) ask, and a write to `keys/` that only the `*` reading reaches is `store_write`
-  rather than `credentials`. A long write line full of expansions costs 2 to 2.5 times the CPU time it did; the
-  work stays linear.
-  Limits in `docs/GATE.md` "Other spellings of a store path", "In `$EXO_HOME`" and "The store is credentials".
   *Amendment 2026-10-21 (issue #329, follow-up to #231):* `unset PATH; ls` was `read` (allow). With no `PATH`, bash
   looks a command up in the current folder, so the `ls` runs a `./ls` an earlier write can plant. That is the hazard
   #231 reads in an empty `PATH` element. *unset.* `unset PATH` and `unset -v PATH` are read as `PATH=` and ask,
@@ -1441,6 +1415,97 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   101 are `unset \<newline>"arr[$k]"` forms. The double-quote check reads the raw word, so a `\<newline>` before it
   makes the word one the gate cannot read, and the line `opaque_exec`, as `unset a[$i]` is. That was so before this
   fix too.
+  *Amendment 2026-10-22 (issues #225, #269, #309, #341):* #307 and #305 left store names an expansion still hid, and
+  relative names that still reached the run folder. *One reading of an expansion.* `_unknown_forms` (#307) is the one
+  place a word's expansions are read, and it now reads more. `$(( ))` and `$[ ]` are substitutions. A substitution is
+  `*` at either end of a word too, except at its start with text after it (`$(pwd)/config` is not `*/config`), while
+  a variable stays `*` only between literal text, as #307 had it (`cat $f` stays a read). One that starts a name part
+  is also `.*`, since output may start with the dot a glob's `*` does not match. The default word of an unknown
+  variable (`${x:-word}`, `-`, `=`, `:=`, `+`, `:+`, on an array element too) may be its value (#341). Its forms
+  (`_unknown_words`, once per spelling per call) feed the secret-store checks as before, the #192 working-folder
+  targets and names, and the Exo-store write checks (#309). There `_unknown_store` checks each form as a path and,
+  with a `*`, as a glob matched one part at a time against the protected folders and names (`_store_glob`). Its
+  tables come from the list `_STORE_NAMES` is built from, so the bus store and `update/allowed_signers` count (`cp x
+  ~/.exo/bu$(printf s)/x`). As for a glob read, a match needs a part with three characters of its own, and a store
+  file's name needs them itself, so a store file's folder alone with output for the name keeps its class (`cp x
+  src/state/$(basename $f)`, `cp x state/$(date +%F).json`). *Relative names from `$EXO_HOME`.* `_exo_relative`
+  (#305) now reads a target spelt with a glob or an expansion as the store folders it could be, below the store's own
+  folder too, along each tail of a principal's `principals/<name>/run/jobs` path it fits (`~/.exo/r?n/jobs`,
+  `~/.exo/r$(printf u)n/jobs`, `cd r?n/jobs` from the store). A target that fits none is left out. A leading part
+  that could be `..` is read as `..` (`.?`, `.$(:).`, after `./` or `.//` too), and a target or name that `..` would
+  shorten is read both as `.` and with those parts as `..` (`cd .?/..`, `cd $PWD/.?/..` and `.?/..` from `run/jobs`
+  are also `../..`).
+  A name that could be the run folder by a glob (`ru?`), or a folder that holds one (`$EXO_HOME` or a `.exo` folder,
+  its `principals`, a principal's store), counts as `.` in `$EXO_HOME` already did. *With #464.* The `*` reading
+  makes lines that never reach the store `store_write` (`cd /dev && cp x ~/.exo/polic$(date)ies/a`, `ssh host 'rm -rf
+  ~/.e$[0]xo/policies'`). Its review found that a matrix cell or a `target:/dev*` entry then stopped deciding them.
+  #467 (D-075 amendment) gives each part its own matrix cell in the #191 pass and keeps the descriptor folder as its
+  own `store_write` part, and this branch merges it, so those lines keep main's deny. *Privileged wrappers.* Main
+  counts what `sudo` or `doas` runs as costly at the line alone, not at the parts it runs over ssh, and a privileged
+  wrapper (`chroot`, `nsenter`, `unshare`, `systemd-run`) at its own parts alone, not the ones nested in them. A rule
+  on costly parts (gate_diff's `rule_costly_part_deny`, which denies a costly `shell`, `read` or `local_write`
+  part) then matched such a line only by the line's category, and once the `*`, default-word or `..` reading made
+  the line `credentials` or `store_write` it matched nothing. So, with that rule, `sudo ssh host 'cat ${x}rc'`, `doas
+  ssh host 'cat /tmp/$(cat last)'`, `sudo ssh host 'cat ${x:-~/.kube}/config'`, `sudo ssh host 'cp x
+  out/schedule$(date +%F).sqlite'`, `sudo ssh host 'cd ~/.exo/run/jobs && cd .?/.. && ls'`, `chroot / bash -c 'cat
+  ${x}rc'` and spellings bash never makes a store path (`sudo ssh host 'cp x ~/.exo/poli$[0]cies/gates.yaml'`,
+  `doas ssh host 'cp x ~/.exo/polic$(date)ies/a'`) went from deny to ask before this fix:
+  everyday lines, secret-store and default-word spellings and the `..` rows alike. `_run_privileged` now adds, beside
+  the parts such a wrapper runs, nested ones included, a costly copy of each one that is reversible, so the rule
+  matches the command inside and keeps main's deny. It adds and does not rewrite: the parts stay as written, so a
+  rule or entry keyed on `reversibility` reaches them as it did on main. An earlier draft of this fix made the parts
+  themselves costly, and under a rule that denies a reversible `read` `sudo ssh host 'ls; cat x'` went from deny to
+  log (`sudo ssh host 'cat ~/.kube/config'` from deny to ask), and under `read: deny` lifted by a rule that allows a
+  costly `read` the first line went from deny to allow. Both deny now, as on main. A copy holds no parts and no
+  post, so the posting checks read each post once. It carries the part's (category, target), so reserved entries
+  list the same parts. None is made where a costly part a rule cannot tell from it is already there (a wrapper
+  inside a wrapper), so the work stays linear. The line itself is costly, as on main. Main's unsplit lines had the
+  same gap (`sudo ssh host 'cat ~/.kube/config'` and `sudo ssh host 'cp x ~/.exo/policies/a'` asked under that
+  rule), and they deny now too. What `sudo` runs through a shell keeps main's decision under a rule on costly parts:
+  `_run_privileged` does not reach the parts of the `-c` text, so `sudo bash -c 'cat ${x}rc'` (now `credentials`,
+  `opaque_exec` on main) asks under it, as it did on main. Rejected: a second
+  mechanism here for what #467 does, keeping the first draft's second reading of substitutions (a `cuts` list on each
+  lexed word, and a run-folder state machine in `_cd_store_read`) beside #307's and #305's, which would have been two
+  mechanisms for each thing, and asking for any expansion in a path-like word, which would ask on `cat notes$(date
+  +%F).txt`. *The cost, failing closed.* These ask: `cd ~/.kube && echo $(date)` (a word that is a substitution alone
+  in a store folder), `cd ~/.exo && ls principals`, in `run/jobs` `ls ../..` and `cat $(ls)`, `cat ${x}rc` (`.*rc`), a
+  read of a folder that holds a store by a name made by output (`cat /tmp/$(cat last)`, `ls ~/.config/$(whoami)`,
+  as `cat /tmp/*` does on main), `cat ${x:-'~/.kube'}/config`, a name whose own text fits a store file (`cp x
+  data/schedule$(date +%F).sqlite`, `cp x out/seat$(date +%F).json`) and a split spelling bash never makes a store
+  path (`cp x ~/.exo/polic$(date)ies/a`). A write to `keys/` that only the `*` reading reaches is `store_write`
+  rather than `credentials`. A long write line full of expansions costs 2 to 3 times the CPU time it did, and the
+  work stays linear. *Differential* (#423), main's `scripts/gate_diff.py --jobs 2 --timeout 0`, base main 77274ab9,
+  head this branch, the built-in corpus plus an aimed corpus of 64,080 lines: 13 store paths and 11 store folders
+  through each expansion form read here, under 12 write, read and delete commands, plain, after `cd /dev` or `cd
+  /proc/self/fd` and in `ssh host '...'`, then `cd`, `tar -C` and `git -C` into each folder spelling with 14 relative
+  names, 100 everyday lines, and 13,696 of these lines again under a privileged wrapper (`sudo ssh host`, `doas ssh
+  host`, `sudo -u bob ssh host`, `sudo env ssh host`, `sudo timeout 5 ssh host`, `chroot / ssh host`, `sudo bash -c`,
+  `chroot / bash -c`). Two policy sets were run. The 87 built-in policies: 238,606 actions, 20,758,722 pairs, no
+  outcome lowered, tightened 3,347,304 pairs on 111,822 actions. 57 policies keyed on `reversibility` (`--only-policies
+  --policies`), for each of `read`, `shell`, `local_write`, `credentials`, `store_write`, `opaque_exec` and
+  `web_post` and each of `reversible`, `costly` and `irreversible`: a rule that denies that category at that
+  reversibility, and a category line that denies it lifted by a rule that allows it at that reversibility; and for
+  each reversibility a rule that denies any category, a deny on all seven lifted by a rule that allows any, a matrix
+  row that denies, and deny and reserved entries for the seven. Result: 238,306 actions, 13,583,442 pairs, no outcome
+  lowered, tightened 2,115,920 pairs on 197,156 actions. So no outcome is lowered under either set; other policy
+  shapes were not run. Both runs count reserved entries lost at the same outcome, and in each case the line still
+  asks, reserved for the principal: the remote read in `ssh host '...'`, a `read` part with target `host` on main, is
+  a `credentials` part with the path or `../..` as its target here, so the entry lists one part fewer wherever no
+  other part makes up the count. Under the built-in `reserved_tool_terminal`, 32 pairs on 32 actions: any line whose
+  other parts add a sixth reserved entry around a `jo$(:)bs ... .?/..` remote read, five parts where main lists six
+  (`chroot / ssh host 'cd ~/.exo/run/jo$(:)bs && grep -r x .?/..'`, and the same remote read beside `sudo`, `xargs`,
+  `find -exec`, `flock`, `unshare`, `systemd-run`, `nsenter`, `coproc` or a redirect, which the corpora do not hold).
+  Under the reserved entry for a reversible `read`, 52 pairs on 52 actions: a remote read of a store file or key
+  spelt with an expansion (`ssh host 'cat ~/.exo/$(printf ledger.sqlite)'`, `ssh host 'cat ~/.e$[0]xo/keys/seat'`,
+  alone or beside `true`, a pipe, `$( )` or a `cd`), two parts where main lists three. Both groups come from the
+  `*` and `..` readings above, not from the privileged-wrapper copies: df22ec97, before them, lists the same parts.
+  An earlier draft of this fix, which made the parts themselves costly, gave no lowered pair under the 87 built-in
+  policies with the same command, and against #467's head 9446c8af it lowered only those 32 pairs and 436 pairs on
+  50 actions from main's #329 `unset` and `readonly +x -n` changes, which 9446c8af predates.
+  *Known limits.* The default word is not read behind an indirect name or a subscript with an expansion in braces
+  (`${!x:-~/.kube}`, `${!x[0]:-.env}`, `${x[${i}]:-$HOME/.exo}`), and a part that could be `..` after a literal part
+  is not read as `..` (`grep -r x ~/.exo/run/jobs/.?`). The other limits are in `docs/GATE.md` "Other spellings of
+  a store path", "In `$EXO_HOME`" and "The store is credentials".
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the
