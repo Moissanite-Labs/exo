@@ -5417,7 +5417,11 @@ def _shell_call(cmd: str) -> Classification:
         return classify_shell(cmd)
     folders = scope.tool_cwds
     seen: dict = {}                 # one memo for the reads below, so the line is parsed once
-    wide = replace(scope, cwds=tuple(dict.fromkeys([*scope.cwds, *map(os.path.abspath, folders)])))
+    try:
+        mine = [os.path.abspath(f) for f in folders]
+    except OSError:                 # the gate's own folder is gone: a relative folder is read as given
+        mine = list(folders)
+    wide = replace(scope, cwds=tuple(dict.fromkeys([*scope.cwds, *mine])))
     token, memo = _scope.set(wide), _shell_seen.set(seen)
     try:
         whole = classify_shell(cmd)             # its relative words read from the folder too, as before #311
@@ -5465,7 +5469,10 @@ def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification |
     forms: list[tuple[str, str]] = []           # (the folder as the call gives it, a form to check)
     for f in folders:
         x = _expand_text(f)
-        real = os.path.realpath(x) if os.path.isabs(x) and not _GLOBBY.search(x) else ""
+        try:
+            real = os.path.realpath(x) if os.path.isabs(x) and not _GLOBBY.search(x) else ""
+        except ValueError:                      # a NUL in it: read as written, as _sensitive_words does
+            real = ""
         if real and _repo_claude(real):
             continue
         linked = [real] if real and real != os.path.normpath(x) else []      # where a link leads, first
@@ -5473,9 +5480,10 @@ def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification |
     for f, g in forms:
         if is_sensitive_path(g) or _glob_hits_secret(g):
             return f"shell runs in {f}", g
-    if read is not None:
+    if read is not None:                        # the target: the name in the folder it resolves into a store from
         where = folders[0] if len(folders) == 1 else " or ".join(folders)
-        return f"{read.summary} in {where}", _in_folder(_expand_text(folders[0]), read.target)
+        paths = [_in_folder(_expand_text(f), read.target) for f in folders]
+        return f"{read.summary} in {where}", next((p for p in paths if is_sensitive_path(p)), paths[0])
     if not forms:
         return None
     cmds, subs, _ = _parse(cmd or "")
@@ -5494,12 +5502,21 @@ def _in_folder(folder: str, name: str) -> str:
 
 def _repo_claude(folder: str) -> bool:
     """A folder in a repo's own `.claude` worktrees, commands, agents or skills, and below no other store, as the
-    search tools judge it (StoreSkip, #241): a checkout at <repo>/.claude/worktrees/x holds the repo's files."""
-    p = os.path.normpath(os.path.abspath(folder))
-    if ".claude" not in p.split(os.sep):
+    search tools judge it (StoreSkip, #241): a checkout at <repo>/.claude/worktrees/x holds the repo's files. A
+    store folder by its name below that (`x/.kube`, `x/.config/gh`, _store_hints) is read as a `cd` there is."""
+    try:
+        p = os.path.normpath(os.path.abspath(folder))
+        parts = p.split(os.sep)
+        if ".claude" not in parts:
+            return False
+        skip = StoreSkip(p)
+        if not skip._project_claude(p + "/x") or skip._hit(p + "/x"):
+            return False
+    except (OSError, ValueError):               # a NUL in it, or the gate's own folder is gone: not the repo's
         return False
-    skip = StoreSkip(p)
-    return skip._project_claude(p + "/x") and not skip._hit(p + "/x")
+    n = len(parts) - parts[::-1].index(".claude") + 1       # the first part below .claude/<worktrees...>
+    singles, pairs, _ = _store_hints()
+    return not any(s in singles or (a, s) in pairs for a, s in zip(parts[n - 1:], parts[n:]))
 
 
 @_brace_budget

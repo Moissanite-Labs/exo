@@ -133,14 +133,15 @@ FORCE_IN_KEYS = [
     ("bash", {"command": "git push --force origin main ; cat *", "workdir": "~/.exo/keys"}),
     ("bash", {"command": "git push --force origin main ; cat *", "cwd": "~/.exo/keys"}),
     ("terminal", {"command": "tar czf /tmp/o.tgz . ; git push --force origin main", "workdir": "~/.exo/run"}),
+    ("exec_command", {"cmd": "cat * && git push --force origin main", "workdir": "~/.claude/projects"}),
 ]
 
 
 def _seat_answers_credentials(tmp_path, home, monkeypatch, gates: str = ""):
-    """Every relative word in ~/.exo/keys and ~/.exo/run is a store hit (#209). approvals.yaml delegates only
-    credentials to a seat."""
+    """Every relative word in ~/.exo/keys, ~/.exo/run and ~/.claude/projects is a store hit (#209). approvals.yaml
+    delegates only credentials to a seat."""
     monkeypatch.setenv("EXO_HOME", str(home / ".exo"))
-    for d in (".exo/keys", ".exo/run"):
+    for d in (".exo/keys", ".exo/run", ".claude/projects/p"):
         (home / d).mkdir(parents=True, exist_ok=True)
     root = tmp_path / "store2"
     (root / "policies").mkdir(parents=True)

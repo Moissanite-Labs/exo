@@ -71,9 +71,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   from `cwd` made the whole call credentials. That lost a matrix deny on a force push beside it, and a
   seat that may answer credentials could answer the push. That reading is still decided, and the
   stricter outcome stands. The ask goes to those who may answer both the line's category and
-  credentials. A checkout in a repo's own `.claude/worktrees` is the repo's folder, not a store. A
-  file tool's folder argument still does not count. A line that reads a secret and writes the Exo
-  store is now answered by the principal alone.
+  credentials. A checkout in a repo's own `.claude/worktrees` is the repo's folder, not a store, but a
+  store folder inside it (`.kube`) still counts. A file tool's folder argument still does not count.
+  A line that reads a secret and writes the Exo store is now answered by the principal alone.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

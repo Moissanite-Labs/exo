@@ -230,7 +230,7 @@ def test_a_folder_whose_every_word_is_a_store_keeps_the_lines_matrix_deny(cmd, f
 
 
 @pytest.mark.parametrize("tool, key", SHELLS)
-@pytest.mark.parametrize("folder", ["~/.exo/keys", "~/.exo/run"])
+@pytest.mark.parametrize("folder", HELD)
 def test_a_seat_that_answers_credentials_does_not_answer_the_force_push(folder, tool, key, _home):
     """approvers: {default: [principal], credentials: [principal, seat:builder]}. The call was credentials, so the
     seat could answer a force push only the principal answers."""
@@ -324,6 +324,53 @@ def test_a_name_read_in_the_folder_is_the_parts_target(_home):
     assert part.target == str(_home / ".kube" / "config")
     assert gate.decide(_bash_in("cat config", "~/.kube"), _pol({"gates": {"deny": ["target:*/.kube/*"]}})).outcome \
         == "deny"
+
+
+@pytest.mark.parametrize("cwd, workdir", [("~/proj", "~/.exo"), ("~/.exo", "~/proj")])
+def test_the_target_is_the_name_in_the_folder_it_resolves_in(cwd, workdir, _home):
+    """With both folder arguments, the part named the first folder joined with the name, even when the name
+    resolves into a store from the other one, so a target entry on the store missed the call."""
+    _held(_home)
+    (_home / "proj").mkdir()
+    (_home / ".exo" / "keys" / "k1").write_text("k\n")
+    c = gate.classify({"tool": "terminal", "args": {"command": "cat keys/k1", "cwd": cwd, "workdir": workdir}})
+    [part] = _store_parts(c)
+    assert part.target == str(_home / ".exo" / "keys" / "k1")
+    assert gate.decide(c, _pol({"gates": {"deny": ["target:*/.exo/keys/*"]}})).outcome == "deny"
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("folder", ["~/.ssh\0", "\0", "~/repo/.claude/worktrees/x\0"])
+def test_a_folder_with_a_nul_never_raises(folder, tool, key, _home):
+    """classify never raises on odd arguments. A NUL in the folder made os.path.realpath raise, so the hook asked
+    as for an unclassified call, which any seat may answer, where the line alone is denied."""
+    _repo(_home)
+    c = _bash_in(f"{FORCE} ; cat *", folder, tool=tool, key=key)
+    assert c.category == "force_push" and gate.decide(c, MATRIX_DENY).outcome == "deny"
+
+
+def test_a_relative_folder_when_the_gates_own_folder_is_gone(tmp_path, monkeypatch):
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    for tool, key in (("bash", "cwd"), ("terminal", "workdir")):
+        c = _bash_in(f"{FORCE} ; cat *", ".ssh", tool=tool, key=key)
+        assert c.category == "force_push" and gate.decide(c, MATRIX_DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("sub, cmd", [(".kube", "cat config"), (".config/gh", "cat hosts.yml"),
+                                      (".docker", "cat config.json"), ("src/.kube", "ls *")])
+def test_a_store_folder_inside_a_repos_claude_worktree_asks(sub, cmd, tool, key, _home):
+    """A checkout in <repo>/.claude/worktrees is the repo's, but a store folder by its name inside it is read as
+    a `cd` there is, so `cat config` in x/.kube asks, as `cd ~/repo/.claude/worktrees/x/.kube && cat config` does."""
+    _repo(_home)
+    folder = f"~/repo/.claude/worktrees/x/{sub}"
+    (_home / folder[2:]).mkdir(parents=True)
+    c = _bash_in(cmd, folder, tool=tool, key=key)
+    assert _store_parts(c) and gate.decide(c).outcome == "ask", (sub, cmd)
+    assert gate.decide(_bash(f"cd {folder} && {cmd}")).outcome == "ask"
 
 
 # --- what stays as it was --------------------------------------------------------------------------------------
