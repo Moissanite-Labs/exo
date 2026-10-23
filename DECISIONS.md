@@ -1042,7 +1042,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (`cd ~/.exo/keys && echo $(rm -f x)`) no longer made it irreversible. A heavier command deeper in the line is now
   a credentials part with that weight beside it, which the #191 pass reads, so a deny on its matrix cell holds. The
   line keeps its own weight, so a policy whose costly cell is stricter than its irreversible one still denies
-  `cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'`, which an earlier commit here made irreversible (#468 review). With
+  `cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'`, which an earlier commit here made irreversible (#468 review). The
+  credentials part #464 adds for a relative key read on a store-write line weighs the same way, so
+  `cd ~/.exo/state && cat ../keys/seat; echo $(rm -rf x)` denies under an irreversible deny cell or rule as on main,
+  and the unwrapped `cd ~/.exo/state && cat ../keys/seat; git push --force origin main` tightens from ask to deny. With
   these, every change makes a line stricter or leaves it alone, but for one group gate_diff reports. Under
   `reserved: ['command:\brm\b']`, `cd ~/.exo/policies && declare -a x='($(ssh prod 'rm -rf /'))'` had its
   reserved hit on `opaque_exec` and now has it on `store_write`. Both ask, the store write only the principal, and
