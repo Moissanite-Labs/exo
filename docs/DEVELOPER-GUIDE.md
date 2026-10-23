@@ -84,8 +84,8 @@ See [HARNESS.md](HARNESS.md) and the sourced [landscape/roadmap](HARNESS-LANDSCA
 
 **Plugin runtime binding (D-082).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
 private=..., approvals=..., required=...)` binds the existing tool and slot interfaces through
-`exo.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback;
-metadata is resolved for each call. The bridge translates existing plugin approval verdicts through
+`exo.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback.
+Metadata is resolved for each call. The bridge translates existing plugin approval verdicts through
 `ApprovalDesk`, preserving bindings, approvers and standing-grant behavior. It does not change the
 execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
 construction still binds plugins. New plugin signature adaptation belongs in this bridge, not in the engine.
