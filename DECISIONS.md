@@ -1004,7 +1004,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (3) The matrix reads the dominant part only. A remote delete such as `ssh host 'rm -rf ~/.exo/update'`
   changes from a matrix deny on delete to the principal-only store-write ask, as deleting `~/.exo/state`
   already does. Category denies still read the retained delete part. Chosen over keeping a file tool's old category as a part, which would
-  change the decisions for every store path, not only the pin's. That is a follow-up for the whole store. Not done,
+  change the decisions for every store path, not only the pin's. That is a follow-up for the whole store. (The
+  D-075 amendment of 2026-10-22 for #464 and #448 is that follow-up, and lifts all three kinds.) Not done,
   as for the other store folders (`docs/GATE.md` "Known limits"): a glob or hard-link spelling, a copy or archive
   unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
   `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
@@ -1508,7 +1509,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   as D-075 does for shell lines. It would keep group 1 denied, but it changes every file-tool call on a store
   (`read_file ~/.ssh/id_rsa` under `categories: {read: deny}` asks on main), so it is a follow-up, as are matrix
   cells, posting checks and `target:` entries on every part, and a store write that keeps the principal's answer
-  beside a secret. Limits: a doubled slash or a `..` inside a store name is matched as written, so
+  beside a secret. (The D-075 amendment of 2026-10-22 for #464 and #448 keeps a file tool's own class as a part,
+  and reads each part's matrix cell for a deny.) Limits: a doubled slash or a `..` inside a store name is matched as written, so
   `cat /proc/1/task/1//environ` and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does
   on main. A glob in the `/proc` name itself is not read, for either form (`cat /pro?/self/task/1/environ`,
   `cat /pro?/self/environ`).
@@ -2694,6 +2696,47 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
   lose #326 and #397), and listing every violation of every post (500 posts gave a 115,000-character reason that
   the card and the ledger repeat).
+  *Amendment 2026-10-22 (issues #464, #448):* the #191 pass decided a part by its category line and rules, but not
+  by its matrix cell, which `decide` read from the combined result only. So a matrix deny reached only the
+  dominant part. A store write or secret that sets a line's category also hid two more of the line's decisions,
+  and a file tool on a store or secret path lost its own category. Each such line still asked the principal
+  alone. (1) The #191 pass now starts each part from its own matrix cell, read under the scopes, before its
+  category line and its rules, which is how the part is decided alone. A `deny` there denies the line, and a
+  category line or rule that lifts the part alone lifts it here too. This reaches any compound line. Under
+  `matrix: {irreversible: {private: deny}}`, `rm -rf ~/work; touch ~/.exo/state/x`, `rm -rf ~/.exo/policies`
+  and `git push --force origin main && rm -rf build` are denied, where they asked. Under
+  `matrix: {irreversible: {internal: deny}}`, so is `git push --force origin main; echo x > ~/.exo/policies/a`,
+  and under `matrix: {costly: {public: deny}}` a post beside a store write. A cell below `deny` still reads the
+  dominant part only (#437). (2) After `cd /dev` or `cd /proc/self/fd`, a write the gate pins to a store path
+  took that path as its only target, so a `target:/dev*` or `target:/proc*` entry no longer matched it. The
+  descriptor folder is now a second store-write part. (3) The relative read check for store folders (#192) ran
+  only on lines that were neither credentials nor store writes, so `tar -C ~/.exo/policies -czf - ../keys/seat`
+  lost its key read and `deny: [credentials]` no longer denied it. On a store-write line that read is now a
+  `credentials` part, and the line stays `store_write`, so only the principal answers. Making the line
+  `credentials` instead would let a seat that `approvals.yaml` delegates `credentials` to answer it. (4) A file
+  tool on a store or secret path keeps the tool's own reading as a part (#448), as a shell line does: a
+  `local_write` part for each file `write_file`, `edit_file`, `patch` or `apply_patch` writes, and for a tool read
+  by name (`delete_file`, `read_file`, `create_directory`, `move_file`) its own category, target, summary, and the
+  text and title of a post. Its category deny, reserved entry, `target:` entries and matrix cell apply again, and
+  the posting checks read a post's text. The call keeps its store or secret category, card, approvers and
+  no-grant rule, and the ledger view still leaves the parts out. (5) The new parts reach policy patterns that
+  main never ran on those calls, so a pattern that does not compile now makes `decide` raise on them, as it
+  already did on other calls. The exo-gate hook's fallback for a call the gate reads as a store write or secret
+  now asks the principal alone, once, in observe mode too, where it ran the call in observe mode or asked
+  anyone. This lifts the trade-offs the D-038 amendments of 2026-10-21 recorded for #133 (all three kinds) and
+  for #313 (group 1, and group 2 for a deny cell). Each change adds a part, a source of a deny or a stricter
+  fallback, so no decision is lower than before. gate_diff (#423) ran main 3ddd89e9 against this change over the
+  built-in corpus and 2,127 targeted lines and calls, under the 87 built-in policies and 18 more (a deny on each
+  matrix cell, lifted and scoped cells, part denies). Main's script read 59,062 actions and the #460 one 59,526,
+  and both found 0 lowered. They found 61,638 and 61,805 stricter pairs, 6,072 of the latter under the built-in
+  policies. Each is a part the same policy denies alone: a delete, force push, history rewrite or post beside
+  another command, a store write or a secret, a file tool's own category or file, a `/dev` or `/proc` target, or a
+  key read after `tar -C`.
+  Not done: an allow, log or ask cell, third-party escalation and the floors on a part (#437), a `target:` entry
+  for a second store on a credentials line (#313 group 4), and checking policy patterns when the policy loads
+  (#466).
+  A relative key read keeps the name as written as its target, as `tar -C ~/.exo -czf - keys/seat` already does,
+  so `target:*/.exo/keys/*` matches neither.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).
