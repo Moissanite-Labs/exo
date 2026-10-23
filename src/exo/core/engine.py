@@ -108,7 +108,7 @@ class CoreRuntime:
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None,
                  attach_peers: Any = None, attach_scheduler: Any = None,
                  attach_jobs: Any = jobs_mod.attach, attach_agents: Any = Delegator,
-                 skills_enabled: bool = True, **loop_kw: Any) -> None:
+                 skills_enabled: bool = True, skills_prompt: bool = True, **loop_kw: Any) -> None:
         # Fail before opening stores, loading adapters or registering host handlers.
         required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
         if executor is not None:
@@ -207,7 +207,7 @@ class CoreRuntime:
         self.mcp = McpManager(mcp_cfg, env)
         self._started: asyncio.Future | None = None
         self._prompt_head = system_prompt
-        self._prompt_tail = [self.skills.prompt(), CODE_FIND_LINE if self.registry.specs(names=["code_find"]) else "",
+        self._prompt_tail = [self.skills.prompt() if skills_prompt else "", CODE_FIND_LINE if self.registry.specs(names=["code_find"]) else "",
                              STANDING_LINE if self.peer_cfg.enabled else ""]
         self._soul_sig = self._soul_stat()
         system_prompt = self._compose_prompt()

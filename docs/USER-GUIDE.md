@@ -77,6 +77,20 @@ set a new `name:` in the copy's `SKILL.md` frontmatter. Exo finds skills by that
 copy that keeps the old name hides the pack's skill or is hidden by it. Then delete the copy's `.exo-managed`, or
 each re-run warns that Exo did not install it. Details: `docs/INSTALL.md` step 5.
 
+### Skills in large collections
+
+To limit the skill descriptions sent with each request, enable local discovery:
+
+```sh
+exo config set skill_discovery '{"enabled":true,"max_chars":2048,"top_k":6}'
+exo stop
+```
+
+Launch Exo again. With the `skills` capability enabled, it selects relevant descriptions within
+that character budget. You can still request any enabled skill by name. Selection makes no model
+or network calls. Set `skill_discovery.enabled` to `false` and restart to restore the full catalog.
+Details and limits: [Skill discovery](SKILL-DISCOVERY.md).
+
 ## 2. The two clients
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
