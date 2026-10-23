@@ -4994,7 +4994,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   are scoped to the engine agent and recorded principal, and cannot grant permission or execute steps.
   Tool calls and command reads use the existing gate and executor. No new approval or ledger path.
 - **Gate classification:** Valid `read` and `history` actions are `read`. Valid `update` is `local_write`.
-  Calls without a valid action keep generic classification, including secret and store path checks.
+  These classifications require the action's supported top-level keys. Calls without a valid action or
+  with unsupported keys keep generic classification, including secret and store path checks.
+  Main's comparison script at `5a9dc394` checked notebook code at `e5677363`: 43 calls across all 87
+  policies, or 3,741 pairs. All 32 missing-action calls behind the earlier 2,167 lowerings were covered.
+  None lowered after the fix. Six intentional read/history differences remain for policies targeting
+  `unknown`. Update tightens four pairs. No reserved protections or posting violations are lost, and
+  neither tree has classification or decision errors. The corpus and results are in
+  `docs/evidence/work-notebook-gate-2026-10-23.json`. This focused comparison does not cover other tools.
 - **Limits:** Strict nested fields, document byte limits, bounded snapshots and history listings.
   A per-session revision ceiling refuses further writes without deleting history. The feature owns
   no separate database, workers, model calls or automatic retention job.

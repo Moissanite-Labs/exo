@@ -150,9 +150,10 @@ caps bound each session's notebook growth.
 The model's tool call must appear as a visible assistant call in the same
 session and turn, matching the tool context's call ID. `/work` is a principal-only
 read path. Both dispatch through the registry. The gate classifies valid `read`
-and `history` actions as `read`, and `update` as `local_write`. Calls without a
-valid action retain generic classification, including secret and store path
-checks. Existing category policies still apply.
+and `history` actions as `read`, and `update` as `local_write`, when their
+top-level keys belong to that action. Missing or invalid actions and unsupported
+keys retain generic classification, including secret and store path checks.
+Existing category policies still apply.
 The configured executor can refuse notebook operations without a host fallback.
 
 Notes cannot create goals independently, execute steps, answer questions, grant
@@ -167,3 +168,48 @@ real gate, gate and executor denials, restart, concurrent connections, principal
 and session isolation, forks, undo, evidence validation and strict limits. It
 also checks workspace-instruction composition, handoff snapshots and disabled
 composition in a fresh Python process.
+
+### Gate comparison, 2026-10-23
+
+Main's unchanged `scripts/gate_diff.py` at `5a9dc394` compared that main checkout
+with notebook code at `e5677363`. The focused corpus contains 43 `work_notes`
+calls generated from both trees, plus explicit valid and invalid actions. All
+87 built-in policies ran, covering 3,741 action/policy pairs.
+
+An earlier full integration comparison found 2,167 lowerings on 32 calls without
+an action. Those calls had lost generic secret or store checks. Every one is in
+this focused corpus, and none has a lowering after the fix. The focused corpus
+differs from the full integration corpus and does not test other new tools.
+
+| Result | Count |
+| --- | --- |
+| Missing or invalid action lowerings | 0 |
+| Intentional lowerings for `read` and `history` | 6 |
+| Tightenings for `update` | 4 |
+| Reserved protections or posting violations lost | 0 |
+| Classification or decision errors | 0 |
+
+The six intentional differences come from policies targeting the formerly
+unknown tool category: deny, ask and log each become allow for `read` and
+`history`. These actions now use the existing `read` category. `update` becomes
+`local_write`, producing three denials and one ask where main allowed it.
+The comparison exits 1 for the six documented differences.
+
+The [comparison evidence](evidence/work-notebook-gate-2026-10-23.json) includes
+the exact corpus, policies, counts and every lowered pair. To repeat it with
+a main checkout at `5a9dc394` and notebook code at `e5677363`:
+
+```sh
+notebook_gate_main=/path/to/main-checkout
+python - <<'PY'
+import json
+from pathlib import Path
+evidence = json.loads(Path("docs/evidence/work-notebook-gate-2026-10-23.json").read_text())
+Path("/tmp/exo-notebook-gate-corpus.json").write_text(json.dumps(evidence["corpus"]))
+PY
+python "$notebook_gate_main/scripts/gate_diff.py" \
+  --base "$notebook_gate_main" --head . \
+  --only-corpus --no-variants --corpus /tmp/exo-notebook-gate-corpus.json \
+  --jobs 1 --json /tmp/exo-notebook-gate-diff.json --json-limit 10000 \
+  --max-examples 4 --timeout 120
+```
