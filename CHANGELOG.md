@@ -214,6 +214,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#469, D-038 amendment): inside backticks, a backslash before a newline is dropped before the body is
+  parsed, as bash drops it. ``echo `r\<newline>m -rf /data` `` was two unknown programs, `r` and `m -rf /data`,
+  so it asked as `opaque_exec`, which `categories: {opaque_exec: allow}` allowed and `deny: [delete]` did not deny.
+  It is now the `rm -rf /data` bash runs, and `deny: [delete]` denies it. The same holds for a force push or any
+  other command split this way, in `x=`, double quotes, nested backticks, `$( )` and `bash -c`. Quotes inside the
+  body do not keep the pair, so a few lines main asked about read as bash runs them:
+  ``echo `echo a\<newline>b` `` is a `read`.
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
   line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
   secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,

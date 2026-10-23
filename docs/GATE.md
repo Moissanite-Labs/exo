@@ -663,6 +663,11 @@ and the body as words of the `for` command, which lists no programs, so the line
 word such as `{`, as in `function f { for x do ...; done; }`, and behind reserved words such as
 `then`. A quoted `"do"`, a `do` in an `in` list and a `for` that is only an argument
 (`echo for x do`) stay plain words, as in bash.
+Inside backticks, bash drops a backslash before a newline before it parses the body, and so does the
+lexer (#469). So ``echo `r\<newline>m -rf /data` `` reads as the `rm -rf /data` that bash runs, and
+`deny: [delete]` denies it. Before, the gate read `r` and `m -rf /data` as two unknown programs, an
+`opaque_exec` ask that `categories: {opaque_exec: allow}` allowed. The pair is gone before the body
+is parsed, so quotes in the body do not keep it: ``echo `echo 'a\<newline>b'` `` prints `ab`.
 A `$'..'` word is decoded with bash's ANSI-C rules (bash 5.2, UTF-8 locale; issue #167): `\n`, `\e`
 and the other letter escapes, octal and `\x` values (also `\x{..}`) cut to 8 bits, `\u` with 1 to 4
 and `\U` with 1 to 8 hex digits, `\cX` (`\c\\` takes one backslash), and an unknown escape kept with
