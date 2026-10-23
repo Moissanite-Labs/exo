@@ -5554,15 +5554,14 @@ def _shell_call(cmd: str) -> Classification:
 
 def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
     """classify_shell(cmd) in ``scope`` with budgets and a memo of its own, as a call of its own; ``parsed`` holds
-    the line's parses already made."""
-    left, memo = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET]), _call_memo.set({})
+    the line's parses already made. _brace_budget makes the budgets, so they have as many pools as a call's."""
+    left = _brace_left.set(None)
     token, seen = _scope.set(scope), _shell_seen.set(parsed)
     try:
-        return classify_shell(cmd)
+        return _brace_budget(classify_shell)(cmd)
     finally:
         _shell_seen.reset(seen)
         _scope.reset(token)
-        _call_memo.reset(memo)
         _brace_left.reset(left)
 
 
