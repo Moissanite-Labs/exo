@@ -12,7 +12,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   classifies as `opaque_exec`, with the path as its target and a card naming the program it
   rebinds. Its options are read as bash reads them: after `builtin` or `command`, in a flag
   cluster, with the path attached and after the path. An option word the gate cannot read
-  (`hash $O ls`) is opaque too, and so is setting `BASH_CMDS` or `BASH_ALIASES`. Plain `hash`,
+  (`hash $O ls`) is opaque too. So is a path or name word it cannot read, which may split or
+  lose its slash (`hash -p $P`, `hash -p /tmp/x {ls,/}`), and setting `BASH_CMDS` or
+  `BASH_ALIASES`. Plain `hash`,
   `hash -r`, `hash -d` and `hash "$cmd"` stay read, as do a `-p` after the first operand and one
   with no name to bind. The path alone is not read as a store write, nor is a `BASH_CMDS` or
   `BASH_ALIASES` value, whatever runs it (ssh, mosh, `man -P`, `printf -v`). So a post on the same
@@ -21,7 +23,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   for the post, as before. Some lines decide lower than before. A rebind run with sudo, doas,
   chroot, nsenter, unshare or systemd-run asks under a rule that denies costly reads, and over ssh
   a policy that allows `opaque_exec` allows it. The D-038 amendment lists them. A plain shell command
-  beside the rebind keeps the store check in either order, so
+  or a login to another host (`ssh a 'ssh b; hash -p /x ls'`) beside the rebind keeps the store
+  check in either order, so
   `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'` is a store write.
 - `scripts/gate_diff.py` counts a posting violation as often as each tree lists it, so a gate change that lists once
   what two posts of one name both meet shows as lower (#460). Each seed also runs under each tool table name that

@@ -1420,14 +1420,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a name is now `opaque_exec`, with the path as its target and a card naming the rebound program. Its options are read
   as bash reads them: a cluster (`-dp`), an attached path, options after the path, and the last of several `-p`. A name
   with a slash binds nothing, since bash skips it. An option word the gate cannot read may hold `-p`, so it is opaque
-  too, except one double-quoted word at the end (`hash "$cmd"`), which has no name after it. Setting `BASH_CMDS`, the
+  too, except one double-quoted word at the end (`hash "$cmd"`), which has no name after it. From the path on, such a
+  word may hold a name. It may split into a path and a name (`hash -p $P` with `P='/tmp/x ls'`, or `hash -p *`),
+  unless it is one double-quoted word. As a name it may lose its slash: bash runs `hash -p /tmp/x {ls,/}` as
+  `hash -p /tmp/x ls /`, skips `/` and binds `ls`. So each is opaque. A glob keeps a slash it has, so
+  `hash -p /tmp/x*` binds nothing. Setting `BASH_CMDS`, the
   table `hash -p` fills, or `BASH_ALIASES` is opaque, like the variables of #231. *No store write.* `hash -p` and a
   `BASH_CMDS` or `BASH_ALIASES` value record a path and open nothing. Their `opaque_exec` part is marked (signal
   `rebinds a name`), and the store check takes a marked part as the `read` it was, whatever runs or sets it: the shell,
   sudo, ssh, mosh, an ssh `ProxyCommand`, `man -P`, `printf -v` or `declare`. A line that ssh, mosh, `man -P`, less or
-  more runs counts so when its other commands are reads or marked parts, and the hop of ssh or mosh counts too. Any
-  other command keeps the check of the words around the line, in either order: a plain shell command
-  (`ssh host 'sort x; hash -p /x ls'`) or one run with sudo. So a store or descriptor path in these words alone makes no
+  more runs counts so when its other commands are reads or marked parts, and the hop of the ssh or mosh that runs it
+  counts too. Any other command keeps the check of the words around the line, in either order: a plain shell command
+  (`ssh host 'sort x; hash -p /x ls'`), one run with sudo, or a login to another host (`ssh a 'ssh b; hash -p /x ls'`).
+  So a store or descriptor path in these words alone makes no
   store write. This matters because a store write outranks a post on the line: the line then asks
   the principal alone, and an allow, log or ask cell reads the store write only (#437). The first draft checked the hash
   part's words, so a descriptor path in them turned a matrix deny on the post into an ask and dropped its posting
@@ -1437,8 +1442,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of an environment dump carries every signal on its line as its own. A store or descriptor path a rebound name runs
   later is still behind the opaque ask. A redirect is still checked as for any read, also after a `cd` into the store
   (`cd ~/.exo/state && hash > notes`), and so is a program named hash run by path (`./hash ~/.exo/state/x`), which is no
-  builtin. *Differential (#423).* Main's `scripts/gate_diff.py` (with #462) against main 01101d3c runs 55,453 actions
-  and 87 policies, and 104 pairs on 91 actions are lower. Three probe sets ran alone (`--only-corpus`). The first has
+  builtin. *Differential (#423).* Main's `scripts/gate_diff.py` (with #462) against main 01101d3c runs 55,546 actions
+  and 87 policies, and 111 pairs on 98 actions are lower. Four probe sets ran alone (`--only-corpus`). The first has
   8,305 lines: the review's lines and every rebinding form under sudo, doas, env, timeout, nice, `bash -c`, ssh, mosh,
   `man -P`, a `ProxyCommand`, `$( )` and a here-doc, alone and beside a post or a force push. It runs 33,244 actions,
   and 13,754 pairs on 7,252 actions are lower. The second has 5,948 lines: the rebind under chroot, nsenter, unshare,
@@ -1449,9 +1454,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a store file, running a rebind and a shell command in either order, also as a `ProxyCommand`, a `LocalCommand`, a
   second hop or a here-doc fed to ssh, the same lines under mosh, `man -P`, less and more, and under sudo, env,
   timeout, nice, `bash -c`, `$( )` and a here-doc, alone and beside a post. It runs 29,434 actions, and 6,564 pairs on
-  4,586 actions are lower. No posting violation is lost in any run, and a deny is lost only in group (3). The pairs
-  fall in three groups, all kept on purpose. Each count is for the first probe set, the second, the third, then the
-  script's own corpus. (1) 5,924 pairs on 1,481 actions, 9,120 on 2,280, 1,844 on 481, and 4 on 1: under a policy
+  4,586 actions are lower. The fourth has 12,556 lines: a rebind whose path or name word the gate cannot read (a brace
+  set, an expansion, a glob) and plain rebinds, under the same wrappers and nested lines, beside a login to another
+  host over ssh, alone and beside a post, a force push or a store redirect. It runs 42,360 actions, and 12,592 pairs on
+  8,982 actions are lower. No posting violation is lost in any run, and a deny is lost only in group (3). The pairs
+  fall in three groups, all kept on purpose. Each count is for the first probe set, the second, the third, the fourth,
+  then the script's own corpus. (1) 5,924 pairs on 1,481 actions, 9,120 on 2,280, 1,844 on 481, 1,856 on 464, and 4 on
+  1: under a policy
   that lowers `opaque_exec` (a category line or an allow rule naming it), a rebinding form that sudo, doas or another
   wrapper that makes its part costly (chroot, nsenter, unshare, systemd-run) runs, inside or around ssh or mosh
   (`ssh host 'sudo hash -lp ./tool ls && ls'`, `ssh host 'sudo BASH_CMDS[ls]=/tmp/x ls'`,
@@ -1460,13 +1469,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (`ssh host 'hash -p /x ls | sudo sort x'`). On main the costly part was a `read` or a `shell` part whose matrix cell
   logged. Now the rebind is the line's own `opaque_exec` part, and the category line replaces its matrix cell, as it
   does for `ssh host 'sudo eval x && ls'` and `ssh host 'eval x | sudo sort x'` on main. Under the default policy each
-  asks. (2) 4,990 pairs on 4,990 actions, 5,843 on 5,843, 4,216 on 4,216, and 90 on 89: under a reservation that
+  asks. (2) 4,990 pairs on 4,990 actions, 5,843 on 5,843, 4,216 on 4,216, 6,452 on 6,452, and 97 on 96: under a
+  reservation that
   matches the hash part (`tool:terminal`, or `command:\brm\b` on a line with `rm`), that part's entry is named
   `opaque_exec`, with the path as target, where it was `read`. Over ssh, where the rebind now names the line, another
   opaque part keeps its own empty target and the hop's entry keeps the host (`ssh host 'setsid ssh b "hash -p /x ls"'`).
   A line that is now a store write gains a store entry too (`ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'`).
   Each line still asks as reserved, and the grant check of D-075 refuses each line it refused on main. (3) 2,840 pairs
-  on 2,840 actions, 7,148 on 7,148, 504 on 504, and 10 on 10: under a deny rule on costly `read`, `shell` or
+  on 2,840 actions, 7,148 on 7,148, 504 on 504, 4,284 on 4,284, and 10 on 10: under a deny rule on costly `read`,
+  `shell` or
   `local_write` parts, a rebinding form run by sudo, doas, chroot, nsenter, unshare or systemd-run goes from deny to ask
   (`sudo hash -p /x git`, `sudo builtin hash -p /x git`, `sudo -u bob hash -p /x ls`, `doas hash -p /x git`,
   `sudo hash $O ls`, `sudo hash "$@"`, `chroot /srv hash -p /x ls`). So does a line that holds one, also over ssh or
@@ -1478,7 +1489,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   shell command came first and not when the rebind did. Now they are checked in either order. ssh's own `-E`, `-S` and
   `UserKnownHostsFile` name a local file it writes, so `ssh -E ~/.exo/state/log host 'sort x && hash -p /x ls'` stays a
   store write and `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'` becomes one. Beside a line of reads alone,
-  ssh's own options are read on neither tree (`ssh -E ~/.exo/state/log host ls` is allowed, #484). *Rejected:* deciding
+  ssh's own options are read on neither tree (`ssh -E ~/.exo/state/log host ls` is allowed, #484), and neither are
+  less's log options `-o`, `-O` and `--log-file` (`cat f | less -o ~/.exo/state/y` is allowed). *Rejected:* deciding
   the matrix cell and the posting rules on every part of a line here. The D-075 amendment of 2026-10-22 for #464 and
   #448 now does it for a deny cell, so a post beside `eval /proc/self/fd/3` or a store redirect is denied under a matrix
   deny for the post. An allow, log or ask cell still reads the dominant part only (#437). Also rejected: taking a plain

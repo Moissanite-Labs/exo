@@ -1775,10 +1775,12 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
     makes the shell run PATH for every later NAME, so a file planted by an earlier write runs under a trusted
     program's name. Options are read as bash reads them: up to the first operand or `--`, `-p` in a cluster (`-rp`,
     `-dp`) or with its path attached (`-p/tmp/x`), and more options after the path (the last `-p` wins). Nothing is
-    bound with no path, an empty one, or no name but those with a slash, which bash skips. Before a `-p`, a word the
-    gate cannot read (an expansion, a brace set, a glob) may hold one, unless it is a lone double-quoted word at
-    the end (`hash "$cmd"`), which is one word with no name after it."""
-    args, path, i = words[1:], None, 0
+    bound with no path, an empty one, or no name but those with a slash, which bash skips. A word the gate cannot
+    read (an expansion, a brace set, a glob) may hold more. Before a `-p` it may be one, unless it is a lone
+    double-quoted word at the end (`hash "$cmd"`), which is one word with no name after it. From the path on, it may
+    split into a path and a name (`hash -p $P` with P='/x ls'), unless it is one double-quoted word, and as a name it
+    may lose its slash (`hash -p /x {ls,/}` binds ls). A glob keeps a slash it has."""
+    args, path, at, i = words[1:], None, 0, 0
     while i < len(args):
         w, a = args[i], args[i].text
         if path is None and (w.dynamic or w.glob or w.brace) and not (
@@ -1793,12 +1795,17 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
         if j > 0 and j + 1 == len(a):      # -p with its path in the next word
             if i + 1 == len(args):
                 return None                # no path: bash stops with a usage error
-            i, path = i + 1, args[i + 1].text
+            i, path, at = i + 1, args[i + 1].text, i + 1
         elif j > 0:
-            path = a[j + 1:]
+            path, at = a[j + 1:], i
         i += 1
-    names = [w.text for w in args[i:] if "/" not in w.text]
-    return (f"hash -p makes {', '.join(names)} run {path}", path) if path and names else None
+    names = [w.text for w in args[i:] if w.dynamic or w.brace or "/" not in w.text]
+    split = [w.text for w in args[at:i] if (w.dynamic or w.brace or w.glob and "/" not in w.text)
+             and not re.fullmatch(r'"[^"@]*"', w.raw)]
+    if not path or not names and not split:
+        return None
+    return (f"hash -p makes {', '.join(names)} run {path}" if names else
+            f"hash -p may rebind a program name: a word the gate cannot read ({split[0][:40]})", path)
 
 
 # The signal of a part that only records a path for a later program name to run: `hash -p`, or setting BASH_CMDS or
@@ -3756,12 +3763,13 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
 def _store_quiet(p: Classification) -> bool:
     """A part the store check takes as a read: a read, or an opaque part that only records a path for a later name
     to run (_REBINDS) and was built from such parts and the plain shell part of an ssh or mosh hop alone
-    (`ssh host 'hash -p /x ls'`). Any other shell part keeps the check of the words around the line, whatever its
+    (`ssh host 'hash -p /x ls'`): the bare part naming its host, not a login to another host on the line
+    (`ssh a 'ssh b; hash -p /x ls'`). Any other shell part keeps the check of the words around the line, whatever its
     order, as a plain one before the rebind did on main: ssh's own `-E ~/.exo/state/log` is a store write. The
     category is checked too: a credentials floor carries every signal of the line as its own."""
     own = p.signals if p.own_signals is None else p.own_signals
     return p.category == "read" or p.category == "opaque_exec" and _REBINDS in own and all(
-        q.category == "shell" and q.reversibility == "reversible" and "remote host" in (
+        q.category == "shell" and q.reversibility == "reversible" and q.target and not q.parts and "remote host" in (
             q.signals if q.own_signals is None else q.own_signals) or _store_quiet(q) for q in p.parts)
 
 
