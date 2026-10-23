@@ -4330,6 +4330,20 @@ def _unread_nest() -> Classification:
     return c
 
 
+def _weigh(line: Classification, whole: Classification, cmd: str) -> Classification:
+    """A secret beside an irreversible command keeps that command's weight: the line takes it from its own parts.
+    A heavier command deeper in ``whole``, as one that a store write in a $( ) holds (#465), is a credentials part
+    with that weight beside the line, which the #191 pass reads. So its matrix cell's deny holds, and the line keeps
+    the cell of its own weight where a policy makes that one stricter (#468). ``line`` is the secret, a credentials
+    line or part, the store read from a shell call's own folder too (#311). One walk over every part the line was
+    built from, made only when a secret decides it."""
+    deep = max((q.reversibility for q in _each_part(whole)), key=REVERSIBILITY.index)
+    if REVERSIBILITY.index(deep) > REVERSIBILITY.index(line.reversibility):
+        line.parts = [*line.parts, _make("credentials", summary=line.summary, target=line.target, command=cmd,
+                                         reversibility=deep, own=None, signals=["secret store"])]
+    return line
+
+
 def _classify_shell(cmd: str, depth: int) -> Classification:
     # A run of stand-in lines (_Lexer._cut), also one written by hand, is one unread part, taken in one step so that no
     # number of them recurses. The lines after it end here-doc bodies, and are read as any line.
@@ -4389,21 +4403,9 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         parts.append(_opaque("defines a shell function", cmd))
     setters = [k.own for k in cmds if _sets_state(k)] + ([None] if func else [])
     c = combined = _combine(parts, cmd)
-
-    def weigh(line: Classification) -> Classification:
-        """A secret beside an irreversible command keeps that command's weight: the line takes it from its own parts.
-        A heavier command deeper in it, as one that a store write in a $( ) holds (#465), is a credentials part with
-        that weight beside the line, which the #191 pass reads. So its matrix cell's deny holds, and the line keeps
-        the cell of its own weight where a policy makes that one stricter (#468). One walk over every part the line
-        was built from, made only when a secret decides it."""
-        deep = max((q.reversibility for q in _each_part(combined)), key=REVERSIBILITY.index)
-        if REVERSIBILITY.index(deep) > REVERSIBILITY.index(line.reversibility):
-            line.parts = [*line.parts, _make("credentials", summary=line.summary, target=line.target, command=cmd,
-                                             reversibility=deep, own=None, signals=["secret store"])]
-        return line
     if c.category == "credentials":
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
-        c = weigh(c)
+        c = _weigh(c, combined, cmd)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
     hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
     if hit and c.category != "credentials":
@@ -4413,7 +4415,7 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
         c.parts = list(parts)
-        c = weigh(c)
+        c = _weigh(c, combined, cmd)
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
@@ -4423,7 +4425,7 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
         seat = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
                      reversibility=max(rev, "costly", key=REVERSIBILITY.index), own=None, signals=["secret store"])
-        c.parts = [*c.parts, weigh(seat)]
+        c.parts = [*c.parts, _weigh(seat, combined, cmd)]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     elif found:
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
@@ -4432,7 +4434,7 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
                   reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
         c.parts = list(parts)
-        c = weigh(c)
+        c = _weigh(c, combined, cmd)
     c.command = cmd
     c._command_views = list(dict.fromkeys([
         _policy_command_view(cmd),
@@ -5509,11 +5511,12 @@ def _args_of(action: Any) -> tuple[str, dict]:
 def _shell_call(cmd: str) -> Classification:
     """A shell tool's line, as classify_shell reads it, run in the call's own folder argument (#311). The line keeps
     its own classification: category, target, axes, text and parts. When it reads a secret store from that folder
-    (_tool_folder_read), a credentials part is added for the read. decide's credentials floor then asks, and
-    no_grant keeps a standing grant off the call, while the line's own deny entries, rules, matrix cell, posting
-    checks and reserved entries still apply. Before #311 a relative word that resolves into a store from the folder
-    made the whole call credentials (#209); that reading is kept beside the line (``also``), and decide keeps the
-    stricter of the two. One check per call, on the whole line: a nested line is read in its own folders only."""
+    (_tool_folder_read), a credentials part is added for the read, weighed as a `cd` form's (_weigh). decide's
+    credentials floor then asks, and no_grant keeps a standing grant off the call, while the line's own deny
+    entries, rules, matrix cell, posting checks and reserved entries still apply. Before #311 a relative word that
+    resolves into a store from the folder made the whole call credentials (#209); that reading is kept beside the
+    line (``also``), and decide keeps the stricter of the two. One check per call, on the whole line: a nested line
+    is read in its own folders only."""
     scope = _scope.get()
     if scope is None or not scope.tool_cwds:
         return classify_shell(cmd)
@@ -5542,7 +5545,9 @@ def _shell_call(cmd: str) -> Classification:
         summary, target = found
         part = _make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
                      signals=["secret store"])
-        c.parts = [*c.parts, part]
+        # the read keeps its own weight, and a heavier command on the line is a credentials part with that weight
+        # beside it, as beside a secret line (#468). So each matrix cell or rule the cd form's parts meet is met.
+        c.parts = [*c.parts, _weigh(part, c, cmd)]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     return c
 

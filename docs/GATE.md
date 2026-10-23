@@ -1380,6 +1380,16 @@ So `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `wo
 denied by a matrix that denies the push, and `gh pr comment 3 --body-file notes.md` there still
 reports the unseen body.
 
+The part weighs as the part a store read after a `cd` gets (#468). It keeps the credentials
+weight, `costly`. A heavier command on the line, such as a force push or `rm -rf`, also in a
+`$( )`, adds a second `credentials` part with that weight beside it. So a matrix cell that denies
+`irreversible` and `private`, or a rule on `credentials` and `irreversible`, denies
+`cat *; touch ~/.exo/state/x; git push --force origin main` with `~/.kube` as `cwd`, as it denies
+the `cd` form. A rule on `*keys*` and `irreversible` denies `cat *; rm -rf build` with
+`~/.exo/keys` as `cwd`, as it denies the `cd` form. Since the read keeps its own weight, a matrix
+whose `costly` cell is stricter than its `irreversible` one still denies the call. There the folder
+form can be stricter than its `cd` form, which #468 weighs as one line.
+
 Before #311, a word that resolved into a store from `cwd` made the whole call `credentials` (#209).
 That reading is kept beside the line (`Classification.also`). `gate.decide` decides both, and the
 stricter outcome stands. The reserved hits and violations of both are kept. So
@@ -1411,7 +1421,9 @@ on the line is read as before. Limits:
 - A name that climbs out of a repo's `.claude` worktree back into it is not caught
   (`cat ../../settings.local.json` from `<repo>/.claude/worktrees/x`), as before. A `cd` there asks.
 - The store-write checks do not read the folder argument. `echo x > gates.yaml` with
-  `~/.exo/policies` as `cwd` stays a `local_write`, as before (#453).
+  `~/.exo/policies` as `cwd` stays a `local_write`, as before (#453). So `deny: [store_write]`
+  does not reach `cat *; rm -rf build` with `~/.exo/keys` as `cwd`, whose `cd` form writes in the
+  store. The call still asks, as on main.
 - A line that reads a secret itself keeps that reading, and the folder adds no part to it. So a
   `target:` entry on the folder does not reach it: under `deny: [target:*/.ssh]`, `cat id_rsa` with
   `~/.ssh` as `cwd` asks, where `cd ~/.ssh && cat id_rsa` is denied. That is no lower than main.

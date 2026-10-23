@@ -168,3 +168,27 @@ def test_a_force_push_from_a_store_folder_keeps_its_matrix_deny(tmp_path, home, 
     gates = "matrix:\n  irreversible: {public: deny, internal: deny}\n  costly: {public: deny}\n"
     _, ctx = make_gate(_seat_answers_credentials(tmp_path, home, monkeypatch, gates))
     assert call(ctx, tool, args)["action"] == "block"
+
+
+# --- the folder's part weighs as the cd form's (#468) --------------------------------------------------------------
+
+WEIGHED = [
+    ("bash", {"command": "cat *; touch ~/.exo/state/x; git push --force origin main", "cwd": "~/.kube"}),
+    ("terminal", {"command": "cat *; touch ~/.exo/state/x; rm -rf build", "workdir": "~/.ssh"}),
+    ("exec_command", {"cmd": "cat *; echo $(rm -rf x)", "workdir": "~/.kube"}),
+]
+
+
+@pytest.mark.parametrize("gates", [
+    "matrix:\n  irreversible: {private: deny}\n",
+    "rules:\n  - match: {category: credentials, reversibility: irreversible}\n    decision: deny\n",
+], ids=["matrix", "rule"])
+@pytest.mark.parametrize("tool, args", WEIGHED)
+def test_an_irreversible_deny_reaches_the_folders_part(tmp_path, home, monkeypatch, gates, tool, args):
+    """The store read from the folder weighs as its `cd` form's does: the line's irreversible command is a
+    credentials part beside it. So these are blocked as `cd ~/.kube && ...` is, where they only asked before."""
+    _, ctx = make_gate(_seat_answers_credentials(tmp_path, home, monkeypatch, gates))
+    assert call(ctx, tool, args)["action"] == "block"
+    plain = {k: v for k, v in args.items() if k not in ("cwd", "workdir")}
+    cd = {"command": f"cd {args.get('cwd') or args.get('workdir')} && {plain.get('command') or plain.get('cmd')}"}
+    assert call(ctx, "bash", cd)["action"] == "block"
