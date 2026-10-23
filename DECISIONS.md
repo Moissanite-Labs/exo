@@ -1023,9 +1023,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   command before it runs where the line started, so it is read as before
   (`cd /proc/$(docker inspect -f '{{.State.Pid}}' web) && cat status` stays a read). Its place in the line decides,
   not its text, so a copy of its text before the `cd` changes nothing. One in a here-doc body counts as after every
-  command on its line. As for the line's own commands, a subshell `cd` and a later `cd` out of the store are not
-  followed, so those fail closed (`(cd ~/.exo) && echo $(sort x)` asks). A loop that enters the store runs its
-  earlier commands there on its next pass, which is not followed either (#480). A line nested in the substitution
+  command on its line. One in the redirections of a compound that holds the `cd` runs before the compound, as bash
+  expands them first (`while read f; do cd ~/.exo/state; done < <(sort list)` stays a read). As for the line's own
+  commands, a subshell `cd`, a later `cd` out of the store and a `cd` in a function body are not followed, so those
+  fail closed (`(cd ~/.exo) && echo $(sort x)` asks). A loop that enters the store runs its earlier commands there
+  on its next pass, which is not followed either (#480). A line nested in the substitution
   keeps its own folder: an `ssh` remote command runs on its host, while a local `bash -c` in the substitution is
   itself a command in the store. A `declare` or `local` value that bash runs again after the `cd`
   (`declare -a x='($(cp /tmp/evil gates.yaml))'`) is classified in the folder as well. Each text is still

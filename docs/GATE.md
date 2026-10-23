@@ -1577,6 +1577,9 @@ writing subcommand, and any writing command after `cd` into the store, also one 
 as unwrapped, a command the gate does not read as a read (`sed -n`, `sort`, `curl`) counts as a write. A
 substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own folder. Its
 place in the line decides, not its text, and one in a here-doc body counts as after every command on its line.
+One in the redirections of a compound that holds the `cd` (`done < <(sort list)`) runs before it. A subshell
+`cd`, a later `cd` out and a `cd` in a function body fail closed. A loop that enters the store is not followed
+(#480).
 `rm -rf ~/.exo` counts (an ancestor). A `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret (a

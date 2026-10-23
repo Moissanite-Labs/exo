@@ -88,8 +88,25 @@ def test_a_substitution_runs_where_its_command_runs():
                  "cd ~/.exo/policies <<< $(cp a b)",              # its redirections expand before it runs
                  "cd /proc/$(docker inspect -f '{{.State.Pid}}' web) && cat status",
                  "pid=$(docker inspect -f '{{.State.Pid}}' web); cd /proc/$pid && cat status",
-                 "V=$(sed -n 1p VERSION); cd ~/.exo && ls"):
+                 "V=$(sed -n 1p VERSION); cd ~/.exo && ls",
+                 # bash expands a compound's own redirections before the compound runs
+                 "while read -r f; do cd ~/.exo/state && cat \"$f\"; done < <(sort list.txt)",
+                 "while read -r f; do cd ~/.exo/state && cat \"$f\"; done <<< \"$(sort list.txt)\"",
+                 "{ cd ~/.exo/state; ls; } <<< \"$(sort list.txt)\"",
+                 "if cd ~/.exo/state; then ls; fi < <(sort list.txt)",
+                 "( cd ~/.exo/state; ls ) < <(sort list.txt)",
+                 "while read -r p; do cd /proc/$p && cat status; done < <(ps -eo pid= | sort -n)"):
         assert _bash(line).category == "read", line
+    # a here-doc body on an earlier line runs with its command, before the `cd`
+    for line in ("cat <<EOF > notes.txt\n$(cp a b)\nEOF\ncd ~/.exo/policies && ls",
+                 "cat > /tmp/x <<EOF &&\n$(cp a b)\nEOF\ncd ~/.exo/state && ls"):
+        assert _bash(line).category != "store_write", line
+    # after such a compound, in its body after the `cd`, and in a later compound's redirections, it runs in the store
+    for line in ("while read -r f; do cd ~/.exo/state; done < <(sort list.txt); echo $(cp a b)",
+                 "while read -r f; do cd ~/.exo/state; echo $(cp a b); done < <(sort list.txt)",
+                 "while read l; do cd ~/.exo/state; cat <<EOF\n$(cp a b)\nEOF\ndone < <(sort x)",
+                 "cd ~/.exo/state; { ls; } < <(sort list.txt)"):
+        assert _bash(line).category == "store_write", line
     # the same text before and after the `cd` is read in each place, and a subshell fails closed, as for the line's
     # own commands. A here-doc body counts as after every command on its line, also one before the `cd`
     for line in ("echo $(cp a b); cd ~/.exo/policies; echo $(cp a b)",
