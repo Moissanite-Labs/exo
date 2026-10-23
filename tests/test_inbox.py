@@ -111,6 +111,33 @@ def test_limit_and_incompatible_schema_isolated_by_section(home):
     assert report["sections"]["jobs"]["status"] == "ok"
 
 
+@pytest.mark.parametrize("meta", ["[]", "null", "[" * 1100])
+def test_malformed_session_metadata_isolated_from_other_sections(home, meta):
+    db = sqlite3.connect(home / "sessions.sqlite")
+    db.execute("UPDATE sessions SET meta=? WHERE id='mine'", (meta,))
+    db.commit()
+    db.close()
+    report = observe(home)
+    assert report["sections"]["sessions"]["status"] == "unknown"
+    assert report["sections"]["jobs"]["status"] == "ok"
+
+
+def test_oversized_source_fields_cannot_expand_report(home):
+    db = sqlite3.connect(home / "sessions.sqlite")
+    db.execute("UPDATE sessions SET updated=? WHERE id='mine'", ("X" * 1_000_000,))
+    db.commit()
+    db.close()
+    report = observe(home)
+    assert report["sections"]["sessions"]["status"] == "unknown"
+    assert len(json.dumps(report)) < 10000
+    row = inbox.item("task", "id", "x" * 1_000_000, "running", updated="x" * 1_000_000,
+                     session="x" * 1_000_000)
+    assert len(row["title"]) == len(row["session"]) == 160
+    assert row["updated_at"] is None
+    assert inbox.timestamp(float("inf")) is None
+    assert inbox.short({"unexpected": ["x" * 1_000_000]}) == "[invalid value]"
+
+
 @pytest.mark.parametrize("content", [b"{broken", b"x" * (inbox.QUESTION_BYTES + 1),
                                      b'{"op":"asked","id":"q"}\n' * (inbox.QUESTION_EVENTS + 1)])
 def test_question_replay_refuses_partial_or_overbudget_history(home, content):

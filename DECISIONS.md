@@ -2947,4 +2947,6 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   persistent inbox database or daemon. SQLite immutable mode, which would ignore concurrent WAL writes.
 - **Validation:** Scoped sources, historical/live separation, read-only writes refused, missing and older
   schemas, malformed/oversized question history, row limits, lazy CLI and import boundaries, Ruff and types.
+  Independent review added malformed metadata, oversized labels and timestamps, and bounded normalization
+  checks. SQLite rows are capped at 64 KiB and output fields are normalized before emission.
 - **Docs:** `docs/INBOX.md`, commands, user guide §11, developer guide §1, docs map and changelog.

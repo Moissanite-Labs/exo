@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import stat
@@ -10,6 +11,7 @@ import threading
 import time
 import unicodedata
 from functools import partial
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,6 +21,7 @@ SECTIONS = ("sessions", "tasks", "jobs", "schedules", "questions", "approvals", 
 QUESTION_BYTES = 2 * 1024 * 1024
 QUESTION_EVENTS = 5000
 APPROVAL_EVENTS = 1000
+ROW_BYTES = 64 * 1024
 
 
 class BudgetExceeded(ValueError):
@@ -27,9 +30,27 @@ class BudgetExceeded(ValueError):
 
 def short(value: Any) -> str:
     """Plain terminal text, including when a stored title contains control characters."""
-    text = str(value or "")
+    if isinstance(value, str):
+        text = value[:640]
+    elif isinstance(value, (int, float, bool)):
+        text = str(value)[:640]
+    else:
+        text = "" if value is None else "[invalid value]"
     return " ".join("".join(c if not unicodedata.category(c).startswith("C") else " "
                             for c in text).split())[:160]
+
+
+def timestamp(value: Any) -> str | int | float | None:
+    """Accept bounded ISO timestamps or finite epoch seconds, never arbitrary source text."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str) and len(value) <= 64:
+        try:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return value
+        except ValueError:
+            pass
+    return None
 
 
 class Snapshot(SessionStore):
@@ -48,7 +69,7 @@ class Snapshot(SessionStore):
         db = sqlite3.connect(Path(self.path).absolute().as_uri() + "?mode=ro", uri=True,
                              timeout=0.05, isolation_level=None)
         db.row_factory = sqlite3.Row
-        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, QUESTION_BYTES)
+        db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, ROW_BYTES)
         db.execute("PRAGMA query_only=ON")
         db.set_progress_handler(lambda: int(time.monotonic() >= self.deadline), 1000)
         db.execute("BEGIN")
@@ -67,7 +88,7 @@ def item(kind: str, ident: Any, title: Any, recorded: Any, *, terminal: bool = F
          updated: Any = None, session: Any = None) -> dict[str, Any]:
     return {"kind": kind, "id": short(ident), "title": short(title),
             "state": short(recorded) if terminal else "unknown", "recorded_state": short(recorded),
-            "updated_at": updated, "session": session}
+            "updated_at": timestamp(updated), "session": short(session) if session is not None else None}
 
 
 def section(rows: list[dict[str, Any]], limit: int, note: str = "") -> dict[str, Any]:
@@ -140,7 +161,8 @@ def _schedules(db: Snapshot, agent: str, limit: int) -> dict[str, Any]:
                      'OR seat IS NULL OR seat=\'\' ORDER BY paused,next_run,id LIMIT ?', (agent, limit + 1))
     items = [{**item("schedule", r["id"], r["title"], "paused" if r["paused"] else "enabled",
                     terminal=bool(r["paused"]), updated=r["last_run"]),
-              "next_run": r["next_run"], "last_status": short(r["last_status"]), "seat": r["seat"]} for r in rows]
+              "next_run": timestamp(r["next_run"]), "last_status": short(r["last_status"]),
+              "seat": short(r["seat"]) if r["seat"] is not None else None} for r in rows]
     return section(items, limit, "Stored schedules; due time does not prove a missed run. Unbound schedules are shared.")
 
 
@@ -201,7 +223,7 @@ def collect(home: Path, agent: str, question_root: Path | None = None, *, limit:
             result["sections"][name] = fn()
         except BudgetExceeded as exc:
             result["sections"][name] = unknown(str(exc))
-        except (OSError, sqlite3.Error, ValueError, KeyError, TypeError):
+        except (OSError, sqlite3.Error, ValueError, KeyError, TypeError, AttributeError, RecursionError, OverflowError):
             result["sections"][name] = unknown("Source missing, unreadable, busy or incompatible; no state inferred.")
 
     for filename, readers in (("sessions.sqlite", {"sessions": _sessions, "tasks": _tasks, "jobs": _jobs,
