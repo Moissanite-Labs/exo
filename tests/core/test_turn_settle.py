@@ -5,9 +5,10 @@ import asyncio
 import re
 import time
 
-from exo.core.context import DefaultCompressor, TreeContext
+from exo.core.context import AgentContext, DefaultCompressor, TreeContext, estimate_tokens
 from exo.core.sessions import SessionStore
-from exo.core.types import Message, ProviderEvent
+from exo.core.types import Message, ProviderEvent, ToolCall, ToolResult
+from exo.turn_settle import SUMMARIZING_MARKER, cut_pending
 
 
 class Summ:
@@ -66,18 +67,77 @@ def test_build_uses_ready_summaries_only():
     asyncio.run(go(pathlib.Path(tempfile.mkdtemp())))
 
 
-def test_fit_tail_keeps_the_newest_that_fit_and_always_the_last():
-    from exo.core.context import estimate_tokens
-    from exo.turn_settle import fit_tail
+class Gated:
+    """Summarizer fake for an AgentContext: finishes nothing until ``gate`` opens."""
 
-    msgs = [Message.user(f"m{i} " + "x" * 400) for i in range(10)]  # about 100 tokens each
-    kept, cut = fit_tail(msgs, 250)
-    assert kept == msgs[len(msgs) - len(kept):] and 0 < len(kept) < len(msgs) and cut == len(msgs) - len(kept)
-    assert sum(estimate_tokens(m) for m in kept) <= 250 < sum(estimate_tokens(m) for m in msgs[len(msgs) - len(kept) - 1:])
-    kept, cut = fit_tail(msgs, 10 ** 9)
-    assert kept == msgs and cut == 0
-    kept, cut = fit_tail(msgs, 1)  # even a budget under one message keeps the last: it is the turn being answered
-    assert kept == msgs[-1:] and cut == 9
+    def __init__(self):
+        self.gate = asyncio.Event()
+
+    async def summarize(self, content, previous=None, **kw):
+        await self.gate.wait()
+        return "S"
+
+
+def test_cut_pending_cuts_whole_pending_leaves_and_keeps_a_call_with_its_results():
+    """Issue #244: cut_pending cuts the spans of pending leaves, oldest first and a whole leaf at a time, until what
+    comes before the turn fits view_budget, and a marker stands in the gap. A leaf edge between a call and its
+    results keeps both. With room to spare, or with no leaf pending, the tail passes through."""
+    async def go():
+        store, summ = SessionStore(), Gated()
+        ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=0)
+        p = store.create_session(agent="razi", kind="private")
+        for i in range(30):  # rounds of three, so the edge after leaf 4 (message 32) falls after call c10
+            store.append_message(p.id, Message.user(f"u{i} " + "x" * 400))
+            store.append_message(p.id, Message.assistant("", [ToolCall(id=f"c{i}", name="read_file", arguments={})]))
+            store.append_message(p.id, Message.tool([ToolResult.of_text(f"c{i}", "r" * 400)]))
+        ctx.note(p.id)
+        tail = store.messages(p.id)
+        assert {(n.start, n.end, n.status) for n in store.summaries(p.id)} == {(i * 8 + 1, i * 8 + 8, "pending")
+                                                                               for i in range(9)}
+        # the turn is u29 (message 88); what is left of the leaves before it after cutting leaves 1-4 just fits
+        ctx.view_budget = sum(estimate_tokens(m) for m in tail if 33 <= m.meta["seq"] < 88)
+        out = cut_pending(ctx, p.id, tail)
+        ctx.view_budget = 10 ** 9
+        roomy = cut_pending(ctx, p.id, tail)
+        summ.gate.set()
+        while pending := TreeContext.pending(ctx, p.id):
+            await asyncio.wait(pending)
+        ctx.view_budget = 1
+        return tail, out, roomy, cut_pending(ctx, p.id, tail)
+    tail, out, roomy, done = asyncio.run(go())
+    assert out[0].text() == SUMMARIZING_MARKER and out[0].meta == {"note": "private", "local": True}
+    assert out[1].meta["seq"] == 32 and out[1].tool_calls[0].id == "c10"  # the call stays with its results
+    assert out[2].role == "tool" and out[2].tool_results[0].call_id == "c10"
+    assert out[1:] == tail[31:] and roomy == tail and done == tail
+
+
+def test_cut_pending_keeps_the_whole_turn_by_its_turn_id():
+    """Issue #244: the turn is found by its turn_id, so it stays whole even when a summary already holds its question
+    and a steer message came in mid-turn. Only the pending spans before its first message are cut."""
+    async def go():
+        store, summ = SessionStore(), Gated()
+        ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=0)
+        p = store.create_session(agent="razi", kind="private")
+        for i in range(10):  # ten short turns, then one long tool loop "T" from message 21
+            store.append_message(p.id, Message.user(f"q{i} " + "x" * 400), f"t{i}")
+            store.append_message(p.id, Message.assistant(f"a{i} " + "x" * 400), f"t{i}")
+        store.append_message(p.id, Message.user("QLONG"), "T")
+        for i in range(16):
+            if i == 12:
+                store.append_message(p.id, Message.user("STEER"), "T")
+            store.append_message(p.id, Message.assistant("", [ToolCall(id=f"c{i}", name="read_file", arguments={})]), "T")
+            store.append_message(p.id, Message.tool([ToolResult.of_text(f"c{i}", "r" * 400)]), "T")
+        ctx.note(p.id)
+        ctx.view_budget = 1
+        tail = [m for m in store.messages(p.id) if m.text() != "QLONG"]  # as if a summary held the question
+        out = cut_pending(ctx, p.id, tail, "T")
+        summ.gate.set()
+        while pending := TreeContext.pending(ctx, p.id):
+            await asyncio.wait(pending)
+        return store, p, tail, out
+    store, p, tail, out = asyncio.run(go())
+    assert [(n.start, n.end) for n in store.summaries(p.id) if n.level == 0] == [(i * 8 + 1, i * 8 + 8) for i in range(5)]
+    assert out[0].text() == SUMMARIZING_MARKER and out[1:] == [m for m in tail if m.meta.get("turn_id") == "T"]
 
 
 def test_overflow_settles_briefly_not_for_settle_timeout():

@@ -79,14 +79,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
   start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
   subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
-- A long private thread's first calls are cut to the budget until its first summary lands (#244). A private
-  thread keeps a summary tree of its own, and until the first summary lands its tail is the whole thread.
-  The turn waits up to `overflow_settle` for the leaves, as the agent tree's turns do, so a fast summarizer
-  bounds the call (120 stored messages drop to about 20). A slow one did not: at 30 s per leaf the first
-  calls carried most of the thread (300 stored messages, about 60k tokens), and a very long thread could
-  exceed the model's window and fail the turn. The tail is now cut to `view_budget`, newest messages kept,
-  behind an `[earlier messages are being summarized]` marker. Once a summary lands, the tree's view leads
-  the tail as before and nothing is cut.
+- A long private thread's calls stay bounded while its own summaries are pending (#244). A private thread keeps
+  a summary tree of its own. Its view ends at its last summary, so every span after it rode in the tail, pending
+  ones included. The turn waits up to `overflow_settle` for the leaves, so a fast summarizer bounds the call. A
+  slow one did not: with 300 stored messages of 1.5k characters, the first call carried about 115k tokens, and the
+  call after the first 8 of 36 leaves landed about 91k. A very long thread could exceed the model's window and
+  fail the turn. While that tree has leaves pending, the call now leaves out their spans, oldest first and a whole
+  leaf at a time, until what comes before the turn fits `view_budget`. A marker stands in each gap:
+  `[earlier messages are being summarized]`. Both calls above are now under 5k tokens. The turn is never cut: its
+  question and all after it, tool rounds and context notes included. Nor is a span that is not pending, such as
+  one skipped for good, and a tool call keeps its results. Tool-call arguments count in full. The cut moves a
+  whole leaf at a time, so calls between moves share their cached prefix. `/context` now gives the first stored
+  message of the tail as `from_seq`, not the unstored private view or marker (D-068 amendment).
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
