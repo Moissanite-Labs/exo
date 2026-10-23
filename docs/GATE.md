@@ -1575,7 +1575,8 @@ non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, 
 writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
 `<( )` of a later command on that line (#465: `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`). There,
 as unwrapped, a command the gate does not read as a read (`sed -n`, `sort`, `curl`) counts as a write. A
-substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own folder.
+substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own folder. Its
+place in the line decides, not its text, and one in a here-doc body counts as after every command on its line.
 `rm -rf ~/.exo` counts (an ancestor). A `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
@@ -1601,7 +1602,8 @@ still denies the line (D-075, #191), and so does a matrix cell that denies the p
 it was before #133. A file tool's write or delete (`write_file`, `edit_file`, `patch`,
 `apply_patch`, `create_directory`, `move_file`, a delete tool) is `store_write` and keeps the
 tool's own reading as a part (#448): a `local_write` part for each file a write tool writes, or
-the tool's own category (`delete`). So a `local_write` or `delete` deny, a `reserved:` entry, a
+the tool's own category (`delete`). `move_file` and `copy_file` name their files in `source` and
+`destination`, so that part has no target. So a `local_write` or `delete` deny, a `reserved:` entry, a
 `target:` entry on another file the patch writes and a matrix cell on it still apply. A file tool on a secret store keeps its reading beside `credentials` the
 same way (`read_file ~/.ssh/id_rsa` is denied under `deny: [read]`, as `cat ~/.ssh/id_rsa` is).
 After `cd /dev` or `cd /proc/self/fd`, a line naming a store path (`printf x > update/allowed_signers`)

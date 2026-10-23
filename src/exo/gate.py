@@ -409,6 +409,7 @@ class _Cmd:
     own: str | None = None       # its source text with its redirections, after leading reserved words (#394)
     pipe_src: Callable[[], str | None] | None = None   # piped from simple commands: the pipeline text up to it
     fed: bool = False            # its stdin comes from a compound around it or piped into it (_feed_compound)
+    subs_met: int = 0            # how many of the line's subs lie in its text and before it, in the lexer's order (#465)
 
 
 class _Lexer:
@@ -424,6 +425,7 @@ class _Lexer:
         self.nest = nest                   # $( ), <( ) and $(( )) levels open around here (_NEST)
         self.cuts: list[tuple[int, int, str]] = []   # (start, end, stand-in) of each part not read, in order
         self.marks: list[tuple[int, int]] = []        # the last run's token spans, one per token, with scan (#394)
+        self.met: list[int] = []           # per mark, how many subs the line met by the end of its token (#465)
 
     def _cut(self, w: _Word, a: int) -> None:
         """The $( ) or <( ) at s[a] lies past _NEST levels and is not read. The line lists _TOO_DEEP for it, and the
@@ -464,10 +466,16 @@ class _Lexer:
         s, toks = self.s, []
         # where each token starts and ends in s, for a command's own text (#394); only _parse reads them
         marks: list[tuple[int, int]] | None = [] if self.scan else None
+        met: list[int] = []
         state = {"w": _Word(), "delim": None}
         depth, start = 0, -1              # start: where the current word's source text begins
         w_at = hd_at = 0                  # where that word starts with its `<(`, and where a here-doc's `<<` does
         fd = ""                           # the fd number of the redirection whose target comes next (`3< f`)
+
+        def mark(a: int, b: int) -> None:
+            if marks is not None:
+                marks.append((a, b))
+                met.append(len(self.subs))
 
         def flush():
             nonlocal start, fd
@@ -486,13 +494,11 @@ class _Lexer:
                                       spelt)                # its end line is spelt so too (_read_heredocs)
                     self.pending.append(hd)
                     toks.append(("hd", hd))
-                    if marks is not None:
-                        marks.append((hd_at, self.i))
+                    mark(hd_at, self.i)
                     state["delim"] = None
                 else:
                     toks.append(("w", w))
-                    if marks is not None:
-                        marks.append((w_at, self.i))
+                    mark(w_at, self.i)
             state["w"] = _Word()
 
         while self.i < len(s):
@@ -506,8 +512,7 @@ class _Lexer:
             elif ch == "\n":
                 flush()
                 toks.append(("op", ";"))
-                if marks is not None:
-                    marks.append((self.i, self.i + 1))
+                mark(self.i, self.i + 1)
                 self.i += 1
                 self._read_heredocs()
             elif ch == "#" and not w.started:
@@ -556,8 +561,7 @@ class _Lexer:
                     state["delim"], hd_at = op == "<<-", op_at
                 else:
                     toks.append(("redir", op))
-                    if marks is not None:
-                        marks.append((op_at, self.i))
+                    mark(op_at, self.i)
             elif ch in ";&|()":
                 flush()
                 if ch == ")" and closer and depth == 0:
@@ -566,8 +570,7 @@ class _Lexer:
                 op = next(o for o in _CTRL_OPS if s.startswith(o, self.i))
                 depth += {"(": 1, ")": -1}.get(op, 0)
                 toks.append(("op", op))
-                if marks is not None:
-                    marks.append((self.i, self.i + len(op)))
+                mark(self.i, self.i + len(op))
                 self.i += len(op)
             else:
                 if ch in "*?" or (ch in "[{" and w.started):
@@ -578,7 +581,7 @@ class _Lexer:
                 w.started = True
                 self.i += 1
         flush()
-        self.marks = marks or []
+        self.marks, self.met = marks or [], met
         return toks
 
     def _read_heredocs(self) -> None:
@@ -1120,15 +1123,17 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     taken: dict = {}        # first command -> (end, an exec inside set the shell's stdin) of a compound whose
                             # stdin is set (inner closers win); also _piped_text's memo
     o_first = o_body = o_end = -1   # cur's own text: where its tokens start, where those after its reserved words do, its end
+    o_tok = -1                      # the index of cur's last token
     p_at = -1                       # where the pipeline cur is in starts, when only simple commands came before it
 
     def end(piped: bool = False) -> None:
-        nonlocal cur, shut, lead, head, o_first, o_body, o_end, p_at
+        nonlocal cur, shut, lead, head, o_first, o_body, o_end, o_tok, p_at
         if shut is not None:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
         at = o_first if o_body < 0 else o_body
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
             cur.own = lx._source(at, o_end)
+            cur.subs_met = lx.met[o_tok]
             if cur.piped_in and p_at >= 0:
                 cur.pipe_src = functools.partial(pipes.text, p_at, o_end)   # read only by _stdin_own
             cmds.append(cur)
@@ -1138,7 +1143,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
         # A command piped from a compound (piped_group) finds p_at at -1, as the end before it had a compound shut.
         p_at = (p_at if cur.piped_in else at) if piped and shut is None and at >= 0 else -1
         cur, shut, lead, head = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True, True
-        o_first = o_body = o_end = -1
+        o_first = o_body = o_end = o_tok = -1
 
     def push(entry: tuple) -> None:
         tops.setdefault(entry[0], []).append(len(opened))
@@ -1180,13 +1185,13 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                     cur.herestrings.append(toks[i + 1][1])
                 else:
                     cur.redirs.append((v, toks[i + 1][1]))
-                a, o_end = marks[i][0], marks[i + 1][1]
+                a, o_end, o_tok = marks[i][0], marks[i + 1][1], i + 1
                 o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
                 i += 2
                 continue
         elif kind == "hd":
             cur.heredocs.append(v)
-            a, o_end = marks[i]
+            (a, o_end), o_tok = marks[i], i
             o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 else o_body)
         else:
             if not v.quoted and v.text == "do" and len(cur.words) > 1 and cur.words[-2] is loop:
@@ -1202,7 +1207,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                         close(j)
             lead = lead and not v.quoted and v.text in _OPENERS
             pre, head = (len(cur.words) if head else pre), cw and v.text in _OPENERS
-            a, o_end = marks[i]
+            (a, o_end), o_tok = marks[i], i
             o_first, o_body = (a if o_first < 0 else o_first), (a if o_body < 0 and not lead else o_body)
             cur.words.append(v)
             if after is not None:
@@ -4327,11 +4332,9 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     parts: list[Classification] = []
     prev: _Cmd | None = None
     slot = _own_text.get() or [None]      # classify_shell gives each line its own
-    # #465: the commands up to the one that entered the store, and those after it, by their own texts. A $( ) runs
-    # where its command runs, so one in the `cd` itself or before it does not run in the store.
-    entered = bool(into)
-    before: list[str] = []
-    after: list[str] = []
+    # #465: a $( ) runs where its command runs, so one in the `cd` that entered the store or before it does not run
+    # there. They are the first subs_met of the line's subs, which the lexer lists in the order of the line.
+    upto = 0 if into else -1
     token = _cd_into.set(None) if into else None     # a line nested in this one (ssh, bash -c) has its own folder
     try:
         for k in cmds:
@@ -4344,8 +4347,8 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
                 got = _given_stdin(got, _stdin_own(k), ctx)
             parts += got
             prev = k
-            (after if entered else before).append(k.own or "")
-            entered = entered or bool(ctx.get("store_cwd"))
+            if upto < 0 and ctx.get("store_cwd"):
+                upto = k.subs_met
     finally:
         if token is not None:
             _cd_into.reset(token)
@@ -4353,13 +4356,12 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     # A $( ) runs where the gate no longer knows which command it is in, so on a line where one has a stdin of its
     # own, a shell inside a $( ) reads a stdin the gate cannot name (`curl .. | echo $(bash)`).
     given = bool(subs) and any(k.fed or k.piped_in or _own_stdin(k) for k in cmds)
-    # #465: a $( ), backticks or <( ) of a command after the `cd` into the store runs there, so a non-read command in
-    # it is a store write, as it is unwrapped. A text found only before that `cd` runs where the line started. As for
-    # the line's own commands, a subshell or a later `cd` out is not followed: fails closed.
-    early, late_text = "\n".join(before), "\n".join(after)
+    # #465: a $( ), backticks or <( ) after the `cd` into the store runs there, so a non-read command in it is a store
+    # write, as it is unwrapped. One in a here-doc body counts as after every command on its line. As for the line's
+    # own commands, a subshell or a later `cd` out is not followed: fails closed.
     there = (True, ctx.get("fd_cwd") or "") if ctx.get("store_cwd") else None
-    for sub in subs:
-        seed = there if there and (sub in late_text or sub not in early) else None
+    for j, sub in enumerate(subs):
+        seed = there if there and j >= upto else None
         token = _cd_into.set(seed) if seed else None
         try:
             got = [classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd)]
