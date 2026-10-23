@@ -309,6 +309,17 @@ def test_a_line_that_reads_a_secret_itself_keeps_its_own_target(cmd, tool, key):
     assert gate.decide(c, _pol({"gates": {"deny": ["credentials"]}})).outcome == "deny"
 
 
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("cmd", ["cat id_rsa; export {PATH,X}=; ls", "cat id_rsa; printf {-v,X,-v,PATH} .; ls",
+                                 "cat id_rsa; echo {a,b}; ls ~/.exo/{run,keys}"])
+def test_the_line_alone_gets_every_brace_pool_a_call_gets(cmd, tool, key):
+    """The line alone is read with brace budgets of its own (_line_alone). _brace_budget makes them, so a check
+    that keeps a pool of its own (#438 adds one for a builtin's names) finds it there as in any call."""
+    c = _bash_in(cmd, "~/.ssh", tool=tool, key=key)
+    assert any(p.category == "credentials" for p in gate._each_part(c))
+    assert gate.decide(c, _pol({})).outcome == "ask"
+
+
 # --- the folder's part weighs as the cd form's (#468) ------------------------------------------------------------
 
 WEIGHED = [f"cat *; touch ~/.exo/state/x; {FORCE}", "cat *; touch ~/.exo/state/x; rm -rf build",
