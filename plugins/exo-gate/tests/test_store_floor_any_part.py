@@ -2,9 +2,10 @@
 
 `_combine` ranks credentials above store_write, so `env; echo x > ~/.exo/policies/gates.yaml` is credentials. The
 hook read who may answer from that one category, so a seat that `approvals.yaml` delegates credentials to could
-approve a write to the policy files. The outcome stayed ask, so only the approvers show it. The hook now reads every
-part of the line (`gate.call_approvers`, `gate.no_grant`): principal only, never a standing grant, in every mode.
-A line with no store write keeps its delegation. Temp stores and a mock context; nothing is executed.
+approve a write to the policy files. The outcome stayed ask, so only the approvers show it. The hook now reads the
+line's credentials and store_write parts (`gate.call_approvers`, `gate.no_grant`): principal only, never a standing
+grant, in every mode. A line with no store write keeps its delegation. Temp stores and a mock context; nothing is
+executed.
 """
 import asyncio
 import json
@@ -138,7 +139,7 @@ def test_a_line_with_no_store_write_keeps_its_own_approvers(line):
 
 
 def test_the_issue_rows_stay_credentials():
-    # The fix reads every part; it does not move the line's category (that is #437).
+    # The fix reads the parts; it does not move the line's category (that is #437).
     assert classify("env; echo x > ~/.exo/policies/gates.yaml").category == "credentials"
     assert classify("cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml").category == "credentials"
 
@@ -153,6 +154,15 @@ def test_every_part_counts_whatever_category_leads():
     assert gate.binds_exact(push)
     push.parts = [*push.parts, classify("echo x > ~/.exo/policies/gates.yaml")]
     assert gate.call_approvers(push, approvals) == ["principal"]
+
+
+def test_other_parts_do_not_narrow_the_approvers_yet():
+    # Only credentials and store_write parts narrow the list; reading every part is #437 (the #489 review).
+    approvals = gate.normalize_approvals({"approvers": {"credentials": ["principal", SEAT],
+                                                        "force_push": ["principal"]}})
+    c = classify("env; git push --force origin main")
+    assert c.category == "credentials" and "force_push" in [p.category for p in gate._each_part(c)]
+    assert gate.call_approvers(c, approvals) == ["principal", SEAT]
 
 
 @pytest.mark.parametrize("how", sorted(DELEGATIONS))
@@ -260,6 +270,17 @@ FILE_TOOL_STORE_WRITES = [
      "~/.exo/keys/seat.key"),
     ("delete_file", {"path": "~/.exo/keys"}, "~/.exo/keys"),
     ("delete_file", {"path": "~/.exo/run/exod.token"}, "~/.exo/run/exod.token"),
+    # A delete of a folder that holds the store, beside a secret, as `rm ~/.ssh/id_rsa ~/.exo` (the #489 review)
+    ("delete_file", {"paths": ["~/.ssh/id_rsa", "~/.exo"]}, "~/.exo"),
+    # A move or rename of such a folder onto a secret path, as `mv ~/.exo ~/.ssh/x` (the #489 review)
+    ("move_file", {"source": "~/.exo", "destination": "~/.ssh/x"}, "~/.exo"),
+    ("rename_file", {"source": "~/.exo", "destination": "~/.ssh/x"}, "~/.exo"),
+    ("mcp__filesystem__move_file", {"source": "~/.exo", "destination": "~/.ssh/x"}, "~/.exo"),
+    # Each store path is a part, not only the first one the scan meets (the #489 review)
+    ("copy_file", {"source": "~/.exo/keys/seat.key", "destination": "~/.exo/policies/gates.yaml"},
+     "~/.exo/policies/gates.yaml"),
+    ("delete_file", {"paths": ["~/.ssh/id_rsa", "~/.exo/policies/a.yaml", "~/.exo/policies/b.yaml"]},
+     "~/.exo/policies/b.yaml"),
 ]
 # A file tool on a secret alone keeps the delegation: a read, or a write outside the store.
 FILE_TOOL_SECRETS = [
@@ -267,6 +288,7 @@ FILE_TOOL_SECRETS = [
     ("read_file", {"path": "~/.exo/keys/seat.key"}),
     ("write_file", {"path": "~/.ssh/config", "content": "x"}),
     ("move_file", {"source": "~/.ssh/id_rsa", "destination": "/tmp/k"}),
+    ("copy_file", {"source": "~/.exo", "destination": "~/.ssh/x"}),     # a copy reads the store, as `cp -r` does
     ("apply_patch", {"patch": "*** Begin Patch\n*** Update File: ~/.ssh/config\n@@\n-a\n+b\n*** End Patch\n"}),
 ]
 
@@ -313,6 +335,56 @@ def test_a_file_tools_store_part_only_adds_denies():
         assert (d.outcome, d.rule) == ("deny", "deny"), (deny, d)
     r = gate.decide(c, pol(reserved=["store_write"]))
     assert r.outcome == "ask" and ("store_write", "~/.exo/policies/gates.yaml") in r.reserved, r
+
+
+@pytest.mark.parametrize("tool", ["move_file", "rename_file", "mcp__filesystem__move_file"])
+def test_a_file_tool_move_of_a_store_folder_beside_a_secret_matches_mv(monkeypatch, tool):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    approvals = gate.normalize_approvals({"approvers": {"credentials": ["principal", SEAT]}})
+    mv = classify("mv ~/.exo ~/.ssh/x")
+    c = gate.classify({"tool": tool, "args": {"source": "~/.exo", "destination": "~/.ssh/x"}})
+    assert (c.category, mv.category) == ("credentials", "credentials")
+    assert gate.call_approvers(c, approvals) == gate.call_approvers(mv, approvals) == ["principal"], tool
+
+
+def test_each_store_path_of_a_file_tool_is_a_part(monkeypatch):
+    # The key is the first store path, so a deny on the policy file it writes reached only the second (#489 review).
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    pol = gate.normalize_policies({"gates": {"deny": ["target:*/.exo/policies/*"]}})
+    for src in ("~/.exo/keys/seat.key", "~/.ssh/id_rsa"):
+        c = gate.classify({"tool": "copy_file", "args": {"source": src, "destination": "~/.exo/policies/gates.yaml"}})
+        assert c.category == "credentials" and gate.decide(c).outcome == "ask"
+        assert "~/.exo/policies/gates.yaml" in [p.target for p in gate._each_part(c) if p.category == "store_write"]
+        d = gate.decide(c, pol)
+        assert (d.outcome, d.rule) == ("deny", "deny"), (src, d)
+
+
+def test_a_store_write_part_after_another_part_keeps_every_hook_term(tmp_path, monkeypatch):
+    # The hook's once-only flag, grant lookup, observe-mode exception and approvers read every part, not the category
+    # or the first part. No classification puts a store write second under a category outside NO_GRANT yet, so a
+    # force push (a plain push only logs) with a read part and then a store write part, built by hand, stands in (the
+    # #489 review).
+    classify = gate.classify
+
+    def push_with_a_store_part_second(action, cwd=None):
+        c = classify({"tool": "terminal", "args": {"command": "git push --force origin main"}})
+        c.parts = [*c.parts, classify({"tool": "terminal", "args": {"command": "ls"}}),
+                   classify({"tool": "terminal", "args": {"command": "echo x > ~/.exo/policies/gates.yaml"}})]
+        return c
+    built = push_with_a_store_part_second({})
+    assert [p.category for p in [built, *built.parts]] == ["force_push", "read", "store_write"]
+    for mode in ("enforce", "observe"):
+        g, ctx, _ = make_gate(tmp_path / mode, DELEGATIONS["default"], mode=mode)
+        plain = run(ctx, "git push --force origin main")      # the plain call: the seat may answer; observe only logs
+        assert (plain["approvers"] == ["principal", SEAT]) if mode == "enforce" else plain is None, (mode, plain)
+        monkeypatch.setattr(hook.gate, "classify", push_with_a_store_part_second)
+        r = run(ctx, "git push --force origin main")
+        assert r is not None and r["action"] == "approve", (mode, r)      # observe mode still shows the card
+        assert (r["approvers"], r.get("once")) == (["principal"], True), (mode, r)
+        answer(ctx, r, "always")
+        assert g.grants.list() == [], mode
+        assert run(ctx, "git push --force origin main")["action"] == "approve", mode      # asked again
+        monkeypatch.undo()
 
 
 def test_the_error_fallback_reads_every_part(tmp_path, monkeypatch):

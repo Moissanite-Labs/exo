@@ -5188,6 +5188,8 @@ def _patch_paths(text: str) -> list[str]:
 
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
                   "src", "dest", "destination")
+# Name words of a file tool that moves or renames what it names, as `mv` does (#447).
+_MOVE_WORDS = frozenset(("move", "rename", "mv"))
 
 
 @_brace_budget
@@ -5481,12 +5483,17 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
         if secret:
             cat = "credentials"
-        store = ""
+        stores: list[str] = []
         if own not in ("read", "web_read"):
-            store = next((v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
-                          else [args.get(k)]) if isinstance(v, str) and is_store_path(v, ancestors=own == "delete")), "")
-            if store and not secret:
+            # A delete reaches the store through a folder that holds it, as `rm` does. Beside a secret, so does a
+            # move or rename, as `mv` does (#447). A move of such a folder with no secret is #494.
+            wide = own == "delete" or bool(secret) and not _MOVE_WORDS.isdisjoint(_name_tokens(tool))
+            named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
+                     else [args.get(k)]) if isinstance(v, str)]
+            stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide)))
+            if stores and not secret:
                 cat = "store_write"
+        store = stores[0] if stores else ""
         target = _first(args, _TARGET_KEYS)
         text = _first(args, _TEXT_KEYS) if cat in OUTBOUND else ""
         title = _first(args, _TITLE_KEYS) if cat in OUTBOUND else ""
@@ -5512,8 +5519,8 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
             out = own in OUTBOUND
             c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
-        if store and secret:    # #447: the store path beside a secret is a part, so only the principal answers
-            c.parts.append(_store_part(store, f"{tool} {store}"))
+        if secret:      # #447: each store path beside a secret is a part, so only the principal answers
+            c.parts += [_store_part(p, f"{tool} {p}") for p in stores]
     c.tool = tool
     if c.category in ("web_post", "web_read") and c.target and _is_local_host(c.target):
         c.exposure, c.third_party = "private", False
