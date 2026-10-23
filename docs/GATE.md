@@ -372,8 +372,14 @@ system or bash will.
   `cat /[p]roc/self/environ`, `cat /p*/self/environ` and `cat /*/*/environ` ask, and so does `cat //proc/self/env*`,
   with two leading slashes. A process's root link (`/proc/<pid>/root`, also below `task/<tid>`) leads to `/`,
   so a glob after it is read from `/`: `cat /proc/self/root/pro?/1/environ` and
-  `cat /proc/self/root/proc/self/env*` ask. `ls /p*/*/status` and `ls /proc/*/root/*` stay reads. The check reads
-  the word, not the program, so `ls /*/*/*` asks too, as `ls /proc/*/*` already did.
+  `cat /proc/self/root/proc/self/env*` ask. A `..` right after the link stays at `/`, as the kernel reads it, so
+  `cat /proc/self/root/../pro?/1/environ` asks too. A process's working folder link (`/proc/<pid>/cwd`) is read the
+  same way, since for pid 1 and most daemons it is `/`: `cat /proc/1/cwd/pro?/1/environ` and
+  `cat /proc/*/cwd/pro?/*/environ` ask. Where the folder is not `/`, such a line asks when it need not (fails
+  closed). `ls /p*/*/status`, `ls /proc/*/root/*` and `ls /proc/self/cwd/*` stay reads. The check reads the word,
+  not the program, so `ls /*/*/*` asks too, as `ls /proc/*/*` already did. The word is walked once, and past 16
+  possible links in one word it counts, so a long word costs linear time. Another link whose target the gate does
+  not know, such as a folder's descriptor in `/proc/<pid>/fd`, is read as text.
 - **Doubled slashes, `.` and `..` (#446).** The shell and the kernel read `a//b` and `a/./b` as `a/b`, and
   `a/x/../b` as `a/b` when `x` is a plain folder. A store name with more than one part (`.kube/config`,
   `.config/gh/hosts.yml`, `.docker/config.json`, `.config/gcloud`, `.unii/<account>/token`,
@@ -383,15 +389,21 @@ system or bash will.
   stores (`~/.ssh//id_rsa`) already asked. Both forms count, so the form as written still asks where the lexical
   one leaves the store (`cat ~/.ssh/../notes`, as before). The lexical form follows no link. When `x` in
   `~/.kube/x/../config` is a link to another folder, the kernel reads a file beside that folder, and the line asks
-  when it need not (fails closed). A link that leads into a store before a `..` is still resolved (#209). The
-  Exo-store names are read the same way (see "The store is credentials").
+  when it need not (fails closed). A link that leads into a store before a `..` is still resolved (#209). A glob
+  word with an absolute path is read that way too: when its folder part before the glob holds a `..`, that part is
+  also resolved. So `cat /dev/fd/../env*` and `cat /proc/thread-self/../../env*`, which reach the process's own
+  `environ`, ask, and so does `cat /tmp/k/../conf*` where `/tmp/k` links into `~/.kube`. The Exo-store names are
+  read the same way (see "The store is credentials").
 
-An odd spelling now takes the store's class, so it decides as main decides its plain spelling. Some lines decide
-lower than before because of that, much as for a thread's environment file (#313, below): a file tool's own class, a
-rule that matched the line as a `read`, a matrix cell, and the target of a second store or of a folder a `cd`
-entered no longer apply. So `write_file ~/.kube//config` under `categories: {local_write: deny}` asks, as
-`write_file ~/.kube/config` does. `cd /dev && echo x > .exo//state/x` under `deny: [target:/dev*]` asks too, as
-`cd /dev && echo x > .exo/state/x` does. The D-038 amendment (#446) gives the groups and the differential's counts.
+An odd spelling now takes the store's class, so it decides as main decides its plain spelling. Some lines decide lower
+than before because of that, much as for a thread's environment file (#313, below). A rule that matched the line as a
+`read` no longer matches it as `credentials`, so `sudo ssh host cat ~/.kube//config` under a rule that denies a costly
+`read` asks, as `sudo ssh host cat ~/.kube/config` does. A `target:` entry for a second store on the line no longer
+matches (`cat ~/.kube/./config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks). A call that was
+`store_write` because its path goes through a descriptor or process folder (`/proc/<pid>/root`, `/dev/fd`, #217) is
+`credentials` once the path names a secret, so a `store_write` deny no longer applies to it. A file tool's own class,
+a part's matrix cell and a `cd` folder's target still count, since #467 keeps each as a part. The D-038 amendment
+(#446) gives the groups and the differential's counts.
 
 Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
 each folder's resolution) across all the line's words. Before, each word looked them up again. On three 10 KB
