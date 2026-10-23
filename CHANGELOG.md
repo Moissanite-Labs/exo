@@ -29,7 +29,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   default retrieval ranker, the learner and the memory plugin all call it, so each query paid for the whole store.
   The tables (each node's word counts and length, the document frequencies, the average length) are now kept for
   the node set they were built from. A `reload()`, or a `refresh()` that sees a node file change, makes a new set
-  and the next `find` builds them again. A repeat query tokenizes only itself. Scores and order are unchanged.
+  and the next `find` builds them again. The reload drops the old tables at once, so they are not held until that
+  `find`. A repeat query tokenizes only itself. Scores and order are unchanged.
 - A thread's environment file is a secret store, like the process's own (#313).
   `/proc/<pid>/task/<tid>/environ` holds the same environment as `/proc/<pid>/environ`, another
   process's included, but the gate read it as an ordinary file, literal path and glob alike.
