@@ -164,8 +164,26 @@ def test_a_command_in_a_substitution_keeps_the_decision_it_had_as_the_line_s_com
     # an anchored rule matches no compound line (#394), so it does not lift the push inside the line either
     for line in ("echo $(git push --force origin main)", "cd ~/.exo/policies && echo $(git push --force origin main)"):
         assert gate.decide(_bash(line), pol).outcome == "deny", line
-    # a secret line takes the weight of an irreversible command, also one held by a store write in a $( )
+    # a secret line takes the weight of an irreversible command, also one held by a store write in a $( ): the line
+    # from its own parts, and a heavier one deeper in it as a credentials part beside it
     pol = gate.normalize_policies({"gates": {"matrix": {"irreversible": {"private": "deny"}}, "categories": {"delete": "allow"}}})
     for line in ("cd ~/.exo/keys && rm -f x", "cd ~/.exo/keys && echo $(rm -f x)"):
         c = _bash(line)
-        assert (c.category, c.reversibility, gate.decide(c, pol).outcome) == ("credentials", "irreversible", "deny"), line
+        assert c.category == "credentials" and gate.decide(c, pol).outcome == "deny", line
+        assert any(p.category == "credentials" and p.reversibility == "irreversible" for p in [c, *c.parts]), c
+
+
+@pytest.mark.parametrize("policy", [
+    {"matrix": {"costly": {"private": "deny"}, "irreversible": {"private": "ask"}}},
+    {"matrix": {"costly": {"private": "deny"}, "irreversible": {"private": "allow"}}},
+    {"rules": [{"match": {"reversibility": "irreversible"}, "decision": "allow"}], "matrix": {"costly": {"private": "deny"}}},
+])
+@pytest.mark.parametrize("line", ["cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'", "echo $(ssh prod 'rm -rf /'); cd ~/.exo/keys",
+                                  "x=$(ssh prod 'rm -rf /'); cd ~/.exo/keys", "cat <(ssh prod 'rm -rf /'); cd ~/.exo/keys",
+                                  "echo $(cat ~/.ssh/id_rsa); ssh prod 'rm -rf /'"])   # a secret part of its own
+def test_a_deeper_irreversible_command_does_not_lift_the_secret_line_s_own_cell(policy, line):
+    # #468 review: taking the line's weight from every part made it irreversible, so a policy whose costly cell is
+    # stricter than its irreversible one asked where main denied. The line keeps the weight of its own parts.
+    c = _bash(line)
+    assert c.category == "credentials" and c.reversibility == "costly", (line, c)
+    assert gate.decide(c, gate.normalize_policies({"gates": policy})).outcome == "deny", (line, policy)

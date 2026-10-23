@@ -220,7 +220,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and so does an `ssh` remote command. One in a here-doc body counts as after every command on its line, and one in
   a compound's own redirections runs before the compound. A push, post or delete inside such a substitution keeps
   the deny it had when it decided the line: an anchored allow rule such as `^git push` no longer lifts a command
-  read from a nested line, and a secret line takes the weight of an irreversible command held anywhere on it.
+  read from a nested line, and a deny on the matrix cell of an irreversible command held anywhere on a secret line
+  holds, while the line keeps the weight of its own parts.
 - Gate (#464, #448, D-075 amendment): a part's own matrix cell now counts in the #191 pass, as its category
   line and rules do. A matrix deny on any command of a compound line denies the line, so a store write or a
   secret on the line no longer hides it. Under `matrix: {irreversible: {private: deny}}`,
