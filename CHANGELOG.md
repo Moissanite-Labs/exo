@@ -217,6 +217,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#446, D-038 amendment): a secret-store path spelt with a doubled slash, a `.` or a `x/..` between its parts now
+  asks. The shell and the kernel read `~/.kube//config` and `~/.kube/./config` as `~/.kube/config`, but the store list
+  was matched as written, so `cat ~/.kube//config`, `cat ~/.kube/./config` and `read_file ~/.kube//config` were plain
+  reads. The same held for `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.config/gcloud` and the other names
+  with more than one part, for a thread's `/proc/1/task/1//environ` (#313), and for relative Exo-store writes
+  (`echo x > .exo//state/x`). Each shell word and file-tool path is now also matched with `//` and `/./` collapsed and
+  `x/..` resolved, beside the form as written. A glob in the `/proc` name itself now counts too:
+  `cat /pro?/self/environ`, `cat /[p]roc/self/environ` and `cat /*/*/environ` ask, and so does a glob after a process's
+  root link, which leads to `/` (`cat /proc/self/root/pro?/1/environ`, `cat /proc/self/root/proc/self/env*`). A `..`
+  after a link is resolved as text, so `~/.kube/link/../config` asks even where the link leads elsewhere (fails closed).
+  Such a line now takes the store's class, so a deny that only its own class drew (a `local_write` deny on `write_file`,
+  a matrix deny cell on an upload) becomes the store's ask, as for the plain spelling. The D-038 amendment lists the
+  groups.
 - Gate store protection (#465, D-038 amendment): after `cd` into the store or a descriptor folder, a `$( )`,
   backticks or `<( )` of a later command is classified in that folder, as the same command unwrapped is. Each
   substitution was classified as a fresh line, so `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the

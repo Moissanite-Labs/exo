@@ -328,9 +328,9 @@ walk every file under their path, and since #241 they leave the stores below it 
 search tools read" below).
 Tests: `tests/security/test_gate_brace_sets.py`.
 
-### Other spellings of a store path (#209, #202, #225, #199)
+### Other spellings of a store path (#209, #202, #225, #199, #446)
 
-A path can reach a store without spelling the store's name. The gate reads four such spellings the way the file
+A path can reach a store without spelling the store's name. The gate reads five such spellings the way the file
 system or bash will.
 
 - **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
@@ -367,7 +367,31 @@ system or bash will.
   `cat ~/.kube/[^x]onfig`, `cat ~/.kube/[[:alpha:]]onfig` and `cat ~/.config/gh/hosts.[^x]ml` ask.
   `/proc/<pid>/<glob>` asks when the glob could match `environ`, for any process: `cat /proc/self/[!x]nviron`,
   `cat /proc/*/[!x]nviron` and `cat /proc/self/*` ask, while `ls /proc/*/status` stays a read. A thread's
-  `/proc/<pid>/task/<tid>/<glob>` is read the same way (#313, below).
+  `/proc/<pid>/task/<tid>/<glob>` is read the same way (#313, below). Since #446 a glob in the `/proc` name itself
+  counts when it could match `proc`: `cat /pro?/self/environ`, `cat /pro?/self/task/1/environ`,
+  `cat /[p]roc/self/environ`, `cat /p*/self/environ` and `cat /*/*/environ` ask, and so does `cat //proc/self/env*`,
+  with two leading slashes. A process's root link (`/proc/<pid>/root`, also below `task/<tid>`) leads to `/`,
+  so a glob after it is read from `/`: `cat /proc/self/root/pro?/1/environ` and
+  `cat /proc/self/root/proc/self/env*` ask. `ls /p*/*/status` and `ls /proc/*/root/*` stay reads. The check reads
+  the word, not the program, so `ls /*/*/*` asks too, as `ls /proc/*/*` already did.
+- **Doubled slashes, `.` and `..` (#446).** The shell and the kernel read `a//b` and `a/./b` as `a/b`, and
+  `a/x/../b` as `a/b` when `x` is a plain folder. A store name with more than one part (`.kube/config`,
+  `.config/gh/hosts.yml`, `.docker/config.json`, `.config/gcloud`, `.unii/<account>/token`,
+  `/proc/<pid>/environ` and its thread form) is matched in that lexical form too, after `~` and `$HOME` are spelt
+  out. So `cat ~/.kube//config`, `cat ~/.kube/./config`, `cat ~/.kube/x/../config`, `sudo cat ~/.kube//config`,
+  `bash -c 'cat ~/.kube//config'` and `read_file ~/.kube//config` ask, as `cat ~/.kube/config` does. Single-folder
+  stores (`~/.ssh//id_rsa`) already asked. Both forms count, so the form as written still asks where the lexical
+  one leaves the store (`cat ~/.ssh/../notes`, as before). The lexical form follows no link. When `x` in
+  `~/.kube/x/../config` is a link to another folder, the kernel reads a file beside that folder, and the line asks
+  when it need not (fails closed). A link that leads into a store before a `..` is still resolved (#209). The
+  Exo-store names are read the same way (see "The store is credentials").
+
+An odd spelling now takes the store's class, so it decides as main decides its plain spelling. Some lines decide
+lower than before because of that, much as for a thread's environment file (#313, below): a file tool's own class, a
+rule that matched the line as a `read`, a matrix cell, and the target of a second store or of a folder a `cd`
+entered no longer apply. So `write_file ~/.kube//config` under `categories: {local_write: deny}` asks, as
+`write_file ~/.kube/config` does. `cd /dev && echo x > .exo//state/x` under `deny: [target:/dev*]` asks too, as
+`cd /dev && echo x > .exo/state/x` does. The D-038 amendment (#446) gives the groups and the differential's counts.
 
 Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
 each folder's resolution) across all the line's words. Before, each word looked them up again. On three 10 KB
@@ -389,7 +413,7 @@ gate's view of the file system may differ from the worker's. A name built whole 
   - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved.
 
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
-`test_gate_expansions_in_names.py`, `test_gate_bash_glob_classes.py`, and
+`test_gate_expansions_in_names.py`, `test_gate_bash_glob_classes.py`, `test_gate_secret_path_spellings.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
 ### A thread's environment file (#313)
@@ -434,10 +458,10 @@ it, where a store write is the principal's alone:
 `cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`. Main does the same for any secret on the
 line, `env; echo x > ~/.exo/policies/gates.yaml` included.
 
-Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
-and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. On Linux, where `/proc/self`
-is a link, a path through it is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
-either form: `cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` stay reads.
+Other spellings. A path through `/proc/self` is resolved first, so `cat /proc/self/task//1/environ` asks. Since
+#446 a doubled slash, a `.` or a `x/..` inside the name and a glob in the `/proc` name itself are read too (see
+"Other spellings of a store path" above): `cat /proc/1/task/1//environ`, `read_file /proc/1/task/1//environ`,
+`cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` ask.
 
 Tests: `tests/security/test_gate_proc_task_environ.py`.
 
@@ -1494,7 +1518,9 @@ set. Distinctive names match anywhere, so a relative `policies/gates.yaml`,
 `state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or `update/allowed_signers`
 counts too, and `.exo/bus` and `.exo/update` count whatever `EXO_HOME` is. A project folder called
 `update` is ordinary; only a file in it named `allowed_signers` asks. `config.json` is not on the
-list yet (D-074, #125).
+list yet (D-074, #125). A relative name is also matched with `//` and `/./` collapsed and `x/..`
+resolved (#446), so `echo x > .exo//state/x`, `write_file policies//gates.yaml` and
+`echo x > state/x/../gate-grants.json` are store writes.
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
