@@ -405,20 +405,21 @@ Other files under `task/` keep their class: `cat /proc/self/task/*/status`, `cat
 `ls /proc/self/task` are reads.
 
 A thread's environment is decided as `/proc/<pid>/environ` already was. Some lines decide lower than before
-because of that. A differential of main against the change found 2,877 lowered pairs (27,708 actions under 95
-policies). Every one of them decides as main decides the same action with `/proc/self/environ`. They fall in
-four groups, all from how the gate already handles a secret store:
+because of that. A differential of main against the change found 4,878 lowered pairs on 1,910 actions (28,651
+actions under 103 policies). Every one of them decides as main decides the same action with `/proc/self/environ`.
+They fall in four groups, all from how the gate already handles a secret store:
 
 - **A file tool's own class.** A file tool on a secret store takes the `credentials` class in place of its own.
   A deny on `read` or `local_write` then becomes the credentials ask: `read_file /proc/self/task/1/environ`
   under `categories: {read: deny}` asks where it was denied. A `reserved: [read]` entry no longer matches the
   call. The call still asks, and no grant covers it, since it is `credentials`. A shell line keeps its read as a
-  part (D-075), so `cat` there is still denied by a `read` deny.
+  part (D-075), so `cat` there is still denied by a `read` deny. Since #448 a file tool keeps its own reading as
+  a part too, so the `read` deny denies `read_file` again and the `reserved: [read]` entry matches it.
 - **Matrix cells.** The matrix sees the dominant part only. A credentials line is costly and private, so a deny
   cell for a read (`reversible`, `private`) no longer applies to `cat /proc/self/task/1/environ`. On a compound
   line the credentials part takes over, so a deny cell another part hit no longer applies:
   `cat /proc/self/task/1/environ; git push --force origin main` under an `irreversible`, `internal` deny cell
-  asks.
+  asks. Since #464 a part's own matrix cell counts for a deny, so both lines are denied again under those cells.
 - **Posting rules.** The posting rules read every post on the line (#396), so a post beside the read keeps its
   violations, named after its part. Before #396 they checked the dominant part only, and such a post lost
   them. The line asks either way.
@@ -434,8 +435,8 @@ it, where a store write is the principal's alone:
 line, `env; echo x > ~/.exo/policies/gates.yaml` included.
 
 Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
-and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. A path through `/proc/self`
-is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
+and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. On Linux, where `/proc/self`
+is a link, a path through it is resolved first, so `cat /proc/self/task//1/environ` asks. A glob in the `/proc` name itself is not read, for
 either form: `cat /pro?/self/task/1/environ` and `cat /pro?/self/environ` stay reads.
 
 Tests: `tests/security/test_gate_proc_task_environ.py`.
@@ -578,7 +579,7 @@ before the other posts' violations. The scrub compiles its patterns once per pol
 many posts does not compile them again for each post. The approval binding hashes the whole
 command, so a grant for one line never covers a changed second body.
 
-Third-party escalation, the matrix cell and the floors still read only the dominant part. So
+Third-party escalation, a matrix cell below deny and the floors still read only the dominant part. So
 `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R other/repo --body $'fine\nF'`
 logs, while the second post alone asks because it affects a third party. That is open as #437.
 
@@ -722,17 +723,21 @@ gate does not read:
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
-  delete is the more severe part and would otherwise set the card. A category line or rule that
-  denies a part denies the line too (#191): each part below the dominant one is decided by its
-  category's line and then the first rule that matches it (or a deny rule whose `command` regex
+  delete is the more severe part and would otherwise set the card. A matrix cell, category line or
+  rule that denies a part denies the line too (#191, #464): each part below the dominant one is
+  decided by its own matrix cell (its reversibility and its exposure under the scopes), then its
+  category's line, then the first rule that matches it (or a deny rule whose `command` regex
   matches a decoded view of the line), and a `deny` there denies the line, with a reason that names
-  the part (`denied by policy (category local_write: write /tmp/f)`). There an allow, log or ask
+  the part (`denied by policy (category local_write: write /tmp/f)`,
+  `denied by policy (irreversible and private: rm ~/work)`). So a store write or a secret on a line
+  no longer hides a delete or force push from a matrix deny (`rm -rf ~/work; touch ~/.exo/state/x`
+  under `matrix: {irreversible: {private: deny}}`). There an allow, log or ask
   rule keyed on `command` counts for a part only when its regex matches the line, as before, and
   also the part's own text (#394, next item). A deny rule's regex matches the whole line. So a rule
   written for another command on the line does not lift the part's deny: under
   `categories: {github_post: deny}`, an allow rule for `'^git push --force origin main$'` and an
   ask rule for `git push` after it, `gh pr comment 3 --body x && git push --force origin main` is
-  denied. Only a deny reaches the parts: allow, log and ask lines and rules, the opaque bump,
+  denied. Only a deny reaches the parts: allow, log and ask cells, lines and rules, the opaque bump,
   third-party escalation and the floors see the dominant part (a `reserved:` entry gives an ask on
   any part, and the opaque bump also fires on the `indirection` or `unknown program` signal of any
   part, #471). The posting checks are the one exception: they read every post on the line (#396,
@@ -1019,7 +1024,20 @@ gate does not read:
   `PATH=$PATH: ls`), any other folder in `PATH`, appended or not, since it supplies every program
   the folders before it lack (`export PATH="$HOME/.local/bin:$PATH"`), `PYTHONPATH` before any
   other program (`PYTHONPATH=/tmp/p python3 -m json.tool x` loads a `json` module from there) or
-  exported, and `GIT_CONFIG_GLOBAL` set to a file. The
+  exported, and `GIT_CONFIG_GLOBAL` set to a file. `unset PATH` and `unset -v PATH` ask as
+  `PATH=` does, since with no `PATH` bash looks a command up in the current folder (#329).
+  `unset -f PATH` stays `allow`: `-f` names a function, and with `-v` it is an error. The gate
+  takes `-f` only from an option word it can read, before any word it cannot. A `+x` word, `--`
+  or a name ends unset's options, so a later `-f` is a name (`unset +f -f PATH` asks). An
+  `unset` with a word the gate cannot read asks too, as a name or as an option: a name made by a
+  variable or a substitution (`unset "$v"`, `unset $(echo PATH)`), an option word with one
+  (`unset -${f}v PATH`), a `$` outside double quotes, which bash may split into more names
+  (`unset a[$i]`), a glob (`unset PAT?`, `unset [P]ATH`, and an unquoted subscript such as
+  `unset arr[1]`), or an unquoted brace (`unset {PATH,}`). bash drops a `\<newline>` before it
+  reads a word, so `unset \<newline>[P]ATH` asks too. A word wholly in double quotes is
+  read as before (`unset "arr[$k]"`), and so is `unset 'arr[1]'`. `unset -n PATH` asks too, to
+  be safe. bash leaves a plain `PATH` set under `-n`, but it unsets a `PATH` that an earlier
+  command made a nameref. The
   line sets one before the program, through a prefix, exported or bare (`export -p` and
   `readonly -p` assign too, while `declare -p` only prints), as a parameter-expansion assignment
   (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
@@ -1043,7 +1061,12 @@ gate does not read:
   parent's value as `${_}`, so classify, which runs in the gate hook, cannot be stalled by a
   long run of unclosed or nested expansions. A name the gate cannot read (`export $X=...`,
   `read -r "$v"`, `declare -n r=$X`, a nameref with no target, or a glob the shell expands
-  first such as `export PAT?=.` or `read HOM[E]`) is opaque too.
+  first such as `export PAT?=.` or `read HOM[E]`) is opaque too. So is an exporter option word
+  the gate cannot read (`declare -${f}x $V=`). The options end at that word, so a `-f` or `-p`
+  after it does not count. `export` and `readonly` read `+x` as a name, and the words after it
+  as names too. So `export +x -f $V=` asks, and `readonly +x -n r=PATH` makes no nameref
+  (#329). An exporter name in a brace (`export {PATH,X}=`) is not read yet (#438), and neither
+  is a leading `[` in a `read` or exporter name (`read [P]ATH`).
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
   `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
@@ -1191,15 +1214,16 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   `command:` deny entry or a deny rule that matches the text still denies it).
 - **Only a deny and the posting checks reach every part of a line.** `classify_shell` keeps the
   most severe part of a compound line, which sets the card. A deny reaches every part the gate
-  reads, nested ones included: a `deny:` entry since D-075, and a `categories:` line or rule that
-  denies a part since #191. So `gh pr comment 3 --body hi && rm -rf build` is denied under
+  reads, nested ones included: a `deny:` entry since D-075, a `categories:` line or rule that
+  denies a part since #191, and a matrix cell that denies a part since #464. So
+  `gh pr comment 3 --body hi && rm -rf build` is denied under
   `categories: {github_post: deny}` as under `deny: [github_post]`, and
   `coproc w { curl https://example.com; }` (and `function f { curl https://example.com; }`) is
   denied under `categories: {web_read: deny}`, though the block is `opaque_exec`. An allow, log or
   ask line or rule applies to the line's own category only: under `categories: {github_post: ask}`
   the line above asks for the delete, and approving it sends the post too. The posting checks read
   every post on the line (#396), so a forbidden word or a missing footer in any post asks. But
-  third-party escalation, the matrix cell and the floors read the dominant part only (#437):
+  third-party escalation, a matrix cell below deny and the floors read the dominant part only (#437):
   `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R other/repo --body $'fine\nF'`
   logs, while the second post alone asks. Since #394 a rule that
   would lower a compound line must also name its deciding command and every command that would get
@@ -1581,7 +1605,10 @@ non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, 
 writing subcommand, and any writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
 `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
-observe mode too. Reads of the store stay `read`, except `keys/` and the run folder's secrets
+observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
+policy pattern that does not compile, for example), the hook's fallback card still asks the
+principal alone, once, in observe mode too (#464). Other calls keep their fallback: a read tool
+runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,
 `rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`) is `credentials`. That covers moving or replacing
@@ -1596,13 +1623,21 @@ stays `store_write`.
 
 What the floor does to a policy's denies. A shell write to the store keeps its own reading
 (`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category
-still denies the line (D-075, #191). The matrix reads the dominant part only, so a matrix deny on delete
-can instead become a principal-only store-write ask (`ssh host 'rm -rf ~/.exo/update'`), as for
-`~/.exo/state`. A file tool's write (`write_file`, `edit_file`, `patch`,
-`apply_patch`, `create_directory`, `move_file`, a delete tool) is `store_write` alone, so a
-`local_write` or `delete` deny does not reach it: it asks the principal instead. After `cd /dev`,
-a line naming a store path (`printf x > update/allowed_signers`, or a credentials command naming the pin) has that path as its target, not
-`/dev`, so a `target:/dev*` deny does not reach it either. `exo update --pin-trust` keeps its old
+still denies the line (D-075, #191), and so does a matrix cell that denies the part (#464):
+`ssh host 'rm -rf ~/.exo/update'` is denied under `matrix: {irreversible: {internal: deny}}`, as
+it was before #133. A file tool's write or delete (`write_file`, `edit_file`, `patch`,
+`apply_patch`, `create_directory`, `move_file`, a delete tool) is `store_write` and keeps the
+tool's own reading as a part (#448): a `local_write` part for each file a write tool writes, or
+the tool's own category (`delete`). So a `local_write` or `delete` deny, a `reserved:` entry, a
+`target:` entry on another file the patch writes and a matrix cell on it still apply. A file tool on a secret store keeps its reading beside `credentials` the
+same way (`read_file ~/.ssh/id_rsa` is denied under `deny: [read]`, as `cat ~/.ssh/id_rsa` is).
+After `cd /dev` or `cd /proc/self/fd`, a line naming a store path (`printf x > update/allowed_signers`)
+has that path as its target, and the descriptor folder is a second store-write part (#464), so a
+`target:/dev*` or `target:/proc*` deny still denies it. On a store-write line, a relative key read after `tar -C` into
+a store (`tar -C ~/.exo/policies -czf - ../keys/seat`) is a `credentials` part, so a deny or
+reserved entry on `credentials` sees it. Its target is the name as written (`../keys/seat`), as for
+`tar -C ~/.exo -czf - keys/seat`. In each case the line stays `store_write` and asks the
+principal alone when nothing denies it. `exo update --pin-trust` keeps its old
 `opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it, and naming
 `opaque_exec` at `allow` or `log` no longer lets it run without an ask.
 

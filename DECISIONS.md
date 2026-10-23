@@ -1004,7 +1004,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (3) The matrix reads the dominant part only. A remote delete such as `ssh host 'rm -rf ~/.exo/update'`
   changes from a matrix deny on delete to the principal-only store-write ask, as deleting `~/.exo/state`
   already does. Category denies still read the retained delete part. Chosen over keeping a file tool's old category as a part, which would
-  change the decisions for every store path, not only the pin's. That is a follow-up for the whole store. Not done,
+  change the decisions for every store path, not only the pin's. That is a follow-up for the whole store. (The
+  D-075 amendment of 2026-10-22 for #464 and #448 is that follow-up, and lifts all three kinds.) Not done,
   as for the other store folders (`docs/GATE.md` "Known limits"): a glob or hard-link spelling, a copy or archive
   unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
   `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
@@ -1351,6 +1352,69 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   once), which would put a `$( )` five levels down past the four-level cap and turn its deny into an ask. Also
   rejected: a scan that follows only quotes and parentheses to the end of the nest, which a quote in a comment or a
   here-doc body leads past the end, past a deny-listed command.
+  *Amendment 2026-10-21 (issue #329, follow-up to #231):* `unset PATH; ls` was `read` (allow). With no `PATH`, bash
+  looks a command up in the current folder, so the `ls` runs a `./ls` an earlier write can plant. That is the hazard
+  #231 reads in an empty `PATH` element. *unset.* `unset PATH` and `unset -v PATH` are read as `PATH=` and ask,
+  `opaque_exec` named in the summary. `-f` names functions, and with `-v` it is an error, so `unset -f PATH` stays
+  `read`. `-f` counts only from an option word the gate can read, before any word it cannot: in `x=; unset -$x -f
+  PATH` bash reads `-` as the end of the options and unsets the variable. A `+x` word ends unset's options, as `--`
+  and a name do (`unset +f -f PATH`). Any word the gate cannot read asks, as a name or as an option: a name made by a
+  variable or a substitution (`unset "$v"`, `unset -${f}v PATH`), a `$` outside double quotes, which bash may split
+  into more names (in `unset a[$i]`, `i='1] PATH ['` splits off `PATH`), a glob (`unset PAT?`, and `unset [P]ATH`,
+  whose leading `[` the lexer does not mark), or an unquoted brace (`unset {PATH,}`). A word wholly in double quotes
+  is read as before, so `unset "arr[$k]"` keeps its class. `unset -n PATH` asks, to be safe. bash leaves a plain
+  `PATH` set under `-n`, but it unsets a `PATH` that an earlier command made a nameref, and the gate does not track
+  namerefs. *Exporters.* One helper, `_builtin_options`, now reads the options of unset and of the exporters. export,
+  readonly and unset take no `+x`, and a word that may expand ends the options. So `V=PATH; export +x -f $V=; ls` and
+  `V=PATH; declare -${f}x $V=; ls`, which were `read` on main and run a planted `./ls`, ask. An option-like word with
+  a value the gate cannot read (`declare -x=$v -n r=PATH`) still asks. A `-n` after a `+x` word is a name too, so
+  `readonly +x -n r=PATH` makes `r` a plain variable in bash. Main took that `-n` as an option and asked on a nameref.
+  The line is `read` now. *Intended asks.* Some new asks fall where `unset` cannot reach a later command: `(unset
+  PATH); ls`, `echo x | unset PATH`, `sudo unset PATH`, and `cd /dev && unset PATH`, which is `store_write` for the
+  `cd`. Main reads `(PATH=); ls`, `echo x | PATH=` and `cd /dev && PATH=` the same way. A loop over other names (`for
+  v in A B; do unset $v; done`) asks, as `export $v=` already does, and so does `unset "${arr[@]}"`, since the array
+  may hold `PATH` (the #179 test that pinned it as `read` now pins `unset -f "${arr[@]}"`). An unquoted subscript
+  (`unset arr[1]`) is a glob and asks, while `unset 'arr[1]'` stays `read`. A brace with no comma (`unset {X}`) asks
+  too. *Policies that allow `opaque_exec`.* The line decides by its most severe part, which is now `opaque_exec`. A
+  policy that allows or logs `opaque_exec` but asks on another category loses that ask. Under `categories:
+  {opaque_exec: allow, local_write: ask}`, `unset PATH; echo hi > out.txt` goes from ask to allow. Main already allows
+  `PATH=; echo hi > out.txt` under that policy, so this follows the design. In the same way, an allow rule that names
+  `opaque_exec` now allows `unset a[$i]`, which main asked on for its subscript. Main allows `export a[$i]=1` and
+  `read a[$i]` under that rule. The rule also allows a line that asked on main only for another word's indirection,
+  once `unset` makes it `opaque_exec` (`unset "arr[$k]" PATH`, `unset $"PATH"`). Main allows `PATH=; unset "arr[$k]"`
+  there too. A line with a `$".."` word that is not `opaque_exec` is decided a second time as `opaque_exec` with no
+  own text (#136), so no allow rule lowers it. A line that is `opaque_exec` already is decided once. So under
+  `categories: {opaque_exec: deny}` with an allow rule for every command, `unset $"PATH"; ls` goes from deny to ask,
+  as `export $"PATH"=; ls` and `PATH=; echo $"x"; ls` ask on main. A `deny: [opaque_exec]` entry still denies it, and
+  a deny on any part still holds (D-075, #191). Differential (#423) on the final tree, with 3,860 probe lines of unset
+  and exporter forms added to the corpus: 28,801 actions x 76 built-in policies, 2,188,876 pairs, lowered 1,246 pairs
+  on 246 actions, each in a group above. 472 pairs on 236 actions are the two allow rules that name `opaque_exec`. 84
+  pairs, on 42 of those actions (each with a `$".."` word), are the two policies that deny `opaque_exec` by category
+  and allow every command by rule. 690 pairs are the 10 `readonly +x -n` actions, 10 of them a reserved entry for
+  `opaque_exec` that no longer applies. With 4 mixed category policies: 115,204 pairs, lowered 510 pairs on 343
+  actions, 500 of them the mixed category case and 10 the `readonly` lines. No posting violation was lost. Not done:
+  an exporter name in a brace (`export {PATH,X}=`) is not read yet (#438). Nor is a `read` or exporter name that
+  starts with a glob `[` or a brace (`read [P]ATH`, `read {PATH,}`), as on main. Rejected: matching a brace set's
+  words against `PATH`. The brace check the store paths use misses a quoted `}` (`unset {"}",PATH}` unsets PATH), and
+  an unquoted `{` is rare in an `unset` line.
+  *Amendment 2026-10-22 (issue #329, review of #404):* `unset \<newline>[P]ATH; ls` was `read` (allow). So were its
+  `-v` form, `unset FOO \<newline>[P]ATH; ls` and the `git status` form. bash drops the `\<newline>` before it reads
+  the word, so the `[` still leads it. In a folder with a file named `PATH`, the glob makes the line `unset PATH`, and
+  the `ls` runs a planted `./ls`. The lexer drops the `\<newline>` too, and leaves a leading `[` unmarked as it always
+  does. But the leading-`[` check read the backslash. It now drops each `\<newline>` from the word's source first, so
+  these lines ask as `unset [P]ATH` does. A quoted `'[P]ATH'` after a `\<newline>` stays `read`. The option checks
+  read the lexer's text, which has no `\<newline>`, so `unset \<newline>-${f}v PATH` asked already. The fix only adds
+  asks. Differential (#423) against the branch before it, c84ffed5, with 2,100 probe lines added (continuations before
+  each kind of `unset` word, under wrappers, compounds, `$( )` and here-docs): 58,385 actions x 87 policies, lowered 0
+  pairs, tightened 43,905 pairs on 564 actions. Under 4 mixed category policies (`{opaque_exec: allow, read: ask}`
+  and the like) it lowers 558 pairs on 546 actions. Each is one of the new asks, now decided by its `opaque_exec`
+  part: the mixed category case above. Against main 39cafcba: 58,388 actions x 87 policies, lowered 580 pairs on 122
+  actions, each in a group the amendment above names. 320 pairs are the 4 `readonly +x -n` actions. 202 pairs on 101
+  actions are the two allow rules that name `opaque_exec`. 58 pairs on 17 actions are lines with a `$".."` word, under
+  those two rules and the two policies that deny `opaque_exec` by category and allow every command by rule. 72 of the
+  101 are `unset \<newline>"arr[$k]"` forms. The double-quote check reads the raw word, so a `\<newline>` before it
+  makes the word one the gate cannot read, and the line `opaque_exec`, as `unset a[$i]` is. That was so before this
+  fix too.
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the
@@ -1394,17 +1458,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `cat /proc/self/[t]ask/*/environ` ask. Other files under `task/` keep their class (`cat /proc/self/task/*/status`).
   The search tools leave a thread's `environ` out of a walk, as they leave out the direct form (#241).
   *Lowered lines.* A thread's environment is decided as `/proc/<pid>/environ` already was, so some lines decide
-  lower than before. A differential of main against the change ran 27,708 actions under 95 policies: the
-  differential's own set, plus task-environ lines, compound lines and file-tool calls, and 19 more policies (a
-  `read` deny, `reserved: [read]`, `/proc` targets, more matrix cells). It found 2,877 lowered pairs on 1,364
-  actions. Each one decides as main decides the same action with `/proc/self/environ`. Four groups, all from how
-  the gate already handles any secret store: (1) A file tool on a store takes the `credentials` class in place of
-  its own, so a deny on `read` or `local_write` (a category line, a `deny:` entry, a rule, a matrix cell) becomes
-  the credentials ask (`read_file /proc/self/task/1/environ` under `categories: {read: deny}`). A `reserved: [read]`
-  entry no longer matches the call. It still asks, and no grant covers it, since it is `credentials`. A shell line
-  keeps the read as a part (D-075), so a `read` deny still denies `cat`. (2) The matrix sees the dominant part only.
-  A credentials line is costly and private and takes the strongest reversibility of its parts, so a deny cell for a
-  read, or for another part of a compound line, no longer applies
+  lower than before. A differential of main against the change ran 28,651 actions under 103 policies: the
+  differential's own set, plus task-environ lines, glob forms, compound lines and file-tool calls, and 27 more
+  policies (among them a `read` deny, `reserved: [read]`, `/proc` targets and more matrix cells). It found 4,878
+  lowered pairs on 1,910 actions. Each one decides as main decides the same action with `/proc/self/environ`. Four
+  groups, all from how the gate already handles any secret store: (1) A file tool on a store takes the `credentials`
+  class in place of its own, so a deny on `read` or `local_write` (a category line, a `deny:` entry, a rule, a matrix
+  cell) becomes the credentials ask (`read_file /proc/self/task/1/environ` under `categories: {read: deny}`). A
+  `reserved: [read]` entry no longer matches the call. It still asks, and no grant covers it, since it is
+  `credentials`. A shell line keeps the read as a part (D-075), so a `read` deny still denies `cat`. (2) The matrix
+  sees the dominant part only. A credentials line is costly and private and takes the strongest reversibility of its
+  parts, so a deny cell for a read, or for another part of a compound line, no longer applies
   (`cat /proc/self/task/1/environ; git push --force origin main` under an `irreversible`, `internal` deny cell
   asks). (3) Before #396 the posting rules checked the dominant part, so a post beside the read lost its listed
   violations. They now read every post (D-075 amendment, #396), so it keeps them, named after its part. The
@@ -1419,7 +1483,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   as D-075 does for shell lines. It would keep group 1 denied, but it changes every file-tool call on a store
   (`read_file ~/.ssh/id_rsa` under `categories: {read: deny}` asks on main), so it is a follow-up, as are matrix
   cells, posting checks and `target:` entries on every part, and a store write that keeps the principal's answer
-  beside a secret. Limits: a doubled slash or a `..` inside a store name is matched as written, so
+  beside a secret. (The D-075 amendment of 2026-10-22 for #464 and #448 keeps a file tool's own class as a part,
+  and reads each part's matrix cell for a deny.) Limits: a doubled slash or a `..` inside a store name is matched as written, so
   `cat /proc/1/task/1//environ` and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does
   on main. A glob in the `/proc` name itself is not read, for either form (`cat /pro?/self/task/1/environ`,
   `cat /pro?/self/environ`).
@@ -1450,6 +1515,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   registry risk floor, the required executor). Chosen over a fixed
   table of expected outcomes, which a change can edit along with the gate: the corpus comes from the tests and tables
   of both trees, so deleting a row or an entry does not hide its line.
+  2026-10-22 (#460): a posting violation counts as often as each tree lists it, so a head that lists once a text
+  two posts of one name both meet is lower. Each seed also runs under each tool table name of either tree that ends
+  in `terminal` or `shell`, since adding such a name to the table stops the gate reading it as a shell, and in a call
+  that holds both `command` and `cmd`. The report shows a few reworded pairs, and `--json` lists them. The line
+  `and N more on other posts` names no text, so it is not compared as one. Its N counts in each tree's total, and
+  a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
+  posts reaches the cap.
   *Amendment 2026-10-23 (issue #471, found in the post-merge review of #406):* two defects let a command beside a
   push or post that logs go unasked. (1) The prefix strip kept any quoted assignment word as the program. Bash reads
   `X='a b' cmd`, `X="a b" cmd`, `X=a\ b cmd`, `X=$'a b' cmd`, `X="$Y" cmd` and `X=a'b c'd cmd` as an assignment and
@@ -2673,13 +2745,57 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   violations are always all listed. So is the line-wide unseen-body note for a part the posting rules do not cover.
   The scrub compiles its patterns once per policy, since a line now runs it once per post. The posting step only
   adds violations, so no decision is looser than before. The gate differential
-  (#423) bears that out. Over 25,497 actions x 85 policies (the built-in set and nine posting policies) it lowered
-  0 pairs and tightened 1,295, each a `github_post` line going from log or allow to ask. Third-party escalation,
+  (#423) bears that out. Over 28,107 actions x 87 policies (the built-in set and 11 posting policies) it lowered
+  0 pairs and tightened 4,378 on 841 actions, each from log or allow to ask on a line that carries a post. Not all
+  of them are `github_post` lines. A `delete` or `force_push` line whose post fails the rules asks now too: under
+  `categories: {delete: allow}` and footer `F`, `rm -rf build && gh pr comment 5 -R myorg/app --body "$X"` was
+  allowed and now asks. That is right, since the post on the line fails the rules. Third-party escalation,
   the matrix cell and the floors still read the dominant part. So `gh pr comment 5 -R myorg/app --body $'ok\nF' &&
   gh pr comment 6 -R other/repo --body $'fine\nF'` logs, while the second post alone asks for a third party. That
   is open as #437. Rejected: checking only the parts under `applies_to` (a close or merge on a compound line would
   lose #326 and #397), and listing every violation of every post (500 posts gave a 115,000-character reason that
   the card and the ledger repeat).
+  *Amendment 2026-10-22 (issues #464, #448):* the #191 pass decided a part by its category line and rules, but not
+  by its matrix cell, which `decide` read from the combined result only. So a matrix deny reached only the
+  dominant part. A store write or secret that sets a line's category also hid two more of the line's decisions,
+  and a file tool on a store or secret path lost its own category. Each such line still asked the principal
+  alone. (1) The #191 pass now starts each part from its own matrix cell, read under the scopes, before its
+  category line and its rules, which is how the part is decided alone. A `deny` there denies the line, and a
+  category line or rule that lifts the part alone lifts it here too. This reaches any compound line. Under
+  `matrix: {irreversible: {private: deny}}`, `rm -rf ~/work; touch ~/.exo/state/x`, `rm -rf ~/.exo/policies`
+  and `git push --force origin main && rm -rf build` are denied, where they asked. Under
+  `matrix: {irreversible: {internal: deny}}`, so is `git push --force origin main; echo x > ~/.exo/policies/a`,
+  and under `matrix: {costly: {public: deny}}` a post beside a store write. A cell below `deny` still reads the
+  dominant part only (#437). (2) After `cd /dev` or `cd /proc/self/fd`, a write the gate pins to a store path
+  took that path as its only target, so a `target:/dev*` or `target:/proc*` entry no longer matched it. The
+  descriptor folder is now a second store-write part. (3) The relative read check for store folders (#192) ran
+  only on lines that were neither credentials nor store writes, so `tar -C ~/.exo/policies -czf - ../keys/seat`
+  lost its key read and `deny: [credentials]` no longer denied it. On a store-write line that read is now a
+  `credentials` part, and the line stays `store_write`, so only the principal answers. Making the line
+  `credentials` instead would let a seat that `approvals.yaml` delegates `credentials` to answer it. (4) A file
+  tool on a store or secret path keeps the tool's own reading as a part (#448), as a shell line does: a
+  `local_write` part for each file `write_file`, `edit_file`, `patch` or `apply_patch` writes, and for a tool read
+  by name (`delete_file`, `read_file`, `create_directory`, `move_file`) its own category, target, summary, and the
+  text and title of a post. Its category deny, reserved entry, `target:` entries and matrix cell apply again, and
+  the posting checks read a post's text. The call keeps its store or secret category, card, approvers and
+  no-grant rule, and the ledger view still leaves the parts out. (5) The new parts reach policy patterns that
+  main never ran on those calls, so a pattern that does not compile now makes `decide` raise on them, as it
+  already did on other calls. The exo-gate hook's fallback for a call the gate reads as a store write or secret
+  now asks the principal alone, once, in observe mode too, where it ran the call in observe mode or asked
+  anyone. This lifts the trade-offs the D-038 amendments of 2026-10-21 recorded for #133 (all three kinds) and
+  for #313 (group 1, and group 2 for a deny cell). Each change adds a part, a source of a deny or a stricter
+  fallback, so no decision is lower than before. gate_diff (#423) ran main 3ddd89e9 against this change over the
+  built-in corpus and 2,127 targeted lines and calls, under the 87 built-in policies and 18 more (a deny on each
+  matrix cell, lifted and scoped cells, part denies). Main's script read 59,062 actions and the #460 one 59,526,
+  and both found 0 lowered. They found 61,638 and 61,805 stricter pairs, 6,072 of the latter under the built-in
+  policies. Each is a part the same policy denies alone: a delete, force push, history rewrite or post beside
+  another command, a store write or a secret, a file tool's own category or file, a `/dev` or `/proc` target, or a
+  key read after `tar -C`.
+  Not done: an allow, log or ask cell, third-party escalation and the floors on a part (#437), a `target:` entry
+  for a second store on a credentials line (#313 group 4), and checking policy patterns when the policy loads
+  (#466).
+  A relative key read keeps the name as written as its target, as `tar -C ~/.exo -czf - keys/seat` already does,
+  so `target:*/.exo/keys/*` matches neither.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).
