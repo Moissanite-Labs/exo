@@ -1893,13 +1893,15 @@ def build_corpus(trees: Iterable[Path], files: Iterable[Path] = (), builtin: boo
             put({"tool": tool, "args": {key: cmd}}, "shell_forms")
     # A name that ends in terminal or shell is a shell tool unless TOOLS lists it, so a head that adds one to TOOLS
     # must show: the seeds run under each such name either tree's TOOLS holds. A call may hold both keys, and the
-    # gate reads "command" first: a seed under one key and a harmless line under the other shows a head that does not.
+    # gate reads "command" first, and "cmd" when "command" is empty: a seed under one key and a harmless line or an
+    # empty one under the other shows a head that does not.
     for cmd in seeds:
         for tool in sorted(n for n in known if n.endswith(SHELL_SUFFIXES) and n not in shell_tools):
             put({"tool": tool, "args": {"command": cmd}}, "shell_forms")
         for tool in shell_tools:
             put({"tool": tool, "args": {"command": cmd, "cmd": BOTH_KEYS_OTHER}}, "shell_forms")
             put({"tool": tool, "args": {"command": BOTH_KEYS_OTHER, "cmd": cmd}}, "shell_forms")
+            put({"tool": tool, "args": {"command": "", "cmd": cmd}}, "shell_forms")
     for cmd in dict.fromkeys(wrapped + alone + posts):
         tool, key = shell_form(cmd, forms)
         put({"tool": tool, "args": {key: cmd}}, "shell_forms")
@@ -2304,7 +2306,8 @@ def compare(base_out: Path, head_out: Path, actions: list[dict], max_examples: i
             "tightened_by_transition": dict(tightened_by.most_common()), "examples_by_policy": ex_policy,
             "examples_by_transition": ex_transition, "classification_only_examples": cls_examples,
             "lowered_actions": lowered_actions, "lowered": lowered, "reworded": reworded,
-            "lowered_truncated": counts["lowered_pairs"] > len(lowered) or counts["lowered_actions"] > len(lowered_actions)}
+            "lowered_truncated": counts["lowered_pairs"] > len(lowered) or counts["lowered_actions"] > len(lowered_actions),
+            "reworded_truncated": counts["violations_reworded"] > len(reworded)}
 
 
 def _decision(d: dict) -> str:
@@ -2357,7 +2360,11 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
             out.append(f"  {n:7d}  {tag}")
     if rep.get("reworded"):
         out.append("Reworded, examples (the texts each tree lists that the other does not):")
-        for e in rep["reworded"][:max_examples]:
+        seen: dict[str, dict] = {}            # one example per action, as for the lowered ones
+        for e in rep["reworded"]:
+            if len(seen) < max_examples:
+                seen.setdefault(json.dumps(e["action"], sort_keys=True), e)
+        for e in seen.values():
             lost, gained = Counter(e["base"]["violations"]), Counter(e["head"]["violations"])
             out.append(f"           [{e['policy']}] {show_action(e['action'], 120)}")
             out += [f"             base: {v}" for v in (lost - gained).elements()]
@@ -2369,6 +2376,8 @@ def summary_text(rep: dict, max_examples: int = 3, groups: int = 6) -> str:
     if rep.get("lowered_truncated"):
         out.append(f"  (--json keeps the first {len(rep['lowered_actions'])} lowered actions and "
                    f"{len(rep['lowered'])} lowered pairs, in corpus order with the --corpus items first)")
+    if rep.get("reworded_truncated"):
+        out.append(f"  (--json keeps the first {len(rep['reworded'])} reworded pairs, in corpus order)")
     for side, tabs in (rep.get("unread_tables") or {}).items():
         out.append(f"Tables the {side} holds in a form the script does not read (their entries got no lines):")
         out += [f"  {k}: {why}" for k, why in tabs.items()]
