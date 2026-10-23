@@ -1507,19 +1507,37 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   That read is now a `credentials` part beside the write too. The line stays `store_write`, so only the principal
   answers it. The fallback now reads `no_grant`, so a call with the folder's part asks the principal alone, once, in
   every mode. abu-aska found the gap on a trial merge: `cat config` with `~/.kube` as `cwd`, under a deny entry
-  whose pattern does not compile, ran in observe mode. Rejected: the folder argument among the #209 folders, which
-  replaces the line. Keeping the old reading costs a second reading of the line and a second decision, both only
-  where the line read in its folder has a `credentials` part. That reading is a whole classification, so nothing
-  has to be found among the parts. A `cd` on the line is read as before. Limits: the session's own
-  folder (#209) is not a target. The file tools ignore a folder argument. A name that climbs out of a repo's `.claude`
-  worktree back into it is not caught (`cat ../../settings.local.json`), as before. The store-write checks do not read
-  the folder argument (`echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`, #453). A
-  differential against main (`gate_diff`, #423, at 3ddd89e9, whose gate is the same as 39cafcba's) finds 0 lowered
-  pairs: 4,803,183 pairs on its built-in corpus (55,209 actions under 87 policies), and 1,905,648 pairs on 21,904
-  folder-argument actions (68 lines under 42 folder spellings and 9 tool and key forms, with both keys, relative
-  folders and session folders in a store). On the 21,292 actions of that corpus, under 9 policies and three approval
-  tables, no call gets a wider approver set or loses `no_grant`, `binds_exact`, a reserved hit or a violation. No
-  lowering is intended.
+  whose pattern does not compile, ran in observe mode. *With #468.* Main's #468 weighs the `credentials` part a
+  store read after a `cd` adds to a store-write line: the weight of the line's own parts, at least `costly`, and a
+  heavier command deeper in the line as a part beside it. The part this change adds for the folder kept the
+  `credentials` default, `costly`. So under `matrix: {irreversible: {private: deny}}`,
+  `cat *; touch ~/.exo/state/x; git push --force origin main` with `~/.kube` as `cwd` asked, as on main, while its
+  `cd` form was denied. A rule on `credentials` and `irreversible` split `cat *; rm -rf build` with `~/.ssh` as
+  `cwd` the same way, also before the merge. The folder's part now goes through the same helper (`_weigh`), on every
+  line the folder adds a part to, for `cwd` and `workdir`. It keeps the read's own weight, and a heavier command on
+  the line is a second `credentials` part with that weight beside it. The line keeps its category, card and
+  approvers. Since the read keeps its weight, a matrix whose `costly` cell is stricter than its `irreversible` one
+  still denies the folder form, as before. There the folder form can be stricter than its `cd` form, never lower.
+  The author found this gap in a check of the merge with main 5a9dc394. A differential from main 5a9dc394
+  (`gate_diff`) finds 0 lowered pairs: 4,977,270 on its built-in corpus (57,210 actions under 87 policies),
+  2,719,446 on the folder corpus (31,258 actions) and 1,412,532 on 16,236 actions of 396 lines with a force push or
+  `rm -rf` beside a store read. Those lines put the command plain, behind `sudo`, `env`, `timeout`, `nohup`,
+  `bash -c`, `ssh` and `mosh`, in a `$( )` and in a here-doc, each as a `cd` form and with `cwd` and `workdir` in 8
+  folders. Under 22 policies and three approval tables, none of them decides lower than before this weight or than
+  main, and no approver set widens. No folder form in a store decides lower than its `cd` form, except where the
+  store-write checks do not read the folder (#453, in the limits below). Rejected: the folder argument among the
+  #209 folders, which replaces the line. Keeping the old reading costs a second reading of the line and a second
+  decision, both only where the line read in its folder has a `credentials` part. That reading is a whole
+  classification, so nothing has to be found among the parts. A `cd` on the line is read as before. Limits: the
+  session's own folder (#209) is not a target. The file tools ignore a folder argument. A name that climbs out of a
+  repo's `.claude` worktree back into it is not caught (`cat ../../settings.local.json`), as before. The store-write
+  checks do not read the folder argument (`echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`,
+  #453). A differential against main (`gate_diff`, #423, at 3ddd89e9, whose gate is the same as 39cafcba's) finds 0
+  lowered pairs: 4,803,183 pairs on its built-in corpus (55,209 actions under 87 policies), and 1,905,648 pairs on
+  21,904 folder-argument actions (68 lines under 42 folder spellings and 9 tool and key forms, with both keys,
+  relative folders and session folders in a store). On the 21,292 actions of that corpus, under 9 policies and three
+  approval tables, no call gets a wider approver set or loses `no_grant`, `binds_exact`, a reserved hit or a
+  violation. No lowering is intended.
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the

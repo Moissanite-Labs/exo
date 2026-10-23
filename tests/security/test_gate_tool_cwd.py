@@ -309,7 +309,80 @@ def test_a_line_that_reads_a_secret_itself_keeps_its_own_target(cmd, tool, key):
     assert gate.decide(c, _pol({"gates": {"deny": ["credentials"]}})).outcome == "deny"
 
 
-EVERYDAY = ["ls *", "ls config", "wc -l *", "grep -r foo *", "du -sh *", "rg -n config src", "file *"]
+# --- the folder's part weighs as the cd form's (#468) ------------------------------------------------------------
+
+WEIGHED = [f"cat *; touch ~/.exo/state/x; {FORCE}", "cat *; touch ~/.exo/state/x; rm -rf build",
+           "cat *; echo x > ~/.exo/policies/a; echo $(rm -rf x)", "cat config; echo $(touch ~/.exo/state/x; rm -rf y)",
+           f"cat *; {FORCE}", "cat *; rm -rf build", "cat *; echo $(rm -rf x)"]
+STORES = ["~/.kube", "~/.ssh", "~/.exo/run", "~/.exo/keys"]
+IRREVERSIBLE = [      # (policy, the folders whose calls it denies)
+    ({"gates": {"matrix": {"irreversible": {"private": "deny"}}}}, STORES),
+    ({"gates": {"rules": [{"match": {"category": "credentials", "reversibility": "irreversible"},
+                           "decision": "deny"}]}}, STORES),
+    ({"gates": {"rules": [{"match": {"target": "*keys*", "reversibility": "irreversible"}, "decision": "deny"}]}},
+     ["~/.exo/keys"]),
+]
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir"), ("exec_command", "workdir")])
+@pytest.mark.parametrize("folder", STORES)
+@pytest.mark.parametrize("cmd", WEIGHED)
+def test_the_folders_part_weighs_as_the_cd_forms(cmd, folder, tool, key, _home):
+    """#468 weighs the credentials part a store read after a `cd` adds: the weight of the line's own parts, and a
+    heavier command deeper in it as a part beside. The folder's part kept the credentials default (costly), so
+    under an irreversible deny cell or rule `cd ~/.kube && cat *; touch ~/.exo/state/x; git push --force origin
+    main` was denied and the same line with ~/.kube as `cwd` only asked. The line keeps its category and card."""
+    _held(_home)
+    c = _bash_in(cmd, folder, tool=tool, key=key)
+    cd = _bash(f"cd {folder} && {cmd}")
+    assert (c.category, c.summary) == (_bash(cmd).category, _bash(cmd).summary) and _store_parts(c)
+    for raw, denied in IRREVERSIBLE:
+        want = "deny" if folder in denied else "ask"
+        assert gate.decide(c, _pol(raw)).outcome == gate.decide(cd, _pol(raw)).outcome == want, raw
+    assert gate.decide(c).outcome == "ask"
+    table = gate.normalize_approvals({"approvers": {"default": ["principal"],
+                                                    "credentials": ["principal", "seat:builder"]}})
+    assert gate.call_approvers(c, table) == ["principal"]
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("folder", STORES)
+@pytest.mark.parametrize("cmd", ["cat *", "cat *; touch ~/.exo/state/x", "cat *; echo $(ls)"])
+def test_a_line_with_nothing_heavier_than_the_read_keeps_its_weight(cmd, folder, tool, key, _home):
+    """Controls: with no command heavier than the read, the part keeps the credentials weight. An irreversible deny
+    does not reach it in either form, and a costly deny cell denies both."""
+    _held(_home)
+    c = _bash_in(cmd, folder, tool=tool, key=key)
+    cd = _bash(f"cd {folder} && {cmd}")
+    assert [p.reversibility for p in _store_parts(c)] == ["costly"]
+    for raw, _ in IRREVERSIBLE:
+        assert gate.decide(c, _pol(raw)).outcome == gate.decide(cd, _pol(raw)).outcome == "ask", raw
+    costly = _pol({"gates": {"matrix": {"costly": {"private": "deny"}}}})
+    assert gate.decide(c, costly).outcome == gate.decide(cd, costly).outcome == "deny"
+
+
+@pytest.mark.parametrize("cmd", WEIGHED)
+def test_a_folder_that_reads_no_store_adds_no_weight(cmd, _home):
+    _held(_home)
+    c = _bash_in(cmd, "~/proj")
+    assert not _store_parts(c)
+    for raw, _ in IRREVERSIBLE:
+        assert gate.decide(c, _pol(raw)).outcome == gate.decide(_bash(cmd), _pol(raw)).outcome, raw
+
+
+@pytest.mark.parametrize("folder", ["~/.kube", "~/.ssh"])
+@pytest.mark.parametrize("cmd", [f"cat *; {FORCE}", "cat *; rm -rf build", "cat *; echo $(rm -rf x)"])
+def test_the_read_keeps_its_own_cell_beside_the_weight(cmd, folder, _home):
+    """The part for the read keeps the credentials weight, and a heavier command's weight is a second part beside
+    it. So a matrix whose costly cell is stricter than its irreversible one still denies the folder form, as it did
+    before this weight."""
+    c = _bash_in(cmd, folder)
+    assert sorted(p.reversibility for p in _store_parts(c)) == ["costly", "irreversible"]
+    pol = _pol({"gates": {"matrix": {"costly": {"private": "deny"}, "irreversible": {"private": "allow"}}}})
+    assert gate.decide(c, pol).outcome == "deny"
+
+
+EVERYDAY =["ls *", "ls config", "wc -l *", "grep -r foo *", "du -sh *", "rg -n config src", "file *"]
 
 
 @pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
