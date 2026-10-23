@@ -625,3 +625,66 @@ def test_a_flag_after_a_word_that_may_expand_is_not_sure(command):
     c = gate.classify_shell(command)
     assert any("runs its stdin" in p.summary for p in gate._each_part(c)), c
     assert gate.decide(c).outcome == "ask"
+
+
+@pytest.mark.parametrize("command", [
+    'ssh -l -n "$h" < cmds.sh',
+    'ssh -ln "$h" < cmds.sh',
+    'ssh -o -n "$h" < cmds.sh',
+    'ssh -i -n "$h" uptime < cmds.sh',
+    '{ ssh -l -n "$h"; } < cmds.sh',
+])
+def test_a_flag_letter_that_is_an_option_s_value_is_not_sure(command):
+    """`-n` after an option that takes a value is that value (a login name, a key file), so ssh still reads its
+    stdin, and the word that may expand still leaves the rest uncountable."""
+    c = gate.classify_shell(command)
+    assert any("runs its stdin" in p.summary for p in gate._each_part(c)), c
+    assert gate.decide(c).outcome == "ask"
+
+
+@pytest.mark.parametrize("command", [
+    "ssh prod-db -n $CMD < cmds.sh",
+    'ssh prod-db -N "$@" < cmds.sh',
+    "ssh prod-db -T -f *.sh < cmds.sh",
+    "echo 'rm -rf /data' | ssh prod-db -n $CMD",
+])
+def test_a_flag_after_the_host_before_a_word_that_may_expand_is_sure(command):
+    """ssh reads options after the host too, so a -n there, before the word that may expand, still keeps ssh from
+    reading its stdin. The line asks for its remote command, which the gate cannot count, not for the stdin."""
+    c = gate.classify_shell(command)
+    assert not any("runs its stdin" in p.summary for p in gate._each_part(c)), c
+    assert c.category != "delete", c
+
+
+# --- a >( ) is one of the line's substitutions for the #465 store folder too ---
+
+@pytest.fixture
+def _store_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".exo" / "policies").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("EXO_HOME", "EXO_KEYS_FILE", "CLAUDE_CONFIG_DIR", "EXO_PRINCIPAL_STORE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.usefixtures("_store_home")
+@pytest.mark.parametrize("command, fed", [
+    ("cd ~/.exo/policies && echo >(cp /tmp/evil gates.yaml)", False),
+    ("cd ~/.exo/policies && tee >(ssh prod-db) < f", True),
+    ("cd ~/.exo/policies && { echo $(ssh prod-db); } < f", True),
+])
+def test_a_fed_substitution_after_cd_into_the_store_runs_there(command, fed):
+    """A >( ) or a $( ) after a `cd` into the store runs in the store (#465), also when it is read as fed: the line
+    is a store write, and the ssh in it still runs the stdin it is fed."""
+    c = gate.classify({"tool": "bash", "args": {"command": command}})
+    assert c.category == "store_write", c
+    assert any("runs its stdin" in p.summary for p in gate._each_part(c)) == fed, c
+    assert gate.decide(c, gate.normalize_policies({"gates": {"deny": ["store_write"]}})).outcome == "deny"
+    if fed:
+        assert gate.decide(c, gate.normalize_policies({"gates": {"deny": ["opaque_exec"]}})).outcome == "deny"
+
+
+@pytest.mark.usefixtures("_store_home")
+def test_a_process_substitution_before_cd_into_the_store_does_not_run_there():
+    c = gate.classify({"tool": "bash", "args": {"command": "echo >(cp /tmp/evil gates.yaml); cd ~/.exo/policies"}})
+    assert c.category != "store_write", c

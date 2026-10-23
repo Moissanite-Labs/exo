@@ -279,8 +279,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   goes from `log` to `allow` (`{ sudo ssh host; } < cmds.sh`, as `sudo ssh host < cmds.sh` did). Under a rule
   that denies `costly` `shell` parts, a nested line sudo runs whose `>( )` or `$( )` now reads an ssh as fed asks
   (`sudo ssh jump 'tee >(ssh host)'`, as `sudo ssh jump 'ssh host < f'` does). And `ssh -n "$h" uptime <
-  hosts.txt` is allowed, where it asked, since ssh never reads its stdin then. `deny` entries and category denies
-  still see every part.
+  hosts.txt` is allowed, where it asked, since ssh never reads its stdin then, also under `deny: [opaque_exec]`, as
+  `ssh -n host uptime < hosts.txt` is. Otherwise `deny` entries and category denies still see every part.
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under

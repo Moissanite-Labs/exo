@@ -1618,24 +1618,30 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   that line, so a rule that denies `costly` `shell` or `read` parts asks instead: `sudo ssh jump 'tee >(ssh host)'`,
   as main decides `sudo ssh jump 'ssh host < f'`. (c) The flag before a word that may expand: `ssh -n "$h" uptime <
   hosts.txt` took the #240 reading (`opaque_exec`, ask) and now takes its own (`read`, allow), since ssh never reads
-  its stdin then. `deny` entries, `reserved` entries and category lines that deny a category still see every part. The
-  #423 differential against main c27d8739, each tree in its own process, finds only these kinds. Its built-in corpus,
-  54,824 actions under the 87 policies built into the script, lowers 4,721 pairs on 133 actions: 145 of kind (a), 6 of
-  kind (b) and 4,570 of kind (c), most of them the test lines for (c) in the compound forms the script makes of each
-  line. 72 of the (c) pairs lose the reserved hit on the `opaque_exec` part that is gone, and still ask. A focused
-  corpus of 69,359 actions (the issue's spellings with other hosts, files and options, behind 30 wrappers and 8 pairs
-  of them, in twelve compound forms, nine `>( )` forms, hops with thirty remote commands, `$( )` forms and everyday
-  ssh lines, and their forms) under 112 policies (the 87 and 25 more with host scopes, host targets, reserved and deny
-  entries, and rules that name `ssh`, `sudo`, `uv run`, `opaque_exec` or a reversibility) lowers 32,616 pairs on
-  12,228 actions: 32,542 of kind (a) and 74 of kind (b), with no reserved hit or posting violation lost. Kind (a)
-  there also takes in a known text a hop reads under a policy that allows its category (`gh pr comment 7 --body done
-  && echo 'rm -rf /srv/app' | sudo ssh bastion 'timeout 5 ssh db1'` under a policy that allows every category goes
-  from the post's third-party ask to `allow`, as the line with `sudo ssh db1` in place of the hop does), and a rule
-  that allows `opaque_exec` keyed on a run wrapper's own text (`^uv run`). The rework's own focused corpus, 31,000
-  actions under 111 policies, lowers 5,955 pairs on 2,130 actions: 4,360 of kind (a), 3 of kind (b) and 1,590 of kind
-  (c). Two more pairs keep their outcome and a `read` hit but list it once where main listed it twice, since ssh's own
-  part keeps no target where ssh reads its stdin (`while read h; do ssh "$h" uptime; done < hosts.txt` under
-  `reserved: [read]`). Known limits: a nested shell in a fed line reads its own line unmarked (`>(bash -c 'ssh
+  its stdin then. That `opaque_exec` part is gone, so `deny: [opaque_exec]` no longer denies such a line, a reserved
+  entry loses its hit on that part, and after a `cd` into the store the line is no longer a store write
+  (`cd ~/.exo/state && ssh -n "$h" uptime < hosts.txt`). Each such line decides as main decides it with a plain host
+  in place of the word (`ssh -n host uptime < hosts.txt`). In (a) and (b), `deny` entries, `reserved` entries and
+  category lines that deny a category still see every part. The #423 differential against main 5a9dc394, each tree
+  in its own process, finds only these kinds, and a script sorted every lowered pair into one. (c) is each pair that
+  is not lower once the sure-flag change is undone, and each of those has the outcome and the reserved categories
+  main gives the line with a plain host in place of the word. The built-in corpus, 55,970 actions under the
+  87 policies built into the script, lowers 4,721 pairs on 133 actions: 145 of kind (a), 6 of kind (b) and 4,570 of
+  kind (c), most of them the test lines for (c) in the compound forms the script makes of each line. 72 of the (c)
+  pairs lose the reserved hit on the `opaque_exec` part that is gone, and still ask. A focused corpus of 33,828
+  actions (5,740 lines and the forms the script makes of them: twenty-six fed forms behind nineteen wrappers,
+  twenty-four host spellings with flags, option values and `--` in six fed forms, hops with thirty-four remote
+  commands behind twelve outer spellings and nine stdins, the store and secret folders around fed lines, posts beside
+  hops, privileged wrappers around nested fed lines, and everyday ssh, logging and declare lines) under 114 policies
+  (the 87 and 27 more: host targets and scopes, deny and reserved entries, `shell` and `opaque_exec` category lines,
+  and rules on `ssh`, `tee`, `uv run`, `sudo`, `cat`, `while`, costly parts and exposure) lowers 110,914 pairs on
+  6,858 actions: 9,354 of kind (a), 176 of kind (b) and 101,384 of kind (c), 3,017 of them a lost reserved hit.
+  Kind (a) also takes in a known text a hop reads under a policy that allows or logs its category (32 of the focused
+  pairs): `gh pr comment 7 --body done && echo 'rm -rf /srv/app' | sudo ssh bastion 'timeout 5 ssh db1'` under a
+  policy that allows every category goes from the post's third-party ask to `allow`, as the line with `sudo ssh db1`
+  in place of the hop does. A known text that reaches an ssh only through a `>( )` is read as a stdin the gate
+  cannot read, as for `tee >(bash)`, so `echo 'rm -rf /srv' | ssh jump 'tee >(ssh host)'` is `opaque_exec`, not
+  `delete`. Known limits: a nested shell in a fed line reads its own line unmarked (`>(bash -c 'ssh
   host')`, `flock -c`, `env -S` ask anyway). On a fed line a `$( )` is read as fed even where the command it sits in
   reads a pipe, which fails closed. A stdin set earlier by `exec < file` is still not seen. Rejected: parsing the
   remote command for one ssh as its first command, the first draft, which missed `ssh a 'cd /; ssh b'` and a second
