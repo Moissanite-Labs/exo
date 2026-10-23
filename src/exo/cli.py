@@ -20,6 +20,7 @@
   exo taste [list|export-house|review]     the taste layers with a source on every item; build and
                                            review the house taste pack (D-044)
   exo findings [add TITLE|fix ID --in SHA|export --md]  the harness's findings about itself
+  exo inbox [--json] [--agent NAME]  a bounded local operations snapshot
   exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes
   exo get <id> [--body-only]               print one node
@@ -81,6 +82,7 @@ LAZY = {
     'findings': ('trace_cmd', 'cmd_findings', 'what the harness found wrong with itself'),
     'memory': ('memory_cmd', 'cmd_memory', "each agent's one log and the signed ledger: verify, threads"),
     'harness': ('harness_cmd', 'cmd_harness', 'inspect and select modular harness profiles'),
+    'inbox': ('inbox', 'cmd_inbox', 'read a bounded local operations snapshot'),
     'taste': ('baseline.cli', 'cmd_taste', 'the taste layers: house, learned, pins (D-044)'),
 }
 # Commands whose handler also takes the principal store.
