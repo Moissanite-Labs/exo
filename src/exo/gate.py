@@ -4301,7 +4301,9 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     slot = _own_text.get() or [None]      # classify_shell gives each line its own
     # #465: the commands up to the one that entered the store, and those after it, by their own texts. A $( ) runs
     # where its command runs, so one in the `cd` itself or before it does not run in the store.
-    entered, before, after = bool(into), [], []
+    entered = bool(into)
+    before: list[str] = []
+    after: list[str] = []
     token = _cd_into.set(None) if into else None     # a line nested in this one (ssh, bash -c) has its own folder
     try:
         for k in cmds:
