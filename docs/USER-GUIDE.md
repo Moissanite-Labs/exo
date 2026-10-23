@@ -23,6 +23,20 @@ technical page that has the detail. The map of all docs is `docs/DOCS-MAP.md`.
 Install steps are in the README (`## Quick start`: install, then type `exo`) and `docs/INSTALL.md`. Keys and models are in `docs/PROVIDERS.md`.
 Setting up your own store and the first interview are in `docs/ONBOARDING.md`. This guide does not repeat them.
 
+### Choose how much Exo loads
+
+Run `exo harness list` to see `lean`, `coding`, and `full`. Preview a change with
+`exo harness use coding --dry-run`, then save it with `exo harness use coding`.
+Run `exo stop` and launch Exo again to apply it. `exo harness show` explains the selection.
+`exo harness enable jobs` adds one capability, and `exo harness disable jobs` removes it.
+The approval gate stays enabled in every profile. Existing installs keep their behavior until
+you select a profile. Profiles retain your saved integration settings and conversation history.
+
+`coding` and `full` also read repository `AGENTS.md` guidance for each session's working
+directory. `AGENTS.override.md` takes priority at the same directory. This reads instructions.
+It does not run project setup code or change tool permissions. See [profiles](HARNESS.md) and
+[workspace instructions](WORKSPACE-INSTRUCTIONS.md) for settings and scope.
+
 If Claude Code is installed (the `claude` command is on your PATH) and logged in, you need no key. While the
 main model has no key (by default Anthropic, then OpenRouter) and you have not chosen one, Exo uses your Claude
 Code login as the main model: `claude-cli:sonnet`. The status line shows it. Cost reads `unknown`, because a

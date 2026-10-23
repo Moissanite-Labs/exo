@@ -62,8 +62,20 @@ def load_config(engine: Any) -> Config | None:
 
 
 def load_settings(engine: Any) -> dict:
+    """Apply the same capability restrictions to lazy feedback handlers as to startup.
+
+    A running engine's selected profile is an upper bound: changing config before
+    the first feedback message cannot attach a service that startup omitted.
+    """
+    from exo.harness import resolve
+
     cfg = load_config(engine)
-    return _merge(copy.deepcopy(DEFAULTS), (cfg.get("learn") if cfg else None) or {})
+    configured = resolve(cfg.data).settings.get("learn") if cfg else None
+    settings = _merge(copy.deepcopy(DEFAULTS), configured or {})
+    plan = getattr(engine, "harness_plan", None)
+    if plan is not None and not plan.enabled("learning"):
+        settings["enabled"] = False
+    return settings
 
 
 def resolve_store(engine: Any, env: Mapping[str, str] | None = None) -> Path | None:

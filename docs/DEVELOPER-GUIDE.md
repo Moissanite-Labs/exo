@@ -64,7 +64,7 @@ some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the 
 **The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
 in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
 protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
-`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the headroom left (run it
+`CORE_HEADROOM`. Today that is 14,813 plus 1,045, a ceiling of 15,858. The test prints the current count and the headroom left (run it
 with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the rules
 (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on the
 engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol has
@@ -73,6 +73,14 @@ its own cap (section 2).
 **Core, plugins, clients.** The core does the work and holds the state. Plugins add tools, commands, hooks, a memory
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
 program's database. Nothing in the core may assume one person's names, accounts or machines (D-004).
+
+**Harness composition (D-082).** `exo.harness.resolve` builds a side-effect-free capability plan.
+`exo.compose` selects services and plugins before constructing the runtime. `exo harness show --json`
+explains the configuration without importing plugins. New optional services belong behind composition
+seams, as jobs/delegation factories do. Disabling a feature must remove its tools and resource startup,
+and reject direct execution attempts. Test seat overrides and alternate executor paths too.
+Profiles are runtime selection, not an OS sandbox or separate installation distributions.
+See [HARNESS.md](HARNESS.md) and the sourced [landscape/roadmap](HARNESS-LANDSCAPE.md).
 
 **The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
 commands. Its collaborators have small interfaces:
@@ -260,6 +268,18 @@ skipped (fail open), except that a failing `pre_tool_call` callback blocks tool 
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
 `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+
+**Dependencies and cleanup (D-082).** A folder's `plugin.yaml` can declare `requires: [other-plugin]`.
+The loader orders selected dependencies first and blocks missing, failed or cyclic dependencies before
+importing the consumer. It never widens an explicit allowlist. Entry-point dependency metadata is
+available only after import and is checked before registration. Pair resources created in `register`
+with `ctx.register_cleanup(sync_callback)`: failed registration or final shutdown calls each once in
+reverse order. Cleanup failures do not skip remaining callbacks. This is final resource cleanup,
+not live unloading. It does not remove gate registrations. See [HARNESS.md](HARNESS.md).
+
+Workspace prompt providers use the per-session `Loop.workspace_extra(session, cwd)` callback.
+Delegated loops inherit the callable and resolve their own cwd. The bounded Markdown provider is
+outside the core in `exo.workspace_context`. See [WORKSPACE-INSTRUCTIONS.md](WORKSPACE-INSTRUCTIONS.md).
 
 `KNOWN_UNFIRED_HOOKS` names hooks present in Hermes contracts or earlier Exo declarations that Exo does not
 fire: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`, `on_session_end`,
