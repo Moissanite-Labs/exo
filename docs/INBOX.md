@@ -37,7 +37,7 @@ answer approvals. `exo ask list` handles the question queue and `exo findings` s
 
 The default is 20 items per section. `--limit` accepts 1 through 100. Database reads share a two-second
 budget (`--timeout 0.1` through `10`), with a 50 ms lock wait per connection and a SQLite progress guard.
-Filesystem I/O and Python imports are outside a hard wall-clock guarantee. SQLite rows are capped at 2 MiB.
+Filesystem I/O and Python imports are outside a hard wall-clock guarantee. SQLite rows are capped at 64 KiB.
 Approvals replay the latest 1,000 matching events, at most 16 KiB per event. Oversized or malformed payloads
 leave the section unknown. Questions require a complete regular file no larger than 2 MiB and 5,000 events.
 An oversized, malformed or incomplete history is unknown, never a supposedly empty queue.
@@ -51,7 +51,8 @@ Each section contains `status`, `source`, `truncated`, `note` and `items`. Statu
 bounded read, `partial` when more rows exist than the display limit, or `unknown` for an unavailable source
 or uncertain coverage. `ok` is source coverage, not a health verdict. Each item separates `state` from
 `recorded_state`. Active historical records have `state: "unknown"`. Item labels are limited to 160 characters
-and control characters are removed. The report contains private operational metadata. Keep it local.
+and control characters are removed. Invalid timestamps become null. The report contains private operational
+metadata. Keep it local.
 
 Missing tables, optional features, locked/corrupt databases and unreadable files affect only their section.
 Exit status is zero when a report is produced, including partial or unknown coverage. Consumers must inspect
