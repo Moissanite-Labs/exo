@@ -163,7 +163,12 @@ shutdown from owned work is rejected before resources are released.
 `exo.harness_runtime` supplies inert optional services. The runtime accepts injected job
 and delegation factories and a skills switch. Workspace prompt injection is per session
 and reused by child loops. Plugin graph/resource ownership lives in
-`exo.plugin_lifecycle`. Its registration interfaces remain in `exo.core.plugins`.
+`exo.plugin_lifecycle`. `PluginManager.bind_tools` also binds tool/slot adapters and
+translates lifecycle verdicts through the existing registry and approval desk. Its explicit
+collaborators keep plugin compatibility independent of the engine's private state. Direct
+`CoreRuntime` construction retains plugin support and the former helper methods remain shims.
+Registration interfaces remain in `exo.core.plugins`. The extraction restores the standard
+1,000-line core headroom allowance without changing approval policy or excluding modules.
 No wire command or event was added.
 
 [HARNESS-LANDSCAPE.md](HARNESS-LANDSCAPE.md) records the dated comparison, sources,
