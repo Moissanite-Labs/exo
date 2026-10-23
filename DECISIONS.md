@@ -4967,3 +4967,40 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   issue's five rows added to the corpus as tightened pairs.
 - **Docs:** `docs/GATE.md` "Store-path checks", "Secret-store paths", "Search tools", "Change limits",
   `CHANGELOG.md`.
+- **Plugin binding follow-up (2026-10-23, #498):** `exo.plugin_lifecycle.PluginToolBridge` now owns the
+  Hermes-compatible tool/slot adapters and lifecycle-verdict translation previously inside `CoreRuntime`.
+  `PluginManager.bind_tools` takes explicit collaborators, including the existing approval desk and a
+  live required-mode callback. Core helper shims preserve compatibility. This is a behavior-preserving
+  extraction: no approval policy, binding, private-thread rule or protocol contract changed. It restores
+  the standard core allowance (D-077 amendment above); broader private-state query cleanup remains open.
+  User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
+
+## D-086: Optional session working notes
+
+- **Date:** 2026-10-23
+- **Status:** In progress. Implemented for review in [#506](https://github.com/aska-digital/exo/issues/506).
+- **Problem:** A long task's current goal, constraints, blockers and next action can become scattered
+  across the transcript. Existing handoffs extract signals, while delegated tasks describe execution.
+  Neither is an explicit, revisioned working document for the current conversation.
+- **Decision:** Add an optional `work_notes` tool and principal-only `/work` read command. Save
+  complete revisions in the existing session database, with transactional revision comparison.
+  Composition is controlled by `work_notes.enabled`, false by default in every harness profile.
+- **Continuity:** Resume the same session with a bounded deterministic snapshot. Feed it into the
+  existing handoff facts. Forks start empty. Child and scheduled sessions cannot use the notebook.
+  Undo makes notes stale when their transcript anchor is hidden or removed. Stale bodies remain
+  explicitly readable, but prompts and handoffs suppress them until revised.
+- **Evidence and authority:** Validate message and completed-tool references against visible records
+  in that session. Record presence is not claim verification. Notes always have agent authorship,
+  are scoped to the engine agent and recorded principal, and cannot grant permission or execute steps.
+  Tool calls and command reads use the existing gate and executor. No new approval or ledger path.
+- **Limits:** Strict nested fields, document byte limits, bounded snapshots and history listings.
+  A per-session revision ceiling refuses further writes without deleting history. The feature owns
+  no separate database, workers, model calls or automatic retention job.
+- **Rejected:** Autonomous task goals, a second task scheduler, promotion of agent notes to principal
+  memory, automatic cross-session inheritance, silent conflict merges and durable question continuations
+  in this change. Runtime question continuation needs its own state and delivery contract.
+- **Validation:** Real composed fake-provider turns through the real gate, gate and required-executor
+  denial, restart, concurrent connections, principal/private/session isolation, undo, forks, evidence
+  checks, disabled composition, workspace instructions and handoff snapshots.
+- **Docs:** `docs/WORK-NOTEBOOK.md`, user guide §1, developer guide §1, command reference, docs map and
+  changelog. Whitepaper coverage is deferred to the next batch.

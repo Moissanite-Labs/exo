@@ -5,6 +5,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Optional session working notes with transcript evidence references, revision conflicts, restart
+  recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
+  through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 ### Fixed
 
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in

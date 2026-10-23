@@ -7565,6 +7565,10 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         c = _shell_call(str(args.get("command") or args.get("cmd") or ""))
     elif tool == "execute_code":
         c = classify_code(str(args.get("code") or ""))
+    elif tool == "work_notes":
+        operation = args.get("action")
+        category = "read" if operation in ("read", "history") else "local_write" if operation == "update" else "unknown"
+        c = _make(category, summary=f"session working notes: {operation}")
     elif tool in ("write_file", "patch", "edit_file", "apply_patch"):
         paths = [_first(args, ("path", "file_path"))] + _patch_paths(str(args.get("patch") or ""))
         paths = [p for p in paths if p]
