@@ -616,6 +616,9 @@ class ExoMemoryProvider(MemoryProvider):
 
     def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "", reset: bool = False,
                           rewound: bool = False, **kwargs) -> None:
+        if rewound:  # #389: Hermes tells only its memory providers about an undo, so pass it on to exo-context
+            from exo import host_undo
+            host_undo.report(new_session_id)  # a listener's failure is caught there: it never fails the switch
         st = self._state()
         if st is None:
             return
