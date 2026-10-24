@@ -483,6 +483,32 @@ def test_a_target_changed_during_every_copy_is_read_live(tmp_path, signer, monke
         _refuses(reader)
 
 
+def test_a_copy_that_fails_on_an_unchanged_target_is_read_live_at_once(tmp_path, signer, monkeypatch):
+    """A copy can fail while the target stays the same: the temporary folder is full. Each try filled the folder
+    again before the target was read live. Now the first such failure reads it live. A copy that fails while a
+    writer changed the target is still taken again."""
+    target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
+    _padded(target, signer, 0, 3)
+    path.symlink_to(target)
+    tried = []
+
+    class Full(sqlite3.Connection):
+        def backup(self, target_db, **kwargs):
+            tried.append(1)
+            if len(tried) == 1:
+                _padded(target, signer, 3, 4)  # the first copy fails under a writer, the second on its own
+            raise sqlite3.OperationalError("database or disk is full")
+
+    connect = sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda db, *a, **k: connect(
+        db, *a, **({**k, "factory": Full} if isinstance(db, str) and "immutable=1" in db else k)))
+    with Ledger(path, signer) as reader:
+        assert tried == [1, 1] and len(reader) == 4
+        _padded(target, signer, 4, 5)
+        assert len(reader) == 5  # read live
+        _refuses(reader)
+
+
 def test_the_snapshot_is_read_only(tmp_path, signer):
     """The copy of a symlinked ledger took writes the read-only target refused (#317 review). `query_only` refuses
     them again. `check_anchors` cannot lock it and checks it as it stands, which cannot change."""
@@ -497,7 +523,17 @@ def test_the_snapshot_is_read_only(tmp_path, signer):
         assert reader.check_anchors() == "" and len(reader) == 3
 
 
+def _temp_store_on_disk() -> bool:
+    """SQLite's default build (`SQLITE_TEMP_STORE` 0 or 1) keeps a private temporary database in a file."""
+    db = sqlite3.connect(":memory:")
+    try:
+        return bool({"TEMP_STORE=0", "TEMP_STORE=1"} & {r[0] for r in db.execute("PRAGMA compile_options")})
+    finally:
+        db.close()
+
+
 @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="lists open files through /proc")
+@pytest.mark.skipif(not _temp_store_on_disk(), reason="this SQLite keeps temporary databases in memory")
 def test_the_snapshot_is_kept_in_a_private_temporary_file(tmp_path, signer):
     """The whole target was copied into memory: a 493 MB ledger added 534 MB to the reader (#317 review). It goes into
     SQLite's private temporary database now. Past SQLite's page cache the copy is an owner-only temporary file,
