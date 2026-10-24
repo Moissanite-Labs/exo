@@ -361,7 +361,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `ssh -n host uptime < hosts.txt` is. Otherwise `deny` entries and category denies still see every part.
   With #399's other targets, the part that runs the stdin names the host for an empty one too, so `echo 'gh pr
   comment -wR myorg/app -b hi' | ssh buildhost` is still denied under a `github_post` deny on `buildhost`. A `$( )`
-  in a value declare reads again is read as fed too (`cat f | declare -a 'a=($(ssh host))'`).
+  in a value declare reads again is read as fed too (`cat f | declare -a 'a=($(ssh host))'`). A post a hop reads
+  can displace a later post as the deciding part, so the line is decided on that post's targets, as with `ssh host`
+  in place of the hop. Under a scope that makes the hosts private, the later post's footer is then listed once, not
+  twice, and the line still asks.
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under

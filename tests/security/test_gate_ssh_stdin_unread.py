@@ -796,3 +796,28 @@ def test_ssh_s_own_part_keeps_main_s_fill_beside_a_stdin_it_reads(command):
     assert (c.category, c.target, c.alt_targets) == ("github_post", "myorg/app", ["buildhost"]), c
     assert gate.decide(c, _post_denied_on("buildhost")).outcome == "deny"
     assert ("github_post", "buildhost") in gate.decide(c, {"gates": {"reserved": ["target:buildhost"]}}).reserved
+
+
+PRIVATE_HOSTS = {"private": ["myorg/*", "jump", "buildhost"]}
+
+
+@pytest.mark.parametrize("post", [GH_WR, "gh pr comment $N -R myorg/app -b hi"])
+@pytest.mark.parametrize("hop", ["ssh jump ssh buildhost", "ssh jump 'cd /; ssh buildhost'"])
+@pytest.mark.parametrize("policy", [
+    {"gates": {"scopes": PRIVATE_HOSTS}, "posting": {"footer": "-- bot"}},
+    {"gates": {"scopes": PRIVATE_HOSTS}, "posting": {"scrub": {"names": ["hi"], "exposures": ["internal", "public"]}}},
+    {"gates": {"scopes": PRIVATE_HOSTS, "categories": {"opaque_exec": "allow"}}},
+])
+def test_a_post_a_hop_reads_decides_a_later_post_as_the_direct_form_does(post, hop, policy):
+    """A post a hop reads can be the deciding part beside a later post of equal weight (kind (a) of the amendment), so
+    the line is decided on that post's targets, not on the later post's other targets (#399). It decides as the line
+    with `ssh buildhost` in place of the hop: under a scope that makes the hosts private, the later post's footer or
+    scrub hit is listed once, for its copy on the current repo, where main lists it for that reading too."""
+    c = gate.classify_shell(f"echo '{post}' | {hop} && {post}")
+    direct = gate.classify_shell(f"echo '{post}' | ssh buildhost && {post}")
+    assert (c.category, c.target, c.alt_targets) == ("github_post", "myorg/app", ["jump"]), c
+    d, want = gate.decide(c, policy), gate.decide(direct, policy)
+    assert (d.outcome, d.exposure, d.third_party, d.violations, d.reserved) == \
+        (want.outcome, want.exposure, want.third_party, want.violations, want.reserved), (d, want)
+    if "posting" in policy:
+        assert d.outcome == "ask" and any(v.startswith("GitHub PR comment: ") for v in d.violations), d

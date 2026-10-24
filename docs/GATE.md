@@ -1693,7 +1693,13 @@ line. The policy steps that read only that part then read it, so some lines deci
   one the opaque floor asks about or a post's third-party ask goes to `allow` or `log`: `{ sudo
   ssh host; } < cmds.sh` and `{ ssh host; git push origin main; } < cmds.sh` go from `log` to
   `allow`, and `nsenter -t 1 ssh host < cmds.sh` from `ask` or `log`, as `sudo ssh host <
-  cmds.sh` and `ssh host < cmds.sh; git push origin main` already did.
+  cmds.sh` and `ssh host < cmds.sh; git push origin main` already did. A post a hop reads can
+  also displace a later post. The line is then decided on that post's targets, not on the later
+  post's other targets ("Where a gh command lands"). So under a scope that makes the hosts
+  private, `echo 'gh pr comment -wR myorg/app -b hi' | ssh jump ssh buildhost && gh pr comment
+  -wR myorg/app -b hi` lists the later post's missing footer once, for its copy on the current
+  repo, where main listed it twice, and it still asks. It decides as the line with `ssh buildhost`
+  in place of the hop.
 - sudo and the privileged wrappers (`nsenter`, `chroot`, `unshare`, `systemd-run`) make `costly`
   only the deciding part of a nested line they run, such as a remote command or a `bash -c` line.
   Where a `>( )` or a `$( )` in that line now reads an `ssh` as fed, the new part decides it, so
