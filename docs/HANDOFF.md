@@ -50,11 +50,23 @@ either (#279, `docs/MEMORY-MODEL.md` "Who wrote it"). Every summary has its tags
 `resume_text` escapes every tag in the handoff before `/exo resume` puts it into the system message. The file holds
 the agent's last report and a summary, and it records the principal's rulings and corrections as quoted items under
 their own headings, never as a pinned block, so they read the same after the escape. The summary under `## State`
-is quoted too, and `load_handoff` keeps the first section of each name, so a summary that holds its own `## `
-heading (a second "Decisions made", say) cannot replace the principal's section or drop a real ruling (#315).
-List fields and the topic line are flattened to one line for the same reason, and Next steps, the one section
-written after every untrusted one, reads from its last copy in the file (#353). After `/undo`, exo-context drops
-the pins of the undone turns and the summaries the undo deleted, then writes again each automatic handoff that may
-quote them, another thread's included (`docs/MEMORY-MODEL.md`, "Undo and failed summaries").
+is quoted too, so a summary that holds its own `## ` heading (a second "Decisions made", say) opens no section
+(#315). List fields and the topic line are flattened to one line for the same reason (#353), and so are the header
+values, the path line and the launch line (#395).
+
+`load_handoff` reads sections only after the header comment. The header ends at the first `-->` outside a quoted
+value, so a `-->` inside `topic="..."` does not end it, and each value it recovers is flattened to one line. That
+way a topic that spans lines in an older file opens no section and adds no line to `resume_text` (#395). The
+reader keeps the first section of each name, with two exceptions. Next steps, the one section written after every
+untrusted one, reads from its last copy in the file (#353). Decisions reads from its one exact heading: the only
+one after the header, or the only one before `## State` when the file has a single State heading. An older file
+can hold a forged copy before the real one (a path or title that spanned lines) or after it (a summary written
+before #349 quoted it, or a list field written before #353 flattened it). When two copies leave the real one
+unclear, the file reads as no rulings and no corrections rather than the forged ones (#395). A heading with an extra space or tab after `##` is never read as
+the section. `resume_text` still carries the raw file.
+
+After `/undo`, exo-context drops the pins of the undone turns and the summaries the undo deleted, then writes again
+each automatic handoff that may quote them, another thread's included (`docs/MEMORY-MODEL.md`, "Undo and failed
+summaries").
 
 Client code: `clients/tui/exo_tui/handoff.py`. Tests: `tests/clients/tui/test_handoff.py`.

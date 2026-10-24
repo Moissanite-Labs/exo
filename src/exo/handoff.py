@@ -37,8 +37,11 @@ from .store import PrincipalStore, exo_home, principal_root
 
 FORMAT_VERSION = 1
 PIN_OPEN, PIN_CLOSE = provenance.PIN_OPEN, provenance.PIN_CLOSE
-HEADER_RE = re.compile(r'<!--\s*exo-handoff\s+(.*?)\s*-->', re.S)
 ATTR_RE = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
+DECISIONS = "Decisions made (principal's words, verbatim)"
+DECISIONS_RE = re.compile(r'^## ' + re.escape(DECISIONS) + r'\s*$', re.M)
+STATE_RE = re.compile(r'^## State\s*$', re.M)
+SECTION_RE = re.compile(r'^## ', re.M)
 # Text that marks a host-written compaction summary; its body is not the principal speaking.
 SUMMARY_MARKERS = ('END OF CONTEXT SUMMARY', '[CONTEXT COMPACTION', '[CONTEXT SUMMARY]')
 MAX_VERBATIM = 600          # a user message up to this length is kept whole
@@ -562,9 +565,10 @@ def find_handoff(topic: str, out_dir: str | os.PathLike) -> Path | None:
 
 def launch_line(topic: str, path: str | os.PathLike) -> str:
     """Shell line that starts a fresh session on this handoff. `$EXO_LAUNCH_TEMPLATE` overrides it
-    (placeholders: {topic}, {path})."""
+    (placeholders: {topic}, {path}). The path is folded to one line, so a handoff folder whose name spans
+    lines cannot add a section to the file through this line (#395)."""
     tpl = os.environ.get('EXO_LAUNCH_TEMPLATE') or 'hermes chat -q "/exo resume {topic}"'
-    return tpl.format(topic=slugify(topic), path=str(path))
+    return tpl.format(topic=slugify(topic), path=_one_line(str(path)))
 
 
 # --- write and load --------------------------------------------------------------
@@ -604,13 +608,13 @@ def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, cr
          f'- In a fresh session: `/exo resume {slugify(topic)}`',
          f'- From a shell: `{launch_line(topic, path or "")}`']
     if path:
-        L.append(f'- This file: {_one_line(path)}')
+        L.append(f'- This file: {_one_line(str(path))}')
     L.append('- Treat the quoted rulings and corrections below as standing instructions.')
 
     if signals.brief:
         L += ['', '## Brief (verbatim)', _quote(signals.brief)]
 
-    L += ['', '## Decisions made (principal\'s words, verbatim)']
+    L += ['', f'## {DECISIONS}']
     if signals.rulings:
         L += ['### Rulings', _quoted_items(signals.rulings)]
     if signals.corrections:
@@ -683,12 +687,13 @@ def _numbered(body: str) -> list[str]:
     return [m.group(1).strip() for m in re.finditer(r'^\d+\.\s+(.+)$', body, re.M)]
 
 
-def _header_body(text: str) -> str | None:
-    """The exo-handoff header's attribute text, or None. The closing --> counts only outside a
-    quoted value: a --> inside topic="..." is data, not the end of the comment (#395)."""
+def _header(text: str) -> tuple[str, int]:
+    """The exo-handoff header's attribute text and the index just past its end, or ('', 0) when there
+    is none. The closing --> counts only outside a quoted value: a --> inside topic="..." is data, not
+    the end of the comment (#395)."""
     m = re.search(r'<!--\s*exo-handoff\s+', text)
     if not m:
-        return None
+        return '', 0
     i, quoted = m.end(), False
     while i < len(text):
         ch = text[i]
@@ -698,37 +703,49 @@ def _header_body(text: str) -> str | None:
         if ch == '"':
             quoted = not quoted
         elif not quoted and (text.startswith('-->', i) or text.startswith('--!>', i)):
-            return text[m.end():i]
+            return text[m.end():i], text.index('>', i) + 1
         i += 1
-    return None
+    return '', 0
+
+
+def _decided(body: str) -> str:
+    """The Decisions section of `body` (the file after its header), or '' when the file cannot say which
+    copy the writer put there (#395). In an older file, a field that spanned lines can put a copy before the
+    real heading (a path or title line) or after it (a summary from before #349, under State). So the
+    section counts when its exact heading is the only one, or the only one before ## State in a file with a
+    single State. Otherwise the file reads as undecided rather than forged."""
+    heads = [m.end() for m in DECISIONS_RE.finditer(body)]
+    states = [m.start() for m in STATE_RE.finditer(body)]
+    if len(heads) > 1 and len(states) == 1:
+        heads = [h for h in heads if h < states[0]]
+    if len(heads) != 1:
+        return ''
+    nxt = SECTION_RE.search(body, heads[0])
+    return body[heads[0]:nxt.start() if nxt else len(body)].strip('\n')
 
 
 def load_handoff(path: str | os.PathLike) -> Handoff:
     p = Path(path).expanduser()
     text = p.read_text(encoding='utf-8')
-    meta: dict[str, str] = {}
-    body = _header_body(text)
-    if body is not None:
-        meta = {k: v.replace('\\"', '"').replace('\\\\', '\\') for k, v in ATTR_RE.findall(body)}
+    attrs, end = _header(text)
+    # Each value is folded to one line as the writer folds it, so an older file's topic that spans
+    # lines adds no line to `resume_text` or the /exo resume reply (#395).
+    meta = {k: _one_line(v.replace('\\"', '"').replace('\\\\', '\\')) for k, v in ATTR_RE.findall(attrs)}
     topic = meta.get('topic')
     if not topic:
         tm = re.search(r'^# (?:Handoff:\s*)?(.+)$', text, re.M)
         topic = tm.group(1).strip() if tm else p.stem
-    secs = _sections(text)
+    # Sections count from the end of the header: a header value an older writer let span lines is
+    # data, and opens no section (#395).
+    body = text[end:]
+    secs = _sections(body)
     # Next steps is the one section the writer puts after every untrusted one, so its genuine copy
     # is the last in the file; a forged earlier copy (an old file's unquoted summary) loses (#353).
-    for m in re.finditer(r'^## Next steps\s*$(.*?)(?=^## |\Z)', text, re.S | re.M):
+    for m in re.finditer(r'^## Next steps\s*$(.*?)(?=^## |\Z)', body, re.S | re.M):
         secs['Next steps'] = m.group(1).strip('\n')
-    # Decisions counts only when exactly one such heading stands before ## State, where the
-    # writer puts it. A file an older writer left with a field spanning lines can hold a forged
-    # copy ahead of the real one; two copies mean neither can be taken as the principal's
-    # words, so the file reads as undecided rather than forged (#395).
-    state = re.search(r'^## State\s*$', text, re.M)
-    head = text[:state.start()] if state else text
-    if len(re.findall(r"^## Decisions made \(principal's words, verbatim\)\s*$", head, re.M)) == 1:
-        decided = secs.get("Decisions made (principal's words, verbatim)", '')
-    else:
-        decided = ''
+    # Decisions is read from its own heading, never by name: _sections files a heading with an
+    # extra space or tab after the ## under the same name, and keeps the first copy (#395).
+    decided = secs[DECISIONS] = _decided(body)
     open_body = secs.get('Open decisions', '')
     return Handoff(
         path=p, topic=topic, created=meta.get('created', ''), meta=meta, text=text, sections=secs,
