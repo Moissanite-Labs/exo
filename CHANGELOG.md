@@ -233,6 +233,26 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#435, D-038 amendment): a write into `$EXO_HOME/plugins` asks the principal. The core loads each plugin it
+  finds there and runs its code with the harness's rights, so a write there installs or changes code the next session
+  runs. Most writes there were allowed: only a `cd` or `git -C` into the Exo home made one a store write, and a delete
+  asked as a plain `delete`. `cp evil.py ~/.exo/plugins/foo/__init__.py` was an allowed `shell`, and `write_file` on
+  the same path an allowed `local_write`. The folder is now a protected store folder, and `.exo/plugins` a name that
+  counts anywhere. A write there is `store_write` (the principal alone, no grant) when made by a file tool, a
+  redirection, `cp`, `cp -t`, `mv`, `install`, `tee`, `sed -i`, `ln`, `rsync`, `tar -C`, `unzip -d`, `curl -o`,
+  `git clone` or `pip install --target` into it, or `mkdir`, `chmod` or `rm` there, spelt with `~`, `$HOME`,
+  `$EXO_HOME`, the resolved path or a link into it. A read with a read command (`cat`, `ls`, `grep -r`, `find`, a read
+  tool) stays a read. A writing command that names a file there only as a source asks too, as for the rest of the
+  store, and so do other commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `xxd`). A call
+  that sends a store file out (an `email_send`, post or payment tool call with the file in `files:`, an MCP upload
+  tool, `curl -T`, `curl -F`, `mail -A`) keeps the call as a part, with its target and text. So a deny, reserved
+  entry, rule, matrix deny cell or posting rule on that call still applies, as on main, and a here-doc body on the
+  line still reaches the post, also inside `bash <<EOF`. For `policies/`, `state/` and `update/` the here-doc body is
+  new: the gate gave it to no post, so `mail -A ~/.exo/policies/x a@b.c <<EOF` listed no violation for a home path in
+  the body. A file tool there keeps its own reading as a part (#448), and a line in `/dev` keeps `/dev` as a target
+  (#464), so a deny on `local_write`, `delete` or `target:/dev*` still applies. Not covered: the folders in
+  `$EXO_PLUGIN_DIRS`, which developers point at a checkout, and, as for the rest of the store, a relative path written
+  by a tool whose working folder is in the plugins folder.
 - Gate (#399, D-033): a URL in a gh option's value no longer picks the post's repo. The first word after the
   subcommand that began with a GitHub URL was the target, a body or `--duplicate-of` value included, so
   `gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 ...'` counted as a post on `myorg/app#9`. Under
