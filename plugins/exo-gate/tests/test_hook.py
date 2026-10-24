@@ -454,6 +454,24 @@ def test_a_policy_that_breaks_decide_still_asks_the_principal_once_for_a_store_w
             assert plain["action"] == "approve" and "once" not in plain and "approvers" not in plain
 
 
+def test_a_policy_that_breaks_decide_still_asks_once_for_a_store_write_only_the_floor_reads(keyed_store, tmp_path,
+                                                                                            monkeypatch):
+    # #439 review: the fallback read only the top reading, so a gh download into the store, which the line as read
+    # before #399 (its floor) reads as a store write, got the plain error card, and ran in observe mode.
+    store, key = keyed_store
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (store / "policies" / "gates.yaml").write_text("deny:\n  - 'command:^(rm|shred'\n")
+    lines = ("gh -R pub/x release download v1 -O ~/.exo/update/allowed_signers --clobber",
+             "gh --repo pub/x release download v1 -D ~/.exo/state",
+             "gh -R pub/x run download 5 -D ~/.exo/policies")
+    for extra in ({}, {"mode": "observe"}):
+        g, _ = make_gate(store, key, decision_model=False, **extra)
+        for line in lines:
+            r = g.pre_tool_call("terminal", {"command": line})
+            assert r and r["rule_key"] == "exo-gate:error:terminal", (line, extra, r)
+            assert (r.get("approvers"), r.get("once")) == (["principal"], True), (line, extra, r)
+
+
 # --- settings precedence under Exo's plugin loader (issue #19) -----------------------------
 
 def _loaded_settings(config=None):
