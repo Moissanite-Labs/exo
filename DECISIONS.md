@@ -444,16 +444,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   plus a peer pin (`exo keys pin --peer`, a `peers` map apart from the D-040 signers). A registry entry decides for its
   name, so a key rotated out with `--replace` stays out. A seat checked against a key of this home takes its
   principal from its seat file here, else this home's principal (`EXO_PRINCIPAL`). A seat checked against a peer
-  pin is `other`: this home has no record of whose it is. A sender with no key here is held as `other`, its card
-  says `key not pinned`, and `rules` never match it. A name that holds a key here is checked against those keys
-  alone, so another key is denied. That includes a seat of another home with the receiver's own name (two unseated
+  pin is `other`: this home has no record of whose it is. A sender with no key here is held as `other`, and its
+  card says `key not pinned`. A rule may hold or deny it, but never deliver it sooner than its policy, since a
+  presence file can claim any name. A name that holds a key here is checked against those keys alone, so another
+  key is denied. That includes a seat of another home with the receiver's own name (two unseated
   homes are both `exo`): its key can be pinned as a peer, and it is then held as `other`. To pin a peer of another
   home, read `<that home>/keys/<seat>.pub` and run `exo keys pin --peer <seat> <key>` here. A `from` that is not a
-  seat id is denied before any key lookup. A receipt must name the seat the message went to, come from that
-  seat's daemon and verify against that seat's keys here, never a presence key. Not changed: under D-039 any
-  same-uid socket client can ask a daemon to `peers send`, which arrives as `same-principal` automation, by design.
-  A process outside the gate can still read seat keys or write `keys/`. Rejected: holding a same-name seat with a
-  different key as `other` without a pin, which would let any presence file under a pinned name reach the card.
+  seat id is denied before any key lookup. A presence file is read only when it is a plain file in the peers folder,
+  so the `daemon` an envelope names cannot be a path or a FIFO. A later receipt must name the seat the message went
+  to, come from that seat's daemon and verify against that seat's keys here, never a presence key. Not changed:
+  under D-039 any same-uid socket client can ask a daemon to `peers send`, which arrives as `same-principal`
+  automation, by design. A process outside the gate can still read seat keys or write `keys/`. A forged presence
+  file still says where its name listens: it can receive the messages sent to that name and answer a send with the
+  first receipt, which is not signed (a follow-up). Rejected: holding a same-name seat with a different key as
+  `other` without a pin, which would let any presence file under a pinned name reach the card.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).

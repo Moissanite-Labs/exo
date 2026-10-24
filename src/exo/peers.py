@@ -111,6 +111,8 @@ class Directory:
         self._file(daemon).unlink(missing_ok=True)
 
     def get(self, daemon: str) -> Presence | None:
+        if Path(daemon).name != daemon:  # an envelope names the daemon: a path there never leaves this folder (#132)
+            return None
         try:
             return self._read(self._file(daemon))
         except (OSError, ValueError, TypeError):
@@ -118,6 +120,8 @@ class Directory:
 
     @staticmethod
     def _read(path: Path) -> Presence:
+        if not path.is_file():  # a FIFO or a folder: reading it could block the event loop
+            raise ValueError(f"{path.name} is not a file")
         d = json.loads(path.read_text())
         return Presence(**{k: v for k, v in d.items() if k in Presence.__dataclass_fields__})
 
@@ -291,10 +295,13 @@ class PeerNode:
     # ---------------------------------------------------------------- policy
 
     def _policy(self, ing: Ingress) -> tuple[str, str]:
-        # A rule names a sender, and a presence file can claim any name: rules match only a sender whose key this
-        # home pins (#132). An unpinned sender gets the policy for its trust.
-        rules = self.config.rules if ing.meta.get("pinned") else []
-        return gate.decide_peer(ing.trust, ing.sender, {"policy": self.config.policy, "rules": rules})
+        got = gate.decide_peer(ing.trust, ing.sender, {"policy": self.config.policy, "rules": self.config.rules})
+        if ing.meta.get("pinned"):
+            return got
+        # A rule names a sender, and a presence file can claim any name (#132). For a sender whose key this home
+        # does not hold, a rule may hold or deny, but never deliver sooner than the policy for its trust.
+        base = gate.decide_peer(ing.trust, ing.sender, {"policy": self.config.policy})
+        return max(got, base, key=lambda o: gate.PEER_OUTCOMES.index(o[0]))
 
     def _pins(self, seat: str) -> tuple[list[str], list[str]]:
         """The keys this home holds for ``seat`` (#132), never a presence file's: ``(here, peer)``. ``here`` is this

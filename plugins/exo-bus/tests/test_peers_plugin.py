@@ -262,6 +262,8 @@ def test_an_unpinned_exo_peer_is_held_in_hermes(env):
             assert out["state"] == "held"
             assert any("(other, key not pinned)" in x and "trust me" in x for x in host.shown)
             assert host.agent.steered == [] and ctx.hooks["pre_llm_call"](session_id="h1", platform="cli") is None
+            # deny it, so no held message is left waiting when the runtime stops
+            assert "denied" in await asyncio.to_thread(ctx.commands["peer-deny"], out["msg_id"])
         finally:
             await eng.close()
             await srv.close()
