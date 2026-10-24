@@ -555,10 +555,12 @@ system or bash will. A fifth, a pattern substitution, it does not spell out: it 
   text: `${HOME/%//.kube}` is `$HOME/.kube` in bash. Its pattern may match all of the value, part of it or none, so
   the gate does not work out the result. When the replacement is not empty, the word fails closed. A read of it
   asks as a store read (`credentials`). A write to it, or a `cd` into it, is a store write. This holds for every
-  anchoring, with a subscript (`${HOME[0]/%//.exo}`), nested at any depth in another form, and with a quote,
-  `$( )`, `<( )` or backticks in it. Bash does not end the form at a `}` inside one of those, so the gate cannot
-  tell where it ends: `${HOME/%[!"}"]/u\/.exo}` is `$HOME/.exo` when `$HOME` ends in `u`. Such a form asks even
-  with an empty replacement. So `cat ${HOME/%//.kube}/config`, `cat ${HOME/#*/~/.exo}/keys/seat` and
+  anchoring, with a subscript (`${HOME[0]/%//.exo}`), nested at any depth in another form, and across a line
+  continuation. It holds in a word a brace set builds: bash expands braces first, so `{$,}{HOME/%//.exo}` is
+  `${HOME/%//.exo}`. It holds with a quote, `$( )`, `<( )` or backticks in the form, or a `[` in its subscript. Bash
+  does not end the form at a `}` inside one of those, or the subscript at the first `]` (`${HOME[a[0]]/%//.exo}`),
+  so the gate cannot tell where it ends: `${HOME/%[!"}"]/u\/.exo}` is `$HOME/.exo` when `$HOME` ends in `u`. Such
+  a form asks even with an empty replacement. So `cat ${HOME/%//.kube}/config`, `cat ${HOME/#*/~/.exo}/keys/seat` and
   `cat ${EXO_HOME/%x/y}/keys/seat` ask, and `cp x ${HOME/%//.exo}/policies/default.yaml` and
   `write_file ${HOME/*/~/.exo}/policies/x.yaml` are store writes. The replacement may name a secret store as
   well, so a shell store write keeps a `credentials` part beside it. A substitution with an empty replacement only
@@ -590,7 +592,8 @@ classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the sto
 while they walk (`grep -r`, `rg -L`, `cp -rL`) are checked by their arguments only. In executor or broker mode the
 gate's view of the file system may differ from the worker's. A name built whole inside a substitution
 (`cat $(printf '.e%sv' n)`) is not read. Some forms that bash resolves into a store stay reads, as before #342: an
-operator that removes text but moves the folder (`cat ${EXO_HOME%/*}/exo-home/keys/seat`), a subscript before
+operator that removes text which the path then puts back (`cat ${EXO_HOME%/*}/exo-home/keys/seat`, and a
+substitution with an empty replacement, `cat ${EXO_HOME/%home/}home/keys/seat`), a subscript before
 another operator (`cat ${HOME[1]:-~/.exo}/keys/seat`, where bash takes the default), and a substitution of another
 variable whose replacement names a store (`cat ${PWD/*/$HOME/.exo}/keys/seat`). `XDG_CONFIG_HOME` is not one of the
 four store variables, so `cat $XDG_CONFIG_HOME/gh/hosts.yml` is a read too. Open issues:
