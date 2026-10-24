@@ -85,13 +85,15 @@ def env(monkeypatch):
 
 
 def pin_each_other(d):
-    """Each home holds the other seat's key, as seats that share one home do (#132): a peer's messages are checked
-    against the key in the receiving home, never against its presence file. Hermes runs on ``exohome``, exod on
-    ``exo``."""
+    """Each home holds the other seat's key and a seat file for it, as seats that share one home do (#132): a peer's
+    messages are checked against the key in the receiving home, never against its presence file. Hermes runs on
+    ``exohome``, exod on ``exo``."""
     pairs = ((d / "exo", "exo-test", d / "exohome"), (d / "exohome", "hermes-test", d / "exo"))
     pubs = [ensure_key(key_path(home, seat)).with_suffix(".pub") for home, seat, _ in pairs]  # both keys first
     for (_, seat, other_home), pub in zip(pairs, pubs):
         shutil.copy(pub, key_path(other_home, seat).with_suffix(".pub"))
+        (other_home / "seats").mkdir(exist_ok=True)
+        (other_home / "seats" / f"{seat}.toml").write_text(f'name = "{seat}"\n')
 
 
 class Quiet:

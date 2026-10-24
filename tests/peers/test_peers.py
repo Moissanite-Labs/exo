@@ -98,11 +98,13 @@ async def until(fn, secs=3.0):
 
 
 def pin_peer(home, seat, pub):
-    """Put a seat's ``.pub`` in a home's ``keys/``, where seats that share one home find each other's keys (#132):
-    a daemon's messages earn trust only against a key the receiving home holds, never against its presence file."""
+    """Put a seat's ``.pub`` in a home's ``keys/``, and a seat file that names no principal, as for seats that share
+    one home (#132): a daemon's messages earn trust only against a key the receiving home holds for a seat of its
+    own, never against its presence file."""
     p = key_path(home, seat).with_suffix(".pub")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(pub + "\n")
+    seat_file(home, seat)
 
 
 async def pair(run_dir, b_peers=None, **kw):
@@ -368,12 +370,12 @@ class StubTarget(Target):
         self.seen.append(held.ing)
 
 
-def victim_node(run_dir, principal="ada", config=None):
+def victim_node(run_dir, principal="ada", config=None, seat="beta"):
     """A beta node whose home holds only beta's own key, as PeerService.start builds it."""
     home = run_dir / "home"
-    signer = crypto.Signer.from_file("beta", ensure_key(key_path(home, "beta")))
+    signer = crypto.Signer.from_file(seat, ensure_key(key_path(home, seat)))
     stub = StubTarget()
-    node = PeerNode(seat="beta", signer=signer, target=stub, sessions=lambda: [],
+    node = PeerNode(seat=seat, signer=signer, target=stub, sessions=lambda: [],
                     directory=Directory(run_dir / "peers"), socket="/tmp/beta.sock", principal=principal,
                     home=home, config=config or PeerConfig())
     return node, stub, home

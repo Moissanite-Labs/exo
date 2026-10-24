@@ -494,6 +494,8 @@ def test_peers_command_send_and_inline_peer_message(tmp_path):
                     pin = key_path(home, seat).with_suffix(".pub")  # each home pins the other seat's key (#132)
                     pin.parent.mkdir(parents=True, exist_ok=True)
                     pin.write_text(pub + "\n")
+                    (home / "seats").mkdir(exist_ok=True)  # and records it as a seat of its own
+                    (home / "seats" / f"{seat}.toml").write_text(f'name = "{seat}"\n')
                 await send(app, pilot, "/peers")
                 await until(lambda: "razi" in app.transcript_text(), pilot)
                 await send(app, pilot, "/send razi are you free?")
