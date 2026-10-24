@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 
 import pytest
 
@@ -482,6 +483,39 @@ def test_a_threads_note_after_the_question_is_not_the_turn():
     assert estimate_tokens(call[-1]) > ctx.view_budget and not any(t.startswith("private note 0 ") for t in call)
 
 
+def test_a_steer_mid_turn_keeps_the_question_and_every_result():
+    """Issue #244: build finds the turn by its turn_id. After 20 pending pairs the model reads ten files of 4k
+    characters, and a steer comes in during the seventh read. By call 9 the question's own leaf is pending too, yet
+    the call keeps the question, the steer and all nine results: the turn starts at its first message, not at its
+    last user message. /context, asked during the tenth read, finds the running turn the same way."""
+    store, ctx, prov, loop, summ = slow_private(reads=10, size=4000)
+    read, seen = loop.run_tool, {}
+
+    async def steer_and_read(call, c):
+        if call.id == "c6":
+            loop.steer(c["session"], Message.user("STEER also check f9"))
+        if call.id == "c9":
+            seen["report"] = ctx.report(c["session"], "SYS")
+        return await read(call, c)
+    loop.run_tool = steer_and_read
+
+    async def go():
+        summ.gate = asyncio.Event()
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        store_pairs(store, p.id, 20)
+        await loop.send(p.id, "QLONG summarize the files")
+        leaves = [(n.start, n.end) for n in store.summaries(p.id) if n.level == 0]
+        summ.gate.set()
+        await settle_own(ctx, p.id)
+        return leaves
+    leaves = run(go())
+    call = texts(prov.calls[9])
+    assert (41, 48) in leaves and "QLONG summarize the files" in call and "STEER also check f9" in call
+    assert all(any(t.startswith(f"FILE-c{i} ") for t in call) for i in range(9))
+    assert SUMMARIZING_MARKER in call and not any(t.startswith("private note 0 ") for t in call)
+    assert seen["report"]["tail"]["messages"] == len(call)  # the call's system message out, the c9 call in
+
+
 def test_nothing_is_cut_while_no_leaf_is_pending():
     """Issue #244: the cut and its marker apply only while the private tree has leaves pending. Four 8k pastes make
     no leaf at all with a fast summarizer, so all four stay and no marker says a summary is coming."""
@@ -533,10 +567,11 @@ def test_failed_and_skipped_spans_stay_verbatim(retryable, status):
     assert "RULING: never email the client directly" in call and SUMMARIZING_MARKER not in call
 
 
-def test_a_skipped_paste_stays_beside_pending_leaves():
-    """Only the spans of pending leaves are cut. A paste whose leaf was skipped for good stays verbatim while the
-    pending spans after it are cut behind the marker."""
-    summ = Refuse(lambda content: "PASTE" in content)
+@pytest.mark.parametrize("retryable,status", [(False, "skipped"), (True, "failed")])
+def test_a_skipped_paste_stays_beside_pending_leaves(retryable, status):
+    """Only the spans of pending leaves are cut. A paste whose leaf was skipped for good, or failed and waits to
+    retry, stays verbatim while the pending spans after it are cut behind the marker."""
+    summ = Refuse(lambda content: "PASTE" in content, retryable)
     store, ctx, prov, loop, _ = slow_private(summ, max_attempts=1)
 
     async def go():
@@ -553,7 +588,7 @@ def test_a_skipped_paste_stays_beside_pending_leaves():
         return statuses
     statuses = run(go())
     call = texts(prov.calls[-1])
-    assert statuses[0] == "pending" and statuses[-1] == "skipped" and statuses.count("skipped") == 1
+    assert set(statuses) == {"pending", status} and statuses.count(status) == 1
     assert "keep this PASTE " + "x" * 30000 in call and SUMMARIZING_MARKER in call
     assert not any(t.startswith("private note 5 ") for t in call)  # in the second leaf, a pending one
 
@@ -659,6 +694,107 @@ def test_a_fast_summarizer_leaves_nothing_to_cut(big, status):
     call = texts(prov.calls[-1])
     assert [n.status for n in store.summaries(p.id)] == [status] and SUMMARIZING_MARKER not in call
     assert call[-1] == "and now?" and ("Q0" in call) == (status == "skipped")
+
+
+class AgentHeld(Summ):
+    """Holds the agent tree's jobs at a gate; a private thread's leaf takes 0.1 s, or waits at the gate too."""
+
+    def __init__(self, lands):
+        super().__init__()
+        self.gate, self.lands = asyncio.Event(), lands
+
+    async def summarize(self, content, previous=None, session=None, **kw):
+        await (asyncio.sleep(0.1) if self.lands and not session.startswith("agent:") else self.gate.wait())
+        return await super().summarize(content, previous, session)
+
+
+@pytest.mark.parametrize("lands", [True, False])
+def test_the_wait_before_a_cut_is_for_the_private_trees_own_leaves(lands):
+    """Issue #244: the private tree's turn waits up to overflow_settle when the cut would apply, for that tree's own
+    leaves only. A job of the agent tree, here a public thread's leaf that never lands, does not stretch the wait:
+    the turn waits the 0.1 s its own leaf takes, not the 1 s of overflow_settle, and carries that leaf's summary.
+    A private leaf that does not land in time is cut after overflow_settle."""
+    summ = AgentHeld(lands)
+    store, ctx, prov, loop, _ = slow_private(summ)
+    ctx.overflow_settle = 1.0
+
+    async def go():
+        a = await loop.create_session(agent="razi", title="public")
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        for i in range(12):
+            store.append_message(a.id, Message.user(f"public {i}"))
+            store.append_message(a.id, Message.assistant(f"done {i}"))
+        store.append_message(p.id, Message.user("PASTE " + "p" * 24000))
+        store_pairs(store, p.id, 9, size=10)
+        t = time.monotonic()
+        await loop.send(p.id, "what was in the paste?")
+        took, running = time.monotonic() - t, ctx.pending(AgentContext.key("razi"))
+        summ.gate.set()
+        await ctx.settle(AgentContext.key("razi"), 5, None)
+        return took, running
+    took, running = run(go())
+    call = texts(prov.calls[-1])
+    assert running and (took < 0.8 if lands else 1.0 <= took < 2.5), took
+    assert not any("PASTE" in t for t in call) and (SUMMARIZING_MARKER in call) != lands
+    assert "what was in the paste?" in call
+
+
+def test_a_turn_that_need_not_wait_reads_its_private_thread_once():
+    """Issue #244: the wait check builds a private thread's tail to see whether the cut applies. When it does not,
+    the call takes that tail, so build reads the thread once while a leaf is pending. A context note stored after
+    the check makes the call read it again, so the note is in the call."""
+    store, ctx, prov, loop, summ = slow_private()
+    reads, read = [], ctx._thread_tail
+    ctx._thread_tail = lambda s, f: reads.append(s) or read(s, f)
+
+    async def go():
+        summ.gate = asyncio.Event()
+        a = await loop.create_session(agent="razi", title="public")
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        store_pairs(store, p.id, 10, size=10)
+        await loop.send(p.id, "first")
+        once, pending = reads.count(p.id), bool(TreeContext.pending(ctx, p.id))
+        await loop.send(a.id, "public news")
+        reads.clear()
+        await loop.send(p.id, "second")
+        summ.gate.set()
+        await settle_own(ctx, p.id)
+        return once, pending, reads.count(p.id)
+    once, pending, twice = run(go())
+    assert pending and once == 1 and twice == 2
+    assert texts(prov.calls[-1])[-1].startswith(NOTE_HEAD) and SUMMARIZING_MARKER not in texts(prov.calls[-1])
+
+
+def test_the_wait_check_finds_the_turn_by_its_turn_id_too():
+    """Issue #244: the wait check keeps the turn whole, as build does. Five short pairs leave room before the
+    question, so no call of a ten-read turn cuts, though its first three reads (10k characters each) are in a
+    pending leaf from call 8 and a steer came in during the seventh read. Calls 8 and 9 do not wait: their view is
+    within the budget too. Found by its last user message, the turn would start at the steer, and each would wait
+    overflow_settle for a cut the call does not make."""
+    store, ctx, prov, loop, summ = slow_private(reads=10)
+    ctx.overflow_settle = 0.5
+    stamps = {}
+
+    async def steer_and_read(call, c):
+        stamps[call.id] = time.monotonic()
+        if call.id == "c6":
+            loop.steer(c["session"], Message.user("STEER also check f9"))
+        return ToolResult.of_text(call.id, f"FILE-{call.id} " + "f" * (10000 if call.id in ("c0", "c1", "c2") else 10))
+    loop.run_tool = steer_and_read
+
+    async def go():
+        summ.gate = asyncio.Event()
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        store_pairs(store, p.id, 5, size=10)
+        await loop.send(p.id, "QLONG summarize the files")
+        leaves = [(n.start, n.end, n.status) for n in store.summaries(p.id) if n.level == 0]
+        summ.gate.set()
+        await settle_own(ctx, p.id)
+        return leaves
+    leaves = run(go())
+    assert (9, 16, "pending") in leaves and len(prov.calls) == 11
+    assert stamps["c9"] - stamps["c7"] < 0.5, stamps["c9"] - stamps["c7"]  # calls 8 and 9 are built in between
+    assert not any(SUMMARIZING_MARKER in texts(c) for c in prov.calls)
 
 
 def test_the_cut_measures_tool_call_arguments_in_full():

@@ -15,9 +15,11 @@ before the turn fits ``view_budget``, and ``SUMMARIZING_MARKER`` stands in each 
 the view shows verbatim because a later leaf landed first. The overflow check measures pending spans as the view
 renders them, cut short, so that tree also waits when ``cut_pending`` would leave a span out: a leaf this call
 scheduled gets its chance to run first, and a fast summarizer, or a span too small to summarize, leaves no cut.
+That wait is for the tree's own leaves only, not the agent tree's jobs.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -54,6 +56,8 @@ def cut_pending(ctx: Any, session: str, tail: list, turn_id: str = "") -> list:
                 max((i for i, m in enumerate(tail) if m.role == "user" and not m.meta.get("note")), default=len(tail)))
     cost = {m.meta["seq"]: _cost(m) for m in tail[:turn] if "seq" in m.meta}  # the private view has no seq
     used = sum(cost.values()) + sum(_cost(m) for m in tail[:turn] if "seq" not in m.meta)
+    if used <= ctx.view_budget:  # room to spare: no need to read the leaves
+        return tail
     view = tail[0].text() if tail and "seq" not in tail[0].meta and tail[0].meta.get("note") == "private" else ""
     cut: set[int] = set()
     for leaf in sorted((n for n in ctx.store.summaries(session) if n.level == 0 and n.status == "pending"),
@@ -98,18 +102,49 @@ def verbatim_overflows(ctx: Any, key: str) -> bool:
     return used > ctx.view_budget
 
 
-def _cuts(ctx: Any, key: str) -> bool:
-    """True when ``cut_pending`` would leave a span out of a private thread's next call (issue #244)."""
+def _cuts(ctx: Any, key: str, turn_id: str = "") -> bool:
+    """True when ``cut_pending`` would leave a span out of a private thread's next call (issue #244). When it would
+    not, that call's ``thread_tail`` takes the tail built here, so ``build`` reads the thread once."""
     own = getattr(ctx, "_own", None)  # an AgentContext: only a private thread has a tree keyed by its session id
     if own is None or key.startswith("agent:") or not own(key):
         return False
     tail = ctx._thread_tail(key, 0)  # a private thread's tail starts at its own tree's frontier
-    return cut_pending(ctx, key, tail) is not tail  # it returns the tail itself when it leaves nothing out
-
-
-async def settle_for_turn(ctx: Any, key: str) -> bool:
-    """Wait only as long as a turn needs: not at all with room to spare, else ``overflow_settle`` seconds. A private
-    thread's tree has no room to spare when ``cut_pending`` would leave a span out."""
-    if not ctx.pending(key) or not (verbatim_overflows(ctx, key) or _cuts(ctx, key)):
+    if cut_pending(ctx, key, tail, turn_id) is not tail:  # it returns the tail itself when it leaves nothing out
         return True
-    return await ctx.settle(key, min(ctx.settle_timeout, getattr(ctx, "overflow_settle", OVERFLOW_SETTLE)))
+    ctx._uncut = (key, ctx.store.last_seq(key), tail)
+    asyncio.get_running_loop().call_soon(setattr, ctx, "_uncut", None)  # gone once anything else runs: a leaf may land
+    return False
+
+
+def thread_tail(ctx: Any, session: str, frontier: int, turn_id: str = "", last_turn: bool = False) -> list:
+    """The thread's tail as its next call carries it: ``_thread_tail``, then ``cut_pending``. ``build`` takes the tail
+    its wait check just built when nothing has run or been stored since. With ``last_turn`` (``/context``) the turn
+    is the thread's last stored one: mid-turn, the running turn, as ``build`` finds it by its turn_id."""
+    uncut, ctx._uncut = getattr(ctx, "_uncut", None), None
+    if uncut and uncut[:2] == (session, ctx.store.last_seq(session)):
+        return uncut[2]
+    tail = ctx._thread_tail(session, frontier)
+    if last_turn:
+        turn_id = next((m.meta["turn_id"] for m in reversed(tail) if m.meta.get("turn_id")), "")
+    return cut_pending(ctx, session, tail, turn_id)
+
+
+async def settle_for_turn(ctx: Any, key: str, turn_id: str = "") -> bool:
+    """Wait only as long as a turn needs: not at all with room to spare, else ``overflow_settle`` seconds. A private
+    thread's tree has no room to spare when ``cut_pending`` would leave a span out. Then the turn waits for that
+    tree's own leaves only: the agent tree's jobs cannot shrink the cut."""
+    from exo.core.context import TreeContext  # core imports this module
+
+    if not ctx.pending(key):
+        return True
+    timeout = min(ctx.settle_timeout, getattr(ctx, "overflow_settle", OVERFLOW_SETTLE))
+    if verbatim_overflows(ctx, key):
+        return await ctx.settle(key, timeout)
+    if not _cuts(ctx, key, turn_id):
+        return True
+    deadline = asyncio.get_running_loop().time() + timeout
+    while pending := TreeContext.pending(ctx, key, "live"):  # AgentContext.pending adds the agent tree's jobs
+        if (left := deadline - asyncio.get_running_loop().time()) <= 0:
+            return False
+        await asyncio.wait(pending, timeout=left)
+    return True

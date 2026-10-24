@@ -119,7 +119,8 @@ of large tool-call arguments can still be skipped as too small, since a leaf's s
 400 characters, and then it stays verbatim. The system message is the same as in the agent's other threads, so
 the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its `checkpoint`),
 `capture_principal` or `on_compacted`. `/context` counts its view and the marker in the recent tail, and its
-`from_seq` is the first stored message there. `/compact` folds only the agent tree.
+`from_seq` is the first stored message there. It finds the turn by the thread's last turn id, so during a turn it
+keeps the running turn whole, as the call does, steer messages included. `/compact` folds only the agent tree.
 
 A fork copies its parent's finished per-session summaries, but it numbers its copies 1 to n. Undo hides
 rows that are in the agent log, so their numbers stay used, and it deletes rows outside the log, such as a
@@ -191,7 +192,9 @@ more than `settle_timeout`), then builds with what is ready. The rule lives in `
 thread checks its own tree the same way, after the agent tree. Its tree also waits when the call would leave out a
 pending span (#244). That check counts each message in full, where the view cuts it short, so a leaf the call
 just scheduled gets its chance to run first. A fast summarizer, or a span too small to summarize, then leaves
-nothing to cut.
+nothing to cut. That wait is for the private tree's own leaves only. The agent tree's jobs cannot shrink the cut,
+so they do not stretch it. So a private turn can now wait where it did not: while a cut would apply, each call
+waits up to `overflow_settle` for those leaves.
 
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf
