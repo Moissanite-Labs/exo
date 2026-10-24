@@ -578,7 +578,9 @@ Known limits. A link made on the same line (`tar xf v.tar && cat notes.txt`) doe
 classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the store. Programs that follow links
 while they walk (`grep -r`, `rg -L`, `cp -rL`) are checked by their arguments only. In executor or broker mode the
 gate's view of the file system may differ from the worker's. A name built whole inside a substitution
-(`cat $(printf '.e%sv' n)`) is not read. Open issues:
+(`cat $(printf '.e%sv' n)`) is not read. A `cd` target is read as written here, not folded as bash's `cd`
+folds it, so `cd xl/../kl && tar czf /tmp/o.tgz .` stays a read while its `cwd` form asks (the store-write
+checks fold it, #340). Open issues:
   - #309: the Exo-store write checks (`is_store_path`, "The store is credentials" below) read the `${VAR:-word}`
     value but not expansions inside a name, so `cp x ~/.exo/polic$(:)ies/gates.yaml` is still a shell command (a
     write redirection to a path with `$` already asks as `opaque_exec`);
@@ -1778,8 +1780,10 @@ the link `sdir`, so with `sdir -> ~/.exo/state` it is `~/.exo/policies`, and the
 same way. This holds for a `cwd` argument too (`sdir/../policies`), and on the secret-store side
 (`cat seat` with `sdir/../keys` as `cwd` asks). A `cwd` argument and a `cd` target are read folded
 as well, as bash's `cd` enters them, so with `xl` a link elsewhere, a `cwd` of `xl/../pdir` and
-`cd xl/../pdir && echo x > default.yaml` ask. A path word itself is read joined only, as the kernel
-reads it: `cp y xl/../pdir/default.yaml` writes through `xl`, not into the store.
+`cd xl/../pdir && echo x > default.yaml` ask. So is the folder a `cd` enters: bash enters `notes`
+for `cd xl/../notes`, so `cd xl/../notes && cp x ../pdir/default.yaml` asks. A path word itself is
+read joined only, as the kernel reads it: `cp y xl/../pdir/default.yaml` writes through `xl`, not
+into the store.
 
 In a store folder every relative word is a store path, the program word too. So a write is named
 after a word that is a store path by its own spelling first: `touch ~/.exo/state/x` with

@@ -436,10 +436,24 @@ def test_a_reserved_entry_reaches_the_folded_folder(links):
     {"command": "cd xl/../pl/foo && cp /tmp/evil.py hook.py"},
     {"command": "cd sub && cd ../xl/../pdir && echo x > default.yaml"},
     {"command": "cd ~/proj/xl/../pdir && echo x > default.yaml"},
+    # bash's `cd` enters notes here, so ../pdir is the policies folder (_cd_enter reads the folder folded too)
+    {"command": "cd xl/../notes && cp x ../pdir/default.yaml"},
+    {"command": "pushd xl/../notes && echo x > ../pdir/default.yaml"},
+    # and rel (-> ../.exo) here, the Exo home itself, as `cd ~/.exo` does (_in_store_dir reads the target folded too)
+    {"command": "cd xl/../rel && touch x"},
+    {"command": "cd xl/../rel && cp /tmp/a /tmp/b"},
 ])
 def test_a_dotdot_after_a_link_in_the_folder_is_read_folded_for_store_writes(links, args):
     assert outcome("bash", args, cwd=str(links)) == ("store_write", "ask")
     assert outcome("bash", args, cwd=str(links), policy=DENY_STORE) == ("store_write", "deny")
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("cd xl/../notes && cp x y", ("read", "allow")),
+    ("cd xl/../notes && echo x > y.md", ("local_write", "allow")),
+])
+def test_a_folded_cd_out_of_the_store_keeps_its_class(links, command, expected):
+    assert outcome("bash", {"command": command}, cwd=str(links)) == expected
 
 
 def test_a_brace_word_met_again_after_a_cd_is_read_again(tree):
