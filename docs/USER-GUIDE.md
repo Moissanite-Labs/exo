@@ -408,13 +408,20 @@ Peers are other live sessions on the machine: Exo sessions, Hermes agents and bu
   A held message that nobody answers expires after 30 minutes.
 - A peer message shows as "from another session, not from you". It is input, not an order.
 - A peer counts as one of your sessions only when this Exo home holds its key and names you as its principal. Seats
-  that share one home hold each other's keys in `$EXO_HOME/keys/`, so they deliver at once. A peer whose key this
-  home does not hold is held, and the card says `key not pinned`. A presence file that claims your name changes
-  nothing (#132).
+  that share one home hold each other's keys in `$EXO_HOME/keys/`, and each seat file names its principal, so they
+  deliver at once. A peer whose key this home does not hold is held, and the card says `key not pinned`. A presence
+  file that claims your name changes nothing (#132).
+- An unseated daemon or a Hermes profile on this home has no seat file. Toward a daemon with no seat principal of
+  its own, it counts as the principal `config.json` names (`exo config set principal <id>`). A seat whose seat file
+  names a principal holds its messages for you. To have them delivered at once, give it a seat file that names you:
+  `$EXO_HOME/seats/<name>.toml` with `principal = "<id>"`.
 - A seat from another home: copy its key from `<that home>/keys/<seat>.pub` and run `exo keys pin --peer <seat>
   <key>` here. Its messages are then checked against that key, and still held for you. A `[peers] rules` entry for
   its name delivers them at once. A message under a name whose key this home holds, signed by another key, is
-  refused.
+  refused. Use `--peer`: a plain `exo keys pin` also lets that key sign your ledgers.
+- If a seat's key was made again, its messages are refused until you pin the new key:
+  `exo keys pin <seat> $EXO_HOME/keys/<seat>.pub --replace`. A Hermes profile's name must be a seat id (lowercase
+  letters, digits, `-` and `_`), or its messages are refused. `docs/PEERS.md` "Peer keys" lists these cases.
 - A bus seat's message is checked against the key Exo pinned for that seat the first time, held for you by default,
   and answered on the bus only if your rules let that seat through on its own. `exo keys` shows the pinned seats.
 

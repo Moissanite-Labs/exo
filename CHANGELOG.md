@@ -83,17 +83,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the sender's presence file, and took the sender's principal from the same file. Any same-user process can write
   a presence file, so a forged one (any seat, any principal, the writer's own key) plus a self-signed envelope
   arrived framed as the principal typing in another client. The receiver now checks a peer only against keys in
-  its own home: its own key for its own seat name, the key registry's entry for the name, else the `.pub` beside
-  the seat's key file in `keys/`, or a peer pin. The principal comes from the seat file there, else from this
-  home's principal. A sender with no key here is held as `other`, and its card says `key not pinned`. A rule may
-  hold or deny it, but never deliver it sooner than its policy. A registry entry decides for its name, so a key
-  replaced with `exo keys pin --replace` is refused. A `from` that is not a seat name is denied before any key
-  lookup. A presence file is read only when it is a plain file in the peers folder, so a FIFO cannot stall
-  delivery. A later receipt must name the seat the message went to, come from that seat's daemon and verify
-  against that seat's keys here. Seats that share one home hold each other's keys, so nothing changes for them.
-  A seat of another home is pinned with the new `exo keys pin --peer SEAT PUB`. Its messages are then checked
-  against that key and held as `other`, and its key never signs a ledger. A seat of another home with the
-  receiver's own name is denied until it is pinned that way (D-026 and D-040 amendments).
+  its own home: its own key for its own seat name, and for a seat of this home (a seat file here, or its key file
+  in `keys/`) the key registry's entry for the name, else the `.pub` beside the seat's key file in `keys/`. A peer
+  pin checks a seat too, and so does a key for a name that is no seat of this home, such as one pinned with a
+  plain `exo keys pin`. The principal comes from the seat file there. A key with no seat file, such as an unseated
+  daemon's or a Hermes profile's, counts as the principal `config.json` names. It is `other` to a seat whose seat
+  file names a principal, and to a daemon run with an `EXO_PRINCIPAL` that `config.json` does not name. A sender
+  with no key here is held as `other`, and its card says `key not pinned`. A rule may hold or deny it, but never
+  deliver it sooner than its policy. A registry entry decides for its name, so a key replaced with
+  `exo keys pin --replace` is refused. A `from` that is not a seat name is denied before any key lookup, and the
+  sender is told so. A presence file or `.pub` is read only when the open file is a plain file, so a FIFO there
+  cannot stall delivery. A later receipt must name the seat the message went to, come from that seat's daemon and
+  verify against that seat's keys here. Seats that share one home hold each other's keys, so they deliver as
+  before. A few setups are now held or denied, each with a fix in `docs/PEERS.md` "Peer keys": a key made again
+  while the registry pins the old one, a seat file naming a key outside `keys/`, a profile name that is not a seat
+  id, and a key with no principal of its own toward a seat that names one. A seat of another home is pinned with
+  the new `exo keys pin --peer SEAT PUB`. Its messages are then checked against that key and held as `other`, and
+  its key never signs a ledger. A seat of another home with the receiver's own name is denied until it is pinned
+  that way (D-026 and D-040 amendments).
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

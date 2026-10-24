@@ -75,6 +75,8 @@ def test_plugin_loads_registers_and_receives(hermes_import, scratch):
             pin = key_path(scratch / "exo", "other").with_suffix(".pub")  # the home pins this peer's key (#132)
             pin.parent.mkdir(parents=True, exist_ok=True)
             pin.write_text(node.signer.pub + "\n")
+            (scratch / "exo" / "seats").mkdir(exist_ok=True)  # and records it as a seat of this home
+            (scratch / "exo" / "seats" / "other.toml").write_text('name = "other"\n')
             node.start()
             rows = await node.entries()
             assert [r["name"] for r in rows] == ["hermes-scratch"] and rows[0]["platform"] == "hermes"
