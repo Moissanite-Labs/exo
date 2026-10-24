@@ -46,8 +46,9 @@ rules = [{ from = "razi*", outcome = "auto" }]   # a bus seat is matched by its 
 enabled = true
 ```
 
-A rule matches a local peer only when this home holds its key. A presence file can claim any name, so a sender
-whose key is not held here gets the policy for its trust, whatever the rules say.
+A presence file can claim any name. So a rule can deliver a local peer sooner than its policy only when this home
+holds its key. A rule that holds or denies applies to every sender. A sender whose key is not held here gets its
+rule or the policy for its trust, whichever is stricter.
 
 ## Peer keys (#132)
 
@@ -76,9 +77,9 @@ The trust level comes from this home too:
   with `exo keys pin --peer exo PUB`, and its messages are held as `other`.
 - A sender name that is not a seat name (lowercase letters, digits, `-` and `_`) is denied before any key is looked
   up, so a path in the name never reads a file.
-- A receipt must name the seat the message went to, come from that seat's daemon, and verify against a key this
-  home holds for that seat. A receipt from a seat whose key is not held here is dropped, so the sender's client
-  shows no later outcome for that message.
+- A later receipt (released, denied or expired) must name the seat the message went to, come from that seat's
+  daemon, and verify against a key this home holds for that seat. A receipt from a seat whose key is not held here
+  is dropped, so the sender's client shows no later outcome for that message.
 
 To pin a peer from another home, read its public key there: `cat <that home>/keys/<seat>.pub` (a Hermes profile's
 key is in the `EXO_HOME` it runs with). Then, in this home, run `exo keys pin --peer <seat> <key>`. Messages from it
@@ -134,7 +135,8 @@ peer client is refused. The system prompt carries a standing line saying the sam
 - A message is a bus-format envelope signed with the sender seat's key. Sender session, target session,
   who wrote it and a nonce are inside the signed `attach`. The receiver checks id, signature, age and
   replay. The signature and the sender's principal come from this home, never from the sender's presence file
-  ("Peer keys" above). The presence file says where a daemon listens.
+  ("Peer keys" above). The presence file says where a daemon listens. It is read only when it is a plain file
+  in the peers folder, so the `daemon` an envelope names cannot point at a path or a FIFO.
 - Local delivery goes over the target daemon's socket with the `peers` protocol command (actions `list`,
   `send`, `deliver`, `receipt`, and `bus` for the bus channel; one command because the protocol has no command slots
   left). Events:
@@ -173,7 +175,13 @@ serves it (trust on first use); pin it by hand first if the relay is not yours. 
 guards where those keys come from: a tool call that writes `$EXO_HOME/bus/` or the keys folder asks the principal
 (`docs/GATE.md` "The store is credentials", #210).
 
-The peer keys of #132 stop a forged presence file only for programs that go through the gate. A program running as
-you outside the gate can still read a seat's key file, or write `keys/` and the seat files, and then speak as that
-seat. And any client of a daemon's socket that runs as you can ask it to `peers send` (D-039). That message arrives
-as `same-principal` automation, never as you typing: that is by design.
+The peer keys of #132 stop a forged presence file from speaking as one of your seats, and only for programs that
+go through the gate. A program running as you outside the gate can still read a seat's key file, or write `keys/`
+and the seat files, and then speak as that seat. And any client of a daemon's socket that runs as you can ask it
+to `peers send` (D-039). That message arrives as `same-principal` automation, never as you typing: that is by
+design.
+
+A presence file still says where a daemon listens, and a program that goes through the gate may write one. A
+forged one under a peer's name can receive the messages sent to that name. It can also answer each send with a
+first receipt, which is not signed, so the sending model may read a false outcome and its detail. Later receipts
+are checked as above.

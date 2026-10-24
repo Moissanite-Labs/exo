@@ -3,7 +3,8 @@
 Each test here is a review finding on the first #132 fix: a seat name that is a path, receipts not bound to the
 seat a message went to, the principal read from the presence file, a key rotated out but still read from its
 ``.pub``, a seat with the receiver's own name, a peer pin that also signed ledgers, rules that matched an unpinned
-sender, and a held card that did not say the key was not pinned."""
+sender, and a held card that did not say the key was not pinned. Rules must still hold or deny an unpinned sender,
+and a FIFO named by the envelope's ``daemon`` must not stall delivery either."""
 
 from __future__ import annotations
 
@@ -73,6 +74,33 @@ def test_a_pub_that_is_a_fifo_never_blocks_delivery(run_dir):
             t.join(5)
             pytest.fail(f"deliver blocked on a FIFO for {name!r}")
     assert [o["state"] for o in outs] == ["denied", "held"]
+
+
+def test_a_daemon_name_that_is_a_path_or_a_fifo_never_blocks_delivery(run_dir):
+    """The same stall by another field: the envelope's ``daemon`` names the presence file. A path there, or a FIFO in
+    the peers dir, was opened on the event loop by ``deliver`` and by every scan."""
+    node, stub, home = victim_node(run_dir)
+    (run_dir / "anywhere").mkdir()
+    (run_dir / "peers").mkdir(exist_ok=True)
+    fifos = [run_dir / "anywhere" / "evil.json", run_dir / "peers" / "stall.json"]
+    for f in fifos:
+        os.mkfifo(f)
+    alpha = crypto.Signer("alpha", crypto.keygen())
+    outs: list = []
+    jobs = [lambda: asyncio.run(node.deliver(envelope(alpha, daemon="../anywhere/evil"))), node.directory.scan]
+    for job in jobs:
+        t = threading.Thread(target=lambda j=job: outs.append(j()), daemon=True)
+        t.start()
+        t.join(5)
+        if t.is_alive():
+            for f in fifos:
+                try:
+                    os.close(os.open(f, os.O_WRONLY | os.O_NONBLOCK))
+                except OSError:
+                    pass
+            t.join(5)
+            pytest.fail("a FIFO named by a presence lookup blocked the loop")
+    assert outs[0]["state"] == "denied" and outs[1] == [] and not fifos[1].exists()  # the scan prunes it
 
 
 async def sent_to_alpha(run_dir, node, presence_key):
@@ -207,7 +235,7 @@ def test_exo_keys_pin_peer(capsys):
 
 
 @aio
-async def test_a_rule_matches_only_a_sender_whose_key_is_pinned(run_dir):
+async def test_a_rule_delivers_at_once_only_a_sender_whose_key_is_pinned(run_dir):
     """A rule names a sender, and a presence file can claim any name: an unpinned sender gets its trust's policy."""
     node, stub, home = victim_node(run_dir, config=PeerConfig(rules=[{"from": "alpha*", "outcome": "auto"}]))
     real = crypto.Signer("alpha", crypto.keygen())
@@ -217,6 +245,19 @@ async def test_a_rule_matches_only_a_sender_whose_key_is_pinned(run_dir):
     KeyRegistry.load(home).pin("alpha", real.pub, peer=True)
     out = await node.deliver(envelope(real))
     assert out["state"] == "delivered" and stub.seen[-1].trust == "other"
+
+
+@aio
+@pytest.mark.parametrize("outcome,policy,state", [("deny", {}, "denied"), ("hold", {"other": "auto"}, "held")])
+async def test_a_rule_still_holds_or_denies_an_unpinned_sender(run_dir, outcome, policy, state):
+    """A rule that holds or denies a name applies whether or not its key is held here. Dropping every rule for an
+    unpinned sender held a denied sender, and delivered a held one when the policy for ``other`` is auto."""
+    node, stub, home = victim_node(run_dir, config=PeerConfig(policy=policy,
+                                                               rules=[{"from": "noisy*", "outcome": outcome}]))
+    noisy = crypto.Signer("noisy", crypto.keygen())
+    announce(run_dir, "noisy", "noisy-1", noisy, "bob")
+    out = await node.deliver(envelope(noisy, "agent", daemon="noisy-1"))
+    assert out["state"] == state and "rule for noisy*" in out["detail"]
 
 
 @aio
