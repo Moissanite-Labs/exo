@@ -92,12 +92,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
   text, an unread body file included. A reopen or merge carrying no text is unchanged.
 - A handoff header field that spans lines can no longer add a section to the file (#395). The topic,
-  session, principal and path are now folded to one line when written, so a value holding a forged
-  `## Decisions made` heading stays inside the header or its list item instead of standing as a section
-  next to the principal's real words. On the read side, the header parse now respects quoted values, so
-  a `-->` inside a value no longer ends the comment early, and a file whose fields an older writer let
-  span lines, leaving two Decisions sections, now reads no rulings or corrections at all rather than the
-  first, forged copy. A file with the usual single Decisions section loads as before.
+  session, principal, path line and launch line are now folded to one line when written, so a value holding a
+  forged `## Decisions made` heading stays inside the header or its list item instead of standing as a section
+  next to the principal's real words. On the read side, the header parse now respects quoted values, so a `-->`
+  inside a value no longer ends the comment early. Sections count only after the header, and the values read
+  back are folded too, so `/exo resume` gets the topic on one line. Decisions is read from its one exact heading.
+  A file whose header values an older writer let span lines now loads the principal's rulings, whatever the
+  forged text holds: a forged `## State`, or a heading with two spaces. A forged copy in an older file's path or
+  title line, or in its summary next to a forged `## State`, makes the file read no rulings or corrections at all
+  rather than the forged ones. A file with the usual single Decisions section loads as before.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens

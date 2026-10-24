@@ -2144,7 +2144,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   after every untrusted one. A multiline tool path or command in a list field, or a pre-#349 file's unquoted
   summary, could put a forged `## Next steps` first and beat the genuine copy, retrieval query included. List
   fields and the topic line are now flattened to one line when written, and `load_handoff` reads Next steps from
-  its last copy in the file. Every other section still reads the first.
+  its last copy in the file. Every other section still reads the first (Decisions changed with #395, below).
+- *Amendment 2026-10-24 (#395):* the header values kept their line breaks. `_attr` escaped only quotes and
+  backslashes, so a topic, session or principal holding a forged `## Decisions made` line put it in the file ahead
+  of the real section, and first-wins loaded the forged copy. A `-->` in a value also ended the header early. The
+  writer now folds every header value, the path line and the launch line to one line. `load_handoff` ends the
+  header at the first `-->` outside a quoted value, folds each value it recovers, and reads sections only after
+  the header. Decisions is read from its one exact heading: the only one after the header, or the only one before
+  `## State` when the file has a single State heading. A forged copy can sit before the real one (an older file's
+  path or title line) or after it (a summary from before #349, a list field from before #353), so two copies
+  otherwise read as no rulings and no corrections. A heading with an extra space or tab after `##` is never read
+  as the section. `resume_text` still carries the raw file.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
