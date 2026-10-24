@@ -739,6 +739,218 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   resolving a relative path against the tool's `cwd` (the hook receives no cwd, and a `cd` on the line moves it);
   reading the stdin source file in the gate (the same folder problem, and a host read before a required worker).
   Limits: `docs/GATE.md` "What an approval covers".
+- **Amendment 2026-10-21 (issue #399):** the scope, the scrub, the footer and the third-party check all follow a gh
+  post's target, and the target was the first word after the subcommand that began with a GitHub URL, option values
+  included. `gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 ...'` was a post on `myorg/app#9`, so
+  under `internal: [myorg/*]` it logged and the scrub never ran. A number in an option value (`-b 7`, `--milestone 3`)
+  became the target's number the same way. Now `_gh_target` takes the repo and the number from `-R` and the operands
+  only. It reads them with the table the unseen check uses (`_GH_TAKES` and the text options, through
+  `_option_values`), so `--opt=value`, short clusters, `--` and options with no value read as in gh. `gh issue close`
+  lists `--duplicate-of` and `-r` now, and the table has rows for pr ready, lock and unlock, issue develop, lock,
+  unlock, delete and transfer, and release upload and delete (gh 2.89 `--help`), beside the pr reopen, pr merge and
+  issue reopen rows from #397, which `_GH_TAKES_BEFORE_399` leaves out since they are main's rows. gh keeps the
+  last `-R`. A URL operand names the repo even beside `-R`, because gh does that (`pr/shared/finder.go` and
+  `issue/shared/lookup.go` in gh 2.89). `_gh_url` reads the scheme and the host in any case, without a user, a port
+  or a leading `www.`, and the path decoded, close to what Go's url.Parse and `ghrepo.NewWithHost` give gh, and
+  takes github.com and any host that ends in `.github.com` (2026-10-22, below). gh's
+  readers take a pull request URL (`ParseURL`) or an issue or pull request URL (the issue lookup). `_gh_url` takes a
+  discussion URL and a repo URL too, which only adds a reading, since `-R` stays an other target. `gh repo` drops a
+  repo URL's `.git`. The reading before #399 keeps `_GH_URL` as it was, so the URL as written still counts. The
+  other readings the gate cannot rule out are kept as `Classification.alt_targets`, each with a copy of the action as
+  a part: `-R` when a URL operand names another repo,
+  and the reading before #399. `decide` decides the line on each and keeps the strictest outcome, the widest exposure,
+  any third party, and every violation and reserved part. So a line never decides lower than it did, and a deny or
+  reserved entry on either repo still fires, also when the gh call is not the line's most severe part. Each copy is
+  marked (`Classification.alt_copy`), and an ssh or mosh hop gives an empty one the host, as it gives the action's
+  own empty target. So a rule on the host's category sees it, as on main, where the gh part's own target was the
+  host. Matching the copies by their fields instead could retarget another part of the line. The exo-gate hook gives
+  the text it reads from a post's body file to each copy as well (`gate.fill_body`), and it reads the floor's body
+  file the same way, so a clean body counts as seen in every reading, as it did on main. A line with
+  other targets binds its approval to the exact command, as an outward act does (`binds_exact`), so a standing grant
+  on one of its targets does not run it, and its rule key and an "always" on it cover that exact line only. The
+  question the principal sees names every other target ("It may land on pub/repo#7 instead."), since the target it
+  names first may not be the one gh acts on. For a gh command outside the table the gate reads the operands twice,
+  with every option a flag and with every option taking a value. A URL operand that only the first reading finds never
+  replaces `-R`, and with no `-R` it names the target beside the reading without it. The unseen check also reads a
+  post with each row as it was before #399 (`_GH_TAKES_BEFORE_399`), and a line unseen then stays unseen, a close
+  whose `--duplicate-of` value is an option word too (gh refuses that line). gh also finds a subcommand past the
+  options before it, and the subcommand reads every option on the line: `gh pr -R pub/repo comment 5` and
+  `gh pr -b text comment 5` post (gh 2.89). The gate took the third word for the subcommand, so such a line was a read
+  and ran under any policy. `_gh_verb_order` now finds the subcommand as cobra does, past an empty word too, before
+  the command as well, and a word from an expansion where it or an option may stand makes the line `opaque_exec`,
+  unless the line as written, past the empty words before the command, is credentials (`gh "" secret "$V"`). An
+  alias from gh 2.89's help (`_GH_ALIASES`: `new`, `ls`, `co`, `remove`) reads as the subcommand it names, and gets
+  the floor below too. The line as read before is decided too (`Classification.floor`), the stricter standing on each
+  axis. `body_unseen` counts it too, so a line unseen as read before stays unseen. The exo-gate hook reads it in its
+  own checks too: a required executor refuses the line when either reading has a body file or an unseen body, so
+  `gh pr "$V" 5 -F notes.md` is refused as on main. Only an approver both
+  readings' categories allow may answer, and the line is answered once, with no grant and an ask in observe mode,
+  when either reading is in `NO_GRANT` or has an unseen body. A seat that answers `github_post` does not answer
+  `gh pr -b x comment 5`, which the principal alone answered as a read. Without the floor a
+  compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5` the edit now outranks the
+  push, as in the same line with the options after the subcommand, and a private scope lowers it. A differential
+  against main with #397 (b419f91b) read 270,394 distinct gh lines, every corpus of the #399 rounds and reviews, in
+  both trees. The 183,611 that classify differently were decided under 119 policies, the earlier harnesses' and
+  the reviews' (a deny map, a rule and a reserved entry on an ssh host with a gh category among them), and none was
+  lower on the outcome, the exposure, the third party, the violations, the reserved parts, `is_outward` or
+  `binds_exact`. They also ran through the exo-gate hook in 13 setups of 5 policies, with standing grants on 31
+  targets, with none, in observe mode and with a required executor, and none was lower on what the hook does (run,
+  ask or block), who may answer (each category with its own seat), "once", the binding or the scope an "always"
+  keeps. The unseen check and the executor's body check read both readings there, as the hook does, and none is
+  lower. 91 lines lose the `secret store` or `unseen_body` signal on the line as read, and the line as read before
+  keeps it, so the decision stands. For `secret store`, gh now reads a credentials subcommand past an option
+  (`gh ssh-key -y 123 delete`), so that line is credentials already and gets no extra mark, as
+  `cat .env && gh ssh-key delete 123 -y` gets none on main. The other 86,783 lines classify the same in both trees,
+  so they decide the same, and 5,000 of them run both ways differed on no axis. The gate does not read `GH_HOST` or
+  `gh api --hostname`, so `owner/name` counts as a repo on github.com. Nor does it read `GH_REPO`, which gh takes for
+  `-R` when the line has none: such a line counts as one on the current repo. `gh api` read its
+  endpoint from the first word with a `/` and no `=`, an option's value included (a header, a jq query). It now reads
+  its one operand with gh api's options that take a value (`_gh_api_endpoint`), and the old word is an other target.
+  Its method reads as pflag reads `-X` and `--method` (`_gh_api_method`): a cluster ends at `X`, one `=` goes, and the
+  last stands, so `gh api -iX DELETE` is a delete, which the first `-X` word as written read as a GET. When the two
+  differ the line gets a floor, read with the first word as before, so `-X DELETE -X GET` still meets a deny on
+  deletes.
+  `-R` reads as pflag and gh read it: one `=` after a short option goes (`-R=x`, `-wR=x`), and `_gh_repo` reads
+  `[HOST/]owner/name` and a repo URL as `ghrepo.FromFullName` does, the URL's path decoded as Go's url.Parse
+  decodes it. On a host gh does not send to github.com the value as
+  written is an other target, since a scope names repos on github.com. An operand from an expansion adds the empty
+  target, a repo the line does not name, since `-R` does not rule out the repo of a URL in it. Rejected: letting `-R`
+  win over a URL operand, since gh posts on the URL's repo and lines that asked as public would log. Also rejected:
+  dropping the earlier reading, since a deny or a rule naming the repo a body links to would stop firing on a line it
+  caught before.
+  2026-10-22, round 6 of the review: gh sends its request for a repo on any host that ends in `.github.com` to
+  github.com, with the github.com token. go-gh 2.13's `auth.NormalizeHostname` reads such a host as github.com, and
+  its GraphQL and REST clients (`graphQLEndpoint`, `restPrefix`) call github.com's API for it. gh's own
+  `ghinstance.RESTPrefix` does not read the host that way, and `gh repo delete` builds its URL with it, so
+  `gh repo delete https://api.github.com/pub/repo` asks `api.api.github.com`, which no DNS name answers. Reading
+  such a host as github.com is the stricter reading either way. The one exception is garage.github.com, which both
+  clients call at itself. `_gh_url` took only github.com and `www.github.com`, so
+  `gh pr comment https://api.github.com/pub/repo/pull/9 -R myorg/app` read as a post on myorg/app and logged under
+  `internal: [myorg/*]`, with no scrub and no third-party check. `_gh_on_github` now decides the host for `_gh_url`
+  and for `_gh_repo`'s sure, after the case, a user, a port and a leading `www.` go as gh drops them, so a `gh repo`
+  operand such as `api.github.com/pub/x` names pub/x. A host gh treats as another instance (`ghe.corp`, a ghe.com
+  tenancy, `github.com.`, a look-alike) names that instance's repo: a URL operand there, or `gh repo`'s first word, is
+  an other target (`_gh_elsewhere`), as a `-R` on another instance is. The gate read such a URL as no repo before. gh
+  also finds the command past the options before it (cobra's `stripFlags` with gh's root flags, where `--help` and
+  `--version` stand alone). `-R` is a persistent flag of each group that calls `cmdutil.EnableRepoOverride`: pr,
+  issue, release, secret, variable and others. gh repo itself does not, only `gh repo rename` and its deploy-key and
+  autolink groups. So
+  `gh -R pub/repo pr comment 5` posts on pub/repo#5. The gate read `-R` there as an alias or extension, so under
+  `opaque_exec: allow` the post ran with no posting checks. `_gh_command_at` finds the command as cobra does, and the
+  line as read before stays the floor. An option's value before the subcommand that bash may split (`_gh_splits`: an
+  expansion outside quotes, a glob, a brace expansion, `"$@"`) may put a word where gh looks for the subcommand, so
+  the line counts as `opaque_exec`, as with a word from an expansion in the subcommand's place (`gh pr -R $R view 5`).
+  A quoted value is one word. The reading before #399 and the floor keep what main read.
+  A differential against main 2ef1a81f found no line lower. gate_diff read 69,792 actions (its built-in
+  corpus and round 3's 40,000 lines) under its 76 policies, and 66,310 targeted lines (the review's lines, each host
+  form, options before the command and expansions before the subcommand, each also behind ssh, sudo, `bash -c` and
+  xargs and in compound lines) under those and 8 of the review's policies. The decide harness read the targeted lines
+  and 20,000 lines sampled from the round 5 corpus under 124 policies, and the exo-gate hook harness in 13 setups.
+  On 5,500 of them the line as read drops a signal (`indirection` mostly) or a body the executor checks, and the line
+  as read before keeps it, so the decision and the hook stand.
+  2026-10-22, round 7 of the review: Go's url.Parse checks only that a port is digits, with no range check
+  (`validOptionalPort` in Go 1.26), and `u.Hostname()` drops it. Python refuses a port past 65535, so `_gh_url` read
+  `https://github.com:99999/pub/x/pull/9` as no URL, and `gh pr review` with it and `-R myorg/app` was a post on
+  myorg/app that an allow rule there let through, while gh approves pub/x#9. url.Parse also decodes the host, and
+  Go's strings.ToLower maps U+0130 to `i`, where Python gives `i` and a combining dot, so for gh
+  `https://g%C4%B0thub.com/pub/repo/pull/9` is on github.com. `_gh_url_host` now reads the host as Go 1.26 does:
+  after the last `@`, the port after the first `:` (or after the `]` of an IPv6 address) as digits only, the host
+  decoded, and None where url.Parse refuses the URL (a second colon, a `[` past the start, an escape below %80 other
+  than %25, a control character before its `#`). `_gh_host` lowers each character, U+0130 to `i`. It is the only
+  character whose lower case differs between Go 1.26 and Python 3.13. `_gh_repo` reads a URL `-R` the same way, its
+  query and fragment dropped. `_gh_elsewhere` took any URL with two path segments, in any operand, also an option's
+  value in the reading where every option is a flag, so `gh variable set X -R myorg/app --body
+  https://hooks.example.com/a/b` logged under `private: [myorg/*]`. It now reads a repo only where gh does: a pull
+  request URL in gh pr (finder.go's `ParseURL`), an issue or pull request URL in gh issue (lookup.go), a discussion
+  URL in the gate's discussion group, and the first word of gh repo and of gh label clone (`ghrepo.FromFullName`).
+  `_gh_splits` scanned the source of a double-quoted word itself and counted parentheses in a `$( )` without its
+  quotes, so `gh pr -R "$(: ")")"$R view 5` read as a view. The lexer now marks a word bash may split
+  (`_Word.split`): an expansion outside double quotes, `"$@"`, `"${name[@]}"`, a `$( )` past the nesting cap, and a
+  `${ }` with a quote, a backslash or a `$(` before its first `}`, since bash may read past that `}`. An unquoted
+  `$(cat <<'EOF' .. EOF)` is such a word too, so gh reads it as a word from an expansion. Last, `gh -R $R secret set X`
+  stayed `opaque_exec`, since the split value took the command's place. When it does, the line is also read with
+  the value as one word, and that reading stands when it gives no grant (`credentials`).
+  A differential against main 2ef1a81f found no line lower. gate_diff read 14,426 targeted lines (each port, host
+  and escape form, URLs in option values, quotes in a `$( )`, here-doc substitutions, split values before the
+  command, each also behind wrappers and in compound lines) and round 6's 23,263 lines under 106 policies, and its
+  built-in corpus of 30,515 actions under its 76 policies. The decide harness read 3,796 of the lines that classify
+  differently under 119 policies, and the exo-gate hook harness 1,400 of them in 13 setups. On 208 the line as read
+  drops the `indirection` signal and the line as read before keeps it, so the decision and the hook stand.
+  2026-10-22, round 8 of the review: gh reads `-R` and `gh repo`'s first word with `ghrepo.FromFullName`. For a URL,
+  go-gh's `RepoInfoFromURL` drops a leading `www.` and lowers the host, and `ghrepo.NewWithHost` does both again. The
+  gate gave such a host one strip, so `gh repo delete https://WWW.garage.github.com/pub/x` read as pub/x on
+  github.com, while gh deletes the repo on garage.github.com. `_gh_repo_parts` now gives a URL's host `_gh_host`
+  twice, and `_gh_url` does the same for gh repo's first word. That line now has the empty target and the other target
+  `garage.github.com/pub/x`, as `https://garage.github.com/pub/x` has. A pull request URL keeps one strip, as
+  finder.go's `ParseURL` gives it. gh gist takes a gist's URL or id (`GistIDFromURL`), never a repo. Round 6 read
+  `https://gist.github.com/pub/abc` as the repo pub/abc, since its host ends in `.github.com`, so `_gh_read` no longer
+  reads a URL in gh gist. The reading before #399 keeps a github.com URL there, as main read it. The docs now say
+  which groups take `-R`: those that call `cmdutil.EnableRepoOverride`, such as pr, issue, release, secret and
+  variable, and not gh repo itself. GATE.md's limits name `GH_COBRA`, under which gh's root has no `--version` flag,
+  and `GODEBUG=urlstrictcolons=0`. A differential against main 2ef1a81f found no line lower. gate_diff read 34,440
+  targeted lines (each `www.` form of a repo word, `-R` and a pull request URL, gist URLs and ids, `--version`
+  before the command with and without `GH_COBRA`, each also behind ssh and `bash -c` and in compound lines) under
+  106 policies. The 3,822 of them that classify differently from round 7 went through the decide harness under 119
+  policies and the exo-gate hook harness in 13 setups, and none is lower on any axis.
+  2026-10-22, round 9 of the review: Go's url.Parse cuts the fragment off before it looks for a control character,
+  and keeps a fragment that has one (Go 1.26's `Parse` and `setFragment`). `_gh_url_parts` and `_gh_repo_parts`
+  refused a URL with a control character anywhere in it, so with `-R myorg/app` the line
+  `gh pr review $'https://api.github.com/pub/x/pull/9#\t' --approve` was a post on myorg/app that an allow rule there
+  let through, while gh approves pub/x#9. They now look for one only before the first `#`. Round 8 said gh reads gh
+  repo's first word with `ghrepo.FromFullName`. gh repo fork reads an `http:/`, `https:/` or `git@` value, and gh
+  repo clone any value with a `:`, with cli's `git.ParseURL` and `ghrepo.FromURL` instead, which drops a leading
+  `www.` once (fork.go and clone.go in gh 2.89). So `gh repo fork https://www.www.garage.github.com/pub/x` forks
+  pub/x on github.com, and round 8 read it as garage.github.com, where a deny on pub/* did not fire. `_gh_from_url`
+  tells the two apart, and `_gh_repo_parts` then reads the value as gh does: one strip, any value with a `:` and no
+  URL scheme as an scp-like ssh remote, and for clone the path's first two parts. Last, an option word before gh's
+  command with its `=` before any expansion (`gh --repo="$R" secret set X`) stands alone in cobra's `stripFlags`,
+  whatever bash puts after the `=`. `_gh_command_at` took it for the command, so the line was `opaque_exec`, and a
+  deny on credentials did not fire. It now passes over such a word unless bash may split it. When bash may, the line
+  read with the word whole stands when it gives no grant, as for `gh -R $R secret set X`. A differential against main
+  2ef1a81f found no line lower. gate_diff read 32,778 targeted lines (control characters around a URL's fragment,
+  each fork and clone value form, option words with a `=` before the command, each also behind ssh and `bash -c`),
+  round 7's 14,426 lines and round 8's 34,440 lines under 106 policies, and its built-in corpus of 31,505 actions
+  under its 76 policies. The 12,041 of those lines that classify differently from round 8 went through the decide
+  harness under 119 policies and the exo-gate hook harness in 13 setups, and none is lower on a decision axis or in
+  the hook. On 954 the line as read drops the `indirection` signal and the line as read before keeps it, so the
+  decision and the hook stand.
+  2026-10-22, round 10 of the review: since #406 the posting checks run on every post, and each copy of a post on
+  another target repeated the post's violations under the copy's name. A post with many violations then pushed
+  another post's past the twenty listed, where main lists it (`gh pr comment 5 -R https://ghe.corp/pub/repo -b
+  '<nine names>' && gh pr comment 7 -R pub/other -b 'ZZOTHER F'`). gate_diff counted 12 lowered pairs on 4 such
+  lines. A copy now lists, right after its post, only what neither the post nor another copy of it lists. A copy
+  can still find what its post does not: under a scope its target may be public where the post's is internal, and
+  main may have read the post on that target. A post read on another target than main's can also list more than
+  main does. So a line with such copies lists every violation, with no cap, and its list holds what main lists
+  (round 11 bounds it).
+  When decide merges the line's readings, a text two posts of one name both meet stays listed as often as one
+  reading lists it, as main lists it, where the merge kept it once. The ledger view (`Classification.as_dict`)
+  hides a user and password in `alt_targets` too. gate_diff, main 39cafcba against this change: the built-in
+  corpus, 62,293 actions under 87 policies, 0 lowered. 1,024 lines of crowded, repeated-name and scoped posts
+  under 93 policies: 0 lowered with the #460 script. Main's script at 3ddd89e9 counts 80 pairs on 16 of those
+  lines, and on each the one text missing is main's `and N more on other posts`, which a line that lists every
+  violation has no need of. #460 stops counting that line.
+  2026-10-23, round 11 of the review: one copy lifted the cap for every post on the line, so the card, the ledger
+  row and the decision model's input grew with the line. One copy and 500 posts of 20 names each gave a 1.1 MB
+  reason, past the ledger authority's 1 MiB limit, so no row was written. Now the other posts' entries keep main's
+  room of twenty, less the line's own violations, and the entries of posts with copies and of the copies have a room
+  of their own, 200 per reading (`_LISTED_WITH_COPIES`). Each keeps the line's order. Main lists an entry of a post
+  without copies only within its room, and lists at most twenty of the others, so this lists every entry main lists
+  while the posts with copies and their copies list no more than 200. A line past that can list fewer than main
+  does, and still asks. A first version had one room for both, so ten posts with copies of twenty names each pushed
+  a plain post's violation out (found by an independent review of this round). When decide merges the line's
+  readings, it lists one `and N more on other posts`, last, which counts what the readings left out (round 13). The
+  bound is on the count. 200 entries with long
+  targets can still pass 1 MiB where main's twenty do not, and main bounds no row either: #485. The docstring of
+  `classify` ends on its old last line again, which main's gate_diff tests patch after.
+  2026-10-23, round 13 of the review: that count could fall short or drop out. A copy's finding is in the merged
+  list twice, under the copy's name and as the post's own on the copy's target, and the old count took each such
+  twin for an entry a reading left out. So `gh pr comment 5 -R https://ghe.example.com/myorg/repo -b '<5 names> F'`
+  before 25 plain posts listed 30 entries and no count, where main lists 20 and `and 10 more`, and 5 posts were
+  neither listed nor counted. Each decision now keeps the entries it left out (`Decision.hidden`, out of the ledger
+  view). The merge counts each one the merged list does not hold, as often as one reading holds it. The merged list
+  and its count then hold what the merge lists with no room at all, so that line lists 30 and `and 5 more`.
+  Limits: `docs/GATE.md` "Where a gh command lands".
 
 - **Amendment (2026-10-21, #397):** a merge commit's subject and body are posted text.
   `gh pr merge --subject`/`--body` become the commit message in the repository, public on a public
@@ -975,6 +1187,30 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Not done: a write back through a link to a descriptor path, `/dev` or `/proc/self` made out of the gate's sight,
   after an open on descriptor 3 or above the gate cannot read; a hardlink to a store file opened on stdout; and a
   walk over a folder above the run folder.
+  *Amendment 2026-10-21 (issue #435):* the plugins folder `$EXO_HOME/plugins` joins the protected list, and
+  `.exo/plugins` counts as a name anywhere, as `.exo/bus` does. The core loads each plugin it finds there and runs its
+  code inside the harness with the harness's rights, so a write there installs or changes code the next session runs.
+  `cp evil.py ~/.exo/plugins/foo/__init__.py` was an allowed `shell`, and `write_file` on that path an allowed
+  `local_write`. Only a writing command after a `cd` or `git -C` into the home asked as a store write, and a delete
+  asked as a plain `delete`. Now any write into the folder is `store_write`, in every spelling the store check reads,
+  and a read with a read command stays a read. Because the folder is a store path, a narrowing of that `cd` rule to
+  the home's other folders (#203) leaves it out with no rule of its own. The call keeps its own reading as a part, so
+  a policy's denies on that reading still hold. A shell line keeps the command it was built from (D-075). A file tool
+  (`write_file`, `edit_file`, `patch`, `apply_patch`, `move_file`, `create_directory`, `delete_file`) keeps a
+  `local_write` part for each file it writes, or its own category, and a line that stands in a descriptor folder
+  (`cd /dev && cp x ~/.exo/plugins/foo/y`) keeps that folder as a second target. Both come from D-075's amendment for
+  #464 and #448 (#467), which landed first. So `deny: [local_write]`, `deny: [delete]`, `deny: [target:/dev*]`, the
+  matching `categories:` lines, `reserved:` entries, rules and a matrix cell that denies the part still deny it. This
+  change's first version, before #467, lowered both: a file tool's call was one `store_write` with no part, and the
+  line in `/dev` took the plugins path as its only target. #467 lifts both groups. `deny: [store_write]` still denies
+  such a call in every spelling. A `target:` entry on the folder denies it only in the spelling it names
+  (`target:~/.exo/plugins/*` misses `$HOME/.exo/plugins/x`). Left out, each for a later change. The folders in
+  `$EXO_PLUGIN_DIRS`: section 4 of the developer guide points that variable at a checkout, so a principal-only floor
+  there would ask on every edit. `$EXO_HOME/venv`: a floor on that folder would also ask whenever its own Python runs
+  a test. A copy that lands on the folder by a source's name, or an archive unpacked into the home: #125's landing
+  rule, in review, covers those for every protected folder. A relative path written by a tool whose working folder is
+  in the plugins folder, as for every protected folder: the store check reads a relative path by its name alone. A
+  per-name allowance for a plugin's own data, such as its `config.json` (#203).
   *Amendment 2026-10-21 (issue #133):* `$EXO_HOME/update` joins the protected list. It holds `allowed_signers`, the
   signed-update trust pin of D-073: with `update.require_signed` on, `exo update` installs the upstream tip only when
   it verifies against that file. A tool could rewrite it with no ask (`cp /tmp/evil ~/.exo/update/allowed_signers`
@@ -1049,6 +1285,58 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of the hook's terms on main and here over the same corpora, under three `approvals.yaml` tables that delegate to a
   seat, finds the approvers narrowed to the principal on 605 built-in and 11,110 focused actions, each `credentials`
   with a `store_write` part. None widens, and no once-only flag, exact binding or category changes.
+  *Amendment 2026-10-22 (issue #435, review):* a call that sends a store file out keeps the call. The review's wider
+  corpus found 414 more lowered pairs on #435's first version. An `email_send`, `web_post`, `github_post`,
+  `social_post`, `publish` or `payment` tool call with a plugin file in `files:`, and a `curl -T`, `curl -F` or
+  `mail -A` line, became `store_write` and lost the deny, matrix and rule outcomes and the posting violations of the
+  send. Main then read `policies/`, `state/` and `update/` the same way. The first version's claims that both lowered
+  groups arise only under a policy that denies or reserves the old category, and that no pair loses a posting
+  violation, were wrong for these calls. Now three things hold. A tool call that names a store path and that the gate
+  does not read as a file write or delete (its own category is not `local_write` or `delete`) is a `store_write` that
+  keeps the call as a part, with its target, text, title and amount. The #191 pass decides that part by its own matrix
+  cell too (D-075, the amendment for #464): the store outranks the send by its category, and its own cell (costly and
+  private) would hide the send's, so a `deny` cell for the send denies the line. A here-doc body on a store line goes
+  to a copy of the post the store write outranks, also a post inside a script fed to `bash`, so the posting rules read
+  it as they did when the post was the line. So a deny, a reserved hit or a posting violation of the send holds as on
+  main, and each such call still asks the principal alone when nothing denies it. For `policies/`, `state/` and
+  `update/` the here-doc body is stricter than main: main keeps the send as a part since #467, but gives the body to
+  no post, so `mail -A ~/.exo/policies/x a@b.c <<EOF` with a home path in the body lists no violation there. Not
+  changed: commands that only read but are not read commands (`sed -n`, `tree`, `sort`, `uniq`, `xxd`, `bat`,
+  `python3 -m json.tool`, `rsync -an`, a `grep` into a file elsewhere) ask the principal when they name a store path,
+  as for `policies/` on main. GATE.md lists them as known friction. Reading them as reads is left for a later change
+  (#482). The gate differential against main 5a9dc394 (#423) runs 92,317 actions under 95 policies. The corpus is the
+  built-in one, a corpus of these sends under wrappers (`sudo`, `env`, `timeout`, `bash -c`, `ssh`, `mosh`), in
+  compounds, `$( )` and here-docs, the reads above, and a checker's corpus of tools the gate reads as file writes by
+  their name and more here-doc forms. The policies are the 87 built-in ones and 8 more, with denies on targets,
+  reserved targets, tool names, a matrix and third parties. No pair loses a posting violation or a reserved hit. It
+  lowers 30 pairs, all in one group, and each line still asks the principal alone, with no grant. Under `sudo`,
+  `sudo -u` or `doas` over `ssh` or `mosh`, the wrapper makes the line's dominant part costly. The group covers any
+  write into the folder or send of a file in it there, not only a send: `sudo ssh host 'scp <plugin file> host:/tmp/'`
+  and `sudo ssh host 'cp evil.py ~/.exo/plugins/foo/__init__.py'` alike. The 30 pairs are the sends of the corpus
+  above. The review's corpus of 4,248 plugin-folder items, which adds writes under these wrappers, lowers 4,961 pairs
+  under 104 policies, all in this group (3,002 of them writes), and no other. On main a rule on `shell` or
+  `local_write` with `reversibility: costly` matched that part, and so did a matrix that denies that cell while
+  `store_write` has its own category line. The store write is now the dominant part, and the parts keep their own
+  reversibility, so neither denies the line. It asks the principal alone, as the same line with a `policies/` file
+  does on main. Before #467 landed, the same run against main 0f203e7f also lowered the two groups of the amendment of
+  2026-10-21: a file tool's call (580 pairs, 124 of them for a tool
+  the gate reads as a file tool by its name although it sends, such as `upload_file`) and a line in `/dev` (2,074
+  pairs). #467 lifts both. A second corpus of 8,949 here-doc lines (a plugin, `policies/`, `state/` or `update/` file
+  sent by `mail -A`, `mutt -a`, `curl -T` or `gh`, with a home path, a key or a footer in the body, under the wrappers
+  above) runs 27,132 actions under the same 95 policies and lowers none. Since #468 (#465), main reads a `$( )`,
+  backticks or `<( )` after a `cd` into the store in that folder, so such a write into the plugins folder asks on main
+  and here alike. 1,303 lines that put #468's forms into the folder, or a plugin file into a `$( )` after a `cd`
+  elsewhere, run 2,623 actions under the same 95 policies. They lower 67 pairs, all in the group above: a `sudo ssh`
+  send of a plugin file, also in a `$( )` after a `cd` into the store or `/dev`, where main's line is a store write
+  that the costly `shell` part denies.
+  Against main 8c09c29c, the review's corpus under 148 policies lowers 11 more pairs, in a second group:
+  `git push --force` followed by `rm` or `rm -rf` in the folder, under a matrix that denies the push's irreversible
+  cell and an anchored `'^git push'` command rule that allows. On main the push leads that line. The rule step passes
+  the rule over, since the line holds a command the rule does not name, so the matrix deny stands. Now the plugins
+  folder is a store, so the store write leads. #191's pass reads the push part's matrix deny and then lifts it,
+  because the anchored rule matches both the line and the part's own text (#394, #464). So the line asks the principal
+  alone. With the `rm` first, the rule does not match the line, and the deny stands. This order rule is main's: each
+  of the 11 decides as main decides the same line with a `policies/` file, on category, outcome and rule.
   *Amendment 2026-10-22 (issue #465):* a writing command after `cd` into the store is a store write, but the `cd`
   reached only the line's own commands. Each `$( )`, backticks and `<( )` body was classified as a fresh line, so
   `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the `x=$( )`, `cat <( )`, backtick and nested forms,
