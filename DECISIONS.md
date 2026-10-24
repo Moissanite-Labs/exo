@@ -1289,7 +1289,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   gate read it before (`floor`). Main's hook took who may answer, "once", grants and observe mode from the category of
   each reading. This change read the parts of the line only. Now `gate.readings` gives the line and its floor, and
   `gate.no_grant` and `gate.call_approvers` read every part of each. So a store write beside a secret read keeps a gh
-  line the gate reads two ways with the principal, in either order, also when only one reading holds the part. The
+  line the gate reads two ways with the principal, in either order, also when only one reading holds the part. In
+  `env; gh -R pub/repo release download v1 -D ~/.exo/policies` only the reading before #399 writes the store, since
+  gh's own reading takes `release download` for a read (#461). Main let a seat delegated `credentials` answer it. The
   hook's own `_readings` and `_no_grant` are gone. It calls the gate's helpers, which have the names and shape of
   #452's (#311), less its `also` reading. `binds_exact` keeps #399's `alt_targets` and `floor` terms beside
   `no_grant`. Since #435 the plugins folder is a store folder, so a file tool that names a secret and a plugin file
