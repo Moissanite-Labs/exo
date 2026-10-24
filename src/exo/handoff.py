@@ -729,7 +729,7 @@ def load_handoff(path: str | os.PathLike) -> Handoff:
     text = p.read_text(encoding='utf-8')
     attrs, end = _header(text)
     # Each value is folded to one line as the writer folds it, so an older file's topic that spans
-    # lines adds no line to `resume_text` or the /exo resume reply (#395).
+    # lines stays on one line where `resume_text` and the /exo resume reply repeat it (#395).
     meta = {k: _one_line(v.replace('\\"', '"').replace('\\\\', '\\')) for k, v in ATTR_RE.findall(attrs)}
     topic = meta.get('topic')
     if not topic:
@@ -760,8 +760,12 @@ def resume_text(handoff: Handoff, store: PrincipalStore | None = None, budget: i
     """Working context for a fresh session: the handoff plus a retrieval pass over the store. It goes into the
     system message, so every pinned-block tag in it is escaped (#279): the file quotes the agent's report and a
     summary, and records the principal's words as quoted items under their own headings, never as a pinned block."""
+    # The header goes in on one line: a value an older writer let span lines must not stand as a
+    # section next to the principal's words (#395).
+    end = _header(handoff.text)[1]
+    text = _one_line(handoff.text[:end]) + handoff.text[end:]
     parts = [f'Resuming "{handoff.topic}" from the handoff at {handoff.path}. The quoted rulings and '
-             'corrections are the principal\'s own words; follow them.', '', handoff.text.strip()]
+             'corrections are the principal\'s own words; follow them.', '', text.strip()]
     if store is not None and store.exists():
         query = ' '.join([handoff.topic] + handoff.open_decisions[:3] + handoff.next_steps[:3])
         try:

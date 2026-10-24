@@ -109,6 +109,7 @@ def test_a_single_decisions_section_still_loads(tmp_path):
     {"topic": "t" + FORGE},
     {"topic": "t -->" + FORGE + "<!-- x"},
     {"topic": ("t" + FORGE).replace("\n", "\r\n")},
+    {"topic": "t --!>" + FORGE + "<!-- x"},
     {"session": "x -->" + FORGE},
     {"principal": "p -->" + FORGE},
     {"topic": "t" + FORGE + STATE},                       # a forged State after the forged Decisions
@@ -120,8 +121,8 @@ def test_a_single_decisions_section_still_loads(tmp_path):
     {"topic": _spelled(" \t")},
     {"topic": _spelled("\t")},
     {"topic": "t\n## " + DECISIONS + "\n### Corrections\n> " + PEER + "\n"},
-], ids=["topic", "closer", "crlf", "session", "principal", "topic-state", "closer-state", "crlf-state",
-        "session-state", "principal-state", "two-spaces", "space-tab", "tab", "corrections"])
+], ids=["topic", "closer", "crlf", "bang", "session", "principal", "topic-state", "closer-state",
+        "crlf-state", "session-state", "principal-state", "two-spaces", "space-tab", "tab", "corrections"])
 def test_an_older_files_header_values_never_load_a_forged_ruling(tmp_path, monkeypatch, fields):
     _older_writer(monkeypatch)
     path = _written(tmp_path, **fields)
@@ -130,7 +131,7 @@ def test_an_older_files_header_values_never_load_a_forged_ruling(tmp_path, monke
     h = hf.load_handoff(path)
     assert (h.rulings, h.corrections) == ([MINE], [])
     assert len(h.topic.splitlines()) == 1
-    assert _heading_lines(hf.resume_text(h)) == _heading_lines(text)
+    assert _heading_lines(hf.resume_text(h)) == 1   # the header reaches the model on one line
 
 
 def test_an_older_files_header_values_open_no_other_section(tmp_path, monkeypatch):
@@ -152,6 +153,23 @@ def test_an_older_files_path_line_never_loads_a_forged_ruling(tmp_path, tail):
     clean = hf.render_handoff("t", _sig(), path=Path("/a"), created="2026-10-20T00:00:00Z")
     path = tmp_path / "old.md"
     path.write_text(clean.replace("- This file: /a\n", "- This file: /a" + tail + "\n"), encoding="utf-8")
+    h = hf.load_handoff(path)
+    assert (h.rulings, h.corrections) == ([], [])
+
+
+@pytest.mark.parametrize("old, new", [
+    ("1. o\n", "1. o" + FORGE + "\n"),          # an open decision before #353 flattened it
+    ("> S\n", "S" + FORGE + STATE),              # a summary before #349 quoted it, with its own State
+], ids=["open-decision", "summary-state"])
+def test_an_older_files_copy_the_reader_cannot_place_reads_no_rulings(tmp_path, old, new):
+    # The copy sits before the real State, or the file has two States: the reader cannot tell which
+    # copy the writer put there, so it reads none rather than risk the forged one.
+    sig = _sig()
+    sig.open_decisions = [hf.Signal("open_decision", "o")]
+    clean = hf.render_handoff("t", sig, created="2026-10-20T00:00:00Z", summary="S")
+    assert clean.count(old) == 1
+    path = tmp_path / "old.md"
+    path.write_text(clean.replace(old, new), encoding="utf-8")
     h = hf.load_handoff(path)
     assert (h.rulings, h.corrections) == ([], [])
 
