@@ -3412,7 +3412,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog in ("cd", "pushd"):
         target = next((w for w in words[1:] if not w.text.startswith("-")), None)
         dest = target.text if target else ""
-        if target and _in_store_dir_words(_shell_words(target, ctx.setdefault("store_braces", {}), "dir")):
+        if target and _in_store_dir_words(_shell_words(target, _store_braces(ctx), "dir")):
             ctx["store_cwd"] = True
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
@@ -4170,9 +4170,23 @@ def _in_store_dir_words(words: list[str] | None) -> bool:
     return words is None or any(_in_store_dir(x) for x in words)
 
 
+def _store_braces(ctx: dict) -> dict:
+    """The store checks' _shell_words memo for a line. Each folder a `cd` enters (_cd_enter) starts a new one, so a
+    relative word met again after it is read from there too (#340): `cp y ../p{a,b}/x; cd notes; cp y ../p{a,b}/x`."""
+    scope = _scope.get()
+    return ctx.setdefault(("store_braces", len(scope.entered) if scope else 0), {})
+
+
 def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
-    """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
-    seen = ctx.setdefault("store_braces", {})
+    """What in a simple command writes to the Exo store, or ''. Reads of the store are fine. A word that is a store
+    path only when read from the tool's folders or a `cd`'s (#340) names the write only if no word is one by its own
+    spelling: `touch ~/.exo/state/x` in ~/.exo/policies names ~/.exo/state/x. In a store folder the program word
+    never names it."""
+    seen = _store_braces(ctx)
+    near = ""                       # the first word but the program that is a store path only as read from a folder
+    lead = ""                       # the program word, when it leads into the store from a folder outside it
+    run = False                     # the program word is one because the folder it runs in is in the store
+    here: str | None = None         # _store_how("."): whether a folder the call runs in is in the store
     for op, t in k.redirs:
         # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
         # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. A
@@ -4182,11 +4196,14 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         held = op == "<" and n != ""
         if op in _WRITE_REDIRS or held:
             targets = _shell_words(t, seen, "target")
-            if targets is None or any(_store_word(x) for x in targets) or held and n in ("1", "2") and (
+            hows = {_store_how(x) for x in targets or ()}
+            if targets is None or "own" in hows or held and n in ("1", "2") and (
                     t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 return t.text
+            if "folder" in hows and not near:
+                near = t.text
     if all(p.category == "read" for p in parts):
-        return ""
+        return near
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
@@ -4199,14 +4216,33 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         if expanded is None:
             return w.text
         for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
-            if piece and _store_word(piece, ancestors=wide):
+            how = _store_how(piece, ancestors=wide) if piece else ""
+            if how == "own":
                 return piece
-        if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and \
-                _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")):
-            return words[i + 1].text            # git checkout, reset or commit inside the store
+            if how and not i:
+                # In a store folder every word reads as a store path, the program too: it is run, not written, so the
+                # folder names the write (below). From a folder outside the store the program word names it when it
+                # leads in, as its absolute spelling does, and as a path in code read as a command does
+                # (_classify_code: `python3 -c "open('pdir/default.yaml', 'w')"`).
+                here = _store_how(".") if here is None else here
+                if here:
+                    run = True
+                elif not lead:
+                    lead = piece
+            elif how and not near:
+                near = piece
+        if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words):
+            dirs = _shell_words(words[i + 1], seen, "dir")
+            hows = {_in_store_dir(x) for x in dirs or ()}
+            if dirs is None or "own" in hows:
+                return words[i + 1].text        # git checkout, reset or commit inside the store
+            if "folder" in hows and not near:
+                near = words[i + 1].text
+    if near or lead:
+        return near or lead
     if ctx.get("store_cwd"):
         return ctx.get("fd_cwd") or "a path inside the store (after cd)"
-    return ""
+    return "a path inside the store (the tool's folder)" if run else ""
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
@@ -5243,8 +5279,8 @@ def _runs_shell(tool: str, args: Mapping) -> bool:
 def _in_tool_folder(fn: _F) -> _F:
     """Run ``fn(action, cwd)`` in one _Scope that holds the folders the tool may read from (#209): ``cwd``, the
     session's working folder as the core passes it, always; and for a shell tool, that folder joined with the
-    call's own `cwd` argument. The secret-store checks resolve a relative path from each of them and from the gate's
-    own folder; the store-write checks from each of them only, never the gate's own (#340)."""
+    call's own `cwd` argument, as written and folded. The secret-store checks resolve a relative path from each of
+    them and from the gate's own folder; the store-write checks from each of them only, never the gate's own (#340)."""
     @functools.wraps(fn)
     def run(action: Any, cwd: str | None = None) -> Any:
         folders: list[str] = []
@@ -5255,8 +5291,9 @@ def _in_tool_folder(fn: _F) -> _F:
                 folders.append(os.path.abspath(base))
             sub = args.get("cwd")
             if isinstance(sub, str) and sub and _runs_shell(tool, args):
-                # joined, not folded: the shell runs in `sdir/../keys` as the kernel reads it, through sdir (#340)
-                folders.append(os.path.join(os.path.abspath(base) if base else os.getcwd(), os.path.expanduser(sub)))
+                # joined as written: the shell runs in `sdir/../keys` as the kernel reads it, through sdir (#340);
+                # and folded, as a tool that takes os.path.abspath or bash's `cd` reads `xl/../kl` (#209)
+                folders += _joined_and_folded(os.path.abspath(base) if base else os.getcwd(), os.path.expanduser(sub))
         except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
             pass
         token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders))))
@@ -5712,18 +5749,24 @@ def is_store_path(path: str, ancestors: bool = False) -> bool:
 
 def _store_word(path: str, ancestors: bool = False) -> bool:
     """is_store_path for one word whose braces are already expanded."""
+    return bool(_store_how(path, ancestors))
+
+
+def _store_how(path: str, ancestors: bool = False) -> str:
+    """How one brace-free word is a store path: "own" by its own spelling, "folder" only as a relative path read from
+    the tool's folders or a `cd`'s (#340), "" not at all. _store_touch names a write after an "own" word first."""
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
-        return False
+        return ""
     if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
-        return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
+        return "own"                     # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
     if not p.startswith("/"):
         # relative: the name checks above already ran. Read it from the tool's folders (#340), as the secret-store
         # checks do (#209), but never from the gate's own: a bare word is not judged by where the gate runs
         # (test_a_bare_run_word_is_not_the_run_folder). Joined, not folded: _store_abs resolves a link before a `..`.
         bases = _relative_bases()
-        return bases is None or any(_store_abs(os.path.join(base, p), ancestors) for base in bases)
-    return _store_abs(p, ancestors)
+        return "folder" if bases is None or any(_store_abs(os.path.join(base, p), ancestors) for base in bases) else ""
+    return "own" if _store_abs(p, ancestors) else ""
 
 
 _ENTERED = 64      # folders one classify call follows a `cd` into (_cd_enter); past that a relative store word counts
@@ -5743,14 +5786,15 @@ def _relative_bases() -> list[str] | None:
 def _cd_enter(dest: str) -> None:
     """Note the folder a `cd` or `pushd` that stays out of the store enters, so a relative store-write path or `cd`
     target after it on the call is read from there too (#340): `cd notes && cp x ../pdir/default.yaml`. A relative
-    target is joined, as written, to the tool's folders and to those the latest `cd` entered. A `cd` in a subshell may
-    not have stayed, so each folder counts, and the store checks read from all of them (fails closed)."""
+    target is joined to the tool's folders and to those the latest `cd` entered, as written and folded
+    (_joined_and_folded). A `cd` in a subshell may not have stayed, so each folder counts, and the store checks read
+    from all of them (fails closed)."""
     scope = _scope.get()
     if scope is None:
         return
     p = os.path.expanduser(_expand_text(dest).strip()) or _home()
     bases = [""] if p.startswith("/") else [b for b in dict.fromkeys([*scope.cwds, *scope.last]) if b]
-    last = {frozenset(_path_forms(q)): q for q in (os.path.join(b, p) for b in bases)}
+    last = {frozenset(_path_forms(q)): q for b in bases for q in _joined_and_folded(b, p)}
     scope.last = list(last.values())
     for key, q in last.items():
         scope.entered.setdefault(key, q)
@@ -5787,25 +5831,35 @@ def _store_abs(p: str, ancestors: bool) -> bool:
     return False
 
 
-def _in_store_dir(path: str) -> bool:
+def _in_store_dir(path: str) -> str:
     """A `cd` target inside EXO_HOME or the principal store: relative names after it may be the store. So is a
     descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217). A
-    relative target is read from the folders a store write's relative path is (#340, _relative_bases)."""
+    relative target is read from the folders a store write's relative path is (#340, _relative_bases). How, as
+    _store_how says it: "own", "folder" or ""."""
     p = _expand_text(path).strip()
     if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")):
-        return True
-    paths = [p]
+        return "own"
+    how, bases = "own", [""]
     if not p.startswith("/"):
         if re.search(r"(^|/)\.exo(/|$)", p):
-            return True
-        bases = _relative_bases()        # joined, not folded, and never from the gate's own folder (_store_word)
-        if bases is None:
-            return True
-        paths = [os.path.join(b, p) for b in bases]
-        if not paths:
-            return False
+            return "own"
+        rel = _relative_bases()          # never from the gate's own folder (_store_word)
+        if rel is None:
+            return "folder"
+        how, bases = "folder", rel
+    # joined as written, as the kernel reads it, and folded, as bash's `cd` does: `cd xl/../pdir` enters pdir
+    paths = [q for b in bases for q in _joined_and_folded(b, p)]
     roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
-    return any(c == r or c.startswith(r.rstrip("/") + "/") for q in paths for c in _path_forms(q) for r in roots)
+    return how if any(c == r or c.startswith(r.rstrip("/") + "/") for q in paths for c in _path_forms(q)
+                      for r in roots) else ""
+
+
+def _joined_and_folded(base: str, p: str) -> list[str]:
+    """``p`` joined to ``base`` as written, and folded (its `..` taken lexically). _path_forms reads each through its
+    links, so a `..` after a link counts both ways: as the kernel climbs from where the link leads, and as bash's `cd`
+    and os.path.abspath drop the link's name (#340)."""
+    joined = os.path.join(base, p)
+    return list(dict.fromkeys((joined, os.path.normpath(joined))))
 
 
 _PATCH_PATHS = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$",

@@ -532,10 +532,11 @@ system or bash will.
 
 - **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
   the session's working folder (the core passes it to tool hooks as `cwd`), and, for a shell tool, from that folder
-  joined with the call's own `cwd` argument, the folder a shell runs in. That argument is joined as written, with
-  no `..` folded, so a `cwd` of `sdir/../keys` is read through the link `sdir`, as the shell enters it (#340). A
-  `cwd` argument on a file tool changes nothing: `read_file`, `write_file` and `grep` take unknown arguments and
-  read from the session's folder. When a
+  joined with the call's own `cwd` argument, the folder a shell runs in. That argument is read joined as written,
+  so a `cwd` of `sdir/../keys` is read through the link `sdir`, as the kernel enters it (#340). It is read folded
+  too, as `os.path.abspath` and bash's `cd` read it, so with `xl` a link elsewhere and `kl` a link to `~/.ssh`, a
+  `cwd` of `xl/../kl` is `~/.ssh`. A `cwd` argument on a file tool changes nothing: `read_file`, `write_file` and
+  `grep` take unknown arguments and read from the session's folder. When a
   link led somewhere else, the resolved path is matched against the store list too. So `notes.txt` pointing at `~/.ssh/id_rsa`, `aws.txt` at `~/.aws/credentials`, `app.cfg` at a
   project `.env`, and a folder link `cfg` to `~/.ssh` (`cat cfg/config`) ask in every form: `read_file notes.txt`,
   `cat notes.txt` and the absolute paths. A relative path that lands below the folder it was read from is matched
@@ -1775,14 +1776,28 @@ gates.yaml` in a session whose folder is `~/.exo/policies` are store writes. So 
 the folder as written, and `..` is not folded first. The kernel reads `sdir/../policies` through
 the link `sdir`, so with `sdir -> ~/.exo/state` it is `~/.exo/policies`, and the gate reads it the
 same way. This holds for a `cwd` argument too (`sdir/../policies`), and on the secret-store side
-(`cat seat` with `sdir/../keys` as `cwd` asks).
+(`cat seat` with `sdir/../keys` as `cwd` asks). A `cwd` argument and a `cd` target are read folded
+as well, as bash's `cd` enters them, so with `xl` a link elsewhere, a `cwd` of `xl/../pdir` and
+`cd xl/../pdir && echo x > default.yaml` ask.
+
+In a store folder every relative word is a store path, the program word too. So a write is named
+after a word that is a store path by its own spelling first: `touch ~/.exo/state/x` with
+`~/.exo/policies` as `cwd` is named `~/.exo/state/x`, and `deny: ["target:*/.exo/*"]` denies it.
+A word that is a store path only as read from the folder names the write only when the command
+has no such word. In a store folder the program word never names it, since it is run, not
+written. When it is the only such word there (`make` with a `cwd` in the store), the write is named
+"a path inside the store (the tool's folder)", as a `cd` there names it "a path inside the store
+(after cd)". From a folder outside the store, a program word that leads in names the write, as its
+absolute spelling does: `../pdir/run.sh`, or a path in `python3 -c` code, which the gate reads as a
+command.
 
 A `cd` or `pushd` that stays out of the store is followed too. A relative path or `cd` target after
 it on the call is also read from the folder it enters. So `cd notes && cp x ../pdir/default.yaml`
 and `cd sub && cd ../pdir && echo x > default.yaml` ask. A relative target is joined to the tool's
 folders and to the folders the latest `cd` entered. A `cd` in a subshell may not have stayed, so
 every folder a `cd` entered counts for the rest of the call (fails closed). Past 64 such folders,
-every relative word counts as the store. Tests: `tests/security/test_gate_store_relative_links.py`.
+every relative word counts as the store. A brace word met again after a `cd` entered a folder is
+read again from there. Tests: `tests/security/test_gate_store_relative_links.py`.
 
 Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
 expanded from its source text, so only unquoted braces expand. A file tool's path is expanded as written. The
