@@ -578,11 +578,14 @@ system or bash will.
   `cat /*/src/*` and `grep -r foo /*/src/*`: a glob top folder, one folder and a glob that could be `environ` read
   as `/proc/<pid>/<glob>`, and `ls /proc/bin/*` asks on main too. `ls /usr/bin/*`, `ls /*/bin` and
   `ls /*/bin/python*` stay reads. Past 16 possible links in one word the word counts. So what follows a link is
-  read at most 16 times, and each such read takes the `/proc` step at most once. The reads after a link look up a
-  run folder in the lexical form of what follows, once per classify call, so a `..` there is read as text for that
-  lookup: `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads as on main, while
-  `cat <link>/../exod*` asks. A 100 KB word with 16 links costs about twice what it costs on main. Another link
-  whose target the gate does not know, such as a folder's descriptor in `/proc/<pid>/fd`, is read as text.
+  read at most 16 times, and each such read takes the `/proc` step at most once. What follows the links of one
+  word mostly differs only before a `..`. So it is not read again when its lexical form, and its folder's, match
+  what followed an earlier link of the same word, unless it holds a link of its own. The reads after a link look
+  up a run folder in the lexical form of what follows, once per classify call, so a `..` there is read as text for
+  that lookup: `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads as on main, while
+  `cat <link>/../exod*` asks. A 100 KB word with 16 links costs about twice what it costs on main, and a line of
+  500 short words with 16 links each about two and a half times. Another link whose target the gate does not know,
+  such as a folder's descriptor in `/proc/<pid>/fd`, is read as text.
 - **Doubled slashes, `.` and `..` (#446).** The shell and the kernel read `a//b` and `a/./b` as `a/b`, and
   `a/x/../b` as `a/b` when `x` is a plain folder. A store name with more than one part (`.kube/config`,
   `.config/gh/hosts.yml`, `.docker/config.json`, `.config/gcloud`, `.unii/<account>/token`,
@@ -608,6 +611,14 @@ asks). A call that was `store_write` because its path goes through a descriptor 
 longer applies to it. A file tool's own class, a part's matrix cell and a `cd` folder's target still count, since
 #467 keeps each as a part. A `target:` entry still reads the path as written, as on main: `cat ~/.kube//config`
 under `deny: [target:*/.kube/config]` asks where the plain spelling is denied, as `cat ~/.ssh//id_rsa` does on main.
+The target is the first word that names the store, so `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` names its `of=`
+word, as `dd` with the plain path does on main, and `deny: [target:~/.exo/*]` asks there, as for the plain path.
+A backslash that the shell drops does not change the target. The gate reads `\` as `/` in the line's text, so the
+text `~/.kube/\config` names the store only in its lexical form. Such a text is the target only when nothing else
+on the line names a store, not even a brace set. So the target of `cat ~/.kube/\config` is the word as the shell
+reads it, `~/.kube/config`, as on main, and `deny: [target:*/.kube/config]` denies it. A text that names a store as
+written stays the target, as on main. So `cat ~/.ssh/\id_rsa ~/.kube/config` keeps `~/.ssh/\id_rsa`, and
+`deny: [target:*/.ssh/*]` still denies it, while `cat ~/.ssh/\id_rsa` under `deny: [target:*/.ssh/id_rsa]` asks.
 
 Beside a store write, a secret makes the call `credentials`, not `store_write`. On a shell line the outcome stays
 an ask: `cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml` asks, and the store write stays a part, so its

@@ -1889,13 +1889,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   16 times, and each such read takes the `/proc` step at most once. The reads after a link look up a run folder in the
   lexical form of what follows, once per classify call, so a `..` there is read as text for that lookup. The #513 review
   found that looking each one up as written cost about ten times main on a long word. A 100 KB word of `/proc/1/*`,
-  fifteen `/../*` steps, a long folder path and a glob took 8.6 s here, against 0.9 s on main. It now takes 1.6 s. Left
-  out: another link whose target the gate does not know, such as a folder's descriptor in `/proc/<pid>/fd`, and `ps e`
-  (row 3 of #476), which is left to #476. A glob in a link's own part before a `..` (`cat /dev/f?/../env*`) is not
-  resolved, since only the literal folder before the first glob is. A glob below a `cwd` link into a home store
-  (`cat /proc/self/cwd/.kube/conf*`) is read from `/` only. A link before a `..` after a `/proc` link is not followed
-  for the run folder, for cost: `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads, while
-  `cat <link>/../exod*` asks. All three read on main too.
+  fifteen `/../*` steps, a long folder path and a glob took 8.6 s here, against 0.9 s on main. It now takes 1.6 s. The
+  re-review found a line of many short words still slow, since what followed each link was read again: 500 words of
+  `/proc/1/*`, fifteen `/../*` steps and a short tail took 1.5 s, against 0.18 s on main (CPU time). What follows a
+  link is now read again only when its lexical form or its folder's differs from what followed an earlier link of the
+  same word, or when it holds a link of its own, and the line takes 0.44 s. Left out: another link whose target the
+  gate does not know, such as a folder's descriptor in `/proc/<pid>/fd`, and `ps e` (row 3 of #476), which is left to
+  #476. A glob in a link's own part before a `..` (`cat /dev/f?/../env*`) is not resolved, since only the literal
+  folder before the first glob is. A glob below a `cwd` link into a home store (`cat /proc/self/cwd/.kube/conf*`) is
+  read from `/` only. A link before a `..` after a `/proc` link is not followed for the run folder, for cost:
+  `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads, while `cat <link>/../exod*` asks. All
+  three read on main too.
   *Lowered lines.* On main an odd spelling kept its own class, and any deny that class drew. It now takes the store's
   class, so it decides as main decides the same action spelt plainly, and some lines decide lower than before. The #423
   differential of main (5a9dc394) against the change ran 57,260 actions under 87 policies and found 42 lowered pairs on
@@ -1954,6 +1958,29 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   That holds for shell lines only: a file tool decides lower (group 4). A first run, before #467 (the D-075 amendment
   for #464 and #448), found three more groups: a file tool's own class, a part's matrix cell, and the folder a `cd`
   entered as a target. Since #467 each of them stays a part, so those lines no longer decide lower.
+  *A backslash after a slash (#513 re-review).* The gate reads `\` as `/` in a line's text, so with the lexical form
+  the text `~/.kube/\config` names `.kube/config`. It became the line's target, where on main the word the shell reads
+  (`~/.kube/config`) was. So under `deny: [target:*/.kube/config, target:*/hosts.yml]`, `cat ~/.kube/\config`,
+  `cat ~/.config/gh/\hosts.yml` and `cp /tmp/a ~/.kube/\config` asked where main denied them, and a `target:` entry
+  in `reserved:` lost its hit. Such a text is now the target only when nothing else on the line names a store, a
+  brace set included, so these lines decide as on main. A text that names a store as written (`~/.ssh/\id_rsa`) stays
+  the target, as on main. Rejected: putting every text with a backslash last. Then `cat ~/.ssh/\id_rsa ~/.kube/config`
+  takes the second store as its target, and `deny: [target:*/.ssh/*]` asks where main denies. A differential of main
+  (d79639f1) against this change ran the built-in set, 66,655 actions under 87 policies, and found the 42 lowered
+  pairs of the five groups above (21, 4, 3, 4 and 10), each deciding as main decides the plain spelling. A focused
+  run of 21,979 actions put a backslash before or inside each part of each store and Exo-store name, in reads,
+  writes, redirections, sends, file tools, wrappers, compounds and heredocs, beside words of up to 17 links. Under
+  144 policies, with a `target:`, `reserved:` and rule entry for each name, it found 350 lowered pairs on 49
+  actions, each deciding as main decides the plain spelling: 336 in group 4 (`copy_file` from `~/.kube/\config` to
+  `gates.yaml`, where a file tool reads `\` as `/`) and 14 in group 1. It also changed the target of three `dd`
+  lines (`dd if=/tmp/a of=~/.exo/\/policies/\/gates.yaml` and the like), with no decision changed. Such a line, and
+  `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` without a backslash, now names the `of=` word, as main does for the
+  plain spelling (`of=~/.exo/policies/gates.yaml`), where main took the path `dd` writes for the odd one. So under
+  `deny: [target:~/.exo/*]`, which reads the target as written, such a line asks, as the plain spelling does on
+  main, where main denied the odd spelling. That is group 2's rule: the target is the first word that names the
+  store. A differential of the change before and after the step that reads what follows a link once per lexical
+  form (7f9a5199 against 393fd3cf) ran the built-in set and the focused runs of the #513 reviews, 139,068 actions
+  under 87 policies, and found no pair or target that changed.
   `tests/security/test_gate_secret_path_spellings.py` pins the five groups against the plain spelling. A differential
   of this change before and after the #513 review fixes (ca8966a3 against e2b4a315) ran the built-in set and the four
   focused runs, 181,641 actions under 87 policies, and found no pair that changed. Rejected: the resolved form alone,
