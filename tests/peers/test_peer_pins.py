@@ -8,7 +8,8 @@ and a FIFO named by the envelope's ``daemon`` must not stall delivery either.
 
 The #525 review added: a key with no seat file took the receiving seat's own principal from ``EXO_PRINCIPAL``, a
 plain ``exo keys pin`` of another home's seat made it a seat of this home, three checks no test caught, and a FIFO
-swapped in after a type check by path."""
+swapped in after a type check by path. A check of that fix found a sender run as another principal still taking a
+receiver's principal when the receiver has no seat principal of its own."""
 
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from exo import crypto
 from exo.core.ingress import PeerConfig
 from exo.core.seats import ensure_key, key_path
 from exo.keyring import KeyRegistry
-from exo.peers import make_envelope, msg_id
+from exo.peers import make_envelope, msg_id, read_plain
 from exo.protocol import schema as s
 
 from .test_peers import Daemon, aio, announce, pin_peer, seat_file, until, victim_node
@@ -291,13 +292,14 @@ def own_key(home, seat):
 
 
 @aio
-@pytest.mark.parametrize("sender,claim", [("exo", ""), ("exo", "ada"), ("herm", "ada"), ("quiet", "ada")])
+@pytest.mark.parametrize("sender,claim", [("exo", ""), ("exo", "ada"), ("exo", "bob"), ("herm", "ada"),
+                                          ("quiet", "ada")])
 async def test_a_key_with_no_principal_on_record_is_other_to_a_seat_whose_file_names_one(run_dir, monkeypatch,
                                                                                          sender, claim):
     """#525 review, blocking 1: a key of this home with no seat file took ``EXO_PRINCIPAL``, which compose.create
     sets to a seated exod's own principal. So ada's unseated daemon and her Hermes profile reached bob's seat scout
     as bob typing. Such a key, or one whose seat file names no principal (``quiet``), is ``other`` to a seat whose
-    own seat file names a principal, whatever config.json says."""
+    own seat file names a principal, whatever config.json says, and a presence file that claims bob changes nothing."""
     monkeypatch.setenv("EXO_PRINCIPAL", "bob")
     home = run_dir / "home"
     seat_file(home, "scout", "bob")
@@ -311,6 +313,7 @@ async def test_a_key_with_no_principal_on_record_is_other_to_a_seat_whose_file_n
         out = await node.deliver(envelope(signer, via, to="scout", daemon=f"{sender}-1"))
         assert out["state"] == "held" and stub.seen[-1].trust == "other" and stub.seen[-1].meta["note"] == ""
     seat_file(home, sender, "bob")  # the way to record whose it is: a seat file that names its principal
+    announce(run_dir, sender, f"{sender}-1", signer, "bob")  # and it runs as bob, as a seated exod then does
     out = await node.deliver(envelope(signer, "agent", to="scout", daemon=f"{sender}-1"))
     assert out["state"] == "delivered" and stub.seen[-1].trust == "same-principal"
 
@@ -332,10 +335,12 @@ async def test_a_seat_whose_own_file_cannot_be_read_holds_a_key_with_no_seat_fil
 
 
 @aio
-@pytest.mark.parametrize("mine,named,trust", [("", "ada", "same-principal"), ("ada", "ada", "same-principal"),
-                                              ("", None, "same-principal"), ("bob", "ada", "other"),
-                                              ("ada", None, "other")])
-async def test_a_key_with_no_seat_file_counts_as_the_principal_config_names(run_dir, monkeypatch, mine, named, trust):
+@pytest.mark.parametrize("mine,named,claim,trust", [("", "ada", "ada", "same-principal"),
+                                                    ("ada", "ada", "ada", "same-principal"),
+                                                    ("", None, "", "same-principal"), ("bob", "ada", "ada", "other"),
+                                                    ("ada", None, "ada", "other")])
+async def test_a_key_with_no_seat_file_counts_as_the_principal_config_names(run_dir, monkeypatch, mine, named, claim,
+                                                                            trust):
     """#525 review, blocking 1, the fallback: toward a daemon with no seat principal of its own, a key of this home
     with no seat file is the principal config.json names, never the receiving process's ``EXO_PRINCIPAL``. It
     matches a daemon that runs as that principal, or as none."""
@@ -346,9 +351,51 @@ async def test_a_key_with_no_seat_file_counts_as_the_principal_config_names(run_
         (home / "config.json").write_text(json.dumps({"principal": named}))
     node, stub, home = victim_node(run_dir, mine)
     herm = own_key(home, "herm")
-    announce(run_dir, "herm", "herm-1", herm, "ada")
+    announce(run_dir, "herm", "herm-1", herm, claim)
     out = await node.deliver(envelope(herm, "agent", daemon="herm-1"))
     assert stub.seen[-1].trust == trust and out["state"] == ("delivered" if trust == "same-principal" else "held")
+
+
+@aio
+@pytest.mark.parametrize("seat,mine,named,claim", [
+    ("beta", "bob", "bob", "ada"),   # bob's unseated daemon; ada's Hermes profile runs with EXO_PRINCIPAL=ada
+    ("beta", "", "bob", "ada"),      # the same daemon, run with no EXO_PRINCIPAL
+    ("exo", "bob", "bob", "ada"),    # two unseated daemons share the seat name exo, and so its key
+    ("exo", "bob", "ada", ""),       # the other one runs as none, so as config.json's ada
+    ("scout", "bob", "bob", "ada"),  # a seat whose seat file names no principal
+])
+async def test_a_sender_that_runs_as_another_principal_is_other(run_dir, monkeypatch, seat, mine, named, claim):
+    """Checking the #525 fix: toward a daemon with no seat principal of its own, a key with no seat file still took
+    the receiver's principal, and a daemon took its own seat name's. So in a home of ada and bob, ada's Hermes
+    profile or unseated daemon reached bob's daemon as bob typing, where main held it as ``other``. The presence
+    file's principal never raises trust, but one that names another principal than this home records lowers it."""
+    monkeypatch.setenv("EXO_PRINCIPAL", mine)
+    home = run_dir / "home"
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"principal": named}))
+    if seat == "scout":
+        seat_file(home, "scout")
+    node, stub, home = victim_node(run_dir, mine, seat=seat)
+    sender = "exo" if seat == "exo" else "herm"
+    signer = node.signer if sender == seat else own_key(home, sender)
+    announce(run_dir, sender, f"{sender}-1", signer, claim)
+    for via in ("human", "agent"):
+        out = await node.deliver(envelope(signer, via, to=seat, daemon=f"{sender}-1"))
+        assert out["state"] == "held" and stub.seen[-1].trust == "other"
+    announce(run_dir, sender, f"{sender}-1", signer, mine)  # the same key, run as the receiver's principal
+    out = await node.deliver(envelope(signer, "agent", to=seat, daemon=f"{sender}-1"))
+    assert out["state"] == "delivered" and stub.seen[-1].trust == "same-principal"
+
+
+@pytest.mark.parametrize("what", ["device", "folder"])
+def test_read_plain_reads_only_a_regular_file(tmp_path, what):
+    """#525 review, nit 5: the type is checked on the open file. ``/dev/null`` opens at once and reads as empty, so
+    only that check refuses it. A link to a device that never ends, such as ``/dev/zero``, is refused the same way."""
+    f = tmp_path / "alpha-1.json"
+    f.write_text("{}")
+    assert read_plain(f) == "{}"
+    with pytest.raises(ValueError):
+        read_plain(Path(os.devnull) if what == "device" else tmp_path)
 
 
 @aio
@@ -367,10 +414,11 @@ async def test_a_key_pinned_for_a_name_that_is_no_seat_of_this_home_is_other(run
         assert KeyRegistry.load(home).pin("bobseat", bob.pub) == "pinned"
     else:
         key_path(home, "bobseat").with_suffix(".pub").write_text(bob.pub + "\n")
-    announce(run_dir, "bobseat", "bobseat-1", bob, "bob")
-    for via in ("human", "agent"):
-        out = await node.deliver(envelope(bob, via, daemon="bobseat-1"))
-        assert out["state"] == "held" and stub.seen[-1].trust == "other" and stub.seen[-1].meta["note"] == ""
+    for claim in ("bob", "ada"):  # honest, then a presence file that names the receiver's principal
+        announce(run_dir, "bobseat", "bobseat-1", bob, claim)
+        for via in ("human", "agent"):
+            out = await node.deliver(envelope(bob, via, daemon="bobseat-1"))
+            assert out["state"] == "held" and stub.seen[-1].trust == "other" and stub.seen[-1].meta["note"] == ""
     forged = crypto.Signer("bobseat", crypto.keygen())
     announce(run_dir, "bobseat", "bobseat-1", forged, "ada")
     assert (await node.deliver(envelope(forged, daemon="bobseat-1")))["state"] == "denied"

@@ -412,8 +412,9 @@ Peers are other live sessions on the machine: Exo sessions, Hermes agents and bu
   deliver at once. A peer whose key this home does not hold is held, and the card says `key not pinned`. A presence
   file that claims your name changes nothing (#132).
 - An unseated daemon or a Hermes profile on this home has no seat file. Toward a daemon with no seat principal of
-  its own, it counts as the principal `config.json` names (`exo config set principal <id>`). A seat whose seat file
-  names a principal holds its messages for you. To have them delivered at once, give it a seat file that names you:
+  its own, it counts as the principal `config.json` names (`exo config set principal <id>`). If it runs as another
+  principal (`EXO_PRINCIPAL`), its messages are held for you. A seat whose seat file names a principal holds its
+  messages for you too. To have them delivered at once, give it a seat file that names you:
   `$EXO_HOME/seats/<name>.toml` with `principal = "<id>"`.
 - A seat from another home: copy its key from `<that home>/keys/<seat>.pub` and run `exo keys pin --peer <seat>
   <key>` here. Its messages are then checked against that key, and still held for you. A `[peers] rules` entry for

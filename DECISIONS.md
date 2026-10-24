@@ -450,7 +450,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `config.json` names, read from the file when the receiver starts. It reaches a daemon as that principal only when
   the daemon runs as that principal or as none and has no seat file naming one. A seat whose seat file names its
   principal holds such a key as `other`, since `config.json` is not a store file and a tool call may change it without
-  asking. Giving the key a seat file that names its principal delivers it at once. A seat checked against a peer
+  asking. Giving the key a seat file that names its principal delivers it at once. The principal a presence file
+  names never raises trust but can lower it: when it is not the one this home records for the sender (none stands
+  for `config.json`'s), the message is `other`, as before #132. So a daemon or Hermes profile run as another
+  principal is held even by a daemon with no seat principal, and so is a daemon under the receiver's own seat name
+  (two unseated daemons are both `exo` and share its key). A seat checked against a peer
   pin is `other`: this home has no record of whose it is. A sender with no key here is held as `other`, and its
   card says `key not pinned`. A rule may hold or deny it, but never deliver it sooner than its policy, since a
   presence file can claim any name. A name that holds a key here is checked against those keys alone, so another

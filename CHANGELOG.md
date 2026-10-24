@@ -88,8 +88,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   pin checks a seat too, and so does a key for a name that is no seat of this home, such as one pinned with a
   plain `exo keys pin`. The principal comes from the seat file there. A key with no seat file, such as an unseated
   daemon's or a Hermes profile's, counts as the principal `config.json` names. It is `other` to a seat whose seat
-  file names a principal, and to a daemon run with an `EXO_PRINCIPAL` that `config.json` does not name. A sender
-  with no key here is held as `other`, and its card says `key not pinned`. A rule may hold or deny it, but never
+  file names a principal, and to a daemon run with an `EXO_PRINCIPAL` that `config.json` does not name. The
+  principal a presence file names can only lower trust: a sender whose presence file names another principal than
+  this home records is `other`, as before. A sender with no key here is held as `other`, and its card says
+  `key not pinned`. A rule may hold or deny it, but never
   deliver it sooner than its policy. A registry entry decides for its name, so a key replaced with
   `exo keys pin --replace` is refused. A `from` that is not a seat name is denied before any key lookup, and the
   sender is told so. A presence file or `.pub` is read only when the open file is a plain file, so a FIFO there
