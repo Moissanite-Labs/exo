@@ -346,6 +346,30 @@ def test_a_long_word_with_sixteen_links_costs_about_what_it_costs_without_them()
     assert took[1] < 4 * took[0] + 0.2, took
 
 
+def test_a_line_of_many_short_words_with_sixteen_links_costs_about_what_it_costs_without_them():
+    # #513 review: the rests after the 16 links of one word mostly share one lexical form (`/*/r1/run/e1*` here), and
+    # each was read again, so 500 such words cost 2.7 s against 0.29 s on main. A rest read before for the word is
+    # skipped now. CPU time, against the same line without the links; a retry only when over the bound.
+    lines = ["ls " + " ".join(f"/proc/1/x{'/ab' * 25}/r{i}/run/e{i}*" for i in range(1000)),
+             "ls " + " ".join(f"/proc/1/*{'/../*' * 15}/r{i}/run/e{i}*" for i in range(1000))]
+    assert len(lines[0]) == len(lines[1])
+    for _ in range(3):
+        took = []
+        for line in lines:
+            start = time.process_time()
+            assert bash(line) == ("read", "allow")
+            took.append(time.process_time() - start)
+        if took[1] < 4 * took[0] + 0.2:
+            break
+    assert took[1] < 4 * took[0] + 0.2, took
+
+
+def test_a_rest_read_before_for_the_word_is_read_again_when_it_holds_a_link():
+    # Both rests after the links of this word are `/y*` in their lexical form, but only the second holds a link (the
+    # `root` below `/proc/1`), which counts, so the word asks (fails closed) though the first rest was a plain read.
+    assert bash("ls /proc/1/*/../*/proc/1/root/../../../../y*") == ("credentials", "ask")
+
+
 def test_a_line_of_many_plain_names_below_proc_compiles_no_pattern_for_them(monkeypatch):
     # #513 review: each part below `/proc` is matched against `root` and `cwd`. A plain name was matched as a pattern,
     # one compiled for each distinct name, so a 906 KB line of them took 17.3 s against 6.9 s on main.

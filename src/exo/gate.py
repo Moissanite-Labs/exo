@@ -5678,8 +5678,19 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     # after a link look up a run folder in its lexical form, once per call (_resolved): the rests of one word mostly
     # differ only before a `..`, and looking each up as written made a 100 KB word with 16 links cost 10 times what it
     # costs on main (#513 review). So a link before a `..` there is not followed (main reads nothing after the link)
+    read: set[tuple[str, str]] = set()
     for n, rest in enumerate(_root_links(written)):
-        if not hop or n >= 16 or _glob_word(rest, home, samples, secrets, runs, False):
+        if not hop or n >= 16:
+            return True
+        # The rests of one word mostly differ only before a `..`: `/proc/1/*/../*/../*/x*` gives `/../*/../*/x*`,
+        # `/../*/x*` and `/x*`, and the first two are both `/*/x*`. A rest whose lexical form, and its folder's, was
+        # read before for this word decides as that one did, unless it holds a link of its own, so it is skipped.
+        # Reading each again cost 8 times main on a line of many short words (#513 review)
+        form = (os.path.normpath(rest), os.path.normpath(rest.rpartition("/")[0].replace("\\", "/")))
+        if form in read and next(_root_links(rest), None) is None:
+            continue
+        read.add(form)
+        if _glob_word(rest, home, samples, secrets, runs, False):
             return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
@@ -5701,7 +5712,7 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
         if any(_glob_rx(tok).match(x) for x in secrets if keys or x.startswith("exod.")):
             return True
     head, tail = re.split(r"[*?\[]", tok, maxsplit=1)[0], re.split(r"[*?\[\]]", tok)[-1]   # literal: narrow first
-    xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
+    xs = [x for x in itertools.chain(samples, _SENSITIVE_SAMPLES)
           if x.endswith(tail) and (x.startswith(head) if tok.startswith("/") else head in x)]
     if not xs:
         return False
