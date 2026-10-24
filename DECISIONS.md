@@ -2152,8 +2152,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   target with a `-wal` file beside it is still read live. `immutable=1` takes no lock, so a writer during the copy
   could tear it, and every read of a torn copy can fail for the reader's life. The open checks the target's inode,
   size and mtime, and that no `-wal` file is beside it, before and after the copy. It takes the copy again when any of
-  them changed. After three changed copies it reads the target live, and SQLite may then leave `-wal` and `-shm` files
-  beside it. The check misses a change that keeps all three. An append grows the file, so it is caught. The copy goes
+  them changed. After three changed copies it reads the target live. It does so at once when a copy fails while the
+  target stays the same (a full temporary folder), since a second copy would fill the folder again. SQLite may then
+  leave `-wal` and `-shm` files beside the target. Every write moves the mtime, but many appends keep the size. So the
+  check misses a write that keeps the size and lands in the same tick of the file system's clock as the write before
+  it. The copy goes
   into SQLite's private temporary database, not into memory. A copy held in memory made a 99 MB ledger cost the reader
   111 MB. This one costs about 6 MB and an owner-only temporary file the size of the ledger, unlinked at once and gone
   at close. The copy is read-only (`query_only`), as the target was. Second, where there is no `/proc` (macOS),

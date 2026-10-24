@@ -113,10 +113,11 @@ back, and the shorter chain still links. So each append also writes the head (se
   SQLite's temporary folder, unlinked at once and gone at close. So an open reader holds disk space the size of the
   ledger, not memory: a 99 MB ledger adds 99 MB there and about 6 MB of memory. The copy is read-only. A target
   that has a `-wal` file is read live (another process has it open, or one crashed): SQLite reads the `-wal` file
-  and may add or rewrite a `-shm` file. A target that changed during three copies in a row is read live too, and
-  SQLite may then leave `-wal` and `-shm` files beside it. A target that is missing, is not a regular file (a FIFO
-  would block the open) or holds no ledger reads as empty. An authority-mode ledger trusts its signed checkpoints: its appends
-  skip the symlink refusal and write the projection through the link.
+  and may add or rewrite a `-shm` file. A target that changed during three copies in a row is read live too, and so
+  is one whose copy fails while it stays the same (a full temporary folder). SQLite may then leave `-wal` and `-shm`
+  files beside it. A target that is missing, is not a regular file (a FIFO would block the open) or holds no ledger
+  reads as empty. An authority-mode ledger trusts its signed checkpoints: its appends skip the symlink refusal and
+  write the projection through the link.
 - An anchor is read only as a regular file: a symlink in its place is unreadable. Anchors are written through a
   fresh temporary file (`mkstemp`, with `O_EXCL` and `O_NOFOLLOW`), so a symlink planted in the anchor's folder
   cannot redirect the write.
