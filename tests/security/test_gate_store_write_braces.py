@@ -84,7 +84,7 @@ def test_over_cap_brace_word_counts_as_the_store():
     ("echo x > notes/{a,b}.txt", "local_write"),
     ("touch build/{1..20}.o", "shell"),
     ("echo hi > ~/.exo/{notes,x}.md", "local_write"),
-    ("touch ~/.exo/plugins/{a,b}/x", "shell"),
+    ("touch ~/.exo/handoffs/{a,b}/x", "shell"),     # the plugins folder is protected (#435)
     # bash expands only unquoted braces: these name a literal `polic{i..i}es` folder
     ("echo x > ~/.exo/polic'{i..i}'es/x", "local_write"),
     ('echo x > ~/.exo/polic"{i..i}"es/x', "local_write"),

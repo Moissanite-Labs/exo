@@ -4799,6 +4799,25 @@ def _own_copy(c: Classification) -> Classification:
     return replace(c, signals=list(c.signals), parts=list(c.parts), _command_views=list(c._command_views))
 
 
+def _store_post_text(c: Classification, body: str) -> None:
+    """Give a store line's here-doc body to the most severe post the store write outranks, as the line itself took
+    it when the post was the line (#435): also a post inside a nested line (`bash <<EOF` feeding `mail -A ..`).
+    Parts are shared (_own_copy), so the post and each part on the way down to it are copied, never changed."""
+    post = _most_severe(p for p in _each_part(c) if p.category != "store_write")
+    if post is None or post.text or post.text_file or post.category not in OUTBOUND or post.category == "web_post":
+        return
+    seen: dict[int, Classification] = {id(post): replace(post, text=body)}
+
+    def walk(p: Classification) -> Classification:
+        if id(p) not in seen:
+            seen[id(p)] = p          # a part met again through a shared one is left as it is
+            kids = [walk(q) for q in p.parts]
+            if any(a is not b for a, b in zip(kids, p.parts)):
+                seen[id(p)] = replace(p, parts=kids)
+        return seen[id(p)]
+    c.parts = [walk(p) for p in c.parts]
+
+
 def _unread_nest() -> Classification:
     """What a $( ) nested past _NEST stands for: an opaque part, signed so that an exported value keeps it."""
     c = _too_deep("", f"a $( ) nested more than {_NEST} levels deep, not read")
@@ -4915,9 +4934,12 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         *(view for part in parts for view in part._command_views),
     ]))
     # Outbound text: if several gh segments post text, keep the most severe one's text. Never for a post whose
-    # body is a file: another command's heredoc is not that file, and the caller reads the file (#208).
+    # body is a file: another command's heredoc is not that file, and the caller reads the file (#208). On a store
+    # write, the post it outranks takes the text (#435: `mail -A <store file> a@b.c <<EOF`).
     body = next((h.body for k in cmds for h in k.heredocs), None)
-    if not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
+    if body is not None and c.category == "store_write":
+        _store_post_text(c, body)
+    elif not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
         c.text = body
     if setters:
         c.setters = [*c.setters, *setters]    # a new list: c may share its setters with a stored result
@@ -5694,21 +5716,22 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 
 
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files,
-# the core sockets and the bus folder (the seat registry signed answers trust and the relay database, #210)
-# steer the gate itself, so a write to them always asks the principal. Names that are distinctive match
-# anywhere (a relative `policies/gates.yaml` may sit in the tool's working folder); absolute paths are also
-# checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
-# `principals` (`exo init --root`, `exo import-store --root`) and the bus folder and files (_bus_paths).
+# the core sockets, the bus folder (the seat registry signed answers trust and the relay database, #210) and
+# the plugins folder (code the next session loads and runs, #435) steer the gate itself, so a write to them
+# always asks the principal. Names that are distinctive match anywhere (a relative `policies/gates.yaml` may
+# sit in the tool's working folder); absolute paths are also checked against EXO_HOME, its principal stores,
+# EXO_PRINCIPAL_STORE, every store root recorded in config `principals` (`exo init --root`, `exo import-store
+# --root`) and the bus folder and files (_bus_paths).
 # $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
-    r"\.exo/bus(/|$)|bus/registry\.json$|bus/relay\.sqlite(-wal|-shm|-journal)?$|"
+    r"\.exo/(bus|plugins)(/|$)|bus/registry\.json$|bus/relay\.sqlite(-wal|-shm|-journal)?$|"
     r"\.exo/update(/|$)|update/allowed_signers$|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
     r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
     r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
-_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "update")
+_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "update", "plugins")
 _STORE_PROTECTED = ("policies", "state", "keys")
 # #210: $EXO_HOME/bus, and the bus settings that move a file the gate trusts out of it: the registry, the relay
 # database and its sidecars, and the seat keys folder. Each name is read as EXO_BUS_<NAME> and as the legacy
@@ -6134,7 +6157,7 @@ def _classify_call(action: Any) -> Classification:
         if not secret and cat not in ("read", "web_read"):
             store = next((v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
                           else [args.get(k)]) if isinstance(v, str) and is_store_path(v, ancestors=cat == "delete")), "")
-            if store:
+            if store and cat in ("local_write", "delete"):
                 cat = "store_write"
         target = _first(args, _TARGET_KEYS)
         text = _first(args, _TEXT_KEYS) if cat in OUTBOUND else ""
@@ -6154,6 +6177,13 @@ def _classify_call(action: Any) -> Classification:
         if secret:
             c.signals.append("secret store")
             c.summary, c.target = f"{tool} {secret}"[:120], secret
+        if store and cat != "store_write":
+            # #435: a call that does not write files (a post, an upload, a payment) and names a store path takes it
+            # as a source. It is a store write, and keeps the call as a part, with its target and text, so a deny,
+            # rule, matrix cell or posting rule on that call still holds (D-075, #191, #396).
+            c.tool = tool
+            _local_post(c)
+            c = _make("store_write", link=link, parts=[c])
         if store:
             c.signals.append("exo store")
             c.summary, c.target = f"{tool} {store}"[:120], store
@@ -6162,9 +6192,14 @@ def _classify_call(action: Any) -> Classification:
             c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
     c.tool = tool
+    _local_post(c)
+    return c
+
+
+def _local_post(c: Classification) -> None:
+    """A web post or read to a local host is private and no third party."""
     if c.category in ("web_post", "web_read") and c.target and _is_local_host(c.target):
         c.exposure, c.third_party = "private", False
-    return c
 
 
 # --- policies ------------------------------------------------------------------------------
