@@ -1290,6 +1290,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   elsewhere, run 2,623 actions under the same 95 policies. They lower 67 pairs, all in the group above: a `sudo ssh`
   send of a plugin file, also in a `$( )` after a `cd` into the store or `/dev`, where main's line is a store write
   that the costly `shell` part denies.
+  Against main 8c09c29c, the review's corpus under 148 policies lowers 11 more pairs, in a second group:
+  `git push --force` followed by `rm` or `rm -rf` in the folder, under a matrix that denies the push's irreversible
+  cell and an anchored `'^git push'` command rule that allows. On main the push leads that line. The rule step passes
+  the rule over, since the line holds a command the rule does not name, so the matrix deny stands. Now the plugins
+  folder is a store, so the store write leads. #191's pass reads the push part's matrix deny and then lifts it,
+  because the anchored rule matches both the line and the part's own text (#394, #464). So the line asks the principal
+  alone. With the `rm` first, the rule does not match the line, and the deny stands. This order rule is main's: each
+  of the 11 decides as main decides the same line with a `policies/` file, on category, outcome and rule.
   *Amendment 2026-10-22 (issue #465):* a writing command after `cd` into the store is a store write, but the `cd`
   reached only the line's own commands. Each `$( )`, backticks and `<( )` body was classified as a fresh line, so
   `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`, the `x=$( )`, `cat <( )`, backtick and nested forms,
