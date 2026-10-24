@@ -1766,8 +1766,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   every reading, and so does the hook: body files, the required executor, "once", grants, observe mode, who may
   answer and the fallback for a failed decision. The hook's own `_readings` and `_no_grant` are gone. `binds_exact`
   binds a call no grant may cover, one with other targets and one with a floor. Each reading matters. Under a scope
-  that makes myorg private, `git push --force origin main ; gh -R pub/repo pr comment 5 -b x` with `~/.kube` as `cwd`
-  asks from its floor, as on main, and is allowed without it. With `~/.exo/keys` as `cwd`, `gh -R $R secret set X`
+  that makes myorg private and a matrix that allows a private force push,
+  `git push --force origin main ; gh -R pub/repo pr comment 5 -b x` with `~/.kube` as `cwd` asks from its floor, as
+  on main, and is allowed without it. With `~/.exo/keys` as `cwd`, `gh -R $R secret set X`
   keeps a reserved `credentials` hit that only the floor's `also` has. A differential (`gate_diff`) from main
   8c09c29c finds 0 lowered pairs: 5,762,445 on its built-in corpus (66,235 actions under 87 policies), and
   1,209,742 on 11,306 actions under 107 policies, its 87 and 20 more on scopes, targets and posts. Those are 24 gh
