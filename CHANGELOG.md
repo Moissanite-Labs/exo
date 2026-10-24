@@ -94,12 +94,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   calls behind a `cd`. `store_write` stays a floor category: even allowed in policy, the write asks.
   From a session folder in the Exo home, a word that names a protected entry (`git add state`) asks,
   as its absolute spelling does. From HOME, or after a `cd` there, `mv x .` asks, as `mv x ~` does,
-  and so does `mv x ..` from a folder in HOME. A shell call's `cwd` and a `cd` target are also read
-  folded, as `os.path.abspath` and bash's `cd` read them, so `tar czf /tmp/o.tgz .` with a `cwd` of
-  `xl/../kl` (`kl -> ~/.ssh`) still asks, as on main. In a store folder, a store write is named after
-  a word that is a store path by its own spelling first, and never after the program word:
-  `touch ~/.exo/state/x` there is named `~/.exo/state/x`, so `deny: ["target:*/.exo/*"]` still
-  denies it, as on main.
+  and so does `mv x ..` from a folder in HOME. A shell call's `cwd` is also read folded, as
+  `os.path.abspath` and bash's `cd` read it, so `tar czf /tmp/o.tgz .` with a `cwd` of `xl/../kl`
+  (`kl -> ~/.ssh`) still asks, as on main. For store writes, a `cd` target and the folder a `cd`
+  enters are read folded too: `cd xl/../notes && cp x ../pdir/default.yaml` asks. On the
+  secret-store side a `cd` target is still read as written, so `cd xl/../kl && tar czf /tmp/o.tgz .`
+  stays a read, as on main. In a store folder, a store write is named after a word that is a store
+  path by its own spelling first, and never after the program word: `touch ~/.exo/state/x` there is
+  named `~/.exo/state/x`, so `deny: ["target:*/.exo/*"]` still denies it, as on main.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

@@ -372,8 +372,10 @@ What the gate asks about, and why:
   path from the session's folder, from a shell call's `cwd`, and from the folder a `cd` on the line enters (#340). So
   `gates.yaml` written in a session whose folder is `policies/` asks, and so does a write through a link into your
   store, such as `pdir/default.yaml`, `sdir/../policies/default.yaml` or `cd notes && cp x ../pdir/default.yaml`. A
-  folder spelt with `..` after a link, such as a `cwd` of `xl/../kl`, is read both through the link and with the `..`
-  dropped, because tools enter it either way. A `deny` entry on a target, such as `target:*/.exo/*`, matches the
+  shell call's `cwd` spelt with `..` after a link, such as `xl/../kl`, is read both through the link and with the `..`
+  dropped, because tools enter it either way. For writes into your store, a `cd` target spelt that way is read both
+  ways too. For other secrets it is not yet: `cd xl/../kl && tar czf /tmp/o.tgz .` does not ask, while the same
+  command with `xl/../kl` as its `cwd` does. A `deny` entry on a target, such as `target:*/.exo/*`, matches the
   store path a command names (`touch ~/.exo/state/x`), also when the command runs in your store. Some writes are not
   seen as store writes yet: a glob spelling, a hard link, and a relative name in the `workdir` of another harness's
   shell tool (#453). A brace spelling (`polic{i..i}es`) is seen (#224), and so is a store file

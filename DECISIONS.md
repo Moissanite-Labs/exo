@@ -1407,10 +1407,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   read joined as written, and never folded. With `xl` a link elsewhere and `kl` a link to `~/.ssh`,
   `tar czf /tmp/o.tgz .` with `xl/../kl` as `cwd` was an allowed shell call. Main read the folder folded, as
   `os.path.abspath` and bash's `cd` read it, and asked. Now the folder is read both ways, as #452 does since 1342d171.
-  A `cd` target and the folder a `cd` enters are read both ways too, so `cd xl/../pdir && echo x > default.yaml` asks.
-  A path word itself is still read joined only, as the kernel reads it: `cp y xl/../pdir/default.yaml` writes through
-  `xl`. The store checks also keep their brace memo per folder a `cd` entered, so a brace word met again after a `cd`
-  is read again from there. gate_diff (#423) ran main d79639f1 against this change, and each run lowers 0 pairs: the
+  A `cd` target and the folder a `cd` enters are read both ways too, so `cd xl/../pdir && echo x > default.yaml` asks,
+  and so does `cd xl/../notes && cp x ../pdir/default.yaml`, since bash enters `notes`. On the secret-store side a
+  `cd` target is still read as written, as on main, so `cd xl/../kl && tar czf /tmp/o.tgz .` stays a read. That is
+  left for a follow-up. A path word itself is still read joined only, as the kernel reads it:
+  `cp y xl/../pdir/default.yaml` writes through `xl`. The store checks also keep their brace memo per folder a `cd`
+  entered, so a brace word met again after a `cd` is read again from there. One name differs from main. After a `cd`
+  into the store, a write that a relative word names keeps that word as its name: with `~/.exo/policies` as `cwd`,
+  `cd ~/.exo/state && touch x` is named `x`, where main names it "a path inside the store (after cd)". It decides
+  lower only under a `target:` entry that matches that text, and a glob on a real path (`target:*default.yaml`)
+  matches more often this way. gate_diff (#423) ran main d79639f1 against this change, and each run lowers 0 pairs: the
   built-in corpus (under its 87 policies), the check's corpus (8,724 actions under 98 policies, which lowered the 320
   pairs at 483e55bf), the two focused corpora above (19,741 and 36,820 actions under 87 policies), and a corpus of
   this round's lines (46,886 actions under 98 policies). That last one runs the two groups' lines under 18 wrappers
