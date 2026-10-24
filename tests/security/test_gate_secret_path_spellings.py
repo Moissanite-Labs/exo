@@ -112,6 +112,7 @@ def test_more_spellings_ask(line):
     'cat ~/.kube/""/config',                     # quotes that leave an empty part
     "cat ~/.kube/'.'/config",
     "cat ~/.kube/\\./config",
+    "echo x > ~/.kube/\\config",                 # a write, a local_write allow on main (#513 review)
     'cat "$HOME"/.kube//config',
     "cat ${HOME}/.kube/./config",
     "cat < ~/.kube//config",
@@ -518,6 +519,17 @@ BACKSLASH = [
                          [(o, p, pol) for o, p in BACKSLASH for pol in STRICT + TARGET])
 def test_a_lowered_line_decides_as_its_plain_spelling(odd, plain, policy):
     assert full(odd, policy) == full(plain, policy)
+
+
+@pytest.mark.parametrize("line, target", [
+    ("cat ~/.kube/\\config", "~/.kube/config"),
+    ("bash -c 'cat ~/.kube/\\config'", "~/.kube/config"),
+    ("cat {~/.kube/\\config,x}", "{~/.kube/\\config,x}"),   # the brace set main names, not the text piece
+])
+def test_a_backslash_piece_is_the_target_only_when_nothing_else_names_the_store(line, target):
+    # #513 review: the text piece `$HOME/.kube/\config` names the store only in its lexical form, so the word the
+    # shell reads, or a brace set below, is the target first, as on main
+    assert gate.classify({"tool": "bash", "args": {"command": line}}).target == target
 
 
 def test_a_shell_read_keeps_its_read_deny():

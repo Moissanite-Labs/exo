@@ -5935,14 +5935,13 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
         if not p or not (_sensitive_words([p]) or _glob_words([p])):
             continue
         # #446: a piece with a backslash that names a store only in its lexical form (`$HOME/.kube/\config`, where
-        # `\c` is `c`) is the target only when no other piece hits, so the dequoted word (`~/.kube/config`) names it
-        # and a `target:` entry for the store still matches. A piece that names a store as written stays the target.
+        # `\c` is `c`) is the target only when nothing else hits, not even a brace set below, so the dequoted word
+        # (`~/.kube/config`) names it and a `target:` entry for the store still matches, as on main. A piece that
+        # names a store as written stays the target.
         if "\\" in p and not (_sensitive_words([p], lexical=False) or _glob_words([p])):
             late = late or p
             continue
         return p
-    if late:
-        return late
     groups: dict[str, list[str]] = {}         # bash expands only unquoted braces: expand, then dequote
     for raw in dict.fromkeys(raws or []):
         words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
@@ -5956,10 +5955,10 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
     words = [w for ws in groups.values() for w in ws]
     if words and (_sensitive_words(words) or _glob_words(words)):
         return next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
-    return ""
+    return late
 
 
-_PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
+_PARAM =re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
 _KNOWN_PARAM = re.compile(r"\$\{?(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?!\w)")
 
 
