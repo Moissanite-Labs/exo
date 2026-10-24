@@ -1856,13 +1856,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   tells the hook of the second case, under the pinned or a changed policy. A grant on (`read`, the host) no longer
   covers such a line either.
   *With #399.* #399 landed first. A gh read's other targets (`alt_targets`) stay on the displaced part: the second
-  reading is decided on each of them, the ssh hop gives them its host, the card names them when that reading asks,
-  and a displaced part with any of them binds the approval to the exact command. A line #399 also reads as before
+  reading is decided on each of them, the ssh hop gives its host to one that is the current repo, the card names
+  them when that reading asks, and a displaced part with any of them binds the approval to the exact command. A line #399 also reads as before
   (`floor`) can be a sudo write line in that reading only, as `sudo gh pr "$V" 5 > /tmp/f` is. #399 lets only
   those who may answer that reading's category answer the line. That category is now the write's, so the hook also
   keeps the approvers of that reading's displaced part, always. Without that, with approvals.yaml
   `approvers: {opaque_exec: [seat:h], local_write: [seat:h]}`, `seat:h` answered that line, where main asked the
   principal alone. An ask from the displaced part of any reading is kept when the readings merge (`_strictest`).
+  Against main 8c09c29c, which has #399, the differential lowers no pair either: the built-in corpus (67,396
+  actions x 87 policies), #399's own corpus (7,014 x 100), its gh lines behind sudo with a write, nested and over
+  ssh (26,748 x 126), the five focused corpora above, and 15,750 lines of sudo writes fed to a shell on stdin, in
+  heredocs, `eval`, `su -c`, `find -exec`, `xargs`, git and rsync exec options, interpreters, container exec and
+  ssh hops (37,308 x 113).
   *Lowered lines.* None. The gate differential (#423) against main 5a9dc394, with main's script, lowers no pair in
   six runs. The built-in corpus: 58,405 actions x 87 policies. 1,564 lines built for this change (sudo and doas with
   options and behind other prefixes, each write redirection, `/dev/null`, store paths, compounds, subshells, `$( )`,
