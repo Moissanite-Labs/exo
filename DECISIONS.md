@@ -1959,7 +1959,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   deny and reserved entries on the hosts and on `github_post` with a host as target, scopes, and rules on gh and
   ssh) lowers 16 pairs on 8 actions, all of kind (a): `{ ssh buildhost; } < cmds.sh; gh pr merge ...` under a
   policy that allows `opaque_exec`, as `ssh buildhost < cmds.sh; gh pr merge ...` is on main. Against this branch
-  before the merge the focused corpus lowers nothing.
+  before the merge the focused corpus lowers nothing. A second check of the merge ran a focused corpus of its own:
+  5,810 actions (the gh lines above beside a local post, posts read in a hop, and many posts on one line) under 140
+  policies (the 87 and 53 more, among them scopes that make `myorg/*` and the hosts private, with a footer or a
+  scrub). It lowers 278 pairs on 54 actions: 222 of kind (a), 40 of kind (b), and 16 that kind (a) also takes in
+  now. A post a hop reads can displace a later post of equal weight as the deciding part, and #399 decides only the
+  deciding part on its other targets. So `echo 'gh pr comment -wR myorg/app -b hi' | ssh jump ssh buildhost && gh
+  pr comment -wR myorg/app -b hi` is decided on the hop's post, on `myorg/app` and `jump`, both private there, not
+  on the later post's current repo. Main lists the later post's missing footer or scrub hit twice, for that reading
+  and for the post's copy on the current repo. The merge lists it once, for the copy, and the line still asks. Under
+  a policy that allows `opaque_exec` too, such a line goes from the later post's third-party ask to `allow`. Each
+  such line decides as main decides it with `ssh buildhost` in place of the hop, on the outcome, the exposure, the
+  third party and the violations: 250 of 250 lowered pairs of 80 such lines under those 53 policies. Against this
+  branch before the merge that corpus lowers nothing.
   *Revisit if:* sudo and the privileged wrappers mark every part they run `costly` ((b) then goes).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
