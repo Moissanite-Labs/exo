@@ -315,3 +315,99 @@ def test_a_cwd_in_the_run_folder_decides_as_the_absolute_spelling(tree, command)
     args = {"command": command, "cwd": "~/.exo/run"}
     assert outcome("bash", args, cwd=str(tree)) == ("store_write", "ask")
     assert outcome("bash", args, cwd=str(tree), policy=DENY_STORE) == ("store_write", "deny")
+
+
+DENY_EXO = {"gates": {"deny": ["target:*/.exo/*"]}}
+
+
+@pytest.mark.parametrize("folder", ["~/.exo/policies", "~/.exo/plugins/foo", "~/.exo/run", "sdir/../plugins/foo"])
+@pytest.mark.parametrize("command,target", [
+    ("touch ~/.exo/state/x", "~/.exo/state/x"),
+    ("touch y ~/.exo/state/x", "~/.exo/state/x"),
+    ("touch ~/.exo/state/x > out.txt", "~/.exo/state/x"),
+    ("rm -rf ~/.exo/state/x", "~/.exo/state/x"),
+    ("git -C ~/.exo/state add x", "~/.exo/state"),
+    ("git -C sub add ~/.exo/state/x", "~/.exo/state/x"),
+    ("sudo touch ~/.exo/state/x", "~/.exo/state/x"),
+    ("bash -c 'touch ~/.exo/state/x'", "~/.exo/state/x"),
+])
+def test_in_a_store_folder_the_write_is_named_after_its_store_path(tree, folder, command, target):
+    """A word that is a store path only because the folder is in the store never displaces one that is a store path
+    by its own spelling, and the program word never names the write. So `deny: ["target:*/.exo/*"]` denies these, as
+    on main and as in their `cd` forms."""
+    for d in (".exo/plugins/foo", ".exo/run"):
+        (tree.parent / d).mkdir(parents=True, exist_ok=True)
+    c = gate.classify({"tool": "bash", "args": {"command": command, "cwd": folder}}, cwd=str(tree))
+    assert (c.category, c.target) == ("store_write", target)
+    assert gate.decide(c, DENY_EXO).outcome == "deny"
+    cd = gate.classify({"tool": "bash", "args": {"command": f"cd {folder} && {command}"}}, cwd=str(tree))
+    assert gate.decide(cd, DENY_EXO).outcome == "deny"
+
+
+@pytest.mark.parametrize("folder", ["~/.exo/plugins/foo", "~/.exo/run", "pdir"])
+@pytest.mark.parametrize("command", ["make", "./build.sh"])
+def test_the_program_word_never_names_a_store_write(tree, folder, command):
+    """A command with no other word still runs in a store folder, so it asks as its `cd` form does. The card names
+    the folder, not the program."""
+    for d in (".exo/plugins/foo", ".exo/run"):
+        (tree.parent / d).mkdir(parents=True, exist_ok=True)
+    c = gate.classify({"tool": "bash", "args": {"command": command, "cwd": folder}}, cwd=str(tree))
+    assert (c.category, c.target) == ("store_write", "a path inside the store (the tool's folder)")
+    assert gate.decide(c, POL).outcome == "ask"
+
+
+@pytest.mark.parametrize("args,target", [
+    # from a folder outside the store, a program word that leads in names the write, as its absolute spelling does
+    ({"command": "../pdir/run.sh", "cwd": "notes"}, "../pdir/run.sh"),
+    # a string in code is read as a command, so its path is the program word there (gate._classify_code)
+    ({"command": "python3 -c \"open('pdir/default.yaml','w').write('x')\""}, "pdir/default.yaml"),
+    ({"command": "node -e \"require('fs').writeFileSync('sdir/../policies/default.yaml','x')\""},
+     "sdir/../policies/default.yaml"),
+])
+def test_a_program_word_that_leads_into_the_store_names_the_write(tree, args, target):
+    c = gate.classify({"tool": "bash", "args": args}, cwd=str(tree))
+    assert target in [p.target for p in [c, *gate._each_part(c)] if p.category == "store_write"]
+    assert gate.decide(c, POL).outcome == "ask"
+    assert gate.decide(c, DENY_STORE).outcome == "deny"
+
+
+@pytest.fixture
+def links(tree):
+    """xl links to a folder elsewhere, and kl, pl and rl to ~/.ssh, the plugins folder and the run folder. The kernel
+    reads `xl/../kl` through xl (~/elsewhere/kl); os.path.abspath and bash's `cd` fold it to kl."""
+    home = tree.parent
+    for d in ("elsewhere/d", ".ssh", ".exo/plugins/foo", ".exo/run"):
+        (home / d).mkdir(parents=True, exist_ok=True)
+    (home / ".ssh/id_rsa").write_text("fake\n")
+    for name, to in (("xl", "elsewhere/d"), ("kl", ".ssh"), ("pl", ".exo/plugins"), ("rl", ".exo/run")):
+        (tree / name).symlink_to(home / to, target_is_directory=True)
+    return tree
+
+
+@pytest.mark.parametrize("command", ["tar czf /tmp/o.tgz .", "pip install --target . x"])
+def test_the_cwd_argument_is_read_folded_too(links, command):
+    """Main read the folder folded, so these asked. Read joined only, they were allowed. Now both readings count."""
+    args = {"command": command, "cwd": "xl/../kl"}
+    assert outcome("bash", args, cwd=str(links)) == ("credentials", "ask")
+    assert outcome("bash", args, cwd=str(links), policy={"gates": {"deny": ["credentials"]}}) == ("credentials", "deny")
+
+
+@pytest.mark.parametrize("args", [
+    {"command": "echo x > default.yaml", "cwd": "xl/../pdir"},
+    {"command": "cp /tmp/g.json approval-grants.json", "cwd": "xl/../sdir"},
+    {"command": "cp /tmp/evil.py hook.py", "cwd": "xl/../pl/foo"},
+    {"command": "echo x > foo", "cwd": "xl/../rl"},
+    {"command": "cd xl/../pdir && echo x > default.yaml"},
+    {"command": "cd xl/../pl/foo && cp /tmp/evil.py hook.py"},
+    {"command": "cd sub && cd ../xl/../pdir && echo x > default.yaml"},
+    {"command": "cd ~/proj/xl/../pdir && echo x > default.yaml"},
+])
+def test_a_dotdot_after_a_link_in_the_folder_is_read_folded_for_store_writes(links, args):
+    assert outcome("bash", args, cwd=str(links)) == ("store_write", "ask")
+    assert outcome("bash", args, cwd=str(links), policy=DENY_STORE) == ("store_write", "deny")
+
+
+def test_a_brace_word_met_again_after_a_cd_is_read_again(tree):
+    """The store checks keep their brace memo per folder entered, so the second `cp` is read from notes."""
+    line = "cp y ../pdi{r,x}/default.yaml; cd notes; cp y ../pdi{r,x}/default.yaml"
+    assert outcome("bash", {"command": line}, cwd=str(tree)) == ("store_write", "ask")

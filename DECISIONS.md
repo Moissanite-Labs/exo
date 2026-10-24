@@ -1390,6 +1390,31 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   spellings of a store path, everyday lines from four session folders and `cd` chains of up to 30 folders. With its
   generated forms it makes 36,820 actions and lowers 0 of 3,203,340 pairs. No pair is lower, so no group needs a
   write-up.
+  *Amendment 2026-10-24 (issue #340, a check of #452):* a check of #452 ran its own focused corpus against this
+  change. It found two groups that decided lower than main d79639f1, 320 pairs on 60 actions. Both are fixed. First,
+  in a store folder a store write was named after the program. With `~/.exo/policies` or `~/.exo/plugins/foo` as the
+  bash `cwd`, every relative word there is a store path, `touch` too. So `touch ~/.exo/state/x` was named `touch`,
+  and `deny: ["target:*/.exo/*"]` only asked where main denies. The same held for `rm` and `git`. Now a word that is
+  a store path by its own spelling names the write first. A word that is one only as read from the folder names it
+  only when no such word is on the command. In a store folder the program word never names it, since it is run, not
+  written. When it is the only such word there (`make`), the write is named "a path inside the store (the tool's
+  folder)", as a `cd` there names it "a path inside the store (after cd)". From a folder outside the store, a program
+  word that leads in still names it, as its absolute spelling does (`../pdir/run.sh`, or a path in `python3 -c` code,
+  which the gate reads as a command). Second, the bash
+  `cwd` was read joined as written, and never folded. With `xl` a link elsewhere and `kl` a link to `~/.ssh`,
+  `tar czf /tmp/o.tgz .` with `xl/../kl` as `cwd` was an allowed shell call. Main read the folder folded, as
+  `os.path.abspath` and bash's `cd` read it, and asked. Now the folder is read both ways, as #452 does since
+  1342d171. A `cd` target and the folder a `cd` enters are read both ways too, so
+  `cd xl/../pdir && echo x > default.yaml` asks. The store checks also keep their brace memo per folder a `cd`
+  entered, so a brace word met again after a `cd` is read again from there. gate_diff (#423) ran main d79639f1
+  against this change, and each run lowers 0 pairs: the built-in corpus (65,757 actions under 87 policies), the
+  check's corpus (8,724 actions under 98 policies), the two focused corpora above (19,741 and 36,820 actions under 87
+  policies), and a corpus of this round's lines (46,886 actions under 98 policies). That last one runs the two
+  groups' lines under 18 wrappers and joins (`sudo`, `env`, `timeout`, `bash -c`, `ssh`, `mosh`, `eval`, `$( )`,
+  here-docs and others) in 22 folders, as a `cwd` and as a `cd`. On a trial merge with #452, `_shell_call` keeps the
+  line alone when the folder's reading has a part no grant covers. With that one line, the merge lowers 0 pairs on
+  the check's corpus against main, #452 and this change. Without it, 252 pairs are lower than #452 alone, under
+  `order_ask_under_category_deny`. Whichever lands second adds it.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,

@@ -371,9 +371,12 @@ What the gate asks about, and why:
   a change in review (D-074, #125) adds it. The gate resolves symbolic links in a path (#130). It reads a relative
   path from the session's folder, from a shell call's `cwd`, and from the folder a `cd` on the line enters (#340). So
   `gates.yaml` written in a session whose folder is `policies/` asks, and so does a write through a link into your
-  store, such as `pdir/default.yaml`, `sdir/../policies/default.yaml` or `cd notes && cp x ../pdir/default.yaml`. Some
-  writes are not seen as store writes yet: a glob spelling, a hard link, and a relative name in the `workdir` of
-  another harness's shell tool (#453). A brace spelling (`polic{i..i}es`) is seen (#224), and so is a store file
+  store, such as `pdir/default.yaml`, `sdir/../policies/default.yaml` or `cd notes && cp x ../pdir/default.yaml`. A
+  folder spelt with `..` after a link, such as a `cwd` of `xl/../kl`, is read both through the link and with the `..`
+  dropped, because tools enter it either way. A `deny` entry on a target, such as `target:*/.exo/*`, matches the
+  store path a command names (`touch ~/.exo/state/x`), also when the command runs in your store. Some writes are not
+  seen as store writes yet: a glob spelling, a hard link, and a relative name in the `workdir` of another harness's
+  shell tool (#453). A brace spelling (`polic{i..i}es`) is seen (#224), and so is a store file
   opened on a numbered file descriptor and written back through `/dev/fd/3` (#217). If your session's folder is your
   store itself, a command that names a part of it, such as `git add state`, asks too. From your home folder, `mv x .`
   asks, as `mv x ~` does, and so does `mv x ..` from a folder in it. `docs/GATE.md` lists the rest.
