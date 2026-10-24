@@ -366,11 +366,14 @@ What the gate asks about, and why:
   standing grants), the ledger, `keys/`, seat files, the core's socket, or the signed-update trust pin in `update/`
   (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. Reading your policies does
   not ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves
-  symbolic links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some
-  writes are not seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working
-  folder is `policies/`, a glob spelling, a hard link, and a store file opened on a numbered file descriptor and
-  written back through `/dev/fd/3` (#217). A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md` lists
-  the rest.
+  symbolic links in a path (#130). It reads a relative path from the session's folder and from a shell call's
+  `cwd` (#340). So `gates.yaml` written in a session whose folder is `policies/` asks, and so does a write through
+  a link into your store, such as `pdir/default.yaml` or `sdir/../policies/default.yaml`. Some writes are not seen
+  as store writes yet: a glob spelling, a hard link, a relative name in the `workdir` of another harness's shell
+  tool (#453), and a store file opened on a numbered file descriptor and written back through `/dev/fd/3` (#217).
+  A brace spelling (`polic{i..i}es`) is seen (#224). If your session's folder is your store itself, a command
+  that names a part of it, such as `git add state`, asks too. From your home folder, `mv x .` asks, as `mv x ~`
+  does. `docs/GATE.md` lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
   This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length

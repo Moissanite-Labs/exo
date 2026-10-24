@@ -1272,6 +1272,38 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `cd ~/.exo/policies && echo $(echo $(gh pr comment 3 --body hi))` the post's bare violation is now named after the
   post, since the store write sets the card. Both trees list it, and the #460 script counts it as reworded. 685,477
   pairs are stricter, nearly all the store-write ask on the forms above.
+  *Amendment 2026-10-23 (issue #340):* the store-write check read a relative path by its distinctive names only. So a
+  link whose name and target text name no store (`rel -> ../.exo`, made by an allowed `ln -s ../.exo rel`) turned
+  `write_file rel/policies/default.yaml` into an allowed local write. Two allowed calls could rewrite the policy file
+  past the principal-only floor. Now a relative path is resolved from the tool's folders, as the secret-store checks
+  resolve it (#209): the session's working folder and, for a shell tool, that folder joined with the call's own `cwd`.
+  So are a relative `ln` target, read against each folder the link can land in, and a relative `cd`, `pushd` or
+  `git -C` target. A shell call's own folder counts for store writes as it does for secret reads. The path is joined
+  as written. The kernel reads `sdir/../policies` through the link `sdir`, and `_path_forms` resolves it the same way.
+  Folding the `..` first (normpath or abspath) read `~/proj/policies`, so with `sdir -> ~/.exo/state` a `write_file`,
+  `edit_file` or `apply_patch` there rewrote the policy file (abu-aska's review of #429). The shell's `cwd` is kept
+  joined for the secret-store checks too, so `cat seat` with `sdir/../keys` as `cwd` is a key read. Rejected:
+  resolving from the gate's own folder as well, as the issue suggested and the secret-store checks do. That judges a
+  bare word by where the gate runs, not where the tool writes (a bare `run` would be the run folder whenever the gate
+  runs in `$EXO_HOME`). This closes what the #130 amendment left open for relative folders, link chains and the bash
+  `cwd` argument, and the relative names under `cwd` the #133 amendment left open. It closes the `cwd` rows of #453.
+  Not done, with the other limits in `docs/GATE.md`: a relative `cd` or path after a `cd` that stays out of the store
+  is read from the tool's folders, not from that `cd` (`cd notes && cp x
+  ../pdir/default.yaml`, as on main), and the `workdir` argument of other harnesses' shell tools is not read (#453).
+  #311 (#452, open) moves a shell call's own folder out of these folders. Its wide reading of the line then gives the
+  store-write checks both `cwd` and `workdir`, if it keeps them joined as written. Known friction, which fails closed:
+  from a session folder in the Exo home, a word that names a protected entry asks, as its absolute spelling does
+  (`git add state`). From a session folder in HOME, `mv x .` asks, as `mv x ~` does. A raw `ln` target is read from
+  the tool's folder as well as the link's, so `ln -s ../.exo sub/rel2` and `ln -s .. up` ask. The text `ssh` runs on
+  another host is read from the local folders, as the secret-store checks read it. gate_diff (#423) ran main 5a9dc394
+  against this change. The built-in corpus, 56,174 actions under the 87 built-in policies, lowers 0 of 4,887,138
+  pairs. A focused corpus of 2,884 actions, run alone in a HOME that holds the links, makes 19,741 actions with its
+  generated forms. It lowers 0 of 1,717,467 pairs and tightens 71,197. Its lines are the issue's and the reviews'
+  rows, `..` after a link, link chains and links into the store under 18 writers (a here-doc among them) and 29
+  wrappers and compound forms (`sudo`, `doas`, `env`, `timeout`, `nice`, `bash -c`, `ssh`, `xargs`, `find -exec`,
+  `$( )` and others), six file tools, 16 `cd`, `pushd` and `git -C` targets, 21 `cwd` and `workdir` folders under
+  three shell tools, and eight session folders. Its 48 reworded pairs name a post's missing footer after the post,
+  since the store write now sets the card, as for #465. No pair is lower, so no group needs a write-up.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,

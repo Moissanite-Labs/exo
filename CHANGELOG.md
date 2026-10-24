@@ -82,9 +82,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A relative link to the Exo home is judged by where it leads (#340). The store-write check read a
   relative path by its distinctive names only, so `rel -> ../.exo` turned `rel/policies/default.yaml`
   into an ordinary local write, and making the link was allowed too: two allowed calls could rewrite
-  the policy file. A relative path is now resolved from the tool's folders and the gate's own folder,
-  as the secret-store checks do (#209), and a relative `ln` target is read against each folder the
-  link can land in. `store_write` stays a floor category: even allowed in policy, the write asks.
+  the policy file. A relative path is now resolved from the tool's folders, never the gate's own: the
+  session's folder and a shell call's `cwd`, as the secret-store checks do (#209). A relative `ln`
+  target is read against each folder the link can land in, and a relative `cd`, `pushd` or `git -C`
+  target from the tool's folders, so `cd pdir && echo x > default.yaml` asks. The path is joined as
+  written, with no `..` folded first, so a `..` after a link climbs from where the link leads, as the
+  kernel reads it: `write_file sdir/../policies/default.yaml` (with `sdir -> ~/.exo/state`) and a
+  `cwd` of `sdir/../policies` ask, and `cat seat` with `sdir/../keys` as `cwd` is a key read.
+  `store_write` stays a floor category: even allowed in policy, the write asks. From a session folder
+  in the Exo home, a word that names a protected entry (`git add state`) asks, as its absolute
+  spelling does, and from a session folder in HOME, `mv x .` asks, as `mv x ~` does.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
