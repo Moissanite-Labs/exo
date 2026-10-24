@@ -191,9 +191,11 @@ def test_a_required_executor_refuses_every_unseen_body(store, work, line):
 
 
 @pytest.mark.parametrize("line", ["sudo gh pr view 1 -R o/r -F {work}/clean.md > /tmp/f",
-                                  "ssh h 'sudo gh pr view 1 -R o/r -F {work}/clean.md > /tmp/f'"])
+                                  "ssh h 'sudo gh pr view 1 -R o/r -F {work}/clean.md > /tmp/f'",
+                                  'sudo gh pr "$V" 5 -F {work}/clean.md > /tmp/f'])
 def test_a_required_executor_refuses_the_body_file_of_a_displaced_part(store, work, line):
     # #454: a sudo write leads the line in place of the gh command, which keeps the body file. Main refused the line.
+    # With #399 only the line as read before may be a sudo write line, as the last one is.
     g, ctx = make_gate(store)
     g.required_getter = lambda: True
     r = call(ctx, line.format(work=work))
