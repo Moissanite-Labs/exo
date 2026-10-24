@@ -317,7 +317,9 @@ What the gate asks about, and why:
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another. A post whose text the gate cannot
   read (piped in, a file given by a relative path, `$( )` or a variable) asks, and offers no "always". The gate
-  reads a body file given by its full path.
+  reads a body file given by its full path. When the gate cannot tell which repo a `gh` command acts on, it reads
+  the command on each one, and the question names the others ("It may land on pub/repo#7 instead."). A deny in
+  your policy for any of them holds. An "always" on such a command covers that exact command only (#399).
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
   the post and lists what it found. The sweep and the exact-text check see only text the gate can read, so a body
   it cannot read asks instead (#208, above).
@@ -362,13 +364,16 @@ What the gate asks about, and why:
   whole line, but an ask rule lifts a deny only from the commands it names. `docs/GATE.md` has the details.
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, the core's socket, or the signed-update trust pin in `update/`
-  (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. Only you can answer it,
-  whatever `approvals.yaml` says, also when the same command or file tool names a secret that a seat may approve
-  (#447). Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074, #125)
-  adds it. The gate resolves symbolic links in an absolute path (#130), but otherwise goes by the path as the command
-  spells it, so some writes are not seen as store writes yet: a relative name such as `gates.yaml` written by a tool
-  whose working folder is `policies/`, a glob spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen
-  (#224). `docs/GATE.md` lists the rest.
+  (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. So does a write into
+  `~/.exo/plugins` (#435), because Exo loads and runs the code it finds there. To work on a plugin, point
+  `EXO_PLUGIN_DIRS` at your copy instead. Only you can answer such a write, whatever `approvals.yaml` says, also
+  when the same command or file tool names a secret that a seat may approve (#447). Reading your policies or plugins
+  with `cat`, `grep` or a read tool does not ask. Some other commands that only read, such as `sed -n` or `sort`, do
+  ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves symbolic
+  links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some writes are not
+  seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working folder is
+  `policies/`, a glob spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md`
+  lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
   This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length
