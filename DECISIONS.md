@@ -1917,7 +1917,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the tool to `local_write` on the first written path. An "always" for `echo started > /tmp/log` now covers a costly
   sudo command whose first sudo write goes to `/tmp/log`, and a second sudo command on that line, while one for a
   costly `read` on the tool no longer covers it. On main a grant on (`shell`, the tool) was as broad, so the key
-  moves rather than widens. A reserved hit on another part, the displaced one too, keeps the principal's ask (D-075).
+  moves rather than widens. A reserved hit keeps the principal's ask from a grant (D-075) on any part of the line,
+  the displaced part and the write included. The line is also the act of the part the write displaced, and on main
+  the write was another part of that line. Without this, under `reserved: [local_write]`, an "always" on
+  `sudo echo hi > /tmp/f` let that line run again with no ask, where main asked each time.
   The approvers follow the new category there too: with approvals.yaml `approvers: {local_write: ["seat:helper"]}`,
   `sudo echo hi > /tmp/log` goes to `[principal, seat:helper]`, as `echo hi > /tmp/log` does.
   Where the displaced part names a target of its own, a gh read's repo or an ssh host, the line is about that target
@@ -1970,6 +1973,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   decide lower: a policy on `local_write` that reached the copy, or one that allows `opaque_exec` or `vcs_push`, now
   meets the part that leads on main. Each decides as on main. The grants and approvers above are outside `decide`, so
   the differential does not count them.
+  Against main d79639f1, which adds #440, the differential lowers no pair either: the built-in corpus (67,654
+  actions x 87 policies), the `RemoteCommand` corpus above (23,230 x 114), and 8,330 sudo write lines in 17 places
+  (`$( )`, ssh hops, `RemoteCommand`, `bash -c`, loops, cd chains into the store and the plugins folder) under the
+  built-in policies and 26 more keyed on categories, cells, the repo, the host, reserved and deny entries,
+  escalations and `command` (49,490 x 113). A check of the hook steps past `decide` (the exact binding, the
+  approvers, the grant key, the reserved check and "once") over those 8,330 lines under the 26 policies finds no
+  pair looser than on main, apart from the grant move above where only the write asks. Before the reserved check
+  above, it found 2,600 such pairs.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

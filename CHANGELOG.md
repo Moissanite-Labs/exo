@@ -232,8 +232,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   under a rule on `a/b`. Where only the write asks, a standing grant and the approvers follow the new category and
   target. Where the displaced part names a repo or a host, or the line asks with that part leading, the approval is
   bound to the exact command, and only those who may answer both categories may answer it, so a grant or a seat for
-  the written path does not answer a rule on that repo or host, or an ask on that part's category. The displaced
-  part keeps #399's other targets, and the line as #399 read it before keeps that reading's approvers.
+  the written path does not answer a rule on that repo or host, or an ask on that part's category. A reserved hit on
+  the write keeps the principal's ask from a grant, as before. The displaced part keeps #399's other targets, and the
+  line as #399 read it before keeps that reading's approvers.
 - Gate (#435, D-038 amendment): a write into `$EXO_HOME/plugins` asks the principal. The core loads each plugin it
   finds there and runs its code with the harness's rights, so a write there installs or changes code the next session
   runs. Most writes there were allowed: only a `cd` or `git -C` into the Exo home made one a store write, and a delete
