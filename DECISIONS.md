@@ -1357,64 +1357,69 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `git -C` target. A shell call's own folder counts for store writes as it does for secret reads. The path is joined
   as written. The kernel reads `sdir/../policies` through the link `sdir`, and `_path_forms` resolves it the same way.
   Folding the `..` first (normpath or abspath) read `~/proj/policies`, so with `sdir -> ~/.exo/state` a `write_file`,
-  `edit_file` or `apply_patch` there rewrote the policy file (abu-aska's review of #429). The shell's `cwd` is kept
-  joined for the secret-store checks too, so `cat seat` with `sdir/../keys` as `cwd` is a key read. Rejected:
-  resolving from the gate's own folder as well, as the issue suggested and the secret-store checks do. That judges a
-  bare word by where the gate runs, not where the tool writes (a bare `run` would be the run folder whenever the gate
-  runs in `$EXO_HOME`). This closes what the #130 amendment left open for relative folders, link chains and the bash
-  `cwd` argument, and the relative names under `cwd` the #133 amendment left open. It closes the `cwd` rows of #453.
-  A `cd` or `pushd` on the line that stays out of the store is followed too: a relative path or `cd` target after it
-  is also read from the folder it enters. Without that, the issue's two calls still worked behind a `cd`
-  (`cd a/b && ln -s ../../../.exo e`, then `cd a/b && cp x e/policies/default.yaml`), and with an existing link one
-  call did (`cd notes && cp x ../pdir/default.yaml`). A relative target is joined to the tool's folders and to those
-  the latest `cd` entered. A `cd` in a subshell may not have stayed, so every folder a `cd` entered counts for the
-  rest of the call (fails closed), and past 64 of them every relative word counts as the store. Not done, with the
-  other limits in `docs/GATE.md`: a `cd` to a folder held in a variable, `cd -`, a folder option that one command
-  takes for its own relative paths (`git -C notes mv x ../pdir/default.yaml`, `env -C`, `sudo -D`), and the `workdir`
-  argument of other harnesses' shell tools (#453). #311 (#452, open) moves a shell call's own folder out of these
-  folders. Its wide reading of the line then gives the store-write checks both `cwd` and `workdir`, if it keeps them
-  joined as written. Known friction, which fails closed: from a session folder in the Exo home, a word that names a
-  protected entry asks, as its absolute spelling does (`git add state`). From a session folder in HOME, or after a
-  `cd` there, `mv x .` asks, as `mv x ~` does, and so does `mv x ..` from a folder in HOME. A raw `ln` target is read
-  from the tool's folder as well as the link's, so `ln -s ../.exo sub/rel2` and `ln -s .. up` ask. The text `ssh` runs
-  on another host is read from the local folders, as the secret-store checks read it. gate_diff (#423) ran main 8c09c29c
-  against this change. The built-in corpus, 65,145 actions under the 87 built-in policies, lowers 0 of 5,667,615
-  pairs. A focused corpus of 2,884 actions, run alone in a HOME that holds the links, makes 19,741 actions with its
-  generated forms. It lowers 0 of 1,717,467 pairs and tightens 72,329. Its lines are the issue's and the reviews'
-  rows, `..` after a link, link chains and links into the store under 18 writers (a here-doc among them) and 29
-  wrappers and compound forms (`sudo`, `doas`, `env`, `timeout`, `nice`, `bash -c`, `ssh`, `xargs`, `find -exec`,
-  `$( )` and others), six file tools, 16 `cd`, `pushd` and `git -C` targets, 21 `cwd` and `workdir` folders under
-  three shell tools, and eight session folders. Its 48 reworded pairs name a post's missing footer after the post,
-  since the store write now sets the card, as for #465. A second focused corpus of 8,430 items, built apart from the
-  first, holds write routes after a `cd` under 18 `cd` spellings and 23 joins, every write template under ten
-  spellings of a store path, everyday lines from four session folders and `cd` chains of up to 30 folders. With its
-  generated forms it makes 36,820 actions and lowers 0 of 3,203,340 pairs. No pair is lower, so no group needs a
-  write-up.
-  *Amendment 2026-10-24 (issue #340, a check of #452):* a check of #452 ran its own focused corpus against this
-  change. It found two groups that decided lower than main d79639f1, 320 pairs on 60 actions. Both are fixed. First,
-  in a store folder a store write was named after the program. With `~/.exo/policies` or `~/.exo/plugins/foo` as the
-  bash `cwd`, every relative word there is a store path, `touch` too. So `touch ~/.exo/state/x` was named `touch`,
-  and `deny: ["target:*/.exo/*"]` only asked where main denies. The same held for `rm` and `git`. Now a word that is
-  a store path by its own spelling names the write first. A word that is one only as read from the folder names it
-  only when no such word is on the command. In a store folder the program word never names it, since it is run, not
-  written. When it is the only such word there (`make`), the write is named "a path inside the store (the tool's
-  folder)", as a `cd` there names it "a path inside the store (after cd)". From a folder outside the store, a program
-  word that leads in still names it, as its absolute spelling does (`../pdir/run.sh`, or a path in `python3 -c` code,
-  which the gate reads as a command). Second, the bash
-  `cwd` was read joined as written, and never folded. With `xl` a link elsewhere and `kl` a link to `~/.ssh`,
+  `edit_file` or `apply_patch` there rewrote the policy file (abu-aska's review of #429). The shell's `cwd` is read
+  joined for the secret-store checks too, so `cat seat` with `sdir/../keys` as `cwd` is a key read. It is read folded
+  as well since the amendment below, as main read it. Rejected: resolving from the gate's own folder as well, as the
+  issue suggested and the secret-store checks do. That judges a bare word by where the gate runs, not where the tool
+  writes (a bare `run` would be the run folder whenever the gate runs in `$EXO_HOME`). This closes what the #130
+  amendment left open for relative folders, link chains and the bash `cwd` argument, and the relative names under
+  `cwd` the #133 amendment left open. It closes the `cwd` rows of #453. A `cd` or `pushd` on the line that stays out
+  of the store is followed too: a relative path or `cd` target after it is also read from the folder it enters.
+  Without that, the issue's two calls still worked behind a `cd` (`cd a/b && ln -s ../../../.exo e`, then
+  `cd a/b && cp x e/policies/default.yaml`), and with an existing link one call did
+  (`cd notes && cp x ../pdir/default.yaml`). A relative target is joined to the tool's folders and to those the latest
+  `cd` entered. A `cd` in a subshell may not have stayed, so every folder a `cd` entered counts for the rest of the
+  call (fails closed), and past 64 of them every relative word counts as the store. Not done, with the other limits in
+  `docs/GATE.md`: a `cd` to a folder held in a variable, `cd -`, a folder option that one command takes for its own
+  relative paths (`git -C notes mv x ../pdir/default.yaml`, `env -C`, `sudo -D`), and the `workdir` argument of other
+  harnesses' shell tools (#453). #311 (#452, open) moves a shell call's own folder out of these folders. Its wide
+  reading of the line then gives the store-write checks both `cwd` and `workdir`, if it keeps them joined as written.
+  It reads them joined and folded since 1342d171 (see the amendment below). Known friction, which fails closed: from a
+  session folder in the Exo home, a word that names a protected entry asks, as its absolute spelling does
+  (`git add state`). From a session folder in HOME, or after a `cd` there, `mv x .` asks, as `mv x ~` does, and so
+  does `mv x ..` from a folder in HOME. A raw `ln` target is read from the tool's folder as well as the link's, so
+  `ln -s ../.exo sub/rel2` and `ln -s .. up` ask. The text `ssh` runs on another host is read from the local folders,
+  as the secret-store checks read it. gate_diff (#423) ran main 8c09c29c against this change. The built-in corpus,
+  65,145 actions under the 87 built-in policies, lowers 0 of 5,667,615 pairs. A focused corpus of 2,884 actions, run
+  alone in a HOME that holds the links, makes 19,741 actions with its generated forms. It lowers 0 of 1,717,467 pairs
+  and tightens 72,329. Its lines are the issue's and the reviews' rows, `..` after a link, link chains and links into
+  the store under 18 writers (a here-doc among them) and 29 wrappers and compound forms (`sudo`, `doas`, `env`,
+  `timeout`, `nice`, `bash -c`, `ssh`, `xargs`, `find -exec`, `$( )` and others), six file tools, 16 `cd`, `pushd` and
+  `git -C` targets, 21 `cwd` and `workdir` folders under three shell tools, and eight session folders. Its 48 reworded
+  pairs name a post's missing footer after the post, since the store write now sets the card, as for #465. A second
+  focused corpus of 8,430 items, built apart from the first, holds write routes after a `cd` under 18 `cd` spellings
+  and 23 joins, every write template under ten spellings of a store path, everyday lines from four session folders and
+  `cd` chains of up to 30 folders. With its generated forms it makes 36,820 actions and lowers 0 of 3,203,340 pairs.
+  No pair is lower, so no group needs a write-up. A later check found two groups those corpora did not hold. The
+  amendment below fixes them.
+  *Amendment 2026-10-24 (issue #340, a check of #452):* a check of #452 ran its own focused corpus against the #340
+  change at 483e55bf. It found two groups that decided lower than main d79639f1: 320 pairs on 60 actions, 318 on the
+  outcome and 2 reserved hits. Both are fixed. First, in a store folder a store write was named after the program.
+  With `~/.exo/policies`, `~/.exo/plugins/foo` or `~/.exo/run` as the bash `cwd`, every relative word there is a store
+  path, `touch` too. So `touch ~/.exo/state/x` was named `touch`, and `deny: ["target:*/.exo/*"]` only asked where
+  main denies. The same held for `rm` and `git`, and with a key read beside the write (`cat *; touch ~/.exo/state/x`
+  with `~/.exo/keys` as `cwd`). Now a word that is a store path by its own spelling names the write first. A word that
+  is one only as read from the folder names it only when the command has no such word. In a store folder the program
+  word never names it, since it is run, not written. When it is the only such word there (`make`), the write is named
+  "a path inside the store (the tool's folder)", as a `cd` there names it "a path inside the store (after cd)". From a
+  folder outside the store, a program word that leads in still names it, as its absolute spelling does
+  (`../pdir/run.sh`, or a path in `python3 -c` code, which the gate reads as a command). Second, the bash `cwd` was
+  read joined as written, and never folded. With `xl` a link elsewhere and `kl` a link to `~/.ssh`,
   `tar czf /tmp/o.tgz .` with `xl/../kl` as `cwd` was an allowed shell call. Main read the folder folded, as
-  `os.path.abspath` and bash's `cd` read it, and asked. Now the folder is read both ways, as #452 does since
-  1342d171. A `cd` target and the folder a `cd` enters are read both ways too, so
-  `cd xl/../pdir && echo x > default.yaml` asks. The store checks also keep their brace memo per folder a `cd`
-  entered, so a brace word met again after a `cd` is read again from there. gate_diff (#423) ran main d79639f1
-  against this change, and each run lowers 0 pairs: the built-in corpus (65,757 actions under 87 policies), the
-  check's corpus (8,724 actions under 98 policies), the two focused corpora above (19,741 and 36,820 actions under 87
-  policies), and a corpus of this round's lines (46,886 actions under 98 policies). That last one runs the two
-  groups' lines under 18 wrappers and joins (`sudo`, `env`, `timeout`, `bash -c`, `ssh`, `mosh`, `eval`, `$( )`,
-  here-docs and others) in 22 folders, as a `cwd` and as a `cd`. On a trial merge with #452, `_shell_call` keeps the
-  line alone when the folder's reading has a part no grant covers. With that one line, the merge lowers 0 pairs on
-  the check's corpus against main, #452 and this change. Without it, 252 pairs are lower than #452 alone, under
-  `order_ask_under_category_deny`. Whichever lands second adds it.
+  `os.path.abspath` and bash's `cd` read it, and asked. Now the folder is read both ways, as #452 does since 1342d171.
+  A `cd` target and the folder a `cd` enters are read both ways too, so `cd xl/../pdir && echo x > default.yaml` asks.
+  A path word itself is still read joined only, as the kernel reads it: `cp y xl/../pdir/default.yaml` writes through
+  `xl`. The store checks also keep their brace memo per folder a `cd` entered, so a brace word met again after a `cd`
+  is read again from there. gate_diff (#423) ran main d79639f1 against this change, and each run lowers 0 pairs: the
+  built-in corpus (under its 87 policies), the check's corpus (8,724 actions under 98 policies, which lowered the 320
+  pairs at 483e55bf), the two focused corpora above (19,741 and 36,820 actions under 87 policies), and a corpus of
+  this round's lines (46,886 actions under 98 policies). That last one runs the two groups' lines under 18 wrappers
+  and joins (`sudo`, `env`, `timeout`, `bash -c`, `ssh`, `mosh`, `eval`, `$( )`, here-docs and others) in 22 folders,
+  as a `cwd` and as a `cd`. With #452: on a trial merge, `_shell_call` keeps the line alone when the folder's reading
+  has a part no grant covers (`if read is not None or no_grant(whole):`). With that one line, the merge lowers 0 pairs
+  on the check's corpus against main, #452 and this change. Without it, 252 pairs are lower than #452 alone, under
+  `order_ask_under_category_deny` (`cat *; git push --force origin main` in `~/.exo/policies`). Whichever lands second
+  adds it.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,

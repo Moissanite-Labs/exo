@@ -330,6 +330,11 @@ DENY_EXO = {"gates": {"deny": ["target:*/.exo/*"]}}
     ("git -C sub add ~/.exo/state/x", "~/.exo/state/x"),
     ("sudo touch ~/.exo/state/x", "~/.exo/state/x"),
     ("bash -c 'touch ~/.exo/state/x'", "~/.exo/state/x"),
+    ("timeout 5 env A=1 touch ~/.exo/state/x", "~/.exo/state/x"),
+    ("ssh host 'touch ~/.exo/state/x'", "~/.exo/state/x"),
+    ("mosh host -- touch ~/.exo/state/x", "~/.exo/state/x"),
+    ("echo $(touch ~/.exo/state/x)", "~/.exo/state/x"),
+    ("bash <<'EOF'\ntouch ~/.exo/state/x\nEOF", "~/.exo/state/x"),
 ])
 def test_in_a_store_folder_the_write_is_named_after_its_store_path(tree, folder, command, target):
     """A word that is a store path only because the folder is in the store never displaces one that is a store path
@@ -342,6 +347,20 @@ def test_in_a_store_folder_the_write_is_named_after_its_store_path(tree, folder,
     assert gate.decide(c, DENY_EXO).outcome == "deny"
     cd = gate.classify({"tool": "bash", "args": {"command": f"cd {folder} && {command}"}}, cwd=str(tree))
     assert gate.decide(cd, DENY_EXO).outcome == "deny"
+
+
+@pytest.mark.parametrize("folder", ["sdir/../policies", "sdir/../keys", "sdir/../run", "sdir/../plugins/foo", "pdir",
+                                    "~/.exo/keys", "~/.exo/state", "~/.exo/plugins", "$HOME/.exo/plugins/foo"])
+@pytest.mark.parametrize("line", ["cat *; touch ~/.exo/state/x", "cat ../keys/seat; touch ~/.exo/state/x",
+                                  "cat config; touch ~/.exo/state/x"])
+def test_the_lines_the_check_of_452_found_are_denied_as_on_main(tree, folder, line):
+    """A check of #452 found these asked under a `target:` deny that denies them on main: the store write was named
+    after `touch`. A key read beside it does not change that."""
+    for d in (".exo/plugins/foo", ".exo/run"):
+        (tree.parent / d).mkdir(parents=True, exist_ok=True)
+    c = gate.classify({"tool": "bash", "args": {"command": line, "cwd": folder}}, cwd=str(tree))
+    assert "~/.exo/state/x" in [p.target for p in [c, *gate._each_part(c)] if p.category == "store_write"]
+    assert gate.decide(c, DENY_EXO).outcome == "deny"
 
 
 @pytest.mark.parametrize("folder", ["~/.exo/plugins/foo", "~/.exo/run", "pdir"])
@@ -365,6 +384,7 @@ def test_the_program_word_never_names_a_store_write(tree, folder, command):
      "sdir/../policies/default.yaml"),
 ])
 def test_a_program_word_that_leads_into_the_store_names_the_write(tree, args, target):
+    """Controls: from a folder outside the store these were named so before, and still are."""
     c = gate.classify({"tool": "bash", "args": args}, cwd=str(tree))
     assert target in [p.target for p in [c, *gate._each_part(c)] if p.category == "store_write"]
     assert gate.decide(c, POL).outcome == "ask"
@@ -384,12 +404,27 @@ def links(tree):
     return tree
 
 
-@pytest.mark.parametrize("command", ["tar czf /tmp/o.tgz .", "pip install --target . x"])
-def test_the_cwd_argument_is_read_folded_too(links, command):
-    """Main read the folder folded, so these asked. Read joined only, they were allowed. Now both readings count."""
-    args = {"command": command, "cwd": "xl/../kl"}
-    assert outcome("bash", args, cwd=str(links)) == ("credentials", "ask")
-    assert outcome("bash", args, cwd=str(links), policy={"gates": {"deny": ["credentials"]}}) == ("credentials", "deny")
+@pytest.mark.parametrize("folder", ["xl/../kl", "~/proj/xl/../kl", "notes/../xl/../kl", "xl/../rl"])
+@pytest.mark.parametrize("command", ["tar czf /tmp/o.tgz .", "pip install --target . x", "sudo tar czf /tmp/o.tgz .",
+                                     "bash -c 'tar czf /tmp/o.tgz .'"])
+def test_the_cwd_argument_is_read_folded_too(links, folder, command):
+    """Main read the folder folded, so these asked. Read joined only, they were allowed. Now both readings count:
+    `xl/../kl` is ~/.ssh and `xl/../rl` the run folder."""
+    args = {"command": command, "cwd": folder}
+    c = gate.classify({"tool": "bash", "args": args}, cwd=str(links))
+    assert "credentials" in [p.category for p in [c, *gate._each_part(c)]]
+    assert gate.decide(c, POL).outcome == "ask"
+    assert gate.decide(c, {"gates": {"deny": ["credentials"]}}).outcome == "deny"
+
+
+def test_a_reserved_entry_reaches_the_folded_folder(links):
+    """The check's two reserved hits: main kept `credentials` reserved for this line, and so does the folded folder."""
+    line = "tar czf /tmp/o.tgz . ; git push --force origin main"
+    c = gate.classify({"tool": "bash", "args": {"command": line, "cwd": "xl/../kl"}}, cwd=str(links))
+    d = gate.decide(c, {"gates": {"reserved": ["credentials"]}})
+    assert ("credentials", ".") in d.reserved and d.outcome == "ask", d
+    d = gate.decide(c, {"gates": {"reserved": ["store_write", "credentials", "force_push"]}})
+    assert {("credentials", "."), ("force_push", "origin")} <= set(d.reserved), d
 
 
 @pytest.mark.parametrize("args", [
