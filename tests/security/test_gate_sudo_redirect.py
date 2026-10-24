@@ -437,3 +437,19 @@ def test_an_ask_from_the_displaced_part_of_any_reading_stays_known():
     ds = [gate.Decision("ask", "a", exposure="internal"), gate.Decision("ask", "b", exposure="private",
                                                                          displaced_asks=True)]
     assert gate._strictest(ds, ["", ""]).displaced_asks
+
+
+@pytest.mark.parametrize("line,rule", [
+    ("sudo gh pr view https://github.com/pub/repo/pull/5 -R myorg/app > /tmp/f", "myorg/*"),
+    ("ssh h 'sudo gh pr view https://github.com/pub/repo/pull/5 -R myorg/app > /tmp/f'", "myorg/*"),
+    ("ssh prod 'sudo gh pr view -c https://github.com/myorg/app/pull/9 > /tmp/f'", "prod"),
+])
+def test_the_displaced_part_keeps_the_other_targets_399_gives_it(line, rule):
+    # #454 with #399: gh may act on a target other than the one it names (alt_targets). The displaced part keeps them,
+    # the ssh hop gives its host to one that is the current repo, and the second reading is decided on each, as main
+    # decides the gh read. The card names them when that reading asks.
+    c = sh(line)
+    assert c.displaced is not None and c.displaced.alt_targets, c
+    d = decide(c, pol(rules=[{"match": {"target": rule}, "decision": "ask", "reason": "r"}]))
+    assert (d.outcome, d.displaced_asks) == ("ask", True) and binds_exact(c, d), (line, d)
+    assert "It may land on" in summarize(c, d), summarize(c, d)
