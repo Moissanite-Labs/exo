@@ -24,10 +24,11 @@ Required mode refuses every post whose body the gate cannot read on the line
 even when body-file reading is disabled), and also stdin (`--body-file -` with a
 pipe or `<`), `gh api` fields read with `@` and `--input`, `$( )`, backticks or
 a variable in the text, and the HTTP clients' file and stdin bodies (see "What an
-approval covers"). The refusal is a recorded `deny` decision (rule `required`).
-The gate cannot approve unseen contents. Pass inline text for inspection; the
-executor then applies its own operation policy. Policy and grant files remain
-trusted configuration outside the worker's writable workspace.
+approval covers"). It counts both readings of a gh line the gate also reads as
+before #399 ("Where a gh command lands"). The refusal is a recorded `deny` decision (rule
+`required`). The gate cannot approve unseen contents. Pass inline text for
+inspection. The executor then applies its own operation policy. Policy and grant
+files remain trusted configuration outside the worker's writable workspace.
 
 Concurrent identical requests keep separate approval tokens and audit
 references. The reusable rule key still scopes a standing grant; it does not
@@ -87,7 +88,10 @@ nobody read:
   or the call's `cwd` argument, moves it (`cd docs && gh ... --body-file notes.md` read `notes.md`
   from exod's own folder before). A path under `/dev` or `/proc`, as written or resolved
   (`/dev/stdin`, `/proc/self/fd/3`), names what the reading process holds, so the hook would read
-  exod's own; it is never read. A missing, larger or unreadable file stays unseen.
+  exod's own. It is never read. A missing, larger or unreadable file stays unseen. A gh post the
+  gate reads more than one way ("Where a gh command lands") gets the text in each reading: the
+  copy on each other target, and the line as read before #399, whose own body file is read the
+  same way.
 
 Under the posting rules (`posting.applies_to`) an unseen body adds the violation "the gate cannot
 read the body ..." and asks. In any category it offers no "always" (`once`) and no standing grant
@@ -98,6 +102,196 @@ matches it, since its binding hashes only the line. A post the line spells out i
 - A client may echo `binding` in `approval.respond`. If it differs from the open request's hash
   the answer is refused as `stale`, so an approver who read an older draft cannot pass a newer
   one. A client that sends no binding keeps the old behaviour.
+
+## Where a gh command lands (#399)
+
+A gh command's target decides its scope (`gates.scopes`), and with it the exposure, the third
+party, the footer and the scrub. The gate takes the target from `-R` and the operands only:
+
+- An option's value is never the target. A URL or a number in `--body`, `--title`, `--comment`,
+  `--duplicate-of`, `--head`, `--base` or `--milestone` names nothing. So
+  `gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 ...'` is a post on
+  `pub/repo#5`, a public repo, even under `internal: [myorg/*]`.
+- Options are read with gh's own table of options that take a value, the same table the unseen
+  check uses: `--opt=value`, short clusters (`-wb text`), `-Rowner/name`, and `--`, which ends the
+  options. gh keeps the last `-R`. The table lists pr and issue create, comment, edit, close,
+  reopen, lock and unlock, pr review, ready and merge, issue develop, delete and transfer, and
+  release create, edit, upload and delete (gh 2.89 `--help`). Other commands are read both ways
+  (below).
+- `-R` reads as gh reads it. A short option drops one `=` before its value, also at the end of a
+  cluster, so `-R=pub/repo` and `-wR=pub/repo` name `pub/repo`. `github.com/pub/repo`,
+  `https://github.com/pub/repo.git` and an ssh remote URL for it name `pub/repo` too, and so do
+  those forms as the first word of `gh repo`. A URL's path reads decoded, without a query or a
+  fragment, as gh reads it (`https://github.com/pub/re%70o`). Its host reads as gh reads it too
+  (below). gh sends a repo on any host that ends in `.github.com` to github.com, so
+  `-R api.github.com/pub/repo` names `pub/repo` too. On another instance (`-R ghe.corp/myorg/app`)
+  the gate cannot tell whether a scope means that repo, so the value as written is another target.
+  gh reads `-R` and most of `gh repo`'s first words with ghrepo.FromFullName, which drops a leading
+  `www.` from a URL's host, lowers it, and then does both again. So
+  `-R https://WWW.garage.github.com/pub/x` and `gh repo delete https://WWW.garage.github.com/pub/x`
+  are on garage.github.com, another instance, and the gate reads them so. `gh repo fork` reads an
+  `http:/`, `https:/` or `git@` value, and `gh repo clone` any value with a `:`, with
+  ghrepo.FromURL, which does it once (gh 2.89). So
+  `gh repo fork https://www.www.garage.github.com/pub/x` is on www.garage.github.com, which gh
+  sends to github.com, and names `pub/x`. `gh repo clone` reads such a value as a git remote:
+  `api.github.com:pub/x` is an ssh remote for `pub/x`, and the path keeps its first two parts.
+- A URL operand names the repo, also beside `-R`, because gh posts there.
+  `gh pr comment https://github.com/myorg/app/pull/9 -R pub/repo` lands on `myorg/app#9`. The URL
+  reads close to how gh reads it: the scheme and the host in any case, without a user, a port or a
+  leading `www.`, and the path decoded. gh sends its request for a host that ends in `.github.com`
+  to github.com, with the github.com token (go-gh's `NormalizeHostname`). So
+  `https://www.github.com/pub/repo/pull/5`, `https://GitHub.com/pub/repo/pull/5`,
+  `https://api.github.com/pub/repo/pull/5` and `https://gist.github.com/pub/repo/issues/5` name
+  `pub/repo#5`. The one such host gh calls at itself is `garage.github.com`. Go's url.Parse, which
+  gh uses, checks only that a port is digits, with no range check, so
+  `https://github.com:99999/pub/repo/pull/5` names `pub/repo#5` too. It decodes the host, and Go
+  lowers `İ` (U+0130) to `i`, so `https://g%C4%B0thub.com/pub/repo/pull/5` and
+  `https://gİthub.com/pub/repo/pull/5` are on github.com. gh takes a pull request or issue URL
+  there. The gate takes a discussion URL and a repo URL too, which only adds a reading, since `-R`
+  stays another target. gh gist takes a gist's URL or id, never a repo, so a URL there names no
+  repo (`gh gist view https://gist.github.com/pub/abc`). For `gh repo` a repo URL drops its `.git`,
+  as `-R` does. A URL that url.Parse refuses names no repo here: a port that is not digits, a
+  second colon (`github.com:80:80`), an escape below `%80` other than `%25` in the host
+  (`g%69thub.com`), or a control character before the first `#`. url.Parse cuts the fragment off
+  first and keeps one with a control character, so `$'https://api.github.com/pub/repo/pull/5#\t'`
+  names `pub/repo#5`. A URL on another instance (`ghe.corp`, `x.ghe.com`, `github.com.`, a
+  look-alike such as `github.com.evil.io`) names that instance's repo, which a scope may not mean.
+  So `https://ghe.corp/pub/repo/pull/5` is the other target `ghe.corp/pub/repo#5`, as a `-R` on
+  another instance is. That holds where gh reads a repo from an operand: a pull request URL in
+  `gh pr`, an issue or pull request URL in `gh issue`, a discussion URL in the gate's discussion group, and the
+  first word of `gh repo` and of `gh label clone`, its source (`ghe.corp/pub/repo`). Another URL on
+  another host names no target. Nor does an option's value that the reading with every option a
+  flag takes for an operand (`gh repo edit myorg/app --homepage https://myorg.github.io/app/docs`).
+- `gh api` takes its target from its endpoint, its one operand, read with gh api's options that
+  take a value. A path in a header, a jq query, a template or a host names nothing. So
+  `gh api -H 'X-Note: repos/myorg/app/' repos/pub/repo/issues/5/comments -f body=...` is a post
+  on `pub/repo`. Its method reads as gh reads it too: a cluster ends at `X` (`-iX DELETE`,
+  `-iXPUT`), one `=` goes (`-X=PUT`), and the last `-X` or `--method` stands. The gate read the
+  first `-X` word as written before, so these lines were GETs. Where the two differ the line is
+  also read as before (below), so `gh api -X DELETE -X GET repos/pub/repo` still meets a deny on
+  deletes.
+- The subcommand is the word gh takes for it. gh finds it past the options before it, and the
+  subcommand then reads every option on the line. So `gh pr -R pub/repo comment 5` and
+  `gh pr -b text comment 5 -R pub/repo` are comments on `pub/repo#5` (checked with gh 2.89). The
+  gate finds it the same way: an option word without `=` that starts with `--` or has two
+  characters takes the next word as its value, `--help` and any other option word stand alone, an
+  empty word is passed over (`gh pr "" comment`, also `gh "" pr comment`), and `--` ends the
+  search. gh finds the command the same way past the options before it, where `--help` and
+  `--version` stand alone. So does an option word with its `=` before any expansion
+  (`--repo="$R"`), whatever bash puts after the `=`, unless bash may split it. `-R` is then an
+  option of each group that calls gh's `EnableRepoOverride`: pr, issue, release, secret, variable
+  and others. gh repo itself does not, only `gh repo rename` and its deploy-key and autolink groups. So
+  `gh -R pub/repo pr comment 5`, `gh --repo pub/repo pr comment 5`
+  and `gh -b x pr comment 5 -R pub/repo` are comments on `pub/repo#5` too, and the gate reads them
+  so. An alias reads as the subcommand it names, from the aliases in gh 2.89's help: `new` is
+  `create` (pr, issue, repo, release, gist), `remove` is `delete` (variable, secret), `ls` is
+  `list` and `co` is `checkout`. So `gh pr new` is a new PR, not a read. A command alias (`gh co`,
+  `gh rs`), a user alias and an extension stay code the gate cannot see, and ask. With no
+  subcommand gh prints help, and the line stays a read. With no command (`gh --version`,
+  `gh --help`, `gh -h`) it stays as it was. A word from an expansion where the subcommand or an
+  option may stand (`gh pr "$V" 5`) counts as `opaque_exec`, since the gate cannot tell what gh
+  runs. So does an option's value before the subcommand that bash may split into several words: an
+  expansion outside quotes, a glob or a brace expansion. With `R='pub/repo comment -F'` and a file
+  named `view`, `gh pr -R $R view 5` comments on `pub/repo#5`. A quoted value (`-R "$R"`) is one
+  word, only that value. The gate reads the quotes in a `$( )` or backtick body as bash does, so in
+  `gh pr -R "$(: ")")"$R view 5` the `$R` is outside quotes. bash splits `$(cat <<'EOF' .. EOF)`
+  outside quotes too. bash may read a `${ }` past its first `}` when a quote, a backslash or a `$(`
+  comes before it, so the gate cannot tell what is quoted after it, and such a value counts as one
+  that may split. `gh auth` and `gh secret` stay credentials, also past an empty word or an option
+  (`gh "" secret "$V"`, `gh -R pub/repo secret "$V"`), and past an option's value or an option
+  word with its `=` that bash may split (`gh -R $R secret set X`, `gh --repo=$R secret set X`).
+  With an empty value `-R$R` is a bare `-R` that takes the next word, so `gh -R$R secret set X`
+  stays `opaque_exec`. The line as the gate read it before, with each gh command's words
+  where they are written, is decided too, and the stricter decision stands on each axis. Without
+  that a compound line could decide lower: in `git push origin f && gh issue -R myorg/app edit 5`
+  the edit now outranks the push, and `private: [myorg/*]` lowers it. Such a line binds its
+  approval to the exact command. It is an outward act when the earlier reading is one, as in
+  `gh issue -R myorg/app close 5 && gh pr comment 3 -R myorg/app -b ok`. When the earlier reading
+  decides, the reason ends with "(for git push to origin)". A required executor refuses the line
+  when either reading has a body file or an unseen body. In `gh pr "$V" 5 -F notes.md` and in
+  `gh pr view 5 -F notes.md | gh issue -b x comment 8` only the earlier reading has one. Only who
+  may answer both readings may answer the line ("Who may approve"): `gh pr -b x comment 5` was a
+  read, so a seat listed for `github_post` alone does not answer it. When either reading is
+  credentials, a store write or a post with an unseen body, the line is answered once, gets no
+  standing grant, and asks in observe mode too.
+
+The gate also keeps every other reading it cannot rule out, and decides the line on each. The
+strictest outcome stands, with the widest exposure, a third party if any reading has one, and every
+violation and reserved part. Each reading is decided in full, the line as read before too. So on a
+compound line, a rule keyed on `command` that would lower the line must name its commands on each
+reading, as "Shell commands: an allowlist (D-038)" says (#394). The other readings are:
+
+- `-R`, when a URL operand names another repo. The line above is decided as public.
+- The reading before #399: `-R`, then the first URL or number anywhere on the line. So no line
+  decides lower than it did. A deny or reserved entry that named the repo a body links to still
+  fires. For `gh api` it is the first word after `api` with a `/` and no `=`.
+- The empty target, a repo the line does not name, when an operand comes from an expansion. In
+  `gh pr merge "$U" -R myorg/app` the URL in `$U` may name any repo, and gh merges there.
+- The repo on another instance that a URL operand, `gh repo`'s first word or `gh label clone`'s
+  source names (`ghe.corp/pub/repo#5`), as above.
+- For a gh command outside the table, whose options the gate cannot tell from their values: the
+  operands read with every option a flag, and with every option taking a value. A URL that only
+  the first reading takes for an operand never replaces `-R`. With no `-R` it names the target,
+  and the reading without it counts too.
+
+Each other reading is a copy of the action among the line's parts, with its own target, so a
+`target:` deny or reserved entry matches it also when the gh call is not the line's most severe
+part. The posting rules list a post's violations under the post's own name, and right after
+them what a copy finds that neither the post nor another copy of it does (under a scope a copy's
+target can be public where the post's is internal). On a line with such copies, the other posts
+keep the room of twenty, and the posts with copies and their copies have a room of 200 of their
+own, so it lists all that main lists while those list no more than 200. Its question merges the
+readings of the line, so a copy's finding can show both under the copy's name and under the
+post's, and it lists one `and N more on other posts`, which counts each entry a reading left out
+that the merged list does not hold. The ledger row lists the other targets as `alt_targets`, with a user and password in a
+URL as `***@`. The question the principal sees
+names each of them, also when none decides the line:
+`merge PR on pub/repo#7 (costly, internal). It may land on myorg/app#7 instead.`
+When one of them decides the line, the reason ends with "(if it lands on owner/name#n)". A user and
+password in such a URL read as `***@` in the question and the reason. An empty target is the repo gh
+picks with no `-R`, named "the current repo". On an ssh or mosh hop the host
+stands for an empty target, as for any command run there, and for an empty other target too. Its
+copy among the parts gets the host as well. So `ssh buildhost gh repo view --web myorg/app` still
+meets a rule on `buildhost`, and a rule on reads on `buildhost` still denies
+`gh pr merge 9 -R myorg/app && ssh buildhost gh repo view --web myorg/app`, where the merge
+outranks the read.
+
+A line with other targets binds its approval to the exact command, as an outward act does. Its
+rule key is the text hash, so a "session" answer covers that line only. A standing grant on one of
+its targets does not run it, and an "always" on it covers that exact line only ("Standing
+grants"). So a grant from `gh pr merge -R myorg/app` never runs
+`gh pr merge https://github.com/pub/repo/pull/7 -R myorg/app`, which merges `pub/repo#7`.
+
+Limits. A body that links to another repo still counts that repo, as it did before #399. So
+`gh pr comment 5 -R myorg/app -b 'https://github.com/pub/repo/pull/3'` asks as public. A post the
+unseen check found unseen with a row of the table as it was before #399 stays unseen, so
+`gh issue lock 5 -rb x` and a close whose `--duplicate-of` value is an option word
+(`--duplicate-of -c x`) stay unseen. gh refuses the second line. The gate does not read `GH_HOST`
+or `gh api --hostname`: `owner/name` counts as a repo on github.com. Nor does it read `GH_REPO`,
+which gh takes for `-R` when the line has none, so such a line counts as one on the current repo.
+With `GH_COBRA` set, gh's root has no `--version` flag, so `--version` takes the next word as its
+value there. The gate reads it alone, as gh does without `GH_COBRA`. So in
+`GH_COBRA=1 gh --version x pr comment 5 -R pub/repo -b hi` the gate takes `x` for the command and
+counts the line as `opaque_exec`, while gh posts on `pub/repo#5`. With `GODEBUG=urlstrictcolons=0`,
+gh's URL parser splits a host from its port at the last colon, as Go before 1.26 did. The gate reads
+a URL with Go 1.26's default, so a host with a second colon names no repo there.
+
+A differential against main with #397 read 270,394 distinct gh lines, every corpus of the #399
+rounds and reviews, in both trees, and found none lower than on main. The 183,611 lines that
+classify differently were decided under 119 policies, among them a deny map, a rule and a
+reserved entry that name an ssh host with a gh category. They were checked on the outcome, the
+exposure, the third party, the violations, the reserved parts and the outward and exact binding
+checks. They also ran through the exo-gate hook in 13 setups of 5 policies: with standing grants
+on 31 targets, with none, in observe mode and with a required executor. There they were checked
+on what the hook does (run, ask or block), who may answer, "once", the binding and the scope an
+"always" keeps. The unseen check and the required executor's body check read both readings, and
+none is lower. On 91 lines the line as read loses the `secret store` or `unseen_body` signal, and
+the line as read before keeps it, so the decision stands. For `secret store`, gh now reads a
+credentials subcommand past an option (`gh ssh-key -y 123 delete`), so the line is credentials
+already and gets no extra mark, as `cat .env && gh ssh-key delete 123 -y` gets none on main. The
+other 86,783 lines classify the same in both trees, so they decide the same, and 5,000 of them run
+both ways showed no difference. Tests:
+`tests/security/test_gate_gh_target_operands.py`, `tests/security/test_gate_gh_subcommand_position.py`.
 
 ## Who may approve
 
@@ -117,6 +311,9 @@ ingress client never can (D-026). The allowed list is sent as `approvers` on
 `approval.requested` so a client can show who must answer; the engine refuses anyone else as
 `forbidden`. While a changed `approvals.yaml` waits for `/gate accept`, the list holds only those
 both files allow (`gate.strictest_approvers`); see "Policy changes during a session".
+
+A gh line the gate also reads as before #399 lists only those both readings' categories allow
+("Where a gh command lands").
 
 A client answers as a seat by setting `client` to `seat:<name>` and signing the answer with that
 seat's Ed25519 key: `sig = exo.core.approvals.sign_approval(key, request_id, decision, binding,
@@ -506,6 +703,9 @@ logged with the grant id.
 - Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`).
 - Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
   granted for the exact command only, like an outward act.
+- A gh command that may land on more than one target (`alt_targets`, "Where a gh command
+  lands") is granted for the exact command only, like an outward act. A grant on one of its targets
+  does not cover it (#399).
 - A post whose body the gate did not read never gets a grant, and an older grant does not cover it
   (#208, "What an approval covers").
 - Only the principal can create a grant.
@@ -573,7 +773,8 @@ after it: `GitHub PR comment on myorg/app#6: forbidden word: Zork`. When two pos
 the gate cannot read, each is named: a part's unseen body is read from the signals it carried
 before the line was combined (`Classification.own_signals`, left out of the ledger view). Once
 other posts add violations, a decision lists at most 20 and counts the rest
-(`and 40 more on other posts`). The dominant part's own violations are always all listed. So is
+(`and 40 more on other posts`). A gh post's copies on other targets have a room of their own
+("Where a gh command lands"). The dominant part's own violations are always all listed. So is
 the unseen-body note for a part the posting rules do not cover, such as a `curl` post. Both come
 before the other posts' violations. The scrub compiles its patterns once per policy, so a line of
 many posts does not compile them again for each post. The approval binding hashes the whole
@@ -1514,21 +1715,74 @@ the sandbox is the real fix.
 
 ## The store is credentials (D-038)
 
-The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/`
-(including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
-`$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats` and `$EXO_HOME/bus`
-(the bus registry that signed seat answers and the relay trust, the relay database and its
-`-wal`, `-shm` and `-journal` files, #210), `$EXO_HOME/update` (`allowed_signers`, the
-signed-update trust pin of D-073, #133), any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store
-root recorded in config `principals` (`exo init --root`, `exo import-store --root`), for every id,
-not only the active one. When the environment moves a bus file, the gate protects where it points:
-the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with the database's sidecars) and the folder
-`EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_` name, and both spellings when both are
-set. Distinctive names match anywhere, so a relative `policies/gates.yaml`,
-`state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or `update/allowed_signers`
-counts too, and `.exo/bus` and `.exo/update` count whatever `EXO_HOME` is. A project folder called
-`update` is ordinary; only a file in it named `allowed_signers` asks. `config.json` is not on the
-list yet (D-074, #125).
+The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/` (including
+`approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of `$EXO_HOME`,
+`$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus` (the bus registry
+that signed seat answers and the relay trust, the relay database and its `-wal`, `-shm` and
+`-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435), `$EXO_HOME/update`
+(`allowed_signers`, the signed-update trust pin of D-073, #133), any `seat.toml`,
+`$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals` (`exo init --root`,
+`exo import-store --root`), for every id, not only the active one. When the environment moves a bus
+file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with
+the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_`
+name, and both spellings when both are set. Distinctive names match anywhere, so a relative
+`policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or
+`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins` and `.exo/update` count whatever
+`EXO_HOME` is. A project folder called `update` is ordinary. Only a file in it named
+`allowed_signers` asks. `config.json` is not on the list yet (D-074, #125).
+
+The plugins folder (#435). The core loads each plugin it finds in `$EXO_PLUGIN_DIRS`, then in
+`$EXO_HOME/plugins` (`exo.core.plugins.default_dirs`), and runs its code inside the harness with the
+harness's own rights. A write into `$EXO_HOME/plugins` can install or change code the next session
+runs, so it is a `store_write` when made in any of these ways: a file tool, a redirection, `cp`,
+`cp -t`, `mv`, `install`, `tee`, `sed -i`, `ln`, `rsync`, `tar -C`, `unzip -d`, `curl -o`, `git clone`
+or `pip install --target` into it, a `mkdir`, `chmod` or `rm` there, a writing command after a `cd` into
+it, with the folder spelt with `~`, `$HOME` or `$EXO_HOME`, as its resolved path, through a link into
+it, or as a relative `.exo/plugins/...`. That covers a plugin's own files too, such as its
+`config.json`. A read with a read command stays a read: `cat`, `ls`, `grep -r`, `find`, `diff`,
+`git -C <folder> log`, and the read tools (`read_file`, `list_dir`, `grep`, `glob`).
+
+What a policy can still do there. As for every protected folder, the call keeps its own reading as a
+part. A shell line keeps its own command. A file tool keeps a `local_write` part for each file it
+writes, or its own category, such as `delete` (#448, below). A line in `/dev` keeps `/dev` as a
+second target (#464). So a `deny`, `categories:`, `reserved:` or `target:` entry, a rule or a matrix
+cell on that reading still applies. A tool call that the gate does not read as a file write or
+delete, and that names a file in a protected folder only as what it sends, keeps the call as a part,
+with its target and text (#435 review). Examples are an `email_send`, `web_post`, `github_post`,
+`social_post`, `publish` or `payment` tool call with the file in `files:`, an MCP upload tool, and
+`curl -T`, `curl -F` or `mail -A` on a shell line. So a `deny`, `reserved` or `categories:` entry
+for the call, a rule that matches it, its own matrix cell and the posting rules still apply to it. A
+tool that the gate reads as `local_write` or `delete` by its name, such as an `upload_file` tool
+that is not from MCP, keeps that reading as a part with the call's own URL as its target. A here-doc
+body on the line goes to the post, also inside a script fed to `bash`. Each of these still asks the
+principal alone when nothing denies it. One reading no longer reaches a write into the folder or a
+send of a file in it under `sudo` or `doas` over `ssh` or `mosh`. The wrapper makes the dominant part
+costly. A rule on `shell` or `local_write` with `reversibility: costly` matched that part, and so did
+a matrix that denies that cell while `store_write` has its own category line. The store write is now
+that part, so neither denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'` or `sudo ssh host
+'cp evil.py ~/.exo/plugins/foo/__init__.py'`. Each asks the principal alone, as for `policies/` on
+main. `deny: [store_write]` is the reliable way to refuse every write into the
+folder. A `target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*`
+denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the absolute path and
+`~/.exo/../.exo/plugins/...` still only ask.
+
+Known friction (fails closed, no grant). A command that names a path in the folder and is not a
+read command asks the principal, as for the rest of the store. That covers a writing command that
+names the path only as a source (`cp ~/.exo/plugins/foo/x.py /tmp/`). It also covers commands that
+only read but that the gate reads as `shell` or `opaque_exec`: `sed -n 1,10p`, `tree`, `sort`,
+`uniq`, `xxd`, `bat`, `python3 -m json.tool`, a dry-run `rsync -an`, and a `grep -rn` whose output
+goes to a file elsewhere. The installer puts every core plugin in the folder, so read plugin code
+with `cat`, `grep` or a read tool. Main reads `policies/` and `state/` the same way. Running a
+plugin's own script by its path (`~/.exo/plugins/foo/tool.sh`) asks the principal alone too, where
+before a seat could answer its `opaque_exec` ask. Not covered here: the folders in
+`$EXO_PLUGIN_DIRS`. Section 4 of the developer guide points that variable at a checkout's `plugins/`,
+so a principal-only floor there would ask on every edit, and protecting it is a separate change. The
+installer and `exo update`, which copy Exo's plugins into the folder, stay `opaque_exec`. A copy that
+lands on the folder by a source's name (`cp -r /tmp/x/plugins ~/.exo/`) or an archive unpacked into
+the home (`tar -xf x.tar -C ~/.exo`) is not seen as a write to it, as for every protected folder. Nor
+is a relative path written by a tool whose working folder is in the plugins folder or in `$EXO_HOME`
+(`cp evil.py __init__.py` or `write_file __init__.py` in a session started in `~/.exo/plugins/foo`):
+the store check reads a relative path by its name alone, as for every protected folder (below).
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
