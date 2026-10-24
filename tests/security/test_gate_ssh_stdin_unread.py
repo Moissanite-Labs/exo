@@ -157,6 +157,10 @@ def test_a_declare_value_without_a_substitution_stays_a_read(command):
     # more than one hop: each passes the stdin on to the next
     "echo 'rm -rf /data' | ssh prod-db ssh jump ssh inner",
     "ssh prod-db ssh jump ssh inner <<'EOF'\nrm -rf /data\nEOF",
+    # after `--` ssh reads no more options, so this `-n` is a word of the remote command and ssh passes the stdin on
+    "echo 'rm -rf /data' | ssh -- prod-db -n 'x; ssh inner'",
+    # a value declare reads again runs its $( ) with declare's stdin, the stdin the hop passes on
+    "echo 'rm -rf /data' | ssh prod-db \"declare -a 'a=(\\$(ssh inner))'\"",
 ])
 def test_a_hop_anywhere_in_the_remote_command_runs_the_known_text(command):
     c = gate.classify_shell(command)
@@ -627,6 +631,17 @@ def test_a_flag_after_a_word_that_may_expand_is_not_sure(command):
     assert gate.decide(c).outcome == "ask"
 
 
+def test_a_flag_after_the_host_and_a_double_dash_is_a_word_of_the_remote_command():
+    """After `--` ssh reads no option, also none after the host (_ssh_forwards): the `-n` is the remote command's, so
+    ssh passes its stdin on and the inner ssh runs it. Reading that `-n` as ssh's own would let a policy that allows
+    `opaque_exec` allow the line."""
+    c = gate.classify_shell("echo 'rm -rf /data' | ssh -- prod-db -n 'x; ssh inner'")
+    assert c.category == "delete", c
+    assert gate.decide(c, OPAQUE_ALLOW).outcome == "ask"
+    for policy in DELETE_DENY_FORMS:
+        assert gate.decide(c, policy).outcome == "deny", policy
+
+
 @pytest.mark.parametrize("command", [
     'ssh -l -n "$h" < cmds.sh',
     'ssh -ln "$h" < cmds.sh',
@@ -688,3 +703,96 @@ def test_a_fed_substitution_after_cd_into_the_store_runs_there(command, fed):
 def test_a_process_substitution_before_cd_into_the_store_does_not_run_there():
     c = gate.classify({"tool": "bash", "args": {"command": "echo >(cp /tmp/evil gates.yaml); cd ~/.exo/policies"}})
     assert c.category != "store_write", c
+
+
+# --- a value declare reads again runs its $( ) with declare's stdin (#316 review, nit 4) ---
+
+@pytest.mark.parametrize("command", [
+    "cat f | declare -a 'a=($(ssh prod-db))'",
+    "{ declare -a 'a=($(ssh prod-db))'; } < cmds.sh",
+    "declare -a 'a=($(ssh prod-db))' < cmds.sh",     # bash has set up declare's `<` when it reads the value
+    "cat f | local -a 'a=(`ssh prod-db`)'",
+])
+def test_a_value_declare_reads_again_runs_its_substitution_fed(command):
+    """A $( ) in a value declare reads again runs as declare runs, with declare's stdin. It is read as the line's own
+    $( ) is, and also when declare has a stdin of its own."""
+    c = gate.classify_shell(command)
+    assert c.category == "opaque_exec", c
+    assert any("runs its stdin" in p.summary for p in gate._each_part(c)), c
+    assert gate.decide(c, {"gates": {"deny": ["opaque_exec"]}}).outcome == "deny"
+    assert gate.decide(c, HOST_DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    "declare -a 'a=($(ssh prod-db))'",
+    "declare -a 'a=($(ssh prod-db))' < /dev/null",
+    "echo hi | declare -a 'a=($(ssh -n prod-db))'",
+])
+def test_a_value_declare_reads_again_with_no_unread_stdin_keeps_its_reading(command):
+    c = gate.classify_shell(command)
+    assert not any("runs its stdin" in p.summary for p in gate._each_part(c)), c
+    assert c.category == "shell", c
+
+
+# --- with #399's other targets (main d79639f1): a gh post fed to ssh may land on the host's current repo ---
+
+GH_WR = "gh pr comment -wR myorg/app -b hi"   # gh reads -R in the cluster; the reading before #399 names no repo
+
+
+def _post_denied_on(host: str) -> dict:
+    return {"gates": {"deny": [{"category": "github_post", "target": host}]}}
+
+
+@pytest.mark.parametrize("command", [
+    f"echo '{GH_WR}' | ssh buildhost",
+    f"ssh buildhost <<< '{GH_WR}'",
+    f"ssh buildhost <<'EOF'\n{GH_WR}\nEOF",
+    f"{{ ssh buildhost; }} <<< '{GH_WR}'",
+    f"echo '{GH_WR}' | sudo ssh buildhost",
+    f"echo '{GH_WR}' | uv run ssh buildhost",
+    f"echo '{GH_WR}' | timeout 5 ssh buildhost",
+    "echo 'gh pr comment $N -R myorg/app -b hi' | ssh buildhost",    # a number from an expansion may be any URL
+])
+def test_a_post_ssh_runs_from_its_stdin_may_land_on_the_host_s_current_repo(command):
+    """#399 decides a gh post on each target the gate cannot rule out, and ssh gives an empty one its host, the repo
+    gh picks there. The part that runs ssh's stdin leads beside ssh's own part (#316), so it takes that fill itself:
+    a deny or reserved entry for github_post on the host finds the post, as on main, and ssh's own part keeps no
+    target, as inside main's line."""
+    c = gate.classify_shell(command)
+    assert (c.category, c.target, c.alt_targets) == ("github_post", "myorg/app", ["buildhost"]), c
+    assert gate.decide(c, _post_denied_on("buildhost")).outcome == "deny"
+    d = gate.decide(c, {"gates": {"reserved": ["target:buildhost", "shell"]}})
+    assert {("github_post", "buildhost"), ("shell", "buildhost"), ("shell", "")} <= set(d.reserved), d
+
+
+@pytest.mark.parametrize("command", [
+    f"echo '{GH_WR}' | ssh jump ssh buildhost",
+    f"echo '{GH_WR}' | ssh jump 'cd /; ssh buildhost'",
+    f"echo '{GH_WR}' | ssh -- jump ssh buildhost",
+    f"ssh jump ssh buildhost <<< '{GH_WR}'",
+])
+def test_after_a_hop_an_empty_other_target_names_the_first_host(command):
+    """The part a hop adds names the first host, where the line hands its stdin over, for an empty target (#316), and
+    so for an empty other target (#399): the two readings of one post name one host. main does not read this text,
+    and the branch before the merge denied the post under a deny on the first host, which still holds."""
+    c = gate.classify_shell(command)
+    assert (c.category, c.target, c.alt_targets) == ("github_post", "myorg/app", ["jump"]), c
+    assert gate.classify_shell(command.replace(GH_WR, "gh pr comment -b hi")).target == "jump"
+    assert gate.decide(c, _post_denied_on("jump")).outcome == "deny"
+    assert ("github_post", "jump") in gate.decide(c, {"gates": {"reserved": ["target:jump"]}}).reserved
+    assert ("shell", "buildhost") in gate.decide(c, {"gates": {"reserved": ["target:buildhost"]}}).reserved
+
+
+@pytest.mark.parametrize("command", [
+    f"ssh buildhost '{GH_WR}' < cmds.sh",
+    f"{{ ssh buildhost '{GH_WR}'; }} < cmds.sh",
+    f"echo x > >(ssh buildhost '{GH_WR}')",
+    f"echo 'rm -rf /data' | ssh jump ssh buildhost '{GH_WR}'",
+])
+def test_ssh_s_own_part_keeps_main_s_fill_beside_a_stdin_it_reads(command):
+    """ssh's own part, its remote command, keeps main's #399 fill where #316 reads a stdin beside it: the remote gh
+    runs on the host, so its empty other target is the host's current repo there."""
+    c = gate.classify_shell(command)
+    assert (c.category, c.target, c.alt_targets) == ("github_post", "myorg/app", ["buildhost"]), c
+    assert gate.decide(c, _post_denied_on("buildhost")).outcome == "deny"
+    assert ("github_post", "buildhost") in gate.decide(c, {"gates": {"reserved": ["target:buildhost"]}}).reserved

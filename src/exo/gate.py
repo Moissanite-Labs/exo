@@ -2959,12 +2959,13 @@ def _own_stdin(k: _Cmd) -> bool:
 
 
 def _wrapped(k: _Cmd, words: list) -> _Cmd:
-    """The command a wrapper k runs (uv run, nsenter, flock, xargs, git bisect run...), read as its own command: it
-    keeps k's heredocs and here-strings, and k's stdin for the #316 reading. A stdin of k the gate cannot read
-    reaches it too: k's own `<` from anything but /dev/null, a pipe into k or a compound's feed (`uv run ssh h <
-    cmds.sh`, `cat cmds.sh | uv run ssh h`, `{ uv run ssh h; } < cmds.sh`); a pipe whose text is known reaches it as
-    `piped`. It reads the stdin of a fed line only when k does: k's own `<`, a pipe into k or a compound around k
-    gives it another (`>(uv run ssh h < /dev/null)`)."""
+    """The command a wrapper k runs (uv run, nsenter, flock, git bisect run...), read as its own command: it keeps
+    k's heredocs and here-strings, and k's stdin for the #316 reading. A stdin of k the gate cannot read reaches it
+    too: k's own `<` from anything but /dev/null, a pipe into k or a compound's feed (`uv run ssh h < cmds.sh`, `cat
+    cmds.sh | uv run ssh h`, `{ uv run ssh h; } < cmds.sh`); a pipe whose text is known reaches it as `piped`. It
+    reads the stdin of a fed line only when k does: k's own `<`, a pipe into k or a compound around k gives it
+    another (`>(uv run ssh h < /dev/null)`). xargs is read so too, which reads more than runs: GNU xargs gives its
+    command /dev/null unless -a names its input file (-o gives it the terminal), so that fails closed."""
     unread = k.stdin_unknown or k.piped_in or \
         any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs)
     return _Cmd(words=words, heredocs=k.heredocs, herestrings=k.herestrings, stdin_unknown=unread,
@@ -3212,12 +3213,14 @@ def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
 
 
 def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: list[str],
-                     late: list[Classification]) -> list[Classification]:
+                     late: list[Classification], inherits: bool = False, line: bool = False) -> list[Classification]:
     """The commands inside the array subscripts of a name-taking builtin's name arguments, whatever their quoting
     (`done`: bodies the line's own parse already classified), and in the values declare evaluates again (into
     `late`, which the line adds after its own $( ) bodies, as it would for the same value unquoted). Any
     expansion there also asks: bash evaluates its value (a variable's, or a $( )'s output) as arithmetic or code
-    too, and a value such as `b[$(cmd)]` runs cmd."""
+    too, and a value such as `b[$(cmd)]` runs cmd. A command in a value read again is fed a stdin the gate cannot
+    read when a $( ) of the line would be, or the builtin has one of its own, set up before it reads the value
+    (`inherits`, #316); `line`: the line itself was fed one."""
     named, valued, operands = _NAME_BUILTINS[prog]
     args = [w.text for w in words]
     names, i, opts = [], 0, True
@@ -3272,7 +3275,7 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
         # the line covers it (#316)
         more = [sub for sub in more if sub not in (seen_out if isinstance(sub, _OutSub) else seen)]
         parts += [classify_shell(sub, depth + 1) for sub in subs if depth < _DEPTH and sub not in done_set]
-        late += [_classify_sub(sub, depth + 1, False) for sub in more if depth < _DEPTH]   # a >( ) is fed (#316)
+        late += [_classify_sub(sub, depth + 1, inherits, line) for sub in more if depth < _DEPTH]   # #316
         fresh = bool(more or set(subs) - done_set)   # commands the line's own parse did not see
         parts += [_too_deep(cmd)] if fresh and depth >= _DEPTH else []
         if other or odd or more:   # a signal, not an opaque part, so a deny on another part of the line still wins
@@ -3307,9 +3310,10 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
             # #465: a value bash runs again after a `cd` into the store runs there too
             token = _cd_into.set((True, ctx.get("fd_cwd") or "")) if ctx.get("store_cwd") else None
+            fed = bool(ctx.get("subs_fed")) or _stdin_given(k, piped)    # bash reads the value as it runs (#316)
             try:
                 parts += _subscript_parts(words[0].text, words[1:] + k.operands, cmd, depth, ctx.get("subs", []),
-                                          ctx.setdefault("late", []))
+                                          ctx.setdefault("late", []), fed, bool(ctx.get("stdin_unknown")))
             finally:
                 if token is not None:
                     _cd_into.reset(token)
@@ -4991,7 +4995,13 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         # the rest is the same line, read the same way
         return _combine([_unread_nest(), _classify_fed(rest, depth, stdin_unknown)], cmd) if rest else _unread_nest()
     cmds, subs, func = _parse(cmd or "")
-    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown}
+    # A $( ) inherits the stdin of the command it is in, so on a line fed a stdin the gate cannot read, or where a
+    # pipe or a compound feeds a command, an ssh in it reads a stdin the gate cannot read (#316). A command's own `<`
+    # is set up after its words are expanded. A >( ) body is fed what the command around it writes, and its stdin
+    # is never its line's. A value declare reads again runs its $( ) the same way (_subscript_parts).
+    inherits = stdin_unknown or any(k.piped_in or k.stdin_unknown or (k.fed and bool(k.heredocs or k.herestrings))
+                                    for k in cmds)
+    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits}
     if into := _cd_into.get():            # a $( ) on a line that entered the store runs in it (#465)
         ctx["store_cwd"] = True
         if into[1]:
@@ -5023,12 +5033,6 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # A $( ) runs where the gate no longer knows which command it is in, so on a line where one has a stdin of its
     # own, a shell inside a $( ) reads a stdin the gate cannot name (`curl .. | echo $(bash)`).
     given = bool(subs) and any(k.fed or k.piped_in or _own_stdin(k) for k in cmds)
-    # It inherits the stdin of the command it is in, so on a line fed a stdin the gate cannot read, or where a pipe
-    # or a compound feeds a command, an ssh in it reads a stdin the gate cannot read (#316). A command's own `<` is
-    # set up after its words are expanded. A >( ) body is fed what the command around it writes, and its stdin is
-    # never its line's.
-    inherits = stdin_unknown or any(k.piped_in or k.stdin_unknown or (k.fed and bool(k.heredocs or k.herestrings))
-                                    for k in cmds)
     # #465: a $( ), backticks or <( ) after the `cd` into the store runs there, so a non-read command in it is a store
     # write, as it is unwrapped. One in a here-doc body counts as after every command on its line. One in the
     # redirections of a compound that holds the `cd` runs before the compound (`done < <(sort x)`). As for the line's
