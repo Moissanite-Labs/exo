@@ -140,6 +140,33 @@ def test_cut_pending_keeps_the_whole_turn_by_its_turn_id():
     assert out[0].text() == SUMMARIZING_MARKER and out[1:] == [m for m in tail if m.meta.get("turn_id") == "T"]
 
 
+def test_context_finds_the_running_turn_by_the_last_turn_id():
+    """Issue #244: /context finds the turn by the thread's last stored turn_id, as build does by its own. Ten short
+    turns come before the running turn "T", whose question's leaf is pending and which took a steer. /context keeps
+    all of T, not the turns before it (the first turn_id) and not only what follows the steer (the last question)."""
+    async def go():
+        store, summ = SessionStore(), Gated()
+        ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=0)
+        p = store.create_session(agent="razi", kind="private")
+        for i in range(10):
+            store.append_message(p.id, Message.user(f"q{i} " + "x" * 400), f"t{i}")
+            store.append_message(p.id, Message.assistant(f"a{i} " + "x" * 400), f"t{i}")
+        store.append_message(p.id, Message.user("QLONG"), "T")
+        for i in range(16):
+            if i == 12:
+                store.append_message(p.id, Message.user("STEER"), "T")
+            store.append_message(p.id, Message.assistant("", [ToolCall(id=f"c{i}", name="read_file", arguments={})]), "T")
+            store.append_message(p.id, Message.tool([ToolResult.of_text(f"c{i}", "r" * 400)]), "T")
+        ctx.note(p.id)
+        ctx.view_budget = 1
+        report = ctx.report(p.id, "SYS")["tail"]
+        summ.gate.set()
+        while pending := TreeContext.pending(ctx, p.id):
+            await asyncio.wait(pending)
+        return report
+    assert asyncio.run(go()) == {"messages": 1 + 1 + 1 + 32, "from_seq": 21}  # the marker, QLONG, STEER, 16 rounds
+
+
 def test_cut_pending_without_a_turn_id_starts_the_turn_at_its_last_question():
     """Issue #244: with no turn_id the turn starts at the last user message that is not a note. A threads note
     stored after the question does not move it, so the question and its tool rounds stay, though the question's
