@@ -1285,6 +1285,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of the hook's terms on main and here over the same corpora, under three `approvals.yaml` tables that delegate to a
   seat, finds the approvers narrowed to the principal on 605 built-in and 11,110 focused actions, each `credentials`
   with a `store_write` part. None widens, and no once-only flag, exact binding or category changes.
+  *Amendment 2026-10-24 (issue #447, with main d79639f1):* #399 reads a gh line two ways: as gh reads it, and as the
+  gate read it before (`floor`). Main's hook took who may answer, "once", grants and observe mode from the category of
+  each reading. This change read the parts of the line only. Now `gate.readings` gives the line and its floor, and
+  `gate.no_grant` and `gate.call_approvers` read every part of each. So a store write beside a secret read keeps a gh
+  line the gate reads two ways with the principal, in either order, also when only one reading holds the part. The
+  hook's own `_readings` and `_no_grant` are gone. It calls the gate's helpers, which have the names and shape of
+  #452's (#311), less its `also` reading. `binds_exact` keeps #399's `alt_targets` and `floor` terms beside
+  `no_grant`. Since #435 the plugins folder is a store folder, so a file tool that names a secret and a plugin file
+  gets a store write part too. A call that does not write files and names a store path with no secret keeps #435's
+  store write, with the call as its part. The gate differential against main d79639f1 (#423) finds 0 lowered pairs.
+  The built-in corpus, 64,465 actions x 87 policies, tightens 309 pairs on 124 actions, all `credentials` ask to
+  deny. A focused corpus of 10,583 actions x 113 policies tightens 292 pairs on 57 actions, the same way. It has
+  the store write beside a secret read in both orders with 15 gh lines the gate reads two ways or on two targets,
+  behind `sudo sh -c`, `bash -c`, `ssh` and `$( )`, and file tools on secrets, store files and plugin files. The
+  tightened pairs are this change's store write parts of a file tool that names a secret and a store file, under a
+  `store_write` deny or category line or a `target:` deny on the store. The same corpus against this branch before
+  the merge (badf22eb) lowers 0 pairs.
   *Amendment 2026-10-22 (issue #435, review):* a call that sends a store file out keeps the call. The review's wider
   corpus found 414 more lowered pairs on #435's first version. An `email_send`, `web_post`, `github_post`,
   `social_post`, `publish` or `payment` tool call with a plugin file in `files:`, and a `curl -T`, `curl -F` or

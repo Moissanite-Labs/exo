@@ -234,7 +234,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   copies or deletes is now a `store_write` part, and so is a folder holding the store that it moves, renames or
   deletes, also under a camelCase name (`moveFile`). So it is the principal's alone as well, and a `store_write`
   deny or `reserved:` entry, or a `target:` entry on any of those files, reaches it. The hook's error fallback
-  reads the parts too.
+  reads the parts too. On a gh line the gate also reads as before #399 (`floor`), the parts of both readings count
+  (`gate.readings`), and a file tool's store write part reaches the plugins folder too (#435).
 - Gate (#435, D-038 amendment): a write into `$EXO_HOME/plugins` asks the principal. The core loads each plugin it
   finds there and runs its code with the harness's rights, so a write there installs or changes code the next session
   runs. Most writes there were allowed: only a `cd` or `git -C` into the Exo home made one a store write, and a delete
