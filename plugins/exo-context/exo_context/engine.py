@@ -13,6 +13,9 @@ On the Exo core loop (``select_context`` on every turn):
    the core deleted with them, and rewrites each handoff that may quote them, another thread's included (D-041).
 The session id comes with every core hook (``session_id=``), so nothing is tracked by hand.
 
+On a host that reports an undo only to its memory provider (Hermes), exo-memory passes the notice on through
+``exo.host_undo``, and ``on_host_undo`` drops the pins that only the undone turn held (#389).
+
 On a flat message list (``compress``, used by hosts and tools):
 1. extracts the signals, 2. calls the inner compressor (the core's default summarizer by default),
 3. writes a handoff, 4. puts the pinned block into the summary message, before its end marker.
@@ -33,6 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from exo import handoff as hf
+from exo import host_undo
 from exo import provenance
 from exo.store import exo_home
 
@@ -75,6 +79,26 @@ def _accepted_kwargs(fn: Callable, kwargs: dict[str, Any]) -> dict[str, Any]:
     if any(p.kind is p.VAR_KEYWORD for p in params.values()):
         return kwargs
     return {k: v for k, v in kwargs.items() if k in params}
+
+
+def _holder(messages: list[dict[str, Any]]) -> Callable[[str, str], bool]:
+    """The test both undo paths apply (D-041): does a principal message in `messages` hold the pin (kind, text)?
+    It does when the pin is classified there, whitespace folded, or quoted inside a principal user message. A
+    pinned block is the engine's own copy of its pins, never their source, so a block holds nothing."""
+    rows = [m for m in messages if isinstance(m, dict)]
+    held = [hf.Signal('', hf.strip_pinned(hf.message_text(m))).key() for m in provenance.principal_view(rows)
+            if m.get('role') == 'user']
+    try:  # a pin is the classified sentence, whitespace folded: classify what is left the same way
+        found = {f'{s.kind}:{s.key()}'
+                 for group in (*sg.classified(rows), sg.pinned_open_decisions(rows)) for s in group}
+    except Exception as e:
+        logger.warning('exo-context: signal extraction failed: %s', e)
+        found = set()
+
+    def holds(kind: str, text: str) -> bool:
+        key = hf.Signal(kind, text).key()
+        return f'{kind}:{key}' in found or any(key in u for u in held)
+    return holds
 
 
 def _proxy(name: str) -> property:
@@ -139,6 +163,7 @@ class ExoContextEngine(ContextEngine):
         d['_x_pins'] = {}
         d['_x_nodes'] = {}
         d['_x_handoffs'] = {}  # session -> (path, session of the window it was written from, topic): automatic only
+        host_undo.listen(self)  # a host's undo reaches the engine only through exo-memory (#389)
 
     # --- attribute routing ---------------------------------------------------------
 
@@ -267,6 +292,8 @@ class ExoContextEngine(ContextEngine):
         old = kwargs.get('old_session_id')
         if kwargs.get('boundary_reason') == 'compression' and old and str(old) != str(session_id):
             self._carry_pins(str(old), str(session_id))  # in_place false: the pins follow the child (#391)
+            if self._x_window_sid == str(old):  # the child goes on from that window's last turns: an undo reads it
+                self._x_window_sid = str(session_id)
         if self.inner is not None and hasattr(self.inner, 'on_session_start'):
             self.inner.on_session_start(session_id, **kwargs)
 
@@ -353,21 +380,9 @@ class ExoContextEngine(ContextEngine):
             self._bind(new_session_id)
             return
         sid = str(new_session_id or '')
-        held = [hf.Signal('', hf.message_text(m)).key() for m in provenance.principal_view(messages)
-                if m.get('role') == 'user']
-        try:  # a pin is the classified sentence, whitespace folded: classify what is left the same way
-            found = {f'{s.kind}:{s.key()}'
-                     for group in (*sg.classified(messages), sg.pinned_open_decisions(messages)) for s in group}
-        except Exception as e:
-            logger.warning('exo-context: signal extraction failed: %s', e)
-            found = set()
+        holds = _holder(messages)
         pins = self._load_pins(sid)
-        kept = {k: [t for t in items if f'{k}:{hf.Signal(k, t).key()}' in found
-                    or any(hf.Signal(k, t).key() in u for u in held)] for k, items in pins.items()}
-        changed = kept != pins
-        if changed:
-            self._x_pins[sid] = kept
-            self._save_pins(kept, sid)
+        kept = {k: [t for t in items if holds(k, t)] for k, items in pins.items()}
         alive = {str(k): set(v) for k, v in (summaries or {}).items()}
         lost = set()
         for owner, cached in self._x_nodes.items():  # any session's cache: an agent tree's nodes go to its latest thread
@@ -376,10 +391,42 @@ class ExoContextEngine(ContextEngine):
                 del cached[n]
             if gone:
                 lost.add(owner)
+        window = None
         if sid == self._x_window_sid:  # the window last seen is this thread's: the undone turns leave it
             have = {hf.message_text(m) for m in messages if isinstance(m, dict)}
             window = [m for m in self._x_messages if isinstance(m, dict) and hf.PIN_OPEN not in hf.message_text(m)
                       and (m.get('role') == 'system' or hf.message_text(m) in have)]
+        self._rewound(sid, pins, kept, window, lost)
+
+    def on_host_undo(self, session_id: str) -> None:
+        """A host's undo, which only its memory provider hears: exo-memory passes it on through ``exo.host_undo``
+        (#389). Hermes's /undo removes the last user message and everything after it, so when the window this engine
+        saw last is that session's, its last user message opens the undone turn. A pin goes when the undone turn
+        holds it and nothing left in the window does. A pin whose message was summarized, or sits in a tail that a
+        compaction held out, stays. Then the window, the handoffs and the link are cleaned as after the core's undo."""
+        sid = str(session_id or '')
+        window = [m for m in self._x_messages if isinstance(m, dict)]
+        cut = max((i for i, m in enumerate(window) if m.get('role') == 'user'), default=-1)
+        if not sid or sid != self._x_window_sid or cut < 0:
+            return  # the window is another session's or holds no turn: nothing shows what was undone
+        undone, left = _holder(window[cut:]), _holder(window[:cut])
+        pins = self._load_pins(sid)
+        kept = {k: [t for t in items if left(k, t) or not undone(k, t)] for k, items in pins.items()}
+        rest = [m for m in window[:cut] if m.get('role') != 'system' or hf.PIN_OPEN not in hf.message_text(m)]
+        self._rewound(sid, pins, kept, rest, set())
+
+    def _rewound(self, sid: str, pins: dict[str, list[str]], kept: dict[str, list[str]],
+                 window: list[dict[str, Any]] | None, lost: set[str]) -> None:
+        """The rest of an undo on either path, once the pins to keep are known. ``window`` is the window last seen
+        without the undone turns, or None when that window is another thread's. ``lost`` names the sessions whose
+        cached summary nodes the undo deleted. A drop is logged as counts per kind and the session id, no text."""
+        changed = kept != pins
+        if changed:
+            self._x_pins[sid] = kept
+            self._save_pins(kept, sid)
+            logger.info('exo-context: an undo in session %s dropped %s', sid,
+                        ', '.join(f'{len(pins[k]) - len(kept[k])} {k}' for k in pins))
+        if window is not None:
             block = self._block_for(kept)
             self._x_messages = window + ([{'role': 'system', 'content': block}] if block else [])
             self._x_last_pinned = ''
@@ -391,7 +438,7 @@ class ExoContextEngine(ContextEngine):
             if x in lost or src == sid or (x == sid and changed):
                 self._write_handoff(x, topic, windowless=src != self._x_window_sid)
         # The pinned block links the last handoff: keep that link only to a file that is current, never to one
-        # written before the undo by /exo handoff or from a window the undo changed.
+        # written before the undo by /exo handoff, by a host's compaction, or from a window the undo changed.
         current = {p for p, _, _ in self._x_handoffs.values()}
         self._x_last_handoff = before if before in current else (self._x_handoffs.get(sid) or (None,))[0]
 
@@ -437,39 +484,6 @@ class ExoContextEngine(ContextEngine):
                 pins = {'ruling': [], 'correction': [], 'open_decision': []}
             self._x_pins[sid] = pins
         return pins
-
-    def _reconcile_pins(self, messages: list[dict[str, Any]]) -> None:
-        """Drop the pins whose source turn a host removed without telling this engine (#389).
-
-        A host's /undo is never reported here (Hermes tells its memory providers, not the context
-        engine), and compaction is where an undone ruling would otherwise be written into the
-        summary and the handoff for good. The test is the undo switch's (D-041), and it is only
-        sound while the input is the live transcript: once a summary (or a block carried in one)
-        enters it, a pin's absence proves nothing, since its source was folded into that summary,
-        and the pins ride on as before (#371, #385). The per-turn window proves nothing either —
-        a pin is meant to outlive it — so this runs at compaction only, which the core loop,
-        with its own undo notice, never calls."""
-        pins = self._load_pins()
-        if pins == {'ruling': [], 'correction': [], 'open_decision': []}:
-            return
-        if any(isinstance(m, dict) and (m.get(SUMMARY_FLAG)
-                                        or hf.message_text(m).lstrip().startswith(hf.PIN_OPEN)
-                                        or hf.is_summary_text(hf.message_text(m)))
-               for m in messages):
-            return
-        held = [hf.Signal('', hf.message_text(m)).key() for m in provenance.principal_view(messages)
-                if isinstance(m, dict) and m.get('role') == 'user']
-        try:  # a pin is the classified sentence, whitespace folded: classify what is left the same way
-            found = {f'{s.kind}:{s.key()}'
-                     for group in (*sg.classified(messages), sg.pinned_open_decisions(messages)) for s in group}
-        except Exception as e:
-            logger.warning('exo-context: signal extraction failed: %s', e)
-            return
-        kept = {k: [t for t in items if f'{k}:{hf.Signal(k, t).key()}' in found
-                    or any(hf.Signal(k, t).key() in u for u in held)] for k, items in pins.items()}
-        if kept != pins:
-            self._x_pins[self._x_session_id] = kept
-            self._save_pins(kept)
 
     def _observe(self, msgs: list[dict[str, Any]]) -> dict[str, list[str]]:
         """Add the rulings, corrections and open decisions visible in `msgs` to this session's pins."""
@@ -562,7 +576,6 @@ class ExoContextEngine(ContextEngine):
         if self.inner is None:  # the core never calls update_model: build the default inner now
             self._build_inner(model='', context_length=0)
         try:
-            self._reconcile_pins(messages)  # #389: an undone ruling must not be merged back in below
             pins = self._observe(messages)  # #371: pins observed from principal text carry across summaries
             signals = sg.extract(messages)
             signals = dataclasses.replace(

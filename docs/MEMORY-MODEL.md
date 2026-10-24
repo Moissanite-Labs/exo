@@ -220,6 +220,20 @@ an automatic handoff written before the host last started, since exo-context kee
 handoffs in memory. exo-context never puts an undone ruling back in the system message or in a handoff it writes
 after the undo. A ruling that was only summarized stays pinned.
 
+A host's undo reaches exo-context too (#389). Hermes reports `/undo` only to its memory providers, as
+`on_session_switch(session, rewound=True)`. exo-memory passes the session id on through `exo.host_undo`, and
+exo-context takes it in `on_host_undo`. The engine reads the window it saw last for that session. Hermes's undo
+removes the last user message and everything after it, so that message opens the undone turn. A pin goes when the
+undone turn holds it and no message left in the window does. A pinned block holds nothing in this test, since it is
+the engine's own copy of the pins. A pin whose message was summarized stays. So does a pin whose message sits in a
+tail that `/compress here N` held out of `compress`: compaction never drops a pin. A compression child takes over
+its parent's window. The link to a handoff a compaction wrote before the undo goes, as on the core. Each drop is
+logged as counts per kind and the session id. Four cases are not covered. A host that runs exo-context without
+exo-memory never passes the notice on. An undo before the engine has seen a turn of that session since it started
+finds no window. A summary row written before the undo keeps its block as written until the next compaction folds
+it. A ruling the principal also said in a turn a compaction folded goes with the undone turn, unless a message left
+in the window still quotes it.
+
 ## Who wrote it: every message has an author (D-040)
 
 Before D-040 the core decided "is this the principal?" by looking for tags that say it is not (a peer tag, a job
