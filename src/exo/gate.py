@@ -6820,7 +6820,8 @@ _HIDDEN = re.compile(r"and (\d+) more on other posts")
 def _strictest(ds: list[Decision], why: list[str]) -> Decision:
     """The strictest of several decisions of one line, with the widest exposure, a third party if any has one, and
     every violation and reserved part any of them met (#399). ``why[i]`` ends the reason when ``ds[i]`` stands. A
-    violation two posts of one name both meet is listed as often as one decision lists it."""
+    violation two posts of one name both meet is listed as often as one decision lists it. An ask from the displaced
+    part of a sudo write line in any of them (#454) stays known, so the hook narrows who may answer for it."""
     i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
     violations: list[str] = []
     for d in ds:
@@ -6841,7 +6842,8 @@ def _strictest(ds: list[Decision], why: list[str]) -> Decision:
     return replace(ds[i], reason=ds[i].reason + why[i], violations=violations,
                    exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
                    third_party=any(d.third_party for d in ds),
-                   reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)), hidden=hidden)
+                   reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)), hidden=hidden,
+                   displaced_asks=any(d.displaced_asks for d in ds))
 
 
 def _target_names(targets: Iterable[str]) -> str:

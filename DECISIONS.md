@@ -1855,6 +1855,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   command (`binds_exact`), and only those who may answer both categories may answer it. `Decision.displaced_asks`
   tells the hook of the second case, under the pinned or a changed policy. A grant on (`read`, the host) no longer
   covers such a line either.
+  *With #399.* #399 landed first. A gh read's other targets (`alt_targets`) stay on the displaced part: the second
+  reading is decided on each of them, the ssh hop gives them its host, the card names them when that reading asks,
+  and a displaced part with any of them binds the approval to the exact command. A line #399 also reads as before
+  (`floor`) can be a sudo write line in that reading only, as `sudo gh pr "$V" 5 > /tmp/f` is. #399 lets only
+  those who may answer that reading's category answer the line. That category is now the write's, so the hook also
+  keeps the approvers of that reading's displaced part, always. Without that, with approvals.yaml
+  `approvers: {opaque_exec: [seat:h], local_write: [seat:h]}`, `seat:h` answered that line, where main asked the
+  principal alone. An ask from the displaced part of any reading is kept when the readings merge (`_strictest`).
   *Lowered lines.* None. The gate differential (#423) against main 5a9dc394, with main's script, lowers no pair in
   six runs. The built-in corpus: 58,405 actions x 87 policies. 1,564 lines built for this change (sudo and doas with
   options and behind other prefixes, each write redirection, `/dev/null`, store paths, compounds, subshells, `$( )`,

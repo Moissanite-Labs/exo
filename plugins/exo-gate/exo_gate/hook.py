@@ -601,11 +601,14 @@ class Gate:
                 # #399: only who may answer the line as read before too. The principal is in every list.
                 allowed = set(gate.strictest_approvers(x.category, pol.get("approvals"), changed_approvals))
                 approvers = [a for a in approvers if a in allowed]
-            if c.displaced is not None and (c.displaced.target or d.displaced_asks):
-                # #454: a sudo write line is also about the repo or host its displaced part names, or asks with that
-                # part leading, so only who may answer that part's category too may answer it.
-                also = set(gate.strictest_approvers(c.displaced.category, pol.get("approvals"), changed_approvals))
-                approvers = [a for a in approvers if a in also]
+            for x in _readings(c):
+                if x.displaced is not None and (x is not c or x.displaced.target or d.displaced_asks):
+                    # #454: a sudo write line is also about the repo or host its displaced part names, or asks with
+                    # that part leading, so only who may answer that part's category too may answer it. The line as
+                    # read before #399 keeps its displaced part's approvers always, as #399 keeps that reading's:
+                    # `sudo gh pr "$V" 5 > /tmp/f` is a sudo write line only as read before.
+                    also = set(gate.strictest_approvers(x.displaced.category, pol.get("approvals"), changed_approvals))
+                    approvers = [a for a in approvers if a in also]
             # persist: this gate keeps "always" grants itself (scoped, expiring, in the store), so the
             # core must not also keep an unscoped one in memory.
             approval_key = "a_" + secrets.token_hex(16)
