@@ -1860,6 +1860,42 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `and N more on other posts` names no text, so it is not compared as one. Its N counts in each tree's total, and
   a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
   posts reaches the cap.
+  *Amendment 2026-10-24 (issue #342, review of #421):* the #202 reading took every operator of a store variable other
+  than `-`, `=` and `+` as the value. A pattern substitution can add text: `${HOME/%//.kube}` is `$HOME/.kube` in
+  bash. So `cat ${HOME/%//.kube}/config` was matched as `$HOME/config` and allowed, and `cp x
+  ${HOME/%//.exo}/policies/default.yaml` was a shell command. Now a `/`, `//`, `/#` or `/%` substitution of `HOME`,
+  `EXO_HOME`, `CLAUDE_CONFIG_DIR` or `EXO_PRINCIPAL_STORE` whose replacement is not empty fails closed. A shell line
+  that holds one reads a secret store, as a relative read after a `cd` into a store does: the line is `credentials`,
+  or a store-write line keeps a `credentials` part beside it. A read tool whose path holds one is `credentials`. A
+  word that holds one is a store path to the store-write checks, and a `cd` into it enters the store. This holds with
+  a subscript (`${HOME[0]/%//.exo}`), nested at any depth in another form, for a form not closed on its line, and with
+  a quote, `$( )`, `<( )` or backticks in the form or its subscript. Bash does not end the form at a `}` inside one of
+  those, so the gate cannot tell where it ends: `${HOME/%[!"}"]/u\/.exo}` is `$HOME/.exo` when `$HOME` ends in `u`,
+  and main read it as `$HOME`. Such a form fails closed even with an empty replacement. Any other substitution with an
+  empty replacement only removes text and reads as the value. The value is still read for every form, so each line main asks on still asks. *Chosen
+  over* reading the replacement (appended for `%`, prepended for `#`, alone for an unanchored pattern), which #421
+  first did. That reading dropped the value when an anchored pattern did not match, so `cat
+  ${EXO_HOME/%x/y}/keys/seat` (credentials on main) and `cp x ${EXO_HOME/%x/y}/policies/default.yaml` (store_write on
+  main) were allowed. It read `${HOME/#*/~/.exo}` as replacement then value, and missed a partial match
+  (`${EXO_HOME/-home/-home\/keys}`), a subscript, a backslash or `$'..'` in the replacement, and a store write or `cd`
+  through an unanchored form. A form 8 levels deep was not read at all, and spelling out each nested replacement made
+  a 138 KB line take 10 s. Both reviews of #421 proposed the fail-closed rule, and the issue offered it. Working out
+  the result needs the pattern matched against the value bash holds, and a non-matching pattern, a partial match and a
+  subscript each change it. *Cost.* Every such substitution of a store variable asks, also one that leaves an ordinary
+  path: `cp x ${HOME/%//backup}/a` is `store_write` and `cat ${HOME//x/y}/notes.txt` is `credentials`, where the issue
+  asked to keep their class. A form in single quotes or a here-doc body asks too, as a store path written there does,
+  and so does a quote in a form with an empty replacement (`cat ${HOME/"x"/}/notes.txt`).
+  Other variables keep their reading (`echo ${PATH//:/ }`, `echo ${PWD/#$HOME/~}`). *Differential (#423).* Main's
+  `scripts/gate_diff.py` ran main d79639f1 against this change with 1,338 more actions: the forms above under 29
+  wrappers and compounds (`sudo`, `env`, `timeout`, `bash -c`, `ssh`, `xargs`, `$( )`, here-docs, loops), `cd` chains,
+  quoted forms, gh posts of such a path with an option before the subcommand (#399), writes into the plugins folder
+  (#435) and 416 file-tool calls. 66,555 actions x 87 policies: 0 pairs lowered, 91,158 pairs on 1,616 actions
+  tightened. In 5,276 pairs a gh line's violation text now starts with the post's name, since the line is a store
+  write or `credentials` that holds the post as a part. The script sets no `EXO_HOME` or `CLAUDE_CONFIG_DIR`. A copy that sets both ran the
+  added actions: 2,260 actions x 87 policies, 0 lowered. Not done (`docs/GATE.md` "Known limits"): `XDG_CONFIG_HOME` is not a store variable, so neither
+  `$XDG_CONFIG_HOME/gh/hosts.yml` nor a substitution of it is read. A removal that moves the folder
+  (`${EXO_HOME%/*}`), a subscript before another operator (`${HOME[1]:-~/.exo}`) and a substitution of another
+  variable whose replacement names a store (`${PWD/*/$HOME/.exo}`) stay reads, as on main.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
