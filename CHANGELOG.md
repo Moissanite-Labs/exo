@@ -88,10 +88,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   target from the tool's folders, so `cd pdir && echo x > default.yaml` asks. The path is joined as
   written, with no `..` folded first, so a `..` after a link climbs from where the link leads, as the
   kernel reads it: `write_file sdir/../policies/default.yaml` (with `sdir -> ~/.exo/state`) and a
-  `cwd` of `sdir/../policies` ask, and `cat seat` with `sdir/../keys` as `cwd` is a key read.
-  `store_write` stays a floor category: even allowed in policy, the write asks. From a session folder
-  in the Exo home, a word that names a protected entry (`git add state`) asks, as its absolute
-  spelling does, and from a session folder in HOME, `mv x .` asks, as `mv x ~` does.
+  `cwd` of `sdir/../policies` ask, and `cat seat` with `sdir/../keys` as `cwd` is a key read. A `cd`
+  that stays out of the store is followed: a relative path or `cd` target after it is read from the
+  folder it enters too, so `cd notes && cp x ../pdir/default.yaml` asks, and so do the issue's two
+  calls behind a `cd`. `store_write` stays a floor category: even allowed in policy, the write asks.
+  From a session folder in the Exo home, a word that names a protected entry (`git add state`) asks,
+  as its absolute spelling does. From HOME, or after a `cd` there, `mv x .` asks, as `mv x ~` does,
+  and so does `mv x ..` from a folder in HOME.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

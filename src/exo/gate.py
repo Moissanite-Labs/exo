@@ -3417,6 +3417,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
                 ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
+        elif target or len(words) == 1:            # `cd` alone enters HOME; `cd -` is not followed
+            _cd_enter(dest)                        # #340: a relative store write after it is read from there too
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -4773,8 +4775,10 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
             return classify_shell(cmd, depth)
         finally:
             _shell_seen.reset(token)
-    # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it.
-    key = ("shell", cmd, depth, _budgets(), _cd_into.get())
+    # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it,
+    # and a line met after a `cd` entered another folder is read again from there too (_cd_enter, #340).
+    scope = _scope.get()
+    key = ("shell", cmd, depth, _budgets(), _cd_into.get(), len(scope.entered) if scope else 0)
     if key not in seen:
         own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
@@ -5194,11 +5198,14 @@ def _brace_budget(fn: _F) -> _F:
 @dataclass
 class _Scope:
     """What the secret-store checks of one classify call share: the folders the tool may read from (#209), the gate's
-    own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot."""
+    own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot. The
+    store-write checks also read the folders a `cd` on the call entered (_cd_enter)."""
     cwds: tuple[str, ...] = ()
     here: str | None = None                      # the gate's own folder; "" when it cannot be read
     roots: set[str] | None = None
     real: dict[str, str] = field(default_factory=dict)
+    entered: dict[frozenset, str] = field(default_factory=dict)    # by their _path_forms
+    last: list[str] = field(default_factory=list)                  # the ones the latest `cd` entered
 
 
 _scope: contextvars.ContextVar[_Scope | None] = contextvars.ContextVar("exo_gate_scope", default=None)
@@ -5691,11 +5698,39 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
         # relative: the name checks above already ran. Read it from the tool's folders (#340), as the secret-store
         # checks do (#209), but never from the gate's own: a bare word is not judged by where the gate runs
         # (test_a_bare_run_word_is_not_the_run_folder). Joined, not folded: _store_abs resolves a link before a `..`.
-        scope = _scope.get()
-        if scope is None:
-            return False
-        return any(_store_abs(os.path.join(base, p), ancestors) for base in dict.fromkeys(scope.cwds) if base)
+        bases = _relative_bases()
+        return bases is None or any(_store_abs(os.path.join(base, p), ancestors) for base in bases)
     return _store_abs(p, ancestors)
+
+
+_ENTERED = 64      # folders one classify call follows a `cd` into (_cd_enter); past that a relative store word counts
+
+
+def _relative_bases() -> list[str] | None:
+    """The folders a relative store-write path or `cd` target is read from: the tool's (_in_tool_folder) and those a
+    `cd` on the call entered before it (_cd_enter). None past _ENTERED of those: every relative word counts then."""
+    scope = _scope.get()
+    if scope is None:
+        return []
+    if len(scope.entered) > _ENTERED:
+        return None
+    return [b for b in dict.fromkeys([*scope.cwds, *scope.entered.values()]) if b]
+
+
+def _cd_enter(dest: str) -> None:
+    """Note the folder a `cd` or `pushd` that stays out of the store enters, so a relative store-write path or `cd`
+    target after it on the call is read from there too (#340): `cd notes && cp x ../pdir/default.yaml`. A relative
+    target is joined, as written, to the tool's folders and to those the latest `cd` entered. A `cd` in a subshell may
+    not have stayed, so each folder counts, and the store checks read from all of them (fails closed)."""
+    scope = _scope.get()
+    if scope is None:
+        return
+    p = os.path.expanduser(_expand_text(dest).strip()) or _home()
+    bases = [""] if p.startswith("/") else [b for b in dict.fromkeys([*scope.cwds, *scope.last]) if b]
+    last = {frozenset(_path_forms(q)): q for q in (os.path.join(b, p) for b in bases)}
+    scope.last = list(last.values())
+    for key, q in last.items():
+        scope.entered.setdefault(key, q)
 
 
 def _store_abs(p: str, ancestors: bool) -> bool:
@@ -5732,7 +5767,7 @@ def _store_abs(p: str, ancestors: bool) -> bool:
 def _in_store_dir(path: str) -> bool:
     """A `cd` target inside EXO_HOME or the principal store: relative names after it may be the store. So is a
     descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217). A
-    relative target is read from the tool's folders, as a store write's path is (#340)."""
+    relative target is read from the folders a store write's relative path is (#340, _relative_bases)."""
     p = _expand_text(path).strip()
     if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")):
         return True
@@ -5740,8 +5775,10 @@ def _in_store_dir(path: str) -> bool:
     if not p.startswith("/"):
         if re.search(r"(^|/)\.exo(/|$)", p):
             return True
-        scope = _scope.get()             # joined, not folded, and never from the gate's own folder (_store_word)
-        paths = [os.path.join(b, p) for b in dict.fromkeys(scope.cwds) if b] if scope else []
+        bases = _relative_bases()        # joined, not folded, and never from the gate's own folder (_store_word)
+        if bases is None:
+            return True
+        paths = [os.path.join(b, p) for b in bases]
         if not paths:
             return False
     roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
