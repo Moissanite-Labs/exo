@@ -1318,7 +1318,9 @@ gate does not read:
   part leading (`{shell: ask}` for `sudo chmod u+s /tmp/x > /tmp/log`), the approval is bound to
   the exact command, and only those who may answer both categories may answer it. So a grant or
   a seat for the written path does not answer a rule on that repo or host, or an ask on that
-  part's category.
+  part's category. A gh read's other targets (#399) stay on the displaced part, and the line as
+  read before #399 keeps the approvers of its own displaced part
+  (`sudo gh pr "$V" 5 > /tmp/f`).
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and

@@ -232,7 +232,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   under a rule on `a/b`. Where only the write asks, a standing grant and the approvers follow the new category and
   target. Where the displaced part names a repo or a host, or the line asks with that part leading, the approval is
   bound to the exact command, and only those who may answer both categories may answer it, so a grant or a seat for
-  the written path does not answer a rule on that repo or host, or an ask on that part's category.
+  the written path does not answer a rule on that repo or host, or an ask on that part's category. The displaced
+  part keeps #399's other targets, and the line as #399 read it before keeps that reading's approvers.
 - Gate (#399, D-033): a URL in a gh option's value no longer picks the post's repo. The first word after the
   subcommand that began with a GitHub URL was the target, a body or `--duplicate-of` value included, so
   `gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 ...'` counted as a post on `myorg/app#9`. Under

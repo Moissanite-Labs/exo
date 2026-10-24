@@ -425,3 +425,15 @@ def test_an_ask_from_the_displaced_reading_binds_the_approval_to_the_line(policy
         assert c.displaced is not None and not c.displaced.target, (line, c.displaced)
         d = decide(c, pol(**policy))
         assert d.displaced_asks is asks and binds_exact(c, d) is asks, (line, policy, d)
+
+
+def test_an_ask_from_the_displaced_part_of_any_reading_stays_known():
+    # #454 with #399: decide keeps the stricter of a line's readings (_strictest), and with it an ask from the displaced
+    # part of any of them, so the hook narrows who may answer for it. Here only the line as read before #399 (floor)
+    # is a sudo write line.
+    c = sh('sudo chmod u+s /tmp/x > /tmp/f; gh pr "$V" 5')
+    assert c.displaced is None and c.floor is not None and c.floor.displaced.category == "shell", c
+    assert decide(c, pol(categories={"shell": "ask"})).displaced_asks and not decide(c, pol()).displaced_asks
+    ds = [gate.Decision("ask", "a", exposure="internal"), gate.Decision("ask", "b", exposure="private",
+                                                                         displaced_asks=True)]
+    assert gate._strictest(ds, ["", ""]).displaced_asks

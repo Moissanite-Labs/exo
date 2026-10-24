@@ -408,6 +408,19 @@ def test_a_changed_policy_whose_displaced_reading_asks_binds_the_line_too(tmp_pa
     assert r["action"] == "approve" and r.get("binding") and r["approvers"] == ["principal"], r
 
 
+@pytest.mark.parametrize("gates,line", [
+    ("version: 1\n", 'sudo gh pr "$V" 5 > /tmp/f'), ("categories: {read: ask}\n", 'sudo gh pr "$V" 5 > /tmp/f; ls'),
+    ("version: 1\n", 'sudo chmod u+s /tmp/x > /tmp/f; gh pr "$V" 5'),
+    ("categories: {shell: ask}\n", 'sudo chmod u+s /tmp/x > /tmp/f; gh pr "$V" 5')])
+def test_the_line_as_read_before_399_keeps_the_approvers_of_its_displaced_part(tmp_path, gates, line):
+    # #454 with #399: only who may answer the line as read before #399 (floor) may answer. That reading is a sudo write
+    # line here. On main it led with the gh read or chmod the write displaced, so a seat that may answer opaque_exec
+    # and local_write, but not that part's category, does not answer, as on main.
+    _, _, ctx = _store454(tmp_path, "st454f", gates, "approvers: {opaque_exec: ['seat:h'], local_write: ['seat:h']}\n")
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
 def test_a_grant_on_the_written_path_does_not_answer_a_rule_on_the_host_or_repo(tmp_path):
     # #454: a sudo write line is also decided with the sudo command's own part leading, so a rule on the repo or host
     # that part names asks. A grant keyed on the written path does not answer that ask, and a seat that may answer
