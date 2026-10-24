@@ -2809,9 +2809,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   id) and spans that are not pending (skipped, failed, or in no leaf yet) are never cut, and a call keeps its
   results. Tool-call arguments count in full. A whole leaf at a time keeps the cached prefix until the cut must
   grow. The private tree's turn also waits `overflow_settle` when the cut would apply, measured in full, so a leaf
-  the call just scheduled runs first and a fast summarizer leaves nothing to cut. The counted core grows by no
-  line: `build` and `report` wrap `_thread_tail`. Validation: `tests/core/test_agent_context.py`,
-  `tests/core/test_turn_settle.py`.
+  the call just scheduled runs first and a fast summarizer leaves nothing to cut. That wait is for the private
+  tree's own leaves only: a job of the agent tree cannot shrink the cut, so it does not stretch the wait. The check
+  finds the turn by its turn id too, and when it finds no cut, the call reuses the tail it built. `/context` finds
+  the turn by the thread's last turn id, so during a turn it matches the call. The counted core grows by no line:
+  `build` and `report` call `thread_tail`, which wraps `_thread_tail`. Validation:
+  `tests/core/test_agent_context.py`, `tests/core/test_turn_settle.py`.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It

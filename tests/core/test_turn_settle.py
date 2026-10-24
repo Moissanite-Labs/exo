@@ -5,10 +5,10 @@ import asyncio
 import re
 import time
 
-from exo.core.context import AgentContext, DefaultCompressor, TreeContext, estimate_tokens
+from exo.core.context import PRIVATE_HEAD, AgentContext, DefaultCompressor, TreeContext, estimate_tokens
 from exo.core.sessions import SessionStore
 from exo.core.types import Message, ProviderEvent, ToolCall, ToolResult
-from exo.turn_settle import SUMMARIZING_MARKER, cut_pending
+from exo.turn_settle import SUMMARIZING_MARKER, cut_pending, settle_for_turn, thread_tail
 
 
 class Summ:
@@ -138,6 +138,58 @@ def test_cut_pending_keeps_the_whole_turn_by_its_turn_id():
     store, p, tail, out = asyncio.run(go())
     assert [(n.start, n.end) for n in store.summaries(p.id) if n.level == 0] == [(i * 8 + 1, i * 8 + 8) for i in range(5)]
     assert out[0].text() == SUMMARIZING_MARKER and out[1:] == [m for m in tail if m.meta.get("turn_id") == "T"]
+
+
+def test_cut_pending_without_a_turn_id_starts_the_turn_at_its_last_question():
+    """Issue #244: with no turn_id the turn starts at the last user message that is not a note. A threads note
+    stored after the question does not move it, so the question and its tool rounds stay, though the question's
+    own leaf is pending."""
+    async def go():
+        store, summ = SessionStore(), Gated()
+        ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=0)
+        p = store.create_session(agent="razi", kind="private")
+        for i in range(10):
+            store.append_message(p.id, Message.user(f"q{i} " + "x" * 400))
+            store.append_message(p.id, Message.assistant(f"a{i} " + "x" * 400))
+        store.append_message(p.id, Message.user("QLONG"))  # message 21, in the pending leaf 17-24
+        for i in range(16):
+            store.append_message(p.id, Message.assistant("", [ToolCall(id=f"c{i}", name="read_file", arguments={})]))
+            store.append_message(p.id, Message.tool([ToolResult.of_text(f"c{i}", "r" * 400)]))
+        note = Message.user("[news from other threads]")
+        note.meta.update({"note": "threads", "local": True})
+        store.append_message(p.id, note)
+        ctx.note(p.id)
+        ctx.view_budget = 1
+        tail = store.messages(p.id)
+        out = cut_pending(ctx, p.id, tail)
+        pending = {(n.start, n.end) for n in store.summaries(p.id) if n.status == "pending"}
+        summ.gate.set()
+        while running := TreeContext.pending(ctx, p.id):
+            await asyncio.wait(running)
+        return pending, tail, out
+    pending, tail, out = asyncio.run(go())
+    assert (17, 24) in pending and (33, 40) in pending
+    assert out[0].text() == SUMMARIZING_MARKER and out[1:] == tail[20:] and out[1].text() == "QLONG"
+
+
+def test_a_checked_tail_is_not_reused_once_a_leaf_lands():
+    """Issue #244: when the cut would not apply, the wait check keeps the tail it built for the call, but only until
+    the event loop runs anything else. A leaf that lands in between leads the call's tail with its summary."""
+    async def go():
+        store, summ = SessionStore(), Gated()
+        ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=0)
+        p = store.create_session(agent="razi", kind="private")
+        for i in range(12):
+            store.append_message(p.id, Message.user(f"q{i}"))
+            store.append_message(p.id, Message.assistant(f"a{i}"))
+        ctx.note(p.id)
+        assert await settle_for_turn(ctx, p.id) and TreeContext.pending(ctx, p.id)  # room to spare: no wait
+        summ.gate.set()
+        while pending := TreeContext.pending(ctx, p.id):
+            await asyncio.wait(pending)
+        return thread_tail(ctx, p.id, 0)
+    tail = asyncio.run(go())
+    assert tail[0].text().startswith(PRIVATE_HEAD) and "## Messages 1-8\nS" in tail[0].text()
 
 
 def test_overflow_settles_briefly_not_for_settle_timeout():

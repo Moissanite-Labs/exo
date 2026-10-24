@@ -27,7 +27,7 @@ from exo import provenance
 from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.types import ContentPart, Message, Provider
-from exo.turn_settle import cut_pending, settle_for_turn
+from exo.turn_settle import settle_for_turn, thread_tail
 
 # ---------------------------------------------------------------- lifted prompt text
 
@@ -916,7 +916,7 @@ class AgentContext(TreeContext):
             raise ValueError("this thread is not part of an agent's memory (no summary tree)")
         top, frontier, parts = self._view(key)
         tree_text = (AGENT_VIEW_HEADER + "\n\n" + "\n\n".join(parts)) if parts else ""
-        tail = cut_pending(self, session, self._thread_tail(session, frontier))
+        tail = thread_tail(self, session, frontier, last_turn=True)  # mid-turn, cut as the running turn's call is
         notes = [m for m in tail if m.meta.get("note") == "threads"]
         recent = [m for m in tail if m.meta.get("note") != "threads"]
         _, pending_text = self._unseen(session, key, frontier, self.store.get_meta(session))
@@ -990,10 +990,10 @@ class AgentContext(TreeContext):
         if settle:
             await settle_for_turn(self, key)
             if self._own(session):  # D-068 on its own tree: a long private thread's first leaves are nearly done
-                await settle_for_turn(self, session)
+                await settle_for_turn(self, session, turn_id)
         top, frontier, parts = self._view(key)
         self.sync_thread(session, frontier)
-        tail = cut_pending(self, session, self._thread_tail(session, frontier), turn_id)  # a private tree's pending spans (#244)
+        tail = thread_tail(self, session, frontier, turn_id)  # a private tree's pending spans cut (#244)
         if recall:
             block = Message.user("# Recalled memory (for this turn)\n" + recall)
             block.meta["author"] = "system"  # D-040: recalled memory is data, never the principal's words

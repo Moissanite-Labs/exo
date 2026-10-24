@@ -90,8 +90,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   later leaf landed first, when the private view showed the pending leaves before it verbatim. The turn is never
   cut: its question and all after it, tool rounds and context notes included. Nor is a span that is not pending,
   such as one skipped for good, and a tool call keeps its results. Tool-call arguments count in full. The cut moves
-  a whole leaf at a time, so calls between moves share their cached prefix. `/context` now gives the first stored
-  message of the tail as `from_seq`, not the unstored private view or marker (D-068 amendment).
+  a whole leaf at a time, so calls between moves share their cached prefix. The private tree's turn now also waits
+  up to `overflow_settle` when the cut would apply, where it did not wait before, so a leaf the call just scheduled
+  can land first. It waits for that tree's own leaves only, not for the agent tree's jobs. `/context` finds the
+  turn as the call does, by its turn id, so during a turn it shows the question kept after a steer. It now gives
+  the first stored message of the tail as `from_seq`, not the unstored private view or marker (D-068 amendment).
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
