@@ -444,8 +444,7 @@ def full(call, policy):
     return c.category, d.outcome, [r[0] for r in d.reserved], d.violations
 
 
-@pytest.mark.parametrize("policy", STRICT)
-@pytest.mark.parametrize("odd, plain", [
+LOWERED = [
     ({"tool": "write_file", "args": {"path": "~/.kube//config", "content": "x"}},
      {"tool": "write_file", "args": {"path": "~/.kube/config", "content": "x"}}),
     ({"tool": "read_file", "args": {"path": "~/.kube/./config"}}, {"tool": "read_file", "args": {"path": "~/.kube/config"}}),
@@ -470,7 +469,29 @@ def full(call, policy):
     # heredoc holds, keeps only its unread-body violation, for both spellings, and still asks
     ("cat ~/.kube//config; gh api repos/a/b/issues/3/comments --input - <<'EOF'\na secret\nEOF",
      "cat ~/.kube/config; gh api repos/a/b/issues/3/comments --input - <<'EOF'\na secret\nEOF"),
-])
+]
+
+# #513 review: a backslash right after a slash names the store only in the lexical form of the text (`\c` is `c`).
+# The dequoted word is the target, as on main, so a `target:` entry, reserved entry or rule for the store still
+# matches. A single-folder name read as written (`~/.ssh/\id_rsa`) stays the target beside a second store, as on main.
+TARGET = [
+    {"gates": {"deny": ["target:*/.kube/config", "target:*/hosts.yml"]}},
+    {"gates": {"reserved": ["target:*/.kube/config", "target:*/hosts.yml"]}},
+    {"gates": {"rules": [{"match": {"target": "*/.kube/config"}, "decision": "deny", "reason": "r"}]}},
+]
+BACKSLASH = [
+    ("cat ~/.kube/\\config", "cat ~/.kube/config"),
+    ("cat ~/.config/gh/\\hosts.yml", "cat ~/.config/gh/hosts.yml"),
+    ("cat ~/.config/\\gh/\\hosts.yml", "cat ~/.config/gh/hosts.yml"),
+    ("cp /tmp/a ~/.kube/\\config", "cp /tmp/a ~/.kube/config"),
+    ("sudo cat ~/.kube/\\config", "sudo cat ~/.kube/config"),
+    ("cat ~/.kube/\\config | head", "cat ~/.kube/config | head"),
+    ("cat ~/.ssh/\\id_rsa ~/.kube/config", "cat ~/.ssh/id_rsa ~/.kube/config"),
+]
+
+
+@pytest.mark.parametrize("odd, plain, policy", [(o, p, pol) for o, p in LOWERED for pol in STRICT] +
+                         [(o, p, pol) for o, p in BACKSLASH for pol in STRICT + TARGET])
 def test_a_lowered_line_decides_as_its_plain_spelling(odd, plain, policy):
     assert full(odd, policy) == full(plain, policy)
 

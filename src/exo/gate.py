@@ -5452,15 +5452,17 @@ def is_sensitive_path(path: str) -> bool:
     return words is None or _sensitive_words(words)
 
 
-def _sensitive_words(words: list[str]) -> bool:
+def _sensitive_words(words: list[str], lexical: bool = True) -> bool:
     """is_sensitive_path for any of ``words``, which are already brace-expanded. A word is matched as written, and
     as resolved from the gate's own folder and from the tool's (_Scope, #209): its absolute and real forms against
     the dynamic stores, and, when a link led elsewhere, its real form by name too (for a relative word that lands
     below the folder it was read from, only the part below it, so a folder like a repo's `.claude` does not count).
-    A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads."""
+    A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads.
+    Without ``lexical``, a name is matched only as written (_shell_credential_hit)."""
     words = [w for w in (w.strip() for w in _expand_words(words)) if w]
     # by name: each word as written and in its lexical form (#446), so `~/.kube//config` is `~/.kube/config`
-    if any(_SENSITIVE_PATH.search(f) for w in words for f in _lexical(w.replace("\\", "/")) if not f.endswith(".pub")):
+    if any(_SENSITIVE_PATH.search(f) for w in words for f in _lexical(w.replace("\\", "/"))[:2 if lexical else 1]
+           if not f.endswith(".pub")):
         return True
     scope = _scope.get() or _Scope()
     if scope.roots is None:
@@ -5916,10 +5918,20 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
         if flat and flat[0].rsplit("/", 1)[-1] == "security" and any(
                 a in ("-w", "-g", "-gs", "-wg") for a in flat[1:]) and len(flat) > 1 and flat[1].startswith("find"):
             return "keychain access"
+    late = ""
     for p in pieces:
         p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
-        if p and (_sensitive_words([p]) or _glob_words([p])):
-            return p
+        if not p or not (_sensitive_words([p]) or _glob_words([p])):
+            continue
+        # #446: a piece with a backslash that names a store only in its lexical form (`$HOME/.kube/\config`, where
+        # `\c` is `c`) is the target only when no other piece hits, so the dequoted word (`~/.kube/config`) names it
+        # and a `target:` entry for the store still matches. A piece that names a store as written stays the target.
+        if "\\" in p and not (_sensitive_words([p], lexical=False) or _glob_words([p])):
+            late = late or p
+            continue
+        return p
+    if late:
+        return late
     groups: dict[str, list[str]] = {}         # bash expands only unquoted braces: expand, then dequote
     for raw in dict.fromkeys(raws or []):
         words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
