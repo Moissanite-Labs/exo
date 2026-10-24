@@ -192,3 +192,59 @@ def test_an_irreversible_deny_reaches_the_folders_part(tmp_path, home, monkeypat
     plain = {k: v for k, v in args.items() if k not in ("cwd", "workdir")}
     cd = {"command": f"cd {args.get('cwd') or args.get('workdir')} && {plain.get('command') or plain.get('cmd')}"}
     assert call(ctx, "bash", cd)["action"] == "block"
+
+
+# --- with #399's readings (#439) -----------------------------------------------------------------------------------
+# A gh line whose subcommand gh finds past an option is also read as before #399 (its floor), in the call's own folder
+# too. The hook reads every reading (gate.readings): the floor, the reading from before #311 and both at once.
+
+FLOOR_STORE_WRITES = [   # the line as read before #399 writes the store; the folder adds no part
+    ("bash", {"command": "gh --repo pub/x release download v1 -D ~/.exo/state", "cwd": "~/proj"}),
+    ("terminal", {"command": "gh -R pub/x run download 5 -D ~/.exo/policies", "workdir": "~/proj"}),
+    ("exec_command", {"cmd": "gh -R pub/x release download v1 -O ~/.exo/update/allowed_signers --clobber",
+                      "workdir": "~/proj"}),
+]
+
+
+@pytest.mark.parametrize("tool, args", FLOOR_STORE_WRITES + [
+    ("terminal", {"command": "cat config ; gh -R pub/x run download 5 -D ~/.exo/policies", "workdir": "~/.kube"}),
+])
+def test_a_policy_that_breaks_decide_reads_the_floor_of_a_call_with_a_folder(tmp_path, home, monkeypatch, tool, args):
+    """Main's fallback read the floor and this branch's the folder's part. Each reading counts: the principal
+    alone answers, once, in both modes."""
+    root, key = _seat_answers_credentials(tmp_path, home, monkeypatch, "deny:\n  - 'command:^(rm|shred'\n")
+    for extra in ({}, {"mode": "observe"}):
+        _, ctx = make_gate((root, key), **extra)
+        r = call(ctx, tool, args)
+        assert r and r["rule_key"] == f"exo-gate:error:{tool}", (args, extra, r)
+        assert (r.get("approvers"), r.get("once")) == (["principal"], True), (args, extra, r)
+
+
+@pytest.mark.parametrize("tool, args", [
+    ("bash", {"command": "cat config && gh pr -R pub/repo comment 5 -b x", "cwd": "~/.kube"}),
+    ("terminal", {"command": "cat config && gh pr -R pub/repo comment 5 -b x", "workdir": "~/.kube"}),
+    ("terminal", {"command": "gh pr -R pub/repo comment 5 -b x", "workdir": "~/.kube"}),
+])
+def test_a_seat_that_answers_posts_and_credentials_does_not_answer_what_was_a_read(tmp_path, home, monkeypatch, tool,
+                                                                                  args):
+    root, key = _seat_answers_credentials(tmp_path, home, monkeypatch, "categories: {read: ask, github_post: ask}\n")
+    (root / "policies" / "approvals.yaml").write_text(
+        "approvers:\n  default: [principal]\n  github_post: [principal, \"seat:builder\"]\n"
+        "  credentials: [principal, \"seat:builder\"]\n")
+    _, ctx = make_gate((root, key))
+    r = call(ctx, tool, args)
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
+@pytest.mark.parametrize("tool, folder", [("bash", {"cwd": "~/.ssh"}), ("terminal", {"workdir": "~/.kube"})])
+def test_a_required_executor_refuses_a_body_file_only_the_floor_has_in_a_folder(tmp_path, home, monkeypatch, store,
+                                                                                tool, folder):
+    body = tmp_path / "clean.md"
+    body.write_text("hello\n")
+    g, ctx = make_gate(store)
+    g.required_getter = lambda: True
+    args = {"command": f'gh pr "$V" 5 -R pub/repo -F {body}', **folder}
+    c = gate.classify({"tool": tool, "args": args})
+    assert c.floor is not None and c.floor.text_file and not c.text_file, c
+    r = call(ctx, tool, args)
+    assert r["action"] == "block" and "required executor" in r["message"], r

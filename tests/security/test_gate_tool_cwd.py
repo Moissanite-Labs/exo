@@ -5,6 +5,7 @@ The line keeps its own classification. The store read is added to it as a creden
 floor asks for and no standing grant covers. So the line's deny entries, target rules, matrix cell, posting checks
 and reserved entries all still apply (exo-36's review of #415). Every command string here is data for
 exo.gate.classify/decide; none is run."""
+import json
 import shlex
 import time
 
@@ -262,6 +263,106 @@ def test_the_reading_from_before_keeps_its_reserved_hits(_home):
     d = gate.decide(c, _pol({"gates": {"reserved": ["credentials", "read"]}}))
     was = gate.decide(c.also, _pol({"gates": {"reserved": ["credentials", "read"]}}))
     assert d.outcome == "ask" and set(was.reserved) <= set(d.reserved)
+
+
+# --- with #399's readings (#439) ---------------------------------------------------------------------------------
+# gh finds a subcommand past an option, and the gate also reads such a line as it did before #399 (its floor), and
+# decides a post on each other target gh may land on (alt_targets). In a call with its own folder the floor is read
+# in that folder too, so it can carry its own reading from before #311. Each row here is decided at least as strictly
+# as on main 8c09c29c, which reads the floor but not the folder's part (nor `workdir`), and as on this branch before
+# that merge, which reads the folder but not the floor.
+
+GH_MOVED = "gh pr -R pub/repo comment 5 -b x"     # gh comments on pub/repo#5; before #399 the gate read `gh pr -R`
+ORG_IN_BODY = "gh pr comment 5 -R pub/repo -b 'https://github.com/myorg/app/pull/9 Note SECRETX'"
+FOLDER_FORMS = [("bash", "cwd"), ("terminal", "workdir")]
+
+
+@pytest.mark.parametrize("tool, key", FOLDER_FORMS)
+def test_a_gh_line_in_its_folder_is_read_every_way(tool, key, _home):
+    _held(_home)
+    c = _bash_in(f"cat * ; {GH_MOVED}", "~/.exo/keys", tool=tool, key=key)
+    rs = gate.readings(c)
+    assert [r.category for r in rs] == ["github_post", "credentials", "read", "credentials"]
+    assert rs[0] is c and rs[1] is c.also and rs[2] is c.floor and rs[3] is c.floor.also
+    assert gate.no_grant(c) and gate.binds_exact(c)
+
+
+@pytest.mark.parametrize("tool, key", FOLDER_FORMS)
+@pytest.mark.parametrize("folder", ["~/.kube", "~/proj"])
+def test_the_floor_is_decided_in_the_folder_too(folder, tool, key):
+    """Under a scope that makes myorg private and a matrix that allows a private force push, the line as read now
+    is allowed. Main asks, from the floor, and so did this branch, which read only the floor's way."""
+    raw = {"gates": {"scopes": {"private": ["myorg/*"]},
+                     "matrix": {"reversible": {"private": "allow", "internal": "allow", "public": "allow"},
+                                "costly": {"private": "allow", "internal": "allow", "public": "allow"},
+                                "irreversible": {"private": "allow", "internal": "allow", "public": "ask"}}}}
+    c = _bash_in(f"{FORCE} ; gh -R pub/repo pr comment 5 -b x", folder, tool=tool, key=key)
+    assert c.floor is not None
+    assert gate.decide(c, _pol(raw)).outcome == "ask"
+
+
+@pytest.mark.parametrize("tool, key", FOLDER_FORMS)
+@pytest.mark.parametrize("cmd, want", [
+    # main: ('', $R) with cwd, ($R) with workdir; before the merge: ('', the folder)
+    ("gh -R $R secret set X", {("credentials", ""), ("credentials", "$R"), ("credentials", "{keys}")}),
+    # main: ('', both posts) with cwd, (both posts) with workdir; before the merge: ('', the folder, myorg/app#9)
+    (ORG_IN_BODY, {("credentials", ""), ("credentials", "{keys}"), ("github_post", "myorg/app#9"),
+                   ("github_post", "pub/repo#5")}),
+])
+def test_each_reading_keeps_its_reserved_hits(cmd, want, tool, key, _home):
+    _held(_home)
+    keys = str(_home / ".exo" / "keys")
+    c = _bash_in(cmd, "~/.exo/keys", tool=tool, key=key)
+    d = gate.decide(c, _pol({"gates": {"reserved": ["credentials", "github_post"]}}))
+    assert d.outcome == "ask"
+    assert {(cat, t.format(keys=keys)) for cat, t in want} <= set(d.reserved), d.reserved
+
+
+@pytest.mark.parametrize("tool, key", FOLDER_FORMS)
+def test_each_reading_keeps_its_violations(tool, key, _home):
+    """The post's own findings, and the same findings as the reading from before #311 names them after the post.
+    Main lists them once with `workdir`, and this branch read the post on myorg/app#9 under the scope."""
+    _held(_home)
+    c = _bash_in(ORG_IN_BODY, "~/.exo/keys", tool=tool, key=key)
+    d = gate.decide(c, _pol({"gates": {"scopes": {"internal": ["myorg/*"]}},
+                             "posting": {"footer": "F", "forbid_words": ["SECRETX"]}}))
+    assert (d.outcome, d.exposure) == ("ask", "public")
+    for v in ("missing footer: F", "forbidden word: SECRETX"):
+        assert sum(x.endswith(v) for x in d.violations) == 2, d.violations
+
+
+@pytest.mark.parametrize("tool, key", FOLDER_FORMS)
+@pytest.mark.parametrize("cmd", [GH_MOVED, f"cat config && {GH_MOVED}"])
+def test_who_may_answer_reads_the_floor_in_the_folder(cmd, tool, key):
+    """A seat that answers posts and credentials does not answer a line that was a read before #399, as on main."""
+    table = gate.normalize_approvals({"approvers": {"default": ["principal"],
+                                                    "github_post": ["principal", "seat:poster"],
+                                                    "credentials": ["principal", "seat:poster"]}})
+    c = _bash_in(cmd, "~/.kube", tool=tool, key=key)
+    assert c.category == "github_post" and c.floor.category == "read"
+    assert gate.call_approvers(c, table) == ["principal"]
+
+
+@pytest.mark.parametrize("tool, key", FOLDER_FORMS)
+@pytest.mark.parametrize("cmd, folder", [
+    ("gh pr -R myorg/app view 5", "~/proj"),                                     # its floor
+    ("gh pr view https://github.com/pub/x/pull/9 -R myorg/app", "~/proj"),       # another target
+    ("cat config", "~/.kube"),                                                   # the folder's part
+])
+def test_a_call_read_more_than_one_way_binds_to_its_text(cmd, folder, tool, key):
+    c = _bash_in(cmd, folder, tool=tool, key=key)
+    d = gate.decide(c, _pol({"gates": {"scopes": {"private": ["myorg/*", "pub/*"]}}}))
+    assert not gate.is_outward(c, d) and gate.binds_exact(c, d)
+    plain = _bash_in("gh pr view 5 -R myorg/app", folder, tool=tool, key=key)
+    assert not gate.binds_exact(plain, gate.decide(plain, _pol({"gates": {"scopes": {"private": ["myorg/*"]}}})))
+
+
+def test_the_ledger_view_drops_the_reading_from_before_and_hides_a_targets_password(_home):
+    _held(_home)
+    c = _bash_in("cat * ; gh pr comment 5 -R https://u:tok@ghe.corp/pub/repo -b x", "~/.exo/keys")
+    assert c.also is not None and any("tok" in t for t in c.alt_targets), c.alt_targets
+    view = c.as_dict()
+    assert "also" not in view and "floor" not in view and "tok" not in json.dumps(view), view
 
 
 # --- a line that writes the Exo store (#464) ---------------------------------------------------------------------
