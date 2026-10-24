@@ -1,8 +1,8 @@
 """A host's undo, passed from Exo's memory provider to Exo's context engine (#389).
 
-Hermes reports `/undo` only to its memory providers, as `on_session_switch(session, rewound=True)`. Its context
-engine never hears of it. exo-memory passes the notice on here and exo-context listens, so the engine can drop
-the pins it took from the undone turn (D-041 amendment). Every plugin imports this module from the installed
+Hermes's CLI and TUI report `/undo` only to their memory providers, as `on_session_switch(session, rewound=True)`.
+The context engine never hears of it. exo-memory passes the notice on here and exo-context listens, so the engine
+can drop the pins it took from the undone turns (D-041 amendment). Every plugin imports this module from the installed
 `exo` package, so they all share one registry, as with `exo.dispatcher`.
 
 The Exo core tells its context plugin about an undo itself, with every message left (D-041), and never calls a

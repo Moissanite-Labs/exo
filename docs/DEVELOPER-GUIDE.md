@@ -303,9 +303,10 @@ like the memory hooks. After `session.undo` the core calls `on_session_switch(se
 summaries=)` with every message left in the thread and `{tree key: [ids of the summary nodes still stored]}`. Drop
 anything kept from the undone turns (D-041), including the text of each `on_compacted` node that is gone (its
 `node.session` is the tree key). exo-context drops their pins and those nodes, then writes again each handoff
-that may quote them. Hermes tells only its memory provider about `/undo`, so exo-memory passes the notice on with
-`exo.host_undo.report(session)`, and exo-context drops the undone turn's pins in `on_host_undo(session)` (#389). A
-memory provider used beside exo-context in exo-memory's place can do the same.
+that may quote them. Hermes's CLI and TUI tell only their memory provider about `/undo`, so exo-memory passes the
+notice on with `exo.host_undo.report(session)`. exo-context drops the last undone turn's pins in
+`on_host_undo(session)`, and those of the earlier turns of `/undo N` in the next `select_context`, from its
+`conversation_messages` (#389). A memory provider used beside exo-context in exo-memory's place can do the same.
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat

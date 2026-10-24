@@ -2169,26 +2169,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and keeps context notes. It also reaches the context plugin: `on_session_switch(rewound=True, messages=,
   summaries=)`. exo-context then drops the undone turns' pins and the deleted nodes, and writes again each
   automatic handoff that may quote them.
-  *Amendment 2026-10-24 (#389):* a host's undo reaches exo-context too. Hermes reports `/undo` only to its memory
-  providers, as `on_session_switch(session, rewound=True)`, so the undone turn's pins stayed. The per-turn block put
-  the ruling back on every turn, and every later summary block and handoff carried it. exo-memory now passes the
-  session id on through `exo.host_undo`, a registry in the installed `exo` package that both plugins share, and every
-  exo-context engine listens (`on_host_undo`). The engine reads the notice as Hermes's undo: the last user message and
-  everything after it are gone. So when the window it saw last is that session's, its last user message opens the
-  undone turn. A pin goes when the undone turn holds it and nothing left in the window does. The test is the core
-  path's, now one shared helper. A pinned block holds nothing in it, since the block is the engine's own copy of the
-  pins. A compression child takes over its parent's window, so an undo right after the move still reads it. Then the
+  *Amendment 2026-10-24 (#389):* a host's undo reaches exo-context too. Hermes's CLI and TUI report `/undo` only to
+  their memory providers, as `on_session_switch(session, rewound=True)`, so the undone turn's pins stayed. The
+  per-turn block put the ruling back on every turn, and every later summary block and handoff carried it. exo-memory
+  now passes the session id on through `exo.host_undo`, a registry in the installed `exo` package that both plugins
+  share, and every exo-context engine listens (`on_host_undo`). Hermes's `/undo N` removes the last N user turns and
+  sends one notice. So when the window the engine saw last is that session's, its last user message opens an undone
+  turn. A pin goes when that turn holds it and nothing left in the window does. The test is the core path's, now one
+  shared helper. A pinned block holds nothing in it, since the block is the engine's own copy of the pins. The first
+  turn after the notice reads the host's whole transcript (`conversation_messages`): a pin the window held goes when
+  that transcript no longer holds it, so `/undo N` drops the pins of every turn it took. A pin whose message a
+  compaction folded stays on both steps, since its first message lives on in the summary. The engine notes those pins
+  at each compaction, so a ruling said again in the undone turn still stands. A compression child takes over its
+  parent's window, the pending undo and the folded pins, so an undo right after the move still reads them. Then the
   window, the handoffs and the block's link are cleaned as after the core's undo, so a handoff a host's compaction
   wrote before the undo is no longer linked. A drop is logged as counts per kind and the session id, never text.
   Compaction drops no pin on its own. This corrects the survival sentence of the D-040 amendment for #385: what a
   pinned block held survives compaction by the pins until an undo, the core's or a host's, removes the turn it came
   from. Rejected: inferring the undo at compaction from the input, as #403 first did. Hermes's `/compress here N`
   hands `compress` only the head of the history, so a live ruling in the held-out tail looked undone. Once a summary
-  row was in the input, nothing could be inferred at all. Not covered, four cases. A host without exo-memory as its
-  memory provider never passes the notice on. An undo before the engine has seen a turn of that session since it
-  started finds no window. A summary row written before the undo keeps its block as written until the next compaction
-  folds it. A ruling the principal also said in a turn a compaction folded goes with the undone turn, unless a message
-  left in the window still quotes it.
+  row was in the input, nothing could be inferred at all. Not covered, six cases. Hermes's messaging gateway sends no
+  notice on `/undo`: it cuts the transcript and builds a new agent, so the pins stay (#389 stays open for it). A host
+  without exo-memory as its memory provider never passes the notice on. An undo before the engine has seen a turn of
+  that session since it started finds no window. After `/undo N`, the earlier turns' pins stay until the next turn,
+  and stay for good if none comes. A summary row and a handoff file written before the drop keep the ruling as written
+  until the next compaction folds the row and writes the file again. The folded pins live in memory, so after a
+  restart a ruling a compaction folded in an earlier run goes with an undone turn that says it again.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
