@@ -1768,7 +1768,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   binds a call no grant may cover, one with other targets and one with a floor. Each reading matters. Under a scope
   that makes myorg private, `git push --force origin main ; gh -R pub/repo pr comment 5 -b x` with `~/.kube` as `cwd`
   asks from its floor, as on main, and is allowed without it. With `~/.exo/keys` as `cwd`, `gh -R $R secret set X`
-  keeps a reserved `credentials` hit that only the floor's `also` has.
+  keeps a reserved `credentials` hit that only the floor's `also` has. A differential (`gate_diff`) from main
+  8c09c29c finds 0 lowered pairs: 5,762,445 on its built-in corpus (66,235 actions under 87 policies), and
+  1,209,742 on 11,306 actions under 107 policies, its 87 and 20 more on scopes, targets and posts. Those are 24 gh
+  lines with `-R`, URL operands and moved subcommands, alone and beside a store read, a store write, a force push,
+  `bash -c` and `ssh`, in 9 folders under 4 tool and key forms, and their `cd` forms. Against this branch before
+  the merge the same pairs lower 0 too. Under 20 of those policies and three approval tables, none of the 9,408
+  actions of that corpus decides lower than main or the branch on the exposure, the third party, `no_grant`,
+  "once", `binds_exact`, the executor's body check, the fallback or who may answer.
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the
