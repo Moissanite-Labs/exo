@@ -108,17 +108,18 @@ such as one from before it had one, gets its leaves on its next turn. That turn 
 tree's turns do (see "A turn does not wait for memory upkeep"), so a fast summarizer bounds the call. A slow one
 does not, so while the private tree has leaves pending, the call leaves out their spans (#244). It cuts the
 oldest pending leaf first, a whole leaf at a time, until what comes before the turn fits `view_budget`. An
-unstored "[earlier messages are being summarized]" message stands in each gap. Nothing else is cut. The turn stays
-whole: its user message, found by its turn id, and all after it, tool rounds and context notes included. A span
-that is not pending stays whole too: one skipped for good, one waiting to retry, and the last `tail_messages`,
-which are in no leaf yet. A tool call and its results are kept or cut together. The cut moves only when it must
-grow, and then by a whole leaf, so the calls in between extend the one before. The size counts tool-call
-arguments in full, but an image only as its placeholder. A span of large tool-call arguments can still be
-skipped as too small, since a leaf's size cuts each call's arguments at 400 characters, and then it stays
-verbatim. The system message is the same as in the agent's other threads, so the cached prefix holds. Plugin
-hooks never see that tree: no `on_pre_compress` (and its `checkpoint`), `capture_principal` or `on_compacted`.
-`/context` counts its view and the marker in the recent tail, and its `from_seq` is the first stored message
-there. `/compact` folds only the agent tree.
+unstored "[earlier messages are being summarized]" message stands in each gap. When a later leaf lands first, the
+view shows the pending leaves before it verbatim. Those are the oldest, so they go first, and each keeps its
+heading over the marker. Nothing else is cut. The turn stays whole: its user message, found by its turn id, and
+all after it, tool rounds and context notes included. A span that is not pending stays whole too: one skipped for
+good, one waiting to retry, and the last `tail_messages`, which are in no leaf yet. A tool call and its results
+are kept or cut together. The cut moves only when it must grow, and then by a whole leaf, so the calls in between
+extend the one before. The size counts tool-call arguments in full, but an image only as its placeholder. A span
+of large tool-call arguments can still be skipped as too small, since a leaf's size cuts each call's arguments at
+400 characters, and then it stays verbatim. The system message is the same as in the agent's other threads, so
+the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its `checkpoint`),
+`capture_principal` or `on_compacted`. `/context` counts its view and the marker in the recent tail, and its
+`from_seq` is the first stored message there. `/compact` folds only the agent tree.
 
 A fork copies its parent's finished per-session summaries, but it numbers its copies 1 to n. Undo hides
 rows that are in the agent log, so their numbers stay used, and it deletes rows outside the log, such as a
@@ -187,7 +188,10 @@ turn picks it up. Nothing the turn says is delayed by bookkeeping.
 The one exception is size. If that view (finished summaries, unfinished spans verbatim, and the tail) is over
 `view_budget`, the turn waits for pending summaries, but only for `overflow_settle` seconds (5 by default, never
 more than `settle_timeout`), then builds with what is ready. The rule lives in `src/exo/turn_settle.py`. A private
-thread checks its own tree the same way, after the agent tree.
+thread checks its own tree the same way, after the agent tree. Its tree also waits when the call would leave out a
+pending span (#244). That check counts each message in full, where the view cuts it short, so a leaf the call
+just scheduled gets its chance to run first. A fast summarizer, or a span too small to summarize, then leaves
+nothing to cut.
 
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf
