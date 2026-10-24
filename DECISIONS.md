@@ -1853,6 +1853,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the merge the same pairs lower 0 too. Under 20 of those policies and three approval tables, none of the 9,408
   actions of that corpus decides lower than main or the branch on the exposure, the third party, `no_grant`,
   "once", `binds_exact`, the executor's body check, the fallback or who may answer.
+  *Joined and folded (2026-10-24).* The reading from before #311 read the folder folded (`os.path.abspath`), as
+  #209 did. That erases a `..` after a link: the shell runs in `sdir/../policies` through `sdir`. The folder is now
+  read both ways: joined to the session's folder as written, as the kernel reads it, and folded, as bash's `cd` and
+  #209 read it. The part's target goes past a link the same way. So with `~/proj/sdir` a link to `~/.exo/state`,
+  `cat ../keys/seat` with `sdir/../policies` or `sdir` as `cwd` keeps its reading from before #311, and its part
+  names `~/.exo/keys/seat`, which `deny: ["target:*/.exo/*"]` reaches. Reading the folder joined alone would lose
+  main's ask for `tar czf /tmp/o.tgz .` with `xl/../kl` as `cwd`, where `~/proj/kl` links to `~/.ssh`. #527
+  (#340) reads relative store writes from the joined folder too. A trial merge with it found the folded folder
+  reopened its fix there. *With #435 (2026-10-24).* Main's #440 makes `~/.exo/plugins` a store folder. A read in
+  it by a relative name from the folder argument asks, as its `cd` form does. A write there by a relative name stays
+  a `local_write`, as on main: `echo x > hook.py` with `~/.exo/plugins/foo` as `cwd` (#453).
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the

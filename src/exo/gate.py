@@ -6028,9 +6028,12 @@ def _shell_call(cmd: str) -> Classification:
     folders = scope.tool_cwds
     seen: dict = {}                 # one memo for the reads below, so the line is parsed once
     try:
-        mine = [os.path.abspath(f) for f in folders]
+        here = os.getcwd()
     except OSError:                 # the gate's own folder is gone: a relative folder is read as given
-        mine = list(folders)
+        here = ""
+    # joined, not folded: the shell runs in `sdir/../keys` through the link sdir, as the kernel reads it; and folded
+    # too, as #209 read the folder before #311, so that reading never loses a store
+    mine = [g for f in folders for g in (os.path.join(here, f), os.path.normpath(os.path.join(here, f)))]
     wide = replace(scope, cwds=tuple(dict.fromkeys([*scope.cwds, *mine])))
     token, memo = _scope.set(wide), _shell_seen.set(seen)
     try:
@@ -6094,7 +6097,8 @@ def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification |
     if read is not None:                        # the target: the name in the folder it resolves into a store from
         where = folders[0] if len(folders) == 1 else " or ".join(folders)
         paths = [_in_folder(_expand_text(f), read.target) for f in folders]
-        return f"{read.summary} in {where}", next((p for p in paths if is_sensitive_path(p)), paths[0])
+        linked = [_in_folder(g, read.target) for f, g in forms if g != f]   # `..` read past the link, as the kernel
+        return f"{read.summary} in {where}", next((p for p in linked + paths if is_sensitive_path(p)), paths[0])
     if not forms:
         return None
     cmds, subs, _ = _parse(cmd or "")

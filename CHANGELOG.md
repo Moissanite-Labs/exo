@@ -102,7 +102,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the `cd` form. GATE.md lists the cases where the two forms still differ. A gh line in such a call
   is also read as the gate read it before #399 (#439), in the folder too. The gate decides each
   reading and the hook checks each: the line, its reading from before #311, the line as read before
-  #399 and that line's reading from before #311.
+  #399 and that line's reading from before #311. A folder spelt through a link and `..`
+  (`sdir/../policies`) is read as the kernel reads it, past the link, and folded too.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

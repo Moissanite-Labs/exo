@@ -601,6 +601,39 @@ def test_the_target_is_the_name_in_the_folder_it_resolves_in(cwd, workdir, _home
     assert gate.decide(c, _pol({"gates": {"deny": ["target:*/.exo/keys/*"]}})).outcome == "deny"
 
 
+def _links(home) -> None:
+    """In ~/proj, the session's folder: sdir -> ~/.exo/state, kl -> ~/.ssh, and xl -> a folder elsewhere."""
+    for d in (".exo/state", ".exo/keys", ".exo/policies", ".ssh", "elsewhere/d", "proj"):
+        (home / d).mkdir(parents=True, exist_ok=True)
+    for name, to in (("sdir", ".exo/state"), ("kl", ".ssh"), ("xl", "elsewhere/d")):
+        (home / "proj" / name).symlink_to(home / to)
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("folder", ["sdir/../policies", "sdir"])
+def test_a_folder_through_a_link_is_read_past_the_link(folder, tool, key, _home):
+    """The shell runs in `sdir/../policies` through the link sdir, as the kernel reads it: in ~/.exo/policies, where
+    `../keys/seat` is ~/.exo/keys/seat. The reading from before #311 read the folder folded (~/proj/policies), so it
+    found no store there, and the part named ~/proj/keys/seat, which a target entry on the store missed. #340's
+    store-write checks (#527) read the folder joined too."""
+    _links(_home)
+    c = _bash_in("cat ../keys/seat", folder, cwd=str(_home / "proj"), tool=tool, key=key)
+    assert [r.category for r in gate.readings(c)] == ["read", "credentials"]
+    [part] = _store_parts(c)
+    assert part.target == str(_home / ".exo" / "keys" / "seat")
+    assert gate.decide(c, _pol({"gates": {"deny": ["target:*/.exo/*"]}})).outcome == "deny"
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
+def test_a_folder_through_a_link_is_read_folded_too(tool, key, _home):
+    """`xl/../kl` is ~/proj/kl, a link to ~/.ssh, as bash's `cd` folds it, and a folder beside xl's target as the
+    kernel reads it. #209 read it folded, so `tar czf /tmp/o.tgz .` with it as `cwd` asked on main. The folder is
+    read both ways, so a reading joined only would not lose that."""
+    _links(_home)
+    c = _bash_in("tar czf /tmp/o.tgz .", "xl/../kl", cwd=str(_home / "proj"), tool=tool, key=key)
+    assert "credentials" in [r.category for r in gate.readings(c)] and gate.decide(c).outcome == "ask"
+
+
 @pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
 @pytest.mark.parametrize("folder", ["~/.ssh\0", "\0", "~/repo/.claude/worktrees/x\0"])
 def test_a_folder_with_a_nul_never_raises(folder, tool, key, _home):
