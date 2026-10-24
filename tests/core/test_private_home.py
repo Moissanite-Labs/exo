@@ -167,6 +167,111 @@ def test_atomic_write_mode_none_does_not_race_the_umask_probe(tmp_path, monkeypa
     assert now == 0o022
 
 
+def _no_proc(monkeypatch):
+    """`_umask()` as it runs without /proc (macOS): by the set-and-restore probe."""
+    from exo.core import private
+
+    def no_proc(*a, **k):
+        raise FileNotFoundError("/proc/self/status")
+    monkeypatch.setattr(private, "open", no_proc, raising=False)
+    return private
+
+
+def test_a_umask_block_and_the_probe_share_one_lock(tmp_path, monkeypatch):
+    """The socket bind in server/app.py set the mask to 0177 and restored it outside the probe's lock. Beside the
+    probe, the process could be left at 0177 or 077 (#317 review). A `umask` block holds the probe's lock, so a
+    thread looping one beside 8 writers leaves every file 0644 and the mask at 022."""
+    import sys
+    import threading
+
+    private = _no_proc(monkeypatch)
+    umask, stop = private.umask, threading.Event()
+
+    def bind():
+        while not stop.is_set():
+            with umask(0o177):
+                pass
+
+    def write(t):
+        for i in range(300):
+            private.atomic_write(tmp_path / f"f{t}-{i}", b"x", mode=None, sync=False)
+
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    binder, writers = threading.Thread(target=bind), [threading.Thread(target=write, args=(t,)) for t in range(8)]
+    try:
+        binder.start()
+        for th in writers:
+            th.start()
+        for th in writers:
+            th.join()
+    finally:
+        stop.set()
+        binder.join()
+        sys.setswitchinterval(interval)
+    assert sorted({mode(p) for p in tmp_path.iterdir()}) == [0o644] and len(list(tmp_path.iterdir())) == 8 * 300
+    now = os.umask(0o022)
+    assert now == 0o022
+
+
+def test_a_probe_inside_a_umask_block_does_not_deadlock(monkeypatch):
+    """The socket bind awaits inside its `umask` block, so another task on the same thread may probe meanwhile. The
+    lock is reentrant: the probe reads the block's mask and the block restores the old one afterwards."""
+    import threading
+
+    private = _no_proc(monkeypatch)
+    got = []
+
+    def probe_inside():
+        with private.umask(0o177):
+            got.append(private._umask())
+
+    t = threading.Thread(target=probe_inside, daemon=True)
+    t.start()
+    t.join(10)
+    assert not t.is_alive() and got == [0o177]
+    now = os.umask(0o022)
+    assert now == 0o022
+
+
+def test_the_socket_bind_sets_its_umask_under_the_probes_lock(monkeypatch):
+    """`HttpServer.start_unix` makes the socket under umask 0177. A probe in another thread during the bind waits
+    for the lock and then reads the process's own mask: before, it ran at once and read 0177 (#317 review)."""
+    import asyncio
+    import shutil
+    import tempfile
+    import threading
+
+    from exo.server.app import Dispatcher, HttpServer
+    from exo.server.echo import EchoEngine
+
+    private = _no_proc(monkeypatch)
+    real, probes, seen, waited = asyncio.start_unix_server, [], [], []
+
+    async def bind(*args, **kwargs):
+        probes.append(threading.Thread(target=lambda: seen.append(private._umask())))
+        probes[0].start()
+        probes[0].join(0.5)
+        waited.append(probes[0].is_alive())
+        return await real(*args, **kwargs)
+
+    async def start(sock):
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(sock)
+        await srv.close()
+
+    monkeypatch.setattr(asyncio, "start_unix_server", bind)
+    d = Path(tempfile.mkdtemp(prefix="exo", dir="/tmp" if os.path.isdir("/tmp") else None))
+    try:
+        asyncio.run(start(d / "exod.sock"))
+        probes[0].join(10)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert waited == [True] and seen == [0o022]
+    now = os.umask(0o022)
+    assert now == 0o022
+
+
 def test_private_dir_rejects_symlink_created_during_mkdir(tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir(mode=0o755)

@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import sqlite3
+import stat
 import threading
 
 import pytest
@@ -387,7 +388,7 @@ def test_opening_a_ledger_symlinked_to_another_exo_ledger_makes_no_wal_or_shm_fi
 def test_reads_through_a_symlink_are_a_snapshot_of_the_target_at_open(tmp_path, signer):
     """A read-only open of a closed target (no `-wal` beside it) held an `immutable=1` connection to the target
     itself: a writer that appended and checkpointed replaced the file under it, so the reader stayed stale and
-    reading raised `database disk image is malformed` (#317). The target is copied into memory at open now: reads
+    reading raised `database disk image is malformed` (#317). The target is copied at open now: reads
     are the target as it stood at open, and a fresh open sees it as it stands then."""
     target = tmp_path / "target.sqlite"
     with Ledger(target, signer) as led:
@@ -407,6 +408,122 @@ def test_reads_through_a_symlink_are_a_snapshot_of_the_target_at_open(tmp_path, 
     reader.close()
     with Ledger(path, signer) as again:
         assert len(again) == 200
+
+
+PAD = "x" * 6000  # two pages an event, so a short ledger spans several 64-page copy steps
+
+
+def _padded(target, signer, start, stop, pad=PAD):
+    with Ledger(target, signer) as led:
+        for i in range(start, stop):
+            led.append("note", {"i": i, "pad": pad}, "agent")
+        led.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
+def _write_during_copies(monkeypatch, write, copies):
+    """Copy a symlinked ledger's target in 64-page steps and run `write` after the first step of each of the first
+    `copies` copies: a writer that lands while the copy is half done, as in abu-aska's review of #416. Returns a
+    list that gets one entry per copy."""
+    made = []
+
+    class Stepped(sqlite3.Connection):
+        def backup(self, target, **kwargs):
+            made.append(len(made) < copies)
+
+            def step(status, remaining, total):
+                if made[-1]:
+                    made[-1] = False
+                    write()
+            return super().backup(target, pages=64, progress=step)
+
+    connect = sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda db, *a, **k: connect(
+        db, *a, **({**k, "factory": Stepped} if isinstance(db, str) and "immutable=1" in db else k)))
+    return made
+
+
+def test_a_writer_during_the_copy_does_not_leave_a_torn_snapshot(tmp_path, signer, monkeypatch):
+    """The copy reads the target with `immutable=1`, which takes no lock. A writer that appended and checkpointed
+    while it was half done left it torn: `integrity_check` failed, and lookups and reads went wrong for the reader's
+    life (#317 review). The target is checked before and after, and a copy taken while it changed is taken again."""
+    target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
+    _padded(target, signer, 0, 100)
+    path.symlink_to(target)
+    beside = sorted(p.name for p in tmp_path.iterdir())
+    made = _write_during_copies(monkeypatch, lambda: _padded(target, signer, 100, 150), copies=1)
+    with Ledger(path, signer) as reader:
+        assert reader.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        events = list(reader.iter())
+        assert [e["body"]["i"] for e in events] == list(range(150))
+        assert all(reader.get(e["id"]) == e for e in events)
+        assert len(made) == 2  # the first copy was thrown away
+        _refuses(reader)
+    assert sorted(p.name for p in tmp_path.iterdir()) == beside
+
+
+def test_a_target_changed_during_every_copy_is_read_live(tmp_path, signer, monkeypatch):
+    """After `SNAPSHOT_TRIES` copies a writer changed, the open reads the target live (`mode=ro`) as it does beside
+    a `-wal` file, and later appends show without a fresh open."""
+    from exo.ledger import SNAPSHOT_TRIES
+
+    target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
+    _padded(target, signer, 0, 100)
+    path.symlink_to(target)
+    added = []
+
+    def write():
+        _padded(target, signer, 100 + 10 * len(added), 110 + 10 * len(added))
+        added.append(1)
+    made = _write_during_copies(monkeypatch, write, copies=SNAPSHOT_TRIES)
+    with Ledger(path, signer) as reader:
+        assert len(made) == SNAPSHOT_TRIES and len(reader) == 100 + 10 * SNAPSHOT_TRIES
+        assert reader.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        _padded(target, signer, len(reader), len(reader) + 1)
+        assert len(reader) == 101 + 10 * SNAPSHOT_TRIES
+        _refuses(reader)
+
+
+def test_the_snapshot_is_read_only(tmp_path, signer):
+    """The copy of a symlinked ledger took writes the read-only target refused (#317 review). `query_only` refuses
+    them again. `check_anchors` cannot lock it and checks it as it stands, which cannot change."""
+    target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
+    _padded(target, signer, 0, 3)
+    path.symlink_to(target)
+    with Ledger(path, signer) as reader:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            reader.db.execute("CREATE TABLE scratch(x)")
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            reader.db.execute("INSERT INTO events (id) VALUES ('x')")
+        assert reader.check_anchors() == "" and len(reader) == 3
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="lists open files through /proc")
+def test_the_snapshot_is_kept_in_a_private_temporary_file(tmp_path, signer):
+    """The whole target was copied into memory: a 493 MB ledger added 534 MB to the reader (#317 review). It goes into
+    SQLite's private temporary database now. Past SQLite's page cache the copy is an owner-only temporary file,
+    unlinked at once and gone at close. None is made beside the target."""
+    target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
+    _padded(target, signer, 0, 80, pad="x" * 100_000)  # 8 MB, past SQLite's 2 MB page cache
+    path.symlink_to(target)
+    beside = sorted(p.name for p in tmp_path.iterdir())
+
+    def unlinked():
+        out = set()
+        for fd in os.listdir("/proc/self/fd"):
+            try:
+                st = os.stat(f"/proc/self/fd/{fd}")
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode) and st.st_nlink == 0:
+                out.add((fd, stat.S_IMODE(st.st_mode), st.st_size))
+        return out
+    before = unlinked()
+    with Ledger(path, signer) as reader:
+        assert len(reader) == 80
+        temp = unlinked() - before
+        assert [(mode, size > target.stat().st_size // 2) for _fd, mode, size in temp] == [(0o600, True)]
+        assert sorted(p.name for p in tmp_path.iterdir()) == beside
+    assert not unlinked() - before
 
 
 def test_an_append_does_not_fsync_its_anchors(tmp_path, signer, monkeypatch):

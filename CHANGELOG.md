@@ -9,10 +9,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Two follow-ups to #296 (#317). A ledger opened read-only through a symlink to a closed target held an
   `immutable=1` connection to the target itself: a writer that appended and checkpointed replaced the file
   under it, so the reader stayed stale and reading raised `database disk image is malformed`. The target is
-  copied into memory at open now, so reads are a snapshot of the target as it stood at open. And where there
-  is no `/proc` (macOS), the umask probe in `atomic_write` set the process mask to 077 and restored it with
-  no lock: concurrent writes with `mode=None` interleaved set and restore, so files came out 0600 under a
-  022 mask and a run could leave the process at 077. The probe runs under a module lock now.
+  copied at open now, so reads are a snapshot of the target as it stood at open. A writer during the copy tears
+  it, so the open checks the target before and after and copies it again when it changed. The copy is read-only.
+  It goes into SQLite's private temporary database: a large ledger costs the reader disk space in the temporary
+  folder, not memory. And where there is no `/proc` (macOS), the umask probe in `atomic_write` set the process
+  mask to 077 and restored it with no lock: concurrent writes with `mode=None` interleaved set and restore, so
+  files came out 0600 under a 022 mask and a run could leave the process at 077. The probe runs under a lock now,
+  and so does the server's socket bind, which sets 0177 (`exo.core.private.umask`).
 - `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
   its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
   each tree's violation total with what `and N more on other posts` counts.

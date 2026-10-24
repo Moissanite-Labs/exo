@@ -2145,6 +2145,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   summary, could put a forged `## Next steps` first and beat the genuine copy, retrieval query included. List
   fields and the topic line are now flattened to one line when written, and `load_handoff` reads Next steps from
   its last copy in the file. Every other section still reads the first.
+- *Amendment 2026-10-24 (#317):* two follow-ups to #296. First, a reader opened through a symlink to a closed ledger
+  held an `immutable=1` connection to the target. A writer that appended and checkpointed changed the file under it,
+  so the reader stayed stale and then raised `database disk image is malformed`. Such a target is now copied at open,
+  and reads come from the copy: a snapshot of the target as it stood at open. A fresh open sees later appends. A
+  target with a `-wal` file beside it is still read live. `immutable=1` takes no lock, so a writer during the copy
+  could tear it, and every read of a torn copy can fail for the reader's life. The open checks the target's inode,
+  size and mtime, and that no `-wal` file is beside it, before and after the copy. It takes the copy again when any of
+  them changed. After three changed copies it reads the target live, and SQLite may then leave `-wal` and `-shm` files
+  beside it. The check misses a change that keeps all three. An append grows the file, so it is caught. The copy goes
+  into SQLite's private temporary database, not into memory. A copy held in memory made a 99 MB ledger cost the reader
+  111 MB. This one costs about 6 MB and an owner-only temporary file the size of the ledger, unlinked at once and gone
+  at close. The copy is read-only (`query_only`), as the target was. Second, where there is no `/proc` (macOS),
+  `atomic_write(mode=None)` learns the umask by setting 077 and back. Unlocked, two threads interleaved: files came
+  out 0600 under a 022 mask, and the process could be left at 077. The probe now runs in `exo.core.private.umask`,
+  which sets the mask for a block under one lock. The socket bind in `server/app.py` sets its 0177 through it too, so
+  neither undoes the other. The bind awaits inside its block, so the lock is reentrant: another task on that thread
+  probes and reads 0177 instead of waiting on itself.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.

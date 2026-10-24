@@ -104,12 +104,19 @@ back, and the shorter chain still links. So each append also writes the head (se
   ledger file swapped for a symlink to a truncated copy still meets that anchor. A ledger file that is a symlink
   fails `verify()`, and `append()` and `anchor()` refuse it. A `Ledger` without an authority opens such a file
   read-only (#277), and only when it is a regular file, so opening it writes nothing through the link: no WAL
-  switch, no tables, no file made at a dangling target. SQLite's `immutable` flag keeps it from making `-wal` and
-  `-shm` files beside a target in WAL mode. The one exception is a target that already has a `-wal` file (another
-  process has it open, or one crashed): SQLite reads it and may add or rewrite a `-shm` file. A target that is
-  missing, is not a regular file (a FIFO would block the open) or holds no ledger reads as empty. An authority-mode
-  ledger trusts its signed checkpoints: its appends skip the symlink refusal and write the projection through the
-  link.
+  switch, no tables, no file made at a dangling target. A target with no `-wal` file beside it is copied at open
+  (#317), and reads come from the copy. They show the target as it stood at open. A fresh open shows later
+  appends. The copy reads the target with SQLite's `immutable` flag, which makes no `-wal` or `-shm` file beside
+  it but takes no lock. So the open checks the target's inode, size and mtime, and that no `-wal` file is there,
+  before and after the copy. A copy taken while any of them changed is taken again. The copy goes into SQLite's
+  private temporary database. About 2 MB of it stays in memory. The rest is an owner-only temporary file in
+  SQLite's temporary folder, unlinked at once and gone at close. So an open reader holds disk space the size of the
+  ledger, not memory: a 99 MB ledger adds 99 MB there and about 6 MB of memory. The copy is read-only. A target
+  that has a `-wal` file is read live (another process has it open, or one crashed): SQLite reads the `-wal` file
+  and may add or rewrite a `-shm` file. A target that changed during three copies in a row is read live too, and
+  SQLite may then leave `-wal` and `-shm` files beside it. A target that is missing, is not a regular file (a FIFO
+  would block the open) or holds no ledger reads as empty. An authority-mode ledger trusts its signed checkpoints: its appends
+  skip the symlink refusal and write the projection through the link.
 - An anchor is read only as a regular file: a symlink in its place is unreadable. Anchors are written through a
   fresh temporary file (`mkstemp`, with `O_EXCL` and `O_NOFOLLOW`), so a symlink planted in the anchor's folder
   cannot redirect the write.
