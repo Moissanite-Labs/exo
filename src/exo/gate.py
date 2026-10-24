@@ -4908,8 +4908,9 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         c = weigh(c)
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
-    # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
-    found = _cd_store_read(cmds, subs) if c.category != "credentials" else ""
+    # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`). So does a `/` substitution of a store variable the gate
+    # does not spell out (#342: `cat ${HOME/%//.kube}/config`), anywhere on the line, as a secret path is.
+    found = (_cd_store_read(cmds, subs) or _store_subst(cmd)) if c.category != "credentials" else ""
     if found and c.category == "store_write":
         # it weighs as a secret line does: its own parts' weight, and a heavier command deeper in it beside (#468 review)
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
@@ -5068,6 +5069,7 @@ def _exo_home() -> str:
 
 _STORE_VAR = re.compile(r"\$\{(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?=[^}\w])")
 _BRACE_EVENTS = re.compile(r"\\.|\$\{|\}|\n", re.S)
+_SUBST_HIDES = re.compile(r"[$<>]\(|[`'\"]")   # text in a `${..}` that bash reads as a unit, so a `}` in it may not close
 
 
 def _store_var(name: str) -> str | None:
@@ -5083,44 +5085,61 @@ def _store_var(name: str) -> str | None:
     return os.path.expanduser(store) if store else None
 
 
-def _subst_value(word: str, value: str, unset: bool, depth: int, alt: bool) -> str | None:
-    """The reading of a `/` substitution on a store variable (#342): ``word`` is the text after the variable's
-    name, starting with `/` (a second `/` replaces every match). The replacement — the text after the pattern's
-    `/` — is spelt out in turn, its quotes dropped, to 8 levels; None when too deep. A pattern substitution can
-    add text to the value, so the replacement counts: a `%` pattern anchors at the end and the replacement is
-    read appended to the value, a `#` pattern anchors at the start and it is read prepended. An unanchored
-    pattern reads as the value, or, in the ``alt`` reading, as the replacement on its own: it may match the
-    whole value."""
-    body = word[2:] if word.startswith("//") else word[1:]
-    cut = next((k for k, ch in enumerate(body) if ch == "/" and (k == 0 or body[k - 1] != "\\")), None)
-    pat, raw = (body, "") if cut is None else (body[:cut], body[cut + 1:])
-    sub = _expand_text(raw.replace('"', "").replace("'", ""), unset, depth + 1, alt) if depth < 8 else None
-    if sub is None:
-        return None
-    if pat.startswith("%"):
-        return value + sub
-    if pat.startswith("#"):
-        return sub + value
-    return sub if alt else value
-
-
-def _store_var_ops(text: str, unset: bool, depth: int, alt: bool = False) -> str:
-    """``text`` with each `${VAR<op>word}` of a store variable spelt out (#202). `:-`, `-`, `:=` and `=` give the
-    value (_store_var), or the word when ``unset`` or the variable has none; `:+` and `+` give the word, or nothing
-    when ``unset``; `:?`, `?` and any other operator that only removes text (`%/`, `#*/`, `:0`) give the value. A
-    `/` substitution is read with its replacement (see _subst_value). The word is spelt out in turn, its quotes
-    dropped, to 8 levels. A form that does not close on its line, or with no value to give, stays as is."""
-    m = _STORE_VAR.search(text)
-    if not m:
-        return text
-    closes, opened = {}, []          # where each `${` closes, in one pass: a hostile line costs linear time
-    for e in _BRACE_EVENTS.finditer(text, m.start()):
+def _brace_closes(text: str, start: int) -> dict[int, int]:
+    """Where each `${` in ``text`` from ``start`` on closes, in one pass: a hostile line costs linear time. A form that
+    does not close on its line has no entry."""
+    closes, opened = {}, []
+    for e in _BRACE_EVENTS.finditer(text, start):
         if e[0] == "${":
             opened.append(e.start())
         elif e[0] == "}" and opened:
             closes[opened.pop()] = e.start()
         elif e[0] == "\n":
             opened.clear()
+    return closes
+
+
+def _store_subst(text: str) -> str:
+    """The first `/` substitution of a store variable in ``text`` that may add text, or '' (#342). Its pattern may
+    match any part of the value, so the gate does not spell it out and fails closed: a word with one is a store path
+    to the store-write and `cd` checks, and a shell line or read tool with one reads a secret store. That is a `/`,
+    `//`, `/#` or `/%` form whose replacement is not empty, also with a subscript (`${HOME[0]/%//.exo}`), nested in
+    any other form, or not closed on its line. A quote, `$( )`, `<( )` or backticks in it or its subscript may hide a
+    `}` and so where it ends (`${HOME/%[!"}"]/u\\/.exo}`), so it counts too. A form with an empty replacement only
+    removes text: it reads as the value."""
+    m = _STORE_VAR.search(text)
+    if not m:
+        return ""
+    closes = _brace_closes(text, m.start())
+    hiders = [h.start() for h in _SUBST_HIDES.finditer(text, m.start())]   # found once, so a hostile nest costs
+    shuts = [s.start() for s in re.finditer(r"\]", text)]                  # n log n, as each form looks them up
+
+    def first(marks: list[int], start: int, end: int) -> int:
+        n = bisect.bisect_left(marks, start)
+        return marks[n] if n < len(marks) and marks[n] < end else -1
+    while m:
+        j = closes.get(m.start())
+        end = len(text) if j is None else j
+        hides = first(hiders, m.end(), end) >= 0
+        k = (first(shuts, m.end(), end) + 1 if text.startswith("[", m.end()) else 0) or m.end()   # past a subscript
+        if text.startswith("/", k) or hides and text.startswith("[", m.end()):
+            cut = text.find("/", k + 2 if text.startswith("//", k) else k + 1, end)
+            if j is None or hides or 0 <= cut < end - 1:
+                return text[m.start():end + (j is not None)]
+        m = _STORE_VAR.search(text, m.end())
+    return ""
+
+
+def _store_var_ops(text: str, unset: bool, depth: int) -> str:
+    """``text`` with each `${VAR<op>word}` of a store variable spelt out (#202). `:-`, `-`, `:=` and `=` give the
+    value (_store_var), or the word when ``unset`` or the variable has none; `:+` and `+` give the word, or nothing
+    when ``unset``; `:?`, `?` and any other operator (`%/`, `#*/`, `:0`, `/x`) give the value. A `/` substitution that
+    may add text fails closed in the store checks (_store_subst, #342). The word is spelt out in turn, its quotes
+    dropped, to 8 levels. A form that does not close on its line, or with no value to give, stays as is."""
+    m = _STORE_VAR.search(text)
+    if not m:
+        return text
+    closes = _brace_closes(text, m.start())
     out, i = [], 0
     while m:
         j = closes.get(m.start())
@@ -5130,9 +5149,7 @@ def _store_var_ops(text: str, unset: bool, depth: int, alt: bool = False) -> str
             if kind == "+" and unset:
                 rep = ""
             elif kind == "+" or kind in ("-", "=") and (unset or rep is None):
-                rep = _expand_text(word.replace('"', "").replace("'", ""), unset, depth + 1, alt) if depth < 8 else None
-            elif not op and word.startswith("/") and rep is not None:
-                rep = _subst_value(word, rep, unset, depth, alt)
+                rep = _expand_text(word.replace('"', "").replace("'", ""), unset, depth + 1) if depth < 8 else None
             if rep is not None:
                 out.append(text[i:m.start()] + rep)
                 i = j + 1
@@ -5140,11 +5157,10 @@ def _store_var_ops(text: str, unset: bool, depth: int, alt: bool = False) -> str
     return "".join(out) + text[i:]
 
 
-def _expand_text(text: str, unset: bool = False, depth: int = 0, alt: bool = False) -> str:
+def _expand_text(text: str, unset: bool = False, depth: int = 0) -> str:
     """~, $HOME and $EXO_HOME (also ${...}, and ${EXO_HOME:-word} and the other operators, see _store_var_ops) spelled
-    out; nothing else is evaluated. With ``unset``, a `${VAR:-word}` form is read as bash reads it when VAR is unset.
-    With ``alt``, an unanchored `${VAR/pat/rep}` form is read as the replacement on its own (#342)."""
-    text = _store_var_ops(text, unset, depth, alt)
+    out; nothing else is evaluated. With ``unset``, a `${VAR:-word}` form is read as bash reads it when VAR is unset."""
+    text = _store_var_ops(text, unset, depth)
     home, exo = _home(), _exo_home()
     store = os.environ.get("EXO_PRINCIPAL_STORE")
     if store:
@@ -5427,15 +5443,13 @@ def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
 
 def _expand_words(words: list[str]) -> list[str]:
     """_expand_text of each word, in one pass when no word holds a newline. A word with a `${VAR:-word}` form of a
-    store variable is also read with VAR unset, so both its value and its default count (#202), and with an
-    unanchored `${VAR/pat/rep}` read as the replacement on its own, so a full match counts too (#342)."""
+    store variable is also read with VAR unset, so both its value and its default count (#202)."""
     if not any("~" in w or "$" in w for w in words):
         return words
     out = [] if any("\n" in w for w in words) else _expand_text("\n".join(words)).split("\n")
     out = out if len(out) == len(words) else [_expand_text(w) for w in words]
-    extra = [_expand_text(w, unset=True) for w in words if _STORE_VAR.search(w)]
-    extra += [_expand_text(w, alt=True) for w in words if _STORE_VAR.search(w)]
-    return out + [w for w in dict.fromkeys(extra) if w not in out] if extra else out
+    unset = [_expand_text(w, unset=True) for w in words if _STORE_VAR.search(w)]
+    return out + [w for w in dict.fromkeys(unset) if w not in out] if unset else out
 
 
 def _real(path: str, memo: dict[str, str]) -> str:
@@ -5729,7 +5743,10 @@ def is_store_path(path: str, ancestors: bool = False) -> bool:
 
 
 def _store_word(path: str, ancestors: bool = False) -> bool:
-    """is_store_path for one word whose braces are already expanded."""
+    """is_store_path for one word whose braces are already expanded. A word with a `/` substitution of a store variable
+    the gate does not spell out counts (_store_subst)."""
+    if _store_subst(path):
+        return True
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
@@ -5763,9 +5780,10 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
 
 def _in_store_dir(path: str) -> bool:
     """A `cd` target inside EXO_HOME or the principal store: relative names after it may be the store. So is a
-    descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217)."""
+    descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217). So is a
+    target with a `/` substitution of a store variable the gate does not spell out (_store_subst)."""
     p = _expand_text(path).strip()
-    if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")):
+    if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")) or _store_subst(path):
         return True
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
@@ -6081,6 +6099,10 @@ def _classify_call(action: Any) -> Classification:
     else:
         cat = own = TOOLS.get(tool) or classify_by_name(tool)
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
+        if not secret and cat == "read":         # #342: a write to such a path is caught by is_store_path below
+            items = [args.get(k) for k in _PATH_ARG_KEYS]
+            secret = next((v for x in items for v in (x if isinstance(x, (list, tuple)) else [x])
+                           if isinstance(v, str) and _store_subst(v)), "")
         if secret:
             cat = "credentials"
         store = ""

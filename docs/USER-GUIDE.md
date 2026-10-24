@@ -312,7 +312,8 @@ What the gate asks about, and why:
   `.env`, Exo's keys and `run/`) and says how many it skipped; the agent must name one to read it, which asks
   (#241). The gate judges a read by the path it names, so a shell walk from a folder above (`grep -r token
   ~/.exo`) is still an ordinary read, and so is a harmlessly named symbolic link to a key file, read by its own
-  name (#209). `docs/GATE.md` lists the other spellings it misses.
+  name (#209). A path that changes `$HOME` or Exo's folder with a `/` substitution (`cat ${HOME/%//.kube}/config`)
+  asks, since the gate does not work out what it gives (#342). `docs/GATE.md` lists the other spellings it misses.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another. A post whose text the gate cannot
