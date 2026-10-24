@@ -170,10 +170,14 @@ class Decision:
     # (category, target) of each part a reserved entry matched, once each (D-075). A standing grant for the
     # line's own category must not cover a reserved part outside it, so the targets stay as written here.
     reserved: list[tuple[str, str]] = field(default_factory=list)
+    # A sudo write line read with its displaced part leading asks or denies (#454): the approval is then about that
+    # part too, so it binds to the exact line (binds_exact) and its approvers are those of both categories.
+    displaced_asks: bool = field(default=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger view: reserved targets with URL userinfo redacted."""
         d = asdict(self)
+        d.pop("displaced_asks")
         d["reserved"] = list(dict.fromkeys((cat, redact_userinfo(t)) for cat, t in self.reserved))
         return d
 
@@ -2389,7 +2393,7 @@ def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words)
     if prog in _PRIVILEGED_WRAPPERS:
         head.signals.append(prog)
         for p in parts:
-            p.reversibility = "costly" if p.reversibility == "reversible" else p.reversibility
+            _raise_axes(p, reversibility="costly")
     return parts
 
 
@@ -2805,8 +2809,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
     if sudo:
         parts[0].signals.append("sudo")
-        if parts[0].reversibility == "reversible":
-            parts[0].reversibility = "costly"
+        _raise_axes(parts[0], reversibility="costly")
     if k.heredocs:
         # dash and ash may end the body early and run the rest: read it as commands too. Once per line, under
         # _once's key for a shell reading it: a compound's heredoc reaches every command inside it.
@@ -3060,8 +3063,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c = _combine(local + [c], cmd)
         c.target = dest if "unread hops" in c.signals else (c.target or dest)
         if c.displaced is not None:           # #454: the part a sudo write displaced gets the host, as it did
-            lead = replace(c.displaced, target=c.displaced.target or dest)
-            c.parts, c.displaced = [lead if q is c.displaced else q for q in c.parts], lead
+            _displace_with(c, target=c.displaced.target or dest)
         if not here:
             c.signals.append("remote host")
         return [c]
@@ -3493,8 +3495,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             elif key in _SSH_EXEC_SETTINGS:
                 c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
                 if c is not None and key == "remotecommand":
-                    if EXPOSURE.index(c.exposure) < 1:
-                        c.exposure = "internal"
+                    _raise_axes(c, exposure="internal")
                     c.signals.append("remote host")
             elif key in _SSH_LIB_SETTINGS and value.strip().lower() != "internal":
                 parts.append(_opaque(f"ssh {_SSH_LIB_SETTINGS[key]} loads a library", cmd))
@@ -3734,6 +3735,30 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     return ""
 
 
+def _displace_with(c: Classification, **changes) -> None:
+    """Give the part a sudo write copy displaced (#454) a change made to the copy after it was made: the ssh host as its
+    target, or a raise in place (_raise_axes). That part is shared with stored results (_own_copy), so a changed copy
+    of it takes its place, also in c.parts."""
+    old = c.displaced
+    if old is None:
+        return
+    lead = replace(old, **changes)
+    c.parts, c.displaced = [lead if q is old else q for q in c.parts], lead
+
+
+def _raise_axes(c: Classification, exposure: str = "private", reversibility: str = "reversible") -> None:
+    """Raise c's exposure and reversibility in place to at least these: a remote command runs on the host, sudo and
+    the privileged wrappers make a reversible part costly. The part a sudo write copy displaced (#454) is raised with
+    it, so the two rank and decide alike: ssh -o RemoteCommand raised the copy alone, and _combine then ranked the
+    copy at its displaced part's old axes, where an earlier costly part took its place."""
+    def up(p: Classification) -> tuple[str, str]:
+        return (max(p.exposure, exposure, key=EXPOSURE.index),
+                max(p.reversibility, reversibility, key=REVERSIBILITY.index))
+    c.exposure, c.reversibility = up(c)
+    if c.displaced is not None and up(c.displaced) != (c.displaced.exposure, c.displaced.reversibility):
+        _displace_with(c, **dict(zip(("exposure", "reversibility"), up(c.displaced))))
+
+
 def _combine(parts: list[Classification], cmd: str) -> Classification:
     """The most severe part, with every part's signals. A store write outranks everything but credentials."""
     signals = [s for p in parts for s in p.signals]
@@ -3743,15 +3768,17 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     if c.displaced is not None:
         # #454: the copy of a sudo write that a nested line (a $( ), an ssh hop) leads with is a costly write here, so
         # it would also take the lead from a part it ties with, which led before as the first of the tie. So the
-        # parts are ranked as before too, each copy as the part it displaced. A part that outranks a read leads
-        # again: an unknown program (`echo $(sudo echo hi > /tmp/f) $(foo)`), or ssh running its stdin. Any other is
-        # the part the copy displaces, so a rule on the repo of `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)`
-        # still reaches the line.
-        before = max([p.displaced or p for p in parts], key=_severity)
+        # parts are ranked as before too, each copy as a read with its own axes, which _raise_axes keeps in step with
+        # its displaced part's. A part that outranks a read leads again: an unknown program (`echo $(sudo echo hi >
+        # /tmp/f) $(foo)`), or ssh running its stdin. Any other is the part the copy displaces, and the summary names
+        # it, so a rule on the repo of `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line.
+        at = max(range(len(parts)), key=lambda i: (*_severity(parts[i])[:3], False) if parts[i].displaced is not None
+                 else _severity(parts[i]))
+        before = parts[at].displaced or parts[at]
         if _severity(before)[3]:
             c = before
-        else:
-            c.displaced = before
+        elif before is not c.displaced:
+            c.summary, c.displaced = f"{before.summary or before.category}, write {c.target}"[:120], before
     if c.own_signals is None:
         c.own_signals = list(c.signals)
     c.signals = list(dict.fromkeys(c.signals + signals))
@@ -6028,12 +6055,24 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         # #454: a sudo write leads the line in place of the command's own costly part. The line is also decided with
         # that part leading, as before, so a category line, rule, scope or escalation on it (a rule on a gh read's
         # repo, on an ssh host) still reaches the line, and the stricter outcome stands. Both readings have the same
-        # parts, that one among them, so a deny or reserved entry finds the same hits in each.
+        # parts, that one among them, so a deny or reserved entry finds the same hits in each. On a tie the decision
+        # keeps what each reading found, as bump() does for an equal level: both reasons, the higher exposure. The
+        # budget step reads the cost. displaced_asks tells binds_exact, the hook and the card that the second asks.
         p = c.displaced
         d = decide(replace(c, displaced=None), pol, ctx)
-        alt = decide(replace(c, category=p.category, cost=p.cost, summary=p.summary, target=p.target, link=p.link,
-                             own=p.own, displaced=None), pol, ctx)
-        return alt if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome) else d
+        alt = decide(replace(c, category=p.category, cost=p.cost, summary=p.summary, target=p.target, own=p.own,
+                             displaced=None), pol, ctx)
+        if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
+            d = alt
+        elif alt.outcome == d.outcome:
+            d.reason = "; ".join(dict.fromkeys(d.reason.split("; ") + alt.reason.split("; ")))
+            d.rule = alt.rule if d.rule == "matrix" else d.rule
+            d.exposure = max(d.exposure, alt.exposure, key=EXPOSURE.index)
+            d.third_party = d.third_party or alt.third_party
+            d.violations = list(dict.fromkeys(d.violations + alt.violations))
+            d.reserved = list(dict.fromkeys(d.reserved + alt.reserved))
+        d.displaced_asks = OUTCOMES.index(alt.outcome) >= OUTCOMES.index("ask")
+        return d
     if _one_text(c):
         return _decide(c, pol, ctx, None)
     passed: list[Mapping] = []
@@ -6238,8 +6277,10 @@ def summarize(c: Classification, d: Decision, default: str = "skip") -> str:
     if c.cost:
         axes.append(f"cost {c.cost:g}")
     line = f"{bits[0]} ({', '.join(axes)}). Why: {d.reason}."
-    if c.link:
-        line += f" Link: {c.link}."
+    # #454: when the part a sudo write displaced asks, the link is that part's (a gh read's issue), as before
+    link = (c.displaced.link if c.displaced is not None and d.displaced_asks else "") or c.link
+    if link:
+        line += f" Link: {link}."
     line += f" Default if no reply: {default}."
     return " ".join(line.split())
 
@@ -6588,10 +6629,10 @@ DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, 
 def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
     and code the gate cannot see into (D-038), so one "always" never covers a different script. Also a sudo write
-    line whose displaced part names a target of its own (#454): a grant keyed on the written path must not answer a
-    rule on the repo or host that part names."""
+    line whose displaced part names a target of its own, or asks with that part leading (#454): a grant keyed on the
+    written path must not answer a rule on the repo or host that part names, nor an ask on its category."""
     return is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals or \
-        bool(c.displaced is not None and c.displaced.target)
+        bool(c.displaced is not None and (c.displaced.target or d is not None and d.displaced_asks))
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:

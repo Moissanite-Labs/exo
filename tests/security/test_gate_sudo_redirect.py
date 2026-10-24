@@ -10,8 +10,11 @@ rule on a gh read's repo or on an ssh host still reaches it.
 
 Classification and decision only; nothing is executed.
 """
+import json
+
 import pytest
 
+from exo import gate
 from exo.gate import binds_exact, classify, decide, normalize_policies, summarize
 
 
@@ -333,3 +336,92 @@ def test_a_displaced_part_with_a_target_binds_the_approval_to_the_line(line, exa
     # A standing grant is keyed on the line's category and target. One on the written path must not answer a rule on
     # the repo or host the displaced part names, so such a line binds its approval to the exact command.
     assert binds_exact(sh(line)) is exact, line
+
+
+# Re-check of #492 at a0da2f31: `ssh -o RemoteCommand=` raised the nested copy's exposure in place, but not that of
+# the part it displaced. _combine ranked the copy as that part, at the stale private axes, so it tied with an earlier
+# costly read, which took its place, or an unknown program led. Main asked for each of these under the rule.
+OPAQUE_ALLOW = pol(categories={"opaque_exec": "allow"},
+                   rules=[{"match": {"target": "a/b*"}, "decision": "ask", "reason": "repo rule"}])
+REMOTE = ["ssh -o RemoteCommand='{}' h", "ssh -oRemoteCommand='{}' h", "scp -o RemoteCommand='{}' a h:b",
+          "sftp -o RemoteCommand='{}' h", "ssh -o 'RemoteCommand={}' h", "ssh h '{}'"]
+
+
+@pytest.mark.parametrize("before", ["sudo ls", "foo", "sudo cat /etc/hosts", "./run"])
+@pytest.mark.parametrize("remote", REMOTE)
+@pytest.mark.parametrize("inner", ["sudo gh pr view 9 -R a/b > /tmp/f", "x=$(sudo gh pr view 9 -R a/b > /tmp/f)",
+                                   "doas gh pr view 9 -R a/b >> /tmp/f"])
+def test_a_remote_command_raises_the_displaced_part_too(before, remote, inner):
+    line = f"{before}; {remote.format(inner)}"
+    c = sh(line)
+    assert (c.category, c.exposure) == ("local_write", "internal"), (line, c)
+    assert (c.displaced.target, c.displaced.exposure) == ("a/b#9", "internal"), (line, c.displaced)
+    assert any(q is c.displaced for q in c.parts), line          # the part decide() and the deny checks see
+    d = decide(c, OPAQUE_ALLOW)
+    assert (d.outcome, d.rule, d.reason) == ("ask", "rule", "repo rule"), (line, d)
+
+
+def test_a_copy_ranks_by_its_own_axes():
+    # A raise in place on the copy alone (none is left in the gate) must not let a part that ties with the stale
+    # displaced part take its place: the copy ranks as a read with its own axes.
+    nested = sh("sudo gh pr view 9 -R a/b > /tmp/f")
+    nested.exposure = "internal"
+    c = gate._combine([sh("sudo ls"), nested], "x")
+    assert c.displaced.target == "a/b#9", c.displaced
+    c = gate._combine([sh("foo"), nested], "x")
+    assert (c.category, c.displaced.target) == ("local_write", "a/b#9"), c
+
+
+@pytest.mark.parametrize("line,link", [
+    ("sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)", "https://github.com/a/b/issues/9"),
+    ("sudo gh pr view 9 -R a/b > /tmp/f", "https://github.com/a/b/issues/9"),
+    ("x=$(sudo gh pr view 9 -R a/b) y=$(sudo echo hi > /tmp/f)", "https://github.com/a/b/issues/9"),
+])
+def test_the_card_names_the_part_whose_rule_asked(line, link):
+    # The summary names the part the copy displaces, also one a nested copy took the place of, and the card links to
+    # it when its reading asks, as main's card did.
+    c = sh(line)
+    d = decide(c, pol(rules=[{"match": {"target": "a/b*"}, "decision": "ask", "reason": "repo rule"}]))
+    card = summarize(c, d)
+    assert d.outcome == "ask" and card.startswith("gh pr view, write /tmp/f (") and f"Link: {link}." in card, card
+    assert c.as_dict()["summary"] == "gh pr view, write /tmp/f"
+    assert "Link: /tmp/f." in summarize(c, decide(c, pol(categories={"local_write": "ask"})))
+
+
+@pytest.mark.parametrize("line", [
+    "sudo gh api -H 'Authorization: token ghp_0123456789abcdefABCDEF0123456789abcd' repos/o/r/contents/x > /tmp/f",
+    "ssh h 'sudo gh api -H \"Authorization: token ghp_0123456789abcdefABCDEF0123456789abcd\" repos/o/r/x > /tmp/f'",
+    "sudo ls; x=$(sudo gh api -H 'Authorization: token ghp_0123456789abcdefABCDEF0123456789abcd' repos/o/r > /tmp/f)"])
+def test_the_ledger_view_leaves_out_the_displaced_part(line):
+    # The displaced part holds the raw command and its own text, a token among them. The ledger row gets neither.
+    c = sh(line)
+    assert c.displaced is not None and "ghp_" in c.displaced.command, (line, c)
+    row = json.dumps(c.as_dict())
+    assert "displaced" not in row and "ghp_" not in row and line not in row, row
+    assert "displaced_asks" not in json.dumps(decide(c, pol(categories={"read": "ask"})).as_dict())
+
+
+def test_a_tie_keeps_the_exposure_and_reason_of_both_readings():
+    # Under a scope that makes the written path private, the reading with the host leading stays internal, as on main.
+    c = sh("ssh prod 'sudo echo hi > /tmp/f'")
+    d = decide(c, pol(scopes={"private": ["/tmp/*"]},
+                      rules=[{"match": {"command": "^ssh "}, "decision": "ask", "reason": "ssh"}]))
+    assert (d.outcome, d.exposure, d.reason) == ("ask", "internal", "ssh"), d
+    # A host rule beside a costly internal ask cell: the card still names the host rule.
+    d = decide(c, pol(matrix={"costly": {"internal": "ask"}},
+                      rules=[{"match": {"target": "prod"}, "decision": "ask", "reason": "host rule"}]))
+    assert (d.outcome, d.rule) == ("ask", "rule") and "host rule" in summarize(c, d), d
+
+
+@pytest.mark.parametrize("policy,asks", [
+    ({"categories": {"shell": "ask"}}, True), ({"categories": {"read": "ask", "shell": "ask"}}, True),
+    ({"escalate": {"categories": ["shell"]}}, True),
+    ({"rules": [{"match": {"category": "shell", "reversibility": "costly"}, "decision": "ask", "reason": "r"}]}, True),
+    ({"categories": {"local_write": "ask"}}, False), ({}, False)])
+def test_an_ask_from_the_displaced_reading_binds_the_approval_to_the_line(policy, asks):
+    # Its part has no target, so only the decision tells: a grant keyed on the written path must not answer it.
+    for line in ("sudo chmod u+s /tmp/x > /tmp/log", "sudo chmod 4755 /usr/bin/python3 > /tmp/f"):
+        c = sh(line)
+        assert c.displaced is not None and not c.displaced.target, (line, c.displaced)
+        d = decide(c, pol(**policy))
+        assert d.displaced_asks is asks and binds_exact(c, d) is asks, (line, policy, d)

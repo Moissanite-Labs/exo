@@ -506,8 +506,9 @@ logged with the grant id.
 - Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`).
 - Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
   granted for the exact command only, like an outward act.
-- A sudo write line whose displaced part names a repo or a host (#454) is granted for the exact
-  command only too, so a grant on the written path does not answer a rule on that repo or host.
+- A sudo write line whose displaced part names a repo or a host, or asks with that part leading
+  (#454), is granted for the exact command only too. So a grant on the written path does not
+  answer a rule on that repo or host, or an ask on that part's category.
 - A post whose body the gate did not read never gets a grant, and an older grant does not cover it
   (#208, "What an approval covers").
 - Only the principal can create a grant.
@@ -1097,19 +1098,26 @@ gate does not read:
   program: `sudo echo hi > /tmp/f; foo` asks as `opaque_exec`. A store path stays `store_write`,
   and `/dev/null` adds no write, as without sudo.
   A copy made on a nested line (a `$( )`, backticks, `<( )` or an ssh hop) is a part of the line
-  around it. There the parts are ranked as before, each copy as the part it displaced. A part
+  around it. There the parts are ranked as before, each copy as a `read` with its own axes. A part
   that outranks a `read` still leads: an unknown program (`echo $(sudo echo hi > /tmp/f) $(foo)`
   asks as `opaque_exec`), or ssh running its stdin. Otherwise the copy leads, and the part that
-  led before is its displaced part. So a rule on the repo of
-  `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line.
+  led before is its displaced part, which its summary names. So a rule on the repo of
+  `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line. An ssh
+  `-o RemoteCommand=` raises the displaced part to `internal` too, as the hop does.
+  When both readings give the same outcome, the decision keeps both reasons and the higher
+  exposure. The card links to the displaced part (a gh read's issue) when its reading asks. A
+  required executor refuses the displaced part's body file too
+  (`sudo gh pr view 1 -R o/r -F /tmp/b > /tmp/f`). The ledger never gets the displaced part.
   A redirection on a compound around a sudo command (`{ sudo echo hi; } > /tmp/f`) or on another
   command of the line (`sudo echo hi | cat > /tmp/f`) is not on the sudo command. There the
-  dominant part decides, as on any line (D-075). A standing grant and the approvers follow the
-  line's category and target, so a grant for `echo hi > /tmp/f` now covers `sudo echo hi > /tmp/f`.
-  Where the displaced part names a target of its own, such as a gh read's repo or an ssh host, the
-  approval is bound to the exact command, and only those who may answer both categories may
-  answer it. So a grant or a seat for the written path does not answer a rule on that repo or
-  host.
+  dominant part decides, as on any line (D-075). Where only the write asks, as under
+  `{local_write: ask}`, a standing grant and the approvers follow the line's category and target,
+  so a grant for `echo hi > /tmp/f` now covers `sudo echo hi > /tmp/f`. Where the displaced part
+  names a target of its own, such as a gh read's repo or an ssh host, or the line asks with that
+  part leading (`{shell: ask}` for `sudo chmod u+s /tmp/x > /tmp/log`), the approval is bound to
+  the exact command, and only those who may answer both categories may answer it. So a grant or
+  a seat for the written path does not answer a rule on that repo or host, or an ask on that
+  part's category.
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
