@@ -84,6 +84,16 @@ def nest(form, levels):
     "cat \"${HOME/%[!'}']/u\\/.exo}/keys/seat\"",
     "cat ${HOME/%<(printf })/\\/.exo}/keys/seat",
     "cat ${HOME[$(printf '}' >/dev/null; printf 0)]/%//.exo}/keys/seat",
+    # a `[` in the subscript hides its end: bash gives `$HOME/.exo`
+    "cat ${HOME[a[0]]/%//.exo}/keys/seat",
+    # a brace set builds the form: a `$` that ends one of its words starts it
+    "cat {$,}{HOME/%//.exo}/keys/seat",
+    "cat {x,$}{HOME/%//.kube}/config",
+    "cd {$,x}{HOME/*/~/.exo} && cat keys/seat",
+    "echo $(cat {$,}{HOME/%//.exo}/keys/seat)",
+    # bash drops a line continuation before it reads the form
+    "cat ${HOME\\\n/%//.exo}/keys/seat",
+    "cat $\\\n{HOME/%//.exo}/keys/seat",
 ])
 def test_a_substitution_spelling_of_the_store_asks(env, line):
     assert outcome(line) == ("credentials", "ask")
@@ -123,6 +133,10 @@ def test_controls_keep_asking(env, line):
     "cp x ${HOME/%[!\"}\"]/u\\/.exo}/policies/default.yaml",
     "cp x ${EXO_HOME/%x/y}/plugins/foo/__init__.py",       # the plugins folder is a store folder (#435)
     "cp x ${HOME/%//.exo}/plugins/foo/__init__.py",
+    "cp x ${HOME[a[0]]/%//.exo}/policies/default.yaml",
+    "cp x {$,x}{HOME/%//.exo}/policies/default.yaml",
+    "cd {$,x}{HOME/*/~/.exo} && cp x policies/default.yaml",
+    "cp x ${HOME\\\n/%//.exo}/policies/default.yaml",
 ])
 def test_a_substituted_store_write_asks(env, line):
     assert outcome(line) == ("store_write", "ask")
@@ -141,11 +155,16 @@ def test_a_gh_post_of_a_substituted_store_file_asks(env, line):
 
 def test_a_store_write_keeps_the_read_beside_it(env):
     """The replacement may name a secret store as well, so a credentials part stands beside the store write, as for a
-    relative read after a `cd` into a store (D-038): a policy that allows store writes still asks."""
-    c = gate.classify({"tool": "bash", "args": {"command": "cp x ${HOME/%//.kube}/config"}})
-    assert c.category == "store_write"
-    assert "credentials" in {p.category for p in gate._each_part(c)}
-    assert gate.decide(c, STORE).outcome == "ask"
+    relative read after a `cd` into a store (D-038): a policy that allows store writes still asks, and a deny on
+    credentials denies it."""
+    deny = {"gates": {"categories": {"credentials": "deny"}}}
+    for line in ("cp x ${HOME/%//.kube}/config", "cp {$,x}{HOME/%//.kube}/config /tmp/x",
+                 "tar czf - {$,x}{HOME/%//.exo}/keys"):
+        c = gate.classify({"tool": "bash", "args": {"command": line}})
+        assert c.category == "store_write"
+        assert "credentials" in {p.category for p in gate._each_part(c)}
+        assert gate.decide(c, STORE).outcome == "ask"
+        assert gate.decide(c, deny).outcome == "deny"
     assert outcome("rm -rf ${HOME/%//.exo}/policies", STORE)[1] == "ask"
 
 
@@ -157,11 +176,13 @@ def test_claude_config_dir_reads_the_same_way(env, tmp_path, monkeypatch):
 
 def test_the_file_tools_read_the_substitution_too(env):
     for path in ("${HOME/%//.kube}/config", "${HOME/#*/~/.exo}/keys/seat", "${EXO_HOME/%x/y}/keys/seat",
-                 "${HOME[0]/%//.exo}/keys/seat", "${HOME/%[!\"}\"]/u\\/.exo}/keys/seat"):
+                 "${HOME[0]/%//.exo}/keys/seat", "${HOME/%[!\"}\"]/u\\/.exo}/keys/seat",
+                 "${HOME[a[0]]/%//.exo}/keys/seat", "{$,}{HOME/#*/~/.exo}/keys/seat"):
         assert tool("read_file", path) == ("credentials", "ask")
     assert tool("grep", "${HOME/%//.kube}") == ("credentials", "ask")
     for path in ("${HOME/%//.exo}/policies/x.yaml", "${EXO_HOME/%x/y}/policies/x.yaml",
-                 "${HOME/*/~/.exo}/policies/x.yaml", "${HOME/#*/~/.exo}/policies/x.yaml"):
+                 "${HOME/*/~/.exo}/policies/x.yaml", "${HOME/#*/~/.exo}/policies/x.yaml",
+                 "${HOME[a[0]]/%//.exo}/policies/x.yaml", "{$,}{HOME/#*/~/.exo}/policies/x.yaml"):
         assert tool("write_file", path) == ("store_write", "ask")
 
 
@@ -180,6 +201,8 @@ def test_other_variables_and_removals_keep_their_reading(env):
     assert outcome("cat ${HOME//x}/notes.txt") == ("read", "allow")
     assert outcome("cat ${HOME/%x/}/notes.txt") == ("read", "allow")
     assert outcome("cp x ${HOME%/}/backup/a") == ("shell", "allow")
+    assert outcome("cat {$,x}{HOME//x}/notes.txt") == ("read", "allow")
+    assert outcome("awk '{print $1,$2}' notes.txt") == ("read", "allow")
 
 
 @pytest.mark.parametrize("text, form", [
@@ -196,6 +219,9 @@ def test_other_variables_and_removals_keep_their_reading(env):
     ("${HOME/%`:`}", "${HOME/%`:`}"),
     ("${HOME[$(: })]/%//x}", "${HOME[$(: }"),
     ("${HOME[\"0\"]}", "${HOME[\"0\"]}"),
+    ("${HOME[a[0]]/%//x}", "${HOME[a[0]]/%//x}"),      # a `[` may hide where the subscript ends
+    ("${HOME[a[0]]}", "${HOME[a[0]]}"),
+    ("${HOME\\\n/%//x}", "${HOME/%//x}"),              # a line continuation is dropped first
     ("${HOME/%/x", "${HOME/%/x"),                      # not closed on its line
     ("${HOME[0]/%/x", "${HOME[0]/%/x"),
     ("${HOME[0}", ""),
@@ -211,6 +237,17 @@ def test_other_variables_and_removals_keep_their_reading(env):
 ])
 def test_which_forms_fail_closed(text, form):
     assert gate._store_subst(text) == form
+
+
+@pytest.mark.parametrize("words, form", [
+    (["{$,}{HOME/%//.exo}/keys"], "${HOME/%//.exo}"),
+    (["x", "{x,$}{HOME/#*/~}"], "${HOME/#*/~}"),
+    (["{$,\\\n}{HOME/%//x}"], "${HOME/%//x}"),
+    (["{$,}{HOME//x}", "{a,b}${HOME}", "'{$,}{HOME/%//.exo}'", "{$,}{PATH/%//x}"], ""),
+])
+def test_a_brace_set_can_build_the_form(words, form):
+    """A `$` that ends one of a brace set's words starts a form after the set, as bash expands braces first."""
+    assert gate._brace_store_subst(words) == form
 
 
 def test_nested_forms_are_not_spelt_out(monkeypatch):
@@ -244,8 +281,8 @@ def test_the_check_reads_a_hostile_nest_in_one_pass(line):
 
 
 def test_many_substitutions_are_bounded():
-    line = "cat " + "${HOME/%//.kube}" * 3000 + "/config"
-    start = time.process_time()
-    c = gate.classify({"tool": "bash", "args": {"command": line}})
-    assert time.process_time() - start < 5
-    assert c.category == "credentials"
+    for line in ("cat " + "${HOME/%//.kube}" * 3000 + "/config", "cat " + "{$,}" * 40 + "{HOME/%//.exo}/keys/seat"):
+        start = time.process_time()
+        c = gate.classify({"tool": "bash", "args": {"command": line}})
+        assert time.process_time() - start < 5
+        assert c.category == "credentials"

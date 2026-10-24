@@ -4897,7 +4897,8 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
         c = weigh(c)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
-    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
+    raws = [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]]
+    hit = _shell_credential_hit(cmd, segs, raws)
     if hit and c.category != "credentials":
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
         signals = c.signals
@@ -4909,8 +4910,10 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`). So does a `/` substitution of a store variable the gate
-    # does not spell out (#342: `cat ${HOME/%//.kube}/config`), anywhere on the line, as a secret path is.
-    found = (_cd_store_read(cmds, subs) or _store_subst(cmd)) if c.category != "credentials" else ""
+    # does not spell out (#342: `cat ${HOME/%//.kube}/config`), anywhere on the line or in a word a brace set makes,
+    # as a secret path is.
+    found = "" if c.category == "credentials" else (
+        _cd_store_read(cmds, subs) or _store_subst(cmd) or _brace_store_subst(raws))
     if found and c.category == "store_write":
         # it weighs as a secret line does: its own parts' weight, and a heavier command deeper in it beside (#468 review)
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
@@ -5105,14 +5108,17 @@ def _store_subst(text: str) -> str:
     to the store-write and `cd` checks, and a shell line or read tool with one reads a secret store. That is a `/`,
     `//`, `/#` or `/%` form whose replacement is not empty, also with a subscript (`${HOME[0]/%//.exo}`), nested in
     any other form, or not closed on its line. A quote, `$( )`, `<( )` or backticks in it or its subscript may hide a
-    `}` and so where it ends (`${HOME/%[!"}"]/u\\/.exo}`), so it counts too. A form with an empty replacement only
-    removes text: it reads as the value."""
+    `}` and so where it ends (`${HOME/%[!"}"]/u\\/.exo}`), so it counts too, as does a `[` in its subscript, which may
+    hide the subscript's end (`${HOME[a[0]]/%//.exo}`). Line continuations go first, as bash drops them. A form with
+    an empty replacement only removes text: it reads as the value."""
+    text = text.replace("\\\n", "")
     m = _STORE_VAR.search(text)
     if not m:
         return ""
     closes = _brace_closes(text, m.start())
     hiders = [h.start() for h in _SUBST_HIDES.finditer(text, m.start())]   # found once, so a hostile nest costs
     shuts = [s.start() for s in re.finditer(r"\]", text)]                  # n log n, as each form looks them up
+    opens = [s.start() for s in re.finditer(r"\[", text)]
 
     def first(marks: list[int], start: int, end: int) -> int:
         n = bisect.bisect_left(marks, start)
@@ -5120,13 +5126,28 @@ def _store_subst(text: str) -> str:
     while m:
         j = closes.get(m.start())
         end = len(text) if j is None else j
-        hides = first(hiders, m.end(), end) >= 0
-        k = (first(shuts, m.end(), end) + 1 if text.startswith("[", m.end()) else 0) or m.end()   # past a subscript
-        if text.startswith("/", k) or hides and text.startswith("[", m.end()):
+        sub = text.startswith("[", m.end())
+        shut = first(shuts, m.end(), end) if sub else -1
+        hides = first(hiders, m.end(), end) >= 0 or 0 <= first(opens, m.end() + 1, end) < shut
+        k = shut + 1 if shut >= 0 else m.end()                                  # past a subscript
+        if text.startswith("/", k) or hides and sub:
             cut = text.find("/", k + 2 if text.startswith("//", k) else k + 1, end)
             if j is None or hides or 0 <= cut < end - 1:
                 return text[m.start():end + (j is not None)]
         m = _STORE_VAR.search(text, m.end())
+    return ""
+
+
+def _brace_store_subst(raws: list[str]) -> str:
+    """_store_subst of the words a brace set makes of each source word in ``raws``: a `$` that ends one of the set's
+    words starts a form after it (`{$,}{HOME/%//.exo}` is `${HOME/%//.exo}`). Only a word with such a `$` is
+    expanded. One past the brace cap is already a secret path (_shell_credential_hit, args_sensitive)."""
+    for raw in (r.replace("\\\n", "") for r in raws):
+        if not re.search(r"\$[,}]", raw):
+            continue
+        found = next((s for w in _brace_words(raw) or [] if (s := _store_subst(w))), "")
+        if found:
+            return found
     return ""
 
 
@@ -6102,7 +6123,7 @@ def _classify_call(action: Any) -> Classification:
         if not secret and cat == "read":         # #342: a write to such a path is caught by is_store_path below
             items = [args.get(k) for k in _PATH_ARG_KEYS]
             secret = next((v for x in items for v in (x if isinstance(x, (list, tuple)) else [x])
-                           if isinstance(v, str) and _store_subst(v)), "")
+                           if isinstance(v, str) and (_store_subst(v) or _brace_store_subst([v]))), "")
         if secret:
             cat = "credentials"
         store = ""
