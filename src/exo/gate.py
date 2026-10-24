@@ -5168,9 +5168,10 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     # its `cwd`, so `/proc/self/root/pro?/1/environ`, `/proc/1/cwd/pro?/1/environ` and
     # `/proc/self/root/../pro?/1/environ` are read from there. One such step: a second link after it counts (fails
     # closed), so `/*/*/*/...` is not read again at each third part, and past 16 links (`/proc/1/*/../*/../x`) the
-    # word counts. So a word is read at most 17 times. The reads after a link look up a run folder in its lexical
-    # form, once per call (_resolved): the rests of one word mostly differ only before a `..`, and looking each up as
-    # written made a 100 KB word with 16 links cost 10 times what it costs on main (#513 review)
+    # word counts. So what follows a link is read at most 16 times, each read with one `/proc` step at most. The reads
+    # after a link look up a run folder in its lexical form, once per call (_resolved): the rests of one word mostly
+    # differ only before a `..`, and looking each up as written made a 100 KB word with 16 links cost 10 times what it
+    # costs on main (#513 review). So a link before a `..` there is not followed (main reads nothing after the link)
     for n, rest in enumerate(_root_links(written)):
         if not hop or n >= 16 or _glob_word(rest, home, samples, secrets, runs, False):
             return True
