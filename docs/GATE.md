@@ -1778,7 +1778,8 @@ the link `sdir`, so with `sdir -> ~/.exo/state` it is `~/.exo/policies`, and the
 same way. This holds for a `cwd` argument too (`sdir/../policies`), and on the secret-store side
 (`cat seat` with `sdir/../keys` as `cwd` asks). A `cwd` argument and a `cd` target are read folded
 as well, as bash's `cd` enters them, so with `xl` a link elsewhere, a `cwd` of `xl/../pdir` and
-`cd xl/../pdir && echo x > default.yaml` ask.
+`cd xl/../pdir && echo x > default.yaml` ask. A path word itself is read joined only, as the kernel
+reads it: `cp y xl/../pdir/default.yaml` writes through `xl`, not into the store.
 
 In a store folder every relative word is a store path, the program word too. So a write is named
 after a word that is a store path by its own spelling first: `touch ~/.exo/state/x` with
