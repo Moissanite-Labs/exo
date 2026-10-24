@@ -185,6 +185,7 @@ def test_matching_binding_is_accepted_and_always_is_kept_by_the_gate(tmp_path):
     # beside a gh post the gate also reads as before #399, in either order (main d79639f1)
     ("env; echo x > ~/.exo/policies/gates.yaml; gh pr -R pub/repo comment 5 -b text", False),
     ("gh -R pub/repo pr comment 5 -b x; echo x > ~/.exo/policies/gates.yaml; env", False),
+    ("env; gh -R pub/repo release download v1 -D ~/.exo/policies", False),   # the store write in the floor only
     ("env", True),                                                            # credentials alone
     ("sudo cat ~/.kube/config", True),
 ])

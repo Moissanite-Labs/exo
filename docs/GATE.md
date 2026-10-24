@@ -214,8 +214,11 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   read, so a seat listed for `github_post` alone does not answer it. When either reading is
   credentials, a store write or a post with an unseen body, the line is answered once, gets no
   standing grant, and asks in observe mode too. So it is when either reading has a `credentials`
-  or `store_write` part (#447). Both readings of
-  `env; echo x > ~/.exo/policies/gates.yaml; gh pr -R pub/repo comment 5 -b x` have such parts.
+  or `store_write` part, and a `store_write` part in either reading leaves the principal alone to
+  answer (#447). Both readings of
+  `env; echo x > ~/.exo/policies/gates.yaml; gh pr -R pub/repo comment 5 -b x` have such parts. In
+  `env; gh -R pub/repo release download v1 -D ~/.exo/policies` only the earlier reading writes the
+  store, because gh's own reading takes `release download` for a read (#461).
 
 The gate also keeps every other reading it cannot rule out, and decides the line on each. The
 strictest outcome stands, with the widest exposure, a third party if any reading has one, and every
