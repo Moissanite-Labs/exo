@@ -1973,12 +1973,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   144 policies, with a `target:`, `reserved:` and rule entry for each name, it found 350 lowered pairs on 49
   actions, each deciding as main decides the plain spelling: 336 in group 4 (`copy_file` from `~/.kube/\config` to
   `gates.yaml`, where a file tool reads `\` as `/`) and 14 in group 1. It also changed the target of three `dd`
-  lines (`dd if=/tmp/a of=~/.exo/\/policies/\/gates.yaml` and the like), with no decision changed. Such a line, and
-  `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` without a backslash, now names the `of=` word, as main does for the
-  plain spelling (`of=~/.exo/policies/gates.yaml`), where main took the path `dd` writes for the odd one. So under
-  `deny: [target:~/.exo/*]`, which reads the target as written, such a line asks, as the plain spelling does on
-  main, where main denied the odd spelling. That is group 2's rule: the target is the first word that names the
-  store. A differential of the change before and after the step that reads what follows a link once per lexical
+  lines (`dd if=/tmp/a of=~/.exo/\/policies/\/gates.yaml` and the like), with no decision changed under those
+  policies. A `dd` operand that names an Exo-store path in an odd spelling, with a backslash or without one, now
+  names its `if=` or `of=` word (`of=~/.exo/./plugins/p/x.py`, `if=~/.exo/./state/x.json`), as main does for the
+  plain spelling (`of=~/.exo/policies/gates.yaml`), where main took the path itself for the odd one. The `store_write`
+  part beside a secret does the same (`dd if=~/.exo//keys/seat.key of=/tmp/a`). So under `deny: [target:~/.exo/*]`
+  or `reserved: [target:~/.exo/*]`, which read the target as written, such a line asks with no hit, as the plain
+  spelling does on main, where main denied the odd spelling or counted a hit. That is group 2's rule: the target is
+  the first word that names the store. An independent re-check (main d79639f1 against 158e4ebc) ran 31,641 focused
+  actions under 157 policies, `target:~/*` and `target:~/.exo/*` among them. It found 290 lowered pairs on 117
+  actions: 160 in group 1, 60 in group 4, 6 in group 2 (`cat ~/.kube/./\config ~/.config/gh/\hosts.yml` takes the
+  first store as its target) and 64 such `dd` pairs on 32 actions. Each decides as main decides the plain spelling.
+  A differential of the change before and after the step that reads what follows a link once per lexical
   form (7f9a5199 against 393fd3cf) ran the built-in set and the focused runs of the #513 reviews, 139,068 actions
   under 87 policies, and found no pair or target that changed.
   `tests/security/test_gate_secret_path_spellings.py` pins the five groups against the plain spelling. A differential

@@ -514,11 +514,28 @@ BACKSLASH = [
     ("cat ~/.ssh/\\id_rsa ~/.kube/config", "cat ~/.ssh/id_rsa ~/.kube/config"),
 ]
 
+# Group 2: a store word's target is the word as written, so `dd` names its `if=` or `of=` word, as main does for the
+# plain path, and a `target:` entry that matched main's target for the odd spelling no longer matches
+EXO_TARGET = [{"gates": {"deny": ["target:~/.exo/*"]}}, {"gates": {"reserved": ["target:~/.exo/*"]}}]
+DD = [
+    ("dd if=~/.exo/./state/x.json of=/tmp/a", "dd if=~/.exo/state/x.json of=/tmp/a"),
+    ("dd if=/tmp/a of=~/.exo/./plugins/p/x.py", "dd if=/tmp/a of=~/.exo/plugins/p/x.py"),
+    ("dd if=~/.exo//keys/seat.key of=/tmp/a", "dd if=~/.exo/keys/seat.key of=/tmp/a"),
+]
+
 
 @pytest.mark.parametrize("odd, plain, policy", [(o, p, pol) for o, p in LOWERED for pol in STRICT] +
-                         [(o, p, pol) for o, p in BACKSLASH for pol in STRICT + TARGET])
+                         [(o, p, pol) for o, p in BACKSLASH for pol in STRICT + TARGET] +
+                         [(o, p, pol) for o, p in DD for pol in STRICT + EXO_TARGET])
 def test_a_lowered_line_decides_as_its_plain_spelling(odd, plain, policy):
     assert full(odd, policy) == full(plain, policy)
+
+
+@pytest.mark.parametrize("policy, outcome, hits", list(zip(TARGET, ["deny", "ask", "deny"], [[], ["local_write"], []])))
+def test_a_write_to_a_backslash_spelling_keeps_its_target_entries(policy, outcome, hits):
+    # Nothing else on the line names the store, so the text piece is the line's target. The redirection stays a part
+    # with the word the shell writes (`~/.kube/config`), so a `target:` deny, reserved entry and rule apply, as on main
+    assert full("echo x > ~/.kube/\\config", policy)[:3] == ("credentials", outcome, hits)
 
 
 @pytest.mark.parametrize("line, target", [

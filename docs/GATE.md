@@ -611,14 +611,17 @@ asks). A call that was `store_write` because its path goes through a descriptor 
 longer applies to it. A file tool's own class, a part's matrix cell and a `cd` folder's target still count, since
 #467 keeps each as a part. A `target:` entry still reads the path as written, as on main: `cat ~/.kube//config`
 under `deny: [target:*/.kube/config]` asks where the plain spelling is denied, as `cat ~/.ssh//id_rsa` does on main.
-The target is the first word that names the store, so `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` names its `of=`
-word, as `dd` with the plain path does on main, and `deny: [target:~/.exo/*]` asks there, as for the plain path.
-A backslash that the shell drops does not change the target. The gate reads `\` as `/` in the line's text, so the
+The target is the first word that names the store. So `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` names its `of=`
+word, and `dd if=~/.exo/./state/x.json of=/tmp/a` its `if=` word, as `dd` with the plain path does on main.
+`deny: [target:~/.exo/*]` asks there, as for the plain path, and a `reserved:` entry like it counts no hit.
+A backslash that the shell drops keeps the target main gives. The gate reads `\` as `/` in the line's text, so the
 text `~/.kube/\config` names the store only in its lexical form. Such a text is the target only when nothing else
 on the line names a store, not even a brace set. So the target of `cat ~/.kube/\config` is the word as the shell
-reads it, `~/.kube/config`, as on main, and `deny: [target:*/.kube/config]` denies it. A text that names a store as
-written stays the target, as on main. So `cat ~/.ssh/\id_rsa ~/.kube/config` keeps `~/.ssh/\id_rsa`, and
-`deny: [target:*/.ssh/*]` still denies it, while `cat ~/.ssh/\id_rsa` under `deny: [target:*/.ssh/id_rsa]` asks.
+reads it, `~/.kube/config`, as on main, and `deny: [target:*/.kube/config]` denies it. In
+`echo x > ~/.kube/\config` nothing else does, so the text is the target. The write stays a part that names
+`~/.kube/config`, so that deny still denies it. A text that names a store as written stays the target, as on main.
+So `cat ~/.ssh/\id_rsa ~/.kube/config` keeps `~/.ssh/\id_rsa`, and `deny: [target:*/.ssh/*]` still denies it, while
+`cat ~/.ssh/\id_rsa` under `deny: [target:*/.ssh/id_rsa]` asks.
 
 Beside a store write, a secret makes the call `credentials`, not `store_write`. On a shell line the outcome stays
 an ask: `cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml` asks, and the store write stays a part, so its
