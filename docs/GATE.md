@@ -1605,6 +1605,12 @@ reading alone asked for `tar czf /tmp/o.tgz . ; git push --force origin main` wi
 The push is now denied. Under a policy that asks, the ask goes to those who may answer both a force
 push and credentials.
 
+The folder is joined to the session's folder as written. So `sdir/../policies` is read through the
+link `sdir`, as the kernel reads it, and also folded (`~/proj/policies`), as bash's `cd` and #209
+read it. With `~/proj/sdir` a link to `~/.exo/state`, `cat ../keys/seat` with `sdir/../policies` as
+`cwd` keeps its reading from before #311, and its part names `~/.exo/keys/seat`. So
+`deny: ["target:*/.exo/*"]` denies it. #340's store-write checks read the folder joined too.
+
 A folder in a repo's own `.claude` folder holds the repo's files, as the search tools judge it
 (#241): it is in `worktrees`, `commands`, `agents` or `skills`, the parent holds `.git`, and the
 `.claude` folder holds no Claude login or transcripts. Only a word that resolves into a store counts
@@ -1627,7 +1633,9 @@ on the line is read as before. Limits:
 - A name that climbs out of a repo's `.claude` worktree back into it is not caught
   (`cat ../../settings.local.json` from `<repo>/.claude/worktrees/x`), as before. A `cd` there asks.
 - The store-write checks do not read the folder argument. `echo x > gates.yaml` with
-  `~/.exo/policies` as `cwd` stays a `local_write`, as before (#453). So `deny: [store_write]`
+  `~/.exo/policies` as `cwd` stays a `local_write`, as before (#453). So does `echo x > hook.py`
+  with `~/.exo/plugins/foo` as `cwd`, which is allowed as on main, where its `cd` form is a store
+  write (#435). So `deny: [store_write]`
   does not reach `cat *; rm -rf build` with `~/.exo/keys` as `cwd`, whose `cd` form writes in the
   store. The call still asks, as on main.
 - A line that reads a secret itself keeps that reading, and the folder adds no part to it. So a
