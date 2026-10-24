@@ -1681,21 +1681,74 @@ the sandbox is the real fix.
 
 ## The store is credentials (D-038)
 
-The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/`
-(including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
-`$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats` and `$EXO_HOME/bus`
-(the bus registry that signed seat answers and the relay trust, the relay database and its
-`-wal`, `-shm` and `-journal` files, #210), `$EXO_HOME/update` (`allowed_signers`, the
-signed-update trust pin of D-073, #133), any `seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store
-root recorded in config `principals` (`exo init --root`, `exo import-store --root`), for every id,
-not only the active one. When the environment moves a bus file, the gate protects where it points:
-the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with the database's sidecars) and the folder
-`EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_` name, and both spellings when both are
-set. Distinctive names match anywhere, so a relative `policies/gates.yaml`,
-`state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or `update/allowed_signers`
-counts too, and `.exo/bus` and `.exo/update` count whatever `EXO_HOME` is. A project folder called
-`update` is ordinary; only a file in it named `allowed_signers` asks. `config.json` is not on the
-list yet (D-074, #125).
+The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/` (including
+`approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of `$EXO_HOME`,
+`$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus` (the bus registry
+that signed seat answers and the relay trust, the relay database and its `-wal`, `-shm` and
+`-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435), `$EXO_HOME/update`
+(`allowed_signers`, the signed-update trust pin of D-073, #133), any `seat.toml`,
+`$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals` (`exo init --root`,
+`exo import-store --root`), for every id, not only the active one. When the environment moves a bus
+file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with
+the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_`
+name, and both spellings when both are set. Distinctive names match anywhere, so a relative
+`policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or
+`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins` and `.exo/update` count whatever
+`EXO_HOME` is. A project folder called `update` is ordinary. Only a file in it named
+`allowed_signers` asks. `config.json` is not on the list yet (D-074, #125).
+
+The plugins folder (#435). The core loads each plugin it finds in `$EXO_PLUGIN_DIRS`, then in
+`$EXO_HOME/plugins` (`exo.core.plugins.default_dirs`), and runs its code inside the harness with the
+harness's own rights. A write into `$EXO_HOME/plugins` can install or change code the next session
+runs, so it is a `store_write` when made in any of these ways: a file tool, a redirection, `cp`,
+`cp -t`, `mv`, `install`, `tee`, `sed -i`, `ln`, `rsync`, `tar -C`, `unzip -d`, `curl -o`, `git clone`
+or `pip install --target` into it, a `mkdir`, `chmod` or `rm` there, a writing command after a `cd` into
+it, with the folder spelt with `~`, `$HOME` or `$EXO_HOME`, as its resolved path, through a link into
+it, or as a relative `.exo/plugins/...`. That covers a plugin's own files too, such as its
+`config.json`. A read with a read command stays a read: `cat`, `ls`, `grep -r`, `find`, `diff`,
+`git -C <folder> log`, and the read tools (`read_file`, `list_dir`, `grep`, `glob`).
+
+What a policy can still do there. As for every protected folder, the call keeps its own reading as a
+part. A shell line keeps its own command. A file tool keeps a `local_write` part for each file it
+writes, or its own category, such as `delete` (#448, below). A line in `/dev` keeps `/dev` as a
+second target (#464). So a `deny`, `categories:`, `reserved:` or `target:` entry, a rule or a matrix
+cell on that reading still applies. A tool call that the gate does not read as a file write or
+delete, and that names a file in a protected folder only as what it sends, keeps the call as a part,
+with its target and text (#435 review). Examples are an `email_send`, `web_post`, `github_post`,
+`social_post`, `publish` or `payment` tool call with the file in `files:`, an MCP upload tool, and
+`curl -T`, `curl -F` or `mail -A` on a shell line. So a `deny`, `reserved` or `categories:` entry
+for the call, a rule that matches it, its own matrix cell and the posting rules still apply to it. A
+tool that the gate reads as `local_write` or `delete` by its name, such as an `upload_file` tool
+that is not from MCP, keeps that reading as a part with the call's own URL as its target. A here-doc
+body on the line goes to the post, also inside a script fed to `bash`. Each of these still asks the
+principal alone when nothing denies it. One reading no longer reaches a write into the folder or a
+send of a file in it under `sudo` or `doas` over `ssh` or `mosh`. The wrapper makes the dominant part
+costly. A rule on `shell` or `local_write` with `reversibility: costly` matched that part, and so did
+a matrix that denies that cell while `store_write` has its own category line. The store write is now
+that part, so neither denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'` or `sudo ssh host
+'cp evil.py ~/.exo/plugins/foo/__init__.py'`. Each asks the principal alone, as for `policies/` on
+main. `deny: [store_write]` is the reliable way to refuse every write into the
+folder. A `target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*`
+denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the absolute path and
+`~/.exo/../.exo/plugins/...` still only ask.
+
+Known friction (fails closed, no grant). A command that names a path in the folder and is not a
+read command asks the principal, as for the rest of the store. That covers a writing command that
+names the path only as a source (`cp ~/.exo/plugins/foo/x.py /tmp/`). It also covers commands that
+only read but that the gate reads as `shell` or `opaque_exec`: `sed -n 1,10p`, `tree`, `sort`,
+`uniq`, `xxd`, `bat`, `python3 -m json.tool`, a dry-run `rsync -an`, and a `grep -rn` whose output
+goes to a file elsewhere. The installer puts every core plugin in the folder, so read plugin code
+with `cat`, `grep` or a read tool. Main reads `policies/` and `state/` the same way. Running a
+plugin's own script by its path (`~/.exo/plugins/foo/tool.sh`) asks the principal alone too, where
+before a seat could answer its `opaque_exec` ask. Not covered here: the folders in
+`$EXO_PLUGIN_DIRS`. Section 4 of the developer guide points that variable at a checkout's `plugins/`,
+so a principal-only floor there would ask on every edit, and protecting it is a separate change. The
+installer and `exo update`, which copy Exo's plugins into the folder, stay `opaque_exec`. A copy that
+lands on the folder by a source's name (`cp -r /tmp/x/plugins ~/.exo/`) or an archive unpacked into
+the home (`tar -xf x.tar -C ~/.exo`) is not seen as a write to it, as for every protected folder. Nor
+is a relative path written by a tool whose working folder is in the plugins folder or in `$EXO_HOME`
+(`cp evil.py __init__.py` or `write_file __init__.py` in a session started in `~/.exo/plugins/foo`):
+the store check reads a relative path by its name alone, as for every protected folder (below).
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
