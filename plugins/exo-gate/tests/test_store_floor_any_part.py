@@ -427,13 +427,13 @@ def test_the_error_fallback_reads_every_part(tmp_path, monkeypatch):
 # #399 (main d79639f1) beside #447: a gh line the gate reads more than one way, as gh reads it and as the gate read it
 # before #399 (`floor`), or on another target it may land on (a copy among the parts). A store write beside a secret
 # read on the same line, in either order, is a part of each reading, so the line stays the principal's alone, once,
-# with no grant, in observe mode too. Main read each reading's category only, and this branch the line's parts only;
-# gate.no_grant and gate.call_approvers read every part of every reading (gate.readings).
+# with no grant, in observe mode too. Main read each reading's category only, and this branch the line's parts only.
+# Now gate.no_grant and gate.call_approvers read every part of every reading (gate.readings).
 GH_POSTS = [
-    "gh pr -R pub/repo comment 5 -b text",          # gh finds the subcommand past -R; the floor read a read
-    "gh -R pub/repo pr comment 5 -b x",             # gh finds the command past -R; the floor read an alias
+    "gh pr -R pub/repo comment 5 -b text",          # gh finds the subcommand past -R, the floor read a read
+    "gh -R pub/repo pr comment 5 -b x",             # gh finds the command past -R, the floor read an alias
     "gh pr comment https://github.com/pub/repo/pull/5 -R myorg/app -b hi",      # a copy on the operand's repo
-    "gh api -X GET -X DELETE repos/pub/repo",       # gh keeps the last -X; the floor read the first
+    "gh api -X GET -X DELETE repos/pub/repo",       # gh keeps the last -X, the floor read the first
 ]
 STORE_BESIDE_SECRET = ["env; echo x > ~/.exo/policies/gates.yaml", "echo x > ~/.exo/policies/gates.yaml; env"]
 GH_STORE_LINES = (
@@ -504,7 +504,7 @@ def test_a_store_write_only_the_floor_reading_holds_keeps_every_hook_term(tmp_pa
     line = "gh pr -R pub/repo comment 5 -b text"
     for mode in ("enforce", "observe"):
         g, ctx, _ = make_gate(tmp_path / mode, DELEGATIONS["default"], mode=mode)
-        plain = run(ctx, line)          # the plain line: the seat may answer; observe mode only logs
+        plain = run(ctx, line)          # the plain line: the seat may answer, and observe mode only logs
         assert (plain["approvers"] == ["principal", SEAT]) if mode == "enforce" else plain is None, (mode, plain)
         monkeypatch.setattr(hook.gate, "classify", lambda action, cwd=None: _post_with_a_store_write_in_its_floor())
         r = run(ctx, line)

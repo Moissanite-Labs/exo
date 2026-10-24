@@ -213,7 +213,9 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   may answer both readings may answer the line ("Who may approve"): `gh pr -b x comment 5` was a
   read, so a seat listed for `github_post` alone does not answer it. When either reading is
   credentials, a store write or a post with an unseen body, the line is answered once, gets no
-  standing grant, and asks in observe mode too.
+  standing grant, and asks in observe mode too. So it is when either reading has a `credentials`
+  or `store_write` part (#447). Both readings of
+  `env; echo x > ~/.exo/policies/gates.yaml; gh pr -R pub/repo comment 5 -b x` have such parts.
 
 The gate also keeps every other reading it cannot rule out, and decides the line on each. The
 strictest outcome stands, with the widest exposure, a third party if any reading has one, and every
@@ -313,7 +315,8 @@ ingress client never can (D-026). The allowed list is sent as `approvers` on
 both files allow (`gate.strictest_approvers`); see "Policy changes during a session".
 
 A gh line the gate also reads as before #399 lists only those both readings' categories allow
-("Where a gh command lands").
+("Where a gh command lands"). The `credentials` and `store_write` parts of both readings narrow
+it too (#447, `gate.readings`).
 
 A client answers as a seat by setting `client` to `seat:<name>` and signing the answer with that
 seat's Ed25519 key: `sig = exo.core.approvals.sign_approval(key, request_id, decision, binding,
@@ -1874,8 +1877,8 @@ One in the redirections of a compound that holds the `cd` (`done < <(sort list)`
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
 policy pattern that does not compile, for example), the hook's fallback card still asks the
-principal alone, once, in observe mode too (#464). A store write or secret part counts, as on the
-normal path (#447). Other calls keep their fallback: a read tool
+principal alone, once, in observe mode too (#464). A store write or secret part counts, also one
+of a gh line's reading before #399, as on the normal path (#399, #447). Other calls keep their fallback: a read tool
 runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,
