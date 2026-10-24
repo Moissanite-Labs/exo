@@ -91,17 +91,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   all: text that asks as a comment post logged. A reopen now reads its comment as a close does
   (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
   text, an unread body file included. A reopen or merge carrying no text is unchanged.
-- A ruling a Hermes `/undo` removed no longer comes back (#389). Hermes reports an undo to its memory
-  providers, not to its context engine, so exo-context kept the undone turn's pins. The per-turn block put
-  the ruling back on every turn, and since #384 every later summary block and handoff carried it too.
-  exo-memory now passes the notice on through `exo.host_undo`, and exo-context drops each pin that only the
-  undone turn held, read from the last window it saw for that session. The ruling leaves the pins, the next
-  turn's block and every later summary block and handoff, after any number of compactions. Compaction drops
-  no pin on its own, so a ruling in the tail that `/compress here N` holds out stays pinned. A drop is logged
-  as counts per kind and the session id. This also corrects the #385 entry below and the D-040 amendment:
-  what a pinned block held survives compaction by the pins until an undo removes its turn. exo-context hears
-  a Hermes undo only through exo-memory. A summary row written before the undo keeps its block as written
-  until the next compaction folds it (D-041 amendment).
+- A ruling a Hermes `/undo` removed in the CLI or TUI no longer comes back (#389). Hermes reports an undo to
+  its memory providers, not to its context engine, so exo-context kept the undone turn's pins. The per-turn
+  block put the ruling back on every turn, and since #384 every later summary block and handoff carried it
+  too. exo-memory now passes the notice on through `exo.host_undo`. exo-context drops each pin that only the
+  undone turns held: the last turn's at once, from the last window it saw for that session, and those of the
+  earlier turns of an `/undo N` on the next turn, from the host's whole transcript. A ruling a compaction
+  folded stays, even when the undone turn says it again. The ruling leaves the pins, the next turn's block
+  and every later summary block and handoff, after any number of compactions. Compaction drops no pin on its
+  own, so a ruling in the tail that `/compress here N` holds out stays pinned. A drop is logged as counts per
+  kind and the session id. This also corrects the #385 entry below and the D-040 amendment: what a pinned
+  block held survives compaction by the pins until an undo removes its turn. exo-context hears a Hermes undo
+  only through exo-memory, and the messaging gateway's `/undo` tells no one, so it is not covered yet. A
+  summary row or handoff file written before the drop keeps the ruling until the next compaction (D-041
+  amendment).
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens

@@ -14,7 +14,8 @@ On the Exo core loop (``select_context`` on every turn):
 The session id comes with every core hook (``session_id=``), so nothing is tracked by hand.
 
 On a host that reports an undo only to its memory provider (Hermes), exo-memory passes the notice on through
-``exo.host_undo``, and ``on_host_undo`` drops the pins that only the undone turn held (#389).
+``exo.host_undo``, and ``on_host_undo`` drops the pins that only the undone turn held (#389). The next turn's
+transcript shows any earlier turn the same undo took. A pin whose message a compaction folded is never dropped.
 
 On a flat message list (``compress``, used by hosts and tools):
 1. extracts the signals, 2. calls the inner compressor (the core's default summarizer by default),
@@ -163,6 +164,8 @@ class ExoContextEngine(ContextEngine):
         d['_x_pins'] = {}
         d['_x_nodes'] = {}
         d['_x_handoffs'] = {}  # session -> (path, session of the window it was written from, topic): automatic only
+        d['_x_folded'] = {}  # session -> keys of the pins a compaction folded into its summary: no undo drops them
+        d['_x_undo_sid'] = ''  # the session a host's undo named, until its next turn shows every turn it took
         host_undo.listen(self)  # a host's undo reaches the engine only through exo-memory (#389)
 
     # --- attribute routing ---------------------------------------------------------
@@ -292,8 +295,11 @@ class ExoContextEngine(ContextEngine):
         old = kwargs.get('old_session_id')
         if kwargs.get('boundary_reason') == 'compression' and old and str(old) != str(session_id):
             self._carry_pins(str(old), str(session_id))  # in_place false: the pins follow the child (#391)
+            self._x_folded.setdefault(str(session_id), set()).update(self._x_folded.get(str(old), ()))
             if self._x_window_sid == str(old):  # the child goes on from that window's last turns: an undo reads it
                 self._x_window_sid = str(session_id)
+                if self._x_undo_sid == str(old):
+                    self._x_undo_sid = str(session_id)
         if self.inner is not None and hasattr(self.inner, 'on_session_start'):
             self.inner.on_session_start(session_id, **kwargs)
 
@@ -400,26 +406,50 @@ class ExoContextEngine(ContextEngine):
 
     def on_host_undo(self, session_id: str) -> None:
         """A host's undo, which only its memory provider hears: exo-memory passes it on through ``exo.host_undo``
-        (#389). Hermes's /undo removes the last user message and everything after it, so when the window this engine
-        saw last is that session's, its last user message opens the undone turn. A pin goes when the undone turn
-        holds it and nothing left in the window does. A pin whose message was summarized, or sits in a tail that a
-        compaction held out, stays. Then the window, the handoffs and the link are cleaned as after the core's undo."""
+        (#389). Hermes's /undo N removes the Nth user message from the end and everything after it, with one notice.
+        So when the window this engine saw last is that session's, its last user message opens an undone turn. A pin
+        goes when that turn holds it and nothing left in the window does, unless a compaction folded the pin's
+        message. A pin whose message sits in a tail that a compaction held out stays too. Then the window, the
+        handoffs and the link are cleaned as after the core's undo, and the next turn drops the pins of any earlier
+        turn the same undo took (``_after_undo``)."""
         sid = str(session_id or '')
+        if not sid or sid != self._x_window_sid:
+            return  # the window is another session's: nothing shows what was undone
         window = [m for m in self._x_messages if isinstance(m, dict)]
         cut = max((i for i, m in enumerate(window) if m.get('role') == 'user'), default=-1)
-        if not sid or sid != self._x_window_sid or cut < 0:
-            return  # the window is another session's or holds no turn: nothing shows what was undone
+        if cut < 0:
+            return  # the window holds no turn
         undone, left = _holder(window[cut:]), _holder(window[:cut])
         pins = self._load_pins(sid)
-        kept = {k: [t for t in items if left(k, t) or not undone(k, t)] for k, items in pins.items()}
+        kept = {k: [t for t in items if left(k, t) or not undone(k, t) or self._folded(sid, k, t)]
+                for k, items in pins.items()}
         rest = [m for m in window[:cut] if m.get('role') != 'system' or hf.PIN_OPEN not in hf.message_text(m)]
+        self._x_undo_sid = sid
         self._rewound(sid, pins, kept, rest, set())
+
+    def _after_undo(self, live: Any) -> None:
+        """The first turn after a host's undo. Hermes's /undo N takes N turns with one notice, so the host's whole
+        transcript (``conversation_messages``) shows what went: a pin the window held goes when that transcript no
+        longer holds it and no compaction folded its message. A host that sends no transcript keeps those pins."""
+        sid, self._x_undo_sid = self._x_undo_sid, ''
+        if sid != self._x_session_id or sid != self._x_window_sid or not isinstance(live, list):
+            return
+        was, now = _holder(self._x_messages), _holder(live)
+        pins = self._load_pins(sid)
+        kept = {k: [t for t in items if not was(k, t) or now(k, t) or self._folded(sid, k, t)]
+                for k, items in pins.items()}
+        if kept != pins:
+            self._rewound(sid, pins, kept, None, set())
+
+    def _folded(self, sid: str, kind: str, text: str) -> bool:
+        return f'{kind}:{hf.Signal(kind, text).key()}' in self._x_folded.get(sid, ())
 
     def _rewound(self, sid: str, pins: dict[str, list[str]], kept: dict[str, list[str]],
                  window: list[dict[str, Any]] | None, lost: set[str]) -> None:
         """The rest of an undo on either path, once the pins to keep are known. ``window`` is the window last seen
-        without the undone turns, or None when that window is another thread's. ``lost`` names the sessions whose
-        cached summary nodes the undo deleted. A drop is logged as counts per kind and the session id, no text."""
+        without the undone turns, or None to leave the window be: another thread's, or one the turn under way
+        replaces. ``lost`` names the sessions whose cached summary nodes the undo deleted. A drop is logged as counts
+        per kind and the session id, no text."""
         changed = kept != pins
         if changed:
             self._x_pins[sid] = kept
@@ -444,6 +474,8 @@ class ExoContextEngine(ContextEngine):
 
     def select_context(self, request_messages: list[dict[str, Any]], **kwargs: Any):
         self._bind(kwargs.get('session_id'))
+        if self._x_undo_sid:
+            self._after_undo(kwargs.get('conversation_messages'))
         selected = None
         if self.inner is not None and hasattr(self.inner, 'select_context'):
             selected = self.inner.select_context(request_messages, **kwargs)
@@ -598,6 +630,13 @@ class ExoContextEngine(ContextEngine):
         raw, result[idx] = result[idx], self._defused(result[idx])
         if signals is None:
             return result
+        try:  # the pins whose message the summary folded, not the kept tail: a host's undo never drops them (#389)
+            out = {hf.message_text(m) for m in result if isinstance(m, dict)}
+            folded = _holder([m for m in messages if isinstance(m, dict) and hf.message_text(m) not in out])
+            self._x_folded.setdefault(self._x_session_id, set()).update(
+                f'{k}:{hf.Signal(k, t).key()}' for k, items in pins.items() for t in items if folded(k, t))
+        except Exception as e:  # never block compaction on it
+            logger.warning('exo-context: folded pins not noted: %s', e)
 
         path = None
         if self._x_write_handoffs:

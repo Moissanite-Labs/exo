@@ -56,6 +56,7 @@ List fields and the topic line are flattened to one line for the same reason, an
 written after every untrusted one, reads from its last copy in the file (#353). After `/undo`, exo-context drops
 the pins of the undone turns and the summaries the undo deleted, then writes again each automatic handoff that may
 quote them, another thread's included (`docs/MEMORY-MODEL.md`, "Undo and failed summaries"). A Hermes `/undo`
-reaches exo-context through exo-memory, and the pins only the undone turn held go the same way (#389).
+in the CLI or TUI reaches exo-context through exo-memory, and the pins only the undone turns held go the same way
+(#389). A handoff a compaction wrote before that keeps the ruling until the next compaction writes it again.
 
 Client code: `clients/tui/exo_tui/handoff.py`. Tests: `tests/clients/tui/test_handoff.py`.

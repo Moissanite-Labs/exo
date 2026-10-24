@@ -14,7 +14,7 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 | `sync_turn` (capture) | The core has no pre-compress call, so each turn also runs `exo.capture` over a short window of recent turns and writes `ruling`, `verdict` and `question` events (config `capture_turns`). |
 | `on_pre_compress` | Finds rulings, corrections and open decisions with `exo.capture`. Writes `ruling`, `verdict` and `question` events, then returns a short block for the compressor to keep verbatim. Checkpoint API v2. |
 | `on_session_end` | A `note` event of type `consolidate_pending`. |
-| `on_session_switch` | A `note` event of type `session_switch`. After a host's undo (`rewound=True`), it first passes the notice on through `exo.host_undo`, so exo-context drops the pins the undone turn held (#389). It does so with memory off too. |
+| `on_session_switch` | A `note` event of type `session_switch`. After a host's undo (`rewound=True`), it first passes the notice on through `exo.host_undo`, so exo-context drops the pins the undone turns held (#389). It does so with memory off too. |
 
 Tools: `exo_recall(query, budget)`, `exo_get(id, body_only)` (a whole belief node, same store and access as recall; D-032), `exo_note(text, kind)`, `exo_should_have_been(target, wanted, reason)`,
 `exo_zoom(id, n)`, `exo_date(id)`.

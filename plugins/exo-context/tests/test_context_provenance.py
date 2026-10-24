@@ -1120,3 +1120,119 @@ def test_a_host_undo_logs_counts_and_the_session_not_text(tmp_path, caplog):
     lines = [r.getMessage() for r in caplog.records if r.name == "exo_context.engine"]
     assert lines == ["exo-context: an undo in session u11 dropped 1 ruling, 0 correction, 1 open_decision"]
     assert "British" not in caplog.text and "deploy" not in caplog.text
+
+
+class Paraphrase(HermesSummary):
+    """A host summary that names what it folded in its own words, as a model's summary does."""
+
+    def compress(self, messages, **kw):
+        summary = {"role": "user", "_compressed_summary": True,
+                   "content": f"[CONTEXT COMPACTION] {len(messages) - 2} earlier rows.\n\n" + END_LINE}
+        return [messages[0], summary, messages[-1]]
+
+
+class Hermes:
+    """Drives the engine as Hermes's CLI does. Each turn sends the request with the whole transcript as
+    conversation_messages, then on_turn_complete. /undo N cuts the last N user turns and sends one notice."""
+
+    def __init__(self, tmp_path, sid, inner=None):
+        self.eng = ExoContextEngine(inner=inner or Paraphrase(), handoff_dir=tmp_path / "h")
+        self.sid, self.history = sid, []
+        self.eng.on_session_start(sid)
+
+    def turn(self, text):
+        self.history.append(mine(text))
+        out = self.eng.select_context([SYS, *self.history], conversation_messages=list(self.history),
+                                      incoming_message=self.history[-1], budget_tokens=0)
+        self.history.append(ok())
+        self.eng.on_turn_complete(list(self.history), usage=None, turn_id="t", interrupted=False)
+        return out
+
+    def undo(self, n=1):
+        users = [i for i, m in enumerate(self.history) if m["role"] == "user" and not m.get("_compressed_summary")]
+        self.history = self.history[:users[-n]]
+        host_undo(self.sid)
+
+    def compress(self):
+        self.history = self.eng.compress(list(self.history), force=True)
+        return self.history
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_an_undo_of_two_turns_drops_both_turns_pins(tmp_path, compact):
+    """Hermes's /undo N takes N turns with one notice. The notice drops the last turn's pins at once, and the next
+    turn's transcript shows the earlier ones went too. A compaction between, as Hermes runs at the start of a turn,
+    changes nothing, and a ruling it folded stays."""
+    h = Hermes(tmp_path, "n2")
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    assert pins(tmp_path, "n2")["ruling"] == [NOTE, MINE]  # one notice: only the last turn is known yet
+    if compact:  # NOTE is folded: the summary names it only in its own words
+        assert NOTE not in hf.strip_pinned(hf.message_text(h.compress()[1]))
+    out = h.turn("next step")
+    assert pins(tmp_path, "n2")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+    assert block_of(h.compress())["ruling"] == [NOTE]
+
+
+@pytest.mark.parametrize("again", [MINE, f"As I said: {MINE} Now write the summary."])
+def test_an_undo_keeps_a_ruling_a_compaction_folded(tmp_path, again):
+    """A ruling said once, folded into a summary, then said again in a turn that is undone, still stands: its first
+    message is in the summary. Only a pin the undone turn added goes."""
+    h = Hermes(tmp_path, "f1")
+    for text in ("start the importer", MINE, "now the parser"):
+        h.turn(text)
+    h.compress()
+    h.turn("next step")
+    h.turn(again)
+    h.undo()
+    assert pins(tmp_path, "f1")["ruling"] == [MINE]
+    h.turn("write the summary")
+    assert pins(tmp_path, "f1")["ruling"] == [MINE] and block_of(h.compress())["ruling"] == [MINE]
+
+
+def test_the_turn_after_an_undo_drops_nothing_still_held(tmp_path):
+    """After a one-turn undo, the next turn drops nothing more: what the transcript still holds stays, and so does a
+    pin from an earlier run whose message is not in this window. The link to a handoff written since stays."""
+    (tmp_path / "exo-home" / "context-pins").mkdir(parents=True)
+    (tmp_path / "exo-home" / "context-pins" / "k1.json").write_text(json.dumps({"ruling": [PEER]}))
+    h = Hermes(tmp_path, "k1", inner=HermesSummary())
+    for text in (MINE, "now the parser", NOTE):
+        h.turn(text)
+    h.undo()
+    h.compress()
+    linked = h.eng.last_handoff
+    h.turn("next step")
+    assert pins(tmp_path, "k1")["ruling"] == [PEER, MINE] and h.eng.last_handoff == linked
+
+
+def test_an_undo_reads_the_next_turn_of_its_own_session_only(tmp_path):
+    """A pending undo is checked against its own session's next turn: a turn in a session resumed in between, or a
+    request with no transcript, drops nothing."""
+    h = Hermes(tmp_path, "a1")
+    for text in (MINE, "now the parser", "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    h.eng.bind_session_state(FakeSessionDB({}), "b1")  # /resume b1 before a1's next turn
+    h.eng.select_context([SYS, mine("hello")], conversation_messages=[mine("hello")])
+    assert pins(tmp_path, "a1")["ruling"] == [MINE]
+    g = Hermes(tmp_path, "a2")
+    for text in (MINE, "now the parser", "and the writer"):
+        g.turn(text)
+    g.undo(2)
+    g.eng.select_context([SYS, mine("hello")])  # a host that sends no transcript keeps the earlier turns' pins
+    assert pins(tmp_path, "a2")["ruling"] == [MINE]
+
+
+def test_an_undo_of_two_turns_carries_into_a_compression_child(tmp_path):
+    """With compression.in_place false, a compaction at the start of the next turn moves Hermes to a child session.
+    The pending undo and what the compaction folded move with the window, so the child drops the earlier undone
+    turn's pin and keeps the folded one."""
+    h = Hermes(tmp_path, "p0")
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    h.compress()
+    h.eng.on_session_start("p1", boundary_reason="compression", old_session_id="p0")
+    h.turn("next step")
+    assert pins(tmp_path, "p1")["ruling"] == [NOTE]
