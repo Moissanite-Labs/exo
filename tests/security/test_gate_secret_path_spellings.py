@@ -72,8 +72,9 @@ def test_the_later_rows_ask(call):
 # --- every store name with more than one part ---------------------------------------------------------------------
 
 # Each multi-part name in the secret-store list, with a doubled slash, a `.` part and a `..` that comes back. Where a
-# folder already names the store (`~/.config/gcloud/`, `~/.config/muse/`, `~/.exo/keys/`), or the last part alone does
-# (`keys.env`), main asked too, so 15 of the 38 rows are controls (#513 review).
+# folder already names the store (`~/.config/gcloud/`, `~/.config/muse/`, `~/.exo/keys/`), the last part alone does
+# (`keys.env`), or the odd part sits above the name (`~/Library//Preferences/Netlify/config.json`), main asked too, so
+# 15 of the 38 rows are controls (#513 review).
 MULTI = ["~/.config/gcloud/creds.db", "~/.config/muse/session", "~/.config/exo/keys.env", "~/.exo/keys/seat",
          "~/.unii/acct/token", "~/.config/gh/hosts.yml", "~/.docker/config.json", "~/.kube/config",
          "~/.config/netlify/config.json", "~/Library/Preferences/Netlify/config.json"]
@@ -307,7 +308,8 @@ def test_a_glob_after_a_link_into_a_store_and_dotdot_asks(env, tmp_path):
 def test_a_long_run_of_glob_parts_is_read_once():
     # `*` could be `proc` and `root` at once: the root step is taken once, so 4,000 parts do not recurse 1,300 deep.
     assert bash("ls " + "/*" * 4000) == ("credentials", "ask")
-    # Each `*` before a `..` could be a root link too: past 16 of them the word counts, so it is read at most 17 times.
+    # Each `*` before a `..` could be a root link too: past 16 of them the word counts, so what follows a link is read
+    # at most 16 times.
     assert bash("ls /proc/1" + "/*/.." * 3000 + "/x") == ("credentials", "ask")
 
 

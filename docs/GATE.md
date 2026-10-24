@@ -380,11 +380,12 @@ system or bash will.
   not the program, so `ls /*/*/*` asks too, as `ls /proc/*/*` already did. So do `ls /*/bin/*`, `ls -l /*/lib/*`,
   `cat /*/src/*` and `grep -r foo /*/src/*`: a glob top folder, one folder and a glob that could be `environ` read
   as `/proc/<pid>/<glob>`, and `ls /proc/bin/*` asks on main too. `ls /usr/bin/*`, `ls /*/bin` and
-  `ls /*/bin/python*` stay reads. Past 16 possible links in one word the word counts, so a word is read at most 17
-  times. The reads after a link look up a run folder in the lexical form of what follows, once per classify call,
-  so a `..` there is read as text for that lookup. A 100 KB word with 16 links costs about twice what it costs on
-  main. Another link whose target the gate does not know, such as a folder's descriptor in `/proc/<pid>/fd`, is
-  read as text.
+  `ls /*/bin/python*` stay reads. Past 16 possible links in one word the word counts. So what follows a link is
+  read at most 16 times, and each such read takes the `/proc` step at most once. The reads after a link look up a
+  run folder in the lexical form of what follows, once per classify call, so a `..` there is read as text for that
+  lookup: `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads as on main, while
+  `cat <link>/../exod*` asks. A 100 KB word with 16 links costs about twice what it costs on main. Another link
+  whose target the gate does not know, such as a folder's descriptor in `/proc/<pid>/fd`, is read as text.
 - **Doubled slashes, `.` and `..` (#446).** The shell and the kernel read `a//b` and `a/./b` as `a/b`, and
   `a/x/../b` as `a/b` when `x` is a plain folder. A store name with more than one part (`.kube/config`,
   `.config/gh/hosts.yml`, `.docker/config.json`, `.config/gcloud`, `.unii/<account>/token`,
@@ -417,8 +418,9 @@ deny and `target:` entries still apply. But a seat that `approvals.yaml` delegat
 as on main with `cat ~/.kube/config` (#447). A file tool that writes a store file and names a secret decides lower:
 `write_file` or `apply_patch` on `~/.exo/policies/gates.yaml` with a patch header for `~/.kube//config`,
 `copy_file` from `~/.kube/./config` to it, and `memory` with both paths ask where main denied them under
-`deny: [store_write]`, a `store_write: deny` category line or a `reserved: [store_write]` entry. Main decides the
-plain spelling the same way: its file-tool branch of `classify()` takes a secret before a store path (#447, #489).
+`deny: [store_write]` or a `store_write: deny` category line. A `reserved: [store_write]` entry no longer matches
+them, and a `target:` entry for the store file no longer matches `copy_file` or `move_file`. Main decides the plain
+spelling the same way: its file-tool branch of `classify()` takes a secret before a store path (#447, #489).
 The D-038 amendment (#446) gives the groups and the differential's counts.
 
 Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and

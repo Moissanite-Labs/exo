@@ -1597,15 +1597,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (`cat //proc/self/*/*/environ`, `cat /proc/self/root/p*/1/environ`). A process's working folder link
   (`/proc/<pid>/cwd`) is read the same way, since for pid 1 and most daemons it is `/`: `cat /proc/1/cwd/pro?/1/environ`
   and `cat /proc/*/cwd/pro?/*/environ` ask, where main allowed them. Where the folder is not `/`, such a line asks when
-  it need not (fails closed). Past 16 possible links in one word the word counts, so a word is read at most 17 times.
-  The reads after a link look up a run folder in the lexical form of what follows, once per classify call, so a `..`
-  there is read as text for that lookup. The #513 review found that looking each one up as written cost about ten times
-  main on a long word. A 100 KB word of `/proc/1/*`, fifteen `/../*` steps, a long folder path and a glob took 8.6 s
-  here, against 0.9 s on main. It now takes 1.6 s. Left out: another link whose target the gate does not know, such as a
-  folder's descriptor in `/proc/<pid>/fd`, and `ps e` (row 3 of #476), which is left to #476. A glob in a link's own
-  part before a `..` (`cat /dev/f?/../env*`) is not resolved, since only the literal folder before the first glob is. A
-  glob below a `cwd` link into a home store (`cat /proc/self/cwd/.kube/conf*`) is read from `/` only. Both read on main
-  too.
+  it need not (fails closed). Past 16 possible links in one word the word counts. So what follows a link is read at most
+  16 times, and each such read takes the `/proc` step at most once. The reads after a link look up a run folder in the
+  lexical form of what follows, once per classify call, so a `..` there is read as text for that lookup. The #513 review
+  found that looking each one up as written cost about ten times main on a long word. A 100 KB word of `/proc/1/*`,
+  fifteen `/../*` steps, a long folder path and a glob took 8.6 s here, against 0.9 s on main. It now takes 1.6 s. Left
+  out: another link whose target the gate does not know, such as a folder's descriptor in `/proc/<pid>/fd`, and `ps e`
+  (row 3 of #476), which is left to #476. A glob in a link's own part before a `..` (`cat /dev/f?/../env*`) is not
+  resolved, since only the literal folder before the first glob is. A glob below a `cwd` link into a home store
+  (`cat /proc/self/cwd/.kube/conf*`) is read from `/` only. A link before a `..` after a `/proc` link is not followed
+  for the run folder, for cost: `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads, while
+  `cat <link>/../exod*` asks. All three read on main too.
   *Lowered lines.* On main an odd spelling kept its own class, and any deny that class drew. It now takes the store's
   class, so it decides as main decides the same action spelt plainly, and some lines decide lower than before. The #423
   differential of main (5a9dc394) against the change ran 57,260 actions under 87 policies and found 42 lowered pairs on
@@ -1646,12 +1648,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   do on main. (4) 4, 0, 0 and 1,017 pairs: a file tool that writes a store file and names a secret is `credentials`,
   not `store_write`. So `write_file`, `patch`, `edit_file` or `apply_patch` on `~/.exo/policies/gates.yaml` with a
   patch header for `~/.kube//config`, `copy_file` or `move_file` between it and `~/.kube/x/../config`, and `memory` or
-  a tool the gate does not know with both paths ask where main denied them under `deny: [store_write]`, a
-  `store_write: deny` category line, a `reserved: [store_write]` entry or a `target:` entry for the store file. Main
-  decides the plain spelling the same way: its file-tool branch of `classify()` takes a secret before a store path
-  (#447, #489). (5) 10, 0, 0 and 160 pairs: since #396 the posting checks read every post, so a post beside the read
-  keeps its violations. `gh api` with `--input -` is the exception: its body is only the line's heredoc, and the line's
-  text takes the heredoc only when the line is outbound. So
+  a tool the gate does not know with both paths ask where main denied them under `deny: [store_write]` or a
+  `store_write: deny` category line. A `reserved: [store_write]` entry no longer matches them, and a `target:` entry
+  for the store file no longer matches `copy_file` or `move_file`. Main decides the plain spelling the same way: its
+  file-tool branch of `classify()` takes a secret before a store path (#447, #489). (5) 10, 0, 0 and 160 pairs: since
+  #396 the posting checks read every post, so a post beside the read keeps its violations. `gh api` that reads its
+  body from stdin (`--input -`, or a field such as `-F body=@-`) is the exception: its body is only the line's heredoc,
+  and the line's text takes the heredoc only when the line is outbound. So
   `cat ~/.kube//config; gh api repos/a/b/issues/3/comments --input - <<EOF` loses the forbidden word in its body, as the
   plain spelling does on main. It keeps its unread-body violation and still asks. In 160 built-in pairs, 336 of the
   second focused run and 5,264 of the fourth a violation is only reworded, named after its post
