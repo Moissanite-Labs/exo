@@ -322,6 +322,8 @@ It writes a temporary file that `mkstemp` makes in the same folder, fsyncs it an
 is 0600 unless you pass `mode` (`None` gives what a plain open gives). A file written many times a minute, such as
 a cursor or a cache, can pass `sync=False` to skip the fsync. Do not write `<file>.tmp` and rename it, and do not
 open the final name for writing: a symlink planted at either name turns the write into a write to another file.
+To change the process umask for a while, use `with exo.core.private.umask(mask):`, not `os.umask`. It holds the
+lock the `mode=None` probe takes, so the two never undo each other (#317).
 
 ## 5. Add a seat
 
