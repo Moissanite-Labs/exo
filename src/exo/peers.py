@@ -405,7 +405,10 @@ class PeerNode:
             return named
         return self.principal if not self._seated and self.principal in ("", self._home_principal) else None
 
-    def _trust(self, meta: dict[str, Any], seat: str, ok: bool, pin: str) -> str:
+    def _trust(self, meta: dict[str, Any], seat: str, ok: bool, pin: str, claim: Any = "") -> str:
+        """``claim`` is the principal the sender's presence file names. It never raises trust, but a sender that
+        says it runs as another principal than this home records is ``other``, as before #132. An empty claim, like
+        an empty principal here, stands for the principal config.json names."""
         if not ok:
             return "unverified"
         if pin != "here":
@@ -414,6 +417,8 @@ class PeerNode:
             return "other"
         principal = self._principal(seat)
         if principal is None or principal != (self.principal or ""):
+            return "other"
+        if (claim or self._home_principal) != (principal or self._home_principal):
             return "other"
         return "principal" if meta.get("via") == "human" else "same-principal"
 
@@ -535,7 +540,7 @@ class PeerNode:
             sender = self.presence()
         seat = str(env.get("from") or "")
         why, pin = self._verify(env, seat, sender)
-        trust = self._trust(meta, seat, not why, pin)
+        trust = self._trust(meta, seat, not why, pin, sender.principal if sender else "")
         sid = meta.get("session")
         name = f"{env.get('from')}/{short(sid)}" if sid else str(env.get("from"))
         ing = Ingress("peer", name, trust, str(env.get("body") or ""), session=meta.get("to_session"),

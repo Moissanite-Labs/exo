@@ -77,6 +77,11 @@ The trust level comes from this home too:
   seat whose seat file names its principal holds it as `other`: `config.json` is not a store file, and a tool call
   may change it without asking. To have such a key delivered at once, give it a seat file here that names its
   principal (`seats/<name>.toml` with `principal = "<id>"`).
+- The principal a presence file names never raises trust, but it can lower it. When it is not the principal this
+  home records for the sender, the message is `other`, as before #132. A presence file that names none stands for
+  the principal `config.json` names. So in a home that serves ada and bob, ada's Hermes profile or unseated daemon,
+  run with `EXO_PRINCIPAL=ada`, is `other` to bob's daemon, even one with no seat file. Two unseated daemons share
+  the seat name `exo` and its key, so this is also what tells them apart.
 - A seat checked against a peer pin is `other`, because this home has no record of whose seat it is. A `rules`
   entry for its name can deliver it.
 - Once this home holds a key for a name, a message under that name signed by any other key is denied. That covers
@@ -204,7 +209,8 @@ to `peers send` (D-039). That message arrives as `same-principal` automation, ne
 design.
 
 A tool call may change `config.json` without asking. Once a daemon restarts, that can change which principal a key
-with no seat file counts as toward it. It never does so toward a seat whose seat file names its principal.
+with no seat file counts as toward it. The key's presence file lowers that only when it names another principal,
+and a tool call may write a presence file too. None of this reaches a seat whose seat file names its principal.
 
 A presence file still says where a daemon listens, and a program that goes through the gate may write one. A
 forged one under a peer's name can receive the messages sent to that name. It can also answer each send with a
