@@ -520,13 +520,17 @@ class Gate:
             d2 = gate.decide(c, changed, ctx)
             if _RANK[d2.outcome] > _RANK[d.outcome]:
                 d = d2
-            # A part reserved under either policy keeps its ask from a standing grant (D-075).
+            # A part reserved under either policy keeps its ask from a standing grant (D-075), and so does a sudo write
+            # line whose displaced part asks under either (#454).
             d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
+            d.displaced_asks = d.displaced_asks or d2.displaced_asks
             d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
         if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
             d.reason += f" (registry risk is high and {tool} is not a known tool)"
             d.outcome = "ask"
-        if self.executor_required and d.outcome != "deny" and (c.text_file or gate.body_unseen(c)):
+        # #454: a sudo write line carries the body file of the part it displaced there (`sudo gh ... -F /tmp/b > f`)
+        files = c.text_file or (c.displaced.text_file if c.displaced is not None else "")
+        if self.executor_required and d.outcome != "deny" and (files or gate.body_unseen(c)):
             # The gate cannot approve contents it has not seen (#208): a body file, stdin, @file, an expansion.
             d.outcome, d.rule = "deny", "required"
             d.reason = ("a required executor runs only a post whose body the gate read on the line; "
@@ -575,9 +579,9 @@ class Gate:
             changed = self.changed_policies()
             approvers = gate.strictest_approvers(c.category, pol.get("approvals"),
                                                  changed.get("approvals") if changed is not None else None)
-            if c.displaced is not None and c.displaced.target:
-                # #454: a sudo write line is also about the repo or host its displaced part names, so only who may
-                # answer that part's category too may answer it.
+            if c.displaced is not None and (c.displaced.target or d.displaced_asks):
+                # #454: a sudo write line is also about the repo or host its displaced part names, or asks with that
+                # part leading, so only who may answer that part's category too may answer it.
                 also = gate.strictest_approvers(c.displaced.category, pol.get("approvals"),
                                                 changed.get("approvals") if changed is not None else None)
                 approvers = [a for a in approvers if a in also]

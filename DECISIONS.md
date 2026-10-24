@@ -1592,12 +1592,29 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   costly write, such as an unknown program (`sudo echo hi > /tmp/f; foo` asks as `opaque_exec`). A store path stays
   `store_write`, and `/dev/null` adds no write. A copy made on a nested line (a `$( )`, backticks, `<( )`, an ssh hop)
   is a costly `local_write` part of the line around it. There it would take the lead from a part it ties with, which
-  led before as the first of the tie. So `_combine` ranks the parts as before too, each copy as the part it displaced.
-  A part that outranks a `read` leads again: an unknown program, or ssh running its stdin. Otherwise the copy leads,
-  and the part that led before is the one it displaced. Without this, `echo $(sudo echo hi > /tmp/f) $(foo)` was
-  allowed and `ssh h1 'sudo echo hi > /tmp/f'; ssh h2 foo` logged under the default policy, a rule that denies
-  `opaque_exec` on `prod` only asked for `ssh -p 2? prod 'sudo echo hi > /tmp/f' < x.sh`, and `{target: a/b*}: ask`
-  missed `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)`. Each now decides as on main. A redirection on a
+  led before as the first of the tie. So `_combine` ranks the parts as before too, each copy as a `read` with its own
+  axes. A part that outranks a `read` leads again: an unknown program, or ssh running its stdin. Otherwise the copy
+  leads, and the part that led before is the one it displaced. The copy's summary then names that part. Without
+  this, `echo $(sudo echo hi > /tmp/f) $(foo)` was allowed and `ssh h1 'sudo echo hi > /tmp/f'; ssh h2 foo` logged
+  under the default policy, a rule that denies `opaque_exec` on `prod` only asked for
+  `ssh -p 2? prod 'sudo echo hi > /tmp/f' < x.sh`, and `{target: a/b*}: ask` missed
+  `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)`. Each now decides as on main.
+  An ssh `-o RemoteCommand=` raises the exposure of the line it runs to `internal`, in place. It raised the copy but
+  not the displaced part, and `_combine` ranked the copy as that part, at its old private axes. So an earlier costly
+  part took its place: under `{opaque_exec: allow}` and `{target: a/b*}: ask`,
+  `sudo ls; ssh -o RemoteCommand='sudo gh pr view 9 -R a/b > /tmp/f' h` logged and `foo; ...` was allowed, where
+  main asked. The same held for `-oRemoteCommand=`, `scp -o RemoteCommand=` and a `$( )` in the remote command. Now
+  every raise in place goes through one helper, `_raise_axes`, which raises the displaced part with the copy, as the
+  hop raises every part. The others are sudo and the privileged wrappers, which make a reversible part costly. A copy
+  is costly from the start, so they change no copy today. And `_combine` ranks a copy by its own axes, so a raise
+  that missed the displaced part would still not move the lead.
+  When both readings give the same outcome, the decision keeps what each found, as an equal level does in `decide`:
+  both reasons, the higher exposure and any third party. Before, the copy's reading alone stood, so a scope that made
+  the written path private made `ssh prod 'sudo echo hi > /tmp/f'` private, where main had it internal, and a host
+  rule beside a costly internal ask cell dropped off the card. The card links to the displaced part (a gh read's
+  issue) when the line asks with that part leading, as main's card did. A required executor refuses the body file of
+  the displaced part too (`sudo gh pr view 1 -R o/r -F /tmp/b > /tmp/f`), as main did. The ledger view leaves the
+  displaced part out, as it leaves out every part, so its command text never reaches the ledger. A redirection on a
   compound around a sudo command (`{ sudo echo hi; } > /tmp/f`) or on another command of the line is not on a sudo
   command, so the dominant part decides there, as on any line. A `code` part never leads a shell line, since the
   interpreter's costly `opaque_exec` part outranks it, so only `read` and `shell` are named. Rejected: making each
@@ -1607,23 +1624,27 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   costly `read`, which moves the line to the reversible cell of the matrix. And deciding the line with the copy alone:
   a line, rule or scope on the displaced part no longer reached it, so a rule on the repo of
   `sudo gh pr view 1 -R o/r > /tmp/f`, or on the host of an ssh line, asked on main and allowed or logged.
-  Grants and approvers follow the line's category and target. A standing grant is keyed on them (D-033), so its key
-  moves from a costly `read` or `shell` on the tool to `local_write` on the first written path. An "always" for
-  `echo started > /tmp/log` now covers a costly sudo command whose first sudo write goes to `/tmp/log`, and a second
-  sudo command on that line, while one for a costly `read` on the tool no longer covers it. On main a grant on
-  (`shell`, the tool) was as broad, so the key moves rather than widens. A reserved hit on another part, the
-  displaced one too, keeps the principal's ask (D-075). The approvers follow the new category too: with approvals.yaml
-  `categories: {local_write: ["seat:helper"]}` and a costly ask cell, `sudo chmod u+s /tmp/x > /tmp/log` goes to
-  `[principal, seat:helper]`, as main routes `sudo chmod u+s /tmp/x; sudo sed -i s/a/b/ /tmp/log`. Where the
-  displaced part names a target of its own, a gh read's repo or an ssh host, the line is about that target too. There
-  a grant on the written path answered a rule on the repo or host: with `{target: prod}: ask` and a grant for
-  `echo hi > /srv/out`, `ssh prod 'sudo echo hi > /srv/out'` ran, where main asked. An "always" on that line also
-  covered the same write on another host. And with approvals.yaml `categories: {local_write: ["seat:helper"]}`, the
-  helper could answer the ask the host rule raised, where main asked the principal. So such a line binds its
-  approval to the exact command (`binds_exact`), and only those who may answer both categories may answer it. A
-  grant on (`read`, the host) no longer covers it either.
+  Grants and approvers follow the line's category and target where only the write asks, as under
+  `{local_write: ask}`. A standing grant is keyed on them (D-033), so its key moves from a costly `read` or `shell` on
+  the tool to `local_write` on the first written path. An "always" for `echo started > /tmp/log` now covers a costly
+  sudo command whose first sudo write goes to `/tmp/log`, and a second sudo command on that line, while one for a
+  costly `read` on the tool no longer covers it. On main a grant on (`shell`, the tool) was as broad, so the key
+  moves rather than widens. A reserved hit on another part, the displaced one too, keeps the principal's ask (D-075).
+  The approvers follow the new category there too: with approvals.yaml `approvers: {local_write: ["seat:helper"]}`,
+  `sudo echo hi > /tmp/log` goes to `[principal, seat:helper]`, as `echo hi > /tmp/log` does.
+  Where the displaced part names a target of its own, a gh read's repo or an ssh host, the line is about that target
+  too. There a grant on the written path answered a rule on the repo or host: with `{target: prod}: ask` and a grant
+  for `echo hi > /srv/out`, `ssh prod 'sudo echo hi > /srv/out'` ran, where main asked. An "always" on that line also
+  covered the same write on another host. And the helper above could answer the ask the host rule raised, where main
+  asked the principal. The same held where the line asks with the displaced part leading (its category, a rule, a
+  cell or an escalation on it) and that part has no target: under `{shell: ask, read: ask}`, an "always" on
+  `sudo echo hi > /tmp/f` let `sudo chmod 4755 /usr/bin/python3 > /tmp/f` run with no ask, and under `{shell: ask}`
+  the helper answered `sudo chmod u+s /tmp/x > /tmp/log`. So in both cases the line binds its approval to the exact
+  command (`binds_exact`), and only those who may answer both categories may answer it. `Decision.displaced_asks`
+  tells the hook of the second case, under the pinned or a changed policy. A grant on (`read`, the host) no longer
+  covers such a line either.
   *Lowered lines.* None. The gate differential (#423) against main 5a9dc394, with main's script, lowers no pair in
-  five runs. The built-in corpus: 58,260 actions x 87 policies. 1,564 lines built for this change (sudo and doas with
+  six runs. The built-in corpus: 58,405 actions x 87 policies. 1,564 lines built for this change (sudo and doas with
   options and behind other prefixes, each write redirection, `/dev/null`, store paths, compounds, subshells, `$( )`,
   `bash -c`, `ssh`, `xargs`, heredocs and cd chains): 20,816 actions with their forms, under the built-in policies and
   16 keyed on `read`, `local_write` and cost. 647 lines with the write on other paths and in other places (before the
@@ -1635,7 +1656,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   with a sudo write in a `$( )`, backticks, `<( )`, `bash -c` or an ssh hop beside 34 other commands, in both orders,
   and ssh lines that run their stdin: 6,384 actions, under the built-in policies and 43 keyed on the repo, the host,
   `opaque_exec`, `read`, `shell`, `local_write` and `command`. Before `_combine` ranked nested copies that way, that
-  corpus lowered 12,220 pairs on 958 actions. The other four lowered no pair before it either. Each run only tightens:
+  corpus lowered 12,220 pairs on 958 actions. The other four lowered no pair before it either. 10,400 lines with a
+  sudo write beside a costly gh read, an unknown program or a post, run by `ssh -o RemoteCommand=` (also
+  `-oRemoteCommand=`, `scp` and `sftp`, after `-F`, behind sudo, `env` or `timeout`, in `$( )` and backticks),
+  `ProxyCommand`, `LocalCommand`, `KnownHostsCommand`, an ssh hop, `bash -c` or a privileged wrapper: 23,230 actions,
+  under the built-in policies and 27 keyed on the repo, the host, `read`, `shell`, `opaque_exec`, exposure, scopes and
+  `command`. Before the raise reached the displaced part, it lowered 41,585 pairs on 8,239 actions, the built-in
+  `categories_allow` and a deny on an internal `read` among them. Each run only tightens:
   a line keyed on `local_write` or its cell now reaches these lines. After a `cd` into the store or `/dev`, an ssh
   line that runs a sudo write is now a store write that asks, as the same line without sudo is on main. Against this
   change before the nested ranking, 2,088 pairs on 618 actions of the last corpus and 79 pairs on 31 built-in actions

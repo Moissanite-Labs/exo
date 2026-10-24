@@ -1,6 +1,7 @@
 """D-033: approvals bound to the exact text, who may approve, standing grants, outbound scrub."""
 import asyncio
 import json
+import os
 
 import pytest
 
@@ -247,26 +248,76 @@ def test_non_outward_grant_is_scoped_to_rule_and_target(tmp_path):
     assert call(ctx2, "mcp_notes_create_page", {"target": "notes:other", "title": "t"})["action"] == "approve"
 
 
-def test_a_grant_on_a_sudo_write_is_keyed_on_the_written_path(tmp_path):
-    # #454: `sudo echo hi > /tmp/f` is a costly local_write with the written path as target. Its grant covers that
-    # path, as one for `echo hi > /tmp/f` would, and a grant for a costly read keyed on the tool no longer covers it.
-    store = tmp_path / "st454"
+def _store454(tmp_path, name, gates, approvals=""):
+    store = tmp_path / name
     (store / "policies").mkdir(parents=True)
-    (store / "policies" / "gates.yaml").write_text("categories: {read: ask, local_write: ask}\n")
-    key = tmp_path / "k454.key"
+    (store / "policies" / "gates.yaml").write_text(gates)
+    if approvals:
+        (store / "policies" / "approvals.yaml").write_text(approvals)
+    key = tmp_path / f"{name}.key"
     crypto.save_key(crypto.keygen(), key)
-    _, ctx = make_gate(store, key)
+    return (store, *make_gate(store, key))
+
+
+def test_a_grant_on_a_sudo_write_is_keyed_on_the_written_path(tmp_path):
+    # #454: `sudo echo hi > /tmp/f` is a costly local_write with the written path as target. Where only the write's
+    # category asks, its grant covers that path, as one for `echo hi > /tmp/f` would.
+    store, _, ctx = _store454(tmp_path, "st454", "categories: {local_write: ask}\n")
+    r = call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f"})
+    assert r["action"] == "approve" and "binding" not in r, r
+    answer(ctx, r, "always")
+    grants = json.loads((store / "state" / "approval-grants.json").read_text())
+    assert [(g["rule"], g["target"], g.get("binding") or "") for g in grants] == [("local_write", "/tmp/f", "")]
+    assert call(ctx, "terminal", {"command": "echo hi > /tmp/f"}) is None
+    assert call(ctx, "terminal", {"command": "sudo chmod 777 /x > /tmp/f"}) is None
+    assert call(ctx, "terminal", {"command": "sudo echo hi > /tmp/g"})["action"] == "approve"
+
+
+def test_a_grant_on_a_sudo_write_does_not_answer_an_ask_on_its_displaced_part(tmp_path):
+    # #454 re-check: where the line asks with the sudo command's own part leading (here its category), a grant keyed
+    # on the written path would answer that ask for any other command writing there. The "always" covers the exact
+    # line only, and a grant for a costly read keyed on the tool does not cover the line.
+    store, _, ctx = _store454(tmp_path, "st454c", "categories: {read: ask, shell: ask}\n")
     r = call(ctx, "terminal", {"command": "sudo ls"})
     assert r["action"] == "approve"
     answer(ctx, r, "always")
     assert call(ctx, "terminal", {"command": "sudo ls -la"}) is None
     r = call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f"})
-    assert r["action"] == "approve", r
+    assert r["action"] == "approve" and r.get("binding"), r
     answer(ctx, r, "always")
     grants = json.loads((store / "state" / "approval-grants.json").read_text())
-    assert [(g["rule"], g["target"]) for g in grants] == [("read", "terminal"), ("local_write", "/tmp/f")]
-    assert call(ctx, "terminal", {"command": "echo hi > /tmp/f"}) is None
-    assert call(ctx, "terminal", {"command": "sudo echo hi > /tmp/g"})["action"] == "approve"
+    assert [(g["rule"], g["target"], bool(g.get("binding"))) for g in grants] == [
+        ("read", "terminal", False), ("local_write", "/tmp/f", True)]
+    assert call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f"}) is None
+    r = call(ctx, "terminal", {"command": "sudo chmod 4755 /usr/bin/python3 > /tmp/f"})
+    assert r["action"] == "approve" and "category shell" in r["message"], r
+
+
+@pytest.mark.parametrize("gates", ["categories: {shell: ask}\n", "categories: {read: ask, shell: ask}\n",
+                                   "escalate: {categories: [shell]}\n",
+                                   "rules: [{match: {category: shell, reversibility: costly}, decision: ask}]\n"])
+def test_only_who_may_answer_the_displaced_part_answers_its_ask(tmp_path, gates):
+    # #454 re-check: the ask comes from the line read with chmod leading, and chmod names no target. A seat that may
+    # answer only local_write must not answer it, as on main, where the line was chmod's.
+    _, _, ctx = _store454(tmp_path, "st454d", gates, "approvers: {local_write: ['seat:helper']}\n")
+    r = call(ctx, "terminal", {"command": "sudo chmod u+s /tmp/x > /tmp/log"})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
+def test_a_changed_policy_whose_displaced_reading_asks_binds_the_line_too(tmp_path):
+    # #454 re-check: mid-session the stricter of the pinned and the changed policy applies (D-038). The pinned one
+    # asks only on the write; the changed one asks on chmod too, so the approval is about chmod as well.
+    store, g, ctx = _store454(tmp_path, "st454e", "categories: {local_write: ask}\n",
+                              "approvers: {local_write: ['seat:helper']}\n")
+    g.policies()
+    line = {"command": "sudo chmod u+s /tmp/x > /tmp/log"}
+    r = call(ctx, "terminal", line)
+    assert r["action"] == "approve" and not r.get("binding") and r["approvers"] == ["principal", "seat:helper"], r
+    p = store / "policies" / "gates.yaml"
+    p.write_text("categories: {local_write: ask, shell: ask}\n")
+    os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 10_000_000))
+    r = call(ctx, "terminal", line)
+    assert r["action"] == "approve" and r.get("binding") and r["approvers"] == ["principal"], r
 
 
 def test_a_grant_on_the_written_path_does_not_answer_a_rule_on_the_host_or_repo(tmp_path):
