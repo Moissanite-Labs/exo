@@ -593,6 +593,74 @@ def test_calls_stay_bounded_while_the_first_leaves_land():
     assert report["tail"]["from_seq"] == next(m.meta["seq"] for m in first if "seq" in m.meta)
 
 
+class PerLeaf(Summ):
+    """Holds each private leaf at a gate of its own, keyed by its first note (four pairs to a leaf)."""
+
+    def __init__(self):
+        super().__init__()
+        self.gates: dict[int, asyncio.Event] = {}
+
+    async def summarize(self, content, previous=None, session=None, **kw):
+        if m := re.search(r"private note (\d+) ", content):
+            await self.gates.setdefault(int(m.group(1)) // 4, asyncio.Event()).wait()
+        return await super().summarize(content, previous, session)
+
+
+def test_calls_stay_bounded_when_a_later_leaf_lands_first():
+    """Issue #244: the private view runs to its last summary. When leaf 8 lands while leaves 1 to 7 still run, the
+    view shows those seven verbatim as pending. They are the oldest pending spans, so they are cut first, each to the
+    marker under its heading, and the call stays bounded."""
+    summ = PerLeaf()
+    store, ctx, prov, loop, _ = slow_private(summ, min_compact_tokens=1500)
+
+    async def go():
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        store_pairs(store, p.id, 150)
+        await loop.send(p.id, "what did I note first?")
+        await asyncio.sleep(0.05)  # the first 8 leaves (live_parallel) reach their gates
+        summ.gates[7].set()
+        while not any(n.status == "done" for n in store.summaries(p.id)):
+            await asyncio.sleep(0.01)
+        await loop.send(p.id, "and the next?")
+        call = prov.calls[-1]
+        for i in range(40):
+            summ.gates.setdefault(i, asyncio.Event()).set()
+        await settle_own(ctx, p.id)
+        return call
+    call = run(go())
+    view = call[1].text()
+    assert view.startswith(PRIVATE_HEAD) and "## Messages 57-64\nS1" in view and "summary pending" not in view
+    assert all(f"## Messages {i * 8 + 1}-{i * 8 + 8}\n{SUMMARIZING_MARKER}" in view for i in range(7))
+    assert call[2].text() == SUMMARIZING_MARKER and sum(estimate_tokens(m) for m in call) < ctx.view_budget
+
+
+@pytest.mark.parametrize("big,status", [("results", "done"), ("arguments", "skipped")])
+def test_a_fast_summarizer_leaves_nothing_to_cut(big, status):
+    """Issue #244: the overflow check measures a pending span as the view renders it, cut short, and cut_pending
+    measures it in full. So the turn also waits when the cut would apply: the leaf this call scheduled runs first.
+    A fast summarizer lands it (three 12k tool results), or it is skipped as too small (three calls with 20k
+    arguments, which a leaf counts at 400 characters). Either way nothing is cut and no marker shows."""
+    store, ctx, prov, loop, _ = setup(min_compact_tokens=1000)
+
+    async def go():
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        store.append_message(p.id, Message.user("Q0"))
+        for i in range(3):
+            args = {"path": f"f{i}", "text": "a" * 20000} if big == "arguments" else {"path": f"f{i}"}
+            store.append_message(p.id, Message.assistant("", [ToolCall(id=f"c{i}", name="write_file", arguments=args)]))
+            store.append_message(p.id, Message.tool([ToolResult.of_text(f"c{i}", "r" * (12000 if big == "results" else 2))]))
+        store.append_message(p.id, Message.assistant("A0"))
+        for i in range(6):  # the last tail_messages, then the turn: only messages 1-8 make a leaf
+            store.append_message(p.id, Message.user(f"q{i}"))
+            store.append_message(p.id, Message.assistant(f"a{i}"))
+        await loop.send(p.id, "and now?")
+        return p
+    p = run(go())
+    call = texts(prov.calls[-1])
+    assert [n.status for n in store.summaries(p.id)] == [status] and SUMMARIZING_MARKER not in call
+    assert call[-1] == "and now?" and ("Q0" in call) == (status == "skipped")
+
+
 def test_the_cut_measures_tool_call_arguments_in_full():
     """render_message cuts tool-call arguments at 400 characters, so estimate_tokens puts 30 write_file rounds
     with 20k-character arguments at about 4k tokens. The cut measures the arguments in full and cuts them."""
