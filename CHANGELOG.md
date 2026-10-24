@@ -359,6 +359,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`sudo ssh jump 'tee >(ssh host)'`, as `sudo ssh jump 'ssh host < f'` does). And `ssh -n "$h" uptime <
   hosts.txt` is allowed, where it asked, since ssh never reads its stdin then, also under `deny: [opaque_exec]`, as
   `ssh -n host uptime < hosts.txt` is. Otherwise `deny` entries and category denies still see every part.
+  With #399's other targets, the part that runs the stdin names the host for an empty one too, so `echo 'gh pr
+  comment -wR myorg/app -b hi' | ssh buildhost` is still denied under a `github_post` deny on `buildhost`. A `$( )`
+  in a value declare reads again is read as fed too (`cat f | declare -a 'a=($(ssh host))'`).
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under

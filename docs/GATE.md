@@ -1654,7 +1654,9 @@ its text, so the line asks as `opaque_exec`, as `ssh host < script.sh` does. A k
   fed such a stdin, or where a pipe or a compound feeds a command, an `ssh` in one is read as fed
   a stdin the gate does not read: `cat cmds.sh | echo $(ssh host)`, `{ echo $(ssh host); } <
   cmds.sh`. A command's own `<` is set up after its words are expanded, so `echo $(ssh host) < f`
-  keeps its reading.
+  keeps its reading. A `$( )` in a value that declare reads again (#188) runs while declare runs,
+  so it is read the same way, and also when declare has a stdin of its own: `cat f | declare -a
+  'a=($(ssh host))'` and `declare -a 'a=($(ssh host))' < f` ask as `opaque_exec`.
 - A remote hop. An `ssh` with a remote command passes its stdin on to that command, unless `-n`,
   `-N` or `-f` (before the host or after it) stops it. The remote command, read as a line fed
   that stdin, shows whether an `ssh` in it with no stdin of its own runs the stdin on the next
@@ -1674,7 +1676,12 @@ sudo or a privileged wrapper around `ssh` still makes that part `costly`, and in
 remote command read as before, with its own target and category. ssh's own part names the host as it
 did where ssh read no stdin. In the direct #240 form, the part that led when #240 built the parts
 into one still leads on equal parts and takes the host, so that form decides and lists its reserved
-hits as before #316. So `deny` and `reserved` entries, category lines that deny and rules that deny
+hits as before #316. A gh post in a known text keeps its other targets ("Where a gh command
+lands"): where the part that runs the stdin names the host for an empty target, it names it for an
+empty other target too. So `echo 'gh pr comment -wR myorg/app -b hi' | ssh buildhost` may land on
+the current repo on `buildhost`, and a `github_post` deny on `buildhost` denies it. After a hop that
+host is the first one, where the line hands the stdin over, as for the part's own target; ssh's own
+part names the inner host. So `deny` and `reserved` entries, category lines that deny and rules that deny
 a part still see every part they saw: under `{match: {category: [shell, read], reversibility:
 costly}, decision: deny}`, `{ sudo ssh host; } < cmds.sh` is denied as before, and `sudo ssh host <
 cmds.sh`, which asked, is denied too. The new `opaque_exec` part can be the part that decides the

@@ -1875,10 +1875,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   with no stdin of its own runs it, wherever it sits, behind a wrapper and over more hops (`ssh a 'cd /; ssh b'`, `ssh
   a ssh b ssh c`), the outer ssh is a hop. The ssh part that runs its fed line's stdin carries the signal `runs its
   line's stdin`, which only that second reading looks for. A known text is read as for the direct form. (5) The
-  command a wrapper runs (`uv run`, `flock`, `nsenter`, `xargs`...) gets the wrapper's stdin (`_wrapped`): a
+  command a wrapper runs (`uv run`, `flock`, `nsenter`...) gets the wrapper's stdin (`_wrapped`): a
   compound's feed, the wrapper's own `<` from anything but `/dev/null` and a pipe into it reach it (`{ uv run ssh
   host; } < cmds.sh`, `uv run ssh host < cmds.sh`, `cat cmds.sh | uv run ssh host`), and a wrapper with a stdin of its
-  own keeps a fed line's mark from it (`>(uv run ssh host < /dev/null)`). The fed mark is a context variable that
+  own keeps a fed line's mark from it (`>(uv run ssh host < /dev/null)`). `xargs` is read the same way, which reads
+  more than runs: GNU xargs gives its command `/dev/null` unless `-a` names the file it reads (and `-o` gives it the
+  terminal), so a stdin read as run there fails closed. The fed mark is a context variable that
   names one line (`_fed_stdin`), not a classify_shell argument, so code that wraps `classify_shell(cmd, depth)` keeps
   working. As for #240, these lines take the category of what runs. The part that runs the stdin is a part of the line
   beside ssh's own part, not built into it, and ssh's own part keeps the reading it had before #316 (in a hop, the
@@ -1936,6 +1938,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   hop. Rejected too: building the new part into ssh's own part and reading a hop's remote command only as fed, an
   earlier draft of this change, which lost sudo's `costly` mark and the reserved hits of the part it displaced. And
   keeping the displaced part as the deciding part, which would make these lines decide unlike their direct form.
+  *2026-10-24, merged with main d79639f1 (#399, #435), and exo-36's review of #520:* #399 decides a gh post on each
+  target the gate cannot rule out, and an ssh gives an empty one its host. The part that runs ssh's stdin takes that
+  fill too where it names the host for an empty target: where it leads (the direct form) and where the stdin is not
+  direct (a hop, a compound's feed). Without it, `echo 'gh pr comment -wR myorg/app -b hi' | ssh buildhost` lost
+  main's deny under a `github_post` deny on `buildhost`, its other target and its reserved hit. After a hop the host
+  is the first one, where the line hands the stdin over, as for the part's own empty target before the merge, so a
+  deny on the first host still denies the post; ssh's own part names the inner host. A `$( )` in a value declare
+  reads again (#188) runs while declare runs, so it is read as fed where a `$( )` of the line is, and also where
+  declare has a stdin of its own (`cat f | declare -a 'a=($(ssh h))'`, `declare -a 'a=($(ssh h))' < f`): it asked
+  as `shell`, and asks as `opaque_exec` now. Cost: a hop's remote command is read a second time, as a fed line, so
+  a crafted line of quoted hops reads in up to about 1.5 to 1.8 times main's time: exo-36 measured 10 nested quoted
+  hops (88,646 characters) at 2.9 to 3.3 s on main 5a9dc394 and 4.0 to 5.5 s on this branch, and a line of quoted
+  hops that fan out (15,657 characters) reads in 0.12 to 0.14 s on main d79639f1 and 0.21 to 0.23 s on the merge.
+  Each line is still read once per depth and per mark. The #423 differential against main d79639f1, each tree in its
+  own process: the built-in corpus, 65,231 actions under the 87 policies, lowers the same 4,721 pairs on 133
+  actions, 145 of kind (a), 6 of kind (b) and 4,570 of kind (c), 72 of them a lost reserved hit. A focused corpus of
+  10,368 actions (#399's gh lines with `-R`, URL operands, other readings, a subcommand past an option and gh api,
+  fed to ssh through each source above and run as ssh's remote command) under 109 policies (the 87 and 22 more:
+  deny and reserved entries on the hosts and on `github_post` with a host as target, scopes, and rules on gh and
+  ssh) lowers 16 pairs on 8 actions, all of kind (a): `{ ssh buildhost; } < cmds.sh; gh pr merge ...` under a
+  policy that allows `opaque_exec`, as `ssh buildhost < cmds.sh; gh pr merge ...` is on main. Against this branch
+  before the merge the focused corpus lowers nothing.
   *Revisit if:* sudo and the privileged wrappers mark every part they run `costly` ((b) then goes).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
