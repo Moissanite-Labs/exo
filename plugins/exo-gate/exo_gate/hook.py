@@ -676,7 +676,9 @@ class Gate:
             return None
         # D-075: a grant covers the act it was given for. A reserved entry that matched another part of
         # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.
-        if any(hit != (c.category, c.target) for hit in d.reserved):
+        # #454: a sudo write line is also the act of the part its write displaced, which led it before, so a hit on
+        # the write keeps the ask too, as it did then (`sudo echo hi > /tmp/f` under `reserved: [local_write]`).
+        if any(hit != (x.category, x.target) for x in (c, c.displaced) if x is not None for hit in d.reserved):
             return None
         try:
             return self.grants.match(c.category, c.target or c.tool, binding, outward)

@@ -451,6 +451,22 @@ def test_a_grant_on_the_written_path_does_not_answer_a_rule_on_the_host_or_repo(
     assert r["action"] == "approve" and r["approvers"] == ["principal", "seat:helper"], r
 
 
+@pytest.mark.parametrize("gates,line", [
+    ("reserved: [local_write]\n", "sudo echo hi > /tmp/f"), ("reserved: [local_write]\n", "x=$(sudo ls > /tmp/f)"),
+    ("reserved: [local_write]\n", "ssh prod 'sudo echo hi > /tmp/f'"),
+    ("reserved: [{category: local_write, target: '/etc/*'}]\n", "sudo echo hi >> /etc/hosts"),
+    ("categories: {local_write: ask}\nreserved: [local_write]\n", "sudo chmod 777 /x > /tmp/f")])
+def test_a_reserved_hit_on_a_sudo_write_keeps_its_ask_from_a_grant(tmp_path, gates, line):
+    # #454 with D-075: the write leads the line now, but the line is also the act of the part it displaced, which led
+    # it on main. There the write was another part of the line, so its reserved hit kept the principal's ask from any
+    # grant. An "always" still leaves the line asking.
+    _, _, ctx = _store454(tmp_path, "st454g", gates)
+    for _ in range(2):
+        r = call(ctx, "terminal", {"command": line})
+        assert r is not None and r["action"] == "approve" and "reserved for the principal" in r["message"], r
+        answer(ctx, r, "always")
+
+
 def test_a_grant_never_covers_a_reserved_part_of_the_line(tmp_path):
     # D-075: the push grant covers the push. A reserved merge on the same line keeps the principal's ask.
     store = tmp_path / "st3"

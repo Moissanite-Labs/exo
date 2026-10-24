@@ -705,7 +705,9 @@ logged with the grant id.
   granted for the exact command only, like an outward act.
 - A sudo write line whose displaced part names a repo or a host, or asks with that part leading
   (#454), is granted for the exact command only too. So a grant on the written path does not
-  answer a rule on that repo or host, or an ask on that part's category.
+  answer a rule on that repo or host, or an ask on that part's category. A reserved hit on any
+  part of a sudo write line, the write included, keeps the principal's ask from every grant, as
+  when the write was another part of the line (D-075).
 - A gh command that may land on more than one target (`alt_targets`, "Where a gh command
   lands") is granted for the exact command only, like an outward act. A grant on one of its targets
   does not cover it (#399).
@@ -1313,7 +1315,8 @@ gate does not read:
   command of the line (`sudo echo hi | cat > /tmp/f`) is not on the sudo command. There the
   dominant part decides, as on any line (D-075). Where only the write asks, as under
   `{local_write: ask}`, a standing grant and the approvers follow the line's category and target,
-  so a grant for `echo hi > /tmp/f` now covers `sudo echo hi > /tmp/f`. Where the displaced part
+  so a grant for `echo hi > /tmp/f` now covers `sudo echo hi > /tmp/f`. A reserved hit on the
+  write still keeps the principal's ask from any grant, as before. Where the displaced part
   names a target of its own, such as a gh read's repo or an ssh host, or the line asks with that
   part leading (`{shell: ask}` for `sudo chmod u+s /tmp/x > /tmp/log`), the approval is bound to
   the exact command, and only those who may answer both categories may answer it. So a grant or
