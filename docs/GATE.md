@@ -532,8 +532,10 @@ system or bash will.
 
 - **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
   the session's working folder (the core passes it to tool hooks as `cwd`), and, for a shell tool, from that folder
-  joined with the call's own `cwd` argument, the folder a shell runs in. A `cwd` argument on a file tool changes
-  nothing: `read_file`, `write_file` and `grep` take unknown arguments and read from the session's folder. When a
+  joined with the call's own `cwd` argument, the folder a shell runs in. That argument is joined as written, with
+  no `..` folded, so a `cwd` of `sdir/../keys` is read through the link `sdir`, as the shell enters it (#340). A
+  `cwd` argument on a file tool changes nothing: `read_file`, `write_file` and `grep` take unknown arguments and
+  read from the session's folder. When a
   link led somewhere else, the resolved path is matched against the store list too. So `notes.txt` pointing at `~/.ssh/id_rsa`, `aws.txt` at `~/.aws/credentials`, `app.cfg` at a
   project `.env`, and a folder link `cfg` to `~/.ssh` (`cat cfg/config`) ask in every form: `read_file notes.txt`,
   `cat notes.txt` and the absolute paths. A relative path that lands below the folder it was read from is matched
@@ -1708,8 +1710,19 @@ they alias. A relative `ln` target is read against each folder the link can land
 (also `-tDIR`, `-st DIR` and `--target-directory`; only the last, as `ln` rejects two), the last
 operand in case it is an existing folder, and that operand's parent. Options count anywhere on the
 line (`ln REL LINK -s`), because getopt permutes them. A folder given as a relative path is a
-base too: relative paths are resolved from the tool's folders (#340), as the secret-store checks do
-(#209), but never from the gate's own folder, so a bare word is not judged by where the gate runs.
+base too.
+
+Relative paths (#340). A relative path is resolved from the tool's folders, as the secret-store
+checks do (#209): the session's working folder and, for a shell tool, that folder joined with the
+call's own `cwd` argument. It is never resolved from the gate's own folder, so a bare word is not
+judged by where the gate runs. So `write_file rel/policies/default.yaml` with `rel -> ../.exo`,
+`cp x pdir/default.yaml` with `pdir -> ~/.exo/policies`, `ln -s ../.exo rel` and `write_file
+gates.yaml` in a session whose folder is `~/.exo/policies` are store writes. So is a relative
+`cd`, `pushd` or `git -C` target: `cd pdir && echo x > default.yaml` asks. The path is joined to
+the folder as written, and `..` is not folded first. The kernel reads `sdir/../policies` through
+the link `sdir`, so with `sdir -> ~/.exo/state` it is `~/.exo/policies`, and the gate reads it the
+same way. This holds for a `cwd` argument too (`sdir/../policies`), and on the secret-store side
+(`cat seat` with `sdir/../keys` as `cwd` asks). Tests: `tests/security/test_gate_store_relative_links.py`.
 
 Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
 expanded from its source text, so only unquoted braces expand. A file tool's path is expanded as written. The
@@ -1732,7 +1745,23 @@ command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
-followed: a call is read against the filesystem as it stands at classification time.
+followed: a call is read against the filesystem as it stands at classification time. A relative
+`cd` is read from the tool's folders, not from an earlier `cd` on the line, so `cd sub && cd
+../pdir && ...` is not followed. Nor is a relative path after a `cd` that stays out of the store:
+in `cd notes && cp x ../pdir/default.yaml`, `../pdir` is read from the tool's folder, not from
+`notes`. A path spelt from the current folder through a variable (`$PWD/pdir/default.yaml`) is a
+path held in a variable, as above. The `workdir` argument of Hermes' `terminal` and Codex's
+`exec_command` is not read here (#453). Known friction (fails closed): in a session whose folder is
+the Exo home, a word that names a protected entry asks, as its absolute spelling does
+(`echo policies > notes.txt`, `git add state`, `cp state/x /tmp/y`). So does a bare word on any
+command but a read, with a `cwd` in the run folder (`git push origin main`), as after a `cd` there.
+In a session whose folder is HOME, which holds the store, `mv x .`, `chmod -R u+w .` and
+`ln -s /opt/x .` ask, as `mv x ~` does from any folder. A relative `ln` target is
+also read from the tool's folder, so `ln -s ../.exo sub/rel2` asks, although that link leads to
+the `.exo` in the session folder, not to the store. `ln -s .. up` asks from a folder whose parent
+holds the store, and `ln -s ../.exo rel2` asks from HOME, since `rel2` could be a folder. The text
+`ssh` runs on another host is read from the local folders too, as the secret-store checks read it,
+so `ssh host 'cp x pdir/default.yaml'` asks.
 
 Descriptor paths (#217). `/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/fd/N`, `/proc/<pid>/cwd`,
 `/proc/<pid>/root` and `/proc/<pid>/map_files` (`<pid>` also `self`, `thread-self` or `$$`, with or

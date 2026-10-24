@@ -4136,8 +4136,8 @@ def _ln_targets(argv: list[str]) -> list[str]:
     if len(operands) > 1:
         last = _expand_text(operands[-1])
         dirs += [last, os.path.dirname(last)]
-    bases = [d for d in dict.fromkeys(map(_expand_text, dirs)) if d]   # relative dirs too: the link may land
-    return [os.path.join(b, t) for t in dict.fromkeys(operands + values) if not _expand_text(t).startswith("/")  # in one
+    bases = [d for d in dict.fromkeys(map(_expand_text, dirs)) if d]   # a relative one too: _store_word reads it (#340)
+    return [os.path.join(b, t) for t in dict.fromkeys(operands + values) if not _expand_text(t).startswith("/")
             for b in bases]
 # A store check on a spelling makes the checks it covers redundant: a word checked with its ancestors and pieces
 # ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check ("target").
@@ -5214,7 +5214,8 @@ def _runs_shell(tool: str, args: Mapping) -> bool:
 def _in_tool_folder(fn: _F) -> _F:
     """Run ``fn(action, cwd)`` in one _Scope that holds the folders the tool may read from (#209): ``cwd``, the
     session's working folder as the core passes it, always; and for a shell tool, that folder joined with the
-    call's own `cwd` argument. A relative path is resolved from each of them and from the gate's own folder."""
+    call's own `cwd` argument. The secret-store checks resolve a relative path from each of them and from the gate's
+    own folder; the store-write checks from each of them only, never the gate's own (#340)."""
     @functools.wraps(fn)
     def run(action: Any, cwd: str | None = None) -> Any:
         folders: list[str] = []
@@ -5225,7 +5226,8 @@ def _in_tool_folder(fn: _F) -> _F:
                 folders.append(os.path.abspath(base))
             sub = args.get("cwd")
             if isinstance(sub, str) and sub and _runs_shell(tool, args):
-                folders.append(os.path.abspath(os.path.join(base, os.path.expanduser(sub))))
+                # joined, not folded: the shell runs in `sdir/../keys` as the kernel reads it, through sdir (#340)
+                folders.append(os.path.join(os.path.abspath(base) if base else os.getcwd(), os.path.expanduser(sub)))
         except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
             pass
         token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders))))
@@ -5686,14 +5688,13 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
     if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
         return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
     if not p.startswith("/"):
-        # relative: the name checks above already ran. Read it from the tool's folders (#340), as the
-        # secret-store checks do since #209 — but never from the gate's own folder: a bare word must
-        # not be judged by where the gate happens to run (test_a_bare_run_word_is_not_the_run_folder).
+        # relative: the name checks above already ran. Read it from the tool's folders (#340), as the secret-store
+        # checks do (#209), but never from the gate's own: a bare word is not judged by where the gate runs
+        # (test_a_bare_run_word_is_not_the_run_folder). Joined, not folded: _store_abs resolves a link before a `..`.
         scope = _scope.get()
         if scope is None:
             return False
-        return any(_store_abs(os.path.normpath(os.path.join(base, p)), ancestors)
-                   for base in dict.fromkeys(scope.cwds) if base)
+        return any(_store_abs(os.path.join(base, p), ancestors) for base in dict.fromkeys(scope.cwds) if base)
     return _store_abs(p, ancestors)
 
 
@@ -5704,8 +5705,13 @@ def _store_abs(p: str, ancestors: bool) -> bool:
     candidates = _path_forms(p)
     if any(_STORE_NAMES.search(c) for c in candidates):
         return True
-    roots = [(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)]
-    roots += [(r, names, False) for root, names in _bus_paths() for r in _path_forms(root)]
+    memo = _call_memo.get()          # one lookup per call: each relative word now comes here too, per folder (#340)
+    roots = memo.get("store_roots") if memo is not None else None
+    if roots is None:
+        roots = [(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)]
+        roots += [(r, names, False) for root, names in _bus_paths() for r in _path_forms(root)]
+        if memo is not None:
+            memo["store_roots"] = roots
     for candidate in candidates:
         for r, names, principals in roots:
             if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
@@ -5725,14 +5731,21 @@ def _store_abs(p: str, ancestors: bool) -> bool:
 
 def _in_store_dir(path: str) -> bool:
     """A `cd` target inside EXO_HOME or the principal store: relative names after it may be the store. So is a
-    descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217)."""
+    descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217). A
+    relative target is read from the tool's folders, as a store write's path is (#340)."""
     p = _expand_text(path).strip()
     if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")):
         return True
+    paths = [p]
     if not p.startswith("/"):
-        return bool(re.search(r"(^|/)\.exo(/|$)", p))
+        if re.search(r"(^|/)\.exo(/|$)", p):
+            return True
+        scope = _scope.get()             # joined, not folded, and never from the gate's own folder (_store_word)
+        paths = [os.path.join(b, p) for b in dict.fromkeys(scope.cwds) if b] if scope else []
+        if not paths:
+            return False
     roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
-    return any(c == r or c.startswith(r.rstrip("/") + "/") for c in _path_forms(p) for r in roots)
+    return any(c == r or c.startswith(r.rstrip("/") + "/") for q in paths for c in _path_forms(q) for r in roots)
 
 
 _PATCH_PATHS = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$",
