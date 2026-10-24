@@ -59,7 +59,12 @@ def test_a_relative_name_into_the_run_folder_asks(cmd, layout):
     h, parent, name = layout
     line = cmd.format(h=h, parent=parent, name=name)
     c = gate.classify(_sh(line))
-    assert (c.category, gate.decide(c).outcome) == ("credentials", "ask"), line
+    # after a `cd` out of the store, `tar czf - exo-home/run` is a store write too (#340): that stays the line's
+    # result, and the read is a credentials part beside it (#464)
+    assert c.category == "credentials" or c.category == "store_write" and any(
+        p.category == "credentials" for p in gate._each_part(c)), line
+    assert gate.decide(c).outcome == "ask", line
+    assert gate.decide(c, {"gates": {"deny": ["credentials"]}}).outcome == "deny", line
 
 
 @pytest.mark.parametrize("cmd", [

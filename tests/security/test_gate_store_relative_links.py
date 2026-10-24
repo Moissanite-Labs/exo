@@ -189,11 +189,49 @@ def test_a_relative_cd_through_a_link(tree, command):
     ("cd notes && echo x > y.md", ("local_write", "allow")),
     ("cd .. && echo x > notes.txt", ("local_write", "allow")),
     ("cd pdir && cat default.yaml", ("read", "allow")),          # reading the policies does not ask
-    ("cd sub && cd ../pdir && echo x > default.yaml", ("local_write", "allow")),   # limit: not from an earlier cd
-    ("cd notes && cp x ../pdir/default.yaml", ("read", "allow")),                  # limit: as on main
+    ("cd notes && cp ../x y && cd .. && mv a b", ("read", "allow")),
+    ("cd notes && cat ../pdir/default.yaml", ("read", "allow")),
+    ("cd a && echo x > y; cd ../b && echo x > y; cd ../c && echo x > y", ("local_write", "allow")),
 ])
-def test_plain_and_limit_cd_rows(tree, command, expected):
+def test_plain_cd_rows(tree, command, expected):
     assert outcome("bash", {"command": command}, cwd=str(tree)) == expected
+
+
+@pytest.mark.parametrize("command", [
+    # a relative path or `cd` target after a `cd` that stays out of the store is read from where that `cd` leads too
+    "cd notes && cp x ../pdir/default.yaml",
+    "cd notes && echo x > ../pol.yaml",
+    "cd notes && cp x ../sdir/../policies/default.yaml",
+    "cd sub && cd ../pdir && echo x > default.yaml",
+    "pushd notes && tee ../pdir/default.yaml < x",
+    "(cd notes && mv x ../pdir/default.yaml)",
+    "cd notes; sed -i s/a/b/ ../pdir/default.yaml",
+    "cd notes && echo $(cp x ../pdir/default.yaml)",
+    "cd notes && bash -c 'cp x ../pdir/default.yaml'",
+    "cd && cp x proj/pdir/default.yaml",
+    "cd ~/proj/notes && cp x ../pdir/default.yaml",
+    # the same text met again after the `cd` is read again from there
+    "eval 'cp x ../pdir/default.yaml'; cd notes && eval 'cp x ../pdir/default.yaml'",
+])
+def test_a_relative_path_after_a_cd_out_of_the_store(tree, command):
+    assert outcome("bash", {"command": command}, cwd=str(tree)) == ("store_write", "ask")
+    assert outcome("bash", {"command": command}, cwd=str(tree), policy=DENY_STORE) == ("store_write", "deny")
+
+
+def test_the_issues_two_calls_behind_a_cd(tree):
+    """#340's two calls, each behind a `cd` that stays out of the store: the link asks, and so does the write
+    through it once it is there."""
+    (tree / "a/b").mkdir(parents=True)
+    assert outcome("bash", {"command": "cd a/b && ln -s ../../../.exo e"}, cwd=str(tree)) == ("store_write", "ask")
+    (tree / "a/b/e").symlink_to("../../../.exo", target_is_directory=True)
+    for command in ("cd a/b && cp x e/policies/default.yaml", "cd a && cd b && echo x > e/policies/default.yaml"):
+        assert outcome("bash", {"command": command}, cwd=str(tree)) == ("store_write", "ask")
+
+
+def test_past_the_folder_cap_a_relative_write_asks(tree):
+    """A line that enters more folders than the gate follows (gate._ENTERED) fails closed."""
+    line = " && ".join(f"cd d{i}" for i in range(12)) + " && echo x > y"
+    assert outcome("bash", {"command": line}, cwd=str(tree)) == ("store_write", "ask")
 
 
 def test_a_session_folder_in_the_store(tree):
@@ -265,6 +303,9 @@ def test_from_home_a_wide_write_on_the_folder_asks_as_its_absolute_spelling(tree
         assert outcome("bash", {"command": command.replace(" .", " ~")}, cwd=str(tree)) == ("store_write", "ask")
     for command in ("mv a b", "cp -r . /tmp/x", "tar czf /tmp/b.tgz .", "echo hi > notes.txt"):
         assert outcome("bash", {"command": command}, cwd=home)[1] == "allow"
+    # a line that enters HOME with `cd`, and `..` from a folder in HOME, read the same way
+    for command in ("cd ~ && mv Downloads/x.txt .", "cd && chmod -R u+w .", "mv x .."):
+        assert outcome("bash", {"command": command}, cwd=str(tree)) == ("store_write", "ask")
 
 
 @pytest.mark.parametrize("command", ["echo x > foo", "cp x foo", "rm -rf build", "git push --force origin main"])

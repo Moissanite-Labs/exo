@@ -1287,23 +1287,33 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   bare word by where the gate runs, not where the tool writes (a bare `run` would be the run folder whenever the gate
   runs in `$EXO_HOME`). This closes what the #130 amendment left open for relative folders, link chains and the bash
   `cwd` argument, and the relative names under `cwd` the #133 amendment left open. It closes the `cwd` rows of #453.
-  Not done, with the other limits in `docs/GATE.md`: a relative `cd` or path after a `cd` that stays out of the store
-  is read from the tool's folders, not from that `cd` (`cd notes && cp x
-  ../pdir/default.yaml`, as on main), and the `workdir` argument of other harnesses' shell tools is not read (#453).
-  #311 (#452, open) moves a shell call's own folder out of these folders. Its wide reading of the line then gives the
-  store-write checks both `cwd` and `workdir`, if it keeps them joined as written. Known friction, which fails closed:
-  from a session folder in the Exo home, a word that names a protected entry asks, as its absolute spelling does
-  (`git add state`). From a session folder in HOME, `mv x .` asks, as `mv x ~` does. A raw `ln` target is read from
-  the tool's folder as well as the link's, so `ln -s ../.exo sub/rel2` and `ln -s .. up` ask. The text `ssh` runs on
-  another host is read from the local folders, as the secret-store checks read it. gate_diff (#423) ran main 5a9dc394
-  against this change. The built-in corpus, 56,174 actions under the 87 built-in policies, lowers 0 of 4,887,138
+  A `cd` or `pushd` on the line that stays out of the store is followed too: a relative path or `cd` target after it
+  is also read from the folder it enters. Without that, the issue's two calls still worked behind a `cd`
+  (`cd a/b && ln -s ../../../.exo e`, then `cd a/b && cp x e/policies/default.yaml`), and with an existing link one
+  call did (`cd notes && cp x ../pdir/default.yaml`). A relative target is joined to the tool's folders and to those
+  the latest `cd` entered. A `cd` in a subshell may not have stayed, so every folder a `cd` entered counts for the
+  rest of the call (fails closed), and past 64 of them every relative word counts as the store. Not done, with the
+  other limits in `docs/GATE.md`: a `cd` to a folder held in a variable, `cd -`, a folder option that one command
+  takes for its own relative paths (`git -C notes mv x ../pdir/default.yaml`, `env -C`, `sudo -D`), and the `workdir`
+  argument of other harnesses' shell tools (#453). #311 (#452, open) moves a shell call's own folder out of these
+  folders. Its wide reading of the line then gives the store-write checks both `cwd` and `workdir`, if it keeps them
+  joined as written. Known friction, which fails closed: from a session folder in the Exo home, a word that names a
+  protected entry asks, as its absolute spelling does (`git add state`). From a session folder in HOME, or after a
+  `cd` there, `mv x .` asks, as `mv x ~` does, and so does `mv x ..` from a folder in HOME. A raw `ln` target is read
+  from the tool's folder as well as the link's, so `ln -s ../.exo sub/rel2` and `ln -s .. up` ask. The text `ssh` runs
+  on another host is read from the local folders, as the secret-store checks read it. gate_diff (#423) ran main 8c09c29c
+  against this change. The built-in corpus, 65,145 actions under the 87 built-in policies, lowers 0 of 5,667,615
   pairs. A focused corpus of 2,884 actions, run alone in a HOME that holds the links, makes 19,741 actions with its
-  generated forms. It lowers 0 of 1,717,467 pairs and tightens 71,197. Its lines are the issue's and the reviews'
+  generated forms. It lowers 0 of 1,717,467 pairs and tightens 72,329. Its lines are the issue's and the reviews'
   rows, `..` after a link, link chains and links into the store under 18 writers (a here-doc among them) and 29
   wrappers and compound forms (`sudo`, `doas`, `env`, `timeout`, `nice`, `bash -c`, `ssh`, `xargs`, `find -exec`,
   `$( )` and others), six file tools, 16 `cd`, `pushd` and `git -C` targets, 21 `cwd` and `workdir` folders under
   three shell tools, and eight session folders. Its 48 reworded pairs name a post's missing footer after the post,
-  since the store write now sets the card, as for #465. No pair is lower, so no group needs a write-up.
+  since the store write now sets the card, as for #465. A second focused corpus of 8,430 items, built apart from the
+  first, holds write routes after a `cd` under 18 `cd` spellings and 23 joins, every write template under ten
+  spellings of a store path, everyday lines from four session folders and `cd` chains of up to 30 folders. With its
+  generated forms it makes 36,820 actions and lowers 0 of 3,203,340 pairs. No pair is lower, so no group needs a
+  write-up.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,

@@ -1722,7 +1722,14 @@ gates.yaml` in a session whose folder is `~/.exo/policies` are store writes. So 
 the folder as written, and `..` is not folded first. The kernel reads `sdir/../policies` through
 the link `sdir`, so with `sdir -> ~/.exo/state` it is `~/.exo/policies`, and the gate reads it the
 same way. This holds for a `cwd` argument too (`sdir/../policies`), and on the secret-store side
-(`cat seat` with `sdir/../keys` as `cwd` asks). Tests: `tests/security/test_gate_store_relative_links.py`.
+(`cat seat` with `sdir/../keys` as `cwd` asks).
+
+A `cd` or `pushd` that stays out of the store is followed too. A relative path or `cd` target after
+it on the call is also read from the folder it enters. So `cd notes && cp x ../pdir/default.yaml`
+and `cd sub && cd ../pdir && echo x > default.yaml` ask. A relative target is joined to the tool's
+folders and to the folders the latest `cd` entered. A `cd` in a subshell may not have stayed, so
+every folder a `cd` entered counts for the rest of the call (fails closed). Past 64 such folders,
+every relative word counts as the store. Tests: `tests/security/test_gate_store_relative_links.py`.
 
 Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
 expanded from its source text, so only unquoted braces expand. A file tool's path is expanded as written. The
@@ -1745,18 +1752,19 @@ command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
-followed: a call is read against the filesystem as it stands at classification time. A relative
-`cd` is read from the tool's folders, not from an earlier `cd` on the line, so `cd sub && cd
-../pdir && ...` is not followed. Nor is a relative path after a `cd` that stays out of the store:
-in `cd notes && cp x ../pdir/default.yaml`, `../pdir` is read from the tool's folder, not from
-`notes`. A path spelt from the current folder through a variable (`$PWD/pdir/default.yaml`) is a
-path held in a variable, as above. The `workdir` argument of Hermes' `terminal` and Codex's
-`exec_command` is not read here (#453). Known friction (fails closed): in a session whose folder is
-the Exo home, a word that names a protected entry asks, as its absolute spelling does
-(`echo policies > notes.txt`, `git add state`, `cp state/x /tmp/y`). So does a bare word on any
-command but a read, with a `cwd` in the run folder (`git push origin main`), as after a `cd` there.
-In a session whose folder is HOME, which holds the store, `mv x .`, `chmod -R u+w .` and
-`ln -s /opt/x .` ask, as `mv x ~` does from any folder. A relative `ln` target is
+followed: a call is read against the filesystem as it stands at classification time. A `cd` to
+a folder held in a variable (`cd "$D"`) or `cd -` is not followed. Nor is a folder option that a
+single command takes for its own relative paths (`git -C notes mv x ../pdir/default.yaml`,
+`env -C`, `sudo -D`). A path spelt from the current folder through a variable
+(`$PWD/pdir/default.yaml`) is a path held in a variable, as above. The `workdir` argument of
+Hermes' `terminal` and Codex's `exec_command` is not read here (#453). Known friction (fails
+closed): in a session whose folder is the Exo home, a word that names a protected entry asks, as
+its absolute spelling does (`echo policies > notes.txt`, `git add state`, `cp state/x /tmp/y`).
+So does a bare word on any command but a read, with a `cwd` in the run folder
+(`git push origin main`), as after a `cd` there. In a session whose folder is HOME, which holds the
+store, `mv x .`, `chmod -R u+w .` and `ln -s /opt/x .` ask, as `mv x ~` does from any folder. So
+do a line that enters HOME with `cd` (`cd ~ && mv Downloads/x.txt .`) and `mv x ..` from a folder
+in HOME. A relative `ln` target is
 also read from the tool's folder, so `ln -s ../.exo sub/rel2` asks, although that link leads to
 the `.exo` in the session folder, not to the store. `ln -s .. up` asks from a folder whose parent
 holds the store, and `ln -s ../.exo rel2` asks from HOME, since `rel2` could be a folder. The text
