@@ -1115,6 +1115,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-24 (issue #542):* an explicit `gates.escalate` must be a mapping, and its `categories`, when
+  present, must be a list. A malformed value raises `PolicyError` during normalization and store policy loading,
+  rather than silently retaining defaults or using substring membership on a string. Omitted settings, an empty
+  mapping and valid mappings keep their existing behavior. An empty category list disables only category
+  escalation. Chosen over interpreting a bare list as shorthand: rejecting it makes the existing schema explicit
+  and catches scalar and null mistakes through the same path. No classification or valid-policy decision changes.
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
   `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
   grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on

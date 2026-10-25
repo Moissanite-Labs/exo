@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
+  `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
+  lists by substring membership. Omitted settings and valid mappings keep their behavior.
 - `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
   its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
   each tree's violation total with what `and N more on other posts` counts.
