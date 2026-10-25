@@ -629,6 +629,132 @@ def test_the_forms_reading_is_a_part_beside_mains(cmd, main, form):
     assert form is None or form in seats + [c.target], (cmd, seats)
 
 
+# A shell call's own folder argument (#311, #452) is read as a `cd` there, in the same order: the name main reads
+# first, its part's target the folder joined with it, and the forms' name beside it. A line that these forms make a
+# secret line by its own words keeps the folder's read beside it. Each denies on main edeb4f89 and asked on a551a14f
+# (#320 merged with it), but the control whose name comes first.
+CONFIG = {"gates": {"rules": [{"match": {"target": "*config*"}, "decision": "deny"}]}}
+CONFIG_ENTRY = {"gates": {"deny": ["target:*config*"]}}
+KEYS_ENTRY = {"gates": {"deny": ["target:*keys*"]}}
+STORE_ENTRY = {"gates": {"deny": ["target:*/.exo/*", "target:*.exo*"]}}
+FOLDER_TARGETS = [
+    ("echo $(cat config)", "~/.kube", CONFIG),
+    ("echo $(cat config)", "~/.kube", CONFIG_ENTRY),
+    ("echo $(cat config)", "$HOME/.kube", CONFIG),
+    ("echo $(cat config)", "~/.kube/", CONFIG_ENTRY),
+    ("echo `cat config`", "~/.kube", CONFIG),
+    ("cat $(echo x) config", "~/.kube", CONFIG),
+    ("cat config; echo $(date)", "~/.kube", CONFIG),
+    ("echo $(cat hosts.yml)", "~/.config/gh", {"gates": {"rules": [{"match": {"target": "*hosts*"}, "decision": "deny"}]}}),
+    ("echo $(cat environ)", "/proc/self", {"gates": {"deny": ["target:*environ*"]}}),
+    ("tar czf - $(ls) ../keys", "~/.exo", KEYS),
+    ("tar czf - $(ls) ../keys", "~/.exo", KEYS_ENTRY),
+    ("cat $(ls) ../keys", "~/.exo", KEYS),
+    ("tar czf - `ls` ../keys", "~/.exo", KEYS),
+    ("tar czf - $(ls) ../keys", "~/.exo/run/jobs", KEYS),
+    ("tar czf - $(ls) ../keys; rm -rf y", "~/.exo", KEYS_IRREVERSIBLE),
+    ("cat ${x-.netrc}; echo $(git push --force origin main)", "~/.exo/keys", STORE_ENTRY),
+    ("cat ${x-.env} keys", "~/.exo/keys", STORE_ENTRY),
+    ("cat ${x-.env} keys", "~/.exo", STORE_ENTRY),
+    ("cat ${x-.env} keys", "~/.kube", KEYS),
+    ("cat ${x-.env} keys", "/proc/self", {"gates": {"deny": ["target:/proc*"]}}),
+    # the push decides the line on main, and the folder's part keeps an allow rule on `command` off it (#394)
+    ("cat ${x-.netrc}; echo $(git push --force origin main)", "~/.exo/keys",
+     {"gates": {"categories": {"force_push": "deny"}, "rules": [{"match": {"command": ".*"}, "decision": "allow"}]}}),
+]
+
+
+@pytest.mark.parametrize("tool,key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("cmd,folder,policy", FOLDER_TARGETS)
+def test_a_name_read_in_a_tools_store_folder_keeps_its_target(cmd, folder, policy, tool, key):
+    c = gate.classify({"tool": tool, "args": {"command": cmd, key: folder}})
+    assert gate.decide(c, policy).outcome == "deny", c
+    assert gate.decide(c).outcome in ("ask", "deny")
+
+
+@pytest.mark.parametrize("cmd,folder,main,form", [
+    ("echo $(cat config)", "~/.kube", ".kube/config", ".kube/*"),
+    ("tar czf - $(ls) ../keys", "~/.exo", "keys", ".exo/*"),
+    ("cat ${x-.netrc}; echo $(git push --force origin main)", "~/.exo/keys", ".exo/keys", None),
+])
+def test_the_forms_reading_is_a_part_beside_mains_in_a_tools_folder(cmd, folder, main, form, home):
+    """The folder's part is built as main builds it, with main's name in the folder as its target; the forms'
+    reading only adds a credentials part beside it, and a reserved entry on main's target still lists it."""
+    c = gate.classify({"tool": "bash", "args": {"command": cmd, "cwd": folder}})
+    seats = [p.target for p in gate._each_part(c) if p.category == "credentials" and "secret store" in p.signals]
+    assert f"{home}/{main}" in seats, (cmd, seats)
+    assert form is None or f"{home}/{form}" in seats, (cmd, seats)
+    assert gate.decide(c, {"gates": {"reserved": [f"target:*{main}"]}}).reserved, c
+
+
+POSTING = {"posting": {"footer": "-- sent by an agent", "forbid_words": ["hi"]}}
+
+
+@pytest.mark.parametrize("tool,key", [("bash", "cwd"), ("terminal", "workdir")])
+@pytest.mark.parametrize("cmd,folder", [
+    ("cat ${x-.env} config; gh pr comment 3 --body hi", "~/.exo/keys"),
+    ("cat ${x-.env} keys; gh pr comment 3 --body hi", "~/.exo"),
+    ("cat ${x-.env} keys; gh pr comment 3 --body hi", "~/.exo/keys"),
+    ("cat ${x-.netrc}; gh pr comment 3 --body hi", "~/.exo/keys"),
+    ("cat ${x:-.env}; gh pr comment 3 --body hi", "~/.exo/keys"),
+    ("cat ${x[0]:-.netrc}; gh pr comment 3 --body hi", "~/.exo/keys"),
+    ("cat id_ed$((25519)); gh pr comment 3 --body hi", "~/.exo/keys"),
+])
+def test_a_post_beside_the_folders_read_keeps_each_check(cmd, folder, tool, key):
+    """In a folder that is itself a store, main edeb4f89 checks the post as the line's own and as its part, so it
+    lists each violation twice. These forms make the line credentials, and the copy of the post beside the folder's
+    part keeps its text, so each is listed as often, named after the post (a551a14f listed each once)."""
+    c = gate.classify({"tool": tool, "args": {"command": cmd, key: folder}})
+    d = gate.decide(c, POSTING)
+    for v in ("missing footer: -- sent by an agent", "forbidden word: hi"):
+        assert sum(x.endswith(v) for x in d.violations) >= 2, d.violations
+    # a body the gate cannot read is a violation of the post's, listed as often too
+    c = gate.classify({"tool": tool, "args": {"command": cmd.replace("--body hi", "--body-file -"), key: folder}})
+    assert sum(x.endswith(gate.UNSEEN_BODY) for x in gate.decide(c, POSTING).violations) >= 2, c
+
+
+@pytest.mark.parametrize("cmd", ["cat ${x-.netrc}; gh pr comment 1 --body hi",
+                                 "cat id_ed$((25519)); gh pr comment 1 --body hi",
+                                 "cat ${x-.env} config; gh pr comment 1 --body hi"])
+@pytest.mark.parametrize("tool,key", [("bash", "cwd"), ("terminal", "workdir")])
+def test_a_line_of_many_posts_in_a_store_folder_lists_as_many_entries(cmd, tool, key):
+    """Past the cap of listed entries (20), main edeb4f89 lists the first post's violation in `~/.exo/keys` bare,
+    beside 20 named ones and `and 5 more`. The copy of the post beside the folder's part comes first, so its entry
+    is listed before the cap, and as many are listed (a551a14f listed one fewer, and counted it in `and 6 more`)."""
+    line = "; ".join([cmd, *(f"gh pr comment {i} --body hi" for i in range(2, 26))])
+    d = gate.decide(gate.classify({"tool": tool, "args": {"command": line, key: "~/.exo/keys"}}),
+                    {"posting": {"footer": "-- sent by an agent"}})
+    assert sum(v.endswith("missing footer: -- sent by an agent") for v in d.violations) == 21, d.violations
+    assert d.violations[-1] == "and 5 more on other posts", d.violations
+
+
+@pytest.mark.parametrize("cwd", [None, "/tmp", "~/.exo"])
+@pytest.mark.parametrize("cmd", [
+    "cat ${x-.netrc}; mail -s s a@b.c <<EOF\nhi\nEOF",
+    "cat ${x:-.env}; mail -s s a@b.c <<EOF\nhi\nEOF",
+    "cat ${x[0]:-.netrc}; mail -s s a@b.c <<EOF\nhi\nEOF",
+    "cat id_ed$((25519)); mail -s s a@b.c <<EOF\nhi\nEOF",
+    "mail -s s a@b.c <<EOF\nhi\nEOF\ncat ${x-.netrc}",
+    "cat ${x-.netrc}; cp x ~/.exo/policies/a; mail -s s a@b.c <<EOF\nhi\nEOF",
+])
+def test_a_heredoc_post_beside_a_secret_form_keeps_its_checks(cmd, cwd):
+    """A here-doc body reaches the post on the line: on main edeb4f89 the post is the line, and these forms make
+    the line a secret line, so the most severe post below the secret takes the body, as below a store write (#435).
+    Its footer and forbidden-word checks stay (a551a14f listed none), and the line still asks."""
+    args = {"command": cmd} if cwd is None else {"command": cmd, "cwd": cwd}
+    c = gate.classify({"tool": "bash", "args": args})
+    d = gate.decide(c, POSTING)
+    assert d.outcome == "ask", c
+    for v in ("missing footer: -- sent by an agent", "forbidden word: hi"):
+        assert any(x.endswith(v) for x in d.violations), d.violations
+
+
+def test_a_heredoc_post_beside_a_literal_secret_is_checked_too():
+    """The literal secret line had no posting checks on main edeb4f89 either; it now has them (stricter)."""
+    d = gate.decide(gate.classify(sh("cat .netrc; mail -s s a@b.c <<EOF\nhi\nEOF")), POSTING)
+    assert any(x.endswith("missing footer: -- sent by an agent") for x in d.violations), d.violations
+
+
 COSTLY_SECRET_DENY = {"gates": {"rules": [{"match": {"category": ["credentials"], "reversibility": "costly"},
                                            "decision": "deny"}]}}
 SECRET_LIFT = {"gates": {"categories": {"credentials": "deny"}, "rules": [
@@ -734,6 +860,8 @@ def test_many_expansions_in_path_words_stay_linear(line, cat, monkeypatch):
     """Each word with an expansion is read in a few more forms, each one string: one pass per word, no splitting
     into every way the gaps could be filled. The work is counted (_unknown_forms and _store_glob calls, and every
     Python call), not timed: twice the line is about twice the work."""
+    # the #269 budget is charged the parts of each path built, so a deep tmp HOME reaches it sooner (it asks then)
+    monkeypatch.setenv("HOME", "/exo-test-home")
     count = {"forms": 0, "glob": 0, "calls": 0}
     real_forms, real_glob = gate._unknown_forms, gate._store_glob
 

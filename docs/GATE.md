@@ -1688,7 +1688,9 @@ names as well (`exod.principal.key`, `exod.token`, the sampled `agent-<seat>.pri
 or name, and each level up, is charged the path parts it builds, as it is made, to one budget of 65,536
 parts for the whole tool call, which every `$( )` shares (each is classified again, nested ones too), so
 the work stays linear in the line however deep the names are. Past the budget, or on a line that reaches
-more than 64 such folders, the line asks (fails closed, no grant). A line that names no store folder
+more than 64 such folders, the line asks (fails closed, no grant). The budget counts the parts of
+each full path, so a deep home folder spends it sooner: a long line of expansion forms in a store
+folder that reads under `/home/me` can ask under a home folder six levels deep. A line that names no store folder
 makes no join. A target spelt with a glob or an expansion (read as a glob, `r$(printf u)n` as `r*n`) is
 read as the folders in the store it could be: its parts up to the store's own folder (or a `.exo` one) as
 that folder, and the parts below it along each tail of a principal's `principals/<name>/run/jobs` path
@@ -1806,11 +1808,32 @@ by its name inside the checkout (`x/.kube`, `x/.config/gh`, `x/.docker`) is not 
 folder itself, `~/.claude` and a `.claude` folder with no `.git` beside it are stores, so any call
 there asks, as a `cd` there does.
 
-A line that already reads a store keeps that reading. A line that writes the Exo store stays
-`store_write`, and a store read from its folder is a `credentials` part beside the write, as a key
-read after `tar -C` is (#464). So `cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd`
-is denied by `deny: [credentials]`, as its `cd` form is, and only the principal answers it. A `cd`
-on the line is read as before. Limits:
+A line that already reads a store keeps that reading, and the folder's read is a `credentials` part
+beside it when it names another target, as beside a `cd` form's secret line (#320). So under
+`deny: [target:*/.ssh]`, `cat id_rsa` with `~/.ssh` as `cwd` is denied, as
+`cd ~/.ssh && cat id_rsa` is, and so is `cat ${x-.netrc}; echo $(git push --force origin main)`
+with `~/.exo/keys` as `cwd` under `deny: [target:*/.exo/*]`, whose `${x-.netrc}` makes it a secret
+line. A line that writes the Exo store stays `store_write`, and a store read from its folder is a
+`credentials` part beside the write, as a key read after `tar -C` is (#464). So
+`cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd` is denied by
+`deny: [credentials]`, as its `cd` form is, and only the principal answers it. A `cd` on the line
+is read as before.
+
+The folder reads a line's names as a `cd` there does, in the same order (#320, "The working folder"
+above): first the words as written, and that name is the part's target, as on main; then
+the expansion forms and `..` readings, and a name they find that is another target is a second
+`credentials` part beside it. So `echo $(cat config)` with `~/.kube` as `cwd` keeps its part on
+`~/.kube/config`, which a rule or `target:` entry on `*config*` denies, with one on `~/.kube/*`
+beside it. These reads are made beside the #209 one too, so `cat ${x-.env} keys` with `~/.kube` as
+`cwd`, which `${x-.env}` makes a secret line, keeps its part on `~/.kube/keys`. On a secret line the
+folder adds a part to, a copy of the line's heaviest other command with no own text is a part as
+well, so a rule keyed on `command` does not lift that command's category or matrix deny (#394), as
+when that command decides the line: `cat ${x-.netrc}; echo $(git push --force origin main)` with
+`~/.exo/keys` as `cwd` is denied under `force_push: deny` and an allow rule on `.*`. The copy
+keeps its body, read or unseen, so a post on such a line meets each posting check as often as
+when it decides the line, and it is the line's first part, so on a line of more posts than the
+card lists (20) its entry is listed before the others, as the line's own is. A word that is a substitution alone is `*` there, so `echo x $(cat f) w`
+with `~/.kube` as `cwd` asks, as after `cd ~/.kube`. Limits:
 
 - The session's own folder (the `cwd` the core passes with every call, #209) is not a target. A
   session started inside a store folder reads it by relative names as before.
@@ -1823,10 +1846,6 @@ on the line is read as before. Limits:
   write (#435). So `deny: [store_write]`
   does not reach `cat *; rm -rf build` with `~/.exo/keys` as `cwd`, whose `cd` form writes in the
   store. The call still asks, as on main.
-- A line that reads a secret itself keeps that reading, and the folder adds no part to it. So a
-  `target:` entry on the folder does not reach it: under `deny: [target:*/.ssh]`, `cat id_rsa` with
-  `~/.ssh` as `cwd` asks, where `cd ~/.ssh && cat id_rsa` is denied. That is no lower than main.
-  `deny: [credentials]` denies both.
 - The part's target is the folder joined with the name (`~/.kube/config`). A `cd` form's target is
   the name alone (`config`). So a rule or `target:` entry on the name alone, such as a deny rule on
   `credentials` and `target: config`, reaches only the `cd` form. One on the path, such as
@@ -1838,7 +1857,8 @@ on the line is read as before. Limits:
   denied, since the rule does not name the `cd`. Main asks or allows there. On a line of two or more
   commands, such as `cat *; git push --force origin main`, the deny stands.
 
-Tests: `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
+Tests: `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`,
+`tests/security/test_gate_store_name_forms.py` (the folder's reads beside each other).
 
 Compound commands (#161). The stdin of a compound command reaches the commands inside it, nested
 compounds included: a heredoc or here-string after its closing `}`, `)`, `done`, `fi` or `esac`,
@@ -2127,7 +2147,10 @@ with its target and text (#435 review). Examples are an `email_send`, `web_post`
 for the call, a rule that matches it, its own matrix cell and the posting rules still apply to it. A
 tool that the gate reads as `local_write` or `delete` by its name, such as an `upload_file` tool
 that is not from MCP, keeps that reading as a part with the call's own URL as its target. A here-doc
-body on the line goes to the post, also inside a script fed to `bash`. Each of these still asks the
+body on the line goes to the post, also inside a script fed to `bash`, and so it does on a line a
+secret read decides (#320): `cat ${x-.netrc}; mail -s s a@b.c <<EOF`, which that form makes a secret
+line, keeps the mail's footer, forbidden-word and scrub checks, and `cat .netrc; mail ...` now has
+them too. Each of these still asks the
 principal alone when nothing denies it. Under `sudo` or `doas` over `ssh` or `mosh`, the store write
 is the dominant part, and a costly copy of each reversible part the wrapper runs is added beside it
 (#320), so a rule on `shell` or `local_write` with `reversibility: costly`, or a matrix that denies

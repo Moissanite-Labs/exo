@@ -5170,8 +5170,11 @@ def _own_copy(c: Classification) -> Classification:
 def _store_post_text(c: Classification, body: str) -> None:
     """Give a store line's here-doc body to the most severe post the store write outranks, as the line itself took
     it when the post was the line (#435): also a post inside a nested line (`bash <<EOF` feeding `mail -A ..`).
+    On a secret line, the most severe post below the secret and any store write takes it so (#320: `cat
+    ${x-.netrc}; mail a@b.c <<EOF`, which these forms make a secret line, keeps its posting checks).
     Parts are shared (_own_copy), so the post and each part on the way down to it are copied, never changed."""
-    post = _most_severe(p for p in _each_part(c) if p.category != "store_write")
+    above = ("store_write",) if c.category == "store_write" else ("store_write", "credentials")
+    post = _most_severe(p for p in _each_part(c) if p.category not in above)
     if post is None or post.text or post.text_file or post.category not in OUTBOUND or post.category == "web_post":
         return
     seen: dict[int, Classification] = {id(post): replace(post, text=body)}
@@ -5357,9 +5360,9 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     ]))
     # Outbound text: if several gh segments post text, keep the most severe one's text. Never for a post whose
     # body is a file: another command's heredoc is not that file, and the caller reads the file (#208). On a store
-    # write, the post it outranks takes the text (#435: `mail -A <store file> a@b.c <<EOF`).
+    # write, the post it outranks takes the text (#435: `mail -A <store file> a@b.c <<EOF`), and so on a secret line.
     body = next((h.body for k in cmds for h in k.heredocs), None)
-    if body is not None and c.category == "store_write":
+    if body is not None and c.category in ("store_write", "credentials"):
         _store_post_text(c, body)
     elif not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
         c.text = body
@@ -6571,14 +6574,19 @@ def _shell_call(cmd: str) -> Classification:
         if read is not None:                    # the line alone, as a call of its own in the session's folder
             c = _line_alone(cmd, scope, {k: v for k, v in seen.items() if k[:1] == ("parse",)})
             c.also = whole
-        if any(p.category == "credentials" for p in _each_part(c)):
-            return c
         found = _tool_folder_read(cmd, folders, read)  # a store write stays the line's result, as for `tar -C` (#464)
     finally:
         _shell_seen.reset(memo)
         _scope.reset(token)
-    if found:
-        summary, target = found
+    # #320: a secret line by its own words keeps the folder's read beside it when that is another target, as a cd
+    # form's does (`cat ${x-.netrc}; git push -f` in ~/.exo/keys), and a copy of its heaviest other command with no
+    # own text, so no rule on `command` lifts that command's deny, as on main where it decides the line (#394). The
+    # copy keeps its body, so a post main checks as the line's own and as its part is checked twice here too.
+    new = [f for f in found if f[1] not in {p.target for p in _each_part(c) if p.category == "credentials"}]
+    top = _most_severe(p for p in _each_part(c) if p.category != "credentials") if c.category == "credentials" else None
+    if new and top is not None:                 # first, so a line of many posts lists its entries before the cap
+        c.parts = [replace(top, parts=[], own=None), *c.parts]
+    for summary, target in new:
         part = _make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
                      signals=["secret store"])
         # the read keeps its own weight, and a heavier command on the line is a credentials part with that weight
@@ -6601,13 +6609,14 @@ def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
         _brace_left.reset(left)
 
 
-def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification | None) -> tuple[str, str] | None:
-    """How a shell call reads a secret store from its own folder argument (#311), as (summary, target), or None. In
+def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification | None) -> list[tuple[str, str]]:
+    """How a shell call reads a secret store from its own folder argument (#311), as [(summary, target)], or []. In
     this order: the folder is itself a store, as a `cd` word is (a link resolved, a glob that could name one); a
-    relative word resolves into one from it (#209; ``read`` is that reading's credentials part); or the line reads
-    a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192). The target is the folder, or the
-    folder joined with the name. A folder in a repo's own .claude worktrees, commands, agents or skills is the
-    repo's, not a store (_repo_claude), so only a word that resolves into a store counts there."""
+    relative word resolves into one from it (#209; ``read`` is that reading's credentials part); and the line reads
+    a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192): the words as written first, then
+    with #320's forms, whose name is a second read when it is another target, as on a cd line. The target is the
+    folder, or the folder joined with the name. A folder in a repo's own .claude worktrees, commands, agents or
+    skills is the repo's, not a store (_repo_claude), so only a word that resolves into a store counts there."""
     forms: list[tuple[str, str]] = []           # (the folder as the call gives it, a form to check)
     for f in folders:
         x = _expand_text(f)
@@ -6621,19 +6630,23 @@ def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification |
         forms += [(f, g) for g in [*linked, f] if not _repo_claude(g)]
     for f, g in forms:
         if is_sensitive_path(g) or _glob_hits_secret(g):
-            return f"shell runs in {f}", g
+            return [(f"shell runs in {f}", g)]
+    out: list[tuple[str, str]] = []
     if read is not None:                        # the target: the name in the folder it resolves into a store from
         where = folders[0] if len(folders) == 1 else " or ".join(folders)
         paths = [_in_folder(_expand_text(f), read.target) for f in folders]
         linked = [_in_folder(g, read.target) for f, g in forms if g != f]   # `..` read past the link, as the kernel
-        return f"{read.summary} in {where}", next((p for p in linked + paths if is_sensitive_path(p)), paths[0])
-    if not forms:
-        return None
-    cmds, subs, _ = _parse(cmd or "")
-    for f, g in forms:
-        if found := _cd_store_read(cmds, subs, tools=(g,)):
-            return f"shell touching {found} in {f}", _in_folder(_expand_text(g), found)
-    return None
+        out.append((f"{read.summary} in {where}", next((p for p in linked + paths if is_sensitive_path(p)), paths[0])))
+    cmds, subs, _ = _parse(cmd or "")           # #320: also beside ``read``, which only its forms may have made
+    walked: list = []
+    for wide in (False, True):                  # main's reading first, #320's beside it
+        for f, g in forms:
+            if found := _cd_store_read(cmds, subs, wide, walked, tools=(g,)):
+                target = _in_folder(_expand_text(g), found)
+                if all(target != t for _, t in out):
+                    out.append((f"shell touching {found} in {f}", target))
+                break
+    return out
 
 
 def _in_folder(folder: str, name: str) -> str:
