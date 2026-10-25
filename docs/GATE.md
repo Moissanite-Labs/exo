@@ -1325,7 +1325,7 @@ gate does not read:
   given, so the gate reads each one, in its place (`printf -v X -v PATH .` and
   `printf {-v,X,-v,PATH} .` ask). A glob in a name joined to `-v` asks as one apart does:
   `printf -vPAT? .` is `printf -vPATH .` when a file named `-vPATH` is in the folder. A leading
-  `[` in a `read` or exporter name (`read [P]ATH`) is not read yet.
+  `[` in a `read` or exporter name (`read [P]ATH`) is not read yet (#478).
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
   `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
@@ -1333,9 +1333,9 @@ gate does not read:
   `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` set more than once on a command is checked with
   each value it takes. bash keeps the last value, but a readonly name keeps its first, so
   `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h
-  GIT_CONFIG_KEY_0=a` runs the hook path. Past 64 pairs of a key and a value, the command asks,
-  and each key is checked with the first and the last value and each value with the first and
-  the last key. An exec key
+  GIT_CONFIG_KEY_0=a` runs the hook path (#555). Past 64 pairs of a key and a value, the command
+  asks, and each key is checked with the first and the last value and each value with the first
+  and the last key. An exec key
   is an alias, the pager, the editor, `core.sshCommand`, a hook path, a filter or diff driver, a
   credential helper, `interactive.diffFilter`, `remote.<name>.uploadpack` or `receivepack`, the
   `.path` of a difftool, mergetool, man or browser tool, any key whose last part ends in

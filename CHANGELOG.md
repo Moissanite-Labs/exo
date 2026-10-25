@@ -304,7 +304,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   hide a git config key the line set before it: `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath
   GIT_CONFIG_VALUE_0=./h {GIT_CONFIG_KEY_0=a,b}; git commit -m x` asks. bash keeps a readonly name's first
   value, so a `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` set twice on one command is now checked with each
-  value, with a brace or not. Past 64 pairs of a key and a value the command asks, and each key is checked with
+  value, with a brace or not (#555). Past 64 pairs of a key and a value the command asks, and each key is checked with
   the first and the last value and each value with the first and the last key, so a short line that sets a
   thousand keys and a thousand values is not read once for each pair. A word outside a set is read once. A word
   with a `$( )`, backticks or `<( )` takes more of the expansion's budget, so a large set of them asks at once and
