@@ -593,9 +593,12 @@ system or bash will.
 
 - **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
   the session's working folder (the core passes it to tool hooks as `cwd`), and, for a shell tool, from that folder
-  joined with the call's own `cwd` or `workdir` argument, the folder a shell runs in. A hit there adds a
-  credentials part to the line (#311, "The tool's own folder"). A `cwd` argument on a file tool changes
-  nothing: `read_file`, `write_file` and `grep` take unknown arguments and read from the session's folder. When a
+  joined with the call's own `cwd` or `workdir` argument, the folder a shell runs in. That argument is read joined
+  as written, so a `cwd` of `sdir/../keys` is read through the link `sdir`, as the kernel enters it (#340). It is
+  read folded too, as `os.path.abspath` and bash's `cd` read it, so with `xl` a link elsewhere and `kl` a link to
+  `~/.ssh`, a `cwd` of `xl/../kl` is `~/.ssh`. A hit there adds a credentials part to the line (#311, "The tool's
+  own folder"). A `cwd` argument on a file tool changes nothing: `read_file`, `write_file` and `grep` take unknown
+  arguments and read from the session's folder. When a
   link led somewhere else, the resolved path is matched against the store list too. So `notes.txt` pointing at `~/.ssh/id_rsa`, `aws.txt` at `~/.aws/credentials`, `app.cfg` at a
   project `.env`, and a folder link `cfg` to `~/.ssh` (`cat cfg/config`) ask in every form: `read_file notes.txt`,
   `cat notes.txt` and the absolute paths. A relative path that lands below the folder it was read from is matched
@@ -637,7 +640,13 @@ Known limits. A link made on the same line (`tar xf v.tar && cat notes.txt`) doe
 classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the store. Programs that follow links
 while they walk (`grep -r`, `rg -L`, `cp -rL`) are checked by their arguments only. In executor or broker mode the
 gate's view of the file system may differ from the worker's. A name built whole inside a substitution
-(`cat $(printf '.e%sv' n)`) is not read. Open issues:
+(`cat $(printf '.e%sv' n)`) is not read. On a line with a `cd` that stays out of the Exo store, a relative
+word is also read from each folder a `cd` entered, as the store-write checks read it (#340). So with `kdir` a
+link to `~/.exo/keys`, `cd notes && cat ../kdir/seat` asks, and so does `cd xl/../kl && tar czf /tmp/o.tgz .`,
+since bash enters `kl`. This runs only where the checks above found nothing, so a line they name keeps its name.
+It reads at most 64 folders, and its joins are charged to the budget of "In `$EXO_HOME` (#269)" below: past the
+budget, the word counts (fails closed). A `cd` into the Exo store is not noted for it, so `cd xl/../kdir && cat *`
+stays a read (#530). Open issues:
   - #309: the Exo-store write checks (`is_store_path`, "The store is credentials" below) read the `${VAR:-word}`
     value but not expansions inside a name, so `cp x ~/.exo/polic$(:)ies/gates.yaml` is still a shell command (a
     write redirection to a path with `$` already asks as `opaque_exec`);
@@ -1625,10 +1634,19 @@ the work stays linear in the line however deep the names are. Past the budget, o
 more than 64 such folders, the line asks (fails closed, no grant). A line that names no store folder
 makes no join. A folder spelt with a wildcard is left to the store-folder check above.
 
-A line that enters no store folder, and names none, is classified as before. The work is linear
-in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
-store tests per store folder (one per glob candidate), and a parent path kept only as deep as
-the deepest sample store folder. The trade-off, which fails closed: neither the order nor the
+A line that enters no store folder, and names none, is classified as before, except past the cap
+and the budget of "Relative paths (#340)" below: past 64 folders entered with `cd`, or past the
+budget above, a plain relative write asks. The work is linear in the line: set lookups per word,
+at most two small `fnmatch` matches per glob, at most 64 store tests per store folder (one per
+glob candidate), and a parent path kept only as deep as the deepest sample store folder. #340
+adds a lookup of each relative word from each folder a `cd` on the line entered, at most 64 of
+them. Each path is looked up once a call, with the folders above it shared, and each such join is
+charged to the budget above. Measured in CPU time with 300 real nested folders: 3,000 relative
+words after one `cd` took 0.30 s, against 0.24 s before #340. After two `cd`s they pass the budget
+and ask, in 0.34 s. 64 relative `cd` steps from a folder 200 levels deep took 57 ms, against 19 ms,
+and ask, since the seventh step passes the cap. A here-string of 3,000 words read by 65 shells,
+with an absolute `cd` before each, took 0.92 s, against 0.41 s, and asks.
+The trade-off, which fails closed: neither the order nor the
 success of the commands is followed, so on a line that enters a store folder a word named like a
 store file asks even when it is elsewhere or is not a file
 (`cd ~/.kube && cd ~/project && cat config`, `cat config; cd ~/.kube`,
@@ -2064,10 +2082,10 @@ before a seat could answer its `opaque_exec` ask. Not covered here: the folders 
 so a principal-only floor there would ask on every edit, and protecting it is a separate change. The
 installer and `exo update`, which copy Exo's plugins into the folder, stay `opaque_exec`. A copy that
 lands on the folder by a source's name (`cp -r /tmp/x/plugins ~/.exo/`) or an archive unpacked into
-the home (`tar -xf x.tar -C ~/.exo`) is not seen as a write to it, as for every protected folder. Nor
-is a relative path written by a tool whose working folder is in the plugins folder or in `$EXO_HOME`
-(`cp evil.py __init__.py` or `write_file __init__.py` in a session started in `~/.exo/plugins/foo`):
-the store check reads a relative path by its name alone, as for every protected folder (below).
+the home (`tar -xf x.tar -C ~/.exo`) is not seen as a write to it, as for every protected folder. A
+relative path written by a tool whose working folder is in the plugins folder or in `$EXO_HOME` is
+seen (`cp evil.py __init__.py` or `write_file __init__.py` in a session started in
+`~/.exo/plugins/foo`): it is read from that folder ("Relative paths (#340)" below).
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
@@ -2079,9 +2097,67 @@ resolution working. `cp -s` and `cp -l` (also spelled `--sym` or `--li`) count a
 they alias. A relative `ln` target is read against each folder the link can land in: `-t DIR`
 (also `-tDIR`, `-st DIR` and `--target-directory`; only the last, as `ln` rejects two), the last
 operand in case it is an existing folder, and that operand's parent. Options count anywhere on the
-line (`ln REL LINK -s`), because getopt permutes them. A folder given as a relative path is not a
-base: relative paths only use the distinctive-name checks, because the tool's working directory is
-unknown here.
+line (`ln REL LINK -s`), because getopt permutes them. A folder given as a relative path is a
+base too.
+
+Relative paths (#340). A relative path is resolved from the tool's folders, as the secret-store
+checks do (#209): the session's working folder and, for a shell tool, that folder joined with the
+call's own `cwd` or `workdir` argument. A store write read in a shell tool's own folder is a reading
+of the call beside the line read alone, as a store read there is (#311, "The tool's own folder"),
+and the stricter one decides. It is never resolved from the gate's own folder, so a bare word is not
+judged by where the gate runs. So `write_file rel/policies/default.yaml` with `rel -> ../.exo`,
+`cp x pdir/default.yaml` with `pdir -> ~/.exo/policies`, `ln -s ../.exo rel` and `write_file
+gates.yaml` in a session whose folder is `~/.exo/policies` are store writes. So is a relative
+`cd`, `pushd` or `git -C` target: `cd pdir && echo x > default.yaml` asks. The path is joined to
+the folder as written, and `..` is not folded first. The kernel reads `sdir/../policies` through
+the link `sdir`, so with `sdir -> ~/.exo/state` it is `~/.exo/policies`, and the gate reads it the
+same way. This holds for a `cwd` argument too (`sdir/../policies`), and on the secret-store side
+(`cat seat` with `sdir/../keys` as `cwd` asks). A `cwd` argument and a `cd` target are read folded
+as well, as bash's `cd` enters them, so with `xl` a link elsewhere, a `cwd` of `xl/../pdir` and
+`cd xl/../pdir && echo x > default.yaml` ask. So is the folder a `cd` enters: bash enters `notes`
+for `cd xl/../notes`, so `cd xl/../notes && cp x ../pdir/default.yaml` asks. A path word itself is
+read joined only, as the kernel reads it: `cp y xl/../pdir/default.yaml` writes through `xl`, not
+into the store.
+
+In a store folder every relative word is a store path, the program word too. So a write is named
+after a word that is a store path by its own spelling first: `touch ~/.exo/state/x` with
+`~/.exo/policies` as `cwd` is named `~/.exo/state/x`, and `deny: ["target:*/.exo/*"]` denies it.
+A word that is a store path only as read from the folder names the write only when the command
+has no such word. In a store folder the program word never names it, since it is run, not
+written. Nor does an option, tar's bundled options or the words of `xargs` up to the program it
+runs: `rm -rf x` there is named `x`, and `tar czf /tmp/o.tgz .` is named `.`. When no word is left
+(`make` with a `cwd` in the store), the write is named "a path inside the store (the tool's
+folder)", as a `cd` there names it "a path inside the store (after cd)". Outside a store folder,
+such a skipped word still names the write when no other word does: `tee -- -p/default.yaml`, with
+`-p` a link to the policies folder, is a store write named `-p/default.yaml`. From a folder outside the
+store, a program word that leads in names the write, as its absolute spelling does:
+`../pdir/run.sh`, or a path in `python3 -c` code, which the gate reads as a command. After a `cd`
+into the store, a relative word that is a store path as read from the tool's folders names the
+write too: `cd ~/.exo/policies && cp y pdir/default.yaml` is named `pdir/default.yaml`. Before #340
+it was named "a path inside the store (after cd)". That name stays as a second target, so a
+`target:` entry on it still matches, and one on the word matches as well.
+
+A `cd` or `pushd` that stays out of the store is followed too. A relative path or `cd` target after
+it on the call is also read from the folder it enters. So `cd notes && cp x ../pdir/default.yaml`
+and `cd sub && cd ../pdir && echo x > default.yaml` ask. A `cd` in a subshell, one that failed, one
+on a branch not taken, or a `pushd` that a `popd` undid may not have stayed. So every folder a `cd`
+entered counts for the rest of the call (fails closed), and a relative `cd` target is joined to
+each of them and to the tool's folders. With `notes/in/e` a link to the Exo home,
+`cd notes && (cd sub) && cd in && echo x > e/policies/default.yaml` asks, since the shell is still
+in `notes`. Past 64 such folders, every relative word counts as the store, so a plain write asks.
+An absolute `cd` enters one folder, so the 65th on a line passes the cap. A relative `cd` can
+double the folders: six relative `cd`s in a row enter 63, and a seventh passes 64. So do six
+rounds of `cd x; ...; cd ..` and seven of `(cd x && make)`, with a new `x` each time. A shell
+call's `cwd` argument adds a folder to join to, so there one step fewer passes it. This is known
+friction, and it fails closed. Each join to a folder a `cd` entered is charged to the budget of
+"In `$EXO_HOME` (#269)", and past it every relative word counts too. Each path is looked up once a
+call, and the folders above it are shared. So the work grows with the words and the folders, at
+most 64, and not with how deep they are. A brace word or a stdin text met again after a `cd`
+entered a folder is read again from there. Such a stdin text is charged its words to the same
+budget, once per folder entered, as joining each word there would be. So a here-string that many
+shells read, with a `cd` before each, is read a few times, not once per `cd`. Past the budget every
+relative word counts, for the secret stores too, and the text is not read again.
+Tests: `tests/security/test_gate_store_relative_links.py`.
 
 Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
 expanded from its source text, so only unquoted braces expand. A file tool's path is expanded as written. The
@@ -2119,8 +2195,28 @@ command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
-followed, and a shell tool's `cwd` or `workdir` argument is not read here (the secret-store checks read
-it, #209, #311).
+followed: a call is read against the filesystem as it stands at classification time. A `cd` to
+a folder held in a variable (`cd "$D"`), to a glob (`cd l[k]`) or `cd -` is not followed. Nor is a
+folder option that a single command takes for its own relative paths
+(`git -C notes mv x ../pdir/default.yaml`, `env -C`, `sudo -D`). A write is read from the folders
+a `cd` before it entered. In a loop, a `cd` later in the body runs before the write on the next
+pass, and that is not followed yet: `for i in 1 2; do cp x ../pdir/default.yaml; cd notes; done`
+is allowed, here and before #340. A path spelt from the current
+folder through a variable (`$PWD/pdir/default.yaml`) is a path held in a variable, as above. A shell
+tool's `cwd` and `workdir` arguments are read here when the line is read in them (#311). Known
+friction (fails closed): in a session whose folder is the Exo home, a word that names a protected
+entry asks, as its absolute spelling does (`echo policies > notes.txt`, `git add state`,
+`cp state/x /tmp/y`).
+So does a bare word on any command but a read, with a `cwd` in the run folder
+(`git push origin main`), as after a `cd` there. In a session whose folder is HOME, which holds the
+store, `mv x .`, `chmod -R u+w .` and `ln -s /opt/x .` ask, as `mv x ~` does from any folder. So
+do a line that enters HOME with `cd` (`cd ~ && mv Downloads/x.txt .`) and `mv x ..` from a folder
+in HOME. A relative `ln` target is
+also read from the tool's folder, so `ln -s ../.exo sub/rel2` asks, although that link leads to
+the `.exo` in the session folder, not to the store. `ln -s .. up` asks from a folder whose parent
+holds the store, and `ln -s ../.exo rel2` asks from HOME, since `rel2` could be a folder. The text
+`ssh` runs on another host is read from the local folders too, as the secret-store checks read it,
+so `ssh host 'cp x pdir/default.yaml'` asks.
 A copy or archive of `keys/` that the gate reads only as a key read has no store write part, so a
 seat that `approvals.yaml` delegates `credentials` to may still answer it, as before #447. It asks
 every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,

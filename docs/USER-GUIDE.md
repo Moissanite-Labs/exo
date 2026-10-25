@@ -368,14 +368,28 @@ What the gate asks about, and why:
   standing grants), the ledger, `keys/`, seat files, the core's socket, or the signed-update trust pin in `update/`
   (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. So does a write into
   `~/.exo/plugins` (#435), because Exo loads and runs the code it finds there. To work on a plugin, point
-  `EXO_PLUGIN_DIRS` at your copy instead. Only you can answer such a write, whatever `approvals.yaml` says, also
-  when the same command or file tool names a secret that a seat may approve (#447). Reading your policies or plugins
-  with `cat`, `grep` or a read tool does not ask. Some other commands that only read, such as `sed -n` or `sort`, do
-  ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves symbolic
-  links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some writes are not
-  seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working folder is
-  `policies/`, a glob spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md`
-  lists the rest.
+  `EXO_PLUGIN_DIRS` at your copy instead. Only you can answer such a write, whatever `approvals.yaml` says, also when
+  the same command or file tool names a secret that a seat may approve (#447). Reading your policies or plugins with
+  `cat`, `grep` or a read tool does not ask. Some other commands that only read, such as `sed -n` or `sort`, do ask.
+  `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves symbolic links in
+  a path (#130). It reads a relative path from the session's folder, from a shell call's `cwd` or `workdir`, and from
+  the folder a `cd` on the line enters (#340). So `gates.yaml` written in a session whose folder is `policies/` asks,
+  and so does a write through a link into your store, such as `pdir/default.yaml`, `sdir/../policies/default.yaml` or
+  `cd notes && cp x ../pdir/default.yaml`. A shell call's `cwd` spelt with `..` after a link, such as `xl/../kl`, is
+  read both through the link and with the `..` dropped, because tools enter it either way. A `cd` target spelt that
+  way is read both ways too, so `cd xl/../kl && tar czf /tmp/o.tgz .` asks, as the same command with `xl/../kl` as its
+  `cwd` does. For your keys and other secrets, a relative path is read from the folder a `cd` enters too:
+  `cd notes && cat ../kdir/seat` asks, as `cp` of that path does. A `cd` into your Exo store spelt that way is not
+  followed for secrets yet, so `cd xl/../kdir && cat *` does not ask (#530). After a `cd` that may not have stayed,
+  such as one in `( )`, every folder a `cd` entered counts. Past 64 of them, a write with a relative path asks. Six
+  relative `cd`s in a row stay under that, and a seventh passes it. A very long line asks too, such as 3,000 relative
+  paths after two `cd`s, since the gate stops reading them one by one. A `deny` entry on a target, such as
+  `target:*/.exo/*`, matches the store path a command names (`touch ~/.exo/state/x`), also when the command runs in
+  your store. Some writes are not seen as store writes yet: a glob spelling and a hard link. A brace spelling
+  (`polic{i..i}es`) is seen (#224), and so is a store file opened on a numbered file descriptor and written back
+  through `/dev/fd/3` (#217). If your session's folder is your store itself, a command that names a part of it, such
+  as `git add state`, asks too. From your home folder, `mv x .` asks, as `mv x ~` does, and so does `mv x ..` from a
+  folder in it. `docs/GATE.md` lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
   This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length

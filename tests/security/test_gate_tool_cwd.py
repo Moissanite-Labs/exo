@@ -225,7 +225,9 @@ def test_a_folder_whose_every_word_is_a_store_keeps_the_lines_matrix_deny(cmd, f
     The folder now only adds a part, so the line's deny stands. Main did the same with `cwd`, which this ends."""
     _held(_home)
     c = _bash_in(cmd, folder, tool=tool, key=key)
-    assert c.category == "force_push" and _store_parts(c), (tool, key, folder)
+    # #340: in ~/.exo/run a bare word is a store path, so a reading of the line there is a store write
+    want = ("force_push", "store_write") if folder == "~/.exo/run" else ("force_push",)
+    assert c.category in want and _store_parts(c), (tool, key, folder)
     assert gate.decide(c, MATRIX_DENY).outcome == "deny"
     assert gate.decide(c).outcome == "ask"
 
@@ -448,7 +450,8 @@ def test_the_folders_part_weighs_as_the_cd_forms(cmd, folder, tool, key, _home):
     _held(_home)
     c = _bash_in(cmd, folder, tool=tool, key=key)
     cd = _bash(f"cd {folder} && {cmd}")
-    assert (c.category, c.summary) == (_bash(cmd).category, _bash(cmd).summary) and _store_parts(c)
+    ok = [(_bash(cmd).category, _bash(cmd).summary)] + ([(cd.category, cd.summary)] if folder == "~/.exo/run" else [])
+    assert (c.category, c.summary) in ok and _store_parts(c)   # #340: in the run folder, as its cd form too
     for raw, denied in IRREVERSIBLE:
         want = "deny" if folder in denied else "ask"
         assert gate.decide(c, _pol(raw)).outcome == gate.decide(cd, _pol(raw)).outcome == want, raw

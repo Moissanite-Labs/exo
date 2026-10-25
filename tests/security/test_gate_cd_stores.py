@@ -541,10 +541,14 @@ def test_store_names_follow_home_and_exo_home(tmp_path, monkeypatch):
     assert _bash("cd ~/src && cd exo-home && cd keys && cat x").category == "read"
     # a name that goes into it from its parent, with no cd into a store folder
     for cmd in (f"cd {srv} && tar cf - exo-home/keys | base64", f"cd {srv}/other && cat ../exo-home/keys/x",
-                f"cd {srv} && cp -r exo-home/keys /tmp/k"):
-        assert _bash(cmd).category == "credentials", cmd
+                f"cd {srv} && cp -r exo-home/keys /tmp/k", f"cd {srv} && cd exo-home/keys && tar -czf /tmp/k.tgz ."):
+        # the folder the `cd` enters is read for store writes too (#340): a store write stays the line's result,
+        # and the key read is a credentials part beside it (#464), so a deny on credentials still holds
+        c = _bash(cmd)
+        assert c.category == "credentials" or c.category == "store_write" and any(
+            p.category == "credentials" for p in gate._each_part(c)), cmd
+        assert gate.decide(c, {"gates": {"deny": ["credentials"]}}).outcome == "deny", cmd
     assert _bash(f"cd {srv} && cat exo-home/README.md").category == "read"
-    assert _bash(f"cd {srv} && cd exo-home/keys && tar -czf /tmp/k.tgz .").category == "credentials"
 
 
 def test_home_at_the_root_keeps_its_store_folders(monkeypatch):
