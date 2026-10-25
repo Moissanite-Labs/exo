@@ -31,6 +31,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 
 | Feature | Technical doc | User guide | Developer guide | Whitepaper |
 |---|---|---|---|---|
+| D-038 amendment (#542, 2026-10-24) Escalation policy rejects a non-mapping `escalate` and a non-list `categories` with `PolicyError`. Omitted settings and valid mappings retain their behavior | `docs/GATE.md` "Escalation policy types (#542)", `DECISIONS.md` D-038, `CHANGELOG.md`, `src/exo/gate.py`, `tests/security/test_gate_escalate_policy.py` | n/a (policy type validation is covered in the technical reference) | n/a (no extension API changed) | n/a |
 | D-001 Work lives in this repo, phases leave handoffs | `DECISIONS.md` D-001 (process) | n/a | §8 | n/a |
 | D-002 Research as parallel subagents | `DECISIONS.md` D-002 (process) | n/a | n/a | n/a |
 | D-003 hafiz is an input | `docs/STORE-V2.md` "Facts checked on disk" | n/a | n/a | WP §3, §4 (idea, no D number) |

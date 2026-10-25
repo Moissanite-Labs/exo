@@ -6585,8 +6585,12 @@ def normalize_policies(raw: Mapping | None) -> dict:
         if not isinstance(v, list):
             raise PolicyError(f"gates.{k} must be a list")
         pol["gates"][k] = v
-    esc = gates.get("escalate")
-    if isinstance(esc, Mapping):
+    if "escalate" in gates:
+        esc = gates["escalate"]
+        if not isinstance(esc, Mapping):
+            raise PolicyError("gates.escalate must be a mapping")
+        if "categories" in esc and not isinstance(esc["categories"], list):
+            raise PolicyError("gates.escalate.categories must be a list")
         pol["gates"]["escalate"].update(esc)
     if gates.get("ask_default"):
         pol["gates"]["ask_default"] = str(gates["ask_default"])
