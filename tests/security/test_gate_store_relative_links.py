@@ -719,6 +719,47 @@ def test_a_stdin_text_met_again_after_a_cd_is_read_again(tree, line):
     assert gate.decide(c, SHELLS_ALLOWED).outcome == "ask"
 
 
+def test_a_stdin_text_is_read_again_within_the_budget(tree, monkeypatch):
+    """A stdin text read again after a `cd` takes its words from the #269 budget once per folder entered (gate._spend),
+    so 31 shells after 30 `cd`s do not read it 31 times: at 339cc7cc, 3,000 words fed to 65 shells took 10.8 s against
+    0.4 s on main. Past the budget every relative word counts, so the write the text makes still asks."""
+    for i in range(30):
+        (tree / f"f{i}").mkdir()
+    text = "cp " + " ".join(f"/tmp/w{i}" for i in range(3000)) + " ../pdir/default.yaml"
+    line = "{ " + "; ".join(f"bash; cd {tree}/f{i}" for i in range(30)) + f"; bash; }} <<< '{text}'"
+    reads: list = []
+    classify_shell = gate.classify_shell
+
+    def count(cmd, depth=0):
+        if cmd == text:
+            reads.append(depth)
+        return classify_shell(cmd, depth)
+
+    monkeypatch.setattr(gate, "classify_shell", count)
+    c = gate.classify({"tool": "bash", "args": {"command": line}}, cwd=str(tree))
+    monkeypatch.undo()
+    assert 2 <= len(reads) <= 10, len(reads)
+    assert "store_write" in [p.category for p in [c, *gate._each_part(c)]]
+    assert gate.decide(c, SHELLS_ALLOWED).outcome == "ask"
+
+
+def test_past_the_budget_a_secret_read_counts_every_relative_word(tree):
+    """Past the budget a reading no longer hangs on which folders a `cd` entered (gate._entered_mark is -1), and a text
+    read then is not read again after a later `cd`. So the secret checks count every relative word then, as the store
+    checks do, even one whose join was looked up before and was no secret."""
+    cmds = gate._parse("cat x.md")[0]
+    scope = gate._Scope(cwds=(str(tree),))
+    scope.entered[frozenset({str(tree / "notes")})] = str(tree / "notes")
+    token, memo = gate._scope.set(scope), gate._call_memo.set({})
+    try:
+        assert gate._entered_mark() == 1 and gate._entered_secret(cmds) == ""
+        assert not gate._spend(gate._EXO_PARTS + 1)
+        assert gate._entered_mark() == -1 and gate._entered_secret(cmds) == "x.md"
+    finally:
+        gate._call_memo.reset(memo)
+        gate._scope.reset(token)
+
+
 @pytest.mark.parametrize("args,target", [
     ({"command": "rm -rf x", "cwd": "~/.exo/policies"}, "x"),
     ({"command": "tar czf /tmp/o.tgz .", "cwd": "xl/../pdir"}, "."),

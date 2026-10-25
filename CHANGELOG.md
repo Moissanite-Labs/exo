@@ -113,8 +113,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `cd xl/../kl && tar czf /tmp/o.tgz .` ask. Past 64 such folders a relative write asks, and seven
   relative `cd`s in a row pass 64. Each path is looked up once per call, with the folders above it
   shared, and each join to a folder a `cd` entered is charged to the #269 budget, past which a
-  relative write asks too. In a store folder, a store write is named after a word that is a store path
-  by its own spelling first, and never after the program word or an option: `touch ~/.exo/state/x`
+  relative write asks too. A stdin text that shells read again after a `cd` is charged to that
+  budget too, so a here-string fed to many shells is not read once per `cd`. In a store folder, a
+  store write is named after a word that is a store path by its own spelling first, and never after
+  the program word or an option: `touch ~/.exo/state/x`
   there is named `~/.exo/state/x`, so `deny: ["target:*/.exo/*"]` still denies it, as on main. After a
   `cd` into the store, a write named after a relative word keeps "a path inside the store (after cd)"
   as a second target.
