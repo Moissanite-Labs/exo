@@ -1314,8 +1314,9 @@ gate does not read:
   subscript of a name the set makes is read as in `printf -v 'a[$(cmd)]'` (#179). A set of other
   names keeps the class of the names it makes: `export {A,B}=1` reads as `export A=1 B=1`. Under
   the default policy a word that asked before still asks, such as `export X{A,B}=1`, whose brace
-  after the first character the lexer reads as a glob. `unset` asks on any unquoted brace, as above. A quoted or escaped
-  brace does not expand (`export '{PATH,X}='`), and bash refuses that word as a name. bash drops
+  after the first character the lexer reads as a glob. `unset` asks on any unquoted brace, as
+  above. A quoted or escaped brace does not expand (`export '{PATH,X}='`), and bash refuses that
+  word as a name. bash drops
   a `\<newline>` outside quotes before it expands a set and keeps one in single quotes or `$'..'`,
   and so does the gate. The expansion is the one "Secret-store paths" describes, with a budget of
   its own. The builtin's checks read the commands in each word again, so a word with n command or
