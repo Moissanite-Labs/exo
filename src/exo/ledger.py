@@ -611,8 +611,7 @@ def _open_symlinked(path: Path) -> sqlite3.Connection:
         if target.is_file():
             db = _snapshot(target)
             if db is None:
-                db = sqlite3.connect(f"{target.as_uri()}?mode=ro", uri=True, check_same_thread=False,
-                                     isolation_level=None, timeout=30)
+                db = _open_live(target)
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
                 return db
     except sqlite3.DatabaseError:
@@ -622,6 +621,25 @@ def _open_symlinked(path: Path) -> sqlite3.Connection:
     db = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
     db.executescript(SCHEMA)
     return db
+
+
+def _open_live(target: Path) -> sqlite3.Connection:
+    """The target read live (`mode=ro`), through a writer's `-wal` file when there is one. SQLite opens the `-wal` and
+    `-shm` files at the first read, and makes them beside a WAL target that has none. Where it cannot (read-only
+    media, or a folder the reader cannot write), that read fails with `SQLITE_CANTOPEN`, and the ledger would read as
+    empty. A target with no `-wal` file holds all its data in its main file, so it is then read with `immutable=1`, as
+    before #317."""
+    db = sqlite3.connect(f"{target.as_uri()}?mode=ro", uri=True, check_same_thread=False, isolation_level=None,
+                         timeout=30)
+    try:
+        db.execute("SELECT 1 FROM sqlite_master").fetchone()
+        return db
+    except sqlite3.OperationalError as e:
+        db.close()
+        if (e.sqlite_errorcode & 0xFF) != sqlite3.SQLITE_CANTOPEN or Path(f"{target}-wal").exists():
+            raise
+    return sqlite3.connect(f"{target.as_uri()}?mode=ro&immutable=1", uri=True, check_same_thread=False,
+                           isolation_level=None, timeout=30)
 
 
 SNAPSHOT_TRIES = 3  # copies of a symlinked ledger a writer may spoil before it is read live instead (#317)

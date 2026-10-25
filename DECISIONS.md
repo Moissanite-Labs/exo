@@ -2654,8 +2654,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   A check of the copy after it is taken would narrow the gap. It has to be `integrity_check`. In a probe, a one-event
   append tore copies of a 2,000-event ledger. Of 7 copies that `integrity_check` failed, `quick_check` passed 3, and so
   did a count through the table against one through each index. It can ride #535, which moves the copy to the first
-  read. The lock does not order two `umask` blocks on one thread: two socket binds that overlap on one event loop can
-  still restore out of order and leave the process at 0177, as they could before.
+  read. A live read fails where SQLite cannot make the `-wal` and `-shm` files (read-only media, or a folder the reader
+  cannot write), and the ledger then read as empty. A target with no `-wal` file is now read with `immutable=1` there,
+  as before. The lock does not order two `umask` blocks on one thread: two socket binds that overlap on one event loop
+  can still restore out of order and leave the process at 0177, as they could before.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.

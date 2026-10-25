@@ -509,6 +509,39 @@ def test_a_copy_that_fails_on_an_unchanged_target_is_read_live_at_once(tmp_path,
         _refuses(reader)
 
 
+def test_a_failed_copy_on_read_only_media_reads_the_target_as_before(tmp_path, signer, monkeypatch):
+    """The live read after a failed copy makes `-wal` and `-shm` files beside the target. On read-only media, or in a
+    folder the reader cannot write, SQLite cannot, so its first read fails, and the ledger read as empty where main
+    read it whole. A target with no `-wal` file is read with `immutable=1` then, as before #317."""
+    target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
+    _padded(target, signer, 0, 3)
+    path.symlink_to(target)
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    class Full(sqlite3.Connection):
+        def backup(self, target_db, **kwargs):
+            raise sqlite3.OperationalError("database or disk is full")
+
+    class ReadOnlyMedia(sqlite3.Connection):  # what SQLite raises when it cannot make the `-shm` file
+        def execute(self, *args):
+            err = sqlite3.OperationalError("unable to open database file")
+            err.sqlite_errorcode, err.sqlite_errorname = sqlite3.SQLITE_CANTOPEN, "SQLITE_CANTOPEN"
+            raise err
+
+    connect = sqlite3.connect
+
+    def opened(db, *a, **k):
+        if isinstance(db, str) and "mode=ro" in db:
+            k = {**k, "factory": Full if "immutable=1" in db else ReadOnlyMedia}
+        return connect(db, *a, **k)
+
+    monkeypatch.setattr(sqlite3, "connect", opened)
+    with Ledger(path, signer) as reader:
+        assert len(reader) == 3 and [e["body"]["i"] for e in reader.iter()] == [0, 1, 2]
+        _refuses(reader)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+
 def test_the_snapshot_is_read_only(tmp_path, signer):
     """The copy of a symlinked ledger took writes the read-only target refused (#317 review). `query_only` refuses
     them again. `check_anchors` cannot lock it and checks it as it stands, which cannot change."""
