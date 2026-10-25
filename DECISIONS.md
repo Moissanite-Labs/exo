@@ -1898,9 +1898,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   4,586 actions are lower. The fourth has 12,556 lines: a rebind whose path or name word the gate cannot read (a brace
   set, an expansion, a glob) and plain rebinds, under the same wrappers and nested lines, beside a login to another
   host over ssh, alone and beside a post, a force push or a store redirect. It runs 42,360 actions, and 12,592 pairs on
-  8,982 actions are lower. No posting violation is lost in any run, and a deny is lost only in group (3). The pairs
-  fall in three groups, all kept on purpose. Each count is for the first probe set, the second, the third, the fourth,
-  then the script's own corpus. (1) 5,924 pairs on 1,481 actions, 9,120 on 2,280, 1,844 on 481, 1,856 on 464, and 4 on
+  8,982 actions are lower. No posting violation is lost in any run. The pairs fall in four groups, all kept on
+  purpose, and a deny is lost only in groups (3) and (4). Each count in groups (1) to (3) is for the first probe set,
+  the second, the third, the fourth, then the script's own corpus. (1) 5,924 pairs on 1,481 actions, 9,120 on 2,280,
+  1,844 on 481, 1,856 on 464, and 4 on
   1: under a policy
   that lowers `opaque_exec` (a category line or an allow rule naming it), a rebinding form that sudo, doas or another
   wrapper that makes its part costly (chroot, nsenter, unshare, systemd-run) runs, inside or around ssh or mosh
@@ -1924,7 +1925,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `sudo hash $O ls`, `sudo hash "$@"`, `chroot /srv hash -p /x ls`). So does a line that holds one, also over ssh or
   beside a post or a force push, and `sudo hash -p ~/.exo/state/x ls > out` stays a store write that asks. A privileged
   wrapper makes its part costly. On main that part was a costly `read`, which the rule names. Now it is `opaque_exec`,
-  which it does not, as for `sudo eval x` on main. Under the default policy each asks. *A shell command beside the
+  which it does not, as for `sudo eval x` on main. Under the default policy each asks. (4) Under a policy that names
+  the `read` category (a category line, or a `deny`, `reserved` or rule entry), the rebind's part was a `read` on
+  main, and the entry reached it. Now it is `opaque_exec`, which the entry does not name. So a line the entry denied
+  only through the rebind goes from deny to ask, or to log under `opaque_exec: log`: `hash -p /tmp/x ls` and
+  `hash $O ls` under `categories: {read: deny}` or `deny: [read]`, a post beside the rebind
+  (`hash -p /tmp/x ls; gh pr comment 1 --body Zork`), and over ssh a line that is now a store write, which main read
+  as a `read` (`ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'`). Under `reserved: [read]` with
+  `categories: {opaque_exec: allow}`, `hash -p /tmp/x ls` goes from ask to allow, since the reserved hit is gone. A
+  read beside the rebind still meets the entry, so `hash -p /tmp/x ls; ls` is denied. Under the default policy each
+  asks. The script's built-in policies name `read` only in a rule on costly parts, group (3), so the runs above hold
+  none of these. The note of 2026-10-25 below counts them. *A shell command beside the
   rebind.* On main the hash part was a `read` that tied with a plain shell command in a line that ssh, `man -P`, less or
   more runs, and the first of the two named the line. So main checked the words around the line for store paths when the
   shell command came first and not when the rebind did. Now they are checked in either order. ssh's own `-E`, `-S` and
@@ -1939,6 +1950,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `ssh host 'hash -p /proc/self/fd/3 ls; sort x'` would not sit under a store write that main does not make. Since #464
   that costs the post nothing: a deny cell on it still denies the line, and its posting violations are kept, named after
   the post. The draft cost the store check instead: ssh's own `-E ~/.exo/state/log` in such a line made no store write.
+  *Note 2026-10-25 (review of PR #409).* A word that starts with an unquoted `[` is a glob the lexer does not mark, as
+  for `unset` (#329). With files named `-p`, `as` and `ls` in the folder, bash runs `hash [-]p /tmp/x ls` as
+  `hash -p /tmp/x ls`, and `hash -p [al]s` as `hash -p as ls`. Such a word is now read as a glob in the option words
+  and from the path on, also after a `\<newline>`, so both lines are opaque, also behind `builtin`, `command` or sudo
+  and over ssh. A quoted or escaped `[` is no glob, so `hash -p '[al]s'` stays `read`. `hash [l]s` now asks, as
+  `hash l?` already did. Group (4) above comes from this review. Main's `scripts/gate_diff.py` against main edeb4f89
+  ran with 8 more policies, 7 of them on `read`. The built-in corpus runs 72,667 actions under 95 policies, and 1,475
+  pairs on 247 actions are lower: (1) 4 pairs on 1 action, (2) 123 on 122, (3) 16 on 16 and (4) 1,332 on 244. A
+  focused corpus of 3,489 lines (`[`, `?`, `*` and brace words in the option and path words, under `builtin`,
+  `command`, sudo, doas, env, eval, `bash -c`, ssh and mosh, beside a post, a force push or a store redirect, and the
+  `BASH_CMDS` forms) ran alone. It runs 22,738 actions under the same 95 policies, and 49,713 pairs on 8,810 actions
+  are lower: (1) 712 on 178, (2) 5,503 on 5,503, (3) 3,142 on 3,142 and (4) 40,356 on 7,242. No posting violation is
+  lost, and a deny is lost only in groups (3) and (4).
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
   word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was
