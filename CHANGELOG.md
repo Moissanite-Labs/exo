@@ -296,10 +296,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   expands the operands of the builtins that take a name as bash does, and reads the words bash makes as well as the
   words as written. So these lines ask or deny as the lines bash runs do, and `export {LD_PRELOAD,X}=/tmp/x.so` or
   `export {GIT_SSH_COMMAND,X}='rm -rf x'` is read as its variable. A set of other names keeps its class:
-  `export {A,B}=1; ls` reads as `export A=1 B=1; ls`. A line that asked before still asks. A quoted or escaped
-  brace is not expanded (`export '{PATH,X}='`). bash fills the last name `printf -v` is given, and the gate read
-  only the first. It now reads each, so `printf -v X -v PATH .; ls` asks. A glob in a name joined to `-v`
-  (`printf -vPAT? .`, which a file named `-vPATH` turns into `printf -vPATH .`) now asks as one apart does.
+  `export {A,B}=1; ls` reads as `export A=1 B=1; ls`. Under the default policy a line that asked before still
+  asks. A quoted or escaped brace is not expanded (`export '{PATH,X}='`). bash fills the last name `printf -v` is
+  given, and the gate read only the first. It now reads each, so `printf -v X -v PATH .; ls` asks. A glob in a
+  name joined to `-v` (`printf -vPAT? .`, which a file named `-vPATH` turns into `printf -vPATH .`) now asks as
+  one apart does. The words as written and the words bash makes are read each on their own, so a set cannot
+  hide a git config key the line set before it: `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath
+  GIT_CONFIG_VALUE_0=./h {GIT_CONFIG_KEY_0=a,b}; git commit -m x` asks. bash keeps a readonly name's first
+  value, so a `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` set twice on one command is now checked with each
+  value, with a brace or not. A word outside a set is read once. A word with a `$( )`, backticks or `<( )` takes
+  more of the expansion's budget, so a large set of them asks at once and no longer holds the gate for
+  seconds. `printf {-v,X} y` counts as a command that changes the shell for a rule (#394).
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that

@@ -1022,7 +1022,8 @@ gate does not read:
   every command that changes the shell for the commands after it on the line (a setter), since a
   bash call starts a fresh shell and only a later command on the same line sees the change: an
   assignment with no command, `export` and the other declaring builtins with an operand, `set -a`,
-  `set -k` and `set -- args`, `shopt -s`, `printf -v`, `read`, `mapfile`, `getopts`, `let`, `hash`,
+  `set -k` and `set -- args`, `shopt -s`, `printf -v` (also `printf {-v,X}`, a brace set that may
+  hold the `-v`), `read`, `mapfile`, `getopts`, `let`, `hash`,
   `alias`, `enable`, `unset` and `trap` with an operand, `source` and `.`, `pushd`, `popd`, `exec`
   with only redirections, a `for` or `select` loop, `coproc`, a function definition (which has no
   own text) and a program name the gate cannot read. The text of an `eval` is a nested line whose
@@ -1304,7 +1305,10 @@ gate does not read:
   as names too. So `export +x -f $V=` asks, and `readonly +x -n r=PATH` makes no nameref
   (#329). bash expands a brace set in the operands of a builtin that takes a name (an exporter,
   `read`, `printf`, `test` and `[`, and `wait`) before the builtin reads them. The gate reads the
-  words bash makes, as well as the words as written (#438). So `export {PATH,X}=` reads as
+  words bash makes, as well as the words as written (#438). It reads each form on its own, so a
+  value one form sets cannot hide a value the other sets. Of the words bash makes it keeps only
+  the parts the words as written do not give, so a word outside a set is read once. So
+  `export {PATH,X}=` reads as
   `export PATH= X=` and asks, and so do `declare -x {PATH,X}=`, `export {P,}ATH=`,
   `read {X,PATH}` and `printf -v {PATH,X} .`. An option in a set counts too:
   `test {-v,'a[PATH=0]'}` sets PATH as `test -v 'a[PATH=0]'` does, and a command in the
@@ -1315,7 +1319,9 @@ gate does not read:
   brace does not expand (`export '{PATH,X}='`), and bash refuses that word as a name. bash drops
   a `\<newline>` outside quotes before it expands a set and keeps one in single quotes or `$'..'`,
   and so does the gate. The expansion is the one "Secret-store paths" describes, with a budget of
-  its own. A set past its limits asks as `opaque_exec`. bash fills the last name `printf -v` is
+  its own. The builtin's checks read the commands in each word again, so a word with n command or
+  process substitutions (`$( )`, backticks, `<( )`) takes 4 x (n + 1)² times its share of that
+  budget. A set past its limits asks as `opaque_exec`. bash fills the last name `printf -v` is
   given, so the gate reads each one, in its place (`printf -v X -v PATH .` and
   `printf {-v,X,-v,PATH} .` ask). A glob in a name joined to `-v` asks as one apart does:
   `printf -vPAT? .` is `printf -vPATH .` when a file named `-vPATH` is in the folder. A leading
@@ -1323,7 +1329,11 @@ gate does not read:
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
   `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
-  as a command too, so a `deny: [delete]` fires on `core.sshCommand='rm -rf ...'`. An exec key
+  as a command too, so a `deny: [delete]` fires on `core.sshCommand='rm -rf ...'`. A
+  `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` set more than once on a command is checked with
+  each value it takes. bash keeps the last value, but a readonly name keeps its first, so
+  `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h
+  GIT_CONFIG_KEY_0=a` runs the hook path. An exec key
   is an alias, the pager, the editor, `core.sshCommand`, a hook path, a filter or diff driver, a
   credential helper, `interactive.diffFilter`, `remote.<name>.uploadpack` or `receivepack`, the
   `.path` of a difftool, mergetool, man or browser tool, any key whose last part ends in
