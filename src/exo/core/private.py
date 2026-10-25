@@ -5,15 +5,15 @@ import contextlib
 import errno
 import os
 import tempfile
+import threading
 from pathlib import Path
+
+_UMASK_LOCK = threading.RLock()  # reentrant: a task may probe while another on its thread awaits in a `umask` block
 
 
 def private_dir(path: str | os.PathLike) -> Path:
-    """Create missing folders with mode 0700; preserve existing modes.
-
-    Reject symlinks encountered while creating folders. This does not guard
-    against every ancestor replacement race in an untrusted directory tree.
-    """
+    """Create missing folders with mode 0700; preserve existing modes. Reject symlinks encountered while creating
+    folders. This does not guard against every ancestor replacement race in an untrusted directory tree."""
     p = Path(path)
     missing = []
     for d in (p, *p.parents):
@@ -32,11 +32,8 @@ def private_dir(path: str | os.PathLike) -> Path:
 
 
 def private_file(path: str | os.PathLike) -> Path:
-    """Create/tighten a file to owner-only access; reject a final symlink.
-
-    The returned path may later be reopened by the caller, so this is not a
-    race-resistant file handle API for an untrusted directory tree.
-    """
+    """Create/tighten a file to owner-only access; reject a final symlink. The returned path may later be reopened by
+    the caller, so this is not a race-resistant file handle API for an untrusted directory tree."""
     p = Path(path)
     private_dir(p.parent)
     fd = os.open(p, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -80,11 +77,21 @@ def atomic_write(path: str | os.PathLike, data: bytes | str, mode: int | None = 
     return p
 
 
+@contextlib.contextmanager
+def umask(mask: int):
+    """Set the process umask to ``mask`` for the block, which gets the old one. The probe takes the same lock (#317)."""
+    with _UMASK_LOCK:
+        old = os.umask(mask)
+        try:
+            yield old
+        finally:
+            os.umask(old)
+
+
 def _umask() -> int:
-    """From /proc on Linux. Elsewhere a probe sets the strictest mask for a moment: a file made meanwhile comes out
-    tighter, never looser."""
+    """From /proc on Linux. Elsewhere a probe sets the strictest mask for a moment, under `umask`'s lock: a file made
+    meanwhile comes out tighter, never looser, and two threads cannot leave the process at 077 (#317)."""
     with contextlib.suppress(OSError, StopIteration, ValueError, IndexError), open("/proc/self/status") as fh:
         return next(int(ln.split()[1], 8) for ln in fh if ln.startswith("Umask:"))
-    old = os.umask(0o077)
-    os.umask(old)
-    return old
+    with umask(0o077) as old:
+        return old
