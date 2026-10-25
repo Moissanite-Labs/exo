@@ -12,10 +12,11 @@ A private thread's own tree is the one case where the wait is not enough (issue 
 summary, so every span after it, pending ones included, is in the tail, and a slow summarizer would leave those
 calls unbounded. While its leaves are pending, ``cut_pending`` leaves out the oldest of their spans until what comes
 before the turn fits ``view_budget``, and ``SUMMARIZING_MARKER`` stands in each gap. That includes a pending leaf
-the view shows verbatim because a later leaf landed first. The overflow check measures pending spans as the view
-renders them, cut short, so that tree also waits when ``cut_pending`` would leave a span out: a leaf this call
-scheduled gets its chance to run first, and a fast summarizer, or a span too small to summarize, leaves no cut.
-That wait is for the tree's own leaves only, not the agent tree's jobs.
+the view shows verbatim because a later leaf landed first, unless it holds the turn's first messages. The overflow
+check measures pending spans as the view renders them, cut short, so that tree also waits when ``cut_pending`` would
+leave a span out: a leaf this call scheduled gets its chance to run first, and a fast summarizer, or a span too
+small to summarize, leaves no cut. Either wait of that tree is for its own jobs only, leaves and merges, not the
+agent tree's.
 """
 from __future__ import annotations
 
@@ -35,6 +36,14 @@ def _cost(m: Any) -> int:
                                     for c in m.tool_calls) // 4
 
 
+def _turn_start(ctx: Any, session: str, since: int, turn_id: str) -> int:
+    """The seq of the turn's first message after ``since``, found as ``cut_pending`` finds it in the tail; 0 when no
+    message after ``since`` can start it, so the turn started before."""
+    msgs = ctx._read(session, since)
+    return next((m.meta["seq"] for m in msgs if turn_id and m.meta.get("turn_id") == turn_id),
+                max((m.meta["seq"] for m in msgs if m.role == "user" and not m.meta.get("note")), default=0))
+
+
 def cut_pending(ctx: Any, session: str, tail: list, turn_id: str = "") -> list:
     """``tail`` with the spans of a private thread's pending leaves left out, oldest first and a whole leaf at a time,
     until what comes before the turn fits ``view_budget`` (issue #244). Each gap gets ``SUMMARIZING_MARKER``.
@@ -43,23 +52,26 @@ def cut_pending(ctx: Any, session: str, tail: list, turn_id: str = "") -> list:
     The turn is kept whole: from its first message in ``tail`` (its user message, unless a summary holds that) to
     the end. So is every span that is not pending: a skipped or failed span stays verbatim, and the last
     ``tail_messages`` are in no leaf yet. Without a ``turn_id`` the turn starts at the last user message that is not
-    a note. A tool call and its results are kept or left out together. The cut moves a whole leaf at a time, so it
-    stays put until it must grow and calls share their cached prefix. When a later leaf landed first, the private
-    view shows the pending ones before it verbatim. Those are the oldest, so they go first, each to the marker under
-    its heading."""
+    a note, and before ``tail`` when it holds none. A tool call and its results are kept or left out together. The
+    cut moves a whole leaf at a time, so it stays put until it must grow and calls share their cached prefix. When a
+    later leaf landed first, the private view shows the pending ones before it verbatim. Those are the oldest, so
+    they go first, each to the marker under its heading, up to the one that holds the turn's first messages: a turn
+    can start inside the view."""
     from exo.core.context import TreeContext, estimate_tokens  # core imports this module
     from exo.core.types import ContentPart, Message
 
     if not TreeContext.pending(ctx, session):
         return tail
+    view = tail[0].text() if tail and "seq" not in tail[0].meta and tail[0].meta.get("note") == "private" else ""
     turn = next((i for i, m in enumerate(tail) if turn_id and m.meta.get("turn_id") == turn_id),
-                max((i for i, m in enumerate(tail) if m.role == "user" and not m.meta.get("note")), default=len(tail)))
+                max((i for i, m in enumerate(tail) if m.role == "user" and not m.meta.get("note")),
+                    default=int(bool(view))))  # no question in the tail: the turn began before it
     cost = {m.meta["seq"]: _cost(m) for m in tail[:turn] if "seq" in m.meta}  # the private view has no seq
     used = sum(cost.values()) + sum(_cost(m) for m in tail[:turn] if "seq" not in m.meta)
     if used <= ctx.view_budget:  # room to spare: no need to read the leaves
         return tail
-    view = tail[0].text() if tail and "seq" not in tail[0].meta and tail[0].meta.get("note") == "private" else ""
     cut: set[int] = set()
+    start = None  # the turn's first seq, read once the view cut needs it
     for leaf in sorted((n for n in ctx.store.summaries(session) if n.level == 0 and n.status == "pending"),
                        key=lambda n: n.start):
         if used <= ctx.view_budget:
@@ -67,6 +79,9 @@ def cut_pending(ctx: Any, session: str, tail: list, turn_id: str = "") -> list:
         span = [s for s in range(leaf.start, leaf.end + 1) if s in cost]
         part = "" if span or not view else ctx._view_parts([leaf])[0]
         if part and part in view:  # a later leaf landed first, so the private view shows this one verbatim
+            start = _turn_start(ctx, session, leaf.start - 1, turn_id) if start is None else start
+            if leaf.end >= start:  # it holds the turn's first messages, and every leaf after it is the turn's
+                break
             short = f"## Messages {leaf.start}-{leaf.end}\n{SUMMARIZING_MARKER}"
             view, used = view.replace(part, short), used - estimate_tokens(part) + estimate_tokens(short)
         cut.update(span)
@@ -130,20 +145,17 @@ def thread_tail(ctx: Any, session: str, frontier: int, turn_id: str = "", last_t
 
 
 async def settle_for_turn(ctx: Any, key: str, turn_id: str = "") -> bool:
-    """Wait only as long as a turn needs: not at all with room to spare, else ``overflow_settle`` seconds. A private
-    thread's tree has no room to spare when ``cut_pending`` would leave a span out. Then the turn waits for that
-    tree's own leaves only: the agent tree's jobs cannot shrink the cut."""
+    """Wait only as long as a turn needs: not at all with room to spare, else ``overflow_settle`` seconds for the
+    tree's own live jobs. A private thread's tree has no room to spare when ``cut_pending`` would leave a span out.
+    Its turn waits for that tree's jobs only: the agent tree's jobs shrink neither its view nor the cut."""
     from exo.core.context import TreeContext  # core imports this module
 
-    if not ctx.pending(key):
+    own = TreeContext.pending  # AgentContext.pending adds the agent tree's jobs to a private thread's
+    if not own(ctx, key) or not (verbatim_overflows(ctx, key) or _cuts(ctx, key, turn_id)):
         return True
     timeout = min(ctx.settle_timeout, getattr(ctx, "overflow_settle", OVERFLOW_SETTLE))
-    if verbatim_overflows(ctx, key):
-        return await ctx.settle(key, timeout)
-    if not _cuts(ctx, key, turn_id):
-        return True
     deadline = asyncio.get_running_loop().time() + timeout
-    while pending := TreeContext.pending(ctx, key, "live"):  # AgentContext.pending adds the agent tree's jobs
+    while pending := own(ctx, key, "live"):
         if (left := deadline - asyncio.get_running_loop().time()) <= 0:
             return False
         await asyncio.wait(pending, timeout=left)
