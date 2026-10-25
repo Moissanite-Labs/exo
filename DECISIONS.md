@@ -1898,8 +1898,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   as after an unquoted assignment (`X='a b' coproc env | cat` a coprocess, where bash runs a program named
   `coproc`); and a value declare reads again is added to the line late. So `classify` also reads a call that has a
   quoted prefix assignment as before, each such word the program, in a call of its own (`Classification.before`),
-  and `decide` decides that reading too: the stricter outcome stands, and at an equal one the reserved parts and
-  violations of both. The hook reads a post's body file into that reading as well. Within the simple command, the
+  and `decide` decides that reading too. The two decisions merge as #399's readings do (`_strictest`): the strictest
+  outcome, the widest exposure, each reserved part of either, and each violation as often as one of them lists it,
+  with one `and N more on other posts` that counts each entry either left out. Each check the exo-gate hook makes
+  past `decide` reads that reading and its own floor, as it reads #399's floor: a post's body file, the required
+  executor's body check, who may answer, "once" and the categories that never get a grant; and `binds_exact` binds
+  the line as that reading binds. Within the simple command, the
   old reading's store scan reads its own parts and the folder from before the new reading's `cd`, and the late parts
   the new reading adds are signed. Before these, the reviews' differential runs lowered 338 pairs on 150 actions of
   each built-in shell line behind `X='a b'` (`X='a b' coproc env | cat`: credentials deny -> credentials ask;
@@ -1926,6 +1930,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `LD_PRELOAD`) through each wrapper (2,479,400); 3,000 of the `cd` lines and 3,080 of those, with their compound
   forms (7,981,575); and the reviews' 6,000 prefixed built-in lines with their compound forms (8,245,454). Earlier
   versions lowered lines it now covers:
+  once main took #468, a merge of the two readings that kept each violation once lowered 126 pairs on 42
+  actions under the posting policies (`gh pr comment 5 -R myorg/app --body $'ok\nF' && X='a b' pushd /dev/fd &&
+  gh pr comment 5 -R myorg/app --body hi`: both posts miss the footer after the `cd` into a descriptor, store or
+  secret folder, and main lists that violation twice, the merge once);
   one that scanned only the new reading's words for store paths lowered 664 pairs on 71 actions (a store path in a
   quoted value lost store_write); one that dropped the old reading when an `env -S` followed lowered 8,889 pairs on
   932 actions of the `env -S` lines (store_write and env-inject deletes lost); and one whose setter check read only the

@@ -6599,8 +6599,8 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     over everything, and so does a category line or rule that denies any part of a compound line. A line
     with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands. So is a line with a part read
     behind a quoted prefix assignment, also decided with the part on top that the gate read there before #471, and
-    the call read as before #471 (Classification.before) is decided too: the stricter outcome stands, and at an equal
-    one the reserved parts and violations of both. `context` may carry `spent_today` for the daily budget.
+    the call read as before #471 (Classification.before) is decided too, and the two merge as #399's readings do
+    (_strictest). `context` may carry `spent_today` for the daily budget.
 
     On a compound line, a rule keyed on `command` that would lower the line (its decision is below the matrix cell
     and category line, or it is an allow or log rule that names opaque_exec) must match the line as before and also
@@ -6623,15 +6623,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     ctx = dict(context or {})
     if c.before is not None:
         # #471: the call read as before, each quoted prefix assignment the program; the folder a `cd` behind one left
-        # and the parts read after it then decide as they did before
-        d = decide(replace(c, before=None), pol, ctx)
-        alt = decide(c.before, pol, ctx)
-        if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
-            return alt
-        if alt.outcome == d.outcome:
-            d.reserved = list(dict.fromkeys(d.reserved + alt.reserved))
-            d.violations = list(dict.fromkeys(d.violations + alt.violations))
-        return d
+        # and the parts read after it then decide as they did before. The two merge as #399's readings do, so each
+        # violation stays listed as often as one of them lists it (two posts to one PR that both miss the footer).
+        return _strictest([decide(replace(c, before=None), pol, ctx), decide(c.before, pol, ctx)], ["", ""])
     if c.floor is not None:
         # #399: the line as the gate read it before gh's subcommand search is decided too, so none decides lower.
         floor = c.floor
@@ -7281,9 +7275,11 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
     code the gate cannot see into (D-038), so one "always" never covers a different script, and a line the gate
     reads more than one way (#399): a gh command that may land on another target (``alt_targets``), so a grant on
-    one of its targets never covers it, and a line with a ``floor``, whose stricter reading may be another act."""
+    one of its targets never covers it, and a line with a ``floor``, whose stricter reading may be another act. A
+    line also read as before #471 (``before``) binds as that reading does."""
     return (is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
-            or "unknown program" in c.signals or bool(c.alt_targets) or c.floor is not None)
+            or "unknown program" in c.signals or bool(c.alt_targets) or c.floor is not None
+            or (c.before is not None and binds_exact(c.before, d)))
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:

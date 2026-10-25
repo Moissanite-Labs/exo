@@ -229,7 +229,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still read, and a setter under either reading (`X="$Y" ls`) still counts for a `command` rule (#394). The line is
   also decided with the part main put on top, and the whole call is also read and decided as before, each quoted
   word the program, the stricter outcome standing: a `cd` behind one (`X='a b' cd /dev && yarn publish`), a
-  `coproc` after one or a value `declare` reads again leaves no decision lower than before.
+  `coproc` after one or a value `declare` reads again leaves no decision lower than before. The two readings merge
+  as a gh line's readings do (#399): each reserved part and violation of either stays, a violation as often as one
+  of them lists it (two posts to one PR that both miss the footer around `X='a b' cd ~/.exo/state` list it twice),
+  and the exo-gate hook's checks past the decision (body files, who may answer, "once", the required executor, an
+  "always" bound to the exact line) read the line as before too.
   An unknown program now asks beside a more severe part that logs (`git push origin feature && mytool --wipe`,
   `git push origin feature; kill -9 1`), unless a category line names `opaque_exec` below ask, and an "always" on
   such a line covers that exact line only. A script that calls a local tool the gate does not know after a push or
