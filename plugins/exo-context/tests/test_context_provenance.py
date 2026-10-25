@@ -1436,6 +1436,21 @@ def test_a_transcript_cut_short_is_no_undo(tmp_path, caplog):
     assert "British" not in caplog.text
 
 
+def test_a_transcript_cut_short_at_a_summary_row_is_no_undo(tmp_path):
+    """Only the window's first row, or the summary part Hermes keeps of it, shows that a transcript reaches back. A
+    later summary row does not, so a transcript cut short to start there drops nothing."""
+    h = Hermes(tmp_path, "s2")
+    for text in (MINE, "now the parser", "and the writer"):
+        h.turn(text)
+    h.compress()
+    h.turn("and the tests")
+    h.undo()
+    tail = [*h.history[1:], mine("next step")]
+    assert tail[0].get("_compressed_summary")
+    h.eng.select_context([SYS, *tail], conversation_messages=tail, incoming_message=tail[-1])
+    assert pins(tmp_path, "s2")["ruling"] == [MINE]
+
+
 class NoHead(Paraphrase):
     """A later Hermes compaction, which keeps no first rows: its summary row opens the transcript."""
 
@@ -1455,6 +1470,82 @@ def test_an_undo_reads_a_transcript_a_compaction_rewrote_since(tmp_path):
     assert NOTE not in hf.strip_pinned(hf.message_text(h.compress()[0]))
     h.turn("next step")
     assert pins(tmp_path, "z1")["ruling"] == [NOTE]
+
+
+class Later(Carrier):
+    """A later Hermes compaction, which keeps no first rows. It merges its summary into the row of the turn it runs
+    in, which then opens the transcript, or (merge off) writes a summary row of its own before that row."""
+
+    merge = True
+
+    def compress(self, messages, **kw):
+        return (super().compress(messages, **kw) if self.merge else Paraphrase.compress(self, messages, **kw))[1:]
+
+
+@pytest.mark.parametrize("case", ["block", "no block", "compact"])
+def test_an_undo_that_cuts_at_the_row_hermes_merged_its_summary_into(tmp_path, case):
+    """The row a later compaction merged its summary into opens the transcript. /undo 3 cuts at it, and Hermes keeps
+    only its summary part, so the window's first row is gone as it was. That part still shows that the transcript
+    reaches back, with a pinned block in it or none (no pin yet when it was written), and so does the summary row of
+    a compaction before the next turn that folds it. So that turn drops the pins of every undone turn, the merged
+    row's own message included, and keeps the ruling the summary folded."""
+    tabs = "From now on, always use tabs in the Makefile."
+    folded, ask = ("now the parser", "and the writer") if case == "no block" else (MINE, NOTE)
+    h = Hermes(tmp_path, "lc", inner=Later())
+    for text in ("start the importer", folded):
+        h.turn(text)
+    h.history = h.eng.compress([*h.history, mine(ask)], force=True)  # Hermes compacts before the request
+    assert (hf.PIN_OPEN in hf.message_text(h.history[0])) == (case != "no block")
+    h.eng.select_context([SYS, *h.history], conversation_messages=list(h.history), incoming_message=h.history[-1])
+    h.eng.on_turn_complete([*h.history, ok()], usage=None)
+    h.history.append(ok())
+    for text in (tabs, "next step"):
+        h.turn(text)
+    text = hf.message_text(h.history[0])
+    h.history = [{**h.history[0], "content": text[:text.index(END_LINE) + len(END_LINE)]}]  # /undo 3
+    host_undo("lc")
+    assert pins(tmp_path, "lc")["ruling"] == ([tabs] if case == "no block" else [MINE, NOTE, tabs])
+    if case == "compact":  # Hermes compacts at the start of the next turn
+        h.eng.inner.merge = False
+        h.history = h.eng.compress([*h.history, mine("write the summary")], force=True)
+        h.eng.select_context([SYS, *h.history], conversation_messages=list(h.history), incoming_message=h.history[-1])
+    else:
+        h.turn("write the summary")
+    assert pins(tmp_path, "lc")["ruling"] == ([] if case == "no block" else [MINE])
+
+
+def test_a_ruling_said_twice_word_for_word_rides_the_summary_that_folded_one(tmp_path):
+    """A ruling said twice word for word, in a turn a compaction folds and in the turn it keeps as its tail, rides
+    the summary row: the folded copy counts as folded, though the kept one has the same text. So an undo of the kept
+    turn keeps the ruling, at the notice and on the next turn."""
+    h = Hermes(tmp_path, "tw")
+    for text in ("start the importer", MINE, "now the parser"):
+        h.turn(text)
+    h.history = h.eng.compress([*h.history, mine(MINE)], force=True)  # Hermes compacts before the request
+    assert hf.message_text(h.history[-1]) == MINE and MINE not in hf.strip_pinned(hf.message_text(h.history[1]))
+    h.eng.select_context([SYS, *h.history], conversation_messages=list(h.history), incoming_message=h.history[-1])
+    h.history.append(ok())
+    h.eng.on_turn_complete(list(h.history), usage=None)
+    h.undo()
+    assert pins(tmp_path, "tw")["ruling"] == [MINE]
+    h.turn("write the summary")
+    assert pins(tmp_path, "tw")["ruling"] == [MINE]
+
+
+def test_a_second_undo_before_the_next_turn_keeps_the_first_ones_window(tmp_path):
+    """Two undos before the next turn. /undo 2 reaches a turn before the summary row, so the row goes too, then
+    /undo 1 takes the first turn. The second notice leaves the next turn the window the first one saw, which still
+    shows the summary row, so that turn drops the ruling the row folded."""
+    h = Hermes(tmp_path, "uu", inner=Head())
+    for text in ("start the importer", "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.compress()
+    h.turn("next step")
+    h.undo(2)
+    h.undo(1)
+    assert pins(tmp_path, "uu")["ruling"] == [MINE]  # the notices show only the turns after the summary row
+    h.turn("write the summary")
+    assert pins(tmp_path, "uu")["ruling"] == []
 
 
 def test_a_request_that_is_no_turn_leaves_an_undo_pending(tmp_path):
