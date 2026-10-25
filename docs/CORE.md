@@ -119,10 +119,10 @@ back, and the shorter chain still links. So each append also writes the head (se
   that has a `-wal` file is read live (another process has it open, or one crashed): SQLite reads the `-wal` file
   and may add or rewrite a `-shm` file. A target that changed during three copies in a row is read live too, and so
   is one whose copy fails while it stays the same (a full temporary folder). SQLite then makes `-wal` and `-shm`
-  files beside it. They stay after the reader closes, until a writer next closes the ledger, and later opens read
-  the target live until then. A target that is missing, is not a regular file (a FIFO would block the open) or holds
-  no ledger reads as empty. An authority-mode ledger trusts its signed checkpoints: its appends skip the symlink
-  refusal and write the projection through the link.
+  files beside it. They stay after the reader closes, until a writer closes the ledger while no reader has it open.
+  Until then, later opens read the target live. A target that is missing, is not a regular file (a FIFO would block
+  the open) or holds no ledger reads as empty. An authority-mode ledger trusts its signed checkpoints: its appends
+  skip the symlink refusal and write the projection through the link.
 - An anchor is read only as a regular file: a symlink in its place is unreadable. Anchors are written through a
   fresh temporary file (`mkstemp`, with `O_EXCL` and `O_NOFOLLOW`), so a symlink planted in the anchor's folder
   cannot redirect the write.
