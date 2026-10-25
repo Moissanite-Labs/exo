@@ -331,6 +331,13 @@ class SessionStore:
                        (sid, since, upto if upto is not None else 2**62))
         return [from_dict(Message, json.loads(r["data"]), strict=False) for r in rows]
 
+    def latest_user_message(self, sid: str) -> Message | None:
+        """Newest visible user input, excluding harness notes, without decoding the whole transcript."""
+        rows = self._q("SELECT data FROM messages WHERE session=? AND hidden=0 AND role='user'"
+                       " AND json_extract(data, '$.meta.note') IS NULL"
+                       " ORDER BY seq DESC LIMIT 1", (sid,))
+        return from_dict(Message, json.loads(rows[0]["data"]), strict=False) if rows else None
+
     def message_seq(self, sid: str, message_id: str) -> int | None:
         rows = self._q("SELECT seq FROM messages WHERE session=? AND id=?", (sid, message_id))
         return rows[0]["seq"] if rows else None
