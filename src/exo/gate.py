@@ -1536,6 +1536,7 @@ _EXEC_ENV_OPAQUE = {
 # git config from the environment, `git -c` by another name: GIT_CONFIG_KEY_<n> with GIT_CONFIG_VALUE_<n>
 # (GIT_CONFIG_COUNT alone sets nothing), and GIT_CONFIG_PARAMETERS. The pairs take _git_config_kind.
 _GIT_CONFIG_ENV = re.compile(r"GIT_CONFIG_(KEY|VALUE)_(\d+)")
+_GIT_ENV_PAIRS = 64   # the key and value pairs of one GIT_CONFIG_KEY_<n> read one by one (_exec_options, #438)
 _EXPORTERS = ("export", "declare", "typeset", "readonly", "local")
 
 
@@ -4125,7 +4126,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                    w.dynamic and not re.fullmatch(r'"(?:[^"\\]|\\.)*"', w.raw) for w in words[1:]):
                 parts.append(_opaque("unset takes a word the gate cannot read, which may unset PATH", cmd))
     # each value a GIT_CONFIG_KEY_<n> or GIT_CONFIG_VALUE_<n> takes: bash keeps the last, but a readonly one the first
-    # (`declare -rx GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_KEY_0=a`), so each key is checked with each value
+    # (`declare -rx GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_KEY_0=a`), so each key is checked with each value, up
+    # to _GIT_ENV_PAIRS pairs
     git_env: dict[tuple[str, ...], list[str]] = {}
     for name, value, runs_nothing, literal in sets:
         if name in _EXEC_ENV:
@@ -4146,8 +4148,15 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     parts += _indirect_sets(prog, words, cmd)
     for (kind, num), taken in git_env.items():
         if kind == "KEY":
-            git_config([f"{key}={value}" for key in dict.fromkeys(taken)
-                        for value in dict.fromkeys(git_env.get(("VALUE", num), [""]))], f"GIT_CONFIG_KEY_{num}")
+            keys, vals = list(dict.fromkeys(taken)), list(dict.fromkeys(git_env.get(("VALUE", num), [""])))
+            if len(keys) * len(vals) <= _GIT_ENV_PAIRS:
+                pairs = [(key, value) for key in keys for value in vals]
+            else:    # bash keeps the first pair or the last: each key with the first and last value, each value
+                # with the first and last key, so a line that sets many is not read once for each pair (#438)
+                parts.append(_opaque(f"GIT_CONFIG_KEY_{num} takes more values than the gate pairs", cmd))
+                pairs = list(dict.fromkeys([(key, value) for key in keys for value in (vals[0], vals[-1])] +
+                                           [(key, value) for value in vals for key in (keys[0], keys[-1])]))
+            git_config([f"{key}={value}" for key, value in pairs], f"GIT_CONFIG_KEY_{num}")
         elif ("KEY", num) not in git_env:
             parts.append(_opaque(f"GIT_CONFIG_VALUE_{num} sets git config whose key is not on the line", cmd))
     for v in values(_EXEC_OPTS.get(prog, ())):
