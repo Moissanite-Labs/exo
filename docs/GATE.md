@@ -630,10 +630,13 @@ system or bash will. A fifth, a pattern substitution, it does not spell out: it 
   builds the form with a brace set fails closed too when it makes more words than the brace cap, or than what
   the call's other checks left of its brace budget. A name read through indirection counts as one of the four
   variables, since the gate does not know which variable it names: `x=HOME; cat ${!x/%//.exo}/keys/seat` is
-  `$HOME/.exo/keys/seat` in bash and asks. A substitution with an empty replacement only removes text and reads
-  as the value (`cat ${HOME//x}/notes.txt` stays a read). The cost: every such substitution of a store variable
-  asks, also one that leaves an ordinary path (`cp x ${HOME/%//backup}/a`), and so does one through any indirect
-  name (`echo ${!v//:/ }`). Other variables keep their reading (`echo ${PATH//:/ }`, `echo ${PWD/#$HOME/~}`).
+  `$HOME/.exo/keys/seat` in bash and asks. When the call also names a store path the gate spells, that path stays
+  its target, so a deny or reserved entry on it still reaches the call:
+  `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml` is a store write to `~/.exo/policies/x.yaml`, with `${HOME/%//x}/a`
+  as a store write part beside it. A substitution with an empty replacement only removes text and reads as the
+  value (`cat ${HOME//x}/notes.txt` stays a read). The cost: every such substitution of a store variable asks,
+  also one that leaves an ordinary path (`cp x ${HOME/%//backup}/a`), and so does one through any indirect name
+  (`echo ${!v//:/ }`). Other variables keep their reading (`echo ${PATH//:/ }`, `echo ${PWD/#$HOME/~}`).
 - **Expansions inside a name (#225).** Bash drops an empty command substitution, and an unset variable expands to
   nothing, so `cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc` and `cat ${x}.env` read the store. A shell word
   that holds a `$( )`, a backtick pair, or a `${..}` or `$name` other than the four variables above is also

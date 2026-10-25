@@ -337,6 +337,47 @@ def test_a_file_tool_write_keeps_the_read_beside_it(env, call):
     assert "credentials" not in {p.category for p in gate._each_part(plain)}
 
 
+@pytest.mark.parametrize("call", [
+    "cp ${HOME/%//projects}/a ~/.exo/policies/x.yaml",
+    "mv ${HOME/%//.kube}/config ~/.exo/policies/x.yaml",
+    "tee ${HOME/%//x} ~/.exo/policies/x.yaml < a.txt",
+    "cp a ~/.exo/policies/x.yaml > ${HOME/%//x}/log",
+    "cp {$,}{HOME/%//x} ~/.exo/policies/x.yaml",
+    "x=HOME; cp ${!x/%//p}/a ~/.exo/policies/x.yaml",
+    "git -C ${HOME/%//p} --work-tree ~/.exo/policies commit -m x",
+    {"tool": "move_file", "args": {"source": "${HOME/%//.kube}/config", "destination": "~/.exo/policies/x.yaml"}},
+    {"tool": "copy_file", "args": {"src": "${HOME/%//projects}/a.md", "dest": "~/.exo/policies/x.yaml"}},
+    {"tool": "delete_file", "args": {"paths": ["${HOME/%//projects}/a.md", "~/.exo/policies/x.yaml"]}},
+    {"tool": "apply_patch", "args": {"patch": "*** Begin Patch\n*** Update File: ${HOME/%//projects}/a.md\n@@\n-a\n+b\n"
+                                              "*** Update File: ~/.exo/policies/x.yaml\n@@\n-a\n+b\n*** End Patch\n"}},
+])
+def test_a_spelled_store_path_stays_the_target(env, call):
+    """A call that names a store path only by a substitution, and another one the gate spells, keeps the spelled one
+    as its target, as main does. So a deny or reserved entry on it still reaches the call (the independent check of
+    #534: `deny: [target:*/.exo/*]` asked on these where main denied). The substitution still fails closed, and stays
+    a store write part beside it."""
+    c = gate.classify({"tool": "bash", "args": {"command": call}} if isinstance(call, str) else call)
+    assert c.category == "store_write" and c.target.endswith(("/.exo/policies/x.yaml", "/.exo/policies"))
+    assert gate.decide(c, {"gates": {"deny": ["target:*/.exo/*"]}}).outcome == "deny"
+    assert gate.decide(c, {"gates": {"reserved": ["target:*/.exo/*"]}}).reserved
+    assert gate.decide(c, DENY).outcome == "deny"
+    assert any(p.category == "store_write" and "${" in p.target for p in gate._each_part(c))
+
+
+def test_a_substitution_alone_stays_the_target(env):
+    assert gate.classify({"tool": "bash", "args": {"command": "cp a ${HOME/%//p}/b"}}).target == "${HOME/%//p}/b"
+    c = gate.classify({"tool": "move_file", "args": {"source": "/tmp/a", "destination": "${HOME/%//p}/b"}})
+    assert (c.category, c.target) == ("store_write", "${HOME/%//p}/b")
+
+
+def test_a_word_past_the_budget_keeps_the_substitution_beside_it(env):
+    """A word past the call's brace budget is the target, as on main, and the form found before it stays a store
+    write part, so a deny entry on its path still denies."""
+    c = gate.classify({"tool": "bash", "args": {"command": "cp a {$,}{HOME/%//.exo}/keys/seat " + " ".join(FILL)}})
+    assert ("store_write", "${HOME/%//.exo}/keys/seat") in {(p.category, p.target) for p in gate._each_part(c)}
+    assert gate.decide(c, {"gates": {"deny": ["target:*.exo*"]}}).outcome == "deny"
+
+
 def test_nested_forms_are_not_spelt_out(monkeypatch):
     """The fail-closed check reads a nest in one pass, so a deep or wide one costs what main's reading costs: the
     review's 138 KB line of 9 levels of 3 forms each took 10 s to classify when each replacement was spelt out."""
