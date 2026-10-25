@@ -5167,7 +5167,9 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         c.signals = signals + ["secret store"]
         c.parts = list(parts)
         c = _weigh(c, combined, cmd)
-    if hit and c.category == "credentials" and not _plain_secret([hit]):     # #513 review: main's target stays a part
+    # #513 review: main's target stays a part, where the target is a spelling only #446 reads: the line's first store,
+    # or a part's, such as a `$( )` the line takes its target from (`cat ~/.kube/config $(cat /pro?/self/environ)`)
+    if hit and c.category == "credentials" and not (_plain_secret([hit]) and _plain_secret([c.target])):
         _plain_part(c, _shell_credential_hit(cmd, segs, raws, plain=True), "shell touching", cmd)
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
