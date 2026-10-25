@@ -1004,3 +1004,32 @@ def test_an_entry_for_the_name_read_after_a_cd_still_matches_beside_a_store_only
 def test_a_line_main_read_a_store_on_gets_no_part_for_the_name_after_its_cd(line, entry):
     # Main read a store or the environment on the line, so it read no name after the `cd`: the entry asks, as on main
     assert full(line, {"gates": {"deny": [f"target:{entry}"]}})[1] == "ask"
+
+
+# A nested line that reads a store through a redirection with a backslash (`$(cat < ~/.kube/\config)`) gives the line
+# its target as the shell reads it, `~/.kube/config`, which the line does not spell. Main read no store there, so its
+# target was the line's own first store, which stays a part (#513 checker).
+@pytest.mark.parametrize("policy", SECOND)
+@pytest.mark.parametrize("line", [
+    "cat ~/.ssh/id_rsa $(cat < ~/.kube/\\config)",
+    "cat ~/.ssh/id_rsa; echo $(cat < ~/.kube/\\config)",
+    "cat ~/.ssh/id_rsa < <(cat < ~/.kube/\\config)",
+    "bash -c 'cat < ~/.kube/\\config'; cat ~/.ssh/id_rsa",
+])
+def test_an_entry_for_main_s_target_still_matches_beside_a_nested_redirection_with_a_backslash(line, policy):
+    category, outcome, hits, _ = full(line, policy)
+    reserved = "reserved" in policy["gates"]
+    assert (category, outcome, "credentials" in hits) == ("credentials", "ask" if reserved else "deny", reserved)
+
+
+@pytest.mark.parametrize("line, policy", [
+    ("cd ~/.ssh; echo $(cat < ~/.kube/\\config)", {"gates": {"deny": ["target:*/.ssh"]}}),
+    ("ls ~/.exo/keys $(cat < ~/.kube/\\config)", {"gates": {"deny": ["target:*/.exo/keys"]}}),
+])
+def test_an_entry_for_a_store_folder_still_matches_beside_a_nested_redirection_with_a_backslash(line, policy):
+    assert full(line, policy)[:2] == ("credentials", "deny")
+
+
+def test_a_nested_store_main_read_gets_no_part_for_the_line_s_first_store():
+    # Main read the nested line's store too and took it as the target, so the first store is no target, as on main
+    assert full("cat ~/.kube/config $(cat ~/.ssh/id_rsa)", {"gates": {"deny": ["target:*/.kube/config"]}})[1] == "ask"
