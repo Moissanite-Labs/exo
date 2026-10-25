@@ -977,3 +977,30 @@ def test_a_line_main_read_as_credentials_gets_no_folder_part(line):
     c = gate.classify({"tool": "bash", "args": {"command": line, "cwd": "~/.ssh"}})
     assert not any(p.target.endswith("/.ssh") for p in gate._each_part(c))
     assert full({"tool": "bash", "args": {"command": line, "cwd": "~/.ssh"}}, SSH_ENTRIES[0])[1] == "ask"
+
+
+# The same on the line itself: after a `cd` into a store folder, main read a relative name there (D-038, #192) when the
+# line named no store as main read it, and the name was its target. That read stays a part (#513 checker).
+@pytest.mark.parametrize("line, entry", [
+    ("cd ~/.config/gh && cat /pro?/self/environ hosts.yml", "*hosts.yml"),
+    ("cd ~/.config//gh && cat hosts.yml", "hosts.yml"),
+    ("cd ~/.exo && ls keys; cat ~/.kube//config", "keys"),
+    ("cd ~/.exo && cat ~/.kube//config; ls keys", "keys"),
+    ("cd ~/.kube && cat config < ~/.kube/\\config", "config"),
+    ("pushd ~/.kube; cat config ~/.docker//config.json", "config"),
+    ("tar -C ~/.kube -czf - config ~/.docker//config.json", "config"),
+    ("echo $(cd ~/.kube && cat config) $(cat ~/.docker//config.json)", "config"),
+])
+def test_an_entry_for_the_name_read_after_a_cd_still_matches_beside_a_store_only_446_reads(line, entry):
+    assert full(line, {"gates": {"deny": [f"target:{entry}"]}})[:2] == ("credentials", "deny")
+    assert full(line, {"gates": {"reserved": [f"target:{entry}"]}})[1:3] == ("ask", ["credentials"])
+
+
+@pytest.mark.parametrize("line, entry", [
+    ("cd ~/.config/gh && cat ~/.ssh/id_rsa hosts.yml", "hosts.yml"),
+    ("cd ~/.kube && env; cat config", "config"),
+    ("cd ~/.kube && cat ~/.docker/config.json config", "config"),
+])
+def test_a_line_main_read_a_store_on_gets_no_part_for_the_name_after_its_cd(line, entry):
+    # Main read a store or the environment on the line, so it read no name after the `cd`: the entry asks, as on main
+    assert full(line, {"gates": {"deny": [f"target:{entry}"]}})[1] == "ask"

@@ -5190,6 +5190,15 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         c.signals = signals + ["secret store"]
         c.parts = list(parts)
         c = _weigh(c, combined, cmd)
+    elif c.category == "credentials" and (found := _cd_store_read(cmds, subs)) and _no_plain_store(
+            [p for p in _each_part(c) if p.category == "credentials"], cmd):
+        # #513 review: main read no store on a line whose stores are all spellings only #446 reads, so it read the
+        # relative names after its `cd`, and its target was the name (`hosts.yml` in
+        # `cd ~/.config/gh && cat /pro?/self/environ hosts.yml`): that read stays a part, weighed as main's line was
+        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
+        read = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
+                     reversibility=max(rev, "costly", key=REVERSIBILITY.index), own=None, signals=["secret store"])
+        c.parts = [*c.parts, _weigh(read, combined, cmd)]
     c.command = cmd
     c._command_views = list(dict.fromkeys([
         _policy_command_view(cmd),
@@ -6469,9 +6478,8 @@ def _shell_call(cmd: str) -> Classification:
             c.also = whole
         secrets = [p for p in _each_part(c) if p.category == "credentials"]
         # the line reads a store, so the call keeps the line's result and reads no folder, as main did where it read a
-        # store or a secret command on the line
-        if secrets and (not all(is_sensitive_path(p.target) or _glob_hits_secret(p.target) for p in secrets)
-                        or _plain_line_hit(cmd, scope)):
+        # store or a secret command on the line, in the session's folder
+        if secrets and not _no_plain_store(secrets, cmd, scope):
             return c
         if secrets:
             # #513 review: main read no store on a line whose stores are all spellings only #446 reads
@@ -6502,16 +6510,22 @@ def _shell_call(cmd: str) -> Classification:
     return c
 
 
-def _plain_line_hit(cmd: str, scope: _Scope) -> str:
-    """What the line itself touches in ``scope``, the session's folder, as main read it before #446: the first store
-    path, the Keychain or an environment dump (_shell_credential_hit with ``plain``), or ''."""
+def _no_plain_store(secrets: list[Classification], cmd: str, scope: _Scope | None = None) -> bool:
+    """#513 review: whether main read no store on the line ``cmd``, whose credentials parts are ``secrets``, and so went
+    on to read the relative names after a `cd` (_cd_store_read) or the call's own folder (_tool_folder_read). Each
+    part names a store path, and the line names none as main read it before #446 (_shell_credential_hit with
+    ``plain``), in ``scope`` when given: `cat ~/.kube//config`, or `cat < ~/.kube/\\config`, which main did not read.
+    A store, the environment or a secret command (`ssh-keygen`) main read on the line keeps the line alone."""
+    if not all(is_sensitive_path(p.target) or _glob_hits_secret(p.target) for p in secrets):
+        return False
     cmds, _, _ = _parse(cmd)
-    token = _scope.set(scope)
+    token = _scope.set(scope) if scope is not None else None
     try:
-        return _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
-                                     [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True)
+        return not _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
+                                         [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True)
     finally:
-        _scope.reset(token)
+        if token is not None:
+            _scope.reset(token)
 
 
 def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
