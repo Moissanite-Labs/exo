@@ -5173,12 +5173,18 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     segs = [[w.text for w in k.words] for k in cmds if k.words]
     raws = [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]]
     hit = _shell_credential_hit(cmd, segs, raws)
-    if hit and c.category != "credentials":
+    # #342: a nested line (an ssh remote command, `bash -c`, a `$( )`) that holds a `/` substitution of a store
+    # variable is `credentials` with the form for its target, and it may lead the line. A secret path the gate spells
+    # on the line stays the target, as on main, and the nested line stays a part, so a deny, rule or reserved entry
+    # on either still reaches the line (`ssh h 'cat ${HOME/%//x}/a'; cp x ~/.ssh/id_rsa`).
+    led = bool(hit) and c.category == "credentials" and c.target != hit and bool(
+        _store_subst(c.target) or _brace_store_subst([c.target]))
+    if hit and c.category != "credentials" or led:
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
         signals = c.signals
         c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
-        c.signals = signals + ["secret store"]
+        c.signals = list(signals) if led else signals + ["secret store"]
         c.parts = list(parts)
         c = _weigh(c, combined, cmd)
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
@@ -6500,18 +6506,19 @@ def _store_part(path: str, summary: str) -> Classification:
     return c
 
 
-def _subst_parts(paths: list[str], verb: str, target: str) -> list[Classification]:
-    """A `credentials` part for the first of ``paths`` with a `/` substitution of a store variable that the gate does
-    not spell out (_store_subst, #342). It may be a secret store, so a file tool's store write keeps a secret read
-    beside it, as a shell line's does, and a deny on credentials reaches it (`write_file ${HOME/%//.kube}/config`).
-    When the call's ``target`` is another store path, one the gate spells (_spelt), that path is a store write part
-    too."""
-    hid = next((p for p in paths if _store_subst(p) or _brace_store_subst([p])), "")
+def _subst_parts(stores: list[str], verb: str, target: str) -> list[Classification]:
+    """A `credentials` part for the first of a call's store paths ``stores`` with a `/` substitution of a store
+    variable that the gate does not spell out (_store_subst, #342). It may be a secret store, so a file tool's store
+    write keeps a secret read beside it, as a shell line's does, and a deny on credentials reaches it (`write_file
+    ${HOME/%//.kube}/config`). Each store path other than the call's ``target`` is a store write part too. The target
+    is one the gate spells where _spelt can tell, but not when the call's other paths spent the brace budget, so a
+    deny, rule or reserved entry on any of them still reaches the call."""
+    hid = next((p for p in stores if _store_subst(p) or _brace_store_subst([p])), "")
     if not hid:
         return []
     c = _make("credentials", summary=f"{verb} {hid}"[:120], target=hid, link=hid)
     c.signals.append("secret store")
-    return [c] if hid == target else [_store_part(hid, f"{verb} {hid}"), c]
+    return [*(_store_part(p, f"{verb} {p}") for p in dict.fromkeys(stores) if p != target), c]
 
 
 @_brace_budget
@@ -6562,7 +6569,7 @@ def _classify_call(action: Any) -> Classification:
         if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
             c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p)]
         elif cat == "store_write":  # #342: a store path the gate does not spell out may be a secret store too
-            c.parts += _subst_parts(paths, "write", path)
+            c.parts += _subst_parts(in_store, "write", path)
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
