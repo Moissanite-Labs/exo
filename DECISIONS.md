@@ -1914,14 +1914,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   assignment, so git runs the hook path. The `export` form lowered too, though bash keeps the last value there. Each
   form is now read on its own (`_each_form`), so the words as written decide as on main and the words bash makes add
   their parts. A key or value set twice on one command is also checked with each value it takes, with a brace or not.
-  That closes main's own form, `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h
-  GIT_CONFIG_KEY_0=a; git commit -m x`, which main allowed. It also asks for the `export` form, where bash keeps the
-  harmless last key. Past 64 pairs of a key and a value, the command asks, and each key is checked with the first and
-  the last value and each value with the first and the last key. bash keeps one of those two pairs. Checking each pair
-  made `export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.{1..1000} GIT_CONFIG_VALUE_0=x{1..1000}; git status` a
-  million pairs, 31 s of CPU, where main takes 0.07 s. Of the words bash makes, a part is kept only when the words as
-  written do not give it, so a word outside a set is read once: `declare 'a[$(rm -rf build)]' {X,Y}` has main's 2
-  parts, not 4. The builtin's checks read the commands in each word again, so a word with n command or process
+  That closes main's own form (#555), `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath
+  GIT_CONFIG_VALUE_0=./h GIT_CONFIG_KEY_0=a; git commit -m x`, which main allowed. It also asks for the `export` form,
+  where bash keeps the harmless last key. Past 64 pairs of a key and a value, the command asks, and each key is checked
+  with the first and the last value and each value with the first and the last key. bash keeps one of those two pairs.
+  Checking each pair made `export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.{1..1000} GIT_CONFIG_VALUE_0=x{1..1000}; git
+  status` a million pairs, 31 s of CPU, where main takes 0.07 s. Of the words bash makes, a part is kept only when the
+  words as written do not give it, so a word outside a set is read once: `declare 'a[$(rm -rf build)]' {X,Y}` has main's
+  2 parts, not 4. The builtin's checks read the commands in each word again, so a word with n command or process
   substitutions now takes 4 x (n + 1)² times its share of the third budget. A nest of seven `$( )` around a 1,000-word
   set was read 53,056 times, about 8 s of CPU. It now asks as too large after 56 reads, as many as main makes. A brace
   set in `printf`'s first word now counts as a command that changes the shell (#394), so an allow rule for
@@ -1942,10 +1942,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   [read]`, `reserved: [delete, local_write, read, credentials, 'target:*/.exo/*']`, `deny: [opaque_exec]`, `deny:
   [delete]` and an allow rule for `git push --force origin main`), the built-in corpus lowers 6 pairs on 3 actions and
   the focused corpus 36 pairs on 20 actions. Each is an ssh line that loses a reserved hit as above, and it asks on both
-  trees. No other pair is lower. Left out: a word whose value is the command of an exec variable (`PAGER`, `EDITOR` and
+  trees. *Privileged hops.* `sudo` and `doas` make the remote line of an `ssh` hop costly. Main read `sudo ssh h 'export
+  {PATH,X}=; ls'` as a costly `read`, which the matrix logs and which a rule that denies a costly `read`, `local_write`
+  or `shell` line denies. It is now `opaque_exec`, as main reads `sudo ssh h 'export PATH= X=; ls'`. So 6 built-in
+  policies decide such a line lower. Under `categories_allow`, `category_opaque_exec_allow`, `category_delete_allow` and
+  the two allow rules that name `opaque_exec`, it goes from log to allow. Under `rule_costly_part_deny`, which is such a
+  rule, it goes from deny to ask. Neither corpus above holds such a hop. Their lines and 204 more from a second check,
+  each under `sudo ssh`, `doas ssh` and `sudo bash -c` (6,729 lines), give 14,937 actions x 87 policies, lowered 14,006
+  pairs on 3,406 actions, each a `sudo ssh` or `doas ssh` line under those 6 policies. 658 of the pairs, on 206 actions,
+  are `export` or prefix git config lines that set a key twice. bash keeps the last key there, and main read only that
+  one. Rejected: reading only the last value where no readonly name can apply. A spelling of `-r` the gate missed would
+  reopen #555, and a command that sets one key twice is rare. The 204 lines and their forms under wrappers, compounds
+  and functions (2,017 lines, 5,024 actions x 87 policies) lower 4 pairs on 1 action, a `sudo ssh` line of this group.
+  No other pair is lower. Left out: a word whose value is the command of an exec variable (`PAGER`, `EDITOR` and
   the like) is read again in each word, and it takes only its plain share of the budget. So four 1,000-word sets of
   `PAGER='ssh h ssh h ssh h ssh h ssh h ssh h ls'` and the like take about 3 s of CPU, where main takes 0.06 s. The line
-  asks on both trees. It is left for its own issue.
+  asks on both trees. #572 tracks it.
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
   word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was

@@ -232,6 +232,16 @@ _SSH_KEY = "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.sshCommand 'GIT_CONFIG_VALU
     (f"declare -rx {_SSH_KEY} GIT_CONFIG_VALUE_0=x; git fetch", {"gates": {"deny": ["delete"]}}, "deny"),
     ("declare -rx GIT_CONFIG_COUNT=1 {GIT_CONFIG_KEY_0=core.hooksPath,X=1} GIT_CONFIG_VALUE_0=./h GIT_CONFIG_KEY_0=a; "
      "git commit -m x", {}, "ask"),
+    # #555's rows: each flag order, and readonly through another command or in a function
+    (f"typeset -xr {_SSH_KEY} GIT_CONFIG_KEY_0=a; git fetch", {"gates": {"deny": ["delete"]}}, "deny"),
+    ("declare -r -x GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h GIT_CONFIG_KEY_0=a; "
+     "git commit -m x", {"gates": {"deny": ["opaque_exec"]}}, "deny"),
+    ("typeset -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h GIT_CONFIG_KEY_0=a; "
+     "git commit -m x", {"gates": {"deny": ["opaque_exec"]}}, "deny"),
+    ("readonly GIT_CONFIG_KEY_0=core.hooksPath; export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=a GIT_CONFIG_VALUE_0=./h; "
+     "git commit -m x", {"gates": {"deny": ["opaque_exec"]}}, "deny"),
+    ("f(){ local -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h GIT_CONFIG_KEY_0=a; "
+     "git commit -m x; }; f", {"gates": {"deny": ["opaque_exec"]}}, "deny"),
 ])
 def test_a_git_config_key_the_line_set_is_read_with_each_value(cmd, policy, outcome):
     assert gate.decide(_bash(cmd), policy).outcome == outcome
