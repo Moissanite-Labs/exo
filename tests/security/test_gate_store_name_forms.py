@@ -448,6 +448,19 @@ STORE_WRITES = [
     "cp x ~/.exo/b$(printf u)s/registry.json",
     "cp x ~/x/bus/rel$(printf a)y.sqlite",
     "cp x ~/x/update/allowed_$(printf s)igners",      # anywhere, as `cp x ~/x/update/allowed_signers` on main
+    # the plugins folder (#440) is reached by each form as policies/ is (on main d79639f1: shell or read allow, or a
+    # delete or opaque_exec ask)
+    "cp x ~/.exo/plug$(:)ins/foo/__init__.py",
+    "cp x ~/.exo/plug``ins/foo/__init__.py",
+    "mv x ~/.exo/plug${u}ins/",
+    "echo x > ~/.exo/plug$(:)ins/foo/__init__.py",
+    "tee ~/.exo/$(printf plugins)/foo/x.py < x",
+    "cp x ${x:-$HOME/.exo}/plugins/foo/x.py",
+    "cp x ${x:-~/.exo/plugins}/foo/x.py",
+    "cp x ~/.exo/{plug$(:)ins,x}/a",
+    "rm -rf ~/.e$(:)xo/plugins",
+    "cd ~/.e$(:)xo && cp x plugins/foo/x.py",
+    "tar -C ~/.exo/plug$(:)ins -xf evil.tar",
 ]
 
 
@@ -563,6 +576,98 @@ PRIVILEGED_READS = [
 def test_a_privileged_wrapper_keeps_the_parts_it_runs_as_written(cmd, policy):
     assert gate.decide(gate.classify(sh(cmd)), policy).outcome == "deny"
     assert gate.decide(gate.classify(sh(cmd)), COSTLY).outcome == "deny"
+
+
+# A name read on a line that enters a store folder keeps main's target, and the `*` and `..` readings add theirs beside
+# it: _cd_store_read reads the words as written first, as main does, and the line's part (#468's key read) is built
+# from that name as on main; a name the forms read that is another target is a credentials part of its own. With the
+# `*` of a `$( )` or a `..` read in its place, a rule on the target asked where main d79639f1 denied. On a line that a
+# name main reads as no secret now decides (`${x-.netrc}`, `id_ed$((25519))`), the name read as written is such a part
+# too. Each denies on main d79639f1 and asked on 51b17393 (#320 merged with it).
+KEYS = {"gates": {"rules": [{"match": {"target": "*keys*"}, "decision": "deny"}]}}
+KEYS_IRREVERSIBLE = {"gates": {"rules": [{"match": {"target": "*keys*", "reversibility": "irreversible"},
+                                          "decision": "deny"}]}}
+RUN = {"gates": {"rules": [{"match": {"target": "*run*"}, "decision": "deny"}]}}
+TARGETS = [
+    ("cd ~/.exo/state && echo $(cat ../keys/seat; rm -rf x)", KEYS_IRREVERSIBLE),
+    ("cd ~/.exo/state && x=$(cat ../keys/seat) && echo $(rm -rf x)", KEYS_IRREVERSIBLE),
+    ("cd ~/.exo && cat $(ls) keys/seat", KEYS),
+    ("cd ~/.exo/state && cat $(ls) ../keys/seat", KEYS),
+    ("cd ~/.exo/state && cp x $(date) && cat ../keys/seat", KEYS),
+    ("cd ~/.exo/state && echo $(rm -rf x) ../keys/seat", KEYS),
+    ("cd ~/.exo/state && grep -r x .. ../run", RUN),
+    ("cd ~/.exo/state && cp -r .. ../run /tmp/out", RUN),
+    ("cd ~/.exo/policies && tar czf - .. ../run", RUN),
+    ("cd ~/.exo/state && cat ${x-.env} ../keys/seat", KEYS),
+    ("cd ~/.exo/state && cat id_ed$((25519)) ../keys/seat", KEYS),
+    ("cd ~/.exo/state && cat ../keys/seat ${x:-~/.kube}/config", KEYS),
+    ("cd ~/.exo/state && cat ../keys/seat; echo $(cat ${x-.env}; rm -rf x)", KEYS_IRREVERSIBLE),
+    ("cd ~/.exo/state && cat ${x-.netrc}; echo $(cat ../keys/seat; rm -rf x)", KEYS_IRREVERSIBLE),
+    ("cd ~/.exo/state && cat ${x-.netrc} ../keys/seat; echo $(rm -rf x)", KEYS_IRREVERSIBLE),
+    ("cd ~/.exo/state && grep -r x ${y-.netrc} .. ../run", RUN),
+]
+
+
+@pytest.mark.parametrize("cmd,policy", TARGETS)
+def test_a_name_read_in_a_store_folder_keeps_its_target(cmd, policy):
+    c = gate.classify(sh(cmd))
+    assert gate.decide(c, policy).outcome == "deny", c
+    assert gate.decide(c).outcome == "ask"
+
+
+@pytest.mark.parametrize("cmd,main,form", [
+    ("cd ~/.exo/state && echo $(cat ../keys/seat; rm -rf x)", "../keys/seat", "*"),
+    ("cd ~/.exo/state && grep -r x .. ../run", "../run", ".."),
+    ("cd ~/.exo/state && cat ${x-.env} ../keys/seat", "../keys/seat", None),
+])
+def test_the_forms_reading_is_a_part_beside_mains(cmd, main, form):
+    """Main's part is built as main builds it, with main's name as its target, and the line keeps main's category;
+    the reading of the forms only adds a credentials part beside it."""
+    c = gate.classify(sh(cmd))
+    seats = [p.target for p in gate._each_part(c) if p.category == "credentials" and "secret store" in p.signals]
+    assert main in seats + [c.target], (cmd, seats)
+    assert form is None or form in seats + [c.target], (cmd, seats)
+
+
+COSTLY_SECRET_DENY = {"gates": {"rules": [{"match": {"category": ["credentials"], "reversibility": "costly"},
+                                           "decision": "deny"}]}}
+SECRET_LIFT = {"gates": {"categories": {"credentials": "deny"}, "rules": [
+    {"match": {"category": "credentials", "reversibility": "irreversible"}, "decision": "allow"}]}}
+
+
+@pytest.mark.parametrize("policy", [COSTLY_SECRET_DENY, SECRET_LIFT], ids=["costly-deny", "irreversible-lift"])
+def test_a_secret_line_keeps_mains_key_read_at_a_secret_reads_weight(policy):
+    """`${x-.env}` in the $( ) makes the line a secret line, irreversible by the delete beside it, where main
+    d79639f1 reads a store write with the key read as a costly credentials part (#468): that part is kept beside
+    the line at a secret read's weight, so a rule on costly credentials still denies it, as on main."""
+    c = gate.classify(sh("cd ~/.exo/state && cat ../keys/seat; echo $(cat ${x-.env}; rm -rf x)"))
+    assert gate.decide(c, policy).outcome == "deny", c
+
+
+def test_a_secret_named_on_a_line_a_nested_secret_decides_is_a_part_beside_it():
+    """The ssh remote line reads as a secret line (`.?/..` from run/jobs), so the secret the line's own words name
+    (the remote text, main's target) is a part beside it: a reserved entry on that target lists it, as on main."""
+    line = "chroot / ssh host 'cd ~/.exo/run/jo$(:)bs && grep -r x .?/..'"
+    c = gate.classify(sh(line))
+    assert any(p.category == "credentials" and p.target == line.split("'")[1] for p in gate._each_part(c)), c
+    assert len(gate.decide(c, {"gates": {"reserved": ["target:*run*"]}}).reserved) >= 2
+    t = gate.classify({"tool": "terminal", "args": {"command": line}})
+    assert len(gate.decide(t, {"gates": {"reserved": ["tool:terminal"]}}).reserved) >= 6
+
+
+REVERSIBLE_RESERVED = {"gates": {"reserved": [{"category": c, "reversibility": "reversible"}
+                                              for c in ("read", "shell", "credentials", "store_write")]}}
+
+
+@pytest.mark.parametrize("line", ["ssh host 'cat ~/.exo/$(printf ledger.sqlite)'", "ssh host 'cat ~/.e$[0]xo/keys/seat'",
+                                  "ssh host 'cd ~/.exo/run/jo$(:)bs && grep -r x .?/..'"])
+def test_a_remote_line_these_forms_make_a_secret_keeps_its_read_of_the_host(line):
+    """Main d79639f1 reads the remote line as a read of `host`; here it is a secret or store line, and the part that
+    decided it before is kept with the host as its target, so a reserved entry on reversible reads lists it."""
+    c = gate.classify(sh(line))
+    assert c.category == "credentials", c
+    assert any(p.category == "read" and p.target == "host" and not p.text for p in gate._each_part(c)), c
+    assert len(gate.decide(c, REVERSIBLE_RESERVED).reserved) >= 3
 
 
 def test_a_privileged_wrappers_copies_add_no_posting_violation():

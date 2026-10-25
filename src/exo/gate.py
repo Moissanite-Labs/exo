@@ -3503,6 +3503,15 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c.signals.append("unread hops")
         elif inner:
             c = classify_shell(inner, inner_depth)
+            # #320: where an expansion form makes the remote line a secret or store line, the part that decided it
+            # before keeps the host as its target, as the remote line itself did (`ssh host 'cat ~/.exo/$(printf
+            # ledger.sqlite)'` was a read of host), so a reserved or rule entry on it still lists it. A copy with no
+            # parts and no post, so the posting checks read each post once.
+            top = (next((p for cat in ("credentials", "store_write") for p in c.parts if p.category == cat), None) or
+                   _most_severe(c.parts)) if c.category in ("credentials", "store_write") else None
+            if top is not None and not top.target:
+                c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
+                    s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
         if prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags):
@@ -4437,7 +4446,8 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
     """From simple commands: the working-folder targets (cd, pushd, git -C, env -C, sudo -D, tar -C, also after
     time, command, builtin, ! or an assignment), the words that may name a path (all but the program and the
     targets, and redirection targets; with whether bash expands a brace set in them) and the text a shell runs
-    (`bash -c`, a heredoc fed to a shell)."""
+    (`bash -c`, a heredoc fed to a shell). Each target and word is listed as (..., whether it is an _unknown_forms
+    reading of the word rather than the word as written)."""
     for k in cmds:
         ws = [w.text for w in k.words]
         i = 0
@@ -4447,8 +4457,8 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
             """Word j (from ``start``, past an option written into it) is a target, also as _unknown_forms reads it
             (`~/.k$(:)ube` is ~/.kube and ~/.k*ube, `~/$(printf .k)ube` is ~/.*ube; #225)."""
             pre = ws[j][:start]
-            targets.extend([ws[j][start:]] + [t[start:] for t in _unknown_words(k.words[j].raw)
-                                              if t.startswith(pre) and t[start:]])
+            targets.extend([(ws[j][start:], False)] + [(t[start:], True) for t in _unknown_words(k.words[j].raw)
+                                                       if t.startswith(pre) and t[start:]])
             skip.add(j)
 
         while i < len(ws) and (ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) or ws[i].rsplit("/", 1)[-1] in _PREFIXES):
@@ -4524,7 +4534,7 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
         # (text, has an unquoted {); a word with a space is prose (a commit message, an echo, awk's '{print $1}'),
         # not a path, unless bash expands a brace set in it ({config,"a b"})
         # and a word with an expansion as _unknown_forms reads it (`c$(:)onfig` is `config` and `c*onfig`; #225)
-        pieces += [(t, w.brace) for w in words for t in [w.text] + _unknown_words(w.raw)
+        pieces += [(t, w.brace, n > 0) for w in words for n, t in enumerate([w.text] + _unknown_words(w.raw))
                    if w.brace or not re.search(r"\s", t)]
 
 
@@ -4548,7 +4558,7 @@ def _dotdot(q: str) -> str:
     return "/".join([".."] * n + qs[n:]) if n else ""
 
 
-def _cd_store_read(cmds: list, subs: list) -> str:
+def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | None = None) -> str:
     """D-038 (#192): a line that enters a folder that can hold a secret store may read it by a relative name. It
     enters one when a working-folder target anywhere in it ($( ), <( ) and a shell's text included) has a store
     folder among its parts (~/.kube, ~/.config/nvim, /proc/self; see _store_hints), or goes by a relative name into
@@ -4556,23 +4566,32 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     counts when its file name is a store file's (a glob or brace set: when it could match one) or it goes into a
     store folder (`gh/x` after ~/.config, `../.docker/x`); any relative name counts when the target is itself a
     store. The targets' own words are not names. The name, or ''. One pass over the words; neither the order nor
-    the success of the commands is followed, so this fails closed."""
-    targets: list = []
-    pieces: list = []
-    bodies: list = []
-    _cd_walk(cmds, targets, pieces, bodies)
-    queue = [(s, 0) for s in subs] + [(b, 1) for b in bodies]
-    seen: dict = {}             # text -> the shallowest depth it was read at
-    while queue:                # each $( ), <( ) and shell text once per depth at most, nested ones too
-        text, n = queue.pop()   # (subs may list them already); a text first met at the depth cap is read again
-        if seen.get(text, _DEPTH + 1) <= n:     # when it comes up shallower, so its own bodies are not lost
-            continue
-        seen[text] = n
-        c2, s2 = _parse(text)[:2]
-        more: list = []
-        _cd_walk(c2, targets, pieces, more)
-        if n < _DEPTH:
-            queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
+    the success of the commands is followed, so this fails closed. Without ``forms``, only the words as written are
+    read, with no `..` reading of a glob and no folder that holds a run folder (#320 adds those): the name the line
+    is read with before them, kept beside theirs. ``walked`` keeps the walk and the store tests for a second call on
+    the same line."""
+    if walked:
+        targets, pieces, stored = walked
+    else:
+        targets, pieces, stored = [], [], {}
+        bodies: list = []
+        _cd_walk(cmds, targets, pieces, bodies)
+        queue = [(s, 0) for s in subs] + [(b, 1) for b in bodies]
+        seen: dict = {}             # text -> the shallowest depth it was read at
+        while queue:                # each $( ), <( ) and shell text once per depth at most, nested ones too
+            text, n = queue.pop()   # (subs may list them already); a text first met at the depth cap is read again
+            if seen.get(text, _DEPTH + 1) <= n:     # when it comes up shallower, so its own bodies are not lost
+                continue
+            seen[text] = n
+            c2, s2 = _parse(text)[:2]
+            more: list = []
+            _cd_walk(c2, targets, pieces, more)
+            if n < _DEPTH:
+                queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
+        if walked is not None:
+            walked += [targets, pieces, stored]
+    targets = [t for t, form in targets if forms or not form]
+    pieces = [(t, brace) for t, brace, form in pieces if forms or not form]
     if not targets:
         return ""
     singles, pairs, names = _store_hints()
@@ -4633,8 +4652,8 @@ def _cd_store_read(cmds: list, subs: list) -> str:
         """The target's brace alternatives, a relative one with a glob (`$PWD/` and the like read as `./`) also with
         its leading parts that could be `..` read as `..` (#269): normpath makes `cd .?/..` `.`, and when `.?` is `..`
         it is `../..`."""
-        return [x for a in _brace_alts(t) for h in [here(a)] for x in [a] + ([u for u in [_dotdot(h)] if u] if h[:1] not
-                in ("/", "~", "$") and "/.." in "/" + h and _GLOBBY.search(h) else [])]
+        return [x for a in _brace_alts(t) for h in [here(a)] for x in [a] + ([u for u in [_dotdot(h)] if u] if forms
+                and h[:1] not in ("/", "~", "$") and "/.." in "/" + h and _GLOBBY.search(h) else [])]
 
     split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in alts(t)
              for p, parts in [folders(alt)]]
@@ -4643,7 +4662,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     # `cd ..`, `cd ../..`, `cd .. && cd ..`: every number of levels up to all of them together (order is not
     # followed); past 64, any number. A part counts when it could be `..` (`.?`, and `.$(:).` read as `.*.` and `..`)
     total = sum(len(parts) for t in targets if "." in here(t) for alt in alts(t) for _, parts in [folders(alt)]
-                if all(_could_be(s, "..") for s in parts))
+                if (all(_could_be(s, "..") for s in parts) if forms else set(parts) == {".."}))
     ups = set(range(min(total, 65) + 1))
 
     def reach(n: int, a: str, need) -> bool:
@@ -4685,7 +4704,6 @@ def _cd_store_read(cmds: list, subs: list) -> str:
         new = {"/".join([path, *rest]): None for _, parts, _ in split for path, rest in into(parts)}
     split += [(full, full.split("/"), last_store_folder(full.split("/"))) for full in after]
     entered = [(p, parts, k) for p, parts, k in split if k >= 0]
-    stored: dict = {}
 
     def is_store(folder: str) -> bool:
         """Is the folder a store? A glob in it (`~/.s?h`) is tried as each store folder name it could be
@@ -4714,7 +4732,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                     if not q or q.startswith(("/", "-")) or q.startswith("~") and q[1:2] not in ("+", "-"):
                         continue
                     # `.?/..` is `.` and, when `.?` is `..`, `../..` (#269)
-                    up = _dotdot(q) if "/.." in "/" + q and _GLOBBY.search(q) else ""
+                    up = _dotdot(q) if forms and "/.." in "/" + q and _GLOBBY.search(q) else ""
                     q = os.path.normpath(q) if "/.." in "/" + q else q         # lua/../../gcloud is ../gcloud
                     for r in dict.fromkeys([q, os.path.normpath(up)] if up else [q]):
                         yield r, [s for s in r.split("/") if s not in ("", ".")], bool(_GLOBBY.search(r))
@@ -4727,7 +4745,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 fp = f"{path}/{'/'.join(rest)}".rstrip("/").split("/")
                 if parts[-1] in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
                     return q
-        return _exo_relative(split, max(ups), candidates)
+        return _exo_relative(split, max(ups), candidates, forms)
     nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
     # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
     roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
@@ -4744,7 +4762,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 not pairs.keys().isdisjoint(zip(inner, inner[1:])) or globbed and any(
                     _could_name(s, hints) for s in parts if _GLOBBY.search(s)):
             return q
-    return _exo_relative(split, max(ups), candidates)
+    return _exo_relative(split, max(ups), candidates, forms)
 
 
 _EXO_PARTS = 65536   # path parts of the folders and paths _exo_relative may build in one classify call (#269)
@@ -4754,7 +4772,7 @@ class _Spent(Exception):
     pass
 
 
-def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]]) -> str:
+def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]], forms: bool = True) -> str:
     """#269: on a line that reaches a folder in `$EXO_HOME` (or any `.exo`), that folder and each relative name read
     from it are checked as the paths they are, as the kernel resolves them, `..` included, so `cd ~/.exo/run/jobs &&
     grep -r . ..`, `cat ../exod*` there, `cd ~/.exo/run/jobs && cd .. && ls` and `tar -C ~/.exo -czf - run` reach the
@@ -4771,14 +4789,15 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     and `~/.exo/r$(printf u)n/jobs` read as `.../r*n/jobs`; settle), a name's leading parts that could be `..` as
     `..` (`.?`), and a name counts too when it could be a folder that holds a run folder (the store's own, its
     principals folder or a principal's store: `../..` from run/jobs, `principals/me`, `.` there) or, by a glob, a
-    run folder (`ru?`), since a recursive read of it reads the secrets. The name or folder, or ''."""
+    run folder (`ru?`), since a recursive read of it reads the secrets. Without ``forms`` none of these readings is
+    made (_cd_store_read), on a budget of its own. The name or folder, or ''."""
     home = os.path.normpath(_home())
     exo = os.path.normpath(_exo_home())
     roots = _path_forms(exo)
     tops = [r.rstrip("/").split("/") for r in roots]
     marks = {".exo", os.path.basename(exo)} - {""}
     memo = _call_memo.get()
-    left = [_EXO_PARTS] if memo is None else memo.setdefault("exo_parts", [_EXO_PARTS])
+    left = [_EXO_PARTS] if memo is None else memo.setdefault("exo_parts" if forms else "exo_parts_written", [_EXO_PARTS])
     if left[0] < 0:
         return "a path in the Exo store (too many to resolve)"
 
@@ -4848,8 +4867,8 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     folders: list[str] = []
     for p, _, _ in split:
         f = os.path.join(home, p[2:]) if p.startswith("~/") else home if p == "~" else p
-        if f:
-            folders += [f] if not (_GLOBBY.search(f) or "$" in f) else [] if "$" in f else settle(f)
+        if f or not forms:
+            folders += [f] if not (_GLOBBY.search(f) or "$" in f) else [] if "$" in f or not forms else settle(f)
     folders = list(dict.fromkeys(folders))
     # a `cd ..` is the level-up walk below (``up`` counts every one on the line), not a join as well
     relative = [r for r in folders if not r.startswith("/") and set(r.split("/")) != {".."}]
@@ -4885,13 +4904,13 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
             return hit
         names = list(dict.fromkeys(q for q, _, _ in candidates()))
         # a name whose leading parts could be `..` (`.?`, `.*.`, `./.?`) is read with them as `..` too
-        ups = [(q, u) for q in names if _GLOBBY.search(q) for u in [_dotdot(q)] if u]
+        ups = [(q, u) for q in names if forms and _GLOBBY.search(q) for u in [_dotdot(q)] if u]
         read = [(q, q) for q in names] + ups          # (the name, how it is read)
         words = [(q, join(b, r)) for b in sorted(bases) for q, r in read]
         words += [(q, w) for b in outer for q, r in read if near(r) for w in [join(b, r)] if inside(w)]
     except _Spent:
         return "a path in the Exo store (too many to resolve)"
-    hit = next((q for q, w in words if holds(w)), "")
+    hit = next((q for q, w in words if holds(w)), "") if forms else ""
     if hit or not words or not (_sensitive_words([w for _, w in words]) or _glob_words([w for _, w in words])):
         return hit
     return next((q for q, w in words if _sensitive_words([w]) or _glob_words([w])), words[0][0])
@@ -4921,7 +4940,8 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
 def _budgets() -> tuple:
     """What is left of the call's budgets (_brace_budget, _exo_relative), on which a line's result can depend."""
     left, memo = _brace_left.get(), _call_memo.get()
-    return (None if left is None else tuple(left), None if memo is None else memo.get("exo_parts", [_EXO_PARTS])[0])
+    return (None if left is None else tuple(left),
+            None if memo is None else tuple(memo.get(k, [_EXO_PARTS])[0] for k in ("exo_parts", "exo_parts_written")))
 
 
 def _own_copy(c: Classification) -> Classification:
@@ -5031,34 +5051,46 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
         c = weigh(c)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
-    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
-    if hit and c.category != "credentials":
+
+    def secret(line: Classification, name: str, target: str, part: bool) -> Classification:
+        """The line as a secret line on ``name``, or with ``part`` a credentials part on ``target`` beside it. Beside
+        a secret line the part is a secret read (costly), and a heavier command deeper in it is beside it too (#468
+        review); beside a store write it weighs as the line's own parts do, as main has it."""
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
-        signals = c.signals
-        c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
-                  command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
-        c.signals = signals + ["secret store"]
-        c.parts = list(parts)
-        c = weigh(c)
+        rev = "costly" if part and line.category == "credentials" else max(rev, "costly", key=REVERSIBILITY.index)
+        if part:
+            seat = _make("credentials", summary=f"shell touching {name}"[:120], target=target, command=cmd,
+                         reversibility=rev, own=None, signals=["secret store"])
+            line.parts = [*line.parts, weigh(seat)]
+            line.signals = list(dict.fromkeys([*line.signals, "secret store"]))
+            return line
+        out = _make("credentials", summary=f"shell touching {name}"[:120], target=target, command=cmd, reversibility=rev)
+        out.signals = line.signals + ["secret store"]
+        out.parts = list(parts)
+        return weigh(out)
+    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
+    named = hit if "/" in hit or "." in hit else ""
+    # #320: on a line that is already a secret line (an expansion form read as a secret in a nested line, such as an
+    # ssh remote command, decides it), the secret the line names is a part beside it when it is another target, as
+    # it was the line's target where nothing else read a secret
+    if hit and (c.category != "credentials" or named != c.target):
+        c = secret(c, hit, named, c.category == "credentials")
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
-    found = _cd_store_read(cmds, subs) if c.category != "credentials" else ""
-    if found and c.category == "store_write":
-        # it weighs as a secret line does: its own parts' weight, and a heavier command deeper in it beside (#468 review)
-        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
-        seat = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
-                     reversibility=max(rev, "costly", key=REVERSIBILITY.index), own=None, signals=["secret store"])
-        c.parts = [*c.parts, weigh(seat)]
-        c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
-    elif found:
-        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
-        signals = c.signals
-        c = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
-                  reversibility=max(rev, "costly", key=REVERSIBILITY.index))
-        c.signals = signals + ["secret store"]
-        c.parts = list(parts)
-        c = weigh(c)
+    # #320: the words as written are read first, so that name and its part are as above; the expansion forms and
+    # `..` readings (_cd_store_read with forms) come after it, and a name they read that is another target is such a
+    # part beside it: `cd ~/.exo/state && echo $(cat ../keys/seat; rm -rf x)` keeps `../keys/seat`, not the `*` of
+    # the `$( )`, so a rule on that target still matches (#468). On a line that those forms make a secret line
+    # (`cat ${x-.env} ../keys/seat`), the name read as written is such a part too.
+    walked: list = []
+    first = c.category
+    found = _cd_store_read(cmds, subs, False, walked)
+    more = _cd_store_read(cmds, subs, True, walked) if first != "credentials" else ""
+    if found and (first != "credentials" or found != c.target):
+        c = secret(c, found, found, c.category in ("store_write", "credentials"))
+    if more and more != found:
+        c = secret(c, more, more, c.category in ("store_write", "credentials"))
     c.command = cmd
     c._command_views = list(dict.fromkeys([
         _policy_command_view(cmd),

@@ -688,7 +688,7 @@ def test_work_is_linear(line, monkeypatch):
     for k in calls:
         calls[k] = 0
     real_read = gate._cd_store_read
-    monkeypatch.setattr(gate, "_cd_store_read", lambda cmds, subs: "")
+    monkeypatch.setattr(gate, "_cd_store_read", lambda *a: "")
     start = time.process_time()
     _bash(line)
     base = time.process_time() - start
@@ -703,7 +703,7 @@ def test_work_is_linear(line, monkeypatch):
         start = time.process_time()
         _bash(line)
         took = min(took, time.process_time() - start)
-        monkeypatch.setattr(gate, "_cd_store_read", lambda cmds, subs: "")
+        monkeypatch.setattr(gate, "_cd_store_read", lambda *a: "")
     calls.update(first)
     cmds, subs = gate._parse(line)[:2]
     targets = line.count("cd ")
