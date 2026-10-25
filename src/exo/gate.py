@@ -5746,8 +5746,10 @@ def _in_store_dir(path: str) -> bool:
     return any(c == r or c.startswith(r.rstrip("/") + "/") for c in _path_forms(p) for r in roots)
 
 
-_PATCH_PATHS = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$",
-                          re.M)
+_PATCH_PATHS = re.compile(
+    r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|"
+    r"^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$|"
+    r"^\*\*\*\s*Move\s+to:\s*(.+?)\s*$", re.M)
 
 
 def _patch_paths(text: str) -> list[str]:

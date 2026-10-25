@@ -1861,6 +1861,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
   posts reaches the cap.
 
+  *Amendment 2026-10-24 (issue #528):* the shared patch-path reader also reads Codex's `*** Move to:`
+  destination, alongside its `*** Update File:` source. Before this, a move from an ordinary file into a
+  protected store was an allowed local write. Both paths now use the same secret and store checks as the other
+  patch headers, including braces and absolute links.
+
+  A secret destination is `credentials`. A store destination
+  is `store_write`. The file's own local-write parts keep policy entries on both source and destination. A
+  `+*** Move to:` line is hunk content, not a header. Chosen over a separate move-path checker so the two formats
+  share protection and limits.
+
+  Relative aliases into non-secret stores still need #340's resolution. Relative
+  secret links use the existing secret-path check. No patch is applied while classifying, and no tool schema or
+  executor behavior changes.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
