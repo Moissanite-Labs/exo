@@ -90,25 +90,34 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   relative path by its distinctive names only, so `rel -> ../.exo` turned `rel/policies/default.yaml`
   into an ordinary local write, and making the link was allowed too: two allowed calls could rewrite
   the policy file. A relative path is now resolved from the tool's folders, never the gate's own: the
-  session's folder and a shell call's `cwd`, as the secret-store checks do (#209). A relative `ln`
-  target is read against each folder the link can land in, and a relative `cd`, `pushd` or `git -C`
-  target from the tool's folders, so `cd pdir && echo x > default.yaml` asks. The path is joined as
-  written, with no `..` folded first, so a `..` after a link climbs from where the link leads, as the
-  kernel reads it: `write_file sdir/../policies/default.yaml` (with `sdir -> ~/.exo/state`) and a
-  `cwd` of `sdir/../policies` ask, and `cat seat` with `sdir/../keys` as `cwd` is a key read. A `cd`
-  that stays out of the store is followed: a relative path or `cd` target after it is read from the
-  folder it enters too, so `cd notes && cp x ../pdir/default.yaml` asks, and so do the issue's two
-  calls behind a `cd`. `store_write` stays a floor category: even allowed in policy, the write asks.
-  From a session folder in the Exo home, a word that names a protected entry (`git add state`) asks,
-  as its absolute spelling does. From HOME, or after a `cd` there, `mv x .` asks, as `mv x ~` does,
-  and so does `mv x ..` from a folder in HOME. A shell call's `cwd` is also read folded, as
-  `os.path.abspath` and bash's `cd` read it, so `tar czf /tmp/o.tgz .` with a `cwd` of `xl/../kl`
-  (`kl -> ~/.ssh`) still asks, as on main. For store writes, a `cd` target and the folder a `cd`
-  enters are read folded too: `cd xl/../notes && cp x ../pdir/default.yaml` asks. On the
-  secret-store side a `cd` target is still read as written, so `cd xl/../kl && tar czf /tmp/o.tgz .`
-  stays a read, as on main. In a store folder, a store write is named after a word that is a store
-  path by its own spelling first, and never after the program word: `touch ~/.exo/state/x` there is
-  named `~/.exo/state/x`, so `deny: ["target:*/.exo/*"]` still denies it, as on main.
+  session's folder and a shell call's `cwd` or `workdir`, as the secret-store checks do (#209, #311).
+  A write in Hermes' `terminal` or Codex's `exec_command` with a `workdir` in the store asks too
+  (#453). A relative `ln` target is read against each folder the link can land in, and a relative
+  `cd`, `pushd` or `git -C` target from the tool's folders, so `cd pdir && echo x > default.yaml`
+  asks. The path is joined as written, with no `..` folded first, so a `..` after a link climbs from
+  where the link leads, as the kernel reads it: `write_file sdir/../policies/default.yaml` (with
+  `sdir -> ~/.exo/state`) and a `cwd` of `sdir/../policies` ask, and `cat seat` with `sdir/../keys` as
+  `cwd` is a key read. A `cd` that stays out of the store is followed: a relative path or `cd` target
+  after it is read from the folder it enters too, so `cd notes && cp x ../pdir/default.yaml` asks, and
+  so do the issue's two calls behind a `cd`. `store_write` stays a floor category: even allowed in
+  policy, the write asks. From a session folder in the Exo home, a word that names a protected entry
+  (`git add state`) asks, as its absolute spelling does. From HOME, or after a `cd` there, `mv x .`
+  asks, as `mv x ~` does, and so does `mv x ..` from a folder in HOME. A shell call's `cwd` is also
+  read folded, as `os.path.abspath` and bash's `cd` read it, so `tar czf /tmp/o.tgz .` with a `cwd` of
+  `xl/../kl` (`kl -> ~/.ssh`) still asks, as on main. For store writes, a `cd` target and the folder a
+  `cd` enters are read folded too: `cd xl/../notes && cp x ../pdir/default.yaml` asks. A relative `cd`
+  target is joined to every folder a `cd` before it entered, since a `cd` in `( )`, one that failed or
+  a `pushd` that a `popd` undid may not have stayed:
+  `cd notes && (cd sub) && cd in && echo x > e/policies/default.yaml` asks. A relative secret read is
+  read from those folders too, so `cd notes && cat ../kdir/seat` and
+  `cd xl/../kl && tar czf /tmp/o.tgz .` ask. Past 64 such folders a relative write asks, and seven
+  relative `cd`s in a row pass 64. Each path is looked up once per call, with the folders above it
+  shared, and each join to a folder a `cd` entered is charged to the #269 budget, past which a
+  relative write asks too. In a store folder, a store write is named after a word that is a store path
+  by its own spelling first, and never after the program word or an option: `touch ~/.exo/state/x`
+  there is named `~/.exo/state/x`, so `deny: ["target:*/.exo/*"]` still denies it, as on main. After a
+  `cd` into the store, a write named after a relative word keeps "a path inside the store (after cd)"
+  as a second target.
 - A shell call's own folder argument is read for secret stores (#311). The bash tool runs a command in
   its `cwd`, and Hermes' `terminal` and Codex's `exec_command` in their `workdir`. The gate read only
   the command text and the session's folder, so `cat config` with `~/.kube` as `cwd` was a plain read

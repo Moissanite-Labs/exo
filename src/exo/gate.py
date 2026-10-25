@@ -1124,6 +1124,9 @@ _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_g
 # The folder a line entered by `cd` into the store or a descriptor folder (_classify_simple's store_cwd and fd_cwd),
 # for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or ""), or None.
 _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_cd_into", default=None)
+# Whether a secret read from the folders a `cd` entered counts on this reading (_entered_secret, #340). _shell_call's
+# reading of the line alone leaves it to the reading in the call's folder, which stands beside it (``also``).
+_entered_reads: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_entered_reads", default=True)
 
 # Whether the next line read is fed a stdin whose text the gate cannot read (#316): a >( ) body, a $( ) that
 # inherits such a stdin, the remote command of an ssh that passes its stdin on. The mark travels here, not as a
@@ -3104,8 +3107,11 @@ def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str
     A reader whose parts carry its own text (#394) passes that text as ``own``. The text is then read with _READER
     in its place, and each reader gets copies with its own text there (_restamp): `{ psql -d test; psql -d prod; }
     <<EOF` gives psql -d prod parts with its own text. Each text is still read once per line, since every read
-    spends the call's budgets (_brace_budget) and a second read could find them spent."""
+    spends the call's budgets (_brace_budget) and a second read could find them spent. A text met again after a `cd`
+    entered another folder is read again, as classify_shell reads a line again (#340)."""
     memo = ctx.setdefault("stdin", {})
+    scope = _scope.get()
+    key = (*key, len(scope.entered) if scope else 0)
     whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
     if whole in memo:
         return [_copy(_restamp(ctx, c, own)) for c in memo[whole]]
@@ -3359,6 +3365,10 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
         # so a `target:/dev*` entry still matches it, as it matches any other write there
         hits.append(ctx["fd_cwd"])
+    elif hit and ctx.get("store_cwd") and hit == ctx.get("store_near"):
+        # #340: after a `cd` into the store, a write named by a word read from a folder keeps the name it had before
+        # such words were read too, so a `target:` entry on that name still matches it
+        hits.append(_AFTER_CD)
     for t in hits:
         # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
         # command is known to write there (`gh ... --body-file /dev/stdin` reads it), so the card says just that
@@ -3455,9 +3465,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog in _INTERPRETERS:
         return _classify_interpreter(prog, argv, k, cmd, depth, ctx, piped)
     if prog == "xargs":
-        i = 1
-        while i < len(words) and words[i].text.startswith("-"):
-            i += 2 if words[i].text in ("-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a") else 1
+        i = _xargs_command(words)
         return [_runs_stdin(_opaque("xargs builds a command from its input", cmd), k)] + inner_words(words[i:])
     if prog == "find":
         parts = [_make("read", summary="find", command=cmd)]
@@ -4330,13 +4338,28 @@ def _store_braces(ctx: dict) -> dict:
     return ctx.setdefault(("store_braces", len(scope.entered) if scope else 0), {})
 
 
+_AFTER_CD = "a path inside the store (after cd)"
+
+
+def _xargs_command(words: list) -> int:
+    """The index of the program xargs runs in ``words``: past its options and their values."""
+    i = 1
+    while i < len(words) and words[i].text.startswith("-"):
+        i += 2 if words[i].text in ("-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a") else 1
+    return i
+
+
 def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
     """What in a simple command writes to the Exo store, or ''. Reads of the store are fine. A word that is a store
     path only when read from the tool's folders or a `cd`'s (#340) names the write only if no word is one by its own
     spelling: `touch ~/.exo/state/x` in ~/.exo/policies names ~/.exo/state/x. In a store folder the program word
-    never names it."""
+    never names it, nor does an option, tar's bundled options or xargs' words up to the program it runs. Elsewhere
+    such a word names it only when no other word does. ctx's "store_near" says when a word read from a folder names
+    it."""
     seen = _store_braces(ctx)
+    ctx["store_near"] = ""
     near = ""                       # the first word but the program that is a store path only as read from a folder
+    opt = ""                        # the same for an option or a word skipped below, named only when no other is
     lead = ""                       # the program word, when it leads into the store from a folder outside it
     run = False                     # the program word is one because the folder it runs in is in the store
     here: str | None = None         # _store_how("."): whether a folder the call runs in is in the store
@@ -4356,9 +4379,11 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             if "folder" in hows and not near:
                 near = t.text
     if all(p.category == "read" for p in parts):
+        ctx["store_near"] = near
         return near
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
+    skip = _xargs_command(words) if prog == "xargs" else 1 if prog == "tar" else 0     # `tar czf`: options
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
         p.category == "delete" for p in parts) or (prog == "cp" and (_has(argv, "-s", "-l") or any(
             len(a) > 2 and ("--symbolic-link".startswith(a) or "--link".startswith(a)) for a in argv)))  # --sym, --li
@@ -4382,8 +4407,10 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                     run = True
                 elif not lead:
                     lead = piece
-            elif how and not near:
+            elif how and not near and i > skip and not piece.startswith("-"):
                 near = piece
+            elif how and not opt:
+                opt = piece                 # `tee -- -p/x` with `-p` a link into the store
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words):
             dirs = _shell_words(words[i + 1], seen, "dir")
             hows = {_in_store_dir(x) for x in dirs or ()}
@@ -4392,10 +4419,11 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             if "folder" in hows and not near:
                 near = words[i + 1].text
     if near or lead:
+        ctx["store_near"] = near or lead
         return near or lead
     if ctx.get("store_cwd"):
-        return ctx.get("fd_cwd") or "a path inside the store (after cd)"
-    return "a path inside the store (the tool's folder)" if run else ""
+        return ctx.get("fd_cwd") or _AFTER_CD
+    return "a path inside the store (the tool's folder)" if run else opt
 
 
 def _displace_with(c: Classification, **changes) -> None:
@@ -4918,6 +4946,30 @@ class _Spent(Exception):
 _TOO_MANY = "a path in the Exo store (too many to resolve)"     # what _cd_store_read names past the #269 budget
 
 
+def _entered_secret(cmds: list) -> str:
+    """#340: a relative word on the line read from each folder a `cd` on the call entered (_cd_enter), as a store
+    write's relative path is: `cd notes && cat ../kdir/seat` with `kdir -> ~/.exo/keys`, and
+    `cd xl/../kl && tar czf /tmp/o.tgz .`, which enters `kl` as bash folds it (#530). Only where the checks before it
+    found nothing, so a line they name keeps its name. Neither the order nor the success of the commands is followed
+    (fails closed). It reads the folders _cd_enter noted, up to _ENTERED; past the budget (_charge) the word counts
+    (fails closed). The word, or ''."""
+    scope = _scope.get()
+    if scope is None or not scope.entered or not _entered_reads.get():
+        return ""
+    seen: dict = {}
+    bases = [b for b in scope.entered.values() if b not in scope.cwds]
+    # the arguments and redirection targets first, so the card names what is read; then the program words
+    for w in [w for k in cmds for w in k.words[1:] + [t for _, t in k.redirs]] + [k.words[0] for k in cmds if k.words]:
+        got = _shell_words(w, seen, "dir")
+        rel = [x for x in (re.sub(r"^[\w-]+=", "", x) for x in got or ()) if x and not _expand_text(x).startswith("/")]
+        try:
+            if got is None or rel and _sensitive_words(rel, bases):
+                return w.text
+        except _Spent:
+            return w.text
+    return ""
+
+
 def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]]) -> str:
     """#269: on a line that reaches a folder in `$EXO_HOME` (or any `.exo`), that folder and each relative name read
     from it are checked as the paths they are, as the kernel resolves them, `..` included, so `cd ~/.exo/run/jobs &&
@@ -5206,7 +5258,7 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
-    found = _cd_store_read(cmds, subs) if c.category != "credentials" else ""
+    found = (_cd_store_read(cmds, subs) or _entered_secret(cmds)) if c.category != "credentials" else ""
     if found and c.category == "store_write":
         # it weighs as a secret line does: its own parts' weight, and a heavier command deeper in it beside (#468 review)
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
@@ -5514,14 +5566,16 @@ def _brace_budget(fn: _F) -> _F:
 class _Scope:
     """What the secret-store checks of one classify call share: the folders the tool may read from (#209), the gate's
     own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot. The
-    store-write checks also read the folders a `cd` on the call entered (_cd_enter)."""
+    store checks also read the folders a `cd` on the call entered (_cd_enter), and look each path up once (#340)."""
     cwds: tuple[str, ...] = ()
     tool_cwds: tuple[str, ...] = ()              # a shell call's own `cwd` or `workdir`, joined to the session folder
     here: str | None = None                      # the gate's own folder; "" when it cannot be read
     roots: set[str] | None = None
     real: dict[str, str] = field(default_factory=dict)
     entered: dict[frozenset, str] = field(default_factory=dict)    # by their _path_forms
-    last: list[str] = field(default_factory=list)                  # the ones the latest `cd` entered
+    forms: dict[str, set[str]] = field(default_factory=dict)       # _path_forms
+    stores: dict[tuple[str, bool], bool] = field(default_factory=dict)    # _store_abs
+    charged: set[str] = field(default_factory=set)                 # joins _charge took from the budget
 
 
 _scope: contextvars.ContextVar[_Scope | None] = contextvars.ContextVar("exo_gate_scope", default=None)
@@ -5742,9 +5796,10 @@ def is_sensitive_path(path: str) -> bool:
     return words is None or _sensitive_words(words)
 
 
-def _sensitive_words(words: list[str]) -> bool:
+def _sensitive_words(words: list[str], bases: list[str] | None = None) -> bool:
     """is_sensitive_path for any of ``words``, which are already brace-expanded. A word is matched as written, and
-    as resolved from the gate's own folder and from the tool's (_Scope, #209): its absolute and real forms against
+    as resolved from the gate's own folder and from the tool's (_Scope, #209), or from ``bases`` only when given
+    (_entered_secret): its absolute and real forms against
     the dynamic stores, and, when a link led elsewhere, its real form by name too (for a relative word that lands
     below the folder it was read from, only the part below it, so a folder like a repo's `.claude` does not count).
     A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads."""
@@ -5759,12 +5814,13 @@ def _sensitive_words(words: list[str]) -> bool:
         except OSError:
             scope.here = ""
     roots, memo = scope.roots, scope.real
-    for base in dict.fromkeys(("", *scope.cwds)):       # "": the gate's own folder
+    for base in dict.fromkeys(("", *scope.cwds) if bases is None else bases):       # "": the gate's own folder
         for w in words:
-            p = os.path.join(base, w)                    # an absolute word stays as it is
+            p = os.path.join(base, w) if bases is None else _charge(base, w)   # an absolute word stays as it is
             try:
                 a = os.path.normpath(os.path.join(scope.here, p)) if scope.here else os.path.abspath(p)
-                real = os.path.realpath(p) if ".." in p.split(os.sep) or a.startswith("//") else _real(a, memo)
+                real = (_resolve(os.path.join(scope.here, p), memo) if scope.here else os.path.realpath(p)) if (
+                    ".." in p.split(os.sep) or a.startswith("//")) else _real(a, memo)
                 cands = {a, real}
             except (OSError, ValueError):
                 real, cands = "", {p}
@@ -5997,13 +6053,34 @@ def _protected_rel(parts: list[str], names: tuple) -> bool:
 
 def _path_forms(p: str) -> set[str]:
     """The lexical and the resolved spelling of an absolute path. A path that cannot be resolved (NUL byte,
-    symlink loop) keeps its lexical form, so a resolution failure never weakens a check."""
+    symlink loop) keeps its lexical form, so a resolution failure never weakens a check. In a classify call each path
+    is looked up once, and the folders above it are shared (_resolve): a relative word is read from each folder a
+    `cd` entered (#340)."""
+    scope = _scope.get()
+    if scope is not None and p in scope.forms:
+        return scope.forms[p]
     forms = {re.sub(r"^//", "/", os.path.normpath(p))}  # normpath keeps a leading `//`
     try:
-        forms.add(os.path.realpath(p))
+        forms.add(os.path.realpath(p) if scope is None else _resolve(p, scope.real))
     except (OSError, ValueError, RecursionError):
         pass
+    if scope is not None:
+        scope.forms[p] = forms
     return forms
+
+
+def _resolve(p: str, memo: dict[str, str]) -> str:
+    """os.path.realpath of ``p``, one part at a time as it does: a link is resolved where it stands, before a `..`
+    after it. ``memo`` shares each folder's lookup (_real), so a path below a deep folder costs its own parts only."""
+    if not p.startswith("/"):
+        return os.path.realpath(p)
+    path = "/"
+    for name in p.split("/"):
+        if name == "..":
+            path = os.path.dirname(path)
+        elif name not in ("", "."):
+            path = _real(os.path.join(path, name), memo)
+    return path
 
 
 def is_store_path(path: str, ancestors: bool = False) -> bool:
@@ -6031,7 +6108,10 @@ def _store_how(path: str, ancestors: bool = False) -> str:
         # checks do (#209), but never from the gate's own: a bare word is not judged by where the gate runs
         # (test_a_bare_run_word_is_not_the_run_folder). Joined, not folded: _store_abs resolves a link before a `..`.
         bases = _relative_bases()
-        return "folder" if bases is None or any(_store_abs(os.path.join(base, p), ancestors) for base in bases) else ""
+        try:
+            return "folder" if bases is None or any(_store_abs(_charge(base, p), ancestors) for base in bases) else ""
+        except _Spent:
+            return "folder"
     return "own" if _store_abs(p, ancestors) else ""
 
 
@@ -6039,49 +6119,90 @@ _ENTERED = 64      # folders one classify call follows a `cd` into (_cd_enter); 
 
 
 def _relative_bases() -> list[str] | None:
-    """The folders a relative store-write path or `cd` target is read from: the tool's (_in_tool_folder) and those a
-    `cd` on the call entered before it (_cd_enter). None past _ENTERED of those: every relative word counts then."""
-    scope = _scope.get()
+    """The folders a relative path is read from for the store checks: the tool's (_in_tool_folder) and each one a
+    `cd` on the call entered (_cd_enter). None past _ENTERED of those, or once a join was past the budget (_charge):
+    every relative word counts then."""
+    scope, memo = _scope.get(), _call_memo.get()
     if scope is None:
         return []
-    if len(scope.entered) > _ENTERED:
+    if len(scope.entered) > _ENTERED or memo is not None and memo.get("joins_spent"):
         return None
     return [b for b in dict.fromkeys([*scope.cwds, *scope.entered.values()]) if b]
 
 
+def _charge(base: str, p: str) -> str:
+    """``p`` joined to ``base`` as written. A join to a folder a `cd` entered, not one of the tool's, is looked up on
+    disk, so the first one of each path in a call takes its path parts from the budget _exo_relative's joins share
+    (_EXO_PARTS, #269). Raises _Spent past it, and every relative word counts after that (_relative_bases)."""
+    joined = os.path.join(base, p)
+    scope, memo = _scope.get(), _call_memo.get()
+    if scope is None or memo is None or not base or base in scope.cwds or joined in scope.charged:
+        return joined
+    scope.charged.add(joined)
+    left = memo.setdefault("exo_parts", [_EXO_PARTS])
+    left[0] -= joined.count("/") + 1
+    if left[0] < 0:
+        memo["joins_spent"] = True
+        raise _Spent
+    return joined
+
+
 def _cd_enter(dest: str) -> None:
-    """Note the folder a `cd` or `pushd` that stays out of the store enters, so a relative store-write path or `cd`
-    target after it on the call is read from there too (#340): `cd notes && cp x ../pdir/default.yaml`. A relative
-    target is joined to the tool's folders and to those the latest `cd` entered, as written and folded
-    (_joined_and_folded). A `cd` in a subshell may not have stayed, so each folder counts, and the store checks read
-    from all of them (fails closed)."""
+    """Note the folder a `cd` or `pushd` that stays out of the store enters, so a relative path or `cd` target after
+    it on the call is read from there too (#340): `cd notes && cp x ../pdir/default.yaml`. A relative target is
+    joined to every folder the shell may be in, as a store write's relative path is (_relative_bases): the tool's, and
+    each one a `cd` on the call entered. A `cd` in a subshell, one that failed or one on a branch not taken may not
+    have stayed, and a `popd` goes back, so each folder counts for the rest of the call (fails closed). Each join is
+    read as written and folded (_joined_and_folded). Past _ENTERED folders or the budget, no more are noted: every
+    relative word counts then."""
     scope = _scope.get()
     if scope is None:
         return
     p = os.path.expanduser(_expand_text(dest).strip()) or _home()
-    bases = [""] if p.startswith("/") else [b for b in dict.fromkeys([*scope.cwds, *scope.last]) if b]
-    last = {frozenset(_path_forms(q)): q for b in bases for q in _joined_and_folded(b, p)}
-    scope.last = list(last.values())
-    for key, q in last.items():
-        scope.entered.setdefault(key, q)
+    bases = [""] if p.startswith("/") else _relative_bases()
+    try:
+        for b in bases or ():
+            _charge(b, p)
+            for q in _joined_and_folded(b, p):
+                if len(scope.entered) > _ENTERED:
+                    return
+                scope.entered.setdefault(frozenset(_path_forms(q)), q)
+    except _Spent:
+        pass
+
+
+def _store_root_forms() -> tuple[list, list]:
+    """_store_roots and _bus_paths, each root in its _path_forms, read once a call: each relative word comes to
+    _store_abs once per folder, and each relative `cd` target to _in_store_dir (#340)."""
+    memo = _call_memo.get()
+    got = memo.get("store_roots") if memo is not None else None
+    if got is None:
+        got = ([(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)],
+               [(r, names, False) for root, names in _bus_paths() for r in _path_forms(root)])
+        if memo is not None:
+            memo["store_roots"] = got
+    return got
 
 
 def _store_abs(p: str, ancestors: bool) -> bool:
-    """_store_word for an absolute path."""
+    """_store_word for an absolute path, once per call (_Scope.stores)."""
+    scope = _scope.get()
+    if scope is None:
+        return _store_abs_read(p, ancestors)
+    if (p, ancestors) not in scope.stores:
+        scope.stores[(p, ancestors)] = _store_abs_read(p, ancestors)
+    return scope.stores[(p, ancestors)]
+
+
+def _store_abs_read(p: str, ancestors: bool) -> bool:
     # Resolve the original spelling: normpath first would erase symlink/.. traversal.
     # Keep the lexical candidate too, including protected paths that link out of the store.
     candidates = _path_forms(p)
     if any(_STORE_NAMES.search(c) for c in candidates):
         return True
-    memo = _call_memo.get()          # one lookup per call: each relative word now comes here too, per folder (#340)
-    roots = memo.get("store_roots") if memo is not None else None
-    if roots is None:
-        roots = [(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)]
-        roots += [(r, names, False) for root, names in _bus_paths() for r in _path_forms(root)]
-        if memo is not None:
-            memo["store_roots"] = roots
+    stores, bus = _store_root_forms()
     for candidate in candidates:
-        for r, names, principals in roots:
+        for r, names, principals in stores + bus:
             if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
                 return True
             if not candidate.startswith(r.rstrip("/") + "/"):
@@ -6114,8 +6235,14 @@ def _in_store_dir(path: str) -> str:
             return "folder"
         how, bases = "folder", rel
     # joined as written, as the kernel reads it, and folded, as bash's `cd` does: `cd xl/../pdir` enters pdir
-    paths = [q for b in bases for q in _joined_and_folded(b, p)]
-    roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
+    paths: list[str] = []
+    try:
+        for b in bases:
+            _charge(b, p)
+            paths += _joined_and_folded(b, p)
+    except _Spent:
+        return "folder"
+    roots = [r for r, _, _ in _store_root_forms()[0]]
     return how if any(c == r or c.startswith(r.rstrip("/") + "/") for q in paths for c in _path_forms(q)
                       for r in roots) else ""
 
@@ -6429,12 +6556,15 @@ def _shell_call(cmd: str) -> Classification:
 
 def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
     """classify_shell(cmd) in ``scope`` with budgets and a memo of its own, as a call of its own; ``parsed`` holds
-    the line's parses already made. _brace_budget makes the budgets, so they have as many pools as a call's."""
+    the line's parses already made. _brace_budget makes the budgets, so they have as many pools as a call's. A secret
+    read from a folder a `cd` entered (_entered_secret, #340) is left to the reading in the call's folder, which reads
+    those folders too and stands beside this one, so the folder's own part is added and named as before #340."""
     left = _brace_left.set(None)
-    token, seen = _scope.set(scope), _shell_seen.set(parsed)
+    token, seen, entered = _scope.set(scope), _shell_seen.set(parsed), _entered_reads.set(False)
     try:
         return _brace_budget(classify_shell)(cmd)
     finally:
+        _entered_reads.reset(entered)
         _shell_seen.reset(seen)
         _scope.reset(token)
         _brace_left.reset(left)

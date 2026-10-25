@@ -168,6 +168,18 @@ def test_the_shell_cwd_argument(tree, args, expected):
     assert expected[0] in cats and out == expected[1]
 
 
+@pytest.mark.parametrize("tool,key", [("terminal", "command"), ("exec_command", "cmd")])
+@pytest.mark.parametrize("folder", ["~/.exo/state", "sdir", "sdir/../policies", "c2"])
+@pytest.mark.parametrize("command", ["cp /tmp/g.json approval-grants.json", "echo x > default.yaml",
+                                     "bash -c 'cp x gates.yaml'", "echo $(cp /tmp/g.json approval-grants.json)"])
+def test_the_workdir_argument(tree, tool, key, folder, command):
+    """#453's `workdir` rows: with #311 the line is read in the folder, and a relative write there is a store write."""
+    args = {key: command, "workdir": folder}
+    cats, out = read_as(tool, args, str(tree))
+    assert "store_write" in cats and out == "ask"
+    assert read_as(tool, args, str(tree), DENY_STORE)[1] == "deny"
+
+
 @pytest.mark.parametrize("folder", ["sdir/../keys", "c2/../keys", "kdir"])
 def test_the_cwd_argument_through_a_link_on_the_read_side(tree, folder):
     """The secret-store checks read the same joined folder (#209), so the key read asks. Checked by its parts, so the
@@ -474,3 +486,280 @@ def test_a_brace_word_met_again_after_a_cd_is_read_again(tree):
     """The store checks keep their brace memo per folder entered, so the second `cp` is read from notes."""
     line = "cp y ../pdi{r,x}/default.yaml; cd notes; cp y ../pdi{r,x}/default.yaml"
     assert outcome("bash", {"command": line}, cwd=str(tree)) == ("store_write", "ask")
+
+
+@pytest.fixture
+def inner(tree):
+    """notes/in/e links to the Exo home, so a write through e is a store write only from notes/in."""
+    (tree / "notes/in").mkdir()
+    (tree / "notes/in/e").symlink_to("../../../.exo", target_is_directory=True)
+    return tree
+
+
+@pytest.mark.parametrize("command", [
+    # a `cd` that did not stay, then a relative `cd`: the shell is still in notes, so it enters notes/in
+    "cd notes && (cd sub) && cd in && echo x > e/policies/default.yaml",
+    "cd notes; (cd sub); cd in; cp x e/policies/default.yaml",
+    "cd notes && cd missing; cd in && echo x > e/policies/default.yaml",
+    "cd notes && { false && cd sub; }; cd in && echo x > e/policies/default.yaml",
+    "cd notes && if false; then cd sub; fi; cd in && echo x > e/policies/default.yaml",
+    "cd notes && pushd sub && popd && cd in && echo x > e/policies/default.yaml",
+    "cd notes && pushd sub; popd; cd in && tee e/policies/default.yaml < x",
+    "cd notes && (cd sub) && pushd in && mv x e/policies/default.yaml",
+    "cd notes && (cd sub) && cd in && bash -c 'cp x e/policies/default.yaml'",
+    "cd notes && (cd sub) && cd in && sudo cp x e/policies/default.yaml",
+    # the control the shapes were measured against
+    "cd notes && cd in && echo x > e/policies/default.yaml",
+])
+def test_a_cd_target_is_read_from_every_folder_entered_before_it(inner, command):
+    assert outcome("bash", {"command": command}, cwd=str(inner)) == ("store_write", "ask")
+    assert outcome("bash", {"command": command}, cwd=str(inner), policy=DENY_STORE) == ("store_write", "deny")
+
+
+@pytest.mark.parametrize("command", [
+    "cd notes && (cd sub) && cd in && echo x > y.md",
+    "cd notes && pushd sub && popd && cd in && echo x > y.md",
+    "cd notes && cd missing; cd in && echo x > y.md",
+])
+def test_a_cd_target_read_from_every_folder_keeps_a_plain_write(inner, command):
+    assert outcome("bash", {"command": command}, cwd=str(inner)) == ("local_write", "allow")
+
+
+@pytest.mark.parametrize("steps,expected", [(64, ("local_write", "allow")), (65, ("store_write", "ask"))])
+def test_the_folder_cap_is_64(tree, steps, expected):
+    """gate._ENTERED: 64 folders entered with `cd` are read, the 65th fails closed. An absolute `cd` enters one."""
+    line = " && ".join(f"cd {tree}/n{i}" for i in range(steps)) + " && echo x > y"
+    assert outcome("bash", {"command": line}, cwd=str(tree)) == expected
+
+
+@pytest.mark.parametrize("steps,expected", [(6, ("local_write", "allow")), (7, ("store_write", "ask"))])
+def test_each_relative_cd_is_joined_to_every_folder_before_it(tree, steps, expected):
+    """So n relative `cd`s in a row enter 2**n - 1 folders: six enter 63, and a seventh passes the cap."""
+    line = " && ".join(f"cd d{i}" for i in range(steps)) + " && echo x > y"
+    assert outcome("bash", {"command": line}, cwd=str(tree)) == expected
+
+
+KDIR = {"command": "cat kdir/seat"}
+
+
+@pytest.mark.parametrize("command", [
+    # a relative secret read after a `cd` is read from the folder it enters, as a store write's path is
+    "cd notes && cat ../kdir/seat",
+    "cd notes; head -c 9 ../kdir/seat",
+    "pushd notes && grep -r token ../kdir",
+    "cd notes && (cd sub) && cd in && cat ../../kdir/seat",
+])
+def test_a_relative_secret_read_after_a_cd(tree, command):
+    (tree / "kdir").symlink_to(tree.parent / ".exo/keys", target_is_directory=True)
+    assert outcome("bash", KDIR, cwd=str(tree)) == ("credentials", "ask")
+    (tree / "notes/in").mkdir()
+    c = gate.classify({"tool": "bash", "args": {"command": command}}, cwd=str(tree))
+    assert c.category == "credentials" and gate.decide(c, POL).outcome == "ask", c
+    assert gate.decide(c, {"gates": {"deny": ["credentials"]}}).outcome == "deny"
+
+
+@pytest.mark.parametrize("command,folder", [("cd d0 && cat ../kdir/seat", "notes"),
+                                            ("cd d0 && cd d1 && cd d2 && cd d3 && cat ../kdir/seat", "notes"),
+                                            ("cd notes && cat ../kdir/seat", "sub")])
+def test_a_secret_read_after_a_cd_keeps_the_folders_reserved_hit(tree, command, folder):
+    """With a `cwd`, the line alone leaves a read after a `cd` to the folder's reading beside it, so the folder's part
+    (#311), named by its full path, is still added. When the line alone read it too, that part and its reserved hit
+    were lost (5 pairs in this round's gate_diff)."""
+    (tree / "kdir").symlink_to(tree.parent / ".exo/keys", target_is_directory=True)
+    (tree / "sub").mkdir()
+    c = gate.classify({"tool": "bash", "args": {"command": command, "cwd": folder}}, cwd=str(tree))
+    d = gate.decide(c, {"gates": {"reserved": ["credentials"]}})
+    assert {"../kdir/seat", str(tree / "kdir/seat")} <= {t for k, t in d.reserved if k == "credentials"}, d.reserved
+    assert d.outcome == "ask"
+
+
+def test_a_copy_and_a_read_of_one_path_after_a_cd_agree(tree):
+    (tree / "kdir").symlink_to(tree.parent / ".exo/keys", target_is_directory=True)
+    c = gate.classify({"tool": "bash", "args": {"command": "cd notes && cp ../kdir/seat /tmp/x"}}, cwd=str(tree))
+    assert c.category == "store_write" and "credentials" in [p.category for p in gate._each_part(c)]
+    assert gate.decide(c, {"gates": {"deny": ["credentials"]}}).outcome == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    # #530: bash's `cd` drops xl before it reads `..`, so these enter ~/.ssh, as a `cwd` of xl/../kl does
+    "cd xl/../kl && tar czf /tmp/o.tgz .",
+    "pushd xl/../kl && tar czf /tmp/o.tgz .",
+    "cd ~/proj/xl/../kl && tar czf /tmp/o.tgz .",
+    "cd notes; cd ../kl && tar czf /tmp/o.tgz .",
+])
+def test_a_folded_cd_into_a_secret_store(links, command):
+    assert outcome("bash", {"command": command}, cwd=str(links)) == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("command", [
+    "cd xl/../notes && ls", "cd xl/../sub && tar czf /tmp/o.tgz .", "cd notes && cat ../notes/x",
+    "cd ~ && du -sh .", "cd sub && ls -la . && cat README",
+])
+def test_a_read_after_a_cd_keeps_its_class(links, command):
+    assert outcome("bash", {"command": command}, cwd=str(links)) == ("read", "allow")
+
+
+def test_each_path_is_looked_up_once_a_call(tree, monkeypatch):
+    """#340: a relative word is read from each folder a `cd` entered. Each path is looked up once a call, and the
+    folders above it are shared (_resolve), so the look-ups grow with the words and folders, not with their depth."""
+    deep = "/".join(f"level{i}" for i in range(10))
+    (tree / deep).mkdir(parents=True)
+    words = " ".join(f"w{i}" for i in range(100))
+    line = f"cd {deep}/a && cd {deep}/b && cd {deep}/c && touch {words}; touch {words}"
+    calls = {"lstat": 0, "realpath": 0}
+    stores: list = []
+    resolved: list = []
+    lstat, realpath, store_abs, resolve = gate.os.lstat, gate.os.path.realpath, gate._store_abs_read, gate._resolve
+
+    def count_lstat(*a, **kw):
+        calls["lstat"] += 1
+        return lstat(*a, **kw)
+
+    def count_realpath(*a, **kw):
+        calls["realpath"] += 1
+        return realpath(*a, **kw)
+
+    def count_stores(p, ancestors):
+        stores.append((p, ancestors))
+        return store_abs(p, ancestors)
+
+    def count_resolved(p, memo):
+        resolved.append(p)
+        return resolve(p, memo)
+
+    monkeypatch.setattr(gate.os, "lstat", count_lstat)
+    monkeypatch.setattr(gate.os.path, "realpath", count_realpath)
+    monkeypatch.setattr(gate, "_store_abs_read", count_stores)
+    monkeypatch.setattr(gate, "_resolve", count_resolved)
+    c = gate.classify({"tool": "bash", "args": {"command": line}}, cwd=str(tree))
+    monkeypatch.undo()
+    assert "store_write" not in [p.category for p in gate._each_part(c)] and gate.decide(c, POL).outcome == "allow"
+    # each (folder, word) once, though the line names every word twice: _Scope.stores and _Scope.forms
+    assert len(stores) == len(set(stores)) and len(resolved) == len(set(resolved))
+    assert len({p for p, _ in stores if p.endswith("/w7")}) == 8      # the tool's folder and the 7 a `cd` entered
+    # 100 words in 8 folders, each looked up with its folders shared, not walked from the root
+    assert calls["lstat"] < 4000 and calls["realpath"] < 100, calls
+
+
+@pytest.mark.parametrize("path", [
+    "pdir/default.yaml", "sdir/../policies/x", "c2/../keys", "deep/../../../.exo/state", "notes/../pdir/./x",
+    "missing/../pdir/x", "loop/x", "rel/policies/../state/x", "notes//x/", "/", "x/..",
+])
+def test_resolve_is_realpath(tree, path):
+    (tree / "loop").symlink_to("loop")
+    memo: dict = {}
+    for p in (str(tree / path), str(tree) + "//" + path):
+        assert gate._resolve(p, memo) == gate.os.path.realpath(p), p
+
+
+def test_resolve_reads_a_dotdot_after_a_link_loop(tree):
+    """A loop cannot be entered, so `loop/../pdir` names nothing the kernel opens. _resolve reads the `..` after it as
+    after any link it could not resolve, so the path still reaches pdir's store folder. Python 3.13's realpath does
+    the same; 3.11's stops at the loop and folds the rest as written."""
+    (tree / "loop").symlink_to("loop")
+    assert gate._resolve(str(tree / "loop/../pdir"), {}) == gate.os.path.realpath(tree.parent / ".exo/policies")
+
+
+def test_past_the_budget_every_relative_word_counts(tree, monkeypatch):
+    """Each join to a folder a `cd` entered is charged to the #269 budget (gate._charge). Past it every relative word
+    counts as the store, so the line asks (fails closed), and the work stops growing with the words."""
+    line = " && ".join(f"cd d{i}" for i in range(6)) + " && touch " + " ".join(f"w{i}" for i in range(2000))
+    looked: list = []
+    store_abs = gate._store_abs_read
+    monkeypatch.setattr(gate, "_store_abs_read", lambda p, ancestors: looked.append(p) or store_abs(p, ancestors))
+    assert outcome("bash", {"command": line}, cwd=str(tree)) == ("store_write", "ask")
+    assert not [p for p in looked if p.endswith("/w1999")]      # not looked up at all once the budget is spent
+    monkeypatch.undo()
+    line = " && ".join(f"cd d{i}" for i in range(6)) + " && touch " + " ".join(f"w{i}" for i in range(20))
+    assert outcome("bash", {"command": line}, cwd=str(tree)) == ("read", "allow")
+
+
+DENY_KEYS = {"gates": {"deny": ["target:*/.ssh/*", "target:*id_rsa*"]}}
+
+
+@pytest.mark.parametrize("folder,command", [
+    ("sdir/../keys", "cat ~/.ssh/id_rsa"),
+    ("c2/../keys", "cat ~/.ssh/id_rsa"),
+    ("c2/../keys", "cat ../kl/id_rsa"),
+    ("sdir/../keys", "sudo cat ~/.ssh/id_rsa"),
+    ("c2/../keys", "bash -c 'cat ~/.ssh/id_rsa'"),
+    ("~/.exo/keys", "cat ~/.ssh/id_rsa"),
+])
+def test_a_key_the_line_names_in_a_keys_folder_keeps_its_deny(links, folder, command):
+    """abu-aska's review of f7074f1e: read through the link, `sdir/../keys` is the keys folder, whose credentials part
+    is named '' and led the line, so a `target:` deny on the key the line names only asked. The line is read alone
+    too now (#311, gate.readings), so the key names its own part, and the deny stands, as on main."""
+    c = gate.classify({"tool": "bash", "args": {"command": command, "cwd": folder}}, cwd=str(links))
+    assert gate.decide(c, DENY_KEYS).outcome == "deny"
+    assert gate.decide(c, POL).outcome == "ask"
+
+
+@pytest.mark.parametrize("folder", ["sdir/../keys", "c2/../keys", "~/.exo/keys"])
+def test_a_reserved_entry_keeps_the_key_a_store_write_names(tree, folder):
+    """The same review: the `(credentials, .../.exo/keys/seat)` reserved hit was lost in those folders."""
+    c = gate.classify({"tool": "bash", "args": {"command": "cp x ~/.exo/keys/seat", "cwd": folder}}, cwd=str(tree))
+    d = gate.decide(c, {"gates": {"reserved": ["target:*/.exo/*"]}})
+    assert any(k == "credentials" and t.endswith("/.exo/keys/seat") for k, t in d.reserved), d.reserved
+    assert ("store_write", "~/.exo/keys/seat") in d.reserved and d.outcome == "ask"
+
+
+SHELLS_ALLOWED = {"gates": {"categories": {"opaque_exec": "allow", "shell": "allow", "read": "allow"}}}
+
+
+@pytest.mark.parametrize("line", [
+    "{ bash; cd notes; bash; } <<< 'cp x ../pdir/default.yaml'",
+    "{ cd notes; bash; } <<< 'cp x ../pdir/default.yaml'",
+    "{ sh; cd notes; sh; } <<EOF\ncp x ../pdir/default.yaml\nEOF",
+])
+def test_a_stdin_text_met_again_after_a_cd_is_read_again(tree, line):
+    """abu-aska's nit: the stdin memo (gate._once) kept the first shell's reading, from the session folder, for the
+    shell after the `cd`. It is keyed by the folders entered too now, as classify_shell's memo is."""
+    c = gate.classify({"tool": "bash", "args": {"command": line}}, cwd=str(tree))
+    assert "store_write" in [p.category for p in [c, *gate._each_part(c)]]
+    assert gate.decide(c, SHELLS_ALLOWED).outcome == "ask"
+
+
+@pytest.mark.parametrize("args,target", [
+    ({"command": "rm -rf x", "cwd": "~/.exo/policies"}, "x"),
+    ({"command": "tar czf /tmp/o.tgz .", "cwd": "xl/../pdir"}, "."),
+    ({"command": "tar -czf /tmp/o.tgz .", "cwd": "~/.exo/policies"}, "."),
+    ({"command": "git -C ../state add x", "cwd": "~/.exo/policies"}, "../state"),
+    ({"command": "cp -r a b", "cwd": "~/.exo/policies"}, "a"),
+    ({"command": "xargs -0 rm -f old", "cwd": "~/.exo/state"}, "old"),
+    ({"command": "xargs -n 1 cp -t dest", "cwd": "~/.exo/state"}, "dest"),
+])
+def test_in_a_store_folder_an_option_never_names_the_write(links, args, target):
+    """abu-aska's nit: in a store folder every relative word is a store path, and the first one but the program named
+    the write, an option too (`-rf`, `czf`, `-C`, xargs' `-0`). Options, tar's bundled options and xargs' words up
+    to the program it runs are skipped now."""
+    c = gate.classify({"tool": "bash", "args": args}, cwd=str(links))
+    assert target in [r.target for r in gate.readings(c) if r.category == "store_write"], gate.readings(c)
+    assert gate.decide(c, POL).outcome == "ask"
+
+
+@pytest.mark.parametrize("command", ["tee -- -p/default.yaml < x", "cp -t -p x", "xargs -a -p/l rm -f y"])
+def test_a_skipped_word_still_counts_when_nothing_else_names_the_write(links, command):
+    """Outside a store folder, an option or a word that xargs or tar skip names the write when no other word does, so
+    skipping them for the name never drops a write: `-p` links to the policies folder."""
+    (links / "-p").symlink_to(links.parent / ".exo/policies", target_is_directory=True)
+    assert outcome("bash", {"command": command}, cwd=str(links)) == ("store_write", "ask")
+
+
+AFTER_CD = {"gates": {"deny": ["target:a path inside the store*"]}}
+
+
+@pytest.mark.parametrize("line,target", [
+    ("cd ~/.exo/policies && cp y pdi{r,x}/default.yaml", "pdir/default.yaml"),
+    ("cd ~/.exo/state && touch sdir/x", "sdir/x"),
+    ("cd ~/.exo/policies && echo x > c2/y", "c2/y"),
+    ("cd ~/.exo/policies; cp y pdir/default.yaml", "pdir/default.yaml"),
+])
+def test_after_a_cd_into_the_store_the_old_name_stays_a_target(tree, line, target):
+    """Since #340 reads a relative word from the folders, the card names the write after it. Before, it was named
+    "a path inside the store (after cd)": that name is kept as a second target, so a `target:` entry on it still
+    matches, as on main (the reviews of f7074f1e counted 5 and 18 such pairs lowered)."""
+    c = gate.classify({"tool": "bash", "args": {"command": line}}, cwd=str(tree))
+    assert (c.category, c.target) == ("store_write", target)
+    assert gate._AFTER_CD in [p.target for p in gate._each_part(c) if p.category == "store_write"]
+    assert gate.decide(c, AFTER_CD).outcome == "deny"
+    assert gate.decide(c, DENY_EXO).outcome == "ask"         # the word itself is not in ~/.exo
