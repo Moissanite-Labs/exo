@@ -6508,8 +6508,8 @@ def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification |
     a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192). The target is the folder, or the
     folder joined with the name. A folder in a repo's own .claude worktrees, commands, agents or skills is the
     repo's, not a store (_repo_claude), so only a word that resolves into a store counts there. With ``plain``, a
-    folder names a store only as main read it before #446 (_plain_secret), which gives main's target. The other two
-    readings are the same either way."""
+    folder or path names a store only as main read it before #446 (_plain_secret), which gives main's target: a word
+    with no name of its own (`ls keys` in `~/.exo`) has the folder as written for its path."""
     forms: list[tuple[str, str]] = []           # (the folder as the call gives it, a form to check)
     for f in folders:
         x = _expand_text(f)
@@ -6528,7 +6528,7 @@ def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification |
         where = folders[0] if len(folders) == 1 else " or ".join(folders)
         paths = [_in_folder(_expand_text(f), read.target) for f in folders]
         linked = [_in_folder(g, read.target) for f, g in forms if g != f]   # `..` read past the link, as the kernel
-        return f"{read.summary} in {where}", next((p for p in linked + paths if is_sensitive_path(p)), paths[0])
+        return f"{read.summary} in {where}", next((p for p in linked + paths if is_sensitive_path(p, plain)), paths[0])
     if not forms:
         return None
     cmds, subs, _ = _parse(cmd or "")
