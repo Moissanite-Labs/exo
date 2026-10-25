@@ -36,10 +36,11 @@ def _cost(m: Any) -> int:
                                     for c in m.tool_calls) // 4
 
 
-def _turn_start(ctx: Any, session: str, since: int, turn_id: str) -> int:
-    """The seq of the turn's first message after ``since``, found as ``cut_pending`` finds it in the tail; 0 when no
-    message after ``since`` can start it, so the turn started before."""
-    msgs = ctx._read(session, since)
+def _turn_start(ctx: Any, session: str, since: int, tail: list, turn_id: str) -> int:
+    """The seq of the turn's first message, found as ``cut_pending`` finds it in ``tail``, but from ``since`` on: the
+    stored messages up to ``tail``, then its own. 0 when none of them can start it, so the turn started before."""
+    first = next((m.meta["seq"] for m in tail if "seq" in m.meta), None)
+    msgs = ctx._read(session, since, None if first is None else first - 1) + [m for m in tail if "seq" in m.meta]
     return next((m.meta["seq"] for m in msgs if turn_id and m.meta.get("turn_id") == turn_id),
                 max((m.meta["seq"] for m in msgs if m.role == "user" and not m.meta.get("note")), default=0))
 
@@ -79,7 +80,7 @@ def cut_pending(ctx: Any, session: str, tail: list, turn_id: str = "") -> list:
         span = [s for s in range(leaf.start, leaf.end + 1) if s in cost]
         part = "" if span or not view else ctx._view_parts([leaf])[0]
         if part and part in view:  # a later leaf landed first, so the private view shows this one verbatim
-            start = _turn_start(ctx, session, leaf.start - 1, turn_id) if start is None else start
+            start = _turn_start(ctx, session, leaf.start - 1, tail, turn_id) if start is None else start
             if leaf.end >= start:  # it holds the turn's first messages, and every leaf after it is the turn's
                 break
             short = f"## Messages {leaf.start}-{leaf.end}\n{SUMMARIZING_MARKER}"
