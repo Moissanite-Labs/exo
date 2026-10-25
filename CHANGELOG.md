@@ -79,6 +79,31 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
   start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
   subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
+- A shell call's own folder argument is read for secret stores (#311). The bash tool runs a command in
+  its `cwd`, and Hermes' `terminal` and Codex's `exec_command` in their `workdir`. The gate read only
+  the command text and the session's folder, so `cat config` with `~/.kube` as `cwd` was a plain read
+  while `cd ~/.kube && cat config` asked. A credentials part is now added when the call reads a store
+  from its folder: the folder is itself a store (a link is resolved), a relative word resolves into
+  one, or the line reads a store name there as after a `cd`. The line keeps its own classification.
+  So the call asks every time with no grant, also in observe mode, and its deny entries, rules, matrix
+  cell, posting checks and reserved entries still apply. Before, a word that resolved into a store
+  from `cwd` made the whole call credentials. That lost a matrix deny on a force push beside it, and a
+  seat that may answer credentials could answer the push. That reading is still decided, and the
+  stricter outcome stands. The ask goes to those who may answer both the line's category and
+  credentials. A checkout in a repo's own `.claude/worktrees` is the repo's folder, not a store, but a
+  store folder inside it (`.kube`) still counts. A file tool's folder argument still does not count.
+  A line that reads a secret and writes the Exo store is now answered by the principal alone. On a
+  line that writes the Exo store, the store read from the folder is a credentials part beside the
+  write, as a key read after `tar -C` is since #464, so `deny: [credentials]` denies it. When the
+  decision fails, the exo-gate hook's fallback reads these parts too, so it asks the principal
+  alone, once, in observe mode too. The store read from the folder weighs as the one after a `cd`
+  does since #468: a force push or `rm -rf` on the line adds its weight beside the read. So a matrix
+  cell on `irreversible`, or a rule on `credentials` and `irreversible`, denies the call as it denies
+  the `cd` form. GATE.md lists the cases where the two forms still differ. A gh line in such a call
+  is also read as the gate read it before #399 (#439), in the folder too. The gate decides each
+  reading and the hook checks each: the line, its reading from before #311, the line as read before
+  #399 and that line's reading from before #311. A folder spelt through a link and `..`
+  (`sdir/../policies`) is read as the kernel reads it, past the link, and folded too.
 - Peer presence forgery (#132). `PeerNode.deliver` checked a peer envelope's signature against the verify key in
   the sender's presence file, and took the sender's principal from the same file. Any same-user process can write
   a presence file, so a forged one (any seat, any principal, the writer's own key) plus a self-signed envelope

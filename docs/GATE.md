@@ -315,11 +315,16 @@ no file, only the principal can, which is the behaviour of a single-user install
 ingress client never can (D-026). The allowed list is sent as `approvers` on
 `approval.requested` so a client can show who must answer; the engine refuses anyone else as
 `forbidden`. While a changed `approvals.yaml` waits for `/gate accept`, the list holds only those
-both files allow (`gate.strictest_approvers`); see "Policy changes during a session".
+both files allow (`gate.strictest_approvers`); see "Policy changes during a session". A call with
+a credentials or store-write part goes to those allowed for its category and for each such part
+(`gate.call_approvers`, #311). A store read in a shell call's own folder is answered by those who
+may answer both the line's category and credentials. A line that reads a secret and writes the store
+is the principal's alone.
 
-A gh line the gate also reads as before #399 lists only those both readings' categories allow
-("Where a gh command lands"). The `credentials` and `store_write` parts of both readings narrow
-it too (#447, `gate.readings`).
+A call the gate reads more than one way lists only those each reading's categories allow
+(`gate.readings`): a gh line also read as before #399 ("Where a gh command lands"), a shell call
+also read as before #311 ("The working folder"), or both.
+The `credentials` and `store_write` parts of each reading narrow it too (#447).
 
 A client answers as a seat by setting `client` to `seat:<name>` and signing the answer with that
 seat's Ed25519 key: `sig = exo.core.approvals.sign_approval(key, request_id, decision, binding,
@@ -508,14 +513,16 @@ class. Any wildcard that spells the folder's path still asks (`ls ~/.exo/run*`, 
 matches the core's file names or spells `agent-` asks in any folder, such as `ls *prin*`,
 `ls *xod*` or `git diff -- 'agent-*'`.
 
+A relative name read in the folder a shell call's own `cwd` or `workdir` argument names asks the
+same way since #311: `{"command": "cat *", "cwd": "~/.exo/run"}` and `cat id*` with `~/.ssh` as
+`cwd` ask, as `cd ~/.exo/run && cat age*`, `cd ~/.exo && cat run/*`, `cd ~/.exo/run/jobs && cat ../*`
+and `cat ../exod*` do (see "The working folder" below).
+
 Limits. No environment variable carries the credential, and `tool_env` drops `EXOD_*`,
 `EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
 (`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`, also through `..`:
-`cd ~/.exo/run/jobs && grep -r secret ../..`); a relative name when the folder is
-the bash tool's own `cwd` argument rather than a `cd` on the line (`{"command": "cat *", "cwd":
-"~/.exo/run"}` is `read`, as is `cat id*` with `~/.ssh` as `cwd`; `cd ~/.exo/run && cat age*`,
-`cd ~/.exo && cat run/*`, `cd ~/.exo/run/jobs && cat ../*` and `cat ../exod*` ask, see "The working folder"
-below); a `..` from a folder spelt with a wildcard (`cd ~/.e*o/run/jobs && ls ..`); a wildcard
+`cd ~/.exo/run/jobs && grep -r secret ../..`); a `..` from a folder spelt with a wildcard
+(`cd ~/.e*o/run/jobs && ls ..`); a wildcard
 in a folder name above a file (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for
 the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
 characters, the same as for `~/.ss?`; `~/.exo/r*` asks); an upper-case spelling on a
@@ -570,7 +577,8 @@ system or bash will.
 
 - **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
   the session's working folder (the core passes it to tool hooks as `cwd`), and, for a shell tool, from that folder
-  joined with the call's own `cwd` argument, the folder a shell runs in. A `cwd` argument on a file tool changes
+  joined with the call's own `cwd` or `workdir` argument, the folder a shell runs in. A hit there adds a
+  credentials part to the line (#311, "The tool's own folder"). A `cwd` argument on a file tool changes
   nothing: `read_file`, `write_file` and `grep` take unknown arguments and read from the session's folder. When a
   link led somewhere else, the resolved path is matched against the store list too. So `notes.txt` pointing at `~/.ssh/id_rsa`, `aws.txt` at `~/.aws/credentials`, `app.cfg` at a
   project `.env`, and a folder link `cfg` to `~/.ssh` (`cat cfg/config`) ask in every form: `read_file notes.txt`,
@@ -619,8 +627,6 @@ gate's view of the file system may differ from the worker's. A name built whole 
     write redirection to a path with `$` already asks as `opaque_exec`);
   - #310: an expansion at the end of a store name is read as empty only, so `cat .env.$(hostname)` stays a read, as
     does the glob `cat .env.*` (the glob samples have no `.env.<suffix>`);
-  - #311: a relative name read in a shell's `cwd` inside a store (`{"command": "cat config", "cwd": "~/.kube"}`) is
-    matched by the name as written; a `cd` on the line is tracked (#192);
   - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved.
 
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
@@ -737,7 +743,9 @@ logged with the grant id.
   unscoped "always" for an outward category. Default expiry 7 days (`always.outward_days`).
 - Other acts: the scope is the category and the exact target. Default expiry 30 days
   (`always.days`).
-- Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`).
+- Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`). The same
+  holds for a call that keeps another category but has such a part (`gate.no_grant`), such as a
+  store read in a shell call's own folder (#311, "The working folder").
 - Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
   granted for the exact command only, like an outward act.
 - A sudo write line whose displaced part names a repo or a host, or asks with that part leading
@@ -1622,6 +1630,114 @@ folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`
 `CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
 link whose name does not say so.
 
+The tool's own folder (#311). A shell call runs in its own folder argument: `cwd` for Exo's `bash`
+tool, `workdir` for Hermes' `terminal` and Codex's `exec_command`. A relative one is joined to the
+session's folder. When a call gives both, each counts. Exo's `bash` ignores `workdir`, but the gate
+cannot tell which harness sent a call, and the folder only ever adds an ask. The line is classified
+in the session's folder alone. It keeps its own category, target, axes, posted text and parts. A
+`credentials` part is added when the call reads a store from its folder (`gate._tool_folder_read`),
+in one of three ways:
+
+- The folder is itself a store, as a `cd` word is (`is_sensitive_path`, which resolves a link, or a
+  glob that could name one). `ls` or `git status` with `~/.ssh` as `cwd` asks, as `cd ~/.ssh && ls`
+  does, and so does `cat deploy_key` in `~/link-ssh`, a link to `~/.ssh`. The part's target is the
+  folder, where a link leads, so `deny: ["target:*/.ssh"]` denies the call as it denies the `cd`
+  form.
+- A relative word resolves into a store from the folder (#209): any word in `~/.exo/keys` or
+  `~/.claude`, `.` in `~/.exo/run`, or a link in the folder that leads into a store.
+- The line reads a relative name there as after `cd <folder>` (the #192 check): a store file name, a
+  glob or brace set that could match one, or a path into a store folder. In a store and in a folder
+  below one (`~/.ssh/old`, `~/.gnupg/private-keys-v1.d`), any relative name counts, since a key there
+  can have any name. So `{"command": "cat config", "cwd": "~/.kube"}` asks as
+  `cd ~/.kube && cat config` does, and so do `cat deploy_key` in `~/.ssh/old` and `cat config` in a
+  link to `~/.kube`. The check runs once per call, on the whole line, `$( )`, `<( )` and the text a
+  shell runs included. A quoted command for `ssh` to run on another host is not read for names, so
+  `ssh host 'cat config'` keeps its class. The part's target is the folder joined with the name
+  (`~/.kube/config`).
+
+The credentials floor reads every part, so the call asks and no rule, category line, matrix cell or
+scope lowers it. `gate.no_grant` keeps a standing grant off it, and observe mode still enforces it.
+When `decide` fails on the call (a policy pattern that does not compile), the exo-gate hook's
+fallback card reads the parts too, so it still asks the principal alone, once, in every mode (#464).
+`gate.call_approvers` sends it to those who may answer both its category and credentials. The line's
+own deny entries, target rules, matrix deny cells, posting checks and reserved entries still apply.
+So `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir` is still
+denied by a matrix that denies the push, and `gh pr comment 3 --body-file notes.md` there still
+reports the unseen body.
+
+The part weighs as the part a store read after a `cd` gets (#468). It keeps the credentials
+weight, `costly`. A heavier command on the line, such as a force push or `rm -rf`, also in a
+`$( )`, adds a second `credentials` part with that weight beside it. So a matrix cell that denies
+`irreversible` and `private`, or a rule on `credentials` and `irreversible`, denies
+`cat *; touch ~/.exo/state/x; git push --force origin main` with `~/.kube` as `cwd`, as it denies
+the `cd` form. A rule on `*keys*` and `irreversible` denies `cat *; rm -rf build` with
+`~/.exo/keys` as `cwd`, as it denies the `cd` form. Since the read keeps its own weight, a matrix
+whose `costly` cell is stricter than its `irreversible` one still denies the call. There the folder
+form can be stricter than its `cd` form, which #468 weighs as one line.
+
+Before #311, a word that resolved into a store from `cwd` made the whole call `credentials` (#209).
+That reading is kept beside the line (`Classification.also`). `gate.decide` decides both, as it
+decides a gh line's reading from before #399 (`floor`, "Where a gh command lands"): the strictest
+stands on each axis, and the reserved hits and violations of both are kept. A gh line run in its
+own folder can carry both kinds, and its floor can carry its own reading from before #311.
+`gate.readings` lists each of them. `decide`, `no_grant`, `call_approvers` and `body_unseen` read
+every one, and so does the exo-gate hook. So
+`cat *` in `~/.exo/keys` is still denied by a matrix cell that denies `costly` and `private`. The old
+reading alone asked for `tar czf /tmp/o.tgz . ; git push --force origin main` with `~/.exo/run` as
+`cwd`, under a matrix that denies the push, and a seat that may answer credentials could answer it.
+The push is now denied. Under a policy that asks, the ask goes to those who may answer both a force
+push and credentials.
+
+The folder is joined to the session's folder as written. So `sdir/../policies` is read through the
+link `sdir`, as the kernel reads it, and also folded (`~/proj/policies`), as bash's `cd` and #209
+read it. With `~/proj/sdir` a link to `~/.exo/state`, `cat ../keys/seat` with `sdir/../policies` as
+`cwd` keeps its reading from before #311, and its part names `~/.exo/keys/seat`. So
+`deny: ["target:*/.exo/*"]` denies it.
+
+A folder in a repo's own `.claude` folder holds the repo's files, as the search tools judge it
+(#241): it is in `worktrees`, `commands`, `agents` or `skills`, the parent holds `.git`, and the
+`.claude` folder holds no Claude login or transcripts. Only a word that resolves into a store counts
+there. So `ls *`, `ls config`, `wc -l *`, `grep -r foo *`, `du -sh *`, `file *` and
+`rg -n config src` in a checkout at `<repo>/.claude/worktrees/x` keep their class. A store folder
+by its name inside the checkout (`x/.kube`, `x/.config/gh`, `x/.docker`) is not the repo's, so
+`cat config` with `x/.kube` as `cwd` asks, as `cd x/.kube && cat config` does. The `.claude`
+folder itself, `~/.claude` and a `.claude` folder with no `.git` beside it are stores, so any call
+there asks, as a `cd` there does.
+
+A line that already reads a store keeps that reading. A line that writes the Exo store stays
+`store_write`, and a store read from its folder is a `credentials` part beside the write, as a key
+read after `tar -C` is (#464). So `cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd`
+is denied by `deny: [credentials]`, as its `cd` form is, and only the principal answers it. A `cd`
+on the line is read as before. Limits:
+
+- The session's own folder (the `cwd` the core passes with every call, #209) is not a target. A
+  session started inside a store folder reads it by relative names as before.
+- The file tools ignore a `cwd` or `workdir` argument. They read from the session's folder.
+- A name that climbs out of a repo's `.claude` worktree back into it is not caught
+  (`cat ../../settings.local.json` from `<repo>/.claude/worktrees/x`), as before. A `cd` there asks.
+- The store-write checks do not read the folder argument. `echo x > gates.yaml` with
+  `~/.exo/policies` as `cwd` stays a `local_write`, as before (#453). So does `echo x > hook.py`
+  with `~/.exo/plugins/foo` as `cwd`, which is allowed as on main, where its `cd` form is a store
+  write (#435). So `deny: [store_write]`
+  does not reach `cat *; rm -rf build` with `~/.exo/keys` as `cwd`, whose `cd` form writes in the
+  store. The call still asks, as on main.
+- A line that reads a secret itself keeps that reading, and the folder adds no part to it. So a
+  `target:` entry on the folder does not reach it: under `deny: [target:*/.ssh]`, `cat id_rsa` with
+  `~/.ssh` as `cwd` asks, where `cd ~/.ssh && cat id_rsa` is denied. That is no lower than main.
+  `deny: [credentials]` denies both.
+- The part's target is the folder joined with the name (`~/.kube/config`). A `cd` form's target is
+  the name alone (`config`). So a rule or `target:` entry on the name alone, such as a deny rule on
+  `credentials` and `target: config`, reaches only the `cd` form. One on the path, such as
+  `deny: ["target:*/.kube/*"]`, reaches only the folder form. The other form still asks.
+- The call's text has no `cd`. A rule keyed on `command` that names a line of one command lifts a
+  matrix deny on its parts, as on any such line (#394). So under
+  `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
+  `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` asks. Its `cd` form is
+  denied, since the rule does not name the `cd`. Main asks or allows there. On a line of two or more
+  commands, such as `cat *; git push --force origin main`, the deny stands.
+
+Tests: `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
+
 Compound commands (#161). The stdin of a compound command reaches the commands inside it, nested
 compounds included: a heredoc or here-string after its closing `}`, `)`, `done`, `fi` or `esac`,
 and text the gate can read piped into it (`echo ... | ( bash )`, `... | while read l; do bash; done`).
@@ -1972,7 +2088,8 @@ command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
-followed, and the bash tool's `cwd` argument is not read here (the secret-store checks read it, #209).
+followed, and a shell tool's `cwd` or `workdir` argument is not read here (the secret-store checks read
+it, #209, #311).
 A copy or archive of `keys/` that the gate reads only as a key read has no store write part, so a
 seat that `approvals.yaml` delegates `credentials` to may still answer it, as before #447. It asks
 every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,
@@ -2030,8 +2147,9 @@ One in the redirections of a compound that holds the `cd` (`done < <(sort list)`
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
 policy pattern that does not compile, for example), the hook's fallback card still asks the
-principal alone, once, in observe mode too (#464). A store write or secret part counts, also one
-of a gh line's reading before #399, as on the normal path (#399, #447). Other calls keep their fallback: a read tool
+principal alone, once, in observe mode too (#464). A store read that a shell call's own folder adds
+as a part counts too, and so does each other reading of the call (`gate.no_grant`, #311, #399).
+Other calls keep their fallback: a read tool
 runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,

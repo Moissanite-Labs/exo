@@ -384,7 +384,7 @@ class Gate:
         asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
         symlinks included, are never read before the worker, and `_rules` refuses the call. The copies of the post
         on its other targets get the text too (`gate.fill_body`), and each other reading of the line
-        (`gate.readings`: as read before #399) has its own body file read the same way, as the hook read it
+        (`gate.readings`: as read before #399 or #311) has its own body file read the same way, as the hook read it
         before."""
         for x in gate.readings(c):
             if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
@@ -497,7 +497,7 @@ class Gate:
             try:        # the call read as a store write or secret, when only the decision failed (a bad policy regex)
                 action = {"tool": tool_name, "args": args}
                 c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
-                store = gate.no_grant(c)    # a part and each reading count too, as on the normal path (#399, #447)
+                store = gate.no_grant(c)    # a part and each reading count too (#311, #399)
             except Exception:
                 pass
             if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not (secret or store):
@@ -538,7 +538,7 @@ class Gate:
                 x.text_file or (x.displaced is not None and x.displaced.text_file) or gate.body_unseen(x)
                 for x in gate.readings(c)):
             # The gate cannot approve contents it has not seen (#208): a body file, stdin, @file, an expansion.
-            # In either reading of the line (#399): `gh pr "$V" 5 -F f` has its body file only as read before.
+            # In any reading of the line (#399, #311): `gh pr "$V" 5 -F f` has its body file only as read before.
             d.outcome, d.rule = "deny", "required"
             d.reason = ("a required executor runs only a post whose body the gate read on the line; "
                         "pass the text inline")
@@ -554,9 +554,9 @@ class Gate:
             self._tighten(d, verdict)
         outward = gate.binds_exact(c, d)
         binding = gate.approval_binding(c, args) if outward else ""
-        # No standing allow for credentials and store writes (a part of the line counts, #447), nor for a post whose
+        # No standing allow for credentials and store writes (a part of the line counts, #311), nor for a post whose
         # body the gate did not see: its binding hashes only the line, so a grant would cover any later body (#208).
-        # Each reading counts (gate.readings: as read before #399).
+        # Each reading counts (gate.readings: as read before #311 or #399).
         once = gate.no_grant(c) or gate.body_unseen(c)
         grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" and not once else None
         if grant:
