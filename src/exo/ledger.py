@@ -640,10 +640,11 @@ def _snapshot(target: Path) -> sqlite3.Connection | None:
     write that keeps the size and lands in the same tick of the file system's clock as the write before it.
 
     The copy goes into SQLite's private temporary database, not into memory. About 2 MB stays in SQLite's page cache
-    and the rest goes to a temporary file in SQLite's temporary folder (`SQLITE_TMPDIR`, else `TMPDIR`, else
-    `/var/tmp` or `/tmp`). SQLite makes it owner-only, unlinks it at once and drops it at close. So an open reader
-    holds disk space the size of the ledger, not memory. (A SQLite built with `SQLITE_TEMP_STORE` 2 or 3 keeps this
-    database in memory. The default build does not.) `query_only` keeps the copy read-only, as the target was."""
+    and the rest goes to a temporary file in SQLite's temporary folder: the first folder it can write of
+    `SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/usr/tmp`, `/tmp` and the current folder. SQLite makes it owner-only,
+    unlinks it at once and drops it at close. So an open reader holds disk space the size of the ledger, not memory.
+    (A SQLite built with `SQLITE_TEMP_STORE` 2 or 3 keeps this database in memory. The default build does not.)
+    `query_only` keeps the copy read-only, as the target was."""
     for _ in range(SNAPSHOT_TRIES):
         before = _target_state(target)
         if before is None:
