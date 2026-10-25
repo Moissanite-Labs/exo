@@ -314,6 +314,16 @@ def test_a_long_run_of_glob_parts_is_read_once():
     assert bash("ls /proc/1" + "/*/.." * 3000 + "/x") == ("credentials", "ask")
 
 
+@pytest.mark.parametrize("policy", [{}, {"gates": {"deny": ["target:*/.kube/config"]}}])
+@pytest.mark.parametrize("link, step", [("/proc/1/*", "/../*"), ("/proc/1/root", "/../root"),
+                                        ("/proc/self/cwd", "/../cwd")])
+def test_the_sixteenth_link_of_a_word_is_read_and_the_seventeenth_counts(policy, link, step):
+    # #513 third review: the boundary of the cap. Each step takes the last link back and could be a link again, so these
+    # words hold 16 and 17 possible links, with a tail that names no store. A cap at 15 or 17 fails one of them
+    assert full(f"ls {link}{step * 15}/usr/lib/x*", policy)[:2] == ("read", "allow")
+    assert full(f"ls {link}{step * 16}/usr/lib/x*", policy)[:2] == ("credentials", "ask")
+
+
 def test_links_taken_back_by_dotdot_are_skipped_in_linear_time(monkeypatch):
     # Each `*` could be a root link, and the `..` after it takes it back. The word is walked once: no candidate link
     # spells the rest of the word out again, so the text normpath reads stays a small multiple of the line.
@@ -363,6 +373,20 @@ def test_a_line_of_many_short_words_with_sixteen_links_costs_about_what_it_costs
         if took[1] < 4 * took[0] + 0.2:
             break
     assert took[1] < 4 * took[0] + 0.2, took
+
+
+def test_the_folder_after_the_links_is_looked_up_once_per_call(monkeypatch):
+    # #513 third review: the reads after a link look up a run folder in the lexical form of what follows, once per
+    # call (_resolved). The 20 words here share that folder (`/usr/lib`, and `/proc/usr/lib` from the `/proc` step),
+    # and each word is read more than once, so without the memo each folder is resolved 40 times.
+    seen, realpath = [], os.path.realpath
+
+    def counting(p, *a, **k):
+        seen.append(p)
+        return realpath(p, *a, **k)
+    monkeypatch.setattr(os.path, "realpath", counting)
+    assert bash("ls " + " ".join(f"/proc/1/*{'/../*' * 15}/usr/lib/x{i}*" for i in range(20))) == ("read", "allow")
+    assert [seen.count("/usr/lib"), seen.count("/proc/usr/lib")] == [1, 1]
 
 
 def test_a_rest_read_before_for_the_word_is_read_again_when_it_holds_a_link():
