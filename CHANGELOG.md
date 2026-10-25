@@ -5,6 +5,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Draft
+- Session bypass (#96, D-065) requests explicit principal approval before lowering ordinary asks. Protected
+  actions and model asks remain gated. The terminal shows a session banner, `/new` starts in ask, and the
+  launch flag requests consent. Mode and lowered decisions must commit to the signed audit before taking effect.
+
 ### Fixed
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category

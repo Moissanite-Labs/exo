@@ -295,3 +295,10 @@ relay. Subcommands: `keygen`, `pubkey`, `post`, `inbox`, `tail`, `thread`, `head
 `0` is success. `1` is a failed check (`lint`, `log verify`, `memory`, a failed decision call, an unset `config get`).
 `2` is a usage error from `exo decide` and `exo upstream`. Argument parsing errors exit with `2`, as `argparse` does.
 `exo chat` exits with `130` on ctrl+c. Most other errors print one line and exit.
+
+### Session permission mode (draft)
+
+`/permissions [status]` reports the current thread's mode and counts. `/permissions bypass` requests explicit
+principal approval to bypass ordinary asks. `/permissions ask` restores those prompts. The terminal's
+`--skip-permissions` flag (alias `--dangerously-skip-permissions`) requests the same approval for its initial
+thread. Protected actions still ask. There is no seat-file default, and `/new` starts in ask mode.

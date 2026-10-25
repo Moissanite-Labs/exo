@@ -3678,3 +3678,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and a first launch from a clean home with the claude CLI: no approval card for the intro skill, no decision
   call to the CLI, and read-only tool calls at 0.0 s.
 - **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.
+
+## D-065 (2026-10-20) Explicit session bypass approval with protected asks
+
+Issue #96 requires session scope and protected asks. The older source used core-global state and seat defaults.
+This draft replaces those assumptions with per-session mode and explicit consent through the existing approval
+desk. Principal approval uses current D-039/D-060 transport authentication. Its binding covers mode and session.
+A signed consent row commits before activation, and every lowered call references that consent. No new keys or
+signature format are introduced. An intervening ask invalidates pending consent, and audit failure blocks a
+lowered call. Tightening to ask takes effect even if its audit fails.
+
+The boundary conservatively retains any irreversible, public or third-party ask, plus every protected compound
+part, classification signal, reserved action, secret/store access, model ask, spending or escalation. Required executors refuse bypass.
+The terminal has a session banner and explicit approval controls. Web mode controls remain outside this draft.
+See `docs/GATE.md` "Session permission mode".
+
+Plugin command dispatch reuses `call_plugin` for accepted optional keywords and `maybe_await` for sync or async
+results. Lookup guards retain their values directly. Built-in outputs and unknown-command error precedence stay
+unchanged. User impact from this simplification: none. Developer impact: reuse the existing callback adapter.
+
+Adapted from mozi and Claude Opus 5.5's source commit `0239ecda82259ae07ede222ecaac8b167a46e908`.

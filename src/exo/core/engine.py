@@ -779,13 +779,13 @@ class CoreRuntime:
         return await diagnostics.handoff_facts(self, session, path_arg)
 
     async def _command_run(self, b: s.CommandRun) -> dict[str, Any]:
-        out = await diagnostics.builtin_command(self, b)
-        if out is not diagnostics.MISSING:
+        if (out := await diagnostics.builtin_command(self, b)) is not diagnostics.MISSING:
             return {"output": out}
-        cmd = self.plugins.commands.get(b.name)
-        if cmd is None:
+        if (cmd := self.plugins.commands.get(b.name)) is None:
             raise CommandFailed("not_found", f"no command /{b.name}")
-        out = await maybe_await(cmd.handler(b.args))
+        if b.session:
+            self._info(b.session)
+        out = await maybe_await(call_plugin(cmd.handler, b.args, session_id=b.session or "", request_approval=self.approvals.ask))
         return {"output": out if isinstance(out, (str, dict, list)) or out is None else str(out)}
 
     async def _schedule_edit(self, b: s.ScheduleEdit) -> dict[str, Any]:

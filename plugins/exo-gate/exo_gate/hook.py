@@ -48,8 +48,10 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
 from exo.core.private import atomic_write
-from exo.principal import require_principal
+from exo.principal import is_principal, require_principal
 from exo.store import principal_root
+
+from . import permissions as perm
 
 logger = logging.getLogger("exo_gate")
 
@@ -291,10 +293,77 @@ class Gate:
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
         self.grants = GrantStore(settings.grants_path)
+        self.permissions: dict[str, perm.Permissions] = {}  # D-065 draft: per-session, never persisted
 
     @property
     def executor_required(self) -> bool:
         return self._required_at_load or bool(self.required_getter and self.required_getter())
+
+    def permission_state(self, session_id: str = "") -> perm.Permissions:
+        # Missing session never addresses a global mode or creates mutable global state.
+        if not session_id:
+            return perm.Permissions()
+        with self._lock:
+            return self.permissions.setdefault(session_id, perm.Permissions())
+
+    async def set_permissions(self, mode: str, via: str = "/permissions", session_id: str = "",
+                              request_approval: Callable | None = None) -> None:
+        if mode not in (perm.ASK, perm.BYPASS):
+            raise ValueError(mode)
+        by = require_principal("select a session permission mode")
+        from exo.server.engine import CommandFailed
+        if not session_id:
+            raise CommandFailed("bad_request", "permissions requires a session")
+        if mode == perm.BYPASS and (self.executor_required or self.settings.mode != "enforce"):
+            raise CommandFailed("forbidden", perm.REQUIRED_REFUSAL if self.executor_required
+                                else "bypass requires the enforcing gate")
+        state = self.permission_state(session_id)
+        with self._lock:
+            state.revision += 1  # even an ask no-op invalidates an outstanding bypass selection
+            revision = state.revision
+        if state.mode == mode:
+            return
+        binding = hashlib.sha256(json.dumps({"mode": mode, "session": session_id},
+                                           sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        deciders: list[str] = []
+        opened: list[str] = []
+        if mode == perm.BYPASS:
+            if request_approval is None:
+                raise CommandFailed("unsupported", perm.MISSING_APPROVAL)
+            choice = await request_approval(session_id, "Enable bypass for this session? " + perm.SUMMARY,
+                                            options=["allow", "deny"], approvers=["principal"],
+                                            binding=binding, decided_by=deciders, opened=opened)
+            by = require_principal("select a session permission mode")  # authority must still be live
+            if choice != "allow":
+                return
+            if not deciders or not is_principal(deciders[0]):
+                raise CommandFailed("forbidden", "mode approval must come from the principal")
+        if self.executor_required or self.settings.mode != "enforce":
+            if mode == perm.BYPASS:
+                raise CommandFailed("forbidden", "the enforcing gate no longer permits bypass")
+        with self._lock:
+            if self.permissions.get(session_id) is not state or state.revision != revision:
+                raise CommandFailed("conflict", "permission selection changed while approval was pending")
+            # The signed consent row must commit before mode takes effect, even on optional executors.
+            try:
+                eid = self._append({"gate": PLUGIN_ID, "phase": "permissions", "mode": mode,
+                                "previous": state.mode, "by": by, "via": via, "binding": binding,
+                                "approved_by": deciders[0] if deciders else by,
+                                "approval_request": opened[0] if opened else None}, session=session_id)
+            finally:
+                if mode == perm.ASK:
+                    state.set(mode, by, via, time.time())
+            if not isinstance(eid, str) or not eid:
+                raise CommandFailed("audit_failed", "permission mode consent could not be saved")
+            state.set(mode, by, via, time.time(), eid)
+
+    def permissions_snapshot(self, session_id: str = "") -> dict:
+        available = not self.executor_required and self.settings.mode == "enforce"
+        snap = self.permission_state(session_id).snapshot(session_id, available)
+        if not available:
+            snap["mode"], snap["reason"] = perm.ASK, (perm.REQUIRED_REFUSAL if self.executor_required
+                                                     else "bypass requires the enforcing gate")
+        return snap
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -562,13 +631,26 @@ class Gate:
         if grant:
             d.outcome, d.rule = "allow", "grant"
             d.reason += f"; standing grant {grant['id']} (until {_iso(grant['expires'])})"
+        state = self.permission_state(session_id)
+        bypass = (state.mode == perm.BYPASS and not self.executor_required and self.settings.mode == "enforce"
+                  and not self._policy_error and self.changed_policies() is None
+                  and not perm.protected(c, d, verdict, pol))
+        would = {"outcome": d.outcome, "rule": d.rule, "reason": d.reason}
+        if bypass:
+            d.outcome, d.rule = "allow", "bypass"
+            d.reason += "; session permission approval bypassed an ordinary ask"
         default = str(pol["gates"].get("ask_default") or "skip")
         body = {
             "gate": PLUGIN_ID, "phase": "decision", "tool": tool, "outcome": d.outcome,
-            "classification": c.as_dict(), "decision": d.as_dict(), "mode": self.settings.mode, "risk": risk or None,
+            "classification": c.as_dict(), "decision": d.as_dict(), "mode": self.settings.mode,
+            "permission_mode": state.mode if self.settings.mode == "enforce" and not self.executor_required else perm.ASK,
+            "risk": risk or None,
             "tool_call_id": tool_call_id or None,
             "args_sha256": hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode("utf-8")).hexdigest(),
         }
+        if bypass:
+            body["decided_by"] = "bypass"
+            body["bypass"] = {**would, "by": state.by, "since": state.since, "consent_id": state.consent_id}
         if verdict:
             body["decision_model"] = {"verdict": verdict, **(via or {})}
         if grant:
@@ -617,7 +699,20 @@ class Gate:
         if d.outcome in ("allow", "log") and c.cost:
             with self._lock:
                 self._spent[today] = self._spent.get(today, 0.0) + float(c.cost)
-        eid = self._append(body, session=session_id)
+        try:
+            eid = self._append(body, session=session_id, refs=(state.consent_id,) if bypass else ())
+            if bypass and (not isinstance(eid, str) or not eid):
+                raise GateAuditError("Bypass decision audit could not be saved")
+        except Exception:
+            if bypass:
+                return {"action": "block", "message": "Bypass decision audit could not be saved"}
+            raise
+        if state.mode == perm.BYPASS:
+            with self._lock:
+                if bypass:
+                    state.auto_approved += 1
+                elif d.outcome == "ask":
+                    state.floor_asks += 1
         if result and result["action"] == "approve":
             with self._lock:
                 scope = {"rule": c.category, "target": c.target or tool, "binding": binding, "outward": outward,
@@ -757,6 +852,20 @@ def gate_command(g: "Gate", args: str = "") -> str:
     return "policy files changed this session; the stricter of old and new applies. Run /gate accept to adopt them."
 
 
+async def permissions_command(g: "Gate", args: str = "", session_id: str = "",
+                              request_approval: Callable | None = None) -> Any:
+    """D-065: show status or request an explicit session-bound mode approval."""
+    words = (args or "").split()
+    if words == ["json"]:
+        return g.permissions_snapshot(session_id)
+    if words[:1] in (["bypass"], ["ask"]) and words[1:] in ([], ["launch"]):
+        await g.set_permissions(words[0], "launch flag" if words[1:] else "/permissions",
+                                session_id, request_approval)
+    elif words not in ([], ["status"]):
+        return "usage: permissions [status] | bypass | ask"
+    return perm.status_text(g.permission_state(session_id), session_id)
+
+
 def _iso(ts: float) -> str:
     return _dt.datetime.fromtimestamp(float(ts), _dt.timezone.utc).isoformat(timespec="seconds")
 
@@ -800,6 +909,9 @@ def register(ctx) -> Gate:
                     "[list] | revoke <id>")
             reg_cmd("gate", lambda args="": gate_command(g, args), "Show or accept policy files changed this session",
                     "[status] | accept")
+            reg_cmd("permissions", lambda args="", session_id="", request_approval=None:
+                    permissions_command(g, args, session_id, request_approval),
+                    "Session permission status or explicit bypass approval", "[status] | bypass | ask")
         except Exception:
             logger.warning("exo-gate: could not register /grants or /gate", exc_info=True)
     return g

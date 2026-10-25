@@ -2258,3 +2258,31 @@ TCP and stdio callers remain local even when they possess a transport bearer tok
 Two other body fields cannot claim the principal. `peers send` with `via="human"` from a non-principal caller
 goes out as `via="agent"`, so the receiving daemon gives it `same-principal` trust, not `principal`. `unsteer`
 from a non-principal caller can pull back only steers that the principal did not write.
+
+## Session permission mode (D-065, issue #96 draft)
+
+`/permissions bypass` opens an approval card for the current session. It offers allow and deny, with the
+principal as the sole approver. The existing approval desk binds the choice to a digest of `{mode, session}`.
+Principal answers use D-039/D-060 transport authentication. Seat answers normally use `exo.approval.v1`, but
+seats and peers cannot approve this mode change. A signed consent row must commit before mode changes.
+Deny, cancellation, expired caller authority, an intervening mode change or a failed audit leaves ask mode.
+
+The terminal launch flag `--skip-permissions` (alias `--dangerously-skip-permissions`) requests the same
+approval after the event pump starts. It does not grant consent itself. A `permissions: bypass` banner shows
+its auto-approved count. `/permissions ask` restores ordinary approval prompts, including when audit fails.
+`/new` starts in ask mode. Resuming the same session retains its in-memory mode until the core restarts.
+There is no seat-file default or persistent global mode. This draft covers the terminal, not web controls.
+
+Bypass lowers only ordinary asks. Any irreversible, public or third-party action stays protected, as do
+nested compound parts, explicit denies, reserved actions, credential and store paths (including schedule.sqlite),
+posting violations, any classification signal, opaque code, spend, escalated categories, operator floors and
+decision-model asks. Signal-bearing parts remain protected even if a category or rule retains the ask label.
+Changed or unreadable policies also prevent bypass until the policy is accepted or repaired. A required executor
+or observing gate refuses bypass. Each lowered call records its exact argument digest, original decision,
+`decided_by: bypass` and a reference to its signed mode consent. Failure to commit that record blocks the call.
+
+The command handler receives a validated session ID and the existing approval desk through optional arguments.
+Dispatch reuses `call_plugin` to pass accepted keywords, including both to handlers taking `**kwargs`, and
+`maybe_await` to accept sync or async results. Unknown commands are rejected before session validation.
+Legacy plugin handlers retain their one-argument contract. Tests use temporary homes, fake models, fixture keys
+and classification-only shell strings. No test enables the installed runtime or runs a protected command.
