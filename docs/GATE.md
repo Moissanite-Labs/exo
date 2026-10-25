@@ -8,6 +8,22 @@ it, how long "always" lasts, and the sweep for internal names in outbound posts.
 shell classifier an allowlist and put the store itself behind the gate (see the last three sections).
 D-081 keeps the decision model's second opinion off the main model (see "The decision model's second opinion").
 
+## Escalation policy types (#542)
+
+In `policies/gates.yaml`, `escalate` must be a mapping. When present, its `categories` value must be a list:
+
+```yaml
+escalate:
+  categories: [payment, account, credentials]
+```
+
+The policy loader raises `PolicyError` for a list, scalar or null in place of the mapping, or a non-list
+`categories` value. These mistakes used to retain defaults silently or compare a category with a substring of
+a string. Omitted settings and an empty mapping retain the defaults. `categories: []` disables category
+escalation, while independent floors, reserved entries, denies and other escalation checks still apply.
+Valid mappings keep their existing behavior.
+The plugin's existing policy-error path logs the error, records it with the decision and uses defaults.
+
 ## Required executor audit
 
 With a required tool executor, the gate refuses execution unless its signed
