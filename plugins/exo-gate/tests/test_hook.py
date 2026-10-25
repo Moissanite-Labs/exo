@@ -189,6 +189,20 @@ def test_bad_policy_file_falls_back_to_defaults(keyed_store):
     assert "policy error" in events(store)[-1]["body"]["decision"]["reason"]
 
 
+@pytest.mark.parametrize("yaml, error", [
+    ("escalate: [read]\n", "gates.escalate must be a mapping"),
+    ("escalate: {categories: read}\n", "gates.escalate.categories must be a list"),
+])
+def test_malformed_escalation_reports_the_policy_error_in_the_hook(keyed_store, yaml, error, caplog):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text(yaml)
+    _, ctx = make_gate(store, key)
+    assert call(ctx, "terminal", {"command": "ls"}) is None
+    [ev] = events(store)
+    assert "policy error" in ev["body"]["decision"]["reason"]
+    assert error in caplog.text
+
+
 def test_policy_reload_on_change(keyed_store):
     store, key = keyed_store
     g, ctx = make_gate(store, key)
