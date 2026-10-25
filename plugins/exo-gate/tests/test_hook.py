@@ -66,6 +66,21 @@ def test_allow_returns_none_and_records(keyed_store):
         assert led.verify()["ok"]
 
 
+@pytest.mark.parametrize("secret", [False, True])
+def test_codex_patch_move_to_is_gated_before_execution(keyed_store, tmp_path, secret):
+    store, key = keyed_store
+    destination = tmp_path / ".ssh" / "config" if secret else store / "policies" / "gates.yaml"
+    before = destination.read_bytes() if destination.exists() else None
+    _, ctx = make_gate(store, key)
+    result = call(ctx, "apply_patch", {"patch": "*** Begin Patch\n*** Update File: src.txt\n"
+                  f"*** Move to: {destination}\n@@\n-before\n+after\n*** End Patch\n"})
+    assert result["action"] == "approve"
+    [ev] = events(store)
+    assert ev["body"]["outcome"] == "ask"
+    assert ev["body"]["classification"]["category"] == ("credentials" if secret else "store_write")
+    assert (destination.read_bytes() if destination.exists() else None) == before
+
+
 def test_ask_returns_approve_with_summary_link_default(keyed_store):
     store, key = keyed_store
     _, ctx = make_gate(store, key)
