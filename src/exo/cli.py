@@ -212,8 +212,9 @@ def cmd_keygen(a) -> int:
 
 
 def cmd_keys(a) -> int:
-    """`exo keys [list]`, `exo keys pin NAME PUB [--seat] [--replace]`, `exo keys principal ID` (D-040)."""
+    """`exo keys [list]`, `exo keys pin NAME PUB [--seat|--peer] [--replace]`, `exo keys principal ID` (D-040)."""
     from . import crypto
+    from .core.seats import ID_RE as SEAT_ID
     from .keyring import KeyRegistry
     reg = KeyRegistry.load()
     if a.keys_cmd == 'pin':
@@ -222,7 +223,14 @@ def cmd_keys(a) -> int:
             crypto.unb64(pub)
         except ValueError:
             sys.exit('exo keys pin: PUB must be a base64 public key or a .pub file')
-        out = (reg.pin_seat if a.seat else reg.pin)(a.name, pub, replace=a.replace)
+        if a.seat and a.peer:
+            sys.exit('exo keys pin: --seat is a bus seat and --peer a peer seat of another home; pass one')
+        if a.peer and not SEAT_ID.fullmatch(a.name):
+            sys.exit(f'exo keys pin: {a.name!r} is not a seat name (lowercase letters, digits, - and _)')
+        if a.seat:
+            out = reg.pin_seat(a.name, pub, replace=a.replace)
+        else:
+            out = reg.pin(a.name, pub, replace=a.replace, peer=a.peer)
         print(f'{a.name}: {out}' + (' (use --replace to change a pinned key)' if out in ('conflict', 'changed') else ''))
         return 0 if out in ('pinned', 'known', 'match') else 1
     if a.keys_cmd == 'principal':
@@ -237,6 +245,8 @@ def cmd_keys(a) -> int:
         print(f'  key   {name:<20} {", ".join(pubs)}')
     for seat, pub in sorted(reg.seats.items()):
         print(f'  seat  {seat:<20} {pub}')
+    for seat, pubs in sorted(reg.peers.items()):
+        print(f'  peer  {seat:<20} {", ".join(pubs)}')
     print(f'  principal ids: {", ".join(reg.principals) or "(none)"}')
     return 0
 
@@ -352,6 +362,8 @@ def build_parser(cmd: str | None = None) -> argparse.ArgumentParser:
     q.add_argument('name')
     q.add_argument('pub', help='base64 public key, or a .pub file')
     q.add_argument('--seat', action='store_true', help='NAME is a bus seat')
+    q.add_argument('--peer', action='store_true', help='NAME is a peer seat of another home: checks its peer messages, '
+                   'never signs a ledger')
     q.add_argument('--replace', action='store_true', help='replace the key already pinned for NAME')
     q = kp.add_parser('principal', help='mark a ledger author id as the principal')
     q.add_argument('name')

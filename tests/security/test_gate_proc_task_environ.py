@@ -2,6 +2,8 @@
 /proc/<pid>/environ, so it is a secret store too.
 
 Every check classifies; nothing is run."""
+import os
+
 import pytest
 
 from exo import gate
@@ -33,7 +35,11 @@ def env(tmp_path, monkeypatch):
     "cat '/proc/self/task/1/environ'",
     'cat "/proc/self/task/"*/environ',
     "cat /proc/self/ta\\sk/1/environ",
-    "cat /proc/self/task//1/environ",
+    # The gate resolves /proc/self, a link on Linux, and the resolved path has no doubled slash. Where /proc/self
+    # is not a link, the row is matched as written and reads.
+    pytest.param("cat /proc/self/task//1/environ",
+                 marks=pytest.mark.skipif(not os.path.islink("/proc/self"),
+                                          reason="needs /proc/self to be a link, as on Linux")),
     "cd /proc/self/task/1 && cat environ",
 ])
 def test_a_task_environ_read_asks(line):
@@ -111,12 +117,12 @@ def test_a_task_environ_decides_as_the_direct_one(action, policy):
     assert decided("/proc/self/task/1/environ") == decided("/proc/self/environ")
 
 
-# The same amendment: beside a store write the line is credentials, as with the direct form, so a seat delegated
-# credentials may answer it. The outcome stays an ask, so only the category and the approvers show the change.
+# The same amendment: beside a store write the line is credentials, as with the direct form. Since #447 the store
+# write part keeps the answer with the principal alone (gate.call_approvers), for both forms.
 def test_a_store_write_beside_a_task_environ_has_the_direct_ones_approvers():
     approvals = {"default": ["principal", "seat:builder"]}
 
     def who(path):
         c = gate.classify({"tool": "bash", "args": {"command": f"cat {path}; echo x > ~/.exo/policies/gates.yaml"}})
-        return c.category, gate.approvers_for(c.category, approvals)
-    assert who("/proc/self/task/1/environ") == who("/proc/self/environ")
+        return c.category, gate.call_approvers(c, approvals)
+    assert who("/proc/self/task/1/environ") == who("/proc/self/environ") == ("credentials", ["principal"])

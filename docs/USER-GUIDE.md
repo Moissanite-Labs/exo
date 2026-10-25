@@ -321,12 +321,16 @@ What the gate asks about, and why:
   `.env`, Exo's keys and `run/`) and says how many it skipped; the agent must name one to read it, which asks
   (#241). The gate judges a read by the path it names, so a shell walk from a folder above (`grep -r token
   ~/.exo`) is still an ordinary read, and so is a harmlessly named symbolic link to a key file, read by its own
-  name (#209). `docs/GATE.md` lists the other spellings it misses.
+  name (#209). A read by a short name inside a secret store asks too when the shell tool was told to run there
+  (its `cwd` or `workdir`), as it does after a `cd` there: `cat config` run in `~/.kube` asks every time and offers
+  no "always" (#311). `docs/GATE.md` lists the other spellings it misses.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another. A post whose text the gate cannot
   read (piped in, a file given by a relative path, `$( )` or a variable) asks, and offers no "always". The gate
-  reads a body file given by its full path.
+  reads a body file given by its full path. When the gate cannot tell which repo a `gh` command acts on, it reads
+  the command on each one, and the question names the others ("It may land on pub/repo#7 instead."). A deny in
+  your policy for any of them holds. An "always" on such a command covers that exact command only (#399).
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
   the post and lists what it found. The sweep and the exact-text check see only text the gate can read, so a body
   it cannot read asks instead (#208, above).
@@ -339,7 +343,8 @@ What the gate asks about, and why:
   trusted by name, so a test runner still runs your project's files. Options of trusted programs that run a
   command (`tar --to-command`, `rsync -e`, `ssh -o ProxyCommand` and the like) are read as the command they run
   (#164). A variable that loads code or changes where programs and config are found asks when the line sets it
-  (`LD_PRELOAD`, `PATH`, `PYTHONPATH`, `HOME`, git config through `git -c` or `GIT_CONFIG_*`; #231). Common setups
+  (`LD_PRELOAD`, `PATH`, `PYTHONPATH`, `HOME`, git config through `git -c` or `GIT_CONFIG_*`; #231), and so does
+  `unset PATH`, since bash then looks programs up in the current folder (#329). Common setups
   still run: `PATH=$PATH:./node_modules/.bin`, a virtualenv's `bin` first in `PATH`, `PYTHONPATH=src python -m
   pytest` and `GIT_CONFIG_GLOBAL=/dev/null`. Any other folder in `PATH`, such as
   `export PATH="$HOME/.local/bin:$PATH"`, asks. A `$( )` inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the
@@ -353,7 +358,9 @@ What the gate asks about, and why:
 - **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
   against each command the gate reads on a line, so with pushes denied `git push origin main && rm -rf build` is
   denied, not asked about the delete. A `categories: {X: deny}` setting or a rule with `decision: deny` holds the
-  same way (#191).
+  same way (#191), and so does a `matrix:` cell set to `deny` for one command on the line (#464). A store write on
+  the line no longer hides those denies, and a file tool on a store or secret path keeps them too: under
+  `deny: [delete]`, `delete_file ~/.exo/state/x` is denied rather than asked about (#448).
 - **An allow rule names the command it allows (#394).** A rule with `decision: allow` or `log` and a `command:` regex
   lowers a line of several commands, or a command with another run inside it (`ssh host '...'`, `bash -c '...'`,
   `eval`), only when the regex matches the line, as before, and also the command that decides the line, as you wrote
@@ -368,13 +375,16 @@ What the gate asks about, and why:
   whole line, but an ask rule lifts a deny only from the commands it names. `docs/GATE.md` has the details.
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, the core's socket, or the signed-update trust pin in `update/`
-  (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. Reading your policies does
-  not ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves
-  symbolic links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some
-  writes are not seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working
-  folder is `policies/`, a glob spelling, a hard link, and a store file opened on a numbered file descriptor and
-  written back through `/dev/fd/3` (#217). A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md` lists
-  the rest.
+  (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. So does a write into
+  `~/.exo/plugins` (#435), because Exo loads and runs the code it finds there. To work on a plugin, point
+  `EXO_PLUGIN_DIRS` at your copy instead. Only you can answer such a write, whatever `approvals.yaml` says, also
+  when the same command or file tool names a secret that a seat may approve (#447). Reading your policies or plugins
+  with `cat`, `grep` or a read tool does not ask. Some other commands that only read, such as `sed -n` or `sort`, do
+  ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves symbolic
+  links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some writes are not
+  seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working folder is
+  `policies/`, a glob spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md`
+  lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
   This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length
@@ -409,9 +419,22 @@ Peers are other live sessions on the machine: Exo sessions, Hermes agents and bu
 - Your own sessions deliver at once. A message from another person, or from a bus seat, is held until you allow it.
   A held message that nobody answers expires after 30 minutes.
 - A peer message shows as "from another session, not from you". It is input, not an order.
-- The receiving side trusts the key in the sender's presence file, which any program running as you can write. So
-  such a program can send a message that is labelled as you typing in another client, or as one of your sessions,
-  and is delivered at once (#132).
+- A peer counts as one of your sessions only when this Exo home holds its key and names you as its principal. Seats
+  that share one home hold each other's keys in `$EXO_HOME/keys/`, and each seat file names its principal, so they
+  deliver at once. A peer whose key this home does not hold is held, and the card says `key not pinned`. A presence
+  file that claims your name changes nothing (#132).
+- An unseated daemon or a Hermes profile on this home has no seat file. Toward a daemon with no seat principal of
+  its own, it counts as the principal `config.json` names (`exo config set principal <id>`). If it runs as another
+  principal (`EXO_PRINCIPAL`), its messages are held for you. A seat whose seat file names a principal holds its
+  messages for you too. To have them delivered at once, give it a seat file that names you:
+  `$EXO_HOME/seats/<name>.toml` with `principal = "<id>"`.
+- A seat from another home: copy its key from `<that home>/keys/<seat>.pub` and run `exo keys pin --peer <seat>
+  <key>` here. Its messages are then checked against that key, and still held for you. A `[peers] rules` entry for
+  its name delivers them at once. A message under a name whose key this home holds, signed by another key, is
+  refused. Use `--peer`: a plain `exo keys pin` also lets that key sign your ledgers.
+- If a seat's key was made again, its messages are refused until you pin the new key:
+  `exo keys pin <seat> $EXO_HOME/keys/<seat>.pub --replace`. A Hermes profile's name must be a seat id (lowercase
+  letters, digits, `-` and `_`), or its messages are refused. `docs/PEERS.md` "Peer keys" lists these cases.
 - A bus seat's message is checked against the key Exo pinned for that seat the first time, held for you by default,
   and answered on the bus only if your rules let that seat through on its own. `exo keys` shows the pinned seats.
 
@@ -504,7 +527,7 @@ Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` onc
 | `exo log append <kind> --author NAME --text "..."` | Adds one signed event. Kinds include `note`, `ruling`, `utterance`, `question`, `answer`. Needs the author's key. |
 | `exo log verify` | Re-checks every event, link and signature. Each key must be one Exo pinned, and the ledger must still reach the last head it recorded. Prints `{"ok": true, ...}` or fails. Run it when something feels off. |
 | `exo memory verify` | The same check for every store, plus each agent's memory log. A ledger that was cut short, edited or deleted fails here. A warning after `ok` (in `exo log verify`, a `warning` field) means the copy of the head it names is not being written: make that file writable again. |
-| `exo keys` | The keys Exo trusts: its own signing keys, the bus seats it has seen, and which ledger names are you. `exo keys pin` adds or replaces one. |
+| `exo keys` | The keys Exo trusts: its own signing keys, the bus seats it has seen, the peer seats of other homes you pinned, and which ledger names are you. `exo keys pin` adds or replaces one (`--peer` for a peer seat). |
 | `exo log tail` | The last events. `-n 20` for more, `--kind ruling` to filter. |
 
 Example: make a key, write a note, check the chain.
