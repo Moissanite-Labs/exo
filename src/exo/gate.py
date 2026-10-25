@@ -5929,11 +5929,13 @@ def _root_links(path: str) -> Iterator[str]:
 
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str], hop: bool = True) -> bool:
     raw, written = tok.rpartition("/")[0], tok           # its folder as written: a link resolves before its `..`
-    tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
+    # run/./*, run//* and run/jobs/../* are run/*. normpath keeps exactly two leading slashes, which the kernel reads
+    # as one: `/$HOME/.kube/conf*`, and the rest after a root link, `/proc/self/root/$HOME/...` (#513 review)
+    tok = re.sub(r"^//+", "/", os.path.normpath(tok))
     proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ, or a thread's (#199, #313)
     if proc and (proc[1] is None or _glob_names(proc[1], ("task",))) and _glob_names(proc[2], ("environ",)):
         return True
-    # #446: a top folder that could be /proc (`/pro?`, `/[p]roc`, `/p*`, and `//proc`, which normpath keeps) is it
+    # #446: a top folder that could be /proc (`/pro?`, `/[p]roc`, `/p*`) is it
     top, _, rest = tok.lstrip("/").partition("/")
     if tok[:1] == "/" and rest and f"/proc/{rest}" != tok and _glob_names(top, ("proc",)) and \
             _glob_word(f"/proc/{rest}", home, samples, secrets, runs, hop):
@@ -6760,6 +6762,20 @@ def _glob_any(value: str, patterns: Iterable[str]) -> bool:
     return bool(v) and any(fnmatch.fnmatchcase(v, str(p).lower()) for p in patterns)
 
 
+def _target_glob(target: str, patterns: Iterable[str], veto: bool) -> bool:
+    """Whether a `target` pattern matches the target as written or, for a deny, ask or reserved entry (``veto``), in
+    its lexical form: `//` and `/./` collapsed and `x/..` resolved, as the kernel reads the path before any link, and a
+    leading `//` read as `/` (#513 review). An odd spelling of a store is the line's target where it is the first store
+    (#446), so `cat ~/.kube//config ~/.ssh/id_rsa` meets `deny: [target:*/.kube/config]` as its plain spelling does.
+    An allow rule and a scope still read the target as written, so this only raises a decision."""
+    patterns = list(patterns)
+    if _glob_any(target, patterns):
+        return True
+    if not veto or not target:          # no target is no path: normpath would make it `.`
+        return False
+    return _glob_any(re.sub(r"^//+", "/", os.path.normpath(target)), patterns)
+
+
 def _as_list(v: Any) -> list:
     return v if isinstance(v, list) else [v]
 
@@ -6811,7 +6827,7 @@ def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False,
             return False
         if k == "tool" and not _glob_any(c.tool, _as_list(want)):
             return False
-        if k == "target" and not _glob_any(c.target, _as_list(want)):
+        if k == "target" and not _target_glob(c.target, _as_list(want), veto):
             return False
         if k == "command" and not any(_command_matches(str(p), c, veto=veto, line=line) for p in _as_list(want)):
             return False
@@ -6844,7 +6860,7 @@ def _list_matches(entries: Iterable, c: Classification, line: Callable[[str], bo
         kind, _, val = s.partition(":")
         if kind == "tool" and _glob_any(c.tool, [val.strip()]):
             return s
-        if kind == "target" and _glob_any(c.target, [val.strip()]):
+        if kind == "target" and _target_glob(c.target, [val.strip()], True):
             return s
         if kind == "command" and val.strip() and _command_matches(val.strip(), c, veto=True, line=line):
             return s
@@ -6988,9 +7004,9 @@ def _override_deny(c: Classification, gates: Mapping,
             break
         if first is not None:
             out, why, step = first["decision"], first["reason"], "rule"
-        if out != "deny":
-            veto = next((r for r in rules if r["decision"] == "deny" and "command" in r["match"]
-                         and _rule_matches(r["match"], p, veto=True, line=line)), None)
+        if out != "deny":   # a deny rule keyed on `target` also sees the part's lexical target (#513 review)
+            veto = next((r for r in rules if r["decision"] == "deny" and ("command" in r["match"] or "target" in
+                         r["match"]) and _rule_matches(r["match"], p, veto=True, line=line)), None)
             if veto is None:
                 continue
             why, step = veto["reason"], "rule"
@@ -7194,11 +7210,11 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
             if rule == "matrix":
                 rule = step
 
-    # A deny or ask rule keyed on `command:` also sees the literal-word view (#136), and can only raise.
-    # A rule the command text matched was settled by the first-match pass above, whatever its place
-    # in the list, so this never changes an outcome the view did not add to.
+    # A deny or ask rule keyed on `command:` also sees the literal-word view (#136), and one keyed on `target` the
+    # target's lexical form (#513 review), and can only raise. A rule the command text matched was settled by the
+    # first-match pass above, whatever its place in the list, so this never changes an outcome the view did not add to.
     for r in gates.get("rules") or []:
-        if r["decision"] in ("ask", "deny") and "command" in r["match"] \
+        if r["decision"] in ("ask", "deny") and ("command" in r["match"] or "target" in r["match"]) \
                 and not _rule_matches(r["match"], eff) and _rule_matches(r["match"], eff, veto=True):
             bump(r["decision"], r["reason"], "rule")
 

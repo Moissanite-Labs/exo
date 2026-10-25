@@ -198,7 +198,7 @@ def test_a_relative_key_store_write_is_credentials():
     "cat /p*/*/env*",
     "cat /*/*/environ",
     "cat //pro?/self/environ",
-    "cat //proc/self/env*",                      # normpath keeps a leading `//`
+    "cat //proc/self/env*",                      # a leading `//` is `/`, which normpath keeps
 ])
 def test_a_glob_that_could_be_proc_asks(line):
     assert bash(line) == ("credentials", "ask")
@@ -242,6 +242,27 @@ def test_dotdot_right_after_a_process_root_link_stays_at_root(line):
 
 def test_dotdot_after_a_root_link_into_a_home_store_asks(env):
     assert bash(f"cat /proc/self/root/..{env}/.kube/conf*") == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("line", [
+    # #513 fourth review: normpath keeps exactly two leading slashes, which the kernel reads as one, so the rest after
+    # a root link (`//<home>/.kube/conf*`) and `/$HOME/...` missed the home store samples
+    "cat /proc/self/root/$HOME/.kube/conf*",
+    "cat /proc/1/root/$HOME/.kube/conf*",
+    "cat /proc/self/cwd/$HOME/.kube/conf*",
+    "cat /$HOME/.docker/conf*",
+    "cat /$HOME/.config/gh/host*",
+    "ls /$HOME/.kube/conf*",
+    "sudo cat /proc/self/root/$HOME/.kube/conf*",
+    "bash -c 'cat /$HOME/.docker/conf*'",
+])
+def test_a_glob_with_two_leading_slashes_before_a_home_store_asks(line):
+    assert bash(line) == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("line", ["cat /$HOME/notes/conf*", "ls /proc/self/root/$HOME/src/*.py"])
+def test_a_glob_with_two_leading_slashes_that_names_no_store_stays_a_read(line):
+    assert bash(line) == ("read", "allow")
 
 
 @pytest.mark.parametrize("line", [
@@ -635,3 +656,73 @@ def test_a_backslash_piece_is_the_target_only_when_nothing_else_names_the_store(
 def test_a_shell_read_keeps_its_read_deny():
     # D-075: the read stays a part of the shell line, so a read deny still denies it.
     assert full("cat ~/.kube//config", STRICT[0])[:2] == ("credentials", "deny")
+
+
+# --- a target entry and the target's lexical form (#513 fourth review) ---------------------------------------------
+
+# An odd spelling of the first store on a line is its target (group 2). A `target:` entry for it matched only the
+# target as written, so with an entry for each of two stores the line asked, where main (whose target was the second
+# store) and the plain spelling deny. A deny or reserved entry, and a deny or ask rule keyed on `target`, now also
+# match the target's lexical form.
+BOTH = [
+    {"gates": {"deny": ["target:*/.kube/config", "target:*/.ssh/*"]}},
+    {"gates": {"reserved": ["target:*/.kube/config", "target:*/.ssh/*"]}},
+    {"gates": {"rules": [{"match": {"target": "*/.kube/config"}, "decision": "deny", "reason": "kube"},
+                         {"match": {"target": "*/.ssh/*"}, "decision": "deny", "reason": "ssh"}]}},
+    {"gates": {"deny": [{"match": {"target": ["*/.kube/config", "*/.ssh/*"]}}]}},
+]
+TWO_STORES = [
+    ("cat ~/.kube//config ~/.ssh/id_rsa", "cat ~/.kube/config ~/.ssh/id_rsa"),
+    ("cat ~/.kube//config; cat ~/.ssh/id_rsa", "cat ~/.kube/config; cat ~/.ssh/id_rsa"),
+    ("cat ~/.kube/x/../config ~/.ssh/id_rsa", "cat ~/.kube/config ~/.ssh/id_rsa"),
+    ("cat ~/.kube/./config ~/.ssh/id_rsa", "cat ~/.kube/config ~/.ssh/id_rsa"),
+    ("sudo cat ~/.kube//config ~/.ssh/id_rsa", "sudo cat ~/.kube/config ~/.ssh/id_rsa"),
+    ("bash -c 'cat ~/.kube//config; cat ~/.ssh/id_rsa'", "bash -c 'cat ~/.kube/config; cat ~/.ssh/id_rsa'"),
+    ("cp ~/.kube/./config ~/.ssh/id_rsa /tmp/", "cp ~/.kube/config ~/.ssh/id_rsa /tmp/"),
+]
+BACKSLASH_TWO = [("cat ~/.kube/./\\config ~/.config/gh/\\hosts.yml", "cat ~/.kube/config ~/.config/gh/hosts.yml"),
+                 ("cat ~/.kube//\\config; cat ~/.config/gh/hosts.yml", "cat ~/.kube/config; cat ~/.config/gh/hosts.yml")]
+
+
+@pytest.mark.parametrize("odd, plain, policy", [(o, p, pol) for o, p in TWO_STORES for pol in BOTH] +
+                         [(o, p, pol) for o, p in BACKSLASH_TWO for pol in TARGET[:2]])
+def test_an_odd_first_store_meets_the_target_entry_its_plain_spelling_meets(odd, plain, policy):
+    assert full(odd, policy) == full(plain, policy)
+    assert full(odd, policy)[1] == ("ask" if "reserved" in policy.get("gates", {}) else "deny")
+
+
+@pytest.mark.parametrize("call, policy", [
+    ("cat ~/.kube//config", {"gates": {"deny": ["target:*/.kube/config"]}}),
+    ("cat ~/.ssh//id_rsa", {"gates": {"deny": ["target:*/.ssh/id_rsa"]}}),
+    ("cp /tmp/a ~/.kube/x/../config", {"gates": {"deny": ["target:*/.kube/config"]}}),
+    ({"tool": "read_file", "args": {"path": "~/.kube/./config"}}, {"gates": {"deny": ["target:*/.kube/config"]}}),
+    ("echo x > //etc/x", {"gates": {"deny": ["target:/etc/*"]}}),        # a leading `//` is `/`
+    ("echo x > /tmp//y", {"gates": {"rules": [{"match": {"target": "/tmp/y"}, "decision": "deny", "reason": "r"}]}}),
+    ("echo x > /tmp/./y; ls", {"gates": {"rules": [{"match": {"target": "/tmp/y", "category": "local_write"},
+                                                    "decision": "deny", "reason": "r"}]}}),
+    # a part below the line's target: the rule denies it as that command alone (#191), as for `/tmp/y`
+    ("echo x > /tmp/a; echo y > /tmp//y", {"gates": {"rules": [{"match": {"target": "/tmp/y"}, "decision": "deny",
+                                                                "reason": "r"}]}}),
+])
+def test_a_target_entry_matches_the_lexical_form_of_a_path(call, policy):
+    assert full(call, policy)[1] == "deny"
+
+
+def test_an_ask_rule_on_a_target_matches_its_lexical_form():
+    policy = {"gates": {"rules": [{"match": {"target": "/tmp/y"}, "decision": "ask", "reason": "r"}]}}
+    assert full("echo x > /tmp//y", policy)[1] == "ask"
+    assert full("echo x > /tmp//z", policy)[1] == "allow"
+
+
+@pytest.mark.parametrize("line", ["echo x > /var/../tmp/y", "echo x > /tmp//y"])
+def test_an_allow_rule_on_a_target_reads_it_as_written(line):
+    # The lexical form only raises: an allow rule for `/tmp/y` does not lift a line whose target only reads as it
+    policy = {"gates": {"categories": {"local_write": "ask"},
+                        "rules": [{"match": {"target": "/tmp/y"}, "decision": "allow", "reason": "r"}]}}
+    assert full(line, policy)[1] == "ask"
+    assert full("echo x > /tmp/y", policy)[1] == "allow"
+
+
+def test_a_line_with_no_target_meets_no_target_entry():
+    # normpath reads an empty target as `.`, which `target:*` would match
+    assert full("ls", {"gates": {"deny": ["target:*"]}})[1] == "allow"
