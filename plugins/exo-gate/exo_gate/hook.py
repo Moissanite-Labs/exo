@@ -536,14 +536,18 @@ class Gate:
             d2 = gate.decide(c, changed, ctx)
             if _RANK[d2.outcome] > _RANK[d.outcome]:
                 d = d2
-            # A part reserved under either policy keeps its ask from a standing grant (D-075).
+            # A part reserved under either policy keeps its ask from a standing grant (D-075), and so does a sudo write
+            # line whose displaced part asks under either (#454).
             d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
+            d.displaced_asks = d.displaced_asks or d2.displaced_asks
             d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
         if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
             d.reason += f" (registry risk is high and {tool} is not a known tool)"
             d.outcome = "ask"
-        if self.executor_required and d.outcome != "deny" and any(x.text_file or gate.body_unseen(x)
-                                                                  for x in _readings(c)):
+        # #454: a sudo write line carries the body file of the part it displaced there (`sudo gh ... -F /tmp/b > f`)
+        if self.executor_required and d.outcome != "deny" and any(
+                x.text_file or (x.displaced is not None and x.displaced.text_file) or gate.body_unseen(x)
+                for x in _readings(c)):
             # The gate cannot approve contents it has not seen (#208): a body file, stdin, @file, an expansion.
             # In either reading of the line (#399): `gh pr "$V" 5 -F f` has its body file only as read before.
             d.outcome, d.rule = "deny", "required"
@@ -597,6 +601,14 @@ class Gate:
                 # #399: only who may answer the line as read before too. The principal is in every list.
                 allowed = set(gate.strictest_approvers(x.category, pol.get("approvals"), changed_approvals))
                 approvers = [a for a in approvers if a in allowed]
+            for x in _readings(c):
+                if x.displaced is not None and (x is not c or x.displaced.target or d.displaced_asks):
+                    # #454: a sudo write line is also about the repo or host its displaced part names, or asks with
+                    # that part leading, so only who may answer that part's category too may answer it. The line as
+                    # read before #399 keeps its displaced part's approvers always, as #399 keeps that reading's:
+                    # `sudo gh pr "$V" 5 > /tmp/f` is a sudo write line only as read before.
+                    also = set(gate.strictest_approvers(x.displaced.category, pol.get("approvals"), changed_approvals))
+                    approvers = [a for a in approvers if a in also]
             # persist: this gate keeps "always" grants itself (scoped, expiring, in the store), so the
             # core must not also keep an unscoped one in memory.
             approval_key = "a_" + secrets.token_hex(16)
@@ -664,7 +676,9 @@ class Gate:
             return None
         # D-075: a grant covers the act it was given for. A reserved entry that matched another part of
         # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.
-        if any(hit != (c.category, c.target) for hit in d.reserved):
+        # #454: a sudo write line is also the act of the part its write displaced, which led it before, so a hit on
+        # the write keeps the ask too, as it did then (`sudo echo hi > /tmp/f` under `reserved: [local_write]`).
+        if any(hit != (x.category, x.target) for x in (c, c.displaced) if x is not None for hit in d.reserved):
             return None
         try:
             return self.grants.match(c.category, c.target or c.tool, binding, outward)

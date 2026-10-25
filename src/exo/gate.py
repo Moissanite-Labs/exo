@@ -149,11 +149,15 @@ class Classification:
     # The signals this part carried before _combine gave it every part's (#396), so the posting checks can tell its
     # own unseen body from another post's. None for a part never combined: its signals are then its own.
     own_signals: list[str] | None = field(default=None, repr=False, compare=False)
+    # The part a sudo command's write took the lead from (#454). decide() also reads the line with that part leading,
+    # as before, and keeps the stricter outcome. None on any other result.
+    displaced: "Classification | None" = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
         d.pop("parts", None)
+        d.pop("displaced")
         d.pop("floor")
         d.pop("alt_copy")
         d.pop("_command_views")
@@ -184,6 +188,9 @@ class Decision:
     # (category, target) of each part a reserved entry matched, once each (D-075). A standing grant for the
     # line's own category must not cover a reserved part outside it, so the targets stay as written here.
     reserved: list[tuple[str, str]] = field(default_factory=list)
+    # A sudo write line read with its displaced part leading asks or denies (#454): the approval is then about that
+    # part too, so it binds to the exact line (binds_exact) and its approvers are those of both categories.
+    displaced_asks: bool = field(default=False, compare=False)
     # The other posts' violations `and N more on other posts` counts, so a merge of a line's readings counts each
     # entry one of them left out (#439 round 13). Not in the ledger view: the count stands for them there.
     hidden: list[str] = field(default_factory=list, repr=False, compare=False)
@@ -191,6 +198,7 @@ class Decision:
     def as_dict(self) -> dict:
         """Ledger view: reserved targets with URL userinfo redacted."""
         d = asdict(self)
+        d.pop("displaced_asks")
         d.pop("hidden")
         d["reserved"] = list(dict.fromkeys((cat, redact_userinfo(t)) for cat, t in self.reserved))
         return d
@@ -2866,7 +2874,7 @@ def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words)
     if prog in _PRIVILEGED_WRAPPERS:
         head.signals.append(prog)
         for p in parts:
-            p.reversibility = "costly" if p.reversibility == "reversible" else p.reversibility
+            _raise_axes(p, reversibility="costly")
     return parts
 
 
@@ -3323,8 +3331,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
     if sudo:
         parts[0].signals.append("sudo")
-        if parts[0].reversibility == "reversible":
-            parts[0].reversibility = "costly"
+        _raise_axes(parts[0], reversibility="costly")
     if k.heredocs:
         # dash and ash may end the body early and run the rest: read it as commands too. Once per line, under
         # _once's key for a shell reading it: a compound's heredoc reaches every command inside it.
@@ -3340,6 +3347,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_opaque(f"writes to a path from a variable ({t.text[:60]})", cmd))
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
+            if sudo:
+                ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
     hit = _store_touch(k, words, parts, ctx)
     hits = [hit] if hit else []
     if hit and ctx.get("fd_cwd") not in (None, hit):
@@ -3607,6 +3616,12 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         # host's category sees it also when another part of the line outranks this one.
         c.alt_targets = [t for t in dict.fromkeys(t or dest for t in c.alt_targets) if t != c.target]
         c.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in c.parts]
+        if c.displaced is not None:           # #454: the part a sudo write displaced gets the host, as it did
+            q = c.displaced                   # and so do its other targets and their copies (#399)
+            _displace_with(c, target=q.target or dest,
+                           alt_targets=[t for t in dict.fromkeys(t or dest for t in q.alt_targets)
+                                        if t != (q.target or dest)],
+                           parts=[replace(p, target=dest) if p.alt_copy and not p.target else p for p in q.parts])
         if not here:
             c.signals.append("remote host")
         if stdin is None:
@@ -4101,8 +4116,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             elif key in _SSH_EXEC_SETTINGS:
                 c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
                 if c is not None and key == "remotecommand":
-                    if EXPOSURE.index(c.exposure) < 1:
-                        c.exposure = "internal"
+                    _raise_axes(c, exposure="internal")
                     c.signals.append("remote host")
             elif key in _SSH_LIB_SETTINGS and value.strip().lower() != "internal":
                 parts.append(_opaque(f"ssh {_SSH_LIB_SETTINGS[key]} loads a library", cmd))
@@ -4342,17 +4356,64 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     return ""
 
 
+def _displace_with(c: Classification, **changes) -> None:
+    """Give the part a sudo write copy displaced (#454) a change made to the copy after it was made: the ssh host as its
+    target, or a raise in place (_raise_axes). That part is shared with stored results (_own_copy), so a changed copy
+    of it takes its place, also in c.parts."""
+    old = c.displaced
+    if old is None:
+        return
+    lead = replace(old, **changes)
+    c.parts, c.displaced = [lead if q is old else q for q in c.parts], lead
+
+
+def _raise_axes(c: Classification, exposure: str = "private", reversibility: str = "reversible") -> None:
+    """Raise c's exposure and reversibility in place to at least these: a remote command runs on the host, sudo and
+    the privileged wrappers make a reversible part costly. The part a sudo write copy displaced (#454) is raised with
+    it, so the two rank and decide alike: ssh -o RemoteCommand raised the copy alone, and _combine then ranked the
+    copy at its displaced part's old axes, where an earlier costly part took its place."""
+    def up(p: Classification) -> tuple[str, str]:
+        return (max(p.exposure, exposure, key=EXPOSURE.index),
+                max(p.reversibility, reversibility, key=REVERSIBILITY.index))
+    c.exposure, c.reversibility = up(c)
+    if c.displaced is not None and up(c.displaced) != (c.displaced.exposure, c.displaced.reversibility):
+        _displace_with(c, **dict(zip(("exposure", "reversibility"), up(c.displaced))))
+
+
 def _lead(parts: list[Classification]) -> Classification | None:
     """The part _combine keeps: the first credentials part, else the first store write, else the most severe."""
     credentials = [p for p in parts if p.category == "credentials"]
     store = [p for p in parts if p.category == "store_write"]
-    return credentials[0] if credentials else (store[0] if store else _most_severe(parts))
+    c = credentials[0] if credentials else (store[0] if store else _most_severe(parts))
+    if c is not None and c.displaced is not None:
+        # #454: match _combine's ranking before a sudo write displaced a read, also when ssh asks which part leads
+        # before filling the host (#316). Selection stays pure: only _combine changes the summary and parts.
+        at = max(range(len(parts)), key=lambda i: (*_severity(parts[i])[:3], False) if parts[i].displaced is not None
+                 else _severity(parts[i]))
+        before = parts[at].displaced or parts[at]
+        if _severity(before)[3]:
+            return before
+    return c
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
     """The most severe part, with every part's signals. A store write outranks everything but credentials."""
     signals = [s for p in parts for s in p.signals]
     c = _lead(parts) or _make("shell", command=cmd)
+    if c.displaced is not None:
+        # #454: the copy of a sudo write that a nested line (a $( ), an ssh hop) leads with is a costly write here, so
+        # it would also take the lead from a part it ties with, which led before as the first of the tie. So the
+        # parts are ranked as before too, each copy as a read with its own axes, which _raise_axes keeps in step with
+        # its displaced part's. A part that outranks a read leads again: an unknown program (`echo $(sudo echo hi >
+        # /tmp/f) $(foo)`), or ssh running its stdin. Any other is the part the copy displaces, and the summary names
+        # it, so a rule on the repo of `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line.
+        at = max(range(len(parts)), key=lambda i: (*_severity(parts[i])[:3], False) if parts[i].displaced is not None
+                 else _severity(parts[i]))
+        before = parts[at].displaced or parts[at]
+        if _severity(before)[3]:
+            c = before
+        elif before is not c.displaced:
+            c.summary, c.displaced = f"{before.summary or before.category}, write {c.target}"[:120], before
     if c.own_signals is None:
         c.own_signals = list(c.signals)
     c.signals = list(dict.fromkeys(c.signals + signals))
@@ -5052,7 +5113,19 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     if func:
         parts.append(_opaque("defines a shell function", cmd))
     setters = [k.own for k in cmds if _sets_state(k)] + ([None] if func else [])
-    c = combined = _combine(parts, cmd)
+    # #454: bash opens a redirection's file as the calling user, before sudo runs, so the write of `sudo echo hi >
+    # /tmp/f` happens either way. Sudo makes the command's own read costly, so it outranked the write. When such a
+    # part leads the line, a copy of the first sudo write with its cost leads in its place, so the line has the
+    # category it has without sudo. Every other part ranks below the copy, and a part that outranks the read (an
+    # unknown program) keeps the lead. The copy keeps the part it displaced, so decide() still reads the line with
+    # that part leading (a rule on a gh read's repo), and its summary names both. The parts stay as they are.
+    lead, writes = _most_severe(parts), ctx.get("sudo_writes")
+    if writes and lead and lead.category in ("read", "shell") and lead.exposure == "private" and not lead.third_party:
+        top = replace(writes[0], reversibility=lead.reversibility, displaced=lead,
+                      summary=f"{lead.summary or lead.category}, write {writes[0].target}"[:120])
+        c = combined = _combine([top, *parts], cmd)
+    else:
+        c = combined = _combine(parts, cmd)
 
     def weigh(line: Classification) -> Classification:
         """A secret beside an irreversible command keeps that command's weight: the line takes it from its own parts.
@@ -6722,6 +6795,20 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         base = replace(c, alt_targets=[])
         return _strictest([decide(base, pol, ctx)] + [decide(replace(base, target=t), pol, ctx) for t in c.alt_targets],
                           [""] + [f" (if it lands on {_target_names([t])})" for t in c.alt_targets])
+    if c.displaced is not None:
+        # #454: a sudo write leads the line in place of the command's own costly part. The line is also decided with
+        # that part leading, as before, with its other targets (#399), and the stricter stands. On a tie the decision
+        # keeps both reasons too, as bump() does for an equal level.
+        p = c.displaced
+        d = decide(replace(c, displaced=None), pol, ctx)
+        alt = decide(replace(c, category=p.category, cost=p.cost, summary=p.summary, target=p.target, own=p.own,
+                             alt_targets=list(p.alt_targets), displaced=None), pol, ctx)
+        both = _strictest([d, alt], ["", ""])
+        if alt.outcome == d.outcome:
+            both.reason = "; ".join(dict.fromkeys(d.reason.split("; ") + alt.reason.split("; ")))
+            both.rule = alt.rule if d.rule == "matrix" else d.rule
+        both.displaced_asks = OUTCOMES.index(alt.outcome) >= OUTCOMES.index("ask")
+        return both
     if _one_text(c):
         return _decide(c, pol, ctx, None)
     passed: list[Mapping] = []
@@ -6949,7 +7036,8 @@ _HIDDEN = re.compile(r"and (\d+) more on other posts")
 def _strictest(ds: list[Decision], why: list[str]) -> Decision:
     """The strictest of several decisions of one line, with the widest exposure, a third party if any has one, and
     every violation and reserved part any of them met (#399). ``why[i]`` ends the reason when ``ds[i]`` stands. A
-    violation two posts of one name both meet is listed as often as one decision lists it."""
+    violation two posts of one name both meet is listed as often as one decision lists it. An ask from the displaced
+    part of a sudo write line in any of them (#454) stays known, so the hook narrows who may answer for it."""
     i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
     violations: list[str] = []
     for d in ds:
@@ -6970,7 +7058,8 @@ def _strictest(ds: list[Decision], why: list[str]) -> Decision:
     return replace(ds[i], reason=ds[i].reason + why[i], violations=violations,
                    exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
                    third_party=any(d.third_party for d in ds),
-                   reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)), hidden=hidden)
+                   reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)), hidden=hidden,
+                   displaced_asks=any(d.displaced_asks for d in ds))
 
 
 def _target_names(targets: Iterable[str]) -> str:
@@ -6989,12 +7078,15 @@ def summarize(c: Classification, d: Decision, default: str = "skip") -> str:
     if c.cost:
         axes.append(f"cost {c.cost:g}")
     line = f"{bits[0]} ({', '.join(axes)})."
-    if c.alt_targets:
+    alts = c.alt_targets or (c.displaced.alt_targets if c.displaced is not None and d.displaced_asks else [])
+    if alts:
         # #399: the gate cannot tell which of these gh acts on. The decision covers each, and so does the question.
-        line += f" It may land on {_target_names(c.alt_targets)} instead."
+        line += f" It may land on {_target_names(alts)} instead."
     line += f" Why: {d.reason}."
-    if c.link:
-        line += f" Link: {c.link}."
+    # #454: when the part a sudo write displaced asks, the link is that part's (a gh read's issue), as before
+    link = (c.displaced.link if c.displaced is not None and d.displaced_asks else "") or c.link
+    if link:
+        line += f" Link: {link}."
     line += f" Default if no reply: {default}."
     return " ".join(line.split())
 
@@ -7344,9 +7436,13 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
     code the gate cannot see into (D-038), so one "always" never covers a different script, and a line the gate
     reads more than one way (#399): a gh command that may land on another target (``alt_targets``), so a grant on
-    one of its targets never covers it, and a line with a ``floor``, whose stricter reading may be another act."""
+    one of its targets never covers it, and a line with a ``floor``, whose stricter reading may be another act. Also
+    a sudo write line whose displaced part names a target of its own, or asks with that part leading (#454): a grant
+    keyed on the written path must not answer a rule on the repo or host that part names, nor an ask on its category."""
+    q = c.displaced
     return (is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
-            or bool(c.alt_targets) or c.floor is not None)
+            or bool(c.alt_targets) or c.floor is not None
+            or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:
