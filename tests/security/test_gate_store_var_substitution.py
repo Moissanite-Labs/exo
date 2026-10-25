@@ -378,6 +378,62 @@ def test_a_word_past_the_budget_keeps_the_substitution_beside_it(env):
     assert gate.decide(c, {"gates": {"deny": ["target:*.exo*"]}}).outcome == "deny"
 
 
+@pytest.mark.parametrize("call", [
+    {"tool": "delete_file", "args": {"paths": FILL + ["{$,}{HOME/%//.exo}/keys/seat", "~/.exo/policies/x.yaml"]}},
+    {"tool": "delete_file", "args": {"paths": ["{$,}{!x/%//.kube}/config"] + FILL + ["~/.exo/policies/x.yaml"]}},
+    {"tool": "move_file", "args": {"source": "{$,}{HOME/%//.exo}/keys/seat", "destination": "~/.exo/policies/x.yaml",
+                                   "files": FILL}},
+    {"tool": "frobnicate", "args": {"files": FILL, "path": "{$,}{HOME/%//.exo}/keys/seat",
+                                    "dest": "~/.exo/policies/x.yaml"}},
+    {"tool": "apply_patch", "args": {"patch": "*** Begin Patch\n" + "".join(
+        f"*** Update File: {p}\n@@\n-a\n+b\n" for p in FILL + ["{$,}{HOME/%//.exo}/keys/seat", "~/.exo/policies/x.yaml"])
+        + "*** End Patch\n"}},
+])
+def test_a_spent_brace_budget_keeps_each_store_path(env, call):
+    """Once the call's other paths spend the brace budget, the gate cannot tell which store path it spells, so a form
+    a brace set builds may stay the target. Each other store path is then a store write part, so a deny or reserved
+    entry on it still reaches the call (a third check of #534: `deny: [target:*/.exo/*]` asked where main denies)."""
+    c = gate.classify(call)
+    assert c.category == "store_write"
+    assert ("store_write", "~/.exo/policies/x.yaml") in {(p.category, p.target) for p in gate._each_part(c)}
+    assert gate.decide(c, {"gates": {"deny": ["target:*/.exo/*"]}}).outcome == "deny"
+    assert len(gate.decide(c, {"gates": {"reserved": ["target:*/.exo/*"]}}).reserved) >= 1
+    assert gate.decide(c, DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("line", [
+    "ssh h 'cat ${HOME/%//x}/a'; cp x ~/.ssh/id_rsa",
+    "cp x ~/.ssh/id_rsa; ssh h 'cat ${HOME/%//x}/a'",
+    "x=HOME; ssh h 'cat ${!x/%//p}/a'; cat ~/.ssh/id_rsa",
+    "bash -c 'cat ${HOME/%//x}/a'; cat ~/.ssh/id_rsa",
+    "cat $(echo {$,}{HOME/%//x}); cp x ~/.ssh/id_rsa",
+    "eval 'cat ${EXO_HOME/%x/y}/a'; cat ~/.ssh/id_rsa",
+    "sh -c \"ls ${HOME/#*/~/p}\" && tee ~/.ssh/id_rsa < /dev/null",
+    "bash -c 'cd {$,}{HOME/%//.exo} && cat keys/seat'; cp x ~/.ssh/id_rsa",
+    "bash -c 'cat {$,}{HOME/%//x} " + " ".join(FILL) + "'; cat ~/.ssh/id_rsa",
+])
+def test_a_spelled_secret_stays_the_line_target(env, line):
+    """A nested line (an ssh remote command, `bash -c`, a `$( )`) that holds a substitution is `credentials` and led
+    the line, so a secret path the gate spells beside it was no longer the target: `deny: [target:*/.ssh/*]` asked
+    where main denies (a third check of #534). The spelled path stays the target, as on main, and the nested line
+    stays a part, so an entry on either reaches the line."""
+    c = gate.classify({"tool": "bash", "args": {"command": line}})
+    assert c.category == "credentials" and c.target.endswith("/.ssh/id_rsa")
+    assert c.signals.count("secret store") == 1
+    assert gate.decide(c, {"gates": {"deny": ["target:*/.ssh/*"]}}).outcome == "deny"
+    assert gate.decide(c, {"gates": {"reserved": ["target:*/.ssh/*"]}}).reserved
+    assert any(p.category == "credentials" and p.target != c.target for p in gate._each_part(c))
+
+
+def test_only_a_form_gives_up_the_target(env):
+    """A nested form with no secret path beside it keeps its target. A nested line that is `credentials` for another
+    reason keeps the target as on main, also beside a secret path (`ssh h env` dumps the host's environment)."""
+    c = gate.classify({"tool": "bash", "args": {"command": "bash -c 'cat ${HOME/%//x}/a'; ls"}})
+    assert (c.category, c.target) == ("credentials", "${HOME/%//x}")
+    c = gate.classify({"tool": "bash", "args": {"command": "ssh h env; cp x ~/.ssh/id_rsa"}})
+    assert (c.category, c.target) == ("credentials", "h")
+
+
 def test_nested_forms_are_not_spelt_out(monkeypatch):
     """The fail-closed check reads a nest in one pass, so a deep or wide one costs what main's reading costs: the
     review's 138 KB line of 9 levels of 3 forms each took 10 s to classify when each replacement was spelt out."""

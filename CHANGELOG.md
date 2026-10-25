@@ -23,7 +23,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   checks have spent its brace budget. A file tool's write to such a path keeps a `credentials` part, as a shell
   line's does, so a deny on `credentials` denies `write_file ${HOME/%//.kube}/config`. When a call also names a
   store path the gate spells, that path stays its target, so a deny on it still denies
-  `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml`.
+  `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml`. A file tool keeps each such store path as a part when its other paths
+  spend the brace budget. A secret path the gate spells stays a shell line's target beside a nested line with the
+  form, so a deny on it still denies `ssh h 'cat ${HOME/%//x}/a'; cp x ~/.ssh/id_rsa`.
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.

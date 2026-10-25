@@ -633,7 +633,12 @@ system or bash will. A fifth, a pattern substitution, it does not spell out: it 
   `$HOME/.exo/keys/seat` in bash and asks. When the call also names a store path the gate spells, that path stays
   its target, so a deny or reserved entry on it still reaches the call:
   `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml` is a store write to `~/.exo/policies/x.yaml`, with `${HOME/%//x}/a`
-  as a store write part beside it. A substitution with an empty replacement only removes text and reads as the
+  as a store write part beside it. When a file tool's other paths spend the brace budget, the gate cannot tell
+  which store path it spells, so each store path other than the target is a store write part too. A nested line
+  that holds the form, such as an ssh remote command, `bash -c` or a `$( )`, is `credentials` with the form for its
+  target. A secret path the gate spells on the same line stays the line's target, as on main, and the nested line
+  is a part. So `deny: [target:*/.ssh/*]` denies `ssh h 'cat ${HOME/%//x}/a'; cp x ~/.ssh/id_rsa`. A substitution
+  with an empty replacement only removes text and reads as the
   value (`cat ${HOME//x}/notes.txt` stays a read). The cost: every such substitution of a store variable asks,
   also one that leaves an ordinary path (`cp x ${HOME/%//backup}/a`), and so does one through any indirect name
   (`echo ${!v//:/ }`). Other variables keep their reading (`echo ${PATH//:/ }`, `echo ${PWD/#$HOME/~}`).

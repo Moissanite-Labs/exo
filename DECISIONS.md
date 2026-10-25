@@ -2406,6 +2406,30 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   answers it. Its `${HOME/..}` rows lower the same way on the head before this note. On the focused corpus, this
   note's last change against the commit before it (`91b6d2e6`) lowers 0 pairs and tightens 1,780 pairs on 412
   actions.
+  A third check of this round found two more lower decisions that the corpus above did not hold. A nested line
+  that holds such a form (an ssh remote command, `bash -c`, a `$( )`) is `credentials` with the form for its
+  target, and it led the line. So a secret path the gate spells on the same line was no longer the target, and a
+  deny, rule or reserved entry on that path missed the line: under `deny: [target:*/.ssh/*]`,
+  `ssh h 'cat ${HOME/%//x}/a'; cp x ~/.ssh/id_rsa` asked, where main denies. This dates from `98a3efbe`. Now that
+  path stays the target, as on main, and the nested line is a part. A nested line that is `credentials` for another
+  reason keeps the lead, as on main. And once a file tool's other paths spent the brace budget, `_spelt` read each
+  path as spelled. So a form a brace set builds could stay the target while the store path main targets had no
+  part: `delete_file` of the filler words, `{$,}{HOME/%//.exo}/keys/seat` and `~/.exo/policies/x.yaml` asked under
+  `deny: [target:*/.exo/*]`. This dates from `b7d3af4d`. Now each store path other than the target is a store write
+  part. *Differential (#423).* Main's `scripts/gate_diff.py` ran main edeb4f89 against this change. The built-in
+  corpus gives 72,041 actions x 87 policies: 0 lowered, 19,568 pairs on 306 actions tightened, 234 reworded as
+  above, 0 errors. Two focused corpora ran with 145 more policies: deny, reserved
+  and rule entries on each category, on 16 target patterns, on 10 tools and on 10 commands, escalations with
+  `credentials` allowed, posting rules and an all-allow matrix. The first, of 4,970 actions, holds the store and
+  indirect variables under 10 operators and 5 tails, a form beside a spelled store or secret path under 14
+  commands and 9 file tools, a form beside outbound and destructive lines, and filler that spends the brace
+  budget. With the script's variants it gives 8,416 actions x 232 policies: 398,269 pairs on 5,894 actions
+  tightened, 0 errors, and 112 pairs on 112 actions lowered. The second, of 7,392 actions, holds 6 forms in 12
+  nested lines beside 8 commands on 9 secret, store and plain paths, and 6 file tools whose filler comes before,
+  between or after the paths. It gives 13,872 actions x 232 policies: 178,487 pairs on 12,682 actions tightened,
+  0 errors, and 1,530 pairs on 810 actions lowered. Each lowered pair is in the ssh group above: under a reserved
+  entry on `read` or on the host, the line loses the hit for its read of `h`, and it still asks and is still
+  reserved. Against the commit before this change, both corpora lower 0 pairs.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
