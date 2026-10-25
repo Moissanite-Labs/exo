@@ -307,9 +307,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   folder part with a `..` is resolved too, so `cat /dev/fd/../env*` asks. The check reads the word, so `ls /*/bin/*`
   and `cat /*/src/*` ask, as `ls /proc/bin/*` does. A `target:` entry, in `deny:` or `reserved:`, and a deny or ask
   rule keyed on `target` also match the target's lexical form, so `cat ~/.kube//config` is denied under
-  `deny: [target:*/.kube/config]`, as its plain spelling is. Such a line now takes the store's class, so a deny that
-  only its own class drew (a rule on a costly `read`, or a `target:` entry for a second store on the line when no
-  entry names the first) becomes the store's ask, as for the plain spelling. The D-038 amendment lists the groups.
+  `deny: [target:*/.kube/config]`, as its plain spelling is. Where a line's or a file tool's target is a spelling main
+  did not read, main's target, another store on the line, stays a credentials part, so a `target:` entry that named it
+  still matches: `cat /pro?/self/environ ~/.ssh/id_rsa` is denied under `deny: [target:*/.ssh/*]`, as on main. Such a
+  line now takes the store's class, so a deny that only its own class drew (a rule on a costly `read`) becomes the
+  store's ask, as for the plain spelling. The D-038 amendment lists the groups.
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that

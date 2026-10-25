@@ -2294,6 +2294,31 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   whose target an entry of its policy names, as written or in its lexical form. The same corpora with this branch before
   this round's gate changes as the base lowered no pair and tightened 22,503 pairs on 1,297 actions. No run had a
   classify or decide error.
+  *2026-10-25 (#513, fifth round, an independent check of the fourth):* (k) Group 2 also held lines below main and below
+  the plain spelling where an entry named the store main took as the target. A glob first store, which no lexical form
+  helps: `cat /pro?/self/environ ~/.ssh/id_rsa` under `deny: [target:/proc/*/environ, target:*/.ssh/*]` asked, where
+  main and `cat /proc/self/environ ~/.ssh/id_rsa` deny. A text with a backslash yields to the word the shell reads, and
+  the words come after every text piece, so an odd second store came first: `cat ~/.kube/\config ~/.docker//config.json`
+  asked under `deny: [target:*/.kube/config]`. A nested line (`$( )`, backticks, `<( )`, `bash -c`, a heredoc) gives the
+  line its target even after a plain store: `cat ~/.ssh/id_rsa $(cat ~/.kube//config)` asked under
+  `deny: [target:*/.ssh/*]`. File tools held the same shape: `read_file`, `copy_file`, `grep` or an unknown tool with
+  `~/.kube//config` and `~/.ssh/id_rsa`. Where a line's or a file tool's target is a spelling main did not read, main's
+  target now stays a credentials part: the first store main read, as written, and a glob read without the #446 steps.
+  The part has no own text, like the part `_weigh` adds for a heavier command, so it only raises: an entry or deny rule
+  that matched main's target matches the part (D-075, #191). The target itself does not change, and a line main read the
+  same way gets no part. This also closes two of the three shapes (g) left: an entry for the second store alone, and a
+  first store that is a word with links. Group 2 now holds only the `dd` operand, which a follow-up issue tracks. (l) A
+  differential of main edeb4f89 against this change ran under the 87 built-in policies and 106 more: the 92 of (j), a
+  deny, reserved and rule entry for four more pairs of stores (`/proc/*/environ` or `/proc/*` with the ssh keys, and the
+  kube and docker configs both ways), `target:/proc/*/environ` alone, and a mapping entry on the ssh keys. The built-in
+  set, 75,599 actions, lowered 394 pairs on 80 actions. Under the 87 built-in policies that is 31 pairs on 21 actions:
+  21 in group 1 and 10 in group 5, with no pair in group 2, against 233 in (j). The other 363 are 21 in group 1 and 342
+  on 55 `dd` lines. A focused run of 25,981 actions held the corpora of (j) and 5,191 lines from this check: 26 first
+  stores in lexical, glob, linked and backslash spellings and plain controls, beside 9 second stores, in 15 line shapes
+  and 7 file tools. It lowered 198 pairs on 33 actions, all `dd` lines under `target:~/.exo/*` and `target:~/*` entries.
+  Each lowered pair in both runs decides as main decides the plain spelling. The same corpora with this branch before
+  this change (882e79d8) as the base lowered no pair and tightened 26,870 pairs on 2,412 actions, each from ask to deny.
+  No run had a classify or decide error.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
