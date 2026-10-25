@@ -826,3 +826,87 @@ def test_a_line_main_read_the_same_way_gets_no_part(line):
     # Only a target main did not read brings main's in. On a line main read the same way, the second store is not a
     # target, as on main: naming each store a line names is a follow-up
     assert full(line, SECOND[0])[1] == "ask"
+
+
+# --- a shell call's own folders (#513 sixth round) -----------------------------------------------------------------
+
+# A shell call's read of a store from its own `cwd` or `workdir` (#311) takes the first folder that names a store. Since
+# #446 that may be a spelling main did not read (`~/.config//gcloud`), so the read's target was that folder where main
+# took the other one (`~/.ssh`), and a `target:` entry or rule for the other one no longer matched. Main's target is
+# now a part of the call too.
+SHELL_TOOLS = [("bash", "command"), ("shell", "command"), ("run_command", "command"), ("terminal", "command"),
+               ("exec_command", "cmd")]
+ODD_GCLOUD = ["~/.config//gcloud", "~/.config/./gcloud", "~/.config/x/../gcloud"]
+SSH_ENTRIES = [
+    {"gates": {"deny": ["target:*/.ssh*"]}},
+    {"gates": {"reserved": ["target:*/.ssh*"]}},
+    {"gates": {"rules": [{"match": {"target": "*/.ssh*"}, "decision": "deny", "reason": "ssh"}]}},
+]
+
+
+def folder_call(tool, key, line, cwd, workdir):
+    return {"tool": tool, "args": {key: line, "cwd": cwd, "workdir": workdir}}
+
+
+@pytest.mark.parametrize("policy", SSH_ENTRIES)
+@pytest.mark.parametrize("odd", ODD_GCLOUD)
+@pytest.mark.parametrize("tool, key", SHELL_TOOLS)
+def test_an_entry_for_main_s_folder_still_matches_beside_an_odd_first_folder(tool, key, odd, policy):
+    category, outcome, hits, _ = full(folder_call(tool, key, "ls", odd, "~/.ssh"), policy)
+    reserved = "reserved" in policy["gates"]
+    assert (category, outcome, "credentials" in hits) == ("read", "ask" if reserved else "deny", reserved)
+
+
+@pytest.mark.parametrize("policy", SSH_ENTRIES)
+@pytest.mark.parametrize("odd", ["/pro?/self/environ", "/*/self/env*", "//proc/self/env*", "/$HOME/.docker/conf*",
+                                 "/proc/self/root/$HOME/.kube/conf*"])
+def test_an_entry_for_main_s_folder_still_matches_beside_a_glob_main_did_not_read(odd, policy):
+    category, outcome, hits, _ = full(folder_call("bash", "command", "ls", odd, "~/.ssh"), policy)
+    reserved = "reserved" in policy["gates"]
+    assert (category, outcome, "credentials" in hits) == ("read", "ask" if reserved else "deny", reserved)
+
+
+@pytest.mark.parametrize("line", ["rm -rf x", "git push --force"])
+def test_main_s_folder_part_keeps_the_weight_of_a_heavier_command(line):
+    # Main's folder part is weighed as the first one is, so a rule on its target and the line's weight still matches
+    policy = {"gates": {"rules": [{"match": {"target": "*/.ssh*", "reversibility": "irreversible"}, "decision": "deny",
+                                   "reason": "r"}]}}
+    assert full(folder_call("bash", "command", line, "~/.config//gcloud", "~/.ssh"), policy)[1] == "deny"
+
+
+@pytest.mark.parametrize("folder, policy", [
+    ("~/.exo/keys", {"gates": {"deny": ["target:*/.exo/*", "target:*.exo*"]}}),
+    ("~/.aws", {"gates": {"deny": ["target:*/.aws"]}}),
+    ("~/.ssh/", {"gates": {"deny": ["target:*/.ssh/"]}}),
+])
+def test_an_entry_for_each_store_folder_main_read_still_matches(folder, policy):
+    assert full(folder_call("bash", "command", "ls", "~/.config//gcloud", folder), policy)[:2] == ("read", "deny")
+
+
+@pytest.mark.parametrize("line, folder, entry", [
+    ("cat config", "~/.kube", "*/.kube/config"),
+    ("cat hosts.yml", "~/.config/gh", "*/hosts.yml"),
+    ("cat gh/hosts.yml", "~/.config", "*/hosts.yml"),
+    ("cat keys/x", "~/.exo", "*/.exo/keys/*"),
+])
+def test_an_entry_for_a_store_read_by_name_still_matches_beside_a_later_odd_store_folder(line, folder, entry):
+    # Main read no store folder here, so the read was the name in the plain folder, the first one
+    call = folder_call("bash", "command", line, folder, "~/.config//gcloud")
+    assert full(call, {"gates": {"deny": [f"target:{entry}"]}})[:2] == ("read", "deny")
+    assert full(call, {"gates": {"reserved": [f"target:{entry}"]}})[1:3] == ("ask", ["credentials"])
+
+
+def test_the_folder_read_keeps_the_first_folder_and_main_s_beside_it(env):
+    c = gate.classify(folder_call("bash", "command", "ls", "~/.config//gcloud", "~/.ssh"))
+    assert [p.target for p in c.parts if p.category == "credentials"] == [f"{env}/.config//gcloud", f"{env}/.ssh"]
+
+
+@pytest.mark.parametrize("cwd, workdir", [("~/.config/gcloud", "~/.ssh"), ("~/.ssh", "~/.config//gcloud"),
+                                          ("~/.config//gcloud", "/tmp")])
+def test_a_call_main_read_the_same_way_gets_no_second_folder_part(cwd, workdir):
+    # The plain spelling's target is its first folder, as on main, so an entry for `~/.ssh` beside it asks; with the
+    # odd folder second, or beside no other store, the target is main's already
+    c = gate.classify(folder_call("bash", "command", "ls", cwd, workdir))
+    assert len([p for p in c.parts if p.category == "credentials"]) == 1
+    assert full(folder_call("bash", "command", "ls", cwd, workdir), SSH_ENTRIES[0])[1] == ("deny" if cwd == "~/.ssh"
+                                                                                          else "ask")
