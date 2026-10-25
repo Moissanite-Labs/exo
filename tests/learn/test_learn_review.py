@@ -157,7 +157,7 @@ def test_no_review_without_a_signal_or_for_unattended_sessions(make_engine):
         sid, _ = new_session(eng, ("user", "hello there"), ("assistant", "hi"))
         eng.plugins.hooks.fire("on_turn_end", session_id=sid)
         cron, _ = new_session(eng, ("user", "Important correction: use X, NOT Y."), ("assistant", "ok"),
-                              title="cron: nightly")
+                              title="nightly", kind="scheduled")
         eng.plugins.hooks.fire("on_turn_end", session_id=cron)
         await asyncio.sleep(0.1)
         assert calls == [] and lr.tasks == {}

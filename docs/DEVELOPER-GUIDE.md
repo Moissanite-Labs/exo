@@ -317,6 +317,14 @@ author is not `principal` through `exo.provenance.defuse_pins`, so it cannot car
 A summarizer's output is model text, never the principal's: pass it through `defuse_pins` where it is made, before
 anything adds a real block to it.
 
+For a user-role display label, use `exo.provenance.user_label(provenance.author_of(message))`. Only the principal
+gets `user`. Sender names never enter the label. The summary renderer uses the uppercase form (D-057 stage 0.3).
+Learning checks the session kind and `SessionStore.latest_user_message(session)` for unattended work. That query
+returns only the newest visible user input, skips harness notes, and decodes no other message. Do not infer
+unattended work from a session title.
+The model-facing renderer lives in `exo.context_render`. `exo.core.context.render_message` remains a compatible
+import. This keeps the text view outside the turn engine while its summary and agent-log callers share one renderer.
+
 **State files (#273).** Write a file that replaces an earlier one with `exo.core.private.atomic_write(path, data)`.
 It writes a temporary file that `mkstemp` makes in the same folder, fsyncs it and renames it over the path. The mode
 is 0600 unless you pass `mode` (`None` gives what a plain open gives). A file written many times a minute, such as

@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Notes and summary sources label scheduled, triggered and other non-principal inputs by author instead of
+  presenting them as the user (D-057 stage 0.3). Learning checks the session kind and newest input's author,
+  skips harness notes and undone messages, and no longer guesses from a session title. Existing summaries stay
+  unchanged. This does not add event triggers.
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
