@@ -109,6 +109,41 @@ def test_an_absolute_body_file_is_read_and_checked(store, work):
     assert gate.UNSEEN_BODY not in r["message"] and not r.get("once")
 
 
+# #399: a post the gate reads more than one way keeps a copy on each other target (alt_targets), and a line whose gh
+# subcommand moved keeps the line as read before (floor). The body file reaches every one of them, so a clean body
+# runs as on main, and an ask offers "always".
+OTHER_READINGS = [
+    "gh pr comment 5 -R github.com/myorg/app --body-file {work}/clean.md",
+    "gh pr comment https://github.com/pub/repo/pull/5 -R myorg/app --body-file {work}/clean.md",
+    "gh pr -R myorg/app view 5 && gh pr comment 5 -R myorg/app --body-file {work}/clean.md",
+]
+
+
+def _store_with(tmp_path, name, gates_yaml):
+    root = tmp_path / name
+    (root / "policies").mkdir(parents=True)
+    (root / "policies" / "gates.yaml").write_text(gates_yaml)
+    (root / "policies" / "posting.md").write_text(POSTING)
+    key = tmp_path / f"{name}.key"
+    crypto.save_key(crypto.keygen(), key)
+    return root, key
+
+
+@pytest.mark.parametrize("line", OTHER_READINGS)
+def test_a_body_file_reaches_every_reading_of_the_post(tmp_path, work, line):
+    line = line.format(work=work)
+    scopes = "scopes:\n  internal: ['myorg/*', 'pub/*']\nescalate: {third_party: false}\n"
+    _, ctx = make_gate(_store_with(tmp_path, "allow", scopes + "categories: {github_post: allow}\n"))
+    assert call(ctx, line) is None
+    _, ctx = make_gate(_store_with(tmp_path, "ask", scopes + "categories: {github_post: ask}\n"))
+    r = call(ctx, line)
+    assert r["action"] == "approve" and gate.UNSEEN_BODY not in r["message"] and not r.get("once"), r
+    # The body is checked in each reading: a forbidden word still asks, and the reason names it.
+    r = call(ctx, line.replace("clean.md", "notes.md"))
+    assert r["action"] == "approve" and "forbidden word: Zork" in r["message"], r
+    assert gate.UNSEEN_BODY not in r["message"] and not r.get("once"), r
+
+
 def test_with_reading_off_a_body_file_asks(store, work):
     _, ctx = make_gate(store, read_body_files=False)
     r = call(ctx, f"gh pr comment 5 {R} --body-file {work}/clean.md")
@@ -153,6 +188,41 @@ def test_a_required_executor_refuses_every_unseen_body(store, work, line):
     assert r["action"] == "block" and "required executor" in r["message"], r
     row = events(root)[-1]
     assert row["phase"] == "decision" and row["outcome"] == "deny" and row["decision"]["rule"] == "required"
+
+
+@pytest.mark.parametrize("line", ["sudo gh pr view 1 -R o/r -F {work}/clean.md > /tmp/f",
+                                  "ssh h 'sudo gh pr view 1 -R o/r -F {work}/clean.md > /tmp/f'",
+                                  'sudo gh pr "$V" 5 -F {work}/clean.md > /tmp/f'])
+def test_a_required_executor_refuses_the_body_file_of_a_displaced_part(store, work, line):
+    # #454: a sudo write leads the line in place of the gh command, which keeps the body file. Main refused the line.
+    # With #399 only the line as read before may be a sudo write line, as the last one is.
+    g, ctx = make_gate(store)
+    g.required_getter = lambda: True
+    r = call(ctx, line.format(work=work))
+    assert r["action"] == "block" and "required executor" in r["message"], r
+
+
+# #399: when gh finds its subcommand past an option, or an expansion stands where it may be, the line is also read as
+# before (its floor). A body file in that reading is refused as on main, though the line as read has none.
+FLOOR_BODY_FILES = [
+    f'gh pr "$V" 5 {R} --body-file {{work}}/clean.md',                        # the subcommand is an expansion
+    f"gh pr view 5 {R} -F {{work}}/clean.md | gh issue -b x comment 8 {R}",   # the second subcommand moved
+    f"gh pr merge 7 {R} -F {{work}}/clean.md | gh issue -b x comment 8 {R}",
+]
+
+
+@pytest.mark.parametrize("line", FLOOR_BODY_FILES)
+def test_a_required_executor_refuses_a_body_file_in_the_line_as_read_before(store, work, line):
+    root, _ = store
+    g, ctx = make_gate(store)
+    g.required_getter = lambda: True
+    line = line.format(work=work)
+    c = gate.classify({"tool": "terminal", "args": {"command": line}})
+    assert c.floor is not None and c.floor.text_file and not c.text_file, c
+    r = call(ctx, line)
+    assert r["action"] == "block" and "required executor" in r["message"], r
+    row = events(root)[-1]
+    assert row["outcome"] == "deny" and row["decision"]["rule"] == "required", row
 
 
 def test_a_required_executor_still_asks_on_an_inline_body(store, work):

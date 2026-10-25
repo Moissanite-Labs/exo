@@ -233,6 +233,8 @@ default for each key), `tags`. Look at `plugins/exo-command/plugin.yaml` for a f
 
 Plugin folders are found in `$EXO_PLUGIN_DIRS`, then `$EXO_HOME/plugins`; installed `exo.plugins` entry points
 also load. To use the repo's plugins during development, set `EXO_PLUGIN_DIRS` to its `plugins/` folder.
+A tool call that writes into `$EXO_HOME/plugins` asks the principal every time (#435, `docs/GATE.md` "The store is
+credentials"), so do not copy a plugin there to try it.
 A seat can limit the list with `[plugins] enabled`. A failed `register` is rolled back, so a half-loaded plugin
 leaves nothing behind.
 
@@ -401,6 +403,150 @@ left and the largest counted files. The rules are in `docs/ENGINE-SPLIT.md` "Bud
 Check your prose before you commit docs:
 
     python3 skills/clean-writing/scripts/check-prose.py docs/YOUR-FILE.md
+
+### Checking a gate change against main
+
+A change to `src/exo/gate.py` must not decide anything lower than main does, unless the change says so (D-038,
+amendment of 2026-10-22). `scripts/gate_diff.py` checks this (#423). Make a worktree of main next to your branch and
+run main's copy of the script on both trees:
+
+    git worktree add ../exo-main origin/main
+    .venv/bin/python ../exo-main/scripts/gate_diff.py --base ../exo-main --head . --json /tmp/gate-diff.json
+
+Run main's copy, not the branch's. The script holds the seeds, the generated forms and the policies, so a branch
+that edits it would check itself with its own copy. A reviewer of a gate PR runs main's copy against the PR head and
+reads any change the PR makes to `scripts/gate_diff.py`.
+
+The script compares two trees, not a diff. If main moved after your branch began, merge main into the branch
+first. Otherwise each line a later main change made stricter shows up as lowered.
+
+The script runs `gate.classify` and `gate.decide` of each tree in a process of its own, with the same HOME and no
+`EXO_*` variables. That HOME is a temp folder under /var/tmp, outside /tmp, so a line that names /tmp does not touch the
+store. It holds a key file, a grants file in the store, and two plain names that are links to them
+(`~/notes-link.txt` and `~/grants-link.json`), so a head that stops following links shows. `--home` sets another
+HOME. The script never imports either gate itself.
+
+The actions are the lines and tool calls the gate suites test, read from the test files of both trees, so a line still
+runs when the head deletes its test. Each call runs as written: a `bash` call stays a `bash` call, and a line under
+`cmd` stays there. The script reads the gate's own tables from both trees the same way, with `ast`: a literal at
+module level, and each `|=`, `+=` or `NAME[key] =` of a literal after it. So a head that drops a table entry still
+runs the base's line for it, and a head that adds one runs its own. A table a tree holds in any other form (built by a
+helper call, changed with `.update()` or inside a function, or, where the two trees hold different kinds of value, one
+the script does not read for that table, such as a string for a set of names or a list for a mapping) is named on
+stderr and in the summary, since its entries may get no lines. To these come generated forms:
+
+- a line for each entry of the program, prefix and shell tables: each program of `PROGRAMS` with a file, each
+  `SUBCOMMANDS` pair, `rm -rf build` behind each prefix (`sudo`, `nohup`, `doas`), wrapper and tmux command, run by
+  each shell with `-c` and from its input, and code that runs it given to each interpreter with each of its flags.
+  Also a line for each program and subcommand of the allowlists, and `python -m` with each module of
+  `_SAFE_PY_MODULES` and each pip subcommand.
+- a line for each value option: `doas -u x rm -rf build`, `flock --wait x 1 rm -rf build`, a tmux command's
+  options, an interpreter's (`python -W x -c ...`) and a run wrapper's (`uv run --with x rm -rf build`). Long options
+  of a prefix or wrapper run as `--opt=x` too. Also each option whose value is a command line (`git rebase --exec`,
+  `tar --to-command`) or a script file, `touch` behind each privileged wrapper (`chroot`), a write by each
+  redirection operator, a POST to each local host, a read in each store folder, and a read of each secret sample
+  path and of a glob that matches it.
+- a string for each alternative of a few patterns, written by `regex_samples`: a read of a path for each
+  alternative of the secret path pattern (`x.pem`, `.gnupg`), a SQL line for each destructive statement kind (`drop
+  database`), and a patch header for each kind (`*** Add File:`) that names the store or a secret.
+- compound forms of each simple line: in a list or a pipe, in `$( )`, after `bash -c`, `sudo`, `env`, `timeout` or
+  `ssh`, fed to `bash` by a heredoc or a here-string, and after a `cd` into the store or `/dev`
+- each line under the other tool names and keys the gate reads as a shell line: `shell`, `bash`, `run_command` and
+  `exec_command` with the line under `command` or `cmd`, and a name the tool table does not hold that ends in
+  `terminal` or `shell` (`powershell`, `remote_shell`) with the line under `command`. Every seed line runs under each
+  of them, every other line under one. Each seed also runs under each tool table name that ends in `terminal` or
+  `shell` (`read_terminal`), so a head that adds such a name to the table shows, and in a call that holds both keys,
+  with `true` or an empty string under the other one, since the gate reads `command` first and `cmd` when
+  `command` is empty. A name read by its suffix also gets each seed under `cmd` beside an empty `command`.
+- folder rows: calls that read a secret store only as resolved from a folder (#209), such as `cat keys` in `~/.exo`,
+  `ls` in `~/.exo/keys`, `cat settings.json` in `~/.claude`, and file tool calls like them. Each line runs under
+  every shell form, once with the folder as the session folder and once as the call's own `cwd`. Main decides each
+  row otherwise without its folder, and a test checks that, so a head that stops reading the folder shows.
+- posts that trip each posting rule (each also twice to one PR behind a delete, so main lists its texts twice): a
+  home path, an internal id and a model id for the default scrub, and each forbid entry, forbidden word, agent name
+  and scrub pattern of the policies the run uses. Each runs as a `gh` comment and title, under each text and title
+  key of the first outbound tool, and under the first text key of the others.
+- calls of the other tools: each tool of the tool table and each tool name the classifier names, with no arguments,
+  and a tool name for each name hint word (`mcp_acme_trash_item`). A store path and a secret path under each path key
+  (`path`, `file_path`, `destination` and the rest), and for an outbound tool, a post with a forbidden word or a
+  `pub/` target under each text, title and target key. Payment and account calls with a plain target and amounts
+  below and above the budget policies' limits. For a tool whose branch compares an argument (the `action` of
+  `cronjob_manage` and `send_message`), each value it names and others (`remove`, `reply`, `xyz`).
+
+That is about 52,000 actions. The policies are built into the script (more than 80). A test checks that every policy
+key `check_post`, `decide`, `normalize_policies`, `normalize_scrub` and `check_scrub` read appears in a built-in
+policy, `footer_exposures`, `ignore_case` and the scrub's `patterns` among them. A key that appears in a policy is not
+yet a key whose loss changes a decision, so two more tests take things out of main's gate in turn. Each table entry
+is removed alone, and main must decide one of its lines or calls otherwise. Each step of `decide` that raises an
+outcome (the budget, the escalation, the posting rules, the floors, the deny entries) is removed alone, and a built-in
+pair must come out lower. A step that every built-in policy masks with another ask fails that test. Some entries
+main never reads on their own, such as an opaque program (an unknown program asks too) or a long option that is a
+prefix of a longer one. The test lists each with the reason. A full run takes three to four minutes on four cores.
+`--jobs` sets the workers in each tree (half the cores by default).
+
+Add actions with `--corpus lines.txt`: one command per line, or a JSON list of commands and `{"tool", "args"}`
+actions. An action may also hold `"cwd"`, the session folder the hook passes to `classify` (#209). An item in another
+shape, such as a call with no `args` mapping, stops the run with exit status 2 and names the item. The `--corpus`
+lines get the same generated forms as the harvested ones.
+
+- `--only-corpus` runs the `--corpus` items, the compound forms of their simple lines, and each line under one other
+  shell tool name and key. It skips the harvest, the seeds, the lines and calls of the tables, the posts, the folder
+  rows and the calls of the other tools.
+- `--no-variants` runs only the `--corpus` items and the harvest. It skips the seeds, the lines and calls of the
+  tables, the posts, the compound forms, the other shell tool names and keys, the folder rows and the calls of the
+  other tools.
+
+Neither reads the gate's tables for lines, so neither names a table it cannot read.
+
+Add policies with `--policies more.py` (a `POLICIES` mapping). Their forbid and scrub entries get posts too.
+
+Exit status 0 means nothing is lower. Exit 1 means at least one pair of action and policy is lower: an outcome below
+main's in the order allow, log, ask, deny, a reserved hit lost, or a posting violation main lists that the head does
+not (one the head words otherwise counts too). A line of several posts lists a violation after the name of its post
+(`<post>: <text>`). Either tree may do so, and the post's name may change with its target, so the texts are compared
+without the name. A violation the head keeps under its post's name, or under a new one, is kept. The summary counts
+those pairs as reworded, shows a few with the texts each tree lists that the other does not, and they do not exit 1.
+A reworded pair is not also counted as another detail changed. The line `and N more on other posts`, which stands
+for the violations a long list leaves out, names no text, so it is not compared as one. Its N counts in each tree's
+total, and a head whose total is lower than main's is lower, so a post skipped past the cap still shows. The texts
+behind that line are compared by count only, so a head that lists more and hides another text there in place of
+one main hid shows nothing. A text the head lists fewer times than main does is lower: one post's violation lost
+while another post still has it, or one of two posts of one name skipped. At an equal deny, lost reserved hits and
+violations are not counted. The call is blocked, and both only matter for an ask: a reserved hit keeps a standing
+grant from covering it, and a violation is named in its message. A classify or decide that raises counts as the
+hook's answer to an error: ask, or allow for a read tool.
+The summary groups the lowered pairs by transition, such as `store_write ask -> read allow`, and by policy.
+Tightenings are only counted. `--json` writes the lowered actions and pairs and the reworded pairs, the first 5,000
+of each in corpus order. The `--corpus` lines come first in that order, so the cap keeps them before the built-in
+lines. Fix each lowered line, or name it in the decision amendment the change records, with the reason it is safe.
+
+Exit 2 means a tree could not run or the script failed, such as on a folder that does not exist or a policy file
+that raises. A tree that dies or runs past `--timeout` (an hour by default) is stopped with exit 2 too. So is a run
+stopped by SIGTERM or SIGHUP, such as a CI cancel. The script stops both trees and removes the temp folder first.
+A signal the script starts with ignored stays ignored, so a run under `nohup` goes on when the terminal closes.
+Exit 2 also follows a run with nothing lower when a tree holds a gate table in a form the script does not read. The
+summary lists each such table with the reason, as `INCOMPLETE`. Keep the table a literal, or read the change and
+name the table in `--accept-unread TOOLS,...` to accept the missing lines. A lowered pair still exits 1.
+
+**What the check leaves out.** It runs `classify` and `decide` alone, so a change to any of these needs its own tests
+and a line in its decision amendment:
+
+- Session folders. The hook passes `classify` the session's folder (#209). Only the corpus's own `"cwd"` values and
+  the folder rows run here. The rows cover what main reads from a folder today: a relative name that lands in a
+  secret root (`~/.exo/keys`, `~/.claude`) or on the run folder. The harvest keeps a literal folder a test passes to `classify`,
+  not one the test builds as it runs, such as `cwd=str(tmp_path)`.
+- Names and keys outside those tables. A tool name, argument key or program the script does not read from one of the
+  tables above runs only where a test or a seed names it: the `urls` and `code` keys, and programs such as `find
+  -exec`, `xargs` or the `git` and `gh` subcommands.
+- Patterns and helper sets. Only the secret path, SQL and patch header patterns and the scrub patterns get a string
+  for each alternative. Any other alternative of a regex or a helper (the URL and host patterns, `_GH_URL`, the
+  option tables of `_VALUE_OPTS`) is seen only where a test or a seed names it.
+- Files and links in HOME. The HOME holds one key file, one grants file and the two links to them. Other file
+  contents, links and folders a real HOME has do not run.
+- Stores the environment moves: `EXO_HOME`, `EXO_PRINCIPAL_STORE`, `EXO_KEYS_FILE` and `EXO_BUS_*` (and their
+  `DIVAN_*` names). Both trees run without them.
+- The hook steps after `decide`: standing grants and `NO_GRANT`, `binds_exact`, the registry risk floor, the required
+  executor, a policy file changed mid-session, and the decision model.
 
 ### CI, lint, lockfile and the privacy deny-list (D-042)
 
@@ -866,4 +1012,5 @@ Keep the module's own top-level imports to what the command needs: they run only
 belongs in `cli.py` itself (store reads, keys, the ledger) imports what it needs inside its function.
 `tests/test_cli_lazy.py` fails when the table and `register` disagree: it compares the help of every command, and of
 `exo --help`, against the parser that `build_parser()` builds with every module imported. It also checks that
-`exo --help` loads no command module.
+`exo --help` loads no command module, and that a command is in `STORE_CMDS` exactly when its handler takes the
+store. If the handler's second argument has a default, add the command to `OPTIONAL_STORE` in that test.

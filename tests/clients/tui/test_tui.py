@@ -465,7 +465,7 @@ def test_peers_command_send_and_inline_peer_message(tmp_path):
     import shutil
     import tempfile
 
-    from exo.core.seats import Seat
+    from exo.core.seats import Seat, key_path
     from exo.peers import attach
     from exo.server.app import Dispatcher, HttpServer
 
@@ -489,6 +489,13 @@ def test_peers_command_send_and_inline_peer_message(tmp_path):
                 await mine.peers.start(f"{d}/tester.sock")  # the TUI's own engine serves no socket here; give it one
                 srv2 = HttpServer(Dispatcher(mine, mine.hub))
                 await srv2.start_unix(f"{d}/tester.sock")
+                for home, seat, pub in ((mine.home, "razi", other.peers.node.signer.pub),
+                                        (other.home, "tester", mine.peers.node.signer.pub)):
+                    pin = key_path(home, seat).with_suffix(".pub")  # each home pins the other seat's key (#132)
+                    pin.parent.mkdir(parents=True, exist_ok=True)
+                    pin.write_text(pub + "\n")
+                    (home / "seats").mkdir(exist_ok=True)  # and records it as a seat of its own
+                    (home / "seats" / f"{seat}.toml").write_text(f'name = "{seat}"\n')
                 await send(app, pilot, "/peers")
                 await until(lambda: "razi" in app.transcript_text(), pilot)
                 await send(app, pilot, "/send razi are you free?")

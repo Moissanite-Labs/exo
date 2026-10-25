@@ -179,7 +179,8 @@ UNCHANGED = [
     "test -n 'a[$i]'",
     f"echo 'a[$({GH})]'",
     'declare x="${a[$i]}"',
-    'unset "${arr[@]}"',
+    # `unset "${arr[@]}"` asks since #329: the array may hold PATH. With -f it names functions.
+    'unset -f "${arr[@]}"',
 ]
 
 
