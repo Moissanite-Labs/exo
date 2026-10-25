@@ -625,10 +625,15 @@ system or bash will. A fifth, a pattern substitution, it does not spell out: it 
   a form asks even with an empty replacement. So `cat ${HOME/%//.kube}/config`, `cat ${HOME/#*/~/.exo}/keys/seat` and
   `cat ${EXO_HOME/%x/y}/keys/seat` ask, and `cp x ${HOME/%//.exo}/policies/default.yaml` and
   `write_file ${HOME/*/~/.exo}/policies/x.yaml` are store writes. The replacement may name a secret store as
-  well, so a shell store write keeps a `credentials` part beside it. A substitution with an empty replacement only
-  removes text and reads as the value (`cat ${HOME//x}/notes.txt` stays a read). The cost: every such
-  substitution of a store variable asks, also one that leaves an ordinary path (`cp x ${HOME/%//backup}/a`).
-  Other variables keep their reading (`echo ${PATH//:/ }`, `echo ${PWD/#$HOME/~}`).
+  well, so a store write keeps a `credentials` part beside it, from a shell line or a file tool. A deny on
+  `credentials` denies `write_file ${HOME/%//.kube}/config` as it denies `write_file ~/.kube/config`. A word that
+  builds the form with a brace set fails closed too when it makes more words than the brace cap, or than what
+  the call's other checks left of its brace budget. A name read through indirection counts as one of the four
+  variables, since the gate does not know which variable it names: `x=HOME; cat ${!x/%//.exo}/keys/seat` is
+  `$HOME/.exo/keys/seat` in bash and asks. A substitution with an empty replacement only removes text and reads
+  as the value (`cat ${HOME//x}/notes.txt` stays a read). The cost: every such substitution of a store variable
+  asks, also one that leaves an ordinary path (`cp x ${HOME/%//backup}/a`), and so does one through any indirect
+  name (`echo ${!v//:/ }`). Other variables keep their reading (`echo ${PATH//:/ }`, `echo ${PWD/#$HOME/~}`).
 - **Expansions inside a name (#225).** Bash drops an empty command substitution, and an unset variable expands to
   nothing, so `cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc` and `cat ${x}.env` read the store. A shell word
   that holds a `$( )`, a backtick pair, or a `${..}` or `$name` other than the four variables above is also
@@ -653,12 +658,17 @@ Known limits. A link made on the same line (`tar xf v.tar && cat notes.txt`) doe
 classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the store. Programs that follow links
 while they walk (`grep -r`, `rg -L`, `cp -rL`) are checked by their arguments only. In executor or broker mode the
 gate's view of the file system may differ from the worker's. A name built whole inside a substitution
-(`cat $(printf '.e%sv' n)`) is not read. Some forms that bash resolves into a store stay reads, as before #342: an
-operator that removes text which the path then puts back (`cat ${EXO_HOME%/*}/exo-home/keys/seat`, and a
-substitution with an empty replacement, `cat ${EXO_HOME/%home/}home/keys/seat`), a subscript before
-another operator (`cat ${HOME[1]:-~/.exo}/keys/seat`, where bash takes the default), and a substitution of another
-variable whose replacement names a store (`cat ${PWD/*/$HOME/.exo}/keys/seat`). `XDG_CONFIG_HOME` is not one of the
-four store variables, so `cat $XDG_CONFIG_HOME/gh/hosts.yml` is a read too. Open issues:
+(`cat $(printf '.e%sv' n)`) is not read. Some forms that bash resolves into a store stay reads or ordinary
+writes, as before #342. One is an operator that removes text which the path then puts back (#531):
+`cat ${EXO_HOME%/*}/exo-home/keys/seat` is a read, and `cp x ${EXO_HOME%-home}-home/policies/default.yaml` is a
+shell command. A substitution with an empty replacement is read the same way
+(`cat ${EXO_HOME/%home/}home/keys/seat`). Others are a subscript before another operator
+(`cat ${HOME[1]:-~/.exo}/keys/seat`, where bash takes the default), a substitution of another variable whose
+replacement names a store (`cat ${PWD/*/$HOME/.exo}/keys/seat`, #532), and a variable that holds a store variable's
+value or name (#475): a copy (`h=$HOME; cat ${h/%//.kube}/config`), a nameref
+(`declare -n r=EXO_HOME; cat $r/keys/seat`), a positional parameter (`set -- $HOME`) or an indirect name with no
+substitution (`x=EXO_HOME; cat ${!x}/keys/seat`). `XDG_CONFIG_HOME` is not one of the four store variables, so
+`cat $XDG_CONFIG_HOME/gh/hosts.yml` is a read too. Open issues:
   - #309: the Exo-store write checks (`is_store_path`, "The store is credentials" below) read the `${VAR:-word}`
     value but not expansions inside a name, so `cp x ~/.exo/polic$(:)ies/gates.yaml` is still a shell command (a
     write redirection to a path with `$` already asks as `opaque_exec`);
