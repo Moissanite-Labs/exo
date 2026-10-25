@@ -1308,14 +1308,13 @@ gate does not read:
   words bash makes, as well as the words as written (#438). It reads each form on its own, so a
   value one form sets cannot hide a value the other sets. Of the words bash makes it keeps only
   the parts the words as written do not give, so a word outside a set is read once. So
-  `export {PATH,X}=` reads as
-  `export PATH= X=` and asks, and so do `declare -x {PATH,X}=`, `export {P,}ATH=`,
-  `read {X,PATH}` and `printf -v {PATH,X} .`. An option in a set counts too:
+  `export {PATH,X}=` reads as `export PATH= X=` and asks, and so do `declare -x {PATH,X}=`,
+  `export {P,}ATH=`, `read {X,PATH}` and `printf -v {PATH,X} .`. An option in a set counts too:
   `test {-v,'a[PATH=0]'}` sets PATH as `test -v 'a[PATH=0]'` does, and a command in the
   subscript of a name the set makes is read as in `printf -v 'a[$(cmd)]'` (#179). A set of other
-  names keeps the class of the names it makes: `export {A,B}=1` reads as `export A=1 B=1`. A word
-  that asked before still asks, such as `export X{A,B}=1`, whose brace after the first character
-  the lexer reads as a glob. `unset` asks on any unquoted brace, as above. A quoted or escaped
+  names keeps the class of the names it makes: `export {A,B}=1` reads as `export A=1 B=1`. Under
+  the default policy a word that asked before still asks, such as `export X{A,B}=1`, whose brace
+  after the first character the lexer reads as a glob. `unset` asks on any unquoted brace, as above. A quoted or escaped
   brace does not expand (`export '{PATH,X}='`), and bash refuses that word as a name. bash drops
   a `\<newline>` outside quotes before it expands a set and keeps one in single quotes or `$'..'`,
   and so does the gate. The expansion is the one "Secret-store paths" describes, with a budget of
@@ -1333,7 +1332,9 @@ gate does not read:
   `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` set more than once on a command is checked with
   each value it takes. bash keeps the last value, but a readonly name keeps its first, so
   `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h
-  GIT_CONFIG_KEY_0=a` runs the hook path. An exec key
+  GIT_CONFIG_KEY_0=a` runs the hook path. Past 64 pairs of a key and a value, the command asks,
+  and each key is checked with the first and the last value and each value with the first and
+  the last key. An exec key
   is an alias, the pager, the editor, `core.sshCommand`, a hook path, a filter or diff driver, a
   credential helper, `interactive.diffFilter`, `remote.<name>.uploadpack` or `receivepack`, the
   `.path` of a difftool, mergetool, man or browser tool, any key whose last part ends in

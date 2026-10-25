@@ -1916,8 +1916,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   their parts. A key or value set twice on one command is also checked with each value it takes, with a brace or not.
   That closes main's own form, `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h
   GIT_CONFIG_KEY_0=a; git commit -m x`, which main allowed. It also asks for the `export` form, where bash keeps the
-  harmless last key. Of the words bash makes, a part is kept only when the words as written do not give it, so a word
-  outside a set is read once: `declare 'a[$(rm -rf build)]' {X,Y}` has main's 2 parts, not 4. The builtin's checks
+  harmless last key. Past 64 pairs of a key and a value, the command asks, and each key is checked with the first and
+  the last value and each value with the first and the last key. bash keeps one of those two pairs. Checking each pair
+  made `export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.{1..1000} GIT_CONFIG_VALUE_0=x{1..1000}; git status` a
+  million pairs, 31 s of CPU, where main takes 0.07 s. Of the words bash makes, a part is kept only when the words as
+  written do not give it, so a word outside a set is read once: `declare 'a[$(rm -rf build)]' {X,Y}` has main's 2 parts, not 4. The builtin's checks
   read the commands in each word again, so a word with n command or process substitutions now takes 4 x (n + 1)² times
   its share of the third budget. A nest of seven `$( )` around a 1,000-word set was read 53,056 times, about 8 s of
   CPU. It now asks as too large after 56 reads, as many as main makes. A brace set in `printf`'s first word now counts

@@ -237,6 +237,25 @@ def test_a_git_config_key_the_line_set_is_read_with_each_value(cmd, policy, outc
     assert gate.decide(_bash(cmd), policy).outcome == outcome
 
 
+@pytest.mark.parametrize("cmd, policy, outcome", [
+    # a thousand keys and a thousand values: a million pairs, each read once with each value it may take
+    ("export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.{1..1000} GIT_CONFIG_VALUE_0=x{1..1000}; git status", {}, "ask"),
+    (" ".join(["export GIT_CONFIG_COUNT=1"] + [f"GIT_CONFIG_KEY_0=alias.a{i} GIT_CONFIG_VALUE_0=x{i}" for i in range(300)])
+     + "; git status", {}, "ask"),
+    # the pair bash keeps is still read: the first under a readonly name, the last under export
+    (f"declare -rx {_SSH_KEY} GIT_CONFIG_KEY_0=a{{1..80}} GIT_CONFIG_VALUE_0=x; git fetch",
+     {"gates": {"deny": ["delete"]}}, "deny"),
+    ("export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=a{1..80} GIT_CONFIG_VALUE_0=x GIT_CONFIG_KEY_0=core.sshCommand "
+     "'GIT_CONFIG_VALUE_0=rm -rf build'; git fetch", {"gates": {"deny": ["delete"]}}, "deny"),
+])
+def test_a_git_config_key_set_many_times_is_read_within_a_bound(cmd, policy, outcome):
+    """Past _GIT_ENV_PAIRS pairs, each key is read with the first and the last value and each value with the first
+    and the last key, and the line asks, so a line that sets many is not read once for each pair (#438 review)."""
+    c = _bash(cmd)
+    assert len(list(gate._each_part(c))) < 20_000     # each pair read once: a million, or 90,000 for the second
+    assert gate.decide(c, policy).outcome == outcome
+
+
 @pytest.mark.parametrize("cmd", [
     # bash expands no quoted or escaped brace: it refuses `{PATH,X}=` as a name and sets nothing
     "export '{PATH,X}='; ls",
