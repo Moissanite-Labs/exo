@@ -2384,19 +2384,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `write_file ~/.kube/config`. Still not done: a variable that holds a store variable's value or name (a copy
   `h=$HOME`, a nameref, a positional parameter or an indirect name with no substitution, #475), and a removal whose
   text the path puts back, which hides a write too (`cp x ${EXO_HOME%-home}-home/policies/default.yaml`, #531).
-  *Differential (#423).* Main's `scripts/gate_diff.py` ran main edeb4f89 against this change with 59 more
-  policies: deny, reserved and rule entries on the store names, a deny and a reserved entry on each category, and an
-  all-allow matrix. With the built-in corpus: 71,980 actions x 146 policies, 0 pairs lowered, 31,572 pairs on 253
-  actions tightened, 0 errors, and 390 pairs reworded as above. A focused corpus of 1,405 actions holds the indirect
-  names with 30 operators, the store and `XDG_*` variables under each substitution, 15 wrappers, `cd`, filler that
-  spends the brace budget and 9 file tools. Alone it gives 2,648 actions x 146 policies: 122,984 pairs on 1,028
-  actions tightened, and 6 pairs on 6 actions lowered, all in one group. Under `reserved: [read]`, an ssh line whose
-  remote command holds such a form, beside another read, was a read on main:
-  `x=HOME; set -- HOME; ssh h 'cat ${!x/%//.exo}/keys/seat'`. It asked with two reserved hits, its read of the host
-  `h` and the other read. It is now `credentials` and asks with one, since the host's read no longer leads the
-  line. Main reads `ls; ssh h 'cat ~/.kube/config'` the same way. The line still asks and is still reserved, and
-  only the principal answers it. Two of the 6 pairs (`${HOME/%//.kube}`) lower the same way on the head before this
-  note.
+  An independent check of this round found a lower decision that dates from `98a3efbe`. A path that is a store
+  path only by such a substitution took the call's target from a store path the gate spells beside it. So a deny,
+  rule or reserved entry on the spelled path no longer reached the call. Under `deny: [target:*/.exo/*]`,
+  `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml` and a `move_file` of `${HOME/%//.kube}/config` to
+  `~/.exo/policies/x.yaml` asked, where main denies. Now the store path main finds comes first (`gate._spelt`). It
+  stays the target of the shell store check and of the file tools, as on main. The substituted path is a store
+  write part beside it, with its `credentials` part, so an entry on that path still reaches the call too.
+  *Differential (#423).* Main's `scripts/gate_diff.py` ran main edeb4f89 against this change with 130 more
+  policies: deny, reserved and rule entries on the store names, the host and each category, escalations with
+  `credentials` allowed, posting rules and an all-allow matrix. A focused corpus of 3,915 actions holds the indirect
+  names with 30 operators, the store and `XDG_*` variables under each substitution, wrappers, `cd`, filler that
+  spends the brace budget, the forms beside gh posts, pushes, deletes, ssh, sudo, curl and mail, file tools under
+  every path key, and a form beside a store path the gate spells. With the built-in corpus it gives 77,722 actions x
+  217 policies: 431,374 pairs on 3,147 actions tightened, 4,654 pairs reworded as above, 0 errors, and 144 pairs on
+  36 actions lowered, all in one group and none from the built-in corpus. An ssh line whose remote command holds
+  such a form was a read on main (`ls; ssh h 'cat ${HOME/%//.kube}/config'`). Under a reserved entry on `read` or
+  on the host (`target:h`), it asked with a hit for the line's read of `h` beside the others. It is now
+  `credentials` and that hit is gone, since the host's read no longer leads the line. Main reads
+  `ls; ssh h 'cat ~/.kube/config'` the same way. The line still asks and is still reserved, and only the principal
+  answers it. Its `${HOME/..}` rows lower the same way on the head before this note. On the focused corpus, this
+  note's last change against the commit before it (`91b6d2e6`) lowers 0 pairs and tightens 1,780 pairs on 412
+  actions.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

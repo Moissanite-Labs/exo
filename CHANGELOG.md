@@ -21,7 +21,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   read as the value. A name read through indirection counts as a store variable, so
   `x=HOME; cat ${!x/%//.exo}/keys/seat` asks. A brace set that builds the form asks also when the call's other
   checks have spent its brace budget. A file tool's write to such a path keeps a `credentials` part, as a shell
-  line's does, so a deny on `credentials` denies `write_file ${HOME/%//.kube}/config`.
+  line's does, so a deny on `credentials` denies `write_file ${HOME/%//.kube}/config`. When a call also names a
+  store path the gate spells, that path stays its target, so a deny on it still denies
+  `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml`.
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
