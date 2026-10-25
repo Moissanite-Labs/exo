@@ -16,6 +16,13 @@ def outcome(tool, args, cwd, policy=POL):
     return c.category, gate.decide(c, policy).outcome
 
 
+def read_as(tool, args, cwd, policy=POL):
+    """(the categories of every reading of the call and of their parts, the outcome): on a merge with #452 a shell
+    call's folder reading stands beside the line alone (gate.readings)."""
+    c = gate.classify({"tool": tool, "args": args}, cwd=cwd)
+    return {x.category for r in gate.readings(c) for x in [r, *gate._each_part(r)]}, gate.decide(c, policy).outcome
+
+
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
     home = tmp_path / "home"
@@ -157,7 +164,8 @@ def test_absolute_dotdot_control(tree):
     ({"command": "cp x y", "cwd": "sdir/.."}, ("shell", "allow")),
 ])
 def test_the_shell_cwd_argument(tree, args, expected):
-    assert outcome("bash", args, cwd=str(tree)) == expected
+    cats, out = read_as("bash", args, str(tree))
+    assert expected[0] in cats and out == expected[1]
 
 
 @pytest.mark.parametrize("folder", ["sdir/../keys", "c2/../keys", "kdir"])
@@ -313,8 +321,10 @@ def test_a_cwd_in_the_run_folder_decides_as_the_absolute_spelling(tree, command)
     """A relative write from a shell `cwd` in the run folder is a store write, as `echo x > ~/.exo/run/foo` is."""
     (tree.parent / ".exo/run").mkdir()
     args = {"command": command, "cwd": "~/.exo/run"}
-    assert outcome("bash", args, cwd=str(tree)) == ("store_write", "ask")
-    assert outcome("bash", args, cwd=str(tree), policy=DENY_STORE) == ("store_write", "deny")
+    cats, out = read_as("bash", args, str(tree))
+    assert "store_write" in cats and out == "ask"
+    cats, out = read_as("bash", args, str(tree), DENY_STORE)
+    assert "store_write" in cats and out == "deny"
 
 
 DENY_EXO = {"gates": {"deny": ["target:*/.exo/*"]}}
@@ -371,7 +381,8 @@ def test_the_program_word_never_names_a_store_write(tree, folder, command):
     for d in (".exo/plugins/foo", ".exo/run"):
         (tree.parent / d).mkdir(parents=True, exist_ok=True)
     c = gate.classify({"tool": "bash", "args": {"command": command, "cwd": folder}}, cwd=str(tree))
-    assert (c.category, c.target) == ("store_write", "a path inside the store (the tool's folder)")
+    assert ("store_write", "a path inside the store (the tool's folder)") in [(r.category, r.target)
+                                                                              for r in gate.readings(c)]
     assert gate.decide(c, POL).outcome == "ask"
 
 
@@ -386,7 +397,8 @@ def test_the_program_word_never_names_a_store_write(tree, folder, command):
 def test_a_program_word_that_leads_into_the_store_names_the_write(tree, args, target):
     """Controls: from a folder outside the store these were named so before, and still are."""
     c = gate.classify({"tool": "bash", "args": args}, cwd=str(tree))
-    assert target in [p.target for p in [c, *gate._each_part(c)] if p.category == "store_write"]
+    assert target in [p.target for r in gate.readings(c) for p in [r, *gate._each_part(r)]
+                      if p.category == "store_write"]
     assert gate.decide(c, POL).outcome == "ask"
     assert gate.decide(c, DENY_STORE).outcome == "deny"
 
@@ -444,8 +456,10 @@ def test_a_reserved_entry_reaches_the_folded_folder(links):
     {"command": "cd xl/../rel && cp /tmp/a /tmp/b"},
 ])
 def test_a_dotdot_after_a_link_in_the_folder_is_read_folded_for_store_writes(links, args):
-    assert outcome("bash", args, cwd=str(links)) == ("store_write", "ask")
-    assert outcome("bash", args, cwd=str(links), policy=DENY_STORE) == ("store_write", "deny")
+    cats, out = read_as("bash", args, str(links))
+    assert "store_write" in cats and out == "ask"
+    cats, out = read_as("bash", args, str(links), DENY_STORE)
+    assert "store_write" in cats and out == "deny"
 
 
 @pytest.mark.parametrize("command,expected", [
