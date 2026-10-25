@@ -437,6 +437,45 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   session here can take a message"), although the card says allow delivers it. Allow now opens a new thread of the
   seat, titled after the sender, and delivers the message there. If that thread cannot open, the message closes as
   not delivered and the principal gets a notice. Deny and expiry open no thread.
+  *Amendment 2026-10-23 (#132, pinned peer keys):* "auto for the same principal" read the sender's key and principal
+  from its presence file, which any same-user process can write. A forged one plus a self-signed envelope arrived as
+  the principal typing in another client. The receiver now checks a peer only against keys in its own home: its own
+  key for its own seat name, and for a seat of this home (a seat file here, or its key file in `keys/`) the
+  registry's entry for the name, else the `.pub` beside the seat's key file in `keys/`. A peer pin
+  (`exo keys pin --peer`, a `peers` map apart from the D-040 signers) also checks a seat. So does a registry entry or
+  `.pub` for a name that is no seat of this home, such as a plain `exo keys pin` of another home's seat, which counts
+  as a peer pin. A registry entry decides for its name, so a key rotated out with `--replace` stays out. A seat
+  checked against a key of this home takes its principal from its seat file here. A key with no seat file, or one
+  whose seat file names no principal (an unseated daemon, a Hermes profile on this home), counts as the principal
+  `config.json` names, read from the file when the receiver starts. It reaches a daemon as that principal only when
+  the daemon runs as that principal or as none and has no seat file naming one. A seat whose seat file names its
+  principal holds such a key as `other`, since `config.json` is not a store file and a tool call may change it without
+  asking. Giving the key a seat file that names its principal delivers it at once. The principal a presence file
+  names never raises trust but can lower it: when it is not the one this home records for the sender (none stands
+  for `config.json`'s), the message is `other`, as before #132. So a daemon or Hermes profile run as another
+  principal is held even by a daemon with no seat principal, and so is a daemon under the receiver's own seat name
+  (two unseated daemons are both `exo` and share its key). A seat checked against a peer
+  pin is `other`: this home has no record of whose it is. A sender with no key here is held as `other`, and its
+  card says `key not pinned`. A rule may hold or deny it, but never deliver it sooner than its policy, since a
+  presence file can claim any name. A name that holds a key here is checked against those keys alone, so another
+  key is denied. That includes a seat of another home with the receiver's own name (two unseated
+  homes are both `exo`): its key can be pinned as a peer, and it is then held as `other`. To pin a peer of another
+  home, read `<that home>/keys/<seat>.pub` and run `exo keys pin --peer <seat> <key>` here. A `from` that is not a
+  seat id is denied before any key lookup, and the sender is told `the sender is not a seat name`. A presence file
+  or `.pub` is read only when the open file is a plain file, and a presence file only in the peers folder, so the
+  `daemon` an envelope names cannot be a path or a FIFO. A later receipt must name the seat the message went
+  to, come from that seat's daemon and verify against that seat's keys here, never a presence key. Stricter than
+  before for some honest setups, each with a fix in `docs/PEERS.md` "Peer keys": a key made again while the registry
+  pins the old one (`exo keys pin --replace`), a seat file naming a key outside `keys/` (pin it), a profile name that
+  is not a seat id, and a key with no principal of its own toward a seat that names one (a seat file). Not changed:
+  under D-039 any same-uid socket client can ask a daemon to `peers send`, which arrives as `same-principal`
+  automation, by design. A process outside the gate can still read seat keys or write `keys/`. A forged presence
+  file still says where its name listens: it can receive the messages sent to that name and answer a send with the
+  first receipt, which is not signed (a follow-up). A tool call may change `config.json`, which after a restart can
+  change the principal a key with no seat file counts as toward a daemon with no seat principal. Rejected: holding
+  a same-name seat with a different key as `other` without a pin, which would let any presence file under a pinned
+  name reach the card. Rejected: giving a key with no seat file the receiver's `EXO_PRINCIPAL`, which a seated exod
+  sets to its own seat's principal, so every such key reached that seat as its principal (#525 review).
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -1115,6 +1154,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-24 (issue #542):* an explicit `gates.escalate` must be a mapping, and its `categories`, when
+  present, must be a list. A malformed value raises `PolicyError` during normalization and store policy loading,
+  rather than silently retaining defaults or using substring membership on a string. Omitted settings, an empty
+  mapping and valid mappings keep their existing behavior. An empty category list disables only category
+  escalation. Chosen over interpreting a bare list as shorthand: rejecting it makes the existing schema explicit
+  and catches scalar and null mistakes through the same path. No classification or valid-policy decision changes.
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
   `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
   grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on
@@ -1246,6 +1291,64 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
   `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
   argument, and a path held in a variable or made by a command (`F=~/.exo/update/allowed_signers; cp x "$F"`).
+  *Amendment 2026-10-22 (issue #447):* who may answer an ask, and whether a grant may cover it, read only the category
+  that leads the line. `_combine` ranks credentials above store_write, so `env; echo x > ~/.exo/policies/gates.yaml`
+  and `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that
+  `approvals.yaml` delegates `credentials` to could approve a write to the policy files. The outcome stayed ask, so
+  the #423 differential could not count it. Now the hook reads the line's `credentials` and `store_write` parts.
+  `gate.call_approvers` keeps only those allowed for the line's category and for each such part, so a store write
+  part leaves the principal alone. Other parts do not narrow the approvers: under `force_push: [principal]`,
+  `env; git push --force origin main` keeps the seats `credentials` allows. `gate.no_grant` keeps a standing grant
+  off a line with such a part, observe mode enforces it, and `binds_exact` binds it to the exact line. This holds
+  behind a wrapper (`sudo`, `doas`, `env`, `timeout`, `nice`, `command`, `bash -c`, `eval`, `xargs`), in a compound,
+  a subshell, a `$( )`, a heredoc or a `cd` chain, wherever the gate reads the store write as a part. The line's
+  category, its matrix cell and its outcome do not change. Reading every part for the approvers, the matrix, third
+  party and floors is #437. This is the follow-up the #169 amendment named: a shell write, delete, copy or archive in
+  `keys/` or the run folder that the gate reads as a write stays `credentials`, but its store write part makes it
+  principal-only. A copy read only as a key read (`tar czf /tmp/k.tgz -C ~/.exo keys`,
+  `cat < ~/.exo/keys/seat.key > /tmp/k`) keeps the delegation, as before. It also settles point (5) of the #313
+  amendment. A secret read alone keeps its delegation. A file tool that names a secret and a store file was
+  `credentials` with no store write part (the #467 review: `apply_patch` on `~/.ssh/config` and
+  `~/.exo/policies/gates.yaml`, `move_file` from `~/.ssh/id_rsa` to `~/.exo/policies/gates.yaml`), so a seat
+  delegated `credentials` could answer it. `classify` now adds a `store_write` part for each store file such a tool
+  writes, moves, copies or deletes, beside the tool's own part (#448). A folder holding the store that it moves,
+  renames or deletes gets one too, as with `mv` and `rm` (`move_file` from `~/.exo` to `~/.ssh/x`). So does a tool
+  with a camelCase name (`moveFile`, `deleteFile`): its category stays `unknown`, because the gate reads its name as
+  one word, but this check splits the name. With no secret, a file tool's move of such a folder is not a store write
+  yet (#494). A file tool's write or delete in `keys/` or the run folder gets a part as well, as its shell spelling
+  does. The call's category, target and card do not change. The hook's error fallback (#464) reads the parts as
+  well. Chosen over ranking store_write first in `_combine`, which would change the line's category, reason and
+  policy matches. The gate differential against main 5a9dc394 (`gate_diff`, #423, main's script) finds 0 lowered
+  pairs. On the built-in corpus, 55,253 actions x 87 policies, it finds 285 pairs on 115 actions tightened, all
+  `credentials` ask to deny. On a focused corpus of 17,930 actions it finds 24,383 pairs on 9,764 actions tightened,
+  also `credentials` ask to deny. That corpus has file tools under 13 names, `moveFile` among them, that move,
+  rename, copy or delete a store file or a folder holding the store beside one of 7 secrets or a plain path, in both
+  directions, under three key pairs and in `paths` or `files` lists, calls with two store paths, and shell spellings
+  behind wrappers, in compounds, a `$( )`, a heredoc, `ssh`, `execute_code` and after a `cd` into the store. The
+  tightened pairs are the file tools' new store write parts under a `store_write` deny or category line, or a
+  `target:` deny on the store. A `reserved: [store_write]` entry now also hits them, with the same outcome. A count
+  of the hook's terms on main and here over the same corpora, under three `approvals.yaml` tables that delegate to a
+  seat, finds the approvers narrowed to the principal on 605 built-in and 11,110 focused actions, each `credentials`
+  with a `store_write` part. None widens, and no once-only flag, exact binding or category changes.
+  *Amendment 2026-10-24 (issue #447, with main d79639f1):* #399 reads a gh line two ways: as gh reads it, and as the
+  gate read it before (`floor`). Main's hook took who may answer, "once", grants and observe mode from the category of
+  each reading. This change read the parts of the line only. Now `gate.readings` gives the line and its floor, and
+  `gate.no_grant` and `gate.call_approvers` read every part of each. So a store write beside a secret read keeps a gh
+  line the gate reads two ways with the principal, in either order, also when only one reading holds the part. In
+  `env; gh -R pub/repo release download v1 -D ~/.exo/policies` only the reading before #399 writes the store, since
+  gh's own reading takes `release download` for a read (#461). Main let a seat delegated `credentials` answer it. The
+  hook's own `_readings` and `_no_grant` are gone. It calls the gate's helpers, which have the names and shape of
+  #452's (#311), less its `also` reading. `binds_exact` keeps #399's `alt_targets` and `floor` terms beside
+  `no_grant`. Since #435 the plugins folder is a store folder, so a file tool that names a secret and a plugin file
+  gets a store write part too. A call that does not write files and names a store path with no secret keeps #435's
+  store write, with the call as its part. The gate differential against main d79639f1 (#423) finds 0 lowered pairs.
+  The built-in corpus, 64,465 actions x 87 policies, tightens 309 pairs on 124 actions, all `credentials` ask to
+  deny. A focused corpus of 10,583 actions x 113 policies tightens 292 pairs on 57 actions, the same way. It has
+  the store write beside a secret read in both orders with 15 gh lines the gate reads two ways or on two targets,
+  behind `sudo sh -c`, `bash -c`, `ssh` and `$( )`, and file tools on secrets, store files and plugin files. The
+  tightened pairs are this change's store write parts of a file tool that names a secret and a store file, under a
+  `store_write` deny or category line or a `target:` deny on the store. The same corpus against this branch before
+  the merge (badf22eb) lowers 0 pairs.
   *Amendment 2026-10-22 (issue #435, review):* a call that sends a store file out keeps the call. The review's wider
   corpus found 414 more lowered pairs on #435's first version. An `email_send`, `web_post`, `github_post`,
   `social_post`, `publish` or `payment` tool call with a plugin file in `files:`, and a `curl -T`, `curl -F` or
@@ -1753,6 +1856,117 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   101 are `unset \<newline>"arr[$k]"` forms. The double-quote check reads the raw word, so a `\<newline>` before it
   makes the word one the gate cannot read, and the line `opaque_exec`, as `unset a[$i]` is. That was so before this
   fix too.
+  *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
+  `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
+  word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was
+  missed, so `{"command": "cat config", "cwd": "~/.kube"}` was `read` and allowed where `cd ~/.kube && cat config`
+  asks, and `workdir` was not read at all. *The folder adds a part.* The line is now classified in the session's
+  folder alone. It keeps its own category, target, axes, text and parts. A `credentials` part is added when the call
+  reads a store from its folder, found in one of three ways. The folder is itself a store, as a `cd` word is (a link
+  is resolved). A relative word resolves into a store from it (#209). Or the line reads a relative name there as
+  after `cd <folder>` (#192), checked once per call on the whole line. The part's target is the folder, or the folder
+  joined with the name. The credentials floor reads every part, so the call asks. `no_grant` keeps a standing grant
+  off it and observe mode enforces it. `call_approvers` sends it to those who may answer both its category and
+  credentials. The line's deny entries, target rules, matrix deny cells, posting checks and reserved entries still
+  apply. Both arguments count, also for `bash`, which ignores `workdir`: the gate cannot tell which harness sent the
+  call, and the folder only ever adds an ask. *The reading from before is kept.* Where the line read in its folder
+  has a `credentials` part (#209 made such a call `credentials` as a whole), that reading is kept beside the line
+  (`Classification.also`). `decide` decides both, and the stricter outcome stands, with the reserved hits and
+  violations of both. `no_grant` and `call_approvers` read both. So no call decides lower than before, and the old
+  reading's own loss ends. With `~/.exo/run` as `cwd`, `tar czf /tmp/o.tgz . ; git push --force origin main` was
+  `credentials` and asked under a matrix that denies the push, and a seat that may answer credentials could answer
+  it. It is now denied, and only the principal answers it. *A repo's own `.claude` folder.* A folder in a repo's
+  `.claude/worktrees`, `commands`, `agents` or `skills` holds the repo's files, as the search tools judge it
+  (StoreSkip, #241: the parent holds `.git`, and the folder holds no Claude login or transcripts). Only a #209 hit
+  counts there, so `ls *`, `ls config`, `wc -l *`, `grep -r foo *`, `du -sh *`, `file *` and `rg -n config src` in
+  `<repo>/.claude/worktrees/x` keep their class. A store folder by its name inside such a folder (`x/.kube`,
+  `x/.config/gh`) is not the repo's, and is read as a `cd` there is. The `.claude` folder itself, `~/.claude` and a
+  `.claude` folder with no `.git` beside it are stores, so any call there asks. *History.* The first version (#415)
+  made the whole call `credentials`, as a `cd` does. exo-36's differential of it found 1,770 actions that went from
+  deny to ask, 118 that lost posting violations and 173 that lost reserved entries. It also read the folder in every
+  nested line, which read it into the text `ssh` runs on another host and spent the #269 budget at every level. The
+  next version added the part, but also put `workdir` among the #209 folders, which made the whole call `credentials`
+  again for `workdir`. exo-36 found 54 matrix denies that went to ask there, and 114 calls with a wider approver set.
+  A check of the version after that found these gaps. A NUL in the folder, or a relative folder while the
+  gate's own folder is gone, made `classify` raise, so the hook asked as for a call it could not classify, which any
+  seat may answer, where the line alone was denied. A store folder inside a repo's `.claude` worktree was not read.
+  With both folder arguments, the part named the first folder even when the name resolved into a store from the other,
+  so a target entry on the store missed it. *With #464.* Main's #464 made a store read after a `cd` on a store-write
+  line a `credentials` part beside the write. Its hook fallback, for a call whose decision fails, read the call's top
+  category only. This change had left the folder's read off a store-write line, so `deny: [credentials]` denied
+  `cd ~/.kube && cat config; echo x > ~/.exo/policies/a` and only asked for the same line with `~/.kube` as `cwd`.
+  That read is now a `credentials` part beside the write too. The line stays `store_write`, so only the principal
+  answers it. The fallback now reads `no_grant`, so a call with the folder's part asks the principal alone, once, in
+  every mode. abu-aska found the gap on a trial merge: `cat config` with `~/.kube` as `cwd`, under a deny entry
+  whose pattern does not compile, ran in observe mode. *With #468.* Main's #468 weighs the `credentials` part a
+  store read after a `cd` adds to a store-write line: the weight of the line's own parts, at least `costly`, and a
+  heavier command deeper in the line as a part beside it. The part this change adds for the folder kept the
+  `credentials` default, `costly`. So under `matrix: {irreversible: {private: deny}}`,
+  `cat *; touch ~/.exo/state/x; git push --force origin main` with `~/.kube` as `cwd` asked, as on main, while its
+  `cd` form was denied. A rule on `credentials` and `irreversible` split `cat *; rm -rf build` with `~/.ssh` as
+  `cwd` the same way, also before the merge. The folder's part now goes through the same helper (`_weigh`), on every
+  line the folder adds a part to, for `cwd` and `workdir`. It keeps the read's own weight, and a heavier command on
+  the line is a second `credentials` part with that weight beside it. The line keeps its category, card and
+  approvers. Since the read keeps its weight, a matrix whose `costly` cell is stricter than its `irreversible` one
+  still denies the folder form, as before. There the folder form can be stricter than its `cd` form, never lower.
+  The author found this gap in a check of the merge with main 5a9dc394. A differential from main 5a9dc394
+  (`gate_diff`) finds 0 lowered pairs: 4,977,270 on its built-in corpus (57,210 actions under 87 policies),
+  2,719,446 on the folder corpus (31,258 actions) and 1,412,532 on 16,236 actions of 396 lines with a force push or
+  `rm -rf` beside a store read. Those lines put the command plain, behind `sudo`, `env`, `timeout`, `nohup`,
+  `bash -c`, `ssh` and `mosh`, in a `$( )` and in a here-doc, each as a `cd` form and with `cwd` and `workdir` in 8
+  folders. Under 22 policies and three approval tables, none of them decides lower than before this weight or than
+  main, and no approver set widens. A folder form in a store can still decide lower than its `cd` form in four cases,
+  none lower than main, each in the limits below: under `deny: [store_write]` (#453), a line that reads a secret
+  itself under a `target:` entry on the folder, a rule or entry on the bare name, and a rule keyed on the text of a
+  line of one command. A check of this change found the last two. Rejected: the folder argument among the
+  #209 folders, which replaces the line. Keeping the old reading costs a second reading of the line and a second
+  decision, both only where the line read in its folder has a `credentials` part. That reading is a whole
+  classification, so nothing has to be found among the parts. A `cd` on the line is read as before. Limits: the
+  session's own folder (#209) is not a target. The file tools ignore a folder argument. A name that climbs out of a
+  repo's `.claude` worktree back into it is not caught (`cat ../../settings.local.json`), as before. The store-write
+  checks do not read the folder argument (`echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`,
+  #453). A line that reads a secret itself keeps that reading, so a `target:` entry on the folder does not reach it.
+  The part's target is the folder joined with the name, where a `cd` form's is the name alone, so a rule on
+  `target: config` reaches only the `cd` form. The call's text has no `cd`, so an allow rule keyed on `command` that
+  names a line of one command (`git push --force origin main` in `~/.ssh`) lifts the matrix deny on its parts, as on
+  any such line (#394), where the `cd` form keeps it. Each is decided at least as on main, and all but the #453 store-write case ask. A differential against main
+  (`gate_diff`, #423, at 3ddd89e9, whose gate is the same as 39cafcba's) finds 0 lowered pairs: 4,803,183 pairs on
+  its built-in corpus (55,209 actions under 87 policies), and 1,905,648 pairs on 21,904 folder-argument actions (68
+  lines under 42 folder spellings and 9 tool and key forms, with both keys, relative folders and session folders in
+  a store). On the 21,292 actions of that corpus, under 9 policies and three approval tables, no call gets a wider
+  approver set or loses `no_grant`, `binds_exact`, a reserved hit or a violation. No lowering is intended.
+  *With #399 (2026-10-24).* Main's #439 reads a gh line as gh does. It keeps the line as read before #399 as its
+  `floor`, and the targets gh may land on as `alt_targets`, and `decide` keeps the strictest of them on each axis
+  (`_strictest`). The exo-gate hook read the floor in its own `_readings`. In a shell call with its own folder the two
+  kinds meet: the floor is read in that folder too, so it can carry its own reading from before #311. `gate.readings`
+  now lists every reading: the call, its `also`, its `floor` and the floor's `also`. `decide` decides each, the
+  `also` reading through `_strictest` too, so its exposure, third party and repeated violations stand beside the
+  outcome, the reserved hits and the violations it kept before. `no_grant`, `call_approvers` and `body_unseen` read
+  every reading, and so does the hook: body files, the required executor, "once", grants, observe mode, who may
+  answer and the fallback for a failed decision. The hook's own `_readings` and `_no_grant` are gone. `binds_exact`
+  binds a call no grant may cover, one with other targets and one with a floor. Each reading matters. Under a scope
+  that makes myorg private and a matrix that allows a private force push,
+  `git push --force origin main ; gh -R pub/repo pr comment 5 -b x` with `~/.kube` as `cwd` asks from its floor, as
+  on main, and is allowed without it. With `~/.exo/keys` as `cwd`, `gh -R $R secret set X`
+  keeps a reserved `credentials` hit that only the floor's `also` has. A differential (`gate_diff`) from main
+  8c09c29c finds 0 lowered pairs: 5,762,445 on its built-in corpus (66,235 actions under 87 policies), and
+  1,209,742 on 11,306 actions under 107 policies, its 87 and 20 more on scopes, targets and posts. Those are 24 gh
+  lines with `-R`, URL operands and moved subcommands, alone and beside a store read, a store write, a force push,
+  `bash -c` and `ssh`, in 9 folders under 4 tool and key forms, and their `cd` forms. Against this branch before
+  the merge the same pairs lower 0 too. Under 20 of those policies and three approval tables, none of the 9,408
+  actions of that corpus decides lower than main or the branch on the exposure, the third party, `no_grant`,
+  "once", `binds_exact`, the executor's body check, the fallback or who may answer.
+  *Joined and folded (2026-10-24).* The reading from before #311 read the folder folded (`os.path.abspath`), as
+  #209 did. That erases a `..` after a link: the shell runs in `sdir/../policies` through `sdir`. The folder is now
+  read both ways: joined to the session's folder as written, as the kernel reads it, and folded, as bash's `cd` and
+  #209 read it. The part's target goes past a link the same way. So with `~/proj/sdir` a link to `~/.exo/state`,
+  `cat ../keys/seat` with `sdir/../policies` or `sdir` as `cwd` keeps its reading from before #311, and its part
+  names `~/.exo/keys/seat`, which `deny: ["target:*/.exo/*"]` reaches. Reading the folder joined alone would lose
+  main's ask for `tar czf /tmp/o.tgz .` with `xl/../kl` as `cwd`, where `~/proj/kl` links to `~/.ssh`. #527
+  (#340) reads relative store writes from the joined folder too. A trial merge with it found the folded folder
+  reopened its fix there. *With #435 (2026-10-24).* Main's #440 makes `~/.exo/plugins` a store folder. A read in
+  it by a relative name from the folder argument asks, as its `cd` form does. A write there by a relative name stays
+  a `local_write`, as on main: `echo x > hook.py` with `~/.exo/plugins/foo` as `cwd` (#453).
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the
@@ -1785,7 +1999,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   A `sudo` or `doas` command that writes through a redirection in a loop body (`for x do sudo echo hi > /tmp/f; done`) took the
   redirection's `local_write` and now takes the `read` main gives that command alone, so an ask or log line on
   `local_write` no longer reaches it (104 pairs on 36 actions in the original corpus). The review's expanded
-  corpus also found 66 `doas` pairs on 22 actions. `deny: [local_write]` still denies it (D-075).
+  corpus also found 66 `doas` pairs on 22 actions. `deny: [local_write]` still denies it (D-075). Since #454 that
+  command alone is a costly `local_write`, so the loop line is a `local_write` again and this group is gone.
   Left out: `time for NAME do ...`, since the parser does not read `for` after `time` as a reserved word. It asks as
   `opaque_exec`, as `time { ...; }` does.
   *Amendment 2026-10-21 (issue #313, follow-up to #199):* on Linux each thread's `/proc/<pid>/task/<tid>/environ`
@@ -1860,6 +2075,258 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `and N more on other posts` names no text, so it is not compared as one. Its N counts in each tree's total, and
   a head with a lower total is lower, so a post skipped past the listing cap still shows. A built-in line of 25
   posts reaches the cap.
+  *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
+  runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
+  write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
+  or an escalation on `local_write` missed it, so `{local_write: ask}` allowed it while `echo hi > /tmp/f` asked.
+  Only a deny or reserved entry reached the write (D-075, #191). Now, when the costly `read` or `shell` part of a
+  sudo command leads the line, a copy of the first sudo write of the line leads in its place, with that cost. The
+  line is a costly `local_write` with the written path as target: it keeps its matrix cell and has the category and
+  target it has without sudo. The copy's summary names the part it displaced and the path (`chmod, write /tmp/f`),
+  so the card, the ledger and the decision model (D-015) still name the program. The copy keeps that part, and
+  `decide` reads the line both ways: with the copy leading, and with that part leading, as before. The stricter
+  outcome stands. So a policy that reached the line before still does: `{read: ask}`, an escalation on `read`, a
+  scope on the read's target, a rule on the repo of a gh read (`{target: o/r*}: ask` for
+  `sudo gh pr view 1 -R o/r > /tmp/f`). An ssh hop gives its host to the displaced part when it has no target, as it
+  gave it to that part when it led, so `{target: prod}: ask` still asks for `ssh prod 'sudo echo hi > /srv/out'`,
+  and a reserved entry on the host names that part as on main.
+  Otherwise the parts stay as they were. A part that outranks the `read` still leads, also one that would tie with a
+  costly write, such as an unknown program (`sudo echo hi > /tmp/f; foo` asks as `opaque_exec`). A store path stays
+  `store_write`, and `/dev/null` adds no write. A copy made on a nested line (a `$( )`, backticks, `<( )`, an ssh hop)
+  is a costly `local_write` part of the line around it. There it would take the lead from a part it ties with, which
+  led before as the first of the tie. So `_combine` ranks the parts as before too, each copy as a `read` with its own
+  axes. A part that outranks a `read` leads again: an unknown program, or ssh running its stdin. Otherwise the copy
+  leads, and the part that led before is the one it displaced. The copy's summary then names that part. Without
+  this, `echo $(sudo echo hi > /tmp/f) $(foo)` was allowed and `ssh h1 'sudo echo hi > /tmp/f'; ssh h2 foo` logged
+  under the default policy, a rule that denies `opaque_exec` on `prod` only asked for
+  `ssh -p 2? prod 'sudo echo hi > /tmp/f' < x.sh`, and `{target: a/b*}: ask` missed
+  `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)`. Each now decides as on main.
+  An ssh `-o RemoteCommand=` raises the exposure of the line it runs to `internal`, in place. It raised the copy but
+  not the displaced part, and `_combine` ranked the copy as that part, at its old private axes. So an earlier costly
+  part took its place: under `{opaque_exec: allow}` and `{target: a/b*}: ask`,
+  `sudo ls; ssh -o RemoteCommand='sudo gh pr view 9 -R a/b > /tmp/f' h` logged and `foo; ...` was allowed, where
+  main asked. The same held for `-oRemoteCommand=`, `scp -o RemoteCommand=` and a `$( )` in the remote command. Now
+  every raise in place goes through one helper, `_raise_axes`, which raises the displaced part with the copy, as the
+  hop raises every part. The others are sudo and the privileged wrappers, which make a reversible part costly. A copy
+  is costly from the start, so they change no copy today. And `_combine` ranks a copy by its own axes, so a raise
+  that missed the displaced part would still not move the lead.
+  When both readings give the same outcome, the decision keeps what each found, as an equal level does in `decide`:
+  both reasons, the higher exposure and any third party. Before, the copy's reading alone stood, so a scope that made
+  the written path private made `ssh prod 'sudo echo hi > /tmp/f'` private, where main had it internal, and a host
+  rule beside a costly internal ask cell dropped off the card. The card links to the displaced part (a gh read's
+  issue) when the line asks with that part leading, as main's card did. A required executor refuses the body file of
+  the displaced part too (`sudo gh pr view 1 -R o/r -F /tmp/b > /tmp/f`), as main did. The ledger view leaves the
+  displaced part out, as it leaves out every part, so its command text never reaches the ledger. A redirection on a
+  compound around a sudo command (`{ sudo echo hi; } > /tmp/f`) or on another command of the line is not on a sudo
+  command, so the dominant part decides there, as on any line. A `code` part never leads a shell line, since the
+  interpreter's costly `opaque_exec` part outranks it, so only `read` and `shell` are named. Rejected: making each
+  write of a sudo command costly. It then ties with an unknown program later on the line, and the first part wins a
+  tie, so `sudo echo hi > /tmp/f; foo` and `while true; do sudo echo hi > /tmp/f; break; done` would be allowed where
+  they asked. A rule on a reversible write would also miss it. Also rejected: ranking the reversible write above the
+  costly `read`, which moves the line to the reversible cell of the matrix. And deciding the line with the copy alone:
+  a line, rule or scope on the displaced part no longer reached it, so a rule on the repo of
+  `sudo gh pr view 1 -R o/r > /tmp/f`, or on the host of an ssh line, asked on main and allowed or logged.
+  Grants and approvers follow the line's category and target where only the write asks, as under
+  `{local_write: ask}`. A standing grant is keyed on them (D-033), so its key moves from a costly `read` or `shell` on
+  the tool to `local_write` on the first written path. An "always" for `echo started > /tmp/log` now covers a costly
+  sudo command whose first sudo write goes to `/tmp/log`, and a second sudo command on that line, while one for a
+  costly `read` on the tool no longer covers it. On main a grant on (`shell`, the tool) was as broad, so the key
+  moves rather than widens. A reserved hit keeps the principal's ask from a grant (D-075) on any part of the line,
+  the displaced part and the write included. The line is also the act of the part the write displaced, and on main
+  the write was another part of that line. Without this, under `reserved: [local_write]`, an "always" on
+  `sudo echo hi > /tmp/f` let that line run again with no ask, where main asked each time.
+  The approvers follow the new category there too: with approvals.yaml `approvers: {local_write: ["seat:helper"]}`,
+  `sudo echo hi > /tmp/log` goes to `[principal, seat:helper]`, as `echo hi > /tmp/log` does.
+  Where the displaced part names a target of its own, a gh read's repo or an ssh host, the line is about that target
+  too. There a grant on the written path answered a rule on the repo or host: with `{target: prod}: ask` and a grant
+  for `echo hi > /srv/out`, `ssh prod 'sudo echo hi > /srv/out'` ran, where main asked. An "always" on that line also
+  covered the same write on another host. And the helper above could answer the ask the host rule raised, where main
+  asked the principal. The same held where the line asks with the displaced part leading (its category, a rule, a
+  cell or an escalation on it) and that part has no target: under `{shell: ask, read: ask}`, an "always" on
+  `sudo echo hi > /tmp/f` let `sudo chmod 4755 /usr/bin/python3 > /tmp/f` run with no ask, and under `{shell: ask}`
+  the helper answered `sudo chmod u+s /tmp/x > /tmp/log`. So in both cases the line binds its approval to the exact
+  command (`binds_exact`), and only those who may answer both categories may answer it. `Decision.displaced_asks`
+  tells the hook of the second case, under the pinned or a changed policy. A grant on (`read`, the host) no longer
+  covers such a line either.
+  *With #399.* #399 landed first. A gh read's other targets (`alt_targets`) stay on the displaced part: the second
+  reading is decided on each of them, the ssh hop gives its host to one that is the current repo, the card names
+  them when that reading asks, and a displaced part with any of them binds the approval to the exact command. A line #399 also reads as before
+  (`floor`) can be a sudo write line in that reading only, as `sudo gh pr "$V" 5 > /tmp/f` is. #399 lets only
+  those who may answer that reading's category answer the line. That category is now the write's, so the hook also
+  keeps the approvers of that reading's displaced part, always. Without that, with approvals.yaml
+  `approvers: {opaque_exec: [seat:h], local_write: [seat:h]}`, `seat:h` answered that line, where main asked the
+  principal alone. An ask from the displaced part of any reading is kept when the readings merge (`_strictest`).
+  Against main 8c09c29c, which has #399, the differential lowers no pair either: the built-in corpus (67,396
+  actions x 87 policies), #399's own corpus (7,014 x 100), its gh lines behind sudo with a write, nested and over
+  ssh (26,748 x 126), the five focused corpora above, and 15,750 lines of sudo writes fed to a shell on stdin, in
+  heredocs, `eval`, `su -c`, `find -exec`, `xargs`, git and rsync exec options, interpreters, container exec and
+  ssh hops (37,308 x 113).
+  *Lowered lines.* None. The gate differential (#423) against main 5a9dc394, with main's script, lowers no pair in
+  six runs. The built-in corpus: 58,405 actions x 87 policies. 1,564 lines built for this change (sudo and doas with
+  options and behind other prefixes, each write redirection, `/dev/null`, store paths, compounds, subshells, `$( )`,
+  `bash -c`, `ssh`, `xargs`, heredocs and cd chains): 20,816 actions with their forms, under the built-in policies and
+  16 keyed on `read`, `local_write` and cost. 647 lines with the write on other paths and in other places (before the
+  command, split by `\<newline>`, behind `time -p`, `exec -a`, `stdbuf` or `ionice`, in loops, `case`, backticks, ssh
+  with options or two hops): 8,268 actions, under the built-in policies and 18 keyed on targets, scopes, `shell` and
+  `command`. 4,760 lines of gh reads with `-R` or `repos/` paths and other commands, behind sudo, doas and their
+  options, with one or two writes, in subshells, braces, cd chains, loops, `$( )`, `bash -c`, heredocs and one or two
+  ssh hops: 41,160 actions, under the built-in policies and 19 keyed on the repo, the host and the paths. 3,000 lines
+  with a sudo write in a `$( )`, backticks, `<( )`, `bash -c` or an ssh hop beside 34 other commands, in both orders,
+  and ssh lines that run their stdin: 6,384 actions, under the built-in policies and 43 keyed on the repo, the host,
+  `opaque_exec`, `read`, `shell`, `local_write` and `command`. Before `_combine` ranked nested copies that way, that
+  corpus lowered 12,220 pairs on 958 actions. The other four lowered no pair before it either. 10,400 lines with a
+  sudo write beside a costly gh read, an unknown program or a post, run by `ssh -o RemoteCommand=` (also
+  `-oRemoteCommand=`, `scp` and `sftp`, after `-F`, behind sudo, `env` or `timeout`, in `$( )` and backticks),
+  `ProxyCommand`, `LocalCommand`, `KnownHostsCommand`, an ssh hop, `bash -c` or a privileged wrapper: 23,230 actions,
+  under the built-in policies and 27 keyed on the repo, the host, `read`, `shell`, `opaque_exec`, exposure, scopes and
+  `command`. Before the raise reached the displaced part, it lowered 41,585 pairs on 8,239 actions, the built-in
+  `categories_allow` and a deny on an internal `read` among them. Each run only tightens:
+  a line keyed on `local_write` or its cell now reaches these lines. After a `cd` into the store or `/dev`, an ssh
+  line that runs a sudo write is now a store write that asks, as the same line without sudo is on main. Against this
+  change before the nested ranking, 2,088 pairs on 618 actions of the last corpus and 79 pairs on 31 built-in actions
+  decide lower: a policy on `local_write` that reached the copy, or one that allows `opaque_exec` or `vcs_push`, now
+  meets the part that leads on main. Each decides as on main. The grants and approvers above are outside `decide`, so
+  the differential does not count them.
+  Against main d79639f1, which adds #440, the differential lowers no pair either: the built-in corpus (67,654
+  actions x 87 policies), the `RemoteCommand` corpus above (23,230 x 114), and 8,330 sudo write lines in 17 places
+  (`$( )`, ssh hops, `RemoteCommand`, `bash -c`, loops, cd chains into the store and the plugins folder) under the
+  built-in policies and 26 more keyed on categories, cells, the repo, the host, reserved and deny entries,
+  escalations and `command` (49,490 x 113). A check of the hook steps past `decide` (the exact binding, the
+  approvers, the grant key, the reserved check and "once") over those 8,330 lines under the 26 policies finds no
+  pair looser than on main, apart from the grant move above where only the write asks. Before the reserved check
+  above, it found 2,600 such pairs.
+  *Integration 2026-10-24 (#454 with #316):* the pure `_lead` selector uses the same displaced-part ranking as
+  `_combine`. An ssh line with a sudo write and unread stdin therefore fills the host on the opaque stdin part
+  that leads, as before: `ssh -p 2? prod 'sudo echo hi > /tmp/f' < x.sh` keeps `prod` as its target, so a deny on
+  opaque execution at that host still denies. The two existing stdin/sudo regression rows fail without this join.
+  *Amendment 2026-10-22 (issue #316, follow-up to #240):* ssh's stdin reached its login shell in five more ways the
+  gate did not see, so the line read as plain `ssh` and was allowed, even under category denies. (1) A compound fed a
+  stdin the gate cannot read: the closer's `<` from anything but a lone `/dev/null`, or a pipe in whose text is not
+  known (`{ ssh host; } < cmds.sh`). Where `_feed_compound` fed such commands nothing, it now marks them
+  (`stdin_unknown`). (2) A `>( )` body, fed what the command around it writes. Its source stays among the line's
+  substitution sources, typed `_OutSub`, so every reader of them still reads it: the cd store read (#192) and the
+  declare re-read (#188) lost it in the first draft, which kept these bodies in a list of their own. The declare
+  re-read reads a `>( )` body again unless the line read the same text as a `>( )` too. A command in the body that
+  sets its own stdin is not fed. (3) A `$( )`, backticks or `<( )` inherits the stdin of the command it sits in. On a
+  fed line, or where a pipe or a compound feeds a command, it is read as fed. A command's own `<` is set up after its
+  words are expanded, so it does not count. (4) A remote hop. An ssh that passes its stdin on (no `-n`, `-N` or `-f`)
+  gives it to its remote command. That command is read a second time, as a line fed that stdin, and when an ssh there
+  with no stdin of its own runs it, wherever it sits, behind a wrapper and over more hops (`ssh a 'cd /; ssh b'`, `ssh
+  a ssh b ssh c`), the outer ssh is a hop. The ssh part that runs its fed line's stdin carries the signal `runs its
+  line's stdin`, which only that second reading looks for. A known text is read as for the direct form. (5) The
+  command a wrapper runs (`uv run`, `flock`, `nsenter`...) gets the wrapper's stdin (`_wrapped`): a
+  compound's feed, the wrapper's own `<` from anything but `/dev/null` and a pipe into it reach it (`{ uv run ssh
+  host; } < cmds.sh`, `uv run ssh host < cmds.sh`, `cat cmds.sh | uv run ssh host`), and a wrapper with a stdin of its
+  own keeps a fed line's mark from it (`>(uv run ssh host < /dev/null)`). `xargs` is read the same way, which reads
+  more than runs: GNU xargs gives its command `/dev/null` unless `-a` names the file it reads (and `-o` gives it the
+  terminal), so a stdin read as run there fails closed. The fed mark is a context variable that
+  names one line (`_fed_stdin`), not a classify_shell argument, so code that wraps `classify_shell(cmd, depth)` keeps
+  working. As for #240, these lines take the category of what runs. The part that runs the stdin is a part of the line
+  beside ssh's own part, not built into it, and ssh's own part keeps the reading it had before #316 (in a hop, the
+  remote command read unfed). So sudo or a privileged wrapper around ssh still makes that part `costly`, and a `deny`
+  or `reserved` entry still finds the targets and categories it found: ssh's own part names the host as it did where
+  ssh read no stdin. The direct #240 form is built the same way. There the part that led when #240 built the parts
+  into one still leads on equal parts and takes the host, so the line decides and lists its hits as on main. So `sudo
+  ssh host < cmds.sh` is now denied under a rule that denies `costly` `shell` parts, where it asked. Last, a
+  `-n`, `-N` or `-f` before a word that may expand to no word or several is an option whatever the word becomes, so
+  ssh does not read its stdin then: `while read h; do ssh -n "$h" uptime; done < hosts.txt` keeps its reading, where
+  it asked once the compound's feed was read. A `--` before the host ends the options, so a letter after it does not
+  count: in `ssh -- -n "$h" < f` ssh takes `-n` as the host, and the line asks as on main.
+  *Lowered on purpose:* the new part is `opaque_exec`, or what a known text reads as, and runs on the remote host. It
+  can be the line's deciding part (the most severe part, or the first of equal ones), and the steps of `decide` that
+  read only that part then read it. A line decides lower than on main in three ways. (a) A policy that allows or logs
+  `opaque_exec`, by a category line or a rule (also one keyed on the text that shows where the stdin comes from),
+  decides it lower than the displaced part did. That part is sudo's or a privileged wrapper's, which the matrix logs
+  or the opaque floor asks about (`{ sudo ssh host; } < cmds.sh`, `nsenter -t 1 ssh host < cmds.sh`), a `git push` or
+  `gh pr merge` the matrix logs (`{ ssh host; git push origin main; } < cmds.sh`), or a `shell` part a category line
+  logs (`uv run ssh host < cmds.sh` under `categories: {shell: log, opaque_exec: allow}`). Main decides the line where
+  the same ssh reads its stdin directly the same way (`sudo ssh host < cmds.sh`, `ssh host < cmds.sh; git push origin
+  main`), and a privileged wrapper as the same wrapper around a shell that reads it (`nsenter -t 1 bash < cmds.sh`).
+  (b) sudo and the privileged wrappers make `costly` only the deciding part of a nested line they run (a remote
+  command, a `bash -c` line). Where a `>( )` or a `$( )` in that line now reads an ssh as fed, the new part decides
+  that line, so a rule that denies `costly` `shell` or `read` parts asks instead: `sudo ssh jump 'tee >(ssh host)'`,
+  as main decides `sudo ssh jump 'ssh host < f'`. (c) The flag before a word that may expand: `ssh -n "$h" uptime <
+  hosts.txt` took the #240 reading (`opaque_exec`, ask) and now takes its own (`read`, allow), since ssh never reads
+  its stdin then. That `opaque_exec` part is gone, so `deny: [opaque_exec]` no longer denies such a line, a reserved
+  entry loses its hit on that part, and after a `cd` into the store the line is no longer a store write
+  (`cd ~/.exo/state && ssh -n "$h" uptime < hosts.txt`). Each such line decides as main decides it with a plain host
+  in place of the word (`ssh -n host uptime < hosts.txt`). In (a) and (b), `deny` entries, `reserved` entries and
+  category lines that deny a category still see every part. The #423 differential against main 5a9dc394, each tree
+  in its own process, finds only these kinds, and a script sorted every lowered pair into one. (c) is each pair that
+  is not lower once the sure-flag change is undone, and each of those has the outcome and the reserved categories
+  main gives the line with a plain host in place of the word. The built-in corpus, 55,970 actions under the
+  87 policies built into the script, lowers 4,721 pairs on 133 actions: 145 of kind (a), 6 of kind (b) and 4,570 of
+  kind (c), most of them the test lines for (c) in the compound forms the script makes of each line. 72 of the (c)
+  pairs lose the reserved hit on the `opaque_exec` part that is gone, and still ask. A focused corpus of 33,828
+  actions (5,740 lines and the forms the script makes of them: twenty-six fed forms behind nineteen wrappers,
+  twenty-four host spellings with flags, option values and `--` in six fed forms, hops with thirty-four remote
+  commands behind twelve outer spellings and nine stdins, the store and secret folders around fed lines, posts beside
+  hops, privileged wrappers around nested fed lines, and everyday ssh, logging and declare lines) under 114 policies
+  (the 87 and 27 more: host targets and scopes, deny and reserved entries, `shell` and `opaque_exec` category lines,
+  and rules on `ssh`, `tee`, `uv run`, `sudo`, `cat`, `while`, costly parts and exposure) lowers 110,914 pairs on
+  6,858 actions: 9,354 of kind (a), 176 of kind (b) and 101,384 of kind (c), 3,017 of them a lost reserved hit.
+  Kind (a) also takes in a known text a hop reads under a policy that allows or logs its category (32 of the focused
+  pairs): `gh pr comment 7 --body done && echo 'rm -rf /srv/app' | sudo ssh bastion 'timeout 5 ssh db1'` under a
+  policy that allows every category goes from the post's third-party ask to `allow`, as the line with `sudo ssh db1`
+  in place of the hop does. A known text that reaches an ssh only through a `>( )` is read as a stdin the gate
+  cannot read, as for `tee >(bash)`, so `echo 'rm -rf /srv' | ssh jump 'tee >(ssh host)'` is `opaque_exec`, not
+  `delete`. Known limits: a nested shell in a fed line reads its own line unmarked (`>(bash -c 'ssh
+  host')`, `flock -c`, `env -S` ask anyway). On a fed line a `$( )` is read as fed even where the command it sits in
+  reads a pipe, which fails closed. A stdin set earlier by `exec < file` is still not seen. Rejected: parsing the
+  remote command for one ssh as its first command, the first draft, which missed `ssh a 'cd /; ssh b'` and a second
+  hop. Rejected too: building the new part into ssh's own part and reading a hop's remote command only as fed, an
+  earlier draft of this change, which lost sudo's `costly` mark and the reserved hits of the part it displaced. And
+  keeping the displaced part as the deciding part, which would make these lines decide unlike their direct form.
+  *2026-10-24, merged with main d79639f1 (#399, #435), and exo-36's review of #520:* #399 decides a gh post on each
+  target the gate cannot rule out, and an ssh gives an empty one its host. The part that runs ssh's stdin takes that
+  fill too where it names the host for an empty target: where it leads (the direct form) and where the stdin is not
+  direct (a hop, a compound's feed). Without it, `echo 'gh pr comment -wR myorg/app -b hi' | ssh buildhost` lost
+  main's deny under a `github_post` deny on `buildhost`, its other target and its reserved hit. After a hop the host
+  is the first one, where the line hands the stdin over, as for the part's own empty target before the merge, so a
+  deny on the first host still denies the post; ssh's own part names the inner host. A `$( )` in a value declare
+  reads again (#188) runs while declare runs, so it is read as fed where a `$( )` of the line is, and also where
+  declare has a stdin of its own (`cat f | declare -a 'a=($(ssh h))'`, `declare -a 'a=($(ssh h))' < f`): it asked
+  as `shell`, and asks as `opaque_exec` now. Cost: a hop's remote command is read a second time, as a fed line, so
+  a crafted line of quoted hops reads in up to about 1.5 to 1.8 times main's time: exo-36 measured 10 nested quoted
+  hops (88,646 characters) at 2.9 to 3.3 s on main 5a9dc394 and 4.0 to 5.5 s on this branch, and a line of quoted
+  hops that fan out (15,657 characters) reads in 0.12 to 0.14 s on main d79639f1 and 0.21 to 0.23 s on the merge.
+  Each line is still read once per depth and per mark. The #423 differential against main d79639f1, each tree in its
+  own process: the built-in corpus, 65,231 actions under the 87 policies, lowers the same 4,721 pairs on 133
+  actions, 145 of kind (a), 6 of kind (b) and 4,570 of kind (c), 72 of them a lost reserved hit. A focused corpus of
+  10,368 actions (#399's gh lines with `-R`, URL operands, other readings, a subcommand past an option and gh api,
+  fed to ssh through each source above and run as ssh's remote command) under 109 policies (the 87 and 22 more:
+  deny and reserved entries on the hosts and on `github_post` with a host as target, scopes, and rules on gh and
+  ssh) lowers 16 pairs on 8 actions, all of kind (a): `{ ssh buildhost; } < cmds.sh; gh pr merge ...` under a
+  policy that allows `opaque_exec`, as `ssh buildhost < cmds.sh; gh pr merge ...` is on main. Against this branch
+  before the merge the focused corpus lowers nothing. A second check of the merge ran a focused corpus of its own:
+  5,810 actions (the gh lines above beside a local post, posts read in a hop, and many posts on one line) under 140
+  policies (the 87 and 53 more, among them scopes that make `myorg/*` and the hosts private, with a footer or a
+  scrub). It lowers 278 pairs on 54 actions: 222 of kind (a), 40 of kind (b), and 16 that kind (a) also takes in
+  now. A post a hop reads can displace a later post of equal weight as the deciding part, and #399 decides only the
+  deciding part on its other targets. So `echo 'gh pr comment -wR myorg/app -b hi' | ssh jump ssh buildhost && gh
+  pr comment -wR myorg/app -b hi` is decided on the hop's post, on `myorg/app` and `jump`, both private there, not
+  on the later post's current repo. Main lists the later post's missing footer or scrub hit twice, for that reading
+  and for the post's copy on the current repo. The merge lists it once, for the copy, and the line still asks. Under
+  a policy that allows `opaque_exec` too, such a line goes from the later post's third-party ask to `allow`. Each
+  such line decides as main decides it with `ssh buildhost` in place of the hop, on the outcome, the exposure, the
+  third party and the violations: 250 of 250 lowered pairs of 80 such lines under those 53 policies. Against this
+  branch before the merge that corpus lowers nothing.
+  *Revisit if:* sudo and the privileged wrappers mark every part they run `costly` ((b) then goes).
+
+  *Amendment 2026-10-24 (issue #528):* the shared patch-path reader also reads Codex's `*** Move to:`
+  destination, alongside its `*** Update File:` source. Before this, a move from an ordinary file into a
+  protected store was an allowed local write. Both paths now use the same secret and store checks as the other
+  patch headers, including braces and absolute links.
+
+  A secret destination is `credentials`. A store destination
+  is `store_write`. The file's own local-write parts keep policy entries on both source and destination. A
+  `+*** Move to:` line is hunk content, not a header. Chosen over a separate move-path checker so the two formats
+  share protection and limits.
+
+  Relative aliases into non-secret stores still need #340's resolution. Relative
+  secret links use the existing secret-path check. No patch is applied while classifying, and no tool schema or
+  executor behavior changes.
+
   *Amendment 2026-10-24 (issue #342, review of #421):* the #202 reading took every operator of a store variable other
   than `-`, `=` and `+` as the value. A pattern substitution can add text: `${HOME/%//.kube}` is `$HOME/.kube` in
   bash. So `cat ${HOME/%//.kube}/config` was matched as `$HOME/config` and allowed, and `cp x
@@ -2083,6 +2550,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Keys:** `$EXO_HOME/keys/registry.json` (0600) pins local signing keys (on creation in `keys/`), bus seat keys,
   and principal ids. `exo log verify` and `exo memory verify` pass it as `trusted`: an unpinned key fails, and so
   does a seat signing as another pinned name. `exo keys` lists and pins.
+  *Amendment 2026-10-23 (#132):* the registry gets a `peers` map for peer seats of other homes, pinned with
+  `exo keys pin --peer SEAT PUB`. Before #132 peers were not pinned: the receiver trusted the key in the sender's
+  presence file. A plain `exo keys pin NAME PUB` writes `keys`, the ledger signers, so it would make a peer's key a
+  signer here, principal-authored events included. `owners` and `allows` read `keys` alone, so a peer pin never
+  signs a ledger. For peer messages, a `keys` entry for a name with no key file in `keys/` and no seat file here
+  counts as a peer pin, so its seat is `other`. The peer rules are in D-026's amendment of the same date.
 - **Head anchor:** each append writes seq, count and chain hash to `<ledger>.head` and
   `$EXO_HOME/keys/heads/<hash>.json` (0600). Verify fails when the ledger no longer reaches an anchor or its hash
   there differs, or when a trigger was missing on open. Append refuses to write past a broken anchor.
@@ -2188,7 +2661,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   after every untrusted one. A multiline tool path or command in a list field, or a pre-#349 file's unquoted
   summary, could put a forged `## Next steps` first and beat the genuine copy, retrieval query included. List
   fields and the topic line are now flattened to one line when written, and `load_handoff` reads Next steps from
-  its last copy in the file. Every other section still reads the first.
+  its last copy in the file. Every other section still reads the first (Decisions changed with #395, below).
+- *Amendment 2026-10-24 (#395):* the header values kept their line breaks. `_attr` escaped only quotes and
+  backslashes, so a topic, session or principal holding a forged `## Decisions made` line put it in the file ahead
+  of the real section, and first-wins loaded the forged copy. A `-->` in a value also ended the header early. The
+  writer now folds every header value, the path line and the path in the launch line to one line. `load_handoff`
+  ends the header at the first `-->` outside a quoted value, folds each value it recovers, and reads sections only
+  after the header. Decisions is read from its one exact heading: the only one after the header, or the only one
+  before `## State` when the file has a single State heading. A forged copy can sit before the real one (an older
+  file's path or title line) or after it (a summary from before #349, a list field from before #353), so two
+  copies otherwise read as no rulings and no corrections. A heading with an extra space or tab after `##` is never
+  read as the section. `resume_text` folds the header to one line too, so a header value no longer reaches the
+  system message as a section. An older file's path and launch lines, title, list fields and summary still reach
+  it as that writer left them.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
