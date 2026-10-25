@@ -1316,10 +1316,16 @@ gate does not read:
   `P='/tmp/x ls'` binds `ls`, and so does `hash -p /tmp/x {ls,/}`, which bash runs as
   `hash -p /tmp/x ls /`. Both are opaque. One double-quoted path word (`hash -p "$P"`) does not
   split, and a glob keeps a slash it has (`hash -p /tmp/x*`), so these stay `read`.
+  A word that starts with an unquoted `[` is a glob too, also after a `\<newline>`. With files
+  named `-p`, `as` and `ls` in the folder, bash runs `hash [-]p /tmp/x ls` as
+  `hash -p /tmp/x ls` and `hash -p [al]s` as `hash -p as ls`, so both are opaque. So is
+  `hash [l]s`, as `hash l?` is. A quoted or escaped `[` (`hash -p '[al]s'`) is no glob.
   A lone quoted word at the end (`hash "$cmd"`) is one word with no name after it,
   so it stays `read`. So do plain `hash`, `hash -r`, `-d` and `-t`, a `-p` after the first
   operand, one with no path, an empty path or no name after it, and a name with a slash, which
-  bash skips.
+  bash skips. A rebind is no `read` now, so a policy entry that names `read` (a category line, a
+  deny, reserved or rule entry) does not reach it: under `categories: {read: deny}`,
+  `hash -p /tmp/x ls` asks and `hash -p /tmp/x ls; ls` is still denied for its `ls`.
   Setting `BASH_CMDS`, the table `hash -p` fills, is opaque in any of the forms above
   (`BASH_CMDS[ls]=/tmp/x`, `read 'BASH_CMDS[ls]'`), and so is `BASH_ALIASES`, which defines an
   alias. `hash -p` and these values only record a path, so for the store check their part is the

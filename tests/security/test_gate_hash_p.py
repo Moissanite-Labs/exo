@@ -76,7 +76,28 @@ ASK = [
     'hash -p "$@"; ls',
     "hash -p /a -p$P; ls",                   # so may an attached path, or an option word after the path
     "hash -p /a -l$O; ls",
+    "hash [l]s",                             # a glob as an option word asks, as `hash l?` does
 ]
+
+# A word that starts with `[` is a glob the lexer does not mark. With files named -p, as and ls in the folder, bash
+# runs `hash [-]p /tmp/x ls` as `hash -p /tmp/x ls` and `hash -p [al]s` as `hash -p as ls` (abu-aska, #409).
+BRACKET = [
+    "hash [-]p /tmp/x ls; ls",
+    "hash [-]p/tmp/x ls; ls",
+    "hash [-]lp /tmp/x ls; ls",
+    "hash -l [-]p /tmp/x ls; ls",
+    "builtin hash [-]p /tmp/x git; git log",
+    "command hash [-]p /tmp/x ls; ls",
+    "sudo hash [-]p /tmp/x ls; ls",
+    "ssh host 'hash [-]p /tmp/x ls; ls'",
+    "hash -p [al]s; ls",
+    "hash -p [a-z]; ls",
+    "hash -p /a -p [al]s; ls",
+    "hash \\\n[-]p /tmp/x ls; ls",           # also after a \<newline>, which bash drops first
+    "hash -p \\\n[al]s; ls",
+    "hash [\\\n-]p /tmp/x ls; ls",
+]
+ASK += BRACKET
 
 READ = [
     "hash",
@@ -97,6 +118,11 @@ READ = [
     'hash -p /a "-l$O"; ls',
     "hash -p /tmp/x*; ls",                   # a glob keeps the slash it has
     "hash -p /tmp/x /usr/bin/l*; ls",
+    'hash -p "[al]s"; ls',                   # a quoted or escaped `[` is no glob
+    "hash -p '[al]s'; ls",
+    "hash \\[-]p /tmp/x ls; ls",
+    "hash -p \\[al]s; ls",
+    "hash -p ./[al]s; ls",
     "hash ls $O",                            # words after the first operand are names
     "ls",
     "git log",
@@ -139,6 +165,41 @@ def test_the_card_names_the_rebound_program_and_its_file(line, card):
     assert c.target == card.rsplit(" ", 1)[-1], c
 
 
+@pytest.mark.parametrize("line", BRACKET)
+@pytest.mark.parametrize("gates", [{}, {"matrix": {"costly": {"public": "deny"}}},
+                                   {"categories": {"store_write": "deny"}}, {"reserved": ["tool:terminal"]}])
+def test_a_word_that_starts_with_a_bracket_may_rebind(line, gates):
+    c = classify(sh(line))
+    assert c.category == "opaque_exec", c
+    assert decide(c, normalize_policies({"gates": gates})).outcome == "ask"
+
+
+# On main a rebind-only line was `read`, so a policy that names `read` decided it. Now it is `opaque_exec`, which that
+# policy does not name: a read deny asks, and a read reservation no longer refuses an opaque_exec allow. The D-038
+# amendment records this as group (4) (abu-aska, #409). A read beside the rebind still denies the line.
+@pytest.mark.parametrize("gates, outcome", [({"categories": {"read": "deny"}}, "ask"), ({"deny": ["read"]}, "ask"),
+                                            ({"reserved": ["read"], "categories": {"opaque_exec": "allow"}}, "allow")])
+def test_a_policy_that_names_read_does_not_name_a_rebind(gates, outcome):
+    pol = normalize_policies({"gates": gates})
+    for line in ("hash -p /tmp/x ls", "hash $O ls", "hash [-]p /tmp/x ls"):
+        assert decide(classify(sh(line)), pol).outcome == outcome, line
+    if outcome == "ask":
+        assert decide(classify(sh("hash -p /tmp/x ls; ls")), pol).outcome == "deny"
+
+
+# Group (4) also holds a line whose only read part was the rebind: a post beside it, and a store write over ssh that
+# a read part denied on main. Each now asks under a read deny, as the post or the store write alone does.
+@pytest.mark.parametrize("line", [
+    "hash -p /tmp/x ls; gh pr comment 1 --body Zork",
+    "ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'",
+    "ssh -L ~/.exo/state/sock:localhost:5432 host 'sort x; hash -p /x ls'",
+])
+def test_a_read_deny_no_longer_reaches_a_line_whose_read_part_was_the_rebind(line, monkeypatch):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    for gates in ({"categories": {"read": "deny"}}, {"deny": ["read"]}):
+        assert decide(classify(sh(line)), normalize_policies({"gates": gates})).outcome == "ask", (line, gates)
+
+
 def test_a_target_entry_on_the_path_denies_the_rebind():
     pol = normalize_policies({"gates": {"deny": ["target:/tmp/*"]}})
     assert decide(classify(sh("hash -p /tmp/x ls; ls")), pol).outcome == "deny"
@@ -149,7 +210,13 @@ def test_an_unread_option_word_is_the_target():
     assert c.target == "$O" and "$O" in c.summary, c
 
 
-@pytest.mark.parametrize("line, word, path", [("hash -p $P; ls", "$P", "$P"), ("hash -p /a -l$O; ls", "-l$O", "/a")])
+def test_a_bracket_option_word_is_the_target():
+    c = classify(sh("hash [-]p /tmp/x ls; ls"))
+    assert c.target == "[-]p" and "([-]p)" in c.summary, c
+
+
+@pytest.mark.parametrize("line, word, path", [("hash -p $P; ls", "$P", "$P"), ("hash -p /a -l$O; ls", "-l$O", "/a"),
+                                              ("hash -p [al]s; ls", "[al]s", "[al]s")])
 def test_a_word_from_the_path_on_that_may_split_is_on_the_card(line, word, path):
     c = classify(sh(line))
     assert c.summary == f"hash -p may rebind a program name: a word the gate cannot read ({word})", c
@@ -188,6 +255,7 @@ POSTS = [
     "gh pr comment 1 --body Zork && ssh host 'hash -p /dev/fd/3 ls'",
     "hash -p /proc/self/fd/3 {ls,/}; gh pr comment 1 --body Zork",   # a name or path the gate cannot read
     "hash -p $P; gh pr comment 1 --body Zork",
+    "hash -p [al]s /dev/fd/3; gh pr comment 1 --body Zork",          # a path word that starts with `[` (abu-aska)
     # a rebind over ssh inside a line ssh runs: the marked part is checked the same way, however deep
     "ssh host 'hash -p /proc/self/fd/3 ls; ssh b \"hash -p /dev/fd/3 ls\"'; gh pr comment 1 --body Zork",
 ]
