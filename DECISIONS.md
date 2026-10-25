@@ -2652,7 +2652,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the tick is long: 1 s on HFS+ and ext3, 2 s on FAT, and as coarse on some NFS mounts. There, a write that keeps the
   size within a second or two of the write before it can leave a torn copy that the check accepts. A check after the
   copy (`quick_check`, or a count through the table against one through an index) that takes the copy again when it
-  fails would close the gap. It can ride #535, which moves the copy to the first read.
+  fails would close the gap. It can ride #535, which moves the copy to the first read. The lock does not order two
+  `umask` blocks on one thread: two socket binds that overlap on one event loop can still restore out of order and
+  leave the process at 0177, as they could before.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
