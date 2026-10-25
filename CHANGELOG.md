@@ -16,7 +16,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   which bash reads from OLDPWD, PWD or the directory stack) is opaque too.
   So is a path or name word it cannot read, which may split or lose its slash (`hash -p $P`,
   `hash -p [al]s`, `hash -p /tmp/x {ls,/}`), and setting `BASH_CMDS` or
-  `BASH_ALIASES`. Plain `hash`,
+  `BASH_ALIASES`. A double-quoted `${!n}` may split as `"$@"` does, so `hash "${!n}"` is opaque
+  too. Plain `hash`,
   `hash -r`, `hash -d` and `hash "$cmd"` stay read, as do a `-p` after the first operand and one
   with no name to bind. The path alone is not read as a store write, nor is a `BASH_CMDS` or
   `BASH_ALIASES` value, whatever runs it (ssh, mosh, `man -P`, `printf -v`). So a post on the same

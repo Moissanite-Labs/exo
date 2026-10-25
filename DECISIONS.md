@@ -1973,6 +1973,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   calls with a store or secret folder of their own. It runs 15,649 actions, and 20,076 pairs on 4,345 actions are
   lower: (1) 240 on 60, (2) 2,042 on 1,963, (3) 2,000 on 2,000 and (4) 15,794 on 3,033. No posting violation is
   lost, and a deny is lost only in groups (3) and (4).
+  A second review of PR #409 found one more word the gate took as one: a double-quoted `${!n}`. With `n=@` or
+  `n='a[@]'`, bash splits it as it splits `"$@"`, so after `set -- -p /tmp/x ls`, `hash "${!n}"` runs `hash -p /tmp/x
+  ls`. A double-quoted word with `${!` is no longer one word, before the `-p` or from the path on, so such lines are
+  opaque. `hash "$cmd"` stays `read`. Main reads them as `read`, as c833d5b0 did. Main's `scripts/gate_diff.py` ran
+  against c833d5b0 with the same 95 policies, the built-in corpus, the check's corpus of 3,287 lines and 490 lines of
+  double-quoted indirect words under seven wrappers. It runs 83,465 actions, and 1,231 pairs on 241 actions are lower.
+  Each is a line with `${!`, in group (2) 89, (3) 60 or (4) 1,082.
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
   word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was

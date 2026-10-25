@@ -1315,7 +1315,9 @@ gate does not read:
   opaque too. From the path on, such a word may hold a name. `hash -p $P` with
   `P='/tmp/x ls'` binds `ls`, and so does `hash -p /tmp/x {ls,/}`, which bash runs as
   `hash -p /tmp/x ls /`. Both are opaque. One double-quoted path word (`hash -p "$P"`) does not
-  split, and a glob keeps a slash it has (`hash -p /tmp/x*`), so these stay `read`.
+  split, and a glob keeps a slash it has (`hash -p /tmp/x*`), so these stay `read`. A
+  double-quoted `${!n}` is not one word: with `n=@` bash splits it as it splits `"$@"`, so
+  `hash "${!n}"` and `hash -p "${!n}"` are opaque, while `hash "$cmd"` stays `read`.
   A word that starts with an unquoted `[` is a glob too, also after a `\<newline>`. With files
   named `-p`, `as` and `ls` in the folder, bash runs `hash [-]p /tmp/x ls` as
   `hash -p /tmp/x ls` and `hash -p [al]s` as `hash -p as ls`, so both are opaque. So is
