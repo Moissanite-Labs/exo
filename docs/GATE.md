@@ -130,8 +130,9 @@ nobody read:
   longer names a forbidden word in the first post's file.
 - The hook reads the file before the command runs, so a process started by an earlier tool call
   can still change the file between the read and `gh`. Closing that gap would need the post to
-  run on a snapshot of the text the hook read. The gate also reads `sudo --chroot=DIR gh ...` as
-  `sudo gh ...`, so the hook reads the file by its path while `gh` reads the one under `DIR`.
+  run on a snapshot of the text the hook read. The gate also reads `sudo --chroot=DIR gh ...` and
+  `sudo -RDIR gh ...` as `sudo gh ...`, so the hook reads the file by its path while `gh` reads
+  the one under `DIR` (#544).
 
 Under the posting rules (`posting.applies_to`) an unseen body adds the violation "the gate cannot
 read the body ..." and asks. A body file the hook left unread because the line does more than post
