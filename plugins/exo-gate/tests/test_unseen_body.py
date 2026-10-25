@@ -190,6 +190,18 @@ def test_a_required_executor_refuses_every_unseen_body(store, work, line):
     assert row["phase"] == "decision" and row["outcome"] == "deny" and row["decision"]["rule"] == "required"
 
 
+@pytest.mark.parametrize("line", ["sudo gh pr view 1 -R o/r -F {work}/clean.md > /tmp/f",
+                                  "ssh h 'sudo gh pr view 1 -R o/r -F {work}/clean.md > /tmp/f'",
+                                  'sudo gh pr "$V" 5 -F {work}/clean.md > /tmp/f'])
+def test_a_required_executor_refuses_the_body_file_of_a_displaced_part(store, work, line):
+    # #454: a sudo write leads the line in place of the gh command, which keeps the body file. Main refused the line.
+    # With #399 only the line as read before may be a sudo write line, as the last one is.
+    g, ctx = make_gate(store)
+    g.required_getter = lambda: True
+    r = call(ctx, line.format(work=work))
+    assert r["action"] == "block" and "required executor" in r["message"], r
+
+
 # #399: when gh finds its subcommand past an option, or an expansion stands where it may be, the line is also read as
 # before (its floor). A body file in that reading is refused as on main, though the line as read has none.
 FLOOR_BODY_FILES = [
