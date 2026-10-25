@@ -68,19 +68,6 @@ _SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
 _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 
-def _readings(c: gate.Classification) -> tuple:
-    """The line as the gate reads it and, when gh reads it otherwise than the gate did before #399 (a subcommand past
-    an option or behind an expansion, gh api's method), as it read it then (``floor``). `decide` keeps the stricter
-    of the two, and so does each check the hook makes past it: the required executor's body check, who may answer,
-    "once" and the categories that never get a grant."""
-    return (c,) if c.floor is None else (c, c.floor)
-
-
-def _no_grant(c: gate.Classification) -> bool:
-    """Whether a reading of the line is a category that never gets a standing grant (``gate.NO_GRANT``)."""
-    return any(x.category in gate.NO_GRANT for x in _readings(c))
-
-
 @dataclass
 class Settings:
     principal_store: Optional[Path]
@@ -396,9 +383,10 @@ class Gate:
         command's folder or home, which the hook does not know. Anything not read stays unseen, so the post
         asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
         symlinks included, are never read before the worker, and `_rules` refuses the call. The copies of the post
-        on its other targets get the text too (`gate.fill_body`), and the line as read before #399 (`floor`) has
-        its own body file read the same way, as the hook read it before."""
-        for x in _readings(c):
+        on its other targets get the text too (`gate.fill_body`), and each other reading of the line
+        (`gate.readings`: as read before #399) has its own body file read the same way, as the hook read it
+        before."""
+        for x in gate.readings(c):
             if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
                 continue
             try:
@@ -508,7 +496,8 @@ class Gate:
                 secret = True
             try:        # the call read as a store write or secret, when only the decision failed (a bad policy regex)
                 action = {"tool": tool_name, "args": args}
-                store = _no_grant(gate.classify(action, cwd=cwd) if cwd else gate.classify(action))
+                c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
+                store = gate.no_grant(c)    # a part and each reading count too, as on the normal path (#399, #447)
             except Exception:
                 pass
             if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not (secret or store):
@@ -547,7 +536,7 @@ class Gate:
         # #454: a sudo write line carries the body file of the part it displaced there (`sudo gh ... -F /tmp/b > f`)
         if self.executor_required and d.outcome != "deny" and any(
                 x.text_file or (x.displaced is not None and x.displaced.text_file) or gate.body_unseen(x)
-                for x in _readings(c)):
+                for x in gate.readings(c)):
             # The gate cannot approve contents it has not seen (#208): a body file, stdin, @file, an expansion.
             # In either reading of the line (#399): `gh pr "$V" 5 -F f` has its body file only as read before.
             d.outcome, d.rule = "deny", "required"
@@ -565,9 +554,10 @@ class Gate:
             self._tighten(d, verdict)
         outward = gate.binds_exact(c, d)
         binding = gate.approval_binding(c, args) if outward else ""
-        # No standing allow for credentials and store writes, nor for a post whose body the gate did not see:
-        # its binding hashes only the line, so a grant would cover any later body (#208). Either reading counts.
-        once = _no_grant(c) or any(gate.body_unseen(x) for x in _readings(c))
+        # No standing allow for credentials and store writes (a part of the line counts, #447), nor for a post whose
+        # body the gate did not see: its binding hashes only the line, so a grant would cover any later body (#208).
+        # Each reading counts (gate.readings: as read before #399).
+        once = gate.no_grant(c) or gate.body_unseen(c)
         grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" and not once else None
         if grant:
             d.outcome, d.rule = "allow", "grant"
@@ -596,12 +586,10 @@ class Gate:
             # D-038 (#211): a changed approvals.yaml can narrow who answers at once; a wider one waits for /gate accept.
             changed = self.changed_policies()
             changed_approvals = changed.get("approvals") if changed is not None else None
-            approvers = gate.strictest_approvers(c.category, pol.get("approvals"), changed_approvals)
-            for x in _readings(c)[1:]:
-                # #399: only who may answer the line as read before too. The principal is in every list.
-                allowed = set(gate.strictest_approvers(x.category, pol.get("approvals"), changed_approvals))
-                approvers = [a for a in approvers if a in allowed]
-            for x in _readings(c):
+            # Only who may answer each reading of the line (#399) and each NO_GRANT part (#447, gate.call_approvers).
+            approvers = gate.call_approvers(c, pol.get("approvals"),
+                                            changed.get("approvals") if changed is not None else None)
+            for x in gate.readings(c):
                 if x.displaced is not None and (x is not c or x.displaced.target or d.displaced_asks):
                     # #454: a sudo write line is also about the repo or host its displaced part names, or asks with
                     # that part leading, so only who may answer that part's category too may answer it. The line as
@@ -623,7 +611,7 @@ class Gate:
             body["approval_key"] = approval_key
             body["approvers"] = approvers
         # NO_GRANT is enforced in every mode; a required executor never runs an unanswered ask.
-        if self.settings.mode == "observe" and not _no_grant(c) and not self.executor_required:
+        if self.settings.mode == "observe" and not gate.no_grant(c) and not self.executor_required:
             body["would"] = result["action"] if result else "run"
             result = None
         if d.outcome in ("allow", "log") and c.cost:
@@ -672,7 +660,7 @@ class Gate:
     # --- standing grants (D-033) --------------------------------------------------------
 
     def _grant_for(self, c: gate.Classification, d: gate.Decision, binding: str, outward: bool) -> Optional[dict]:
-        if _no_grant(c) or (d.violations and not binding):
+        if gate.no_grant(c) or (d.violations and not binding):
             return None
         # D-075: a grant covers the act it was given for. A reserved entry that matched another part of
         # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.

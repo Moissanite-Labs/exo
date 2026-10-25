@@ -1285,6 +1285,64 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   unpacked into the home folder that makes `update/` from its source name (`cp -r /tmp/x/update ~/.exo/`,
   `tar -C ~/.exo -xf x.tar`), a relative name other than `update/allowed_signers` under the shell tool's `cwd`
   argument, and a path held in a variable or made by a command (`F=~/.exo/update/allowed_signers; cp x "$F"`).
+  *Amendment 2026-10-22 (issue #447):* who may answer an ask, and whether a grant may cover it, read only the category
+  that leads the line. `_combine` ranks credentials above store_write, so `env; echo x > ~/.exo/policies/gates.yaml`
+  and `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that
+  `approvals.yaml` delegates `credentials` to could approve a write to the policy files. The outcome stayed ask, so
+  the #423 differential could not count it. Now the hook reads the line's `credentials` and `store_write` parts.
+  `gate.call_approvers` keeps only those allowed for the line's category and for each such part, so a store write
+  part leaves the principal alone. Other parts do not narrow the approvers: under `force_push: [principal]`,
+  `env; git push --force origin main` keeps the seats `credentials` allows. `gate.no_grant` keeps a standing grant
+  off a line with such a part, observe mode enforces it, and `binds_exact` binds it to the exact line. This holds
+  behind a wrapper (`sudo`, `doas`, `env`, `timeout`, `nice`, `command`, `bash -c`, `eval`, `xargs`), in a compound,
+  a subshell, a `$( )`, a heredoc or a `cd` chain, wherever the gate reads the store write as a part. The line's
+  category, its matrix cell and its outcome do not change. Reading every part for the approvers, the matrix, third
+  party and floors is #437. This is the follow-up the #169 amendment named: a shell write, delete, copy or archive in
+  `keys/` or the run folder that the gate reads as a write stays `credentials`, but its store write part makes it
+  principal-only. A copy read only as a key read (`tar czf /tmp/k.tgz -C ~/.exo keys`,
+  `cat < ~/.exo/keys/seat.key > /tmp/k`) keeps the delegation, as before. It also settles point (5) of the #313
+  amendment. A secret read alone keeps its delegation. A file tool that names a secret and a store file was
+  `credentials` with no store write part (the #467 review: `apply_patch` on `~/.ssh/config` and
+  `~/.exo/policies/gates.yaml`, `move_file` from `~/.ssh/id_rsa` to `~/.exo/policies/gates.yaml`), so a seat
+  delegated `credentials` could answer it. `classify` now adds a `store_write` part for each store file such a tool
+  writes, moves, copies or deletes, beside the tool's own part (#448). A folder holding the store that it moves,
+  renames or deletes gets one too, as with `mv` and `rm` (`move_file` from `~/.exo` to `~/.ssh/x`). So does a tool
+  with a camelCase name (`moveFile`, `deleteFile`): its category stays `unknown`, because the gate reads its name as
+  one word, but this check splits the name. With no secret, a file tool's move of such a folder is not a store write
+  yet (#494). A file tool's write or delete in `keys/` or the run folder gets a part as well, as its shell spelling
+  does. The call's category, target and card do not change. The hook's error fallback (#464) reads the parts as
+  well. Chosen over ranking store_write first in `_combine`, which would change the line's category, reason and
+  policy matches. The gate differential against main 5a9dc394 (`gate_diff`, #423, main's script) finds 0 lowered
+  pairs. On the built-in corpus, 55,253 actions x 87 policies, it finds 285 pairs on 115 actions tightened, all
+  `credentials` ask to deny. On a focused corpus of 17,930 actions it finds 24,383 pairs on 9,764 actions tightened,
+  also `credentials` ask to deny. That corpus has file tools under 13 names, `moveFile` among them, that move,
+  rename, copy or delete a store file or a folder holding the store beside one of 7 secrets or a plain path, in both
+  directions, under three key pairs and in `paths` or `files` lists, calls with two store paths, and shell spellings
+  behind wrappers, in compounds, a `$( )`, a heredoc, `ssh`, `execute_code` and after a `cd` into the store. The
+  tightened pairs are the file tools' new store write parts under a `store_write` deny or category line, or a
+  `target:` deny on the store. A `reserved: [store_write]` entry now also hits them, with the same outcome. A count
+  of the hook's terms on main and here over the same corpora, under three `approvals.yaml` tables that delegate to a
+  seat, finds the approvers narrowed to the principal on 605 built-in and 11,110 focused actions, each `credentials`
+  with a `store_write` part. None widens, and no once-only flag, exact binding or category changes.
+  *Amendment 2026-10-24 (issue #447, with main d79639f1):* #399 reads a gh line two ways: as gh reads it, and as the
+  gate read it before (`floor`). Main's hook took who may answer, "once", grants and observe mode from the category of
+  each reading. This change read the parts of the line only. Now `gate.readings` gives the line and its floor, and
+  `gate.no_grant` and `gate.call_approvers` read every part of each. So a store write beside a secret read keeps a gh
+  line the gate reads two ways with the principal, in either order, also when only one reading holds the part. In
+  `env; gh -R pub/repo release download v1 -D ~/.exo/policies` only the reading before #399 writes the store, since
+  gh's own reading takes `release download` for a read (#461). Main let a seat delegated `credentials` answer it. The
+  hook's own `_readings` and `_no_grant` are gone. It calls the gate's helpers, which have the names and shape of
+  #452's (#311), less its `also` reading. `binds_exact` keeps #399's `alt_targets` and `floor` terms beside
+  `no_grant`. Since #435 the plugins folder is a store folder, so a file tool that names a secret and a plugin file
+  gets a store write part too. A call that does not write files and names a store path with no secret keeps #435's
+  store write, with the call as its part. The gate differential against main d79639f1 (#423) finds 0 lowered pairs.
+  The built-in corpus, 64,465 actions x 87 policies, tightens 309 pairs on 124 actions, all `credentials` ask to
+  deny. A focused corpus of 10,583 actions x 113 policies tightens 292 pairs on 57 actions, the same way. It has
+  the store write beside a secret read in both orders with 15 gh lines the gate reads two ways or on two targets,
+  behind `sudo sh -c`, `bash -c`, `ssh` and `$( )`, and file tools on secrets, store files and plugin files. The
+  tightened pairs are this change's store write parts of a file tool that names a secret and a store file, under a
+  `store_write` deny or category line or a `target:` deny on the store. The same corpus against this branch before
+  the merge (badf22eb) lowers 0 pairs.
   *Amendment 2026-10-22 (issue #435, review):* a call that sends a store file out keeps the call. The review's wider
   corpus found 414 more lowered pairs on #435's first version. An `email_send`, `web_post`, `github_post`,
   `social_post`, `publish` or `payment` tool call with a plugin file in `files:`, and a `curl -T`, `curl -F` or

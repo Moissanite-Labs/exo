@@ -6001,6 +6001,11 @@ def _patch_paths(text: str) -> list[str]:
 
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
                   "src", "dest", "destination")
+# Name words of a file tool that moves or renames what it names, as `mv` does, or deletes it, as `rm` does (#447).
+# They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` keeps as one word.
+_WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
+                         "revoke", "trash"))
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 @_brace_budget
@@ -6236,6 +6241,14 @@ def _args_of(action: Any) -> tuple[str, dict]:
     return str(tool), dict(args or {})
 
 
+def _store_part(path: str, summary: str) -> Classification:
+    """The store write part of a file tool that also names a secret (#447): the call stays credentials, and
+    call_approvers reads the part, so only the principal answers it, as for `cat ~/.ssh/id_rsa > <store file>`."""
+    c = _make("store_write", summary=summary[:120], target=path, link=path)
+    c.signals.append("exo store")
+    return c
+
+
 @_brace_budget
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
@@ -6278,6 +6291,8 @@ def _classify_call(action: Any) -> Classification:
         if cat != "local_write":    # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
+        if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
+            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p)]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -6301,12 +6316,18 @@ def _classify_call(action: Any) -> Classification:
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
         if secret:
             cat = "credentials"
-        store = ""
-        if not secret and cat not in ("read", "web_read"):
-            store = next((v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
-                          else [args.get(k)]) if isinstance(v, str) and is_store_path(v, ancestors=cat == "delete")), "")
-            if store and cat in ("local_write", "delete"):
+        stores: list[str] = []
+        if own not in ("read", "web_read"):
+            # A delete reaches the store through a folder that holds it, as `rm` does. Beside a secret, so does a
+            # move or rename, as `mv` does, and a tool whose camelCase name says so (#447). A move of such a folder
+            # with no secret is #494.
+            wide = own == "delete" or bool(secret) and not _WIDE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+            named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
+                     else [args.get(k)]) if isinstance(v, str)]
+            stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide)))
+            if stores and not secret and cat in ("local_write", "delete"):
                 cat = "store_write"
+        store = stores[0] if stores and not secret else ""
         target = _first(args, _TARGET_KEYS)
         text = _first(args, _TEXT_KEYS) if cat in OUTBOUND else ""
         title = _first(args, _TITLE_KEYS) if cat in OUTBOUND else ""
@@ -6339,6 +6360,8 @@ def _classify_call(action: Any) -> Classification:
             out = own in OUTBOUND
             c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
+        if secret:      # #447: each store path beside a secret is a part, so only the principal answers
+            c.parts += [_store_part(p, f"{tool} {p}") for p in stores]
     c.tool = tool
     _local_post(c)
     return c
@@ -7434,15 +7457,45 @@ DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, 
 
 def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
-    code the gate cannot see into (D-038), so one "always" never covers a different script, and a line the gate
-    reads more than one way (#399): a gh command that may land on another target (``alt_targets``), so a grant on
-    one of its targets never covers it, and a line with a ``floor``, whose stricter reading may be another act. Also
-    a sudo write line whose displaced part names a target of its own, or asks with that part leading (#454): a grant
-    keyed on the written path must not answer a rule on the repo or host that part names, nor an ask on its category."""
+    code the gate cannot see into (D-038), so one "always" never covers a different script, a call no grant may
+    cover (``no_grant``, a part of it too, #447), and a line the gate reads more than one way (#399): a gh command
+    that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
+    with a ``floor``, whose stricter reading may be another act. A sudo write also binds when its displaced
+    part names a target or asks with that part leading (#454)."""
     q = c.displaced
-    return (is_outward(c, d) or c.category in ("opaque_exec",) + NO_GRANT or "indirection" in c.signals
+    return (is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
             or bool(c.alt_targets) or c.floor is not None
             or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
+
+
+def readings(c: Classification) -> list[Classification]:
+    """Each way the gate reads the call, the call first, then as it read it before #399 (``floor``: each gh
+    command's third word for its subcommand, gh api's first `-X` word). `decide` keeps the stricter of them, and so
+    does each check past it: no_grant, call_approvers, body_unseen and the exo-gate hook's body files and required
+    executor."""
+    return [x for x in (c, c.floor) if x is not None]
+
+
+def no_grant(c: Classification) -> bool:
+    """True when no standing grant may cover the call, and observe mode still enforces it (D-033, D-038): its
+    category is in NO_GRANT, or a part's is (a store write beside a secret read that leads the line, #447), in any
+    reading (#399)."""
+    return any(p.category in NO_GRANT for r in readings(c) for p in _each_part(r))
+
+
+def call_approvers(c: Classification, pinned: Mapping | None, changed: Mapping | None = None) -> list[str]:
+    """Who may answer an ask on ``c``: the approvers strictest_approvers allows for its category and also for each
+    other NO_GRANT category among its parts, so a store write beside a secret read (`env; echo x >
+    ~/.exo/policies/gates.yaml` is credentials, #447) is the principal's alone. A call the gate reads more than one
+    way (readings: ``floor``, #399) is answered only by those who may answer each reading too. The principal is
+    first in each, so the list is never empty."""
+    out = strictest_approvers(c.category, pinned, changed)
+    cats = [r.category for r in readings(c)] + [p.category for r in readings(c) for p in _each_part(r)
+                                                 if p.category in NO_GRANT]
+    for cat in dict.fromkeys(x for x in cats if x != c.category):
+        allowed = strictest_approvers(cat, pinned, changed)
+        out = [a for a in out if a in allowed]
+    return out
 
 
 def is_outward(c: Classification, d: Decision | None = None) -> bool:
