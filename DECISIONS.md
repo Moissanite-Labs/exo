@@ -2371,6 +2371,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of it is read. A removal whose text the path puts back (`${EXO_HOME%/*}/exo-home`, `${EXO_HOME/%home/}home`), a
   subscript before another operator (`${HOME[1]:-~/.exo}`) and a substitution of another variable whose replacement
   names a store (`${PWD/*/$HOME/.exo}`) stay reads, as on main.
+  2026-10-25 (reviews of #534): a word that builds the form with a brace set was missed when the call's other
+  checks had spent the shared brace budget. `_brace_words` then gave nothing, and the check read that as no form,
+  so `cat {$,}{HOME/%//.kube}/config` beside about 4,000 filler brace words was a read, and so was `read_file` of
+  it. Such a word now counts, as it does for the other callers. A name read through indirection counts as a store
+  variable, since the gate does not know which variable it names: `x=HOME; cat ${!x/%//.exo}/keys/seat` is
+  `$HOME/.exo/keys/seat` in bash. This holds for a positional name (`${!1}`, `${!*}`, `${!@}`) and with a
+  subscript. The cost: every `/` substitution through an indirect name whose replacement is not empty asks
+  (`for v in PATH; do echo ${!v//:/ }; done`). A file tool's store write to such a path keeps a `credentials` part
+  beside it, as a shell line's does. This covers `write_file`, `edit_file`, `apply_patch`, `delete_file`, a move
+  and an upload. So `categories: {credentials: deny}` denies `write_file ${HOME/%//.kube}/config`, as it denies
+  `write_file ~/.kube/config`. Still not done: a variable that holds a store variable's value or name (a copy
+  `h=$HOME`, a nameref, a positional parameter or an indirect name with no substitution, #475), and a removal whose
+  text the path puts back, which hides a write too (`cp x ${EXO_HOME%-home}-home/policies/default.yaml`, #531).
+  *Differential (#423).* Main's `scripts/gate_diff.py` ran main edeb4f89 against this change with 59 more
+  policies: deny, reserved and rule entries on the store names, a deny and a reserved entry on each category, and an
+  all-allow matrix. With the built-in corpus: 71,980 actions x 146 policies, 0 pairs lowered, 31,572 pairs on 253
+  actions tightened, 0 errors, and 390 pairs reworded as above. A focused corpus of 1,405 actions holds the indirect
+  names with 30 operators, the store and `XDG_*` variables under each substitution, 15 wrappers, `cd`, filler that
+  spends the brace budget and 9 file tools. Alone it gives 2,648 actions x 146 policies: 122,984 pairs on 1,028
+  actions tightened, and 6 pairs on 6 actions lowered, all in one group. Under `reserved: [read]`, an ssh line whose
+  remote command holds such a form, beside another read, was a read on main:
+  `x=HOME; set -- HOME; ssh h 'cat ${!x/%//.exo}/keys/seat'`. It asked with two reserved hits, its read of the host
+  `h` and the other read. It is now `credentials` and asks with one, since the host's read no longer leads the
+  line. Main reads `ls; ssh h 'cat ~/.kube/config'` the same way. The line still asks and is still reserved, and
+  only the principal answers it. Two of the 6 pairs (`${HOME/%//.kube}`) lower the same way on the head before this
+  note.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

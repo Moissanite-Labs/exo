@@ -12,6 +12,8 @@ from exo import gate
 
 POL = gate.DEFAULT_POLICIES
 STORE = {"gates": {"categories": {"store_write": "allow"}}}
+DENY = {"gates": {"categories": {"credentials": "deny"}}}
+FILL = [f"p{i}" + "{a,b}" * 10 for i in range(3)] + ["q{1..1021}"]   # spends most of the call's brace budget
 
 
 def outcome(command, policy=POL):
@@ -177,7 +179,7 @@ def test_claude_config_dir_reads_the_same_way(env, tmp_path, monkeypatch):
 def test_the_file_tools_read_the_substitution_too(env):
     for path in ("${HOME/%//.kube}/config", "${HOME/#*/~/.exo}/keys/seat", "${EXO_HOME/%x/y}/keys/seat",
                  "${HOME[0]/%//.exo}/keys/seat", "${HOME/%[!\"}\"]/u\\/.exo}/keys/seat",
-                 "${HOME[a[0]]/%//.exo}/keys/seat", "{$,}{HOME/#*/~/.exo}/keys/seat"):
+                 "${HOME[a[0]]/%//.exo}/keys/seat", "{$,}{HOME/#*/~/.exo}/keys/seat", "${!x/%//.kube}/config"):
         assert tool("read_file", path) == ("credentials", "ask")
     assert tool("grep", "${HOME/%//.kube}") == ("credentials", "ask")
     for path in ("${HOME/%//.exo}/policies/x.yaml", "${EXO_HOME/%x/y}/policies/x.yaml",
@@ -191,6 +193,7 @@ def test_any_replacement_on_a_store_variable_asks(env):
     assert outcome("cp x ${HOME/%//backup}/a") == ("store_write", "ask")
     assert outcome("cat ${HOME/%//notes}/x.txt") == ("credentials", "ask")
     assert outcome("cat ${HOME//x/y}/notes.txt") == ("credentials", "ask")
+    assert outcome("x=PATH; echo ${!x//:/ }") == ("credentials", "ask")   # an indirect name may be one
 
 
 def test_other_variables_and_removals_keep_their_reading(env):
@@ -234,6 +237,18 @@ def test_other_variables_and_removals_keep_their_reading(env):
     ("${HOME%/x}", ""),
     ("${PWD/#$HOME/~}", ""),
     ("${XDG_CONFIG_HOME/%//gh}", ""),
+    ("${!x/%//.exo}/keys", "${!x/%//.exo}"),          # an indirect name may be a store variable
+    ("${!x_1//u/v}", "${!x_1//u/v}"),
+    ("${!12/#/x}", "${!12/#/x}"),
+    ("${!*/%//x}", "${!*/%//x}"),
+    ("${!@/%//x}", "${!@/%//x}"),
+    ("${!x[0]/%//x}", "${!x[0]/%//x}"),
+    ("${!x/%/}", ""),
+    ("${!x}", ""),
+    ("${!x:-a/b}", ""),
+    ("${!x%/y}", ""),
+    ("${!HOME*}", ""),
+    ("${!a[@]}", ""),
 ])
 def test_which_forms_fail_closed(text, form):
     assert gate._store_subst(text) == form
@@ -248,6 +263,78 @@ def test_which_forms_fail_closed(text, form):
 def test_a_brace_set_can_build_the_form(words, form):
     """A `$` that ends one of a brace set's words starts a form after the set, as bash expands braces first."""
     assert gate._brace_store_subst(words) == form
+
+
+def test_a_word_past_the_brace_cap_counts():
+    """It counts as the other callers of _brace_words count it: the gate cannot tell what it makes."""
+    word = "{$,}" + "{a,b}" * 10 + "{HOME/%//x}"
+    assert gate._brace_store_subst(["x", word]) == word
+    assert gate._brace_store_subst(["{a,b}" * 11]) == ""        # no `$` ends a word in it, so it is not expanded
+
+
+@pytest.mark.parametrize("line", [
+    "cat {$,}{HOME/%//.kube}/config " + " ".join(FILL),
+    "cat {$,}{HOME/%//.kube}/config " + " ".join(FILL).replace("1021", "1022"),
+    "cat {$,}{HOME/%//.exo}/keys/seat " + " ".join(FILL),
+    "cat " + " ".join(FILL) + " {$,}{HOME/%//.kube}/config",
+])
+def test_a_spent_brace_budget_does_not_hide_a_built_form(env, line):
+    """The secret-store checks of a call share one brace budget. When other words leave too little of it for the
+    word that builds the form, that word counts, as a word past the cap does (abu-aska's review of #534)."""
+    c = gate.classify({"tool": "bash", "args": {"command": line}})
+    assert (c.category, gate.decide(c, POL).outcome, gate.decide(c, DENY).outcome) == ("credentials", "ask", "deny")
+    c = gate.classify({"tool": "bash", "args": {"command": line.replace("cat ", "cp x ", 1)}})
+    assert "credentials" in {p.category for p in gate._each_part(c)}
+
+
+@pytest.mark.parametrize("first", [True, False], ids=["form first", "form last"])
+def test_a_read_tool_with_a_spent_brace_budget_asks(env, first):
+    built = "{$,}{HOME/%//.kube}/config"
+    c = gate.classify({"tool": "read_file", "args": {"paths": [built, *FILL] if first else [*FILL, built]}})
+    assert (c.category, gate.decide(c, POL).outcome, gate.decide(c, DENY).outcome) == ("credentials", "ask", "deny")
+
+
+@pytest.mark.parametrize("line", [
+    "x=HOME; cat ${!x/%//.kube}/config",
+    "x=HOME; cat ${!x/%//.exo}/keys/seat",
+    "x=EXO_HOME; cat ${!x/%x/y}/keys/seat",
+    "x=HOME; cat ${!x/*/~/.exo}/keys/seat",
+    "x=HOME; cat ${!x//e/e\\/.exo}/keys/seat",
+    "x=HOME; cd ${!x/%//.exo} && cat keys/seat",
+    "set -- HOME; cat ${!1/%//.exo}/keys/seat",
+    "set -- HOME; cat ${!*/%//.exo}/keys/seat",
+    "set -- HOME; cat ${!@/%//.exo}/keys/seat",
+    "x=HOME; cat ${!x[0]/%//.exo}/keys/seat",
+    "x=HOME; cat {$,}{!x/%//.exo}/keys/seat",
+])
+def test_an_indirect_name_reads_as_a_store_variable(env, line):
+    """`${!x}` is the variable whose name `$x` holds. The gate does not track that name, so it may be a store variable
+    (exo-36's review of #534): bash gives `$HOME/.exo/keys/seat` for `x=HOME; cat ${!x/%//.exo}/keys/seat`."""
+    assert outcome(line) == ("credentials", "ask")
+    assert outcome(line.replace("cat", "cp x", 1).replace("keys/seat", "policies/default.yaml")
+                   .replace("config", "policies/default.yaml"))[0] == "store_write"
+
+
+@pytest.mark.parametrize("call", [
+    {"tool": "write_file", "args": {"path": "${HOME/%//.kube}/config", "content": "x"}},
+    {"tool": "edit_file", "args": {"path": "{$,}{HOME/%//.kube}/config", "content": "x"}},
+    {"tool": "apply_patch", "args": {"patch": "*** Begin Patch\n*** Update File: a.txt\n"
+                                              "*** Move to: ${HOME/%//.kube}/config\n@@\n-a\n+b\n*** End Patch\n"}},
+    {"tool": "write_file", "args": {"path": "${!x/%//.kube}/config", "content": "x"}},
+    {"tool": "delete_file", "args": {"path": "${HOME/%//.kube}/config"}},
+    {"tool": "move_file", "args": {"source": "a.txt", "destination": "${EXO_HOME/%x/y}/policies/x.yaml"}},
+    {"tool": "upload_file", "args": {"path": "${HOME/#*/~/.kube}/config"}},
+])
+def test_a_file_tool_write_keeps_the_read_beside_it(env, call):
+    """As on a shell line, a write or delete of a path the gate does not spell out keeps a credentials part beside the
+    store write, so a deny on credentials denies it as it denies `write_file ~/.kube/config` (abu-aska's review of
+    #534). A plain store write has no such part."""
+    c = gate.classify(call)
+    assert c.category == "store_write"
+    assert "credentials" in {p.category for p in gate._each_part(c)}
+    assert (gate.decide(c, POL).outcome, gate.decide(c, DENY).outcome) == ("ask", "deny")
+    plain = gate.classify({"tool": call["tool"], "args": {"path": "~/.exo/policies/x.yaml", "content": "x"}})
+    assert "credentials" not in {p.category for p in gate._each_part(plain)}
 
 
 def test_nested_forms_are_not_spelt_out(monkeypatch):

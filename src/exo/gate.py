@@ -5330,6 +5330,8 @@ def _exo_home() -> str:
 _STORE_VAR = re.compile(r"\$\{(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?=[^}\w])")
 _BRACE_EVENTS = re.compile(r"\\.|\$\{|\}|\n", re.S)
 _SUBST_HIDES = re.compile(r"[$<>]\(|[`'\"]")   # text in a `${..}` that bash reads as a unit, so a `}` in it may not close
+# A store variable, or a name read through indirection (`${!x}`, `${!1}`, `${!*}`), which may be one (#342)
+_SUBST_VAR = re.compile(r"\$\{(?:HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR|!(?:[A-Za-z_]\w*|\d+|[*@]))(?=[^}\w])")
 
 
 def _store_var(name: str) -> str | None:
@@ -5366,10 +5368,11 @@ def _store_subst(text: str) -> str:
     `//`, `/#` or `/%` form whose replacement is not empty, also with a subscript (`${HOME[0]/%//.exo}`), nested in
     any other form, or not closed on its line. A quote, `$( )`, `<( )` or backticks in it or its subscript may hide a
     `}` and so where it ends (`${HOME/%[!"}"]/u\\/.exo}`), so it counts too, as does a `[` in its subscript, which may
-    hide the subscript's end (`${HOME[a[0]]/%//.exo}`). Line continuations go first, as bash drops them. A form with
-    an empty replacement only removes text: it reads as the value."""
+    hide the subscript's end (`${HOME[a[0]]/%//.exo}`). A name read through indirection counts as a store variable,
+    since the gate does not know which variable it names (`x=HOME; cat ${!x/%//.exo}/keys/seat`). Line continuations
+    go first, as bash drops them. A form with an empty replacement only removes text: it reads as the value."""
     text = text.replace("\\\n", "")
-    m = _STORE_VAR.search(text)
+    m = _SUBST_VAR.search(text)
     if not m:
         return ""
     closes = _brace_closes(text, m.start())
@@ -5391,18 +5394,22 @@ def _store_subst(text: str) -> str:
             cut = text.find("/", k + 2 if text.startswith("//", k) else k + 1, end)
             if j is None or hides or 0 <= cut < end - 1:
                 return text[m.start():end + (j is not None)]
-        m = _STORE_VAR.search(text, m.end())
+        m = _SUBST_VAR.search(text, m.end())
     return ""
 
 
 def _brace_store_subst(raws: list[str]) -> str:
     """_store_subst of the words a brace set makes of each source word in ``raws``: a `$` that ends one of the set's
     words starts a form after it (`{$,}{HOME/%//.exo}` is `${HOME/%//.exo}`). Only a word with such a `$` is
-    expanded. One past the brace cap is already a secret path (_shell_credential_hit, args_sensitive)."""
+    expanded. A word past the brace cap, or past what is left of the call's budget, counts, as it does for the other
+    callers of _brace_words: other checks may have spent the budget on the same call."""
     for raw in (r.replace("\\\n", "") for r in raws):
         if not re.search(r"\$[,}]", raw):
             continue
-        found = next((s for w in _brace_words(raw) or [] if (s := _store_subst(w))), "")
+        words = _brace_words(raw)
+        if words is None:
+            return raw
+        found = next((s for w in words if (s := _store_subst(w))), "")
         if found:
             return found
     return ""
@@ -6461,6 +6468,18 @@ def _store_part(path: str, summary: str) -> Classification:
     return c
 
 
+def _subst_parts(paths: list[str], verb: str) -> list[Classification]:
+    """A `credentials` part for the first of ``paths`` with a `/` substitution of a store variable that the gate does
+    not spell out (_store_subst, #342). It may be a secret store, so a file tool's store write keeps a secret read
+    beside it, as a shell line's does, and a deny on credentials reaches it (`write_file ${HOME/%//.kube}/config`)."""
+    hid = next((p for p in paths if _store_subst(p) or _brace_store_subst([p])), "")
+    if not hid:
+        return []
+    c = _make("credentials", summary=f"{verb} {hid}"[:120], target=hid, link=hid)
+    c.signals.append("secret store")
+    return [c]
+
+
 @_brace_budget
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
@@ -6505,6 +6524,8 @@ def _classify_call(action: Any) -> Classification:
                        for p in dict.fromkeys(paths or [path])]
         if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
             c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p)]
+        elif cat == "store_write":  # #342: a store path the gate does not spell out may be a secret store too
+            c.parts += _subst_parts(paths, "write")
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -6578,6 +6599,8 @@ def _classify_call(action: Any) -> Classification:
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
         if secret:      # #447: each store path beside a secret is a part, so only the principal answers
             c.parts += [_store_part(p, f"{tool} {p}") for p in stores]
+        else:           # #342: a store path the gate does not spell out may be a secret store too
+            c.parts += _subst_parts(stores, tool)
     for r in readings(c):
         r.tool = tool
         _local_post(r)

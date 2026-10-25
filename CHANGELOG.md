@@ -18,7 +18,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   subscript, can hide where it ends (`${HOME/%[!"}"]/u\/.exo}`), so such a form asks too. Any other substitution
   with an empty replacement still reads as the value. The cost: every such substitution of a store variable asks,
   also on an ordinary path (`cp x ${HOME/%//backup}/a`). Operators that only remove text (`%`, `#`, `:0`) still
-  read as the value.
+  read as the value. A name read through indirection counts as a store variable, so
+  `x=HOME; cat ${!x/%//.exo}/keys/seat` asks. A brace set that builds the form asks also when the call's other
+  checks have spent its brace budget. A file tool's write to such a path keeps a `credentials` part, as a shell
+  line's does, so a deny on `credentials` denies `write_file ${HOME/%//.kube}/config`.
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
