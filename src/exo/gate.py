@@ -6020,8 +6020,9 @@ _PATCH_PATHS = re.compile(
     r"^\*\*\*\s*Move\s+to:\s*(.+?)\s*$", re.M)
 # The same headers with each path read on its own line (#548 follow-up). `\s` above may cross a line, so a header
 # with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) takes the next header line as its path and
-# that header is never read, while a patch tool skips the bare line and applies the next one.
-_PATCH_LINE_PATHS = re.compile(_PATCH_PATHS.pattern.replace(r"\s", r"[ \t]"), re.M)
+# that header is never read, while a patch tool skips the bare line and applies the next one. A `\r` before the
+# newline is space, as a patch tool trims it.
+_PATCH_LINE_PATHS = re.compile(_PATCH_PATHS.pattern.replace(r"\s", r"[^\S\n]"), re.M)
 
 
 def _patch_paths(text: str) -> list[str]:
@@ -6441,7 +6442,9 @@ def _classify_call(action: Any) -> Classification:
         c = _make(cat, summary=f"write {path}", target=path, link=path)
         if cat == "store_write":
             c.signals.append("exo store")
-        if cat != "local_write":    # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply
+        # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply. A local write of more
+        # than one file too, so an exact target entry reaches a path that only the reading on one line found (#559).
+        if cat != "local_write" or len(set(paths)) > 1:
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
         if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers

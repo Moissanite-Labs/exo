@@ -83,15 +83,20 @@ def test_codex_patch_move_to_is_gated_before_execution(keyed_store, tmp_path, se
 
 @pytest.mark.parametrize("bare", ["*** Move to:", "*** Add File:", "*** Move File: a ->"])
 @pytest.mark.parametrize("path", [".ssh/config", ".exo/keys/k"])
-def test_a_bare_patch_header_does_not_hide_the_next_write(keyed_store, bare, path):
+def test_a_bare_patch_header_does_not_hide_the_next_write(keyed_store, tmp_path, monkeypatch, bare, path):
     """#548 follow-up: the bare header no longer takes the next header line as its path. A relative path, since an
     absolute or home one still matched inside the swallowed header line."""
     store, key = keyed_store
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"before\n")
     _, ctx = make_gate(store, key)
     result = call(ctx, "apply_patch", {"patch": f"*** Begin Patch\n{bare}\n*** Add File: {path}\n+x\n*** End Patch\n"})
     assert result["action"] == "approve"
     [ev] = events(store)
     assert ev["body"]["outcome"] == "ask" and ev["body"]["classification"]["category"] == "credentials"
+    assert target.read_bytes() == b"before\n"
 
 
 def test_ask_returns_approve_with_summary_link_default(keyed_store):

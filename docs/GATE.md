@@ -2098,8 +2098,11 @@ and Exo's `*** Move File: source -> destination` headers. A destination in a pro
 `store_write`. A secret destination is `credentials`. Both ask.
 
 A header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) does not hide the header after
-it (#548 follow-up). Each header's path is read on its own line, as a patch tool reads it, and also as before,
-across a line, so a path either reading finds counts.
+it (#548 follow-up). Each header's path is read on its own line, as a patch tool reads it (a `\r` before the
+newline is trimmed), and also as before, across a line, so a path either reading finds counts. A local write of
+more than one file keeps each file as a `local_write` part, so `deny: [target:notes.txt]` or a reserved
+`target:` entry reaches every file the patch writes. The call's own target is the first path read as before: after
+a bare header, the card shows the swallowed header text.
 
 Their `local_write` parts keep
 the source and destination's deny and reserved entries. A content line beginning with `+` or a
