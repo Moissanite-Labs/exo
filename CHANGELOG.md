@@ -224,8 +224,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   names with more than one part, for a thread's `/proc/1/task/1//environ` (#313), and for relative Exo-store writes
   (`echo x > .exo//state/x`). Each shell word and file-tool path is now also matched with `//` and `/./` collapsed and
   `x/..` resolved, beside the form as written. A backslash between the parts is read the same way, so
-  `echo x > ~/.kube/\config` asks. `cat ~/.kube/\config` keeps the word the shell reads, `~/.kube/config`, as its
-  target, as on main. A glob in the `/proc` name itself now counts too:
+  `echo x > ~/.kube/\config` and `cat < ~/.kube/\config` ask. Their target is the word the shell reads,
+  `~/.kube/config`, as for `cat ~/.kube/\config` on main. A backslash in quotes stays in the name, so
+  `cat "$HOME/.kube/\config"` stays a read. A glob in the `/proc` name itself now counts too:
   `cat /pro?/self/environ`, `cat /[p]roc/self/environ` and `cat /*/*/environ` ask, and so does a glob after a process's
   root link, which leads to `/` (`cat /proc/self/root/pro?/1/environ`, `cat /proc/self/root/../pro?/1/environ`), or
   after its working folder link, which does for pid 1 and most daemons (`cat /proc/1/cwd/pro?/1/environ`). This also

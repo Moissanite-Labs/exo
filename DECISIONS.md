@@ -1993,6 +1993,48 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   which follows the gate's view of the file system. In executor or broker mode that view may differ from the
   worker's, and the lexical form fails closed where the two disagree. Follow-ups: `target:` entries on every part, a
   store write that keeps the principal's answer beside a secret (#447), and the cases left out above.
+  *2026-10-25 (#513, third review):* (a) A text with a backslash that names a store only in its lexical form is now
+  read as the shell reads the word that holds it, a redirection's target included. No word of `cat < ~/.kube/\config`
+  holds the redirection's target, so the text `$HOME/.kube/\config` was the target, and `deny: [target:*/.kube/config]`
+  asked where it denies the plain spelling. Main allowed the line as a read. The target is now `~/.kube/config`, and
+  the line decides as the plain spelling does, behind `sudo` and in `bash -c` too. Two pinned results change, both up.
+  `echo x > ~/.kube/\config` takes `~/.kube/config` as its target, so `reserved: [target:*/.kube/config]` hits the
+  line as well as the write part, two hits where it had one, as for the plain spelling. And
+  `cat < "$HOME"/.kube/\config`, whose backslash is outside the quotes, goes from ask to deny under that `target:`
+  entry, as the plain spelling does. In quotes, or after `\\`, the shell keeps the backslash and reads a file named
+  `\config`. So `cat "$HOME/.kube/\config"`, `cat < "$HOME/.kube/\config"` and `cat ~/.kube/\\config` go back from
+  `credentials` ask to main's read allow, and `echo x > "$HOME/.kube/\config"` to main's `local_write` allow. That is
+  lower than the earlier rounds of #513 and the same as main: the earlier ask was an over-ask. A word with a space or
+  an operator, which another shell may read again (`su -c 'cat ~/.kube/\config'`), and text that no word holds (a
+  heredoc body) keep the text as the target and still ask (fails closed). (b) Group 2 holds a seat key read.
+  `dd if=~/.exo//keys/seat.key of=/tmp/a` under `deny: [target:~/.exo/*]` is denied on main, whose `store_write`
+  part named the path itself. It asks here, since that part now names the `if=` word, as main does for the plain
+  spelling: `dd if=~/.exo/keys/seat.key of=/tmp/a` asks on main, while `cp ~/.exo/keys/seat.key /tmp/a` denies. So
+  this copies a gap main has for the plain spelling instead of closing it. Group 2 also holds a word with more than
+  16 possible links, which counts as a store (fails closed). As a line's first store it is the target, so
+  `ls /proc/1/*` with sixteen `/../*` steps and `/usr/lib/x*`, then `; cat ~/.kube/config`, asks under
+  `deny: [target:*/.kube/config]`, where main denies. Such a word has no plain spelling. A follow-up issue tracks the
+  fix for both: take a `dd` operand's path without its `if=` or `of=` as the target, and report each store a line
+  names as a target.
+  (c) A word counts past 16 possible links: a test pins a word with 16 as a read and one with 17 as an ask, under
+  the default policy and a `target:` entry. (d) The once-per-call lookup of the folder after the links (`_resolved`)
+  is worth about a quarter of the time of one 100 KB word with 16 links (1.55 s with it, 2.04 s without, the
+  review's figures), and nothing on a line of many words whose folders differ. It saves most where words share that
+  folder: 20 words with 16 links each and a `/usr/lib` tail look `/usr/lib` up once, where they did 40 times. A test
+  counts those lookups. (e) A differential of main (d79639f1) against this round ran under the 87 built-in policies
+  and 72 more: a `target:`, `reserved:` and rule entry for each of 22 store, Exo-store and folder names,
+  `target:~/*` and `target:~/.exo/*` among them. The built-in set, 67,212 actions, lowered 431 pairs on 84 actions.
+  Under the 87 built-in policies that is the 42 pairs on 27 actions of the five groups (21, 4, 3, 4 and 10), as
+  before. The other 389 are the same groups under the added entries: 21 in group 1, 354 in group 2 (342 on 57 `dd`
+  lines, 114 of them on 19 seat key lines, and 12 on two-store lines), 3 in group 3 and 11 in group 4. A focused run
+  of 19,340 lines put a backslash after a slash in 12 store and Exo-store names, in reads, writes and input and output
+  redirections, under five quotings, behind 14 wrappers, in compounds, `$( )` and heredocs. It also held `dd`
+  operands in odd spellings, the seat key among them, and words with 15, 16 and 17 links. It lowered 1,182 pairs on
+  129 actions, all in group 2: 182 on 29 `dd` lines and 1,000 on 100 lines whose first store is a word with links.
+  902 of them decide as main decides the plain spelling. The other 280 are words with 17 links and a tail that names
+  no store, which have no plain spelling. The same run with c4bdbd2a as the base lowered 164,742 pairs on 1,176
+  actions. Each is a backslash the shell keeps, in quotes or after `\\`, going back to main's decision, and none of
+  them is below main. No run had a classify or decide error.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
