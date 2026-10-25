@@ -726,13 +726,14 @@ class ExoContextEngine(ContextEngine):
         """Tie to this summary's block each pin whose message the summary folded (not the kept tail), and each pin
         tied to an earlier summary row it folded. A host's undo keeps such a pin while a row with one of its blocks
         is left (#389). The last 8 blocks are kept per pin, in case a host drops a summary it was handed. The last
-        message missing from the result was kept, not folded, when the summary row holds its text whole: Hermes
-        merges its summary into the first tail row when no role alternates, and an undo of that row's turn keeps
-        only the summary part."""
+        message missing from the result was kept, not folded, when the summary row has its role and holds its text
+        whole: Hermes merges its summary into the first tail row when no role alternates, and an undo of that row's
+        turn keeps only the summary part. A summary row in another role that quotes the message was not merged."""
         try:
             out = {hf.message_text(m) for m in result if isinstance(m, dict)}
             gone = [m for m in messages if isinstance(m, dict) and hf.message_text(m) not in out]
-            if gone and hf.message_text(gone[-1]) in hf.strip_pinned(hf.message_text(result[idx])):
+            if (gone and gone[-1].get('role') == result[idx].get('role')
+                    and hf.message_text(gone[-1]) in hf.strip_pinned(hf.message_text(result[idx]))):
                 gone.pop()  # the summary row's own block quotes the pins, so it is left out of the test
             holds, carried, tie = _holder(gone), _blocks(gone), _digest(block)
             folded = self._x_folded.setdefault(self._x_session_id, {})
