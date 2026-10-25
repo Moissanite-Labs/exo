@@ -12,7 +12,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   classifies as `opaque_exec`, with the path as its target and a card naming the program it
   rebinds. Its options are read as bash reads them: after `builtin` or `command`, in a flag
   cluster, with the path attached and after the path. An option word the gate cannot read
-  (`hash $O ls`, or a glob that starts with `[` such as `hash [-]p /tmp/x ls`) is opaque too.
+  (`hash $O ls`, a glob that starts with `[` such as `hash [-]p /tmp/x ls`, or `~-`, `~+` or `~1`,
+  which bash reads from OLDPWD, PWD or the directory stack) is opaque too.
   So is a path or name word it cannot read, which may split or lose its slash (`hash -p $P`,
   `hash -p [al]s`, `hash -p /tmp/x {ls,/}`), and setting `BASH_CMDS` or
   `BASH_ALIASES`. Plain `hash`,
