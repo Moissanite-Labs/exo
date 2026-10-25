@@ -2699,7 +2699,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Both worked examples are tests with the doc's numbers. Mode storage: D-072.
   *Restoration amendment 2026-10-25 (#283):* preserve the original implementation's authorship and port it onto
   current main. Learner notes require the learner author and cite principal behavior, not principal control
-  notes. Ask-mode answers bind to the proposal's frozen text and timestamp. Rulings, pins and guarded items keep
+  notes. Ask-mode answers bind to the proposal's frozen text, scope and timestamp, and its pending line shows that snapshot. Rulings, pins and guarded items keep
   their precedence for scoped changes too; guarded challenger text becomes a question. Each model question is
   reserved before I/O against the daily cap, including failed requests. Taste updates reach the next model call
   through an invalidated per-project cache; the principal pack remains stable. Project scope is an exact working

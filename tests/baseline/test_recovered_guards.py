@@ -217,3 +217,13 @@ def test_adapter_does_not_inflate_uncertain_delta(monkeypatch):
     labeller = classify.decision_labeller(SimpleNamespace(roles={"decision": ["test"]}))
     label = asyncio.run(labeller(classify.Candidate("x", "old", frozenset()), "new", "", "verdict:edit"))
     assert label.delta == 1 and label.confidence == .7
+
+
+def test_pending_scope_text_is_the_scope_frozen_in_the_proposal():
+    track = shift.Track("x", "method", claim="newer claim", scope="project:new")
+    track.proposal = {"kind": "scope", "snapshot": {"scope": "project:shown", "claim": "shown claim"}}
+    state = adapt.State("ask", "default", items={"x": adapt.Item(shift.Subject("x", "old"), track, True,
+                                                                   INSTALL.date())})
+    view = layers.TasteView(True, "released", pack(), [], state=state)
+    text = command.pending_line(view, "x")
+    assert "project:shown: shown claim" in text and "project:new" not in text and "newer claim" not in text
