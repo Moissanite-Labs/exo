@@ -102,3 +102,33 @@ def test_relative_aliases_use_the_existing_patch_path_rules(destination, layout,
     added = gate.classify({"tool": "apply_patch", "args": {"patch": f"*** Add File: {destination}\n+x\n"}})
     assert moved.category == added.category
     assert gate.decide(moved).outcome == gate.decide(added).outcome
+
+
+BARE_HEADERS = ["*** Move to:", "*** Move to:   ", "***Move to:\t", "*** Add File:", "*** Delete File:",
+                "*** Update File:", "*** Move File: a ->", "*** Move File: ->"]
+
+
+@pytest.mark.parametrize("bare", BARE_HEADERS)
+@pytest.mark.parametrize("path,category", [(".ssh/config", "credentials"), (".env", "credentials"),
+                                           (".exo/keys/k", "credentials"), (".exo/policies/default.yaml", "store_write"),
+                                           ("policies/gates.yaml", "store_write")])
+def test_a_header_with_no_path_does_not_hide_the_next_header(bare, path, category, layout, monkeypatch):
+    """A patch tool skips a header with no path and applies the next one. Read with `\\s`, the bare header took the
+    next header line as its path, so that write was never read (#548 follow-up)."""
+    monkeypatch.chdir(layout)
+    patch = f"*** Begin Patch\n{bare}\n*** Add File: {path}\n+x\n*** End Patch\n"
+    c = gate.classify({"tool": "apply_patch", "args": {"patch": patch}})
+    assert (c.category, c.target, gate.decide(c).outcome) == (category, path, "ask")
+    assert gate.decide(c, {"gates": {"deny": [category]}}).outcome == "deny"
+
+
+@pytest.mark.parametrize("patch,category,target,outcome", [
+    # a path the reading across a line found still counts
+    ("*** Update File:\n.ssh/config\n@@\n-a\n+b\n", "credentials", ".ssh/config", "ask"),
+    # an ordinary write keeps the target it had: the first path read as before
+    ("*** Move File: a ->\nnotes.txt\n", "local_write", "a", "allow"),
+    ("*** Move to:\n*** Add File: notes.txt\n+x\n", "local_write", "*** Add File: notes.txt", "allow"),
+])
+def test_the_reading_across_a_line_is_kept(patch, category, target, outcome):
+    c = gate.classify({"tool": "apply_patch", "args": {"patch": patch}})
+    assert (c.category, c.target, gate.decide(c).outcome) == (category, target, outcome)

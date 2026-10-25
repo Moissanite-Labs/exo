@@ -2323,6 +2323,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `+*** Move to:` line is hunk content, not a header. Chosen over a separate move-path checker so the two formats
   share protection and limits.
 
+  *Amendment 2026-10-25 (#548 follow-up):* the reader's `\s` let a header's path run onto the next line. A header
+  with no path (`*** Move to:`, `*** Add File:`, `*** Delete File:`, `*** Move File: a ->`) took the next header
+  line as its path, and that header's write was never read. A patch tool skips the bare line and applies the next
+  header. With #548's `Move to:` alternative, a bare `*** Move to:` let a secret or store write through. The
+  post-merge review's aimed run counted 11,340 lowered pairs against the main before #548, among them
+  `credentials` deny -> allow. The paths are now also read
+  one line at a time (`[ \t]`, never a newline), and the reading as before is kept beside it. So every path main
+  found still counts, and a local write keeps main's target. Main's `scripts/gate_diff.py` reports nothing lowered
+  against 2cc0c32f or against f10a7489 (counts in the PR).
+  *Revisit if:* the gate parses patches with the patch tool's own header grammar.
+
   Relative aliases into non-secret stores still need #340's resolution. Relative
   secret links use the existing secret-path check. No patch is applied while classifying, and no tool schema or
   executor behavior changes.

@@ -2097,6 +2097,10 @@ Patch move destinations (#528). Codex `apply_patch` writes the path in `*** Move
 and Exo's `*** Move File: source -> destination` headers. A destination in a protected store is
 `store_write`. A secret destination is `credentials`. Both ask.
 
+A header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) does not hide the header after
+it (#548 follow-up). Each header's path is read on its own line, as a patch tool reads it, and also as before,
+across a line, so a path either reading finds counts.
+
 Their `local_write` parts keep
 the source and destination's deny and reserved entries. A content line beginning with `+` or a
 space is not a patch header. The checks use the existing path rules, including absolute links,
