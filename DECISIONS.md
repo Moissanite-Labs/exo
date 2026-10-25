@@ -2250,6 +2250,50 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   no store, which have no plain spelling. The same run with c4bdbd2a as the base lowered 164,742 pairs on 1,176
   actions. Each is a backslash the shell keeps, in quotes or after `\\`, going back to main's decision, and none of
   them is below main. No run had a classify or decide error.
+  *2026-10-25 (#513, fourth review, and the merge of main edeb4f89):* (f) A check of (a) found two lines it let back to
+  main's result, where the earlier rounds asked. A word in quotes keeps its backslash, but the kernel walks `\x/..` back
+  to the folder when `\x` exists, as it walks `x/..`. So such a word is also read in its lexical form, with the
+  backslash as a plain character, and `cat "$HOME/.kube/\x/../config"` asks. And a quoted word with the same text as a
+  heredoc body stood in for the body (`bash -s "$HOME/.kube/\config" <<'X'` with `cat < ~/.kube/\config` in it). The
+  line's copies of the text are now counted, and the text stays the target when the words hold fewer of them. Main reads
+  both lines as a read or `opaque_exec`, so neither was below main. (g) A `target:` entry in `deny:` or `reserved:`, and
+  a deny or ask rule keyed on `target`, now also match the target's lexical form: `//` and `/./` collapsed, `x/..`
+  resolved and a leading `//` read as `/`. The fourth review found that group 2 lowered a line below main and below its
+  plain spelling when an entry names each of two stores. `cat ~/.kube//config ~/.ssh/id_rsa` under
+  `deny: [target:*/.kube/config, target:*/.ssh/*]` was denied on main, through the ssh key, its target there. It asked
+  here, since the odd first store is the target and the entry read it as written. It is denied again, as its plain
+  spelling is, and so is `cat ~/.kube//config` under `deny: [target:*/.kube/config]`, which main allowed as a read. A
+  rule keyed on `target` sees the lexical form only through the steps that can only raise: the line's veto pass, as for
+  a `command` view (#136), and a part's deny veto (#191). An allow rule and a scope read the target as written, so the
+  lexical form never lowers a decision. A link before a `..` may lead elsewhere, and then the entry matches when it need
+  not (fails closed). This is the lexical form of #522's proposal. Its other two forms, the target with each `\` dropped
+  and the value of a `key=value` operand, stay with #522. Group 2 keeps three shapes, which a follow-up issue tracks.
+  One is an entry for the second store alone: `cat ~/.kube/./config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]`.
+  One is a `dd` operand, whose lexical form keeps its `if=` or `of=`. And one is a first store that is a word with
+  links. (h) `normpath` keeps exactly two leading slashes, which the kernel reads as one. So what follows a root link
+  into a home store (`cat /proc/self/root/$HOME/.kube/conf*`, whose rest is `//<home>/...`) and
+  `cat /$HOME/.docker/conf*` missed the home store samples. The glob check now reads them as one slash, and these lines
+  ask, where main and the earlier rounds allowed them. (i) Main merged #447 (#489) since (e). A store write beside a
+  secret now keeps the line with the principal alone, and a file tool keeps each store file it writes as a `store_write`
+  part. So the change the differential did not count is gone, and so are groups 3 and 4: a `store_write` deny, category
+  line or `reserved:` entry, and a `target:` entry for the store file, apply to those lines again, as on main. (j) A
+  differential of main edeb4f89 against this round ran under the 87 built-in policies and 92 more: the 72 of (e), a
+  deny, reserved and rule entry for each of five pairs of stores, an ask rule and two allow rules on a target, a private
+  scope and `target:` entries anchored at `/`. The built-in set, 75,359 actions, lowered 1,808 pairs on 181 actions,
+  each deciding as main decides the plain spelling. Under the 87 built-in policies that is 233 pairs on 124 actions: 21
+  in group 1, 202 in group 2 and 10 in group 5. Of group 2's, 198 pairs on 99 actions are this round's new test rows and
+  their forms under a `target:` entry for the ssh key alone. Without them it is 35 pairs on 25 actions (21, 4, 0, 0 and
+  10 in groups 1 to 5), against 42 on 27 in (e). The other 1,575 pairs are 21 in group 1 and 1,554 in group 2: lines
+  with an entry for the second store alone, and `dd` lines, 114 pairs of them on 19 seat key lines. A focused run of
+  20,855 actions held the corpus of (e) and 1,549 lines from this review. It put an odd first store before a second
+  store in 9 shapes, with 5 spellings of 6 store names, a glob after a root or `cwd` link or `/$HOME` under 12 prefixes
+  and 8 tails, and plain writes to targets spelt with `//`, `/./` or `x/..`. It lowered 4,098 pairs on 297 actions, all
+  in group 2: 206 on 29 `dd` lines, 2,752 on 208 lines with an entry for the second store alone, and 1,140 on 60 lines
+  whose first store is a word with links. 2,978 of them decide as main decides the plain spelling. The other 1,120 are
+  on words with links, which have no plain spelling. Outside the `dd` lines, no lowered pair in either run is on a line
+  whose target an entry of its policy names, as written or in its lexical form. The same corpora with this branch before
+  this round's gate changes as the base lowered no pair and tightened 22,503 pairs on 1,297 actions. No run had a
+  classify or decide error.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
