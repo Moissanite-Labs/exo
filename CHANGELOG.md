@@ -6,11 +6,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
-- A post's `--body-file` is read only when the post is the only command on the line (#343). The
-  exo-gate hook read an absolute body file before the line ran, but an earlier part of a compound
-  line — a copy, a move, a redirect, a link, `tee` — could rewrite the file after the read, so `gh`
-  posted text the posting rules never saw. On a compound line the file now stays unread, so the post
-  counts as unseen: it asks once and gets no standing grant, as a stdin body does.
+- A post's `--body-file` is read only on a line where the gate finds no other part (#343). The exo-gate hook read
+  an absolute body file before the line ran, but another part of the line could change the file before `gh` read
+  it: a copy, a move, a redirect, a link or `tee` before the post, a writer after it in a pipe or in the
+  background, or a redirection onto the file. An ssh hop ran `gh` where the path names another file. So `gh` posted
+  text the posting rules never saw. On such a line the file now stays unread, so the post counts as unseen: it asks
+  once and gets no standing grant, as a stdin body does. Any other part counts, writer or not: another command, a
+  redirection to a file, an assignment, a wrapper the gate does not see through, a shell, a `{ }` group, and the
+  code around the call in `execute_code` or `python -c`. `nice`, `exec`, `sudo`, `env`, `timeout`, `command`,
+  `nohup`, a `( )` subshell and a redirection to `/dev/null` add no part, so the file is still read there. A copy
+  of the post on another target (#399) is not another part. The card says the file was not read and why, and asks
+  for the post on a line of its own, in place of the hint to pass an absolute path. It no longer names a word the
+  unread file holds.
 - `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
   its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
   each tree's violation total with what `and N more on other posts` counts.

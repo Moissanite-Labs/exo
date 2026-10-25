@@ -111,11 +111,11 @@ def test_an_absolute_body_file_is_read_and_checked(store, work):
 
 # #399: a post the gate reads more than one way keeps a copy on each other target (alt_targets), and a line whose gh
 # subcommand moved keeps the line as read before (floor). The body file reaches every one of them, so a clean body
-# runs as on main, and an ask offers "always".
+# runs as on main, and an ask offers "always". A copy is the post itself, not another part of the line (#343).
 OTHER_READINGS = [
     "gh pr comment 5 -R github.com/myorg/app --body-file {work}/clean.md",
     "gh pr comment https://github.com/pub/repo/pull/5 -R myorg/app --body-file {work}/clean.md",
-    "gh pr -R myorg/app view 5 && gh pr comment 5 -R myorg/app --body-file {work}/clean.md",
+    "gh pr -R myorg/app comment 5 --body-file {work}/clean.md",
 ]
 
 
@@ -144,22 +144,94 @@ def test_a_body_file_reaches_every_reading_of_the_post(tmp_path, work, line):
     assert gate.UNSEEN_BODY not in r["message"] and not r.get("once"), r
 
 
-@pytest.mark.parametrize("line", [
-    f"cp {{work}}/notes.md {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
-    f"mv {{work}}/notes.md {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
-    f"cat {{work}}/notes.md > {{work}}/clean.md; gh pr comment 5 {R} --body-file {{work}}/clean.md",
-    f"echo Zork >> {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
-    f"ln -sf {{work}}/notes.md {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
-    f"echo Zork | tee {{work}}/clean.md && gh pr comment 5 {R} --body-file {{work}}/clean.md",
-    f"true && gh pr comment 5 {R} --body-file {{work}}/clean.md",   # any other part, writer or not (#343)
-])
+# #343: the hook reads a body file before the line runs. Another part of the line may change the file before gh reads
+# it (a writer before the post, one beside it in a pipe or in the background, a redirection onto it), or run gh where
+# the path names another file (ssh). So on a line where the gate finds any other part the file stays unread: the post
+# asks once, and the card says why in place of the hint to pass an absolute path.
+P = "gh pr comment 5 -R myorg/app --body-file {work}/clean.md"
+COMPOUND = [
+    # the issue's rows
+    "cp {work}/notes.md {work}/clean.md && " + P,
+    "mv {work}/notes.md {work}/clean.md && " + P,
+    "cat {work}/notes.md > {work}/clean.md; " + P,
+    "echo Zork >> {work}/clean.md && " + P,
+    "ln -sf {work}/notes.md {work}/clean.md && " + P,
+    "echo Zork | tee {work}/clean.md && " + P,
+    # any other part, writer or not
+    "true && " + P,
+    "cd /tmp && " + P,
+    P + " || true",
+    # a part after the post that runs beside it: a pipe, the background
+    P + " | tee {work}/clean.md",
+    P + " & cp {work}/notes.md {work}/clean.md",
+    # a group or a subshell with another command
+    "{{ cp {work}/notes.md {work}/clean.md; " + P + "; }}",
+    "(cp {work}/notes.md {work}/clean.md; " + P + ")",
+    # a redirection, an assignment, a wrapper the gate does not see through, a shell, an ssh hop
+    P + " 2> {work}/clean.md",
+    P + " > {work}/out.txt",
+    "GH_EDITOR=x " + P,
+    "setsid " + P,
+    "taskset 1 " + P,
+    "bash -c '" + P + "'",
+    "ssh host " + P,
+    "python3 -c \"import shutil, subprocess; shutil.copy('{work}/notes.md', '{work}/clean.md'); "
+    "subprocess.run(['gh', 'pr', 'comment', '5', '-R', 'myorg/app', '--body-file', '{work}/clean.md'])\"",
+    # #399's other readings: a copy on another target, the line as read before
+    "cp {work}/notes.md {work}/clean.md && gh pr comment 5 -R github.com/myorg/app --body-file {work}/clean.md",
+    "cp {work}/notes.md {work}/clean.md && gh pr comment https://github.com/pub/repo/pull/5 -R myorg/app "
+    "--body-file {work}/clean.md",
+    "cp {work}/notes.md {work}/clean.md && gh pr -R myorg/app comment 5 --body-file {work}/clean.md",
+    "gh pr -R myorg/app view 5 && " + P,
+]
+
+
+@pytest.mark.parametrize("line", COMPOUND)
 def test_a_body_file_on_a_compound_line_asks_once(store, work, line):
-    # The hook reads a body file before the line runs, but an earlier part can rewrite the file before gh
-    # posts it, so on a compound line the file stays unread and the post counts as unseen (#343).
     _, ctx = make_gate(store)
     r = call(ctx, line.format(work=work))
-    assert r["action"] == "approve" and gate.UNSEEN_BODY in r["message"], r
-    assert r.get("once") is True
+    assert r["action"] == "approve" and r.get("once") is True, r
+    assert gate.UNSEEN_ON_LINE in r["message"] and gate.UNSEEN_BODY not in r["message"], r
+
+
+def test_code_that_posts_a_body_file_asks_once(store, work):
+    # The script around the call is another part: it can rewrite the file first (#343). On main the hook read the
+    # file, still clean, and the ask offered "always".
+    code = (f"import shutil, subprocess\nshutil.copy('{work}/notes.md', '{work}/clean.md')\n"
+            f"subprocess.run(['gh', 'pr', 'comment', '5', '-R', 'myorg/app', '--body-file', '{work}/clean.md'])")
+    _, ctx = make_gate(store)
+    [cb] = ctx.hooks["pre_tool_call"]
+    r = asyncio.run(cb(tool_name="execute_code", args={"code": code}, session_id="s1", tool_call_id="c1",
+                       turn_id="t1"))
+    assert r["action"] == "approve" and r.get("once") is True, r
+    assert gate.UNSEEN_ON_LINE in r["message"] and gate.UNSEEN_BODY not in r["message"], r
+
+
+def test_the_card_says_the_file_was_not_read(store, work):
+    # The file is not read, so the card names no word it holds now: gh may post another text. It says the file was
+    # not read and why. Alone on its line, the same post is read and checked. A second post's file is one the hook
+    # never reads, so its note stays the plain one, named after it.
+    _, ctx = make_gate(store)
+    r = call(ctx, f"true && gh pr comment 5 {R} --body-file {work}/notes.md")
+    assert gate.UNSEEN_ON_LINE in r["message"] and "forbidden word" not in r["message"], r
+    r = call(ctx, f"gh pr comment 5 {R} --body-file {work}/notes.md")
+    assert "forbidden word: Zork" in r["message"] and gate.UNSEEN_ON_LINE not in r["message"], r
+    r = call(ctx, f"gh pr comment 5 {R} --body-file {work}/notes.md && gh pr comment 6 {R} --body-file {work}/clean.md")
+    assert r.get("once") is True and gate.UNSEEN_ON_LINE in r["message"], r
+    assert f"GitHub PR comment on myorg/app#6: {gate.UNSEEN_BODY}" in r["message"], r
+
+
+@pytest.mark.parametrize("line", [
+    "nice -n 5 " + P, "exec " + P, "sudo " + P, "env -u X " + P, "timeout 60 " + P, "command " + P, "nohup " + P,
+    P + " 2>/dev/null", P + " >/dev/null 2>&1", "(" + P + ")", P + " &",
+])
+def test_a_post_alone_under_a_wrapper_the_gate_sees_through_is_read(store, work, line):
+    # These add no part, so the post is alone on its line and its file is read and checked (#343).
+    _, ctx = make_gate(store)
+    assert call(ctx, line.format(work=work)) is None
+    r = call(ctx, line.replace("clean.md", "notes.md").format(work=work))
+    assert "forbidden word: Zork" in r["message"] and gate.UNSEEN_BODY not in r["message"], r
+    assert gate.UNSEEN_ON_LINE not in r["message"] and not r.get("once"), r
 
 
 def test_with_reading_off_a_body_file_asks(store, work):

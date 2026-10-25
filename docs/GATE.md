@@ -83,10 +83,8 @@ nobody read:
   `--config`, or an expansion outside `--header` and the login options. httpie: `k=@f`, `k:=@f`,
   `k@f`, a pipe or `<` into it, or an expansion outside `-a`.
 - The exo-gate hook reads a body file only by an absolute path, up to 256 KiB, with
-  `read_body_files` on, and only when the post is the only command on the line: on a compound
-  line an earlier part (a copy, a move, a redirect, a link, `tee`) can rewrite the file after
-  the read and before `gh` posts it, so the file stays unread and the post counts as unseen
-  (#343). A relative or `~` path names a file in the command's folder or home, which
+  `read_body_files` on, and only on a line where the gate finds no other part (#343, below). A
+  relative or `~` path names a file in the command's folder or home, which
   the hook cannot pin down: it gets the session's folder (#209), but a `cd` or `pushd` on the line,
   or the call's `cwd` argument, moves it (`cd docs && gh ... --body-file notes.md` read `notes.md`
   from exod's own folder before). A path under `/dev` or `/proc`, as written or resolved
@@ -94,13 +92,32 @@ nobody read:
   exod's own. It is never read. A missing, larger or unreadable file stays unseen. A gh post the
   gate reads more than one way ("Where a gh command lands") gets the text in each reading: the
   copy on each other target, and the line as read before #399, whose own body file is read the
-  same way. The hook reads the file before the command runs, so a process started by an earlier
-  tool call can still change the file between the read and `gh`. Closing that gap would need the
-  post to run on a snapshot of the text the hook read.
+  same way.
+- Another part of the line can change the body file after the hook reads it and before `gh`
+  does (#343). A copy, a move, a redirect, a link or `tee` can run before the post. A writer can
+  run beside it, later in a pipe or in the background, and a redirection can truncate the file
+  itself. An ssh hop runs `gh` on a host where the path names another file. So the hook leaves
+  the file unread when the gate finds any other part on the line, in either reading: another
+  command, a redirection to a file, an assignment (`GH_EDITOR=x gh ...`), a wrapper the gate
+  does not see through (`setsid`, `taskset`, `xargs`), a shell (`bash -c`), an ssh hop, a
+  `{ ...; }` group, or the code around the call in `execute_code` or `python -c`. It does not
+  ask whether that part writes the file. The post then counts as unseen: it asks once, and its
+  violation says why ("the gate did not read the body file, since the line does more than post
+  ..."). Wrappers the gate sees through add no part, so the file is still read under `nice`,
+  `exec`, `sudo`, `env`, `timeout`, `command` and `nohup`, in a `( )` subshell, with a trailing
+  `&`, and with a redirection to `/dev/null`. A copy of the post on another target is the post
+  itself, not another part. Since the file is not read, the card names nothing its text holds
+  now: on a line of two posts it no longer names a forbidden word in the first post's file.
+- The hook reads the file before the command runs, so a process started by an earlier tool call
+  can still change the file between the read and `gh`. Closing that gap would need the post to
+  run on a snapshot of the text the hook read.
 
 Under the posting rules (`posting.applies_to`) an unseen body adds the violation "the gate cannot
-read the body ..." and asks. In any category it offers no "always" (`once`) and no standing grant
-matches it, since its binding hashes only the line. A post the line spells out is checked as before.
+read the body ..." and asks. A body file the hook left unread because the line does more than post
+gets "the gate did not read the body file ..." in its place (`gate.UNSEEN_ON_LINE`): the hook names
+those files to `decide` in `held_body_files`. In any category it offers no "always" (`once`) and no
+standing grant matches it, since its binding hashes only the line. A post the line spells out is
+checked as before.
 
 - An answer covers that hash only. If the agent edits one character, the next call has a new
   hash and is asked again. This is the same rule as a review verdict that a new head sha voids.
