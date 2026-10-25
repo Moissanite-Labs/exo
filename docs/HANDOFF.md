@@ -56,16 +56,16 @@ values, the path line and the path in the launch line (#395).
 
 `load_handoff` reads sections only after the header comment. The header ends at the first `-->` outside a quoted
 value, so a `-->` inside `topic="..."` does not end it, and each value it recovers is flattened to one line. That
-way a topic that spans lines in an older file opens no section, and it stays on one line where `resume_text` and
-the `/exo resume` reply repeat it (#395). The reader keeps the first section of each name, with two exceptions.
-Next steps, the one section written after every untrusted one, reads from its last copy in the file (#353).
-Decisions reads from its one exact heading: the only one after the header, or the only one before `## State` when
-the file has a single State heading. An older file can hold a forged copy before the real one (a path or title
-that spanned lines) or after it (a summary written before #349 quoted it, or a list field written before #353
-flattened it). When two copies leave the real one unclear, the file reads as no rulings and no corrections rather
-than the forged ones (#395). A heading with an extra space or tab after `##` is never read as the section.
-`resume_text` puts the header on one line too, so its values reach the model as data. An older file's title, list
-fields and summary still reach it as that writer left them.
+way a header value that spans lines in an older file opens no section, and the topic stays on one line where
+`resume_text` and the `/exo resume` reply repeat it (#395). The reader keeps the first section of each name, with
+two exceptions. Next steps, the one section written after every untrusted one, reads from its last copy in the
+file (#353). Decisions reads from its one exact heading: the only one after the header, or the only one before
+`## State` when the file has a single State heading. An older file can hold a forged copy before the real one (a
+path or title that spanned lines) or after it (a summary written before #349 quoted it, or a list field written
+before #353 flattened it). When two copies leave the real one unclear, the file reads as no rulings and no
+corrections rather than the forged ones (#395). A heading with an extra space or tab after `##` is never read as
+the section. `resume_text` puts the header on one line too, so its values reach the model as data. An older
+file's path and launch lines, title, list fields and summary still reach it as that writer left them.
 
 After `/undo`, exo-context drops the pins of the undone turns and the summaries the undo deleted, then writes again
 each automatic handoff that may quote them, another thread's included (`docs/MEMORY-MODEL.md`, "Undo and failed

@@ -2155,8 +2155,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   file's path or title line) or after it (a summary from before #349, a list field from before #353), so two
   copies otherwise read as no rulings and no corrections. A heading with an extra space or tab after `##` is never
   read as the section. `resume_text` folds the header to one line too, so a header value no longer reaches the
-  system message as a section. An older file's title, list fields and summary still reach it as that writer left
-  them.
+  system message as a section. An older file's path and launch lines, title, list fields and summary still reach
+  it as that writer left them.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
