@@ -16,13 +16,14 @@ The labeller is a hook. With none (the default when no `decision` route is confi
 agreement, and confidence is unknown, so a value never steps back on a single signal. A labeller only
 classifies: its answer adds a signal to a record, and below `min_confidence` it counts as unrelated. It can
 hold an item back (period, quoting, unrelated), and it can never swap, adopt, step back or pin anything: the
-rule in `exo.baseline.shift` does that, from the ledger. At most `daily_cap` labeller calls a day; past the cap
+rule in `exo.baseline.shift` does that, from the ledger. At most `daily_cap` typed questions per local day; past the cap
 the remaining events wait for the next day.
 """
 from __future__ import annotations
 
 import asyncio
 import inspect
+from contextvars import ContextVar
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -77,8 +78,7 @@ def own_words(text: str) -> str:
     t = QUOTE_LINE_RE.sub(" ", t)
     t = QUOTED_RE.sub(" ", t)
     paras = [p for p in re.split(r"\n\s*\n", t) if p.strip()]
-    if len(paras) > 1:
-        paras = [p for p in paras if len(p) < PASTE_MIN]
+    paras = [p for p in paras if len(p) < PASTE_MIN]
     return "\n\n".join(p.strip() for p in paras).strip()
 
 
@@ -112,7 +112,20 @@ Q_SCOPE = ("Does the behaviour look general, bound to this project, to this kind
 Q_VOICE = ("In the user's words, are they stating their own view, quoting someone, asking about a view, or asking "
            "for a role to be played?")
 Q_TASK = "What kind of task is this?"
-Q_CLAIM = "Write the user's version of the taste item as one short neutral sentence starting 'The user wants'."
+class DailyCapReached(Exception):
+    """The remaining questions wait for the next local day."""
+
+
+_reserve_question: ContextVar[Callable[[], None] | None] = ContextVar("taste_reserve_question", default=None)
+
+
+async def _ask(router, state, question, options):
+    from ..core.models.decision import ask_choice_result
+    reserve = _reserve_question.get()
+    if reserve is not None:
+        reserve()
+    return await ask_choice_result(router, state, question, options)
+
 
 
 def decision_labeller(router=None) -> Labeller | None:
@@ -126,29 +139,38 @@ def decision_labeller(router=None) -> Labeller | None:
             return None
     if not (getattr(router, "roles", None) or {}).get("decision"):
         return None
-    from ..core.models.decision import ask_choice_result, ask_score
+
+    def confidence(answer) -> float:
+        return (answer.confidence if answer.confidence is not None
+                else answer.probabilities.get(answer.choice, 0.0))
 
     async def label(item: Candidate, behaviour: str, reply: str, kind: str) -> Label | None:
         state = {"taste item": item.claim, "the user's own words or action": behaviour,
                  "the agent reply being corrected": reply or "(none)", "kind": kind}
-        rel = await ask_choice_result(router, state, Q_REL, list(shift.RELATIONS))
-        conf = rel.confidence if rel.confidence is not None else max(rel.probabilities.values(), default=0.0)
-        if rel.choice in ("unrelated", "refine"):
-            return Label(rel.choice, 0.0, confidence=conf, route=rel.route or "decision")
-        delta = await ask_score(router, state, Q_DELTA, ["none", "small", "medium", "large", "opposite"])
-        scope = await ask_choice_result(router, state, Q_SCOPE, ["general", "this project", "this kind of task",
+        rel = await _ask(router, state, Q_REL, list(shift.RELATIONS))
+        conf = confidence(rel)
+        if rel.choice in ("unrelated", "refine") or conf < shift.DEFAULTS["min_confidence"]:
+            return Label(rel.choice if conf >= shift.DEFAULTS["min_confidence"] else "unrelated",
+                         0.0, confidence=conf, route=rel.route or "decision")
+        delta_names = ["none", "small", "medium", "large", "opposite"]
+        delta = await _ask(router, state, Q_DELTA, delta_names)
+        scope = await _ask(router, state, Q_SCOPE, ["general", "this project", "this kind of task",
                                                                  "this period"])
-        task = await ask_choice_result(router, state, Q_TASK, list(shift.TASK_KINDS))
+        task = await _ask(router, state, Q_TASK, list(shift.TASK_KINDS))
+        conf = min(conf, confidence(delta), confidence(scope))
+        if scope.choice == "this kind of task":
+            conf = min(conf, confidence(task))
         voice = None
-        if item.cls == "value" and kind == "utterance":
-            voice = (await ask_choice_result(router, state, Q_VOICE, ["own view", "quoting", "asking",
-                                                                      "role-playing"])).choice
-            voice = "own" if voice == "own view" else voice
-        d = shift.DELTAS[max(0, min(4, round(delta.score)))]
+        if item.cls == "value" and kind != "accept":
+            voiced = await _ask(router, state, Q_VOICE, ["own view", "quoting", "asking", "role-playing"])
+            conf = min(conf, confidence(voiced))
+            voice = "own" if voiced.choice == "own view" else voiced.choice
+        d = shift.DELTAS[delta_names.index(delta.choice)]
         sc = {"this project": "project", "this kind of task": "task", "this period": "period"}.get(scope.choice,
                                                                                                  "general")
         return Label(rel.choice, d, sc, voice, conf, task.choice, "", rel.route or "decision")
 
+    label.taste_questions = True  # type: ignore[attr-defined]
     return label
 
 
@@ -158,14 +180,15 @@ def _watermark(led) -> int:
     upto = 0
     for ev in led.iter(kind="note"):
         b = ev["body"] or {}
-        if b.get("type") == "taste_scan":
+        if b.get("type") == "taste_scan" and ev.get("author") == "exo-learn":
             upto = max(upto, int(b.get("upto") or 0))
     return upto
 
 
 def _model_calls_today(led, day: str) -> int:
-    return sum(1 for ev in led.iter(kind="note") if (ev["body"] or {}).get("type") == "taste_signal"
-               and (ev["body"] or {}).get("route") not in (None, "rules") and ev["ts"][:10] == day)
+    return sum(1 for ev in led.iter(kind="note")
+               if (ev["body"] or {}).get("type") == "taste_question_call"
+               and ev.get("author") == "exo-learn" and (ev["body"] or {}).get("day") == day)
 
 
 def _behaviour(ev: Mapping, led) -> tuple[str, str, str, float]:
@@ -178,8 +201,8 @@ def _behaviour(ev: Mapping, led) -> tuple[str, str, str, float]:
         reply = str(((target or {}).get("body") or {}).get("text") or "")
         verdict = str(b.get("verdict") or "")
         if verdict == "accept":
-            return reply, "", "accept", STRENGTH["accept"]
-        return said, reply, f"verdict:{verdict}", STRENGTH.get(verdict, shift.EDIT)
+            return own_words(reply), "", "accept", STRENGTH["accept"]
+        return own_words(said), reply, f"verdict:{verdict}", STRENGTH.get(verdict, shift.EDIT)
     if ev["kind"] == "utterance" and b.get("role", "user") == "user":
         return own_words(str(b.get("text") or "")), "", "utterance", shift.EDIT
     return "", "", "", 0.0
@@ -209,12 +232,26 @@ async def record_signals(store: PrincipalStore, ledger, *, labeller: Labeller | 
     pol = taste_policy(store)
     principals = set(provenance.principal_names(store))
     items = list(items) if items is not None else _items(store, now_s, pack)
-    author = author or getattr(ledger, "author", None) or "exo-learn"
+    author = author or "exo-learn"
+    if author != "exo-learn":
+        raise ValueError("taste signals must use the learner author")
     res = {"read": 0, "not_principal": 0, "signals": 0, "abstained": 0, "capped": False}
     mark = _watermark(ledger)
     done = {((ev["body"] or {}).get("item"), (ev["body"] or {}).get("evidence")) for ev in ledger.iter(kind="note")
-            if (ev["body"] or {}).get("type") == "taste_signal"}
-    calls = _model_calls_today(ledger, now_s[:10])
+            if (ev["body"] or {}).get("type") == "taste_signal" and ev.get("author") == "exo-learn"}
+    from .adapt import zone
+    day = taste.parse_ts(now_s).astimezone(zone(pol)).date().isoformat()
+    calls = _model_calls_today(ledger, day)
+
+    def reserve():
+        nonlocal calls
+        # Another coroutine may have reserved questions while this one awaited a model.
+        calls = _model_calls_today(ledger, day)
+        if calls >= int(pol["daily_cap"]):
+            raise DailyCapReached
+        # Reserve before I/O: failed and cancelled requests consume their question.
+        ledger.append("note", {"type": "taste_question_call", "day": day}, author=author)
+        calls += 1
     upto = mark
     for ev in list(ledger.iter(kind=("verdict", "utterance"), since=mark)):
         if ev.get("author") not in principals:            # D-040: skipped before any model is asked
@@ -232,7 +269,7 @@ async def record_signals(store: PrincipalStore, ledger, *, labeller: Labeller | 
             want, avoid, _ = parse_instruction(said)
             sig = taste.signature(want, avoid) or sig
         cands = candidates(sig, items)
-        if labeller is not None and calls + len(cands) > int(pol["daily_cap"]):
+        if labeller is not None and calls >= int(pol["daily_cap"]) and cands:
             res["capped"] = True
             break
         for c in cands:
@@ -240,30 +277,44 @@ async def record_signals(store: PrincipalStore, ledger, *, labeller: Labeller | 
                 continue
             lab = None
             if labeller is not None:
-                calls += 1
+                token = _reserve_question.set(reserve)
                 try:
+                    if not getattr(labeller, "taste_questions", False):
+                        reserve()  # A custom single-question labeller uses the same durable cap.
                     out = labeller(c, said, reply, kind)
                     lab = await out if inspect.isawaitable(out) else out
+                except DailyCapReached:
+                    res["capped"] = True
+                    break
                 except Exception:
                     lab = None
+                finally:
+                    _reserve_question.reset(token)
             else:
                 lab = fallback(c, sig)
                 if lab is not None and kind == "accept" and lab.relation != "agree":
                     lab = None                             # accepting an answer only ever agrees
-            if lab is None:
+            if lab is None or kind == "accept" and lab.relation != "agree":
                 continue
             if lab.confidence is not None and lab.confidence < float(pol["min_confidence"]):
                 res["abstained"] += 1
                 lab = Label("unrelated", 0.0, confidence=lab.confidence, route=lab.route)
-            stated = kind == "utterance" and lab.voice == "own" and lab.relation == "contradict"
+            stated = kind != "accept" and lab.voice == "own" and lab.relation == "contradict"
             body = {"type": "taste_signal", "item": c.id, "relation": lab.relation, "delta": lab.delta,
                     "scope": lab.scope, "voice": lab.voice, "confidence": lab.confidence, "route": lab.route,
                     "evidence": ev["id"], "at": ev["ts"], "strength": shift.INFERRED if kind == "accept" else strength,
                     "kind": kind, "stated": stated, "claim": lab.claim or (said[:200] if lab.relation == "contradict"
                                                                           else ""),
                     "project": (ev.get("body") or {}).get("project"), "task": lab.task}
+            if any((n.get("author") == author and (n["body"] or {}).get("type") == "taste_signal"
+                    and (n["body"] or {}).get("item") == c.id
+                    and (n["body"] or {}).get("evidence") == ev["id"])
+                   for n in ledger.iter(kind="note")):
+                continue
             ledger.append("note", body, author=author, session=ev.get("session"), refs=[ev["id"]])
             res["signals"] += 1
+        if res["capped"]:
+            break
         upto = ev["seq"]
     if upto > mark:
         ledger.append("note", {"type": "taste_scan", "upto": upto, "read": res["read"]}, author=author)

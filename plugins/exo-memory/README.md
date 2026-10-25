@@ -6,7 +6,7 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 
 | Hook | Behaviour |
 |---|---|
-| `system_prompt_block` | The store's `PRINCIPAL.md`, curator comments removed, trimmed to `pack_budget` tokens, then the taste block (D-044: house, learned and pinned taste items with their source, under `taste_budget` tokens; `docs/TASTE-BASELINE.md`), plus one line naming the tools. Built once per process, so the prompt cache holds. |
+| `system_prompt_block` | The store's `PRINCIPAL.md`, curator comments removed, trimmed to `pack_budget` tokens, then the taste block (D-044: house, learned and pinned taste items with their source, under `taste_budget` tokens; `docs/TASTE-BASELINE.md`), plus one line naming the tools. The principal pack stays fixed per process. Taste refreshes on a local day boundary, a relevant ledger change or policy edit, with separate cached entries for each session working directory. |
 | `prefetch` | Belief nodes from `exo.retrieve.assemble`, then episodic recall: keyword hits from the log and the summary view. Each section is labelled. The whole block stays under `prefetch_budget`. Nodes are read fresh on each call (`PrincipalStore.refresh`), so a belief accepted, promoted, edited or reverted since the last turn shows up or drops out at once, by `exo proposals` in another process or by learning in this one. |
 | `on_turn_start`, `sync_turn` | `utterance` events in the ledger. User turns are authored by the principal, assistant turns by the agent id. The turn also goes to the episodic log. |
 | `on_memory_write` | A `note` event of type `memory_write`. |

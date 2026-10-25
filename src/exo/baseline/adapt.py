@@ -116,9 +116,9 @@ def _principals(store: PrincipalStore) -> set[str]:
     return set(provenance.principal_names(store))
 
 
-def read_ledger(store: PrincipalStore, principals: set[str]) -> dict:
+def read_ledger(store: PrincipalStore, principals: set[str], now: datetime | None = None) -> dict:
     """Signals (verified), active days, sessions per day, acts, mode notes and written outcomes."""
-    out: dict = {"signals": [], "days": [], "acts": [], "modes": [], "written": {}, "beliefs": {}}
+    out: dict = {"signals": [], "days": [], "sessions": [], "acts": [], "modes": [], "written": {}, "beliefs": {}}
     if not store.ledger_path.is_file():
         return out
     from ..consolidate import load_state
@@ -128,6 +128,8 @@ def read_ledger(store: PrincipalStore, principals: set[str]) -> dict:
         out["beliefs"] = {pid: (b, st.proposals.get(pid)) for pid, b in st.beliefs.items()}
         seen: set[tuple[str, str]] = set()
         for ev in led.iter(kind=("note", "utterance", "verdict")):
+            if now is not None and taste.parse_ts(ev["ts"]) > now:
+                continue
             b = ev["body"] or {}
             if ev["kind"] != "note":
                 if ev.get("author") in principals:
@@ -136,15 +138,20 @@ def read_ledger(store: PrincipalStore, principals: set[str]) -> dict:
             t = b.get("type")
             if t == "session_start":
                 out["days"].append(ev["ts"])
+                out["sessions"].append(ev["ts"])
             elif t == "taste_signal" and b.get("item") and b.get("relation") in ("contradict", "agree"):
+                if ev.get("author") != AGENT:
+                    continue
                 src = led.get(str(b.get("evidence") or ""))
-                if src is None or src.get("author") not in principals:      # D-040: only the user's own
+                if (src is None or src.get("author") not in principals
+                        or src.get("kind") not in ("utterance", "verdict")
+                        or src.get("kind") == "utterance" and (src.get("body") or {}).get("role", "user") != "user"):      # D-040: only the user's own
                     continue
                 if (b["item"], src["id"]) in seen:
                     continue
                 seen.add((b["item"], src["id"]))
                 out["signals"].append(_signal(b, src))
-            elif t in NOTE_TYPES and b.get("key"):
+            elif t in NOTE_TYPES and b.get("key") and ev.get("author") == AGENT:
                 out["written"][b["key"]] = {**b, "ts": ev["ts"]}
             elif ev.get("author") not in principals:
                 continue                                                   # D-052: acts are the principal's
@@ -153,7 +160,8 @@ def read_ledger(store: PrincipalStore, principals: set[str]) -> dict:
             elif t in ACT_TYPES and (b.get("item") or t == "taste_reset"):
                 verb = ACT_TYPES[t] or str(b.get("answer") or "")
                 if verb in ("pin", "unpin", "yes", "no", "later", "undo", "restore", "reset"):
-                    out["acts"].append(shift.Act(ev["ts"], verb, str(b.get("item") or "*")))
+                    out["acts"].append(shift.Act(ev["ts"], verb, str(b.get("item") or "*"),
+                                                 str(b.get("proposal") or "")))
     return out
 
 
@@ -178,7 +186,7 @@ def load(store: PrincipalStore, *, now: str | datetime | None = None, pack: Hous
     layer = user_layer(store, _iso(now_dt))
     on, reason = house_status(pack, layer, pol)
     principals = _principals(store)
-    data = read_ledger(store, principals)
+    data = read_ledger(store, principals, now_dt)
     mode0, src = default_mode(pol, pack, layer)
     modes = sorted(data["modes"])
     mode = modes[-1][1] if modes else mode0
@@ -195,7 +203,7 @@ def load(store: PrincipalStore, *, now: str | datetime | None = None, pack: Hous
     installed = taste.parse_ts(layer.installed) if layer.installed else now_dt
     inst_day = installed.astimezone(tz).date()
     days = sorted(shift.local_day(d, tz) for d in data["days"])
-    starts = sorted(data["days"])
+    starts = sorted(data["sessions"])
 
     def window_at(ts: str) -> bool:
         n = sum(1 for d in starts if d <= ts)
@@ -214,7 +222,9 @@ def load(store: PrincipalStore, *, now: str | datetime | None = None, pack: Hous
             subjects.append((shift.Subject(h.id, h.claim, h.cls, "house", False, layer.installed or "",
                                            house_innate(h)), True, inst_day))
     from ..consolidate import load_policy
-    half_lives = load_policy(store)["half_life_days"]
+    consolidate_policy = load_policy(store)
+    half_lives = consolidate_policy["half_life_days"]
+    pol["guard_words"] = consolidate_policy["guard_words"]
     for u in layer.items:
         b, p = data["beliefs"].get(u.id, (None, None))
         if b is None:
@@ -243,7 +253,7 @@ def _pid(key: str) -> str:
 
 def _belief(ledger, st: State, o: shift.Outcome, author: str) -> str:
     """The challenger, or the adopted view, as an accepted learned belief that overrides the item."""
-    from ..consolidate import Proposal
+    from ..consolidate import Proposal, load_state
     it = st.items[o.item]
     claim = (o.data.get("claim") or "").strip() or f"The user's own way, not: {it.subject.claim}"
     pid = _pid(o.key)
@@ -258,8 +268,11 @@ def _belief(ledger, st: State, o: shift.Outcome, author: str) -> str:
     body["overrides"] = o.item
     if o.data.get("scope"):
         body["scope"] = o.data["scope"]
-    ledger.append("belief_proposed", body, author=author)
-    ledger.append("belief_accepted", {"proposal_id": pid, "node_id": None, "rule": "taste_shift"}, author=author)
+    existing = load_state(ledger)
+    if pid not in existing.proposals:
+        ledger.append("belief_proposed", body, author=author)
+    if pid not in existing.beliefs or existing.beliefs[pid].status != "accepted":
+        ledger.append("belief_accepted", {"proposal_id": pid, "node_id": None, "rule": "taste_shift"}, author=author)
     return pid
 
 
@@ -267,7 +280,9 @@ def close_weeks(store: PrincipalStore, ledger, *, now: str | datetime | None = N
                 author: str | None = None) -> list[dict]:
     """Write each outcome the replay found that is not written yet. Returns the new notes' bodies."""
     st = load(store, now=now, pack=pack)
-    author = author or getattr(ledger, "author", None) or AGENT
+    author = author or AGENT
+    if author != AGENT:
+        raise ValueError("taste outcomes must use the learner author")
     made: list[dict] = []
     for o in st.outcomes:
         if o.key in st.written:
@@ -352,7 +367,7 @@ def brief_lines(store: PrincipalStore, since: str, *, now: str | datetime | None
     with Ledger(path) as led:
         for ev in led.iter(kind="note"):
             b = ev["body"] or {}
-            if b.get("type") in NOTE_TYPES and ev["ts"] >= since:
+            if b.get("type") in NOTE_TYPES and ev["ts"] >= since and ev.get("author") == AGENT:
                 rows.append(b)
     out, new_props = [], 0
     for b in rows:

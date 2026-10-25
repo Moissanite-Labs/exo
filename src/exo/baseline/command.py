@@ -70,6 +70,7 @@ def pending_line(v: TasteView, iid: str) -> str | None:
     if t.proposal is not None:
         what = {"swap": "switch to your way", "scope": f"use your way in {t.scope or 'that work'}",
                 "adopt": "take on your view", "restore": "bring back the house view"}[t.proposal["kind"]]
+        yours = t.proposal.get("snapshot", {}).get("claim") or yours
         return (f"Waiting for you: {what}: {yours} (against '{it.subject.claim}'). "
                 f"/taste yes {iid}, /taste no {iid} or /taste later {iid}")
     if t.s <= 0 or t.status in ("swapped", "adopted"):
@@ -181,7 +182,17 @@ def _overriders(v: TasteView, iid: str) -> list[str]:
     st = v.state
     if st is None or st.layer is None:
         return []
-    return [u.id for u in st.layer.items if u.overrides == iid and u.source != "ruling"]
+    from .layers import _matches
+    house = next((h for h in v.pack.items if h.id == iid), None)
+    targets = {iid}
+    found: set[str] = set()
+    while True:
+        more = {u.id for u in st.layer.items if u.source != "ruling" and u.id not in found
+                and (u.overrides in targets or house is not None and _matches(u, house))}
+        if not more:
+            return sorted(found)
+        found |= more
+        targets |= more
 
 
 def write(store: PrincipalStore, ledger, v: TasteView, verb: str, ref: str, now: str | datetime | None = None) -> str:
@@ -193,8 +204,8 @@ def write(store: PrincipalStore, ledger, v: TasteView, verb: str, ref: str, now:
         ledger.append("note", {"type": "taste_mode", "mode": ref}, author="principal")
         return f"mode: {ref}" + (" (each inferred change waits for your yes)" if ref == "ask" else
                                  " (changes happen, then show in /taste and the brief; /taste undo reverses one)")
-    if verb == "reset" and ref.startswith("all"):
-        if ref.split()[-1] != "confirm":
+    if verb == "reset" and ref in ("all", "all confirm"):
+        if ref != "all confirm":
             return "This drops every learned taste item; your rulings and the ledger rows stay. " \
                    "Type /taste reset all confirm"
         pids = [u.id for u in (st.layer.items if st and st.layer else []) if u.source != "ruling"]
@@ -203,6 +214,8 @@ def write(store: PrincipalStore, ledger, v: TasteView, verb: str, ref: str, now:
         return f"reset: {len(pids)} learned item(s) dropped; house items apply again"
     iid = _id(v, ref)
     claim = _claim(v, iid)
+    if verb in ("off", "on") and iid not in {h.id for h in v.pack.items}:
+        raise TasteError("bad_request", "off and on apply to house items; use reset for a learned item")
     if verb in NOTE:
         ledger.append("note", {"type": NOTE[verb], "item": iid}, author="principal")
         return {"pin": "pinned", "unpin": "unpinned", "off": "turned off", "on": "turned on"}[verb] + f": {claim}"

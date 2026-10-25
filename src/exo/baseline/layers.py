@@ -175,6 +175,8 @@ def user_layer(store: PrincipalStore, now: str | datetime | None = None) -> User
         if b.status != "accepted":
             continue
         p = st.proposals.get(pid)
+        if b.type not in ("preference", "value", "rule", "procedure") or p is not None and p.ptype != "taste":
+            continue  # Taste controls never reset facts, skills or other learned material.
         ex = extra.get(pid, {})
         layer.items.append(UserItem(pid, b.claim, b.sig, b.weight(now_s, half_lives),
                                     "ruling" if p is not None and p.kind == "ruling" else "learned",
@@ -218,8 +220,11 @@ def resolve(house: Sequence[HouseItem], user: Sequence[UserItem], *, pins: set[s
     `overrides` is not listed unless pinned. Returns entries by weight, highest first."""
     weights = weights or {}
     weight_of = weight_of or (lambda h: start)
-    shadowed = {u.overrides for u in user if u.overrides and (u.scope is None or u.scope == scope)}
-    active = [u for u in user if (u.scope is None or u.scope == scope) and (u.id not in shadowed or u.id in pins)]
+    protected = {u.id for u in user if u.source == "ruling"} | set(pins)
+    eligible = [u for u in user if (u.scope is None or u.scope == scope)
+                and (u.overrides not in protected or u.source == "ruling")]
+    shadowed = {u.overrides for u in eligible if u.overrides}
+    active = [u for u in eligible if u.id not in shadowed or u.id in protected]
     used: set[str] = set()
     out: list[Entry] = []
 
@@ -307,10 +312,10 @@ def view(store: PrincipalStore, *, pack: HousePack | None = None, now: str | dat
 
 
 def taste_block(store: PrincipalStore, *, budget_tokens: int = 400, pack: HousePack | None = None,
-                now: str | datetime | None = None) -> str:
+                now: str | datetime | None = None, scope: str | None = None) -> str:
     """The taste block for the system message: active items by weight, each with its source, cut to the
     budget (low-weight items drop out first; they stay in `exo taste`). Empty when there is nothing."""
-    v = view(store, pack=pack, now=now)
+    v = view(store, pack=pack, now=now, scope=scope)
     if not v.entries:
         return ""
     head = "# Taste (how this user likes work done; source in brackets)"

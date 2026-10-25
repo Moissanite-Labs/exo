@@ -28,6 +28,7 @@ class Learner:
         self._complete = complete
         self._runtime: Runtime | None = None
         self._resolved = False
+        self._taste_lock = asyncio.Lock()
         self.notices: list[str] = []
         self.tasks: dict[str, asyncio.Task] = {}
         self.turns: dict[str, int] = {}      # user turns seen per session since its last review
@@ -71,6 +72,7 @@ class Learner:
             self._runtime.close()
             self._runtime = None
         self._resolved = False
+        self._taste_lock = asyncio.Lock()
 
     # -- model calls ---------------------------------------------------------
 

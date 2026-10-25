@@ -205,8 +205,7 @@ class Loop:
         await self.bus.emit(body, session)
 
     def _specs(self) -> list[ToolSpec]:
-        specs = self.tool_specs() if callable(self.tool_specs) else self.tool_specs
-        return list(specs or [])
+        return list((self.tool_specs() if callable(self.tool_specs) else self.tool_specs) or [])
 
     async def _add(self, session: str, msg: Message, turn_id: str) -> Message:
         msg.meta.setdefault("author", provenance.infer(msg.role, msg.meta))  # D-040: agent, tool, or the ingress's
@@ -231,7 +230,8 @@ class Loop:
         author = provenance.author_of(user)
         remembered = not self.store.private(session)  # D-028: no memory write sees a private thread or its child
         if remembered:
-            await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
+            await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author,
+                               cwd=info.cwd if (info := self.store.get_session(session)) else "")
         result = TurnResult(turn_id=turn_id, stop_reason="end")
         try:
             await self._rounds(session, turn_id, user, st, result)
@@ -293,8 +293,8 @@ class Loop:
         extra = self.system_extra() if self.system_extra else ""  # last: never moves what comes before it (D-030)
         info = self.store.get_session(session) if session else None
         where = WORKDIR_LINE.format(cwd=info.cwd) if info and info.cwd else ""
-        parts = (self.system_prompt, await self._memory("system_prompt_block") or "", where, extra)
-        return "\n\n".join(p for p in parts if p)
+        return "\n\n".join(p for p in (self.system_prompt, await self._memory(
+            "system_prompt_block", cwd=info.cwd if info else "") or "", where, extra) if p)
 
     async def _system(self, session: str, query: str) -> tuple[str, str]:
         """(system text, recall). Recall is folded into the system text unless the context engine takes it."""

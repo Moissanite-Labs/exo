@@ -204,6 +204,9 @@ class _State:
         self.sessions: dict[str, dict] = {}
         self.utterances: OrderedDict[str, str] = OrderedDict()  # text hash -> event id
         self.pack = ""
+        self.pack_head = ""
+        self.pack_tools = ""
+        self.taste_prompt: Any = None
         self.last_recall = 0
         self.core_log: Any = None  # the host's agent log (D-028); when set, it is the episodic log
 
@@ -409,26 +412,33 @@ class ExoMemoryProvider(MemoryProvider):
             raw = ""
         pack = trim_pack(raw, st.cfg["pack_budget"]) if raw.strip() else ""
         head = "# Principal pack (exo-memory)\n\n" + pack if pack else "# Principal pack (exo-memory)\n\n(empty store)"
+        st.pack_head = head
+        st.pack_tools = CORE_TOOLS_LINE if st.core_log is not None else TOOLS_LINE
         taste = self._taste_block(st)
-        tools = CORE_TOOLS_LINE if st.core_log is not None else TOOLS_LINE
-        return head + "\n\n" + (taste + "\n\n" if taste else "") + tools
+        return head + "\n\n" + (taste + "\n\n" if taste else "") + st.pack_tools
 
     @staticmethod
-    def _taste_block(st: _State) -> str:
+    def _taste_block(st: _State, scope: str | None = None) -> str:
         """D-044: house, learned and pinned taste items with their source, by weight, under `taste_budget`.
-        Built with the pack, once per process, so the cached prefix stays stable. Never stops memory."""
+        Stable until taste changes or a local day closes. Never stops memory."""
         if st.cfg.get("taste_budget", 0) <= 0:
             return ""
         try:
-            from exo.baseline import taste_block
-            return taste_block(st.rt.store, budget_tokens=st.cfg["taste_budget"])
+            from exo.baseline.prompt import TastePrompt
+            if st.taste_prompt is None:
+                st.taste_prompt = TastePrompt(st.rt.store, st.rt.ledger, st.cfg["taste_budget"])
+            return st.taste_prompt.block(scope)
         except Exception as exc:
             logger.warning("exo-memory: taste block skipped: %s", exc)
             return ""
 
-    def system_prompt_block(self) -> str:
+    def system_prompt_block(self, *, cwd: str = "") -> str:
         st = self._state()
-        return st.pack if st else ""  # built once per process: byte-stable for prompt caching
+        if st is None:
+            return ""
+        with st.rt.lock:
+            taste = self._taste_block(st, "project:" + cwd if cwd else None)
+            return st.pack_head + "\n\n" + (taste + "\n\n" if taste else "") + st.pack_tools
 
     # -- recall ------------------------------------------------------------------
 
@@ -505,6 +515,8 @@ class ExoMemoryProvider(MemoryProvider):
             return
         author = self._user_author(st, kwargs.get("author_id"), bool(kwargs.get("author_is_bot")), kwargs.get("author"))
         body = {"text": message, "role": "user", "turn": turn_number}
+        if kwargs.get("cwd"):
+            body["project"] = str(kwargs["cwd"])
         if kwargs.get("author_name"):
             body["author_name"] = kwargs["author_name"]
         ev = self._safe(lambda: self._append(st, "utterance", body, author, sid))
