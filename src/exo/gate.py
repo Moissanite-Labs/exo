@@ -6974,7 +6974,7 @@ def body_unseen(c: Classification) -> bool:
     """Whether an outbound body, title or field on the line is out of the gate's sight (#208): a part with the
     ``unseen_body`` signal, or a post's body file nobody read into its text. Such a post asks under the posting
     rules, never gets a standing grant, and a required executor refuses it. Each reading of the line counts
-    (readings: as read before #399 or #311), so a line unseen as the gate read it then stays unseen."""
+    (readings: as read before #399, #311 or #471), so a line unseen as the gate read it then stays unseen."""
     return any("unseen_body" in p.signals or (p.text_file and not p.text
                                               and (p.category in OUTBOUND or p.category == "vcs_merge"))
                for x in readings(c) for p in _each_part(x))

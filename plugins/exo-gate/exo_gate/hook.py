@@ -497,7 +497,7 @@ class Gate:
             try:        # the call read as a store write or secret, when only the decision failed (a bad policy regex)
                 action = {"tool": tool_name, "args": args}
                 c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
-                store = gate.no_grant(c)    # a part and each reading count too (#311, #399)
+                store = gate.no_grant(c)    # a part and each reading count too (#311, #399, #471)
             except Exception:
                 pass
             if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not (secret or store):
@@ -556,7 +556,7 @@ class Gate:
         binding = gate.approval_binding(c, args) if outward else ""
         # No standing allow for credentials and store writes (a part of the line counts, #311), nor for a post whose
         # body the gate did not see: its binding hashes only the line, so a grant would cover any later body (#208).
-        # Each reading counts (gate.readings: as read before #311 or #399).
+        # Each reading counts (gate.readings: as read before #311, #399 or #471).
         once = gate.no_grant(c) or gate.body_unseen(c)
         grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" and not once else None
         if grant:

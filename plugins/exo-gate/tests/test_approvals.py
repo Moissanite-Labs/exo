@@ -300,12 +300,12 @@ def before_is(monkeypatch):
     """Give a line a reading as before #471 read from another line, with that line's floor."""
     real = gate.classify
 
-    def set_before(line, before):
+    def set_before(line, before, **more):
         def classify(action, *a, **k):
             c = real(action, *a, **k)
             args = action[1] if isinstance(action, tuple) else action.get("args") or {}
             if args.get("command") == line:
-                c.before = real({"tool": "terminal", "args": {"command": before}})
+                c.before = real({"tool": "terminal", "args": {"command": before, **more}})
             return c
         monkeypatch.setattr(gate, "classify", classify)
     return set_before
@@ -350,6 +350,47 @@ def test_who_may_answer_a_line_read_as_before_471_may_answer_that_reading(tmp_pa
     line = "gh pr comment 5 -R myorg/app -b x"
     before_is(line, "gh pr -b x comment 5 -R myorg/app")             # read as a read, with a post for its floor
     _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
+DELEGATED = 'approvers:\n  default: [principal, "seat:saga-divan"]\n  categories:\n    credentials: [principal]\n'
+
+
+@pytest.mark.parametrize("before, more", [
+    ("env; echo x > ~/.exo/policies/gates.yaml", {}),            # #447: a store write part beside a secret read
+    ("cp /tmp/evil.yaml ~/.exo/policies/default.yaml", {}),
+    ("cat config", {"workdir": "~/.kube"}),                       # #311: a store read from the call's own folder
+])
+def test_a_store_part_only_in_the_line_read_as_before_471_keeps_the_principal_once(tmp_path, before_is, before, more):
+    # gate.readings lists the line read as before #471 after the line's own readings, so call_approvers and no_grant
+    # (#447, #311) read its parts too: a seat every other category is delegated to does not answer, and no grant is
+    # kept.
+    store, key = _seat_gate(tmp_path, "st16")
+    (store / "policies" / "approvals.yaml").write_text(DELEGATED)
+    line = "gh pr view 5 -R myorg/app"
+    before_is(line, before, **more)
+    g, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert not any(p.category in gate.NO_GRANT for p in gate._each_part(c)), c     # only that reading has one
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True and r["approvers"] == ["principal"], r
+    answer(ctx, r, "always")
+    assert g.grants.list() == []
+
+
+def test_who_may_answer_a_sudo_write_read_as_before_471_may_answer_its_displaced_part(tmp_path, before_is):
+    # #454: as read before #471 the line is a sudo write that displaced a gh read on myorg/app. Only those who may
+    # answer that read may answer the line, as for the line read as before #399.
+    store, key = _seat_gate(tmp_path, "st17")
+    (store / "policies" / "gates.yaml").write_text("categories: {local_write: ask, read: ask}\n")
+    (store / "policies" / "approvals.yaml").write_text(
+        'approvers:\n  default: [principal]\n  categories:\n    local_write: [principal, "seat:saga-divan"]\n')
+    line = "echo hi > /tmp/f"
+    before_is(line, "sudo gh pr view 9 -R myorg/app > /tmp/f")
+    _, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.displaced is None and c.before.displaced is not None, c
     r = call(ctx, "terminal", {"command": line})
     assert r["action"] == "approve" and r["approvers"] == ["principal"], r
 
