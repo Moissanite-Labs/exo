@@ -16,7 +16,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   does not see through, a shell, a `{ }` group, and the code around the call in `execute_code` or `python -c`.
   `nice`, `exec`, `sudo`, `env`, `timeout`, `command`, `nohup`, a variable such as `NO_COLOR=1`, a `( )` subshell
   and a redirection to `/dev/null` add no part, so the file is still read there. A copy of the post on another
-  target (#399) is not another part. The card says the file was not read and why, for each post on the line, and
+  target (#399) is not another part. Every reading of the line counts, and a store read from the tool's own
+  folder (#311) is a part too. The card says the file was not read and why, for each post on the line, and
   asks for the post on a line of its own, in place of the hint to pass an absolute path. A post also unseen another
   way, such as a title from a variable, keeps that hint beside it. The card no longer names a word the unread file
   holds.
