@@ -3299,6 +3299,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the turn by the thread's last turn id, so during a turn it matches the call. The counted core grows by no line:
   `build` and `report` call `thread_tail`, which wraps `_thread_tail`. Validation:
   `tests/core/test_agent_context.py`, `tests/core/test_turn_settle.py`.
+  *2026-10-25, merged with main edeb4f89, and the reviews of f80c0444 by abu-aska and exo-36:* the view cut could
+  still drop the question. When the question's leaf is pending and a later leaf of the turn lands first, the view
+  shows the question verbatim, and the cut took that leaf to the marker. The cut now stops at the leaf that holds
+  the turn's first message, read from the store by turn id. Without a turn id the turn starts at the last user
+  message that is not a note, and before the tail when the tail holds none, so no stored message of the tail is
+  then cut. Both waits of a private tree, on overflow and before a cut, are for its own jobs only, leaves and
+  merges: a merge shrinks the view the cut counts. The overflow wait no longer waits for the agent tree's jobs
+  (#529), which shrink neither. `/context` matches the call during a turn. Between turns it keeps the last turn
+  whole, which the next turn's call can cut.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It

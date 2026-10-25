@@ -669,6 +669,31 @@ def test_calls_stay_bounded_when_a_later_leaf_lands_first():
     assert call[2].text() == SUMMARIZING_MARKER and sum(estimate_tokens(m) for m in call) < ctx.view_budget
 
 
+def test_the_view_cut_stops_at_the_turns_own_leaf():
+    """Issue #244: the question shares the pending leaf 17-24 with notes 8 and 9. A later leaf of the turn (25-32)
+    lands first, so the private view shows the question verbatim. The view cut leaves out the pending leaves before
+    it and stops there: every call keeps the question and its first result, though the view is over budget."""
+    summ = PerLeaf()
+    store, ctx, prov, loop, _ = slow_private(summ, reads=16, size=3000, view_budget=1500)
+
+    async def go():
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        store_pairs(store, p.id, 10)  # messages 1-20; the question is message 21
+        await loop.send(p.id, "QLONG summarize the files")
+        statuses = {(n.start, n.end): n.status for n in store.summaries(p.id) if n.level == 0}
+        for i in range(10):
+            summ.gates.setdefault(i, asyncio.Event()).set()
+        await settle_own(ctx, p.id)
+        return statuses
+    statuses = run(go())
+    view = prov.calls[-1][1].text()
+    assert statuses[(17, 24)] == "pending" and statuses[(25, 32)] == "done"
+    assert all(f"## Messages {s}\n{SUMMARIZING_MARKER}" in view for s in ("1-8", "9-16"))
+    assert "## Messages 17-24 (verbatim, summary pending)" in view and estimate_tokens(view) > ctx.view_budget
+    assert all("QLONG summarize the files" in c[1].text() + "".join(texts(c)) for c in prov.calls)
+    assert all("FILE-c0 " in c[1].text() + "".join(texts(c)) for c in prov.calls[1:])
+
+
 @pytest.mark.parametrize("big,status", [("results", "done"), ("arguments", "skipped")])
 def test_a_fast_summarizer_leaves_nothing_to_cut(big, status):
     """Issue #244: the overflow check measures a pending span as the view renders it, cut short, and cut_pending
@@ -708,14 +733,16 @@ class AgentHeld(Summ):
         return await super().summarize(content, previous, session)
 
 
+@pytest.mark.parametrize("budget", [6000, 600], ids=["cut", "overflow"])
 @pytest.mark.parametrize("lands", [True, False])
-def test_the_wait_before_a_cut_is_for_the_private_trees_own_leaves(lands):
-    """Issue #244: the private tree's turn waits up to overflow_settle when the cut would apply, for that tree's own
-    leaves only. A job of the agent tree, here a public thread's leaf that never lands, does not stretch the wait:
-    the turn waits the 0.1 s its own leaf takes, not the 1 s of overflow_settle, and carries that leaf's summary.
-    A private leaf that does not land in time is cut after overflow_settle."""
+def test_a_private_trees_wait_is_for_its_own_jobs(lands, budget):
+    """Issue #244: the private tree's turn waits up to overflow_settle when the cut would apply, or when its view
+    overflows (a budget of 600), for that tree's own jobs only. A job of the agent tree, here a public thread's leaf
+    that never lands, does not stretch the wait: the turn waits the 0.1 s its own leaf takes, not the 1 s of
+    overflow_settle, and carries that leaf's summary. A private leaf that does not land in time is cut after
+    overflow_settle."""
     summ = AgentHeld(lands)
-    store, ctx, prov, loop, _ = slow_private(summ)
+    store, ctx, prov, loop, _ = slow_private(summ, view_budget=budget)
     ctx.overflow_settle = 1.0
 
     async def go():

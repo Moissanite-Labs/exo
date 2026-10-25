@@ -111,8 +111,9 @@ oldest pending leaf first, a whole leaf at a time, until what comes before the t
 unstored "[earlier messages are being summarized]" message stands in each gap. When a later leaf lands first, the
 view shows the pending leaves before it verbatim. Those are the oldest, so they go first, and each keeps its
 heading over the marker. Nothing else is cut. The turn stays whole: its user message, found by its turn id, and
-all after it, tool rounds and context notes included. A span that is not pending stays whole too: one skipped for
-good, one waiting to retry, and the last `tail_messages`, which are in no leaf yet. A tool call and its results
+all after it, tool rounds and context notes included. The turn can start in such a leaf, and the cut stops there.
+A span that is not pending stays whole too: one skipped for good, one waiting to retry, and the last
+`tail_messages`, which are in no leaf yet. A tool call and its results
 are kept or cut together. The cut moves only when it must grow, and then by a whole leaf, so the calls in between
 extend the one before. The size counts tool-call arguments in full, but an image only as its placeholder. A span
 of large tool-call arguments can still be skipped as too small, since a leaf's size cuts each call's arguments at
@@ -120,7 +121,8 @@ of large tool-call arguments can still be skipped as too small, since a leaf's s
 the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its `checkpoint`),
 `capture_principal` or `on_compacted`. `/context` counts its view and the marker in the recent tail, and its
 `from_seq` is the first stored message there. It finds the turn by the thread's last turn id, so during a turn it
-keeps the running turn whole, as the call does, steer messages included. `/compact` folds only the agent tree.
+keeps the running turn whole, as the call does, steer messages included. Between turns it keeps the last turn
+whole too, though the next turn's call can cut it. `/compact` folds only the agent tree.
 
 A fork copies its parent's finished per-session summaries, but it numbers its copies 1 to n. Undo hides
 rows that are in the agent log, so their numbers stay used, and it deletes rows outside the log, such as a
@@ -143,7 +145,9 @@ the protocol is full at 30 commands. No new command type and no new event.
   the summary tree (summaries, nodes, levels, log range), the note of other threads' news (stored, plus
   news not yet stored), and this thread's recent tail. Each part has a token estimate, and the total
   follows. It also counts tree nodes by state (done, pending, skipped, failed) and says how many leaf
-  chunks `/compact` would fold. It reads only: it stores no note and starts no summary.
+  chunks `/compact` would fold. It reads only: it stores no note and starts no summary. In a private
+  thread whose leaves are pending, this holds during a turn. Between turns it keeps the last turn whole,
+  which the next turn's call can cut (#244).
 - `/compact` summarizes now whatever is eligible for this agent. Every full leaf chunk is eligible, even
   inside the tail (the 12-message wait is skipped), then finished neighbours are merged even if the view
   is under budget. The size rules stay: a span under `min_compact_tokens`, or a summary that is not shorter
@@ -192,9 +196,10 @@ more than `settle_timeout`), then builds with what is ready. The rule lives in `
 thread checks its own tree the same way, after the agent tree. Its tree also waits when the call would leave out a
 pending span (#244). That check counts each message in full, where the view cuts it short, so a leaf the call
 just scheduled gets its chance to run first. A fast summarizer, or a span too small to summarize, then leaves
-nothing to cut. That wait is for the private tree's own leaves only. The agent tree's jobs cannot shrink the cut,
-so they do not stretch it. So a private turn can now wait where it did not: while a cut would apply, each call
-waits up to `overflow_settle` for those leaves.
+nothing to cut. Both waits of the private tree are for its own jobs only, leaves and merges: a merge shrinks the
+view the cut counts. The agent tree's jobs shrink neither the private view nor the cut, so they do not stretch
+either wait. So a private turn can now wait where it did not: while a cut would apply, each call waits up to
+`overflow_settle` for those jobs.
 
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf

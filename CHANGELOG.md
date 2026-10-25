@@ -95,13 +95,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   leaf at a time, until what comes before the turn fits `view_budget`. A marker stands in each gap:
   `[earlier messages are being summarized]`. Both calls above are now under 5k tokens. So is a call made after a
   later leaf landed first, when the private view showed the pending leaves before it verbatim. The turn is never
-  cut: its question and all after it, tool rounds and context notes included. Nor is a span that is not pending,
-  such as one skipped for good, and a tool call keeps its results. Tool-call arguments count in full. The cut moves
-  a whole leaf at a time, so calls between moves share their cached prefix. The private tree's turn now also waits
-  up to `overflow_settle` when the cut would apply, where it did not wait before, so a leaf the call just scheduled
-  can land first. It waits for that tree's own leaves only, not for the agent tree's jobs. `/context` finds the
-  turn as the call does, by its turn id, so during a turn it shows the question kept after a steer. It now gives
-  the first stored message of the tail as `from_seq`, not the unstored private view or marker (D-068 amendment).
+  cut: its question and all after it, tool rounds and context notes included, also when the question is in such a
+  leaf. Nor is a span that is not pending, such as one skipped for good, and a tool call keeps its results.
+  Tool-call arguments count in full. The cut moves a whole leaf at a time, so calls between moves share their
+  cached prefix. The private tree's turn now also waits up to `overflow_settle` when the cut would apply, where it
+  did not wait before, so a leaf the call just scheduled can land first. It waits for that tree's own jobs only,
+  not for the agent tree's. So does its wait when the private view overflows, which also waited for the agent
+  tree's jobs before (#529). `/context` finds the turn as the call does, by its turn id, so during a turn it shows
+  the question kept after a steer. Between turns it keeps the last turn whole, which the next turn's call can cut.
+  It now gives the first stored message of the tail as `from_seq`, not the unstored private view or marker (D-068
+  amendment).
 - A shell call's own folder argument is read for secret stores (#311). The bash tool runs a command in
   its `cwd`, and Hermes' `terminal` and Codex's `exec_command` in their `workdir`. The gate read only
   the command text and the session's folder, so `cat config` with `~/.kube` as `cwd` was a plain read

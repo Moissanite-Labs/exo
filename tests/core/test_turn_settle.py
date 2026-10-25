@@ -5,6 +5,8 @@ import asyncio
 import re
 import time
 
+import pytest
+
 from exo.core.context import PRIVATE_HEAD, AgentContext, DefaultCompressor, TreeContext, estimate_tokens
 from exo.core.sessions import SessionStore
 from exo.core.types import Message, ProviderEvent, ToolCall, ToolResult
@@ -197,6 +199,93 @@ def test_cut_pending_without_a_turn_id_starts_the_turn_at_its_last_question():
     pending, tail, out = asyncio.run(go())
     assert (17, 24) in pending and (33, 40) in pending
     assert out[0].text() == SUMMARIZING_MARKER and out[1:] == tail[20:] and out[1].text() == "QLONG"
+
+
+def land(store, sid, *starts):
+    """Mark leaves done while their jobs still wait at the gate, as when a later leaf lands first."""
+    for n in store.summaries(sid):
+        if n.level == 0 and n.start in starts:
+            n.status, n.text = "done", "S"
+            store.save_summary(n)
+
+
+def test_the_view_cut_stops_at_the_leaf_that_holds_the_turns_question():
+    """Issue #244: leaf 33-40 lands while the leaves before it are pending, so the private view shows them verbatim.
+    The question (message 21, turn "T") is in 17-24 and a steer in 25-32. The view cut takes the two leaves before
+    the turn to the marker and stops at the question's leaf, found by its turn_id. It cuts nothing after it, such as
+    a threads note that opens the tail in the pending leaf 41-48. Without a turn_id the turn starts at the steer,
+    the last user message, so the question's leaf is cut."""
+    async def go():
+        store, summ = SessionStore(), Gated()
+        ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=0)
+        p = store.create_session(agent="razi", kind="private")
+        for i in range(10):
+            store.append_message(p.id, Message.user(f"q{i} " + "x" * 400), f"t{i}")
+            store.append_message(p.id, Message.assistant(f"a{i} " + "x" * 400), f"t{i}")
+        store.append_message(p.id, Message.user("QLONG"), "T")
+        for i in range(19):
+            if i == 2:
+                store.append_message(p.id, Message.user("STEER"), "T")  # message 26
+            if i == 9:  # message 41, in the pending leaf 41-48 after the frontier
+                note = Message.user("[news from other threads]")
+                note.meta.update({"note": "threads", "local": True})
+                store.append_message(p.id, note)
+            store.append_message(p.id, Message.assistant("", [ToolCall(id=f"c{i}", name="read_file", arguments={})]), "T")
+            store.append_message(p.id, Message.tool([ToolResult.of_text(f"c{i}", "r" * 400)]), "T")
+        ctx.note(p.id)
+        land(store, p.id, 33)
+        ctx.view_budget = 1
+        tail = ctx._thread_tail(p.id, 0)
+        out = [cut_pending(ctx, p.id, tail, turn_id) for turn_id in ("T", "")]
+        summ.gate.set()
+        while pending := TreeContext.pending(ctx, p.id):
+            await asyncio.wait(pending)
+        return tail, out
+    tail, (by_id, fallback) = asyncio.run(go())
+    assert tail[1].meta == {"seq": 41, "note": "threads", "local": True} and by_id[1:] == fallback[1:] == tail[1:]
+    view, steered = by_id[0].text(), fallback[0].text()
+    assert all(f"## Messages {s}\n{SUMMARIZING_MARKER}" in view for s in ("1-8", "9-16"))
+    assert "## Messages 17-24 (verbatim, summary pending)" in view and "QLONG" in view and "STEER" in view
+    assert f"## Messages 17-24\n{SUMMARIZING_MARKER}" in steered and "QLONG" not in steered and "STEER" in steered
+
+
+@pytest.mark.parametrize("landed", [(25,), (17, 25), (1, 9, 17, 33)])
+def test_without_a_turn_id_a_question_before_the_tail_keeps_its_turn(landed):
+    """Issue #244: with no turn_id and no user message in the tail, the turn began before it. The question is the
+    last message of leaf 17-24, a threads note follows it, and the leaves in ``landed`` land first. The view cut takes
+    the pending leaves before the question to the marker and keeps the rest: the question's own leaf, the turn's
+    rounds in the view, and every stored message of the tail, which is all the turn's."""
+    async def go():
+        store, summ = SessionStore(), Gated()
+        ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=0)
+        p = store.create_session(agent="razi", kind="private")
+        for i in range(11):
+            store.append_message(p.id, Message.user(f"q{i} " + "x" * 400))
+            store.append_message(p.id, Message.assistant(f"a{i} " + "x" * 400))
+        store.append_message(p.id, Message.assistant("a11"))
+        store.append_message(p.id, Message.user("QLONG"))  # message 24
+        for i in range(18):
+            if i == 2:  # message 29: a threads note does not start the turn
+                note = Message.user("[news from other threads]")
+                note.meta.update({"note": "threads", "local": True})
+                store.append_message(p.id, note)
+            store.append_message(p.id, Message.assistant("", [ToolCall(id=f"c{i}", name="read_file", arguments={})]))
+            store.append_message(p.id, Message.tool([ToolResult.of_text(f"c{i}", "r" * 400)]))
+        ctx.note(p.id)
+        land(store, p.id, *landed)
+        ctx.view_budget = 1
+        tail = ctx._thread_tail(p.id, 0)
+        out = cut_pending(ctx, p.id, tail)
+        summ.gate.set()
+        while pending := TreeContext.pending(ctx, p.id):
+            await asyncio.wait(pending)
+        return tail, out
+    tail, out = asyncio.run(go())
+    view = out[0].text()
+    assert out[1:] == tail[1:] and not any(m.role == "user" for m in tail[1:])
+    assert all((f"## Messages {s}-{s + 7}\n{SUMMARIZING_MARKER}" in view) == (s not in landed) for s in (1, 9))
+    assert all((f"## Messages {s}-{s + 7} (verbatim" in view) == (s not in landed) for s in (17, 25))
+    assert ("QLONG" in view) == (17 not in landed)
 
 
 def test_a_checked_tail_is_not_reused_once_a_leaf_lands():
