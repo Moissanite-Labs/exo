@@ -66,6 +66,21 @@ def test_allow_returns_none_and_records(keyed_store):
         assert led.verify()["ok"]
 
 
+@pytest.mark.parametrize("secret", [False, True])
+def test_codex_patch_move_to_is_gated_before_execution(keyed_store, tmp_path, secret):
+    store, key = keyed_store
+    destination = tmp_path / ".ssh" / "config" if secret else store / "policies" / "gates.yaml"
+    before = destination.read_bytes() if destination.exists() else None
+    _, ctx = make_gate(store, key)
+    result = call(ctx, "apply_patch", {"patch": "*** Begin Patch\n*** Update File: src.txt\n"
+                  f"*** Move to: {destination}\n@@\n-before\n+after\n*** End Patch\n"})
+    assert result["action"] == "approve"
+    [ev] = events(store)
+    assert ev["body"]["outcome"] == "ask"
+    assert ev["body"]["classification"]["category"] == ("credentials" if secret else "store_write")
+    assert (destination.read_bytes() if destination.exists() else None) == before
+
+
 def test_ask_returns_approve_with_summary_link_default(keyed_store):
     store, key = keyed_store
     _, ctx = make_gate(store, key)
@@ -172,6 +187,20 @@ def test_bad_policy_file_falls_back_to_defaults(keyed_store):
     r = call(ctx, "terminal", {"command": "gh pr merge 3 -R acme-org/app"})
     assert r is None or r["action"] == "approve"       # defaults: costly internal is log
     assert "policy error" in events(store)[-1]["body"]["decision"]["reason"]
+
+
+@pytest.mark.parametrize("yaml, error", [
+    ("escalate: [read]\n", "gates.escalate must be a mapping"),
+    ("escalate: {categories: read}\n", "gates.escalate.categories must be a list"),
+])
+def test_malformed_escalation_reports_the_policy_error_in_the_hook(keyed_store, yaml, error, caplog):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text(yaml)
+    _, ctx = make_gate(store, key)
+    assert call(ctx, "terminal", {"command": "ls"}) is None
+    [ev] = events(store)
+    assert "policy error" in ev["body"]["decision"]["reason"]
+    assert error in caplog.text
 
 
 def test_policy_reload_on_change(keyed_store):
@@ -424,19 +453,30 @@ def test_internal_error_on_a_secret_read_is_not_a_free_pass(keyed_store, monkeyp
     assert g.pre_tool_call("read_file", {"path": "README.md"}) is None
 
 
-def test_a_policy_that_breaks_decide_still_asks_the_principal_once_for_a_store_write(keyed_store, tmp_path,
+@pytest.mark.parametrize("cat, tool, args, plain_args", [
+    ("local_write", "write_file", {"path": "~/.exo/policies/gates.yaml", "content": "version: 1\n"},
+     {"path": "notes.md", "content": "x"}),
+    # #311: a read line whose store read from the shell call's own folder is a credentials part (abu-aska's repro
+    # on the #452 + #467 merge: the fallback read the top category only, so observe mode ran the call)
+    ("read", "bash", {"command": "cat config", "cwd": "~/.kube"}, {"command": "cat config", "cwd": "~/proj"}),
+    ("read", "terminal", {"command": "cat config", "workdir": "~/.kube"}, {"command": "cat notes.md"}),
+    ("force_push", "bash", {"command": "cat * && git push --force origin main", "cwd": "~/.claude/projects"},
+     {"command": "git push --force origin main", "cwd": "~/proj"}),
+])
+def test_a_policy_that_breaks_decide_still_asks_the_principal_once_for_a_store_write(cat, tool, args, plain_args,
+                                                                                     keyed_store, tmp_path,
                                                                                      monkeypatch):
     # #464: a regex that does not compile raises in decide, now also on a store write's own part. The error card
     # for a call the gate read as a store write or secret asks the principal alone, once, in every mode.
     store, key = keyed_store
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    (store / "policies" / "gates.yaml").write_text("deny:\n  - category: local_write\n    command: '^(rm|shred'\n")
+    (store / "policies" / "gates.yaml").write_text(f"deny:\n  - category: {cat}\n    command: '^(rm|shred'\n")
     for extra in ({}, {"mode": "observe"}):
         g, _ = make_gate(store, key, decision_model=False, **extra)
-        r = g.pre_tool_call("write_file", {"path": "~/.exo/policies/gates.yaml", "content": "version: 1\n"})
-        assert r["action"] == "approve" and r["rule_key"] == "exo-gate:error:write_file", r
+        r = g.pre_tool_call(tool, args)
+        assert r["action"] == "approve" and r["rule_key"] == f"exo-gate:error:{tool}", r
         assert (r["approvers"], r["once"]) == (["principal"], True), r
-        plain = g.pre_tool_call("write_file", {"path": "notes.md", "content": "x"})
+        plain = g.pre_tool_call(tool, plain_args)
         if extra:
             assert plain is None                      # observe mode, as before
         else:
