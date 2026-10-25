@@ -249,6 +249,42 @@ def test_the_view_cut_stops_at_the_leaf_that_holds_the_turns_question():
     assert f"## Messages 17-24\n{SUMMARIZING_MARKER}" in steered and "QLONG" not in steered and "STEER" in steered
 
 
+def test_the_view_cut_takes_a_finished_turns_question():
+    """Issue #244: a finished turn "T" (question at message 21, tool rounds to message 50) is not the turn. The
+    running turn "U" asks at message 51, in the tail. Leaf 41-48, all rounds of T, lands first, so the view shows
+    leaves 1-40 verbatim, T's question among them. The view cut takes all five to the marker: T's question is not a
+    reason to stop, and U stays whole."""
+    async def go():
+        store, summ = SessionStore(), Gated()
+        ctx = AgentContext(store, summ, leaf_size=8, tail_messages=12, min_compact_tokens=0)
+        p = store.create_session(agent="razi", kind="private")
+        for i in range(10):
+            store.append_message(p.id, Message.user(f"q{i} " + "x" * 400), f"t{i}")
+            store.append_message(p.id, Message.assistant(f"a{i} " + "x" * 400), f"t{i}")
+        for turn, question, rounds in (("T", "QLONG", 14), ("U", "Q2", 6)):
+            store.append_message(p.id, Message.user(question), turn)
+            for i in range(rounds):
+                call = ToolCall(id=f"{turn}{i}", name="read_file", arguments={})
+                store.append_message(p.id, Message.assistant("", [call]), turn)
+                store.append_message(p.id, Message.tool([ToolResult.of_text(call.id, "r" * 400)]), turn)
+            if turn == "T":
+                store.append_message(p.id, Message.assistant("A"), turn)
+        ctx.note(p.id)
+        land(store, p.id, 41)
+        ctx.view_budget = 1
+        tail = ctx._thread_tail(p.id, 0)
+        out = cut_pending(ctx, p.id, tail, "U")
+        summ.gate.set()
+        while pending := TreeContext.pending(ctx, p.id):
+            await asyncio.wait(pending)
+        return tail, out
+    tail, out = asyncio.run(go())
+    view = out[0].text()
+    assert tail[1].meta["seq"] == 48 and [m.text() for m in tail[3:5]] == ["A", "Q2"] and out[1:] == tail[1:]
+    assert all(f"## Messages {i * 8 + 1}-{i * 8 + 8}\n{SUMMARIZING_MARKER}" in view for i in range(5))
+    assert "QLONG" not in view and "## Messages 41-48\nS" in view
+
+
 @pytest.mark.parametrize("landed", [(25,), (17, 25), (1, 9, 17, 33)])
 def test_without_a_turn_id_a_question_before_the_tail_keeps_its_turn(landed):
     """Issue #244: with no turn_id and no user message in the tail, the turn began before it. The question is the
