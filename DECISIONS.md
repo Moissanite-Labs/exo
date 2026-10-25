@@ -1928,7 +1928,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `printf {-v,X} y; git push --force origin main`. *Reserved hits.* A `reserved:` entry for a line's old category
   loses that hit when the line becomes `opaque_exec` or `delete`. `ssh h 'export {PATH,X}=; ls'` under `reserved:
   [read]` has 1 hit, not main's 2, and still asks, as main decides `ssh h 'export PATH= X=; ls'`. Differential (#423)
-  against main edeb4f89. Built-in corpus: 72,073 actions x 87 policies, lowered 0 pairs, tightened 16,912 pairs on 229
+  against main edeb4f89. Built-in corpus: 72,067 actions x 87 policies, lowered 0 pairs, tightened 16,891 pairs on 226
   actions. The focused corpus adds 291 lines to the 930: `declare -rx`, `typeset -xr`, `readonly`, `local -rx` and
   `export` git config pairs with and without a set, PATH, LD_PRELOAD and GIT_SSH_COMMAND spelled in a set with line
   joins and escapes, under `builtin`, `command`, `env`, `sudo`, `ssh` and `bash -c`, and `$( )` nests in a set. A
