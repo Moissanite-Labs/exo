@@ -2120,47 +2120,51 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   executor's body check, who may answer, "once" and the categories that never get a grant; and `binds_exact` binds
   the line as that reading binds. Within the simple command, the
   old reading's store scan reads its own parts and the folder from before the new reading's `cd`, and the late parts
-  the new reading adds are signed. Before these, the reviews' differential runs lowered 338 pairs on 150 actions of
+  the new reading adds are signed. Before these, the reviews' differential runs found lowered lines among
   each built-in shell line behind `X='a b'` (`X='a b' coproc env | cat`: credentials deny -> credentials ask;
   `X='a b' cd /dev && ssh -vpls 22 rm -rf /data`: delete deny -> store_write ask; `X='a b' cd ~/.exo && mv keys
-  /tmp/k`: credentials deny -> store_write ask) and 98 pairs on 50 actions of an aimed corpus (`gh pr comment 5 ...
+  /tmp/k`: credentials deny -> store_write ask) and in an aimed corpus (`gh pr comment 5 ...
   && X='a b' declare -a 'arr=($(rm -rf /srv/data))'`: github_post deny -> delete ask), and with the two in-command
-  fixes alone 284 pairs on 132 actions still lowered, each a `cd` or a `coproc` behind the quoted word. Rejected:
+  fixes alone lines still lowered, each a `cd` or a `coproc` behind the quoted word. Rejected:
   dropping the old reading, which lowers those lines and the ones that ask only as an unknown program. Rejected:
   reading a reserved word after an assignment as a program, as bash does: right for both forms, but it changes the
   unquoted form main reads as a coprocess, which this fix leaves alone. Rejected: giving the
   env-inject scan's matching loop the same unquoted-name test. Bash runs `'GIT_SSH_COMMAND=rm -rf /srv/data' git
   fetch` as a program of that name, but main reads the delete in the value and `deny: [delete]` denies the line.
   With the test it would ask. The loop still reads a word with a quoted name as an assignment, which only adds parts.
-  The differential (main's `scripts/gate_diff.py` under its built-in policies and the 74 from the reviews, among them
+  The differential (main's `scripts/gate_diff.py` under its built-in policies and those from the reviews, among them
   `command` rules on `git push` beside `opaque_exec: allow`, target and command denies and matrix deny cells) lowers
-  nothing in five runs, 38,632,272 pairs on 239,952 actions in all, and tightens 2,067,718 pairs: its built-in
-  corpus with 6,701 aimed lines and the reviews' probe lines (13,617,863 pairs); 39,180 aimed lines as written
-  (6,307,980): a `cd` or `pushd` into `/dev`, `/proc`, `~/.exo` or `~/.ssh` behind each quoting style, also through
-  `builtin`, `command`, `env -S`, `--split-string`, `env -u`, `nice`, `sudo`, `timeout` and `exec`, before a
-  publish, a force push, a post, an ssh delete, a secret read or a move of the store's keys; a `cd` before one;
-  reserved words and `coproc` after one; environment dumps behind one; values declare and friends read again after a
-  post; the reviews' corpus of each built-in shell line behind `X='a b'`; and the reviews' probe lines; 15,400 lines
-  of each quoting style with store, secret and env-inject values (`PATH`, `BASH_ENV`, `GIT_SSH_COMMAND`, `PS4`,
-  `LD_PRELOAD`) through each wrapper (2,479,400); 3,000 of the `cd` lines and 3,080 of those, with their compound
-  forms (7,981,575); and the reviews' 6,000 prefixed built-in lines with their compound forms (8,245,454). Earlier
-  versions lowered lines it now covers:
-  once main took #468, a merge of the two readings that kept each violation once lowered 126 pairs on 42
-  actions under the posting policies (`gh pr comment 5 -R myorg/app --body $'ok\nF' && X='a b' pushd /dev/fd &&
+  nothing on its built-in corpus and on aimed lines: a `cd` or `pushd` into `/dev`, `/proc`, `~/.exo` or `~/.ssh`
+  behind each quoting style, also through `builtin`, `command`, `env -S`, `--split-string`, `env -u`, `nice`, `sudo`,
+  `timeout` and `exec`, before a publish, a force push, a post, an ssh delete, a secret read or a move of the store's
+  keys; a `cd` before one; reserved words and `coproc` after one; environment dumps behind one; values declare and
+  friends read again after a post; each quoting style with store, secret and env-inject values (`PATH`, `BASH_ENV`,
+  `GIT_SSH_COMMAND`, `PS4`, `LD_PRELOAD`) through each wrapper; and each built-in shell line behind `X='a b'`, with
+  their compound forms. The runs and counts are in #546. Earlier versions lowered lines it now covers:
+  once main took #468, a merge of the two readings that kept each violation once lowered lines under the posting
+  policies (`gh pr comment 5 -R myorg/app --body $'ok\nF' && X='a b' pushd /dev/fd &&
   gh pr comment 5 -R myorg/app --body hi`: both posts miss the footer after the `cd` into a descriptor, store or
   secret folder, and main lists that violation twice, the merge once);
-  one that scanned only the new reading's words for store paths lowered 664 pairs on 71 actions (a store path in a
-  quoted value lost store_write); one that dropped the old reading when an `env -S` followed lowered 8,889 pairs on
-  932 actions of the `env -S` lines (store_write and env-inject deletes lost); and one whose setter check read only the
-  new reading lowered 8 pairs on 6 actions (`X="$Y" ls; git push --force origin main` allowed by a rule on
-  `git push`). The top transitions are a push that logged, or was allowed, and now asks beside an unknown program or
-  a command read behind a quoted assignment (`vcs_push log -> vcs_push ask`, 132,363 pairs in the built-in run), and
-  the command behind one taking the line (`opaque_exec allow -> delete ask`, 89,497 there and 276,241 in the
-  prefixed run). In a sample of 6,000 built-in actions and one of 2,000 aimed lines, each decided under the default
-  policy and `deny: [delete]`, none is lower; each of the 45 and 306 stricter pairs is a command read behind a quoted
-  assignment, now asking or denying as it does alone, or an unknown program (the quoted word read as before) asking
-  beside a push that logged. The everyday cost is a script that calls a local tool the gate does not know after a
+  one that scanned only the new reading's words for store paths lowered a store path in a quoted value from
+  store_write; one that dropped the old reading when an `env -S` followed lost store_write and env-inject deletes;
+  and one whose setter check read only the new reading allowed `X="$Y" ls; git push --force origin main` by a rule
+  on `git push`. The stricter lines are a push that logged, or was allowed, and now asks beside an unknown program or
+  a command read behind a quoted assignment (`vcs_push log -> vcs_push ask`), and the command behind one taking the
+  line (`opaque_exec allow -> delete ask`): a command read behind a quoted assignment now asks or denies as it does
+  alone, and an unknown program (the quoted word read as before) asks beside a push that logged.
+  The everyday cost is a script that calls a local tool the gate does not know after a
   push or a post (`git push origin feature && notify-send done`): it asks where it logged.
+  On main 2cc0c32f (2026-10-25), which took #311, #447, #454 and #316, `gate.readings` lists the line read as
+  before, with its own floor and its reading from before #311, after the line's own readings. So `no_grant`,
+  `call_approvers` and `body_unseen` read its parts as `decide` does, and so do the hook's body files, its required
+  executor check and its approvers for a sudo write's displaced part, which iterate the readings: a store write or
+  secret part only that reading has keeps the answer with the principal, once, and a sudo write only it reads keeps
+  its displaced part's approvers. The hook's grant check (D-075) compares a reserved hit with the line's own act, as
+  on main; an "always" on such a line covers that exact line only (`binds_exact`). Main's `scripts/gate_diff.py`
+  lowers nothing on its built-in corpus or on the aimed corpora above with the test lines of #311, #447, #454, #316
+  and #528 behind `X='a b'` and `X="$Y"`, in front and after the first joiner, also in a shell call's own folder.
+  Through the exo-gate hook, those prefixed lines under several policy and approval setups, each asked twice with
+  an "always" between, lose no ask, exact binding, approver or "once" against main. The runs and counts are in #546.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

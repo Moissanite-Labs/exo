@@ -289,12 +289,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   as a gh line's readings do (#399): each reserved part and violation of either stays, a violation as often as one
   of them lists it (two posts to one PR that both miss the footer around `X='a b' cd ~/.exo/state` list it twice),
   and the exo-gate hook's checks past the decision (body files, who may answer, "once", the required executor, an
-  "always" bound to the exact line) read the line as before too.
+  "always" bound to the exact line) read the line as before too. That reading is one of the line's readings
+  (`gate.readings`), so a store write or secret part only it has keeps the answer with the principal, once (#447,
+  #311), and a sudo write only it reads keeps its displaced part's approvers (#454).
   An unknown program now asks beside a more severe part that logs (`git push origin feature && mytool --wipe`,
   `git push origin feature; kill -9 1`), unless a category line names `opaque_exec` below ask, and an "always" on
   such a line covers that exact line only. A script that calls a local tool the gate does not know after a push or
-  a post now asks where it logged. Main's `scripts/gate_diff.py` lowers nothing in 38,632,272 pairs (239,952 actions,
-  its built-in corpus and the aimed lines, under 161 policies) and tightens 2,067,718.
+  a post now asks where it logged. An unknown program that names a store path (`bat ~/.exo/plugins/foo/__init__.py`)
+  still asks the principal alone, and its decision now names the rule `opaque` where it named `floor`. Main's
+  `scripts/gate_diff.py` lowers nothing on its built-in corpus or on aimed lines behind a quoted assignment (runs and
+  counts in #546).
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that

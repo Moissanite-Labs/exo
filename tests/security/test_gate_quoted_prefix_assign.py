@@ -11,7 +11,8 @@ from collections import Counter
 
 import pytest
 
-from exo.gate import CATEGORIES, OUTCOMES, binds_exact, classify, decide, normalize_policies
+from exo.gate import (CATEGORIES, OUTCOMES, binds_exact, call_approvers, classify, decide, no_grant,
+                      normalize_approvals, normalize_policies, readings)
 
 DEFAULT = normalize_policies(None)
 DENY = normalize_policies({"gates": {"deny": ["delete"]}})
@@ -310,3 +311,63 @@ def test_the_line_decided_as_before_loses_nothing_in_the_merge(name, line):
     c = classify(sh(line))
     assert c.before is not None, line
     _kept(decide(c, pol), decide(c.before, pol))
+
+
+# --- with a shell call's own folder (#311), store parts (#447), sudo writes (#454) and ssh stdin (#316) ---------------
+# gate.readings lists the line read as before after the line's own readings, so no_grant, call_approvers and
+# body_unseen read it as decide does.
+
+DELEGATED = normalize_approvals({"approvers": {"default": ["principal", "seat:a"]}})
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("EXO_HOME", str(tmp_path / "home" / ".exo"))
+
+
+def test_each_reading_as_before_is_one_of_the_lines_readings():
+    c = classify(sh(f"X='a b' cd /tmp && gh pr -b x comment 5 {R}"))
+    assert c.before is not None and c.before.floor is not None, c
+    assert readings(c)[-2:] == [c.before, c.before.floor] and c not in readings(c.before)
+
+
+@pytest.mark.parametrize("line, policy", [
+    ("X='a b' sudo rm -rf /srv/data > /tmp/f", DENY),                     # #454: a sudo write line
+    ("echo 'rm -rf /data' | X='a b' ssh prod-db ssh inner", DENY),        # #316: the hop reads the text fed to ssh
+    ("echo 'rm -rf /data' | ssh prod-db \"X='a b' ssh inner\"", DENY),
+    (f"{PUSH} && X='a b' sudo echo hi > /etc/x", normalize_policies({"gates": {"categories": {"local_write": "ask"}}})),
+])
+def test_a_command_behind_a_quoted_assignment_is_read_with_mains_new_readings(line, policy):
+    outcome = "deny" if policy is DENY else "ask"
+    assert decide(classify(sh(line)), policy).outcome == outcome, line
+
+
+def test_a_delete_behind_a_quoted_assignment_in_a_secret_folder_is_denied(home):
+    c = classify({"tool": "bash", "args": {"command": "X='a b' rm -rf config", "cwd": "~/.kube"}})
+    assert decide(c, DENY).outcome == "deny" and no_grant(c), c
+
+
+# Controls: the same on main and here.
+
+@pytest.mark.parametrize("line", ["X='a b' env; echo x > ~/.exo/policies/gates.yaml",
+                                  "X='a b' cp ~/.ssh/id_rsa ~/.exo/policies/gates.yaml",
+                                  "X='a b' cd ~/.exo/state && echo x > notes.md",
+                                  "cd ~/.exo/state && X='a b' cd /tmp && echo x > notes.md",
+                                  f"{PUSH} && X='a b' cp evil.yaml ~/.exo/policies/default.yaml"])
+def test_a_store_write_beside_a_quoted_assignment_is_the_principals_alone(home, line):
+    c = classify(sh(line))
+    assert no_grant(c) and call_approvers(c, DELEGATED) == ["principal"], line
+    assert decide(c, normalize_policies({"gates": {"deny": ["store_write"]}})).outcome == "deny", line
+
+
+def test_a_sudo_write_behind_a_quoted_assignment_keeps_its_write():
+    c = classify(sh("X='a b' sudo echo hi > /etc/x"))
+    assert decide(c, normalize_policies({"gates": {"deny": ["local_write"]}})).outcome == "deny", c
+    d = decide(c, normalize_policies({"gates": {"reserved": ["local_write"]}}))
+    assert d.outcome == "ask" and ("local_write", "/etc/x") in d.reserved, d
+
+
+def test_a_secret_read_from_the_calls_folder_behind_a_quoted_assignment_asks(home):
+    c = classify({"tool": "bash", "args": {"command": "X='a b' cat config", "cwd": "~/.kube"}})
+    assert no_grant(c) and decide(c, normalize_policies({"gates": {"deny": ["credentials"]}})).outcome == "deny", c

@@ -339,7 +339,9 @@ is the principal's alone.
 
 A call the gate reads more than one way lists only those each reading's categories allow
 (`gate.readings`): a gh line also read as before #399 ("Where a gh command lands"), a shell call
-also read as before #311 ("The working folder"), or both.
+also read as before #311 ("The working folder"), or both, and a line also read as before #471
+with each quoted prefix assignment the program ("Shell commands: an allowlist (D-038)"), with each
+of that reading's own readings.
 The `credentials` and `store_write` parts of each reading narrow it too (#447).
 
 A client answers as a seat by setting `client` to `seat:<name>` and signing the answer with that
@@ -944,7 +946,11 @@ both, and each violation as often as one of them lists it. So two posts to one P
 the footer after `X='a b' cd ~/.exo/state` list it twice, as the line read as before does. The
 exo-gate hook reads that reading, and its floor, wherever it reads a gh line's floor: a post's body
 file, the required executor's body check, who may answer, "once" and the categories that never get
-a grant. An "always" binds to the exact line when that reading would. That covers what a quoted word changes
+a grant. `gate.readings` lists it, with its own floor and its reading from before #311, after the
+line's own, so `no_grant`, `call_approvers` and `body_unseen` read its parts too: a store write
+part only that reading has keeps the answer with the principal, once (#447), and a sudo write it
+reads keeps its displaced part's approvers (#454). An "always" binds to the exact line when
+that reading would. That covers what a quoted word changes
 for the commands after it. A `cd` behind one (`X='a b' cd /dev && yarn publish`) moves their
 folder, as bash runs it, so their store write may outrank the publish that a matrix cell denied;
 read as before, the `cd` was an unknown program and the publish still decides. A reserved word
@@ -986,7 +992,9 @@ gate does not read:
   it as on `indirection`, unless a category line names `opaque_exec` below ask (a rule on
   `opaque_exec` lowers it only when that rule matches the line's dominant part, as for
   `indirection`). So a script that calls a local tool the gate does not know after a push or a post
-  now asks, where it logged.
+  now asks, where it logged. An unknown program that names a store path
+  (`bat ~/.exo/plugins/foo/__init__.py`) still asks the principal alone; this floor answers first,
+  so its decision names the rule `opaque` where it named the store floor's `floor`.
 - Where the gate can see inside (a `bash -c` string, a heredoc or pipe fed to a shell, the code
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too, within a bounded inspection depth (four levels,
