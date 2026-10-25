@@ -300,14 +300,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `cat "$HOME/.kube/\config"` stays a read. A glob in the `/proc` name itself now counts too:
   `cat /pro?/self/environ`, `cat /[p]roc/self/environ` and `cat /*/*/environ` ask, and so does a glob after a process's
   root link, which leads to `/` (`cat /proc/self/root/pro?/1/environ`, `cat /proc/self/root/../pro?/1/environ`), or
-  after its working folder link, which does for pid 1 and most daemons (`cat /proc/1/cwd/pro?/1/environ`). This also
-  covers rows 1 and 2 of #476. A `..` after another link is resolved as text, so `~/.kube/link/../config` asks even
-  where the link leads elsewhere (fails closed), and a glob's folder part with a `..` is resolved too, so
-  `cat /dev/fd/../env*` asks. The check reads the word, so `ls /*/bin/*` and `cat /*/src/*` ask, as `ls /proc/bin/*`
-  does. Such a line now takes the store's class, so a deny that only its own class drew (a rule on a costly `read`, a
-  `target:` entry for a second store on the line, a `store_write` deny on a `/proc/<pid>/root` or `/dev/fd` path or on
-  a file tool that writes a store file and names a secret) becomes the store's ask, as for the plain spelling. The
-  D-038 amendment lists the groups.
+  after its working folder link, which does for pid 1 and most daemons (`cat /proc/1/cwd/pro?/1/environ`). A glob
+  after two leading slashes is read as after one, so `cat /$HOME/.docker/conf*` and
+  `cat /proc/self/root/$HOME/.kube/conf*` ask. This also covers rows 1 and 2 of #476. A `..` after another link is
+  resolved as text, so `~/.kube/link/../config` asks even where the link leads elsewhere (fails closed), and a glob's
+  folder part with a `..` is resolved too, so `cat /dev/fd/../env*` asks. The check reads the word, so `ls /*/bin/*`
+  and `cat /*/src/*` ask, as `ls /proc/bin/*` does. A `target:` entry, in `deny:` or `reserved:`, and a deny or ask
+  rule keyed on `target` also match the target's lexical form, so `cat ~/.kube//config` is denied under
+  `deny: [target:*/.kube/config]`, as its plain spelling is. Such a line now takes the store's class, so a deny that
+  only its own class drew (a rule on a costly `read`, or a `target:` entry for a second store on the line when no
+  entry names the first) becomes the store's ask, as for the plain spelling. The D-038 amendment lists the groups.
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that

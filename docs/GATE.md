@@ -635,10 +635,13 @@ system or bash will.
   `cat /proc/self/root/../pro?/1/environ` asks too. A process's working folder link (`/proc/<pid>/cwd`) is read the
   same way, since for pid 1 and most daemons it is `/`: `cat /proc/1/cwd/pro?/1/environ` and
   `cat /proc/*/cwd/pro?/*/environ` ask. Where the folder is not `/`, such a line asks when it need not (fails
-  closed). `ls /p*/*/status`, `ls /proc/*/root/*` and `ls /proc/self/cwd/*` stay reads. The check reads the word,
-  not the program, so `ls /*/*/*` asks too, as `ls /proc/*/*` already did. So do `ls /*/bin/*`, `ls -l /*/lib/*`,
-  `cat /*/src/*` and `grep -r foo /*/src/*`: a glob top folder, one folder and a glob that could be `environ` read
-  as `/proc/<pid>/<glob>`, and `ls /proc/bin/*` asks on main too. `ls /usr/bin/*`, `ls /*/bin` and
+  closed). The kernel reads two leading slashes as one, and so does the glob check, so what follows such a link
+  into a home store is read too: `cat /proc/self/root/$HOME/.kube/conf*`, `cat /proc/self/cwd/$HOME/.kube/conf*`
+  and `cat /$HOME/.docker/conf*` ask (#513 review). `ls /p*/*/status`, `ls /proc/*/root/*` and
+  `ls /proc/self/cwd/*` stay reads. The check reads the word, not the program, so `ls /*/*/*` asks too, as
+  `ls /proc/*/*` already did. So do `ls /*/bin/*`, `ls -l /*/lib/*`, `cat /*/src/*` and `grep -r foo /*/src/*`:
+  a glob top folder, one folder and a glob that could be `environ` read as `/proc/<pid>/<glob>`, and
+  `ls /proc/bin/*` asks on main too. `ls /usr/bin/*`, `ls /*/bin` and
   `ls /*/bin/python*` stay reads. Past 16 possible links in one word the word counts. So what follows a link is
   read at most 16 times, and each such read takes the `/proc` step at most once. What follows the links of one
   word mostly differs only before a `..`. So it is not read again when its lexical form, and its folder's, match
@@ -667,18 +670,24 @@ An odd spelling now takes the store's class, so it decides as main decides its p
 than before because of that, much as for a thread's environment file (#313, below). A rule that matched the line as a
 `read` no longer matches it as `credentials`, so `sudo ssh host cat ~/.kube//config` under a rule that denies a costly
 `read` asks, as `sudo ssh host cat ~/.kube/config` does. A `target:` entry or a rule keyed on `target`, for a second
-store on the line, no longer matches (`cat ~/.kube/./config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]`
-asks). The first store can be a word with more than 16 possible links, which counts (fails closed). So `ls` of
-`/proc/1/*` with sixteen `/../*` steps and `/usr/lib/x*`, then `; cat ~/.kube/config`, asks under
-`deny: [target:*/.kube/config]`.
+store on the line, no longer matches when none names the first (`cat ~/.kube/./config; cat ~/.ssh/id_rsa` under
+`deny: [target:*/.ssh/*]` asks, as its plain spelling does). The first store can be a word with more than 16
+possible links, which counts (fails closed). So `ls` of `/proc/1/*` with sixteen `/../*` steps and `/usr/lib/x*`,
+then `; cat ~/.kube/config`, asks under `deny: [target:*/.kube/config]`.
 A call that was `store_write` because its path goes through a descriptor or process folder
-(`/proc/<pid>/root`, `/dev/fd`, #217) is `credentials` once the path names a secret, so a `store_write` deny no
-longer applies to it. A file tool's own class, a part's matrix cell and a `cd` folder's target still count, since
-#467 keeps each as a part. A `target:` entry still reads the path as written, as on main: `cat ~/.kube//config`
-under `deny: [target:*/.kube/config]` asks where the plain spelling is denied, as `cat ~/.ssh//id_rsa` does on main.
+(`/proc/<pid>/root`, `/dev/fd`, #217) is `credentials` once the path names a secret. Its store write stays a part
+(#447), so a `store_write` deny, category line or `reserved:` entry still applies to it. A file tool's own class,
+a part's matrix cell and a `cd` folder's target still count, since #467 keeps each as a part.
+A `target:` entry in `deny:` or `reserved:`, and a deny or ask rule keyed on `target`, match the target as written
+and in its lexical form, with a leading `//` read as `/` (#513 review). So `cat ~/.kube//config` under
+`deny: [target:*/.kube/config]` is denied, as its plain spelling is, and so is `cat ~/.kube//config ~/.ssh/id_rsa`
+under `deny: [target:*/.kube/config, target:*/.ssh/*]`. Main denied that line through the ssh key, its target there.
+An allow rule and a scope still read the target as written, so a lexical form only raises a decision. A link before
+a `..` may lead elsewhere, and then the entry matches when it need not (fails closed).
 The target is the first word that names the store. So `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` names its `of=`
 word, and `dd if=~/.exo/./state/x.json of=/tmp/a` its `if=` word, as `dd` with the plain path does on main.
-`deny: [target:~/.exo/*]` asks there, as for the plain path, and a `reserved:` entry like it counts no hit. That
+`deny: [target:~/.exo/*]` asks there, as for the plain path, since the lexical form keeps the `if=` or `of=`, and
+a `reserved:` entry like it counts no hit. That
 holds for a read of the seat key too: `dd if=~/.exo//keys/seat.key of=/tmp/a` asks under that entry, where main
 denied it, as main asks for `dd if=~/.exo/keys/seat.key of=/tmp/a`.
 A backslash that the shell drops keeps the target main gives. The gate reads `\` as `/` in the line's text, so the
@@ -698,15 +707,13 @@ target, as on main. So `cat ~/.ssh/\id_rsa ~/.kube/config` keeps
 `~/.ssh/\id_rsa`, and `deny: [target:*/.ssh/*]` still denies it, while `cat ~/.ssh/\id_rsa` under
 `deny: [target:*/.ssh/id_rsa]` asks.
 
-Beside a store write, a secret makes the call `credentials`, not `store_write`. On a shell line the outcome stays
-an ask: `cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml` asks, and the store write stays a part, so its
-deny and `target:` entries still apply. But a seat that `approvals.yaml` delegates `credentials` to may answer it,
-as on main with `cat ~/.kube/config` (#447). A file tool that writes a store file and names a secret decides lower:
-`write_file` or `apply_patch` on `~/.exo/policies/gates.yaml` with a patch header for `~/.kube//config`,
-`copy_file` from `~/.kube/./config` to it, and `memory` with both paths ask where main denied them under
-`deny: [store_write]` or a `store_write: deny` category line. A `reserved: [store_write]` entry no longer matches
-them, and a `target:` entry for the store file no longer matches `copy_file` or `move_file`. Main decides the plain
-spelling the same way: its file-tool branch of `classify()` takes a secret before a store path (#447, #489).
+Beside a store write, a secret makes the call `credentials`, not `store_write`. The outcome stays an ask:
+`cat ~/.kube//config; echo x > ~/.exo/policies/gates.yaml` asks. The store write stays a part, so its deny and
+`target:` entries still apply, and only the principal answers the line (#447, "Who may approve"). A file tool that
+writes a store file and names a secret keeps each store file as a `store_write` part too (#447). So `write_file` or
+`apply_patch` on `~/.exo/policies/gates.yaml` with a patch header for `~/.kube//config`, `copy_file` or
+`move_file` from `~/.kube/./config` to it, and `memory` with both paths are denied under `deny: [store_write]`, a
+`store_write: deny` category line or a `target:` entry for the store file, as on main.
 The D-038 amendment (#446) gives the groups and the differential's counts.
 
 Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
@@ -2130,9 +2137,9 @@ a matrix that denies that cell while `store_write` has its own category line. Th
 that part, so neither denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'` or `sudo ssh host
 'cp evil.py ~/.exo/plugins/foo/__init__.py'`. Each asks the principal alone, as for `policies/` on
 main. `deny: [store_write]` is the reliable way to refuse every write into the
-folder. A `target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*`
-denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the absolute path and
-`~/.exo/../.exo/plugins/...` still only ask.
+folder. A `target:` entry matches the path as the call spells it and in its lexical form (#446):
+`target:~/.exo/plugins/*` denies `cp x ~/.exo/plugins/foo/y` and `cp x ~/.exo/../.exo/plugins/foo/y`, but
+`$HOME/.exo/plugins/...` and the absolute path still only ask.
 
 Known friction (fails closed, no grant). A command that names a path in the folder and is not a
 read command asks the principal, as for the rest of the store. That covers a writing command that
