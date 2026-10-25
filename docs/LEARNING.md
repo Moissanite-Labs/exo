@@ -125,14 +125,16 @@ install day. The house layer is off on the store it was exported from. Learning 
 never writes to the house pack, and nothing learned on one install flows back into it. Design and status:
 `docs/TASTE-BASELINE.md`; code: `src/exo/baseline/`.
 
-**The sustained-change rule (wave 2).** After each fast-loop review, `exo.baseline.classify` labels your new
-verdicts and utterances against the active taste items and writes `taste_signal` notes; only events you wrote
+**The sustained-change rule (wave 2).** After fast-loop reviews, every `fast_loop.every_turns` completed principal
+turns even without a correction, and before each nightly climb, `exo.baseline.classify` labels your new verdicts
+and utterances against the active taste items and writes `taste_signal` notes; only events you wrote
 count (D-040), and quoted, pasted and code text is dropped first. The labeller is the `decision` role when one is
 configured; otherwise a signature match. `exo.baseline.adapt` replays the notes week by week (`exo.baseline.shift`):
 episodes, weekly majorities, the persistence score, arming, fading, the swap, value step backs and adoptions. What a
 closed week decides is written once: `taste_replaced` (with the challenger as an accepted belief that `overrides`
 the item), `taste_scoped`, `value_stepped_back`, `value_adopted`, `taste_restored`, `taste_proposed` or a question.
-The brief lists them. `/taste` shows and changes them.
+Private and unattended sessions are excluded from the turn cadence, and peer turns do not count.
+The brief lists the changes. `/taste` shows and changes them.
 
 ## Where to look
 

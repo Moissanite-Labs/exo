@@ -1011,7 +1011,10 @@ principal pack, by ledger revision, policy stamp, local day and exact project sc
 one budgeted question per call; the built-in adapter reserves each typed question before I/O. Its failed and
 cancelled calls still count. Generated notes use `exo-learn`, cite principal behavioral evidence, and ask-mode
 answers retain the proposal's frozen text. Test these boundaries in `tests/baseline/test_recovered_guards.py` and
-`plugins/exo-memory/tests/test_taste_prompt_refresh.py`. Task-kind client scope and nightly activation remain open.
+`plugins/exo-memory/tests/test_taste_prompt_refresh.py`. The turn-end hook counts completed principal turns and
+starts a taste scan at `fast_loop.every_turns` even without a correction; private and unattended sessions stay
+excluded. The async nightly entry scans taste before its worker-thread climb. Hook and nightly regressions live
+in `tests/learn`. Task-kind client scope remains open.
 
 ### Add an `exo` subcommand
 

@@ -2703,7 +2703,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   their precedence for scoped changes too; guarded challenger text becomes a question. Each model question is
   reserved before I/O against the daily cap, including failed requests. Taste updates reach the next model call
   through an invalidated per-project cache; the principal pack remains stable. Project scope is an exact working
-  directory. Task-kind scope and nightly activation remain follow-ups. The shipped pack remains empty.
+  directory. Completed principal turns trigger a taste review at the configured cadence even without a correction;
+  peer turns do not count. The nightly entry point scans taste before its climb. Task-kind scope remains a
+  follow-up. The shipped pack remains empty.
   Rejected: replaying whichever challenger text is newest when a user answers; trusting every note that cites a
   principal event; rebuilding the entire principal pack on each turn. Tests cover these boundaries without model
   calls or releasing a pack.
