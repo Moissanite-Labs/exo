@@ -2311,9 +2311,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   differential of main edeb4f89 against this change ran under the 87 built-in policies and 106 more: the 92 of (j), a
   deny, reserved and rule entry for four more pairs of stores (`/proc/*/environ` or `/proc/*` with the ssh keys, and the
   kube and docker configs both ways), `target:/proc/*/environ` alone, and a mapping entry on the ssh keys. The built-in
-  set, 75,599 actions, lowered 394 pairs on 80 actions. Under the 87 built-in policies that is 31 pairs on 21 actions:
+  set, 75,599 actions, lowered 394 pairs on 80 actions. Under the 87 built-in policies that is 31 pairs on 23 actions:
   21 in group 1 and 10 in group 5, with no pair in group 2, against 233 in (j). The other 363 are 21 in group 1 and 342
-  on 55 `dd` lines. A focused run of 25,981 actions held the corpora of (j) and 5,191 lines from this check: 26 first
+  on 57 `dd` actions. A focused run of 25,981 actions held the corpora of (j) and 5,191 lines from this check: 26 first
   stores in lexical, glob, linked and backslash spellings and plain controls, beside 9 second stores, in 15 line shapes
   and 7 file tools. It lowered 198 pairs on 33 actions, all `dd` lines under `target:~/.exo/*` and `target:~/*` entries.
   Each lowered pair in both runs decides as main decides the plain spelling. The same corpora with this branch before
