@@ -1644,7 +1644,9 @@ them. Each path is looked up once a call, with the folders above it shared, and 
 charged to the budget above. Measured in CPU time with 300 real nested folders: 3,000 relative
 words after one `cd` took 0.30 s, against 0.24 s before #340. After two `cd`s they pass the budget
 and ask, in 0.34 s. 64 relative `cd` steps from a folder 200 levels deep took 57 ms, against 19 ms,
-and ask, since the seventh step passes the cap. The trade-off, which fails closed: neither the order nor the
+and ask, since the seventh step passes the cap. A here-string of 3,000 words read by 65 shells,
+with an absolute `cd` before each, took 0.92 s, against 0.41 s, and asks.
+The trade-off, which fails closed: neither the order nor the
 success of the commands is followed, so on a line that enters a store folder a word named like a
 store file asks even when it is elsewhere or is not a file
 (`cd ~/.kube && cd ~/project && cat config`, `cat config; cd ~/.kube`,
@@ -2151,7 +2153,10 @@ friction, and it fails closed. Each join to a folder a `cd` entered is charged t
 "In `$EXO_HOME` (#269)", and past it every relative word counts too. Each path is looked up once a
 call, and the folders above it are shared. So the work grows with the words and the folders, at
 most 64, and not with how deep they are. A brace word or a stdin text met again after a `cd`
-entered a folder is read again from there.
+entered a folder is read again from there. Such a stdin text is charged its words to the same
+budget, once per folder entered, as joining each word there would be. So a here-string that many
+shells read, with a `cd` before each, is read a few times, not once per `cd`. Past the budget every
+relative word counts, for the secret stores too, and the text is not read again.
 Tests: `tests/security/test_gate_store_relative_links.py`.
 
 Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
@@ -2193,7 +2198,10 @@ and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e &&
 followed: a call is read against the filesystem as it stands at classification time. A `cd` to
 a folder held in a variable (`cd "$D"`), to a glob (`cd l[k]`) or `cd -` is not followed. Nor is a
 folder option that a single command takes for its own relative paths
-(`git -C notes mv x ../pdir/default.yaml`, `env -C`, `sudo -D`). A path spelt from the current
+(`git -C notes mv x ../pdir/default.yaml`, `env -C`, `sudo -D`). A write is read from the folders
+a `cd` before it entered. In a loop, a `cd` later in the body runs before the write on the next
+pass, and that is not followed yet: `for i in 1 2; do cp x ../pdir/default.yaml; cd notes; done`
+is allowed, here and before #340. A path spelt from the current
 folder through a variable (`$PWD/pdir/default.yaml`) is a path held in a variable, as above. A shell
 tool's `cwd` and `workdir` arguments are read here when the line is read in them (#311). Known
 friction (fails closed): in a session whose folder is the Exo home, a word that names a protected

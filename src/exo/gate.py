@@ -3108,18 +3108,25 @@ def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str
     in its place, and each reader gets copies with its own text there (_restamp): `{ psql -d test; psql -d prod; }
     <<EOF` gives psql -d prod parts with its own text. Each text is still read once per line, since every read
     spends the call's budgets (_brace_budget) and a second read could find them spent. A text met again after a `cd`
-    entered another folder is read again, as classify_shell reads a line again (#340)."""
+    entered another folder is read again, as classify_shell reads a line again (#340). That reading takes the text's
+    words from the budget of _charge once per folder entered, as joining each word there would, so `{ bash; cd a;
+    bash; cd b; ...; } <<< '<long text>'` is not read once per `cd`: past the budget every relative word counts, and
+    the text is not read again (_entered_mark)."""
     memo = ctx.setdefault("stdin", {})
-    scope = _scope.get()
-    key = (*key, len(scope.entered) if scope else 0)
-    whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
+    last = ctx.setdefault("stdin_mark", {})     # the _entered_mark each text was last read under
+    mark = _entered_mark()
+    whole = (*key, mark, id(k.heredocs), id(k.herestrings), piped, ambiguous)
     if whole in memo:
         return [_copy(_restamp(ctx, c, own)) for c in memo[whole]]
     got: list[Classification] = []
     for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped):
-        if (*key, text) not in memo:
-            memo[(*key, text)] = read(text) if own is ... else _read_as_reader(read, text)
-        got += memo[(*key, text)]
+        if (*key, mark, text) not in memo and mark > 0 and (*key, text) in last:
+            _spend((len(text.split()) + 1) * mark)
+            mark = _entered_mark()
+        if (*key, mark, text) not in memo:
+            memo[(*key, mark, text)] = read(text) if own is ... else _read_as_reader(read, text)
+            last[(*key, text)] = mark
+        got += memo[(*key, mark, text)]
     memo[whole] = [max((p for p in got if p.category == c), key=_severity)
                    for c in dict.fromkeys(p.category for p in got)]
     return [_copy(_restamp(ctx, c, own)) for c in got]
@@ -4334,8 +4341,7 @@ def _in_store_dir_words(words: list[str] | None) -> bool:
 def _store_braces(ctx: dict) -> dict:
     """The store checks' _shell_words memo for a line. Each folder a `cd` enters (_cd_enter) starts a new one, so a
     relative word met again after it is read from there too (#340): `cp y ../p{a,b}/x; cd notes; cp y ../p{a,b}/x`."""
-    scope = _scope.get()
-    return ctx.setdefault(("store_braces", len(scope.entered) if scope else 0), {})
+    return ctx.setdefault(("store_braces", _entered_mark()), {})
 
 
 _AFTER_CD = "a path inside the store (after cd)"
@@ -4951,11 +4957,13 @@ def _entered_secret(cmds: list) -> str:
     write's relative path is: `cd notes && cat ../kdir/seat` with `kdir -> ~/.exo/keys`, and
     `cd xl/../kl && tar czf /tmp/o.tgz .`, which enters `kl` as bash folds it (#530). Only where the checks before it
     found nothing, so a line they name keeps its name. Neither the order nor the success of the commands is followed
-    (fails closed). It reads the folders _cd_enter noted, up to _ENTERED; past the budget (_charge) the word counts
-    (fails closed). The word, or ''."""
-    scope = _scope.get()
+    (fails closed). It reads the folders _cd_enter noted, up to _ENTERED; past the budget (_charge) every relative word
+    counts (fails closed), so a reading then does not hang on which folders were entered (_entered_mark). The word,
+    or ''."""
+    scope, memo = _scope.get(), _call_memo.get()
     if scope is None or not scope.entered or not _entered_reads.get():
         return ""
+    spent = bool(memo and memo.get("joins_spent"))
     seen: dict = {}
     bases = [b for b in scope.entered.values() if b not in scope.cwds]
     # the arguments and redirection targets first, so the card names what is read; then the program words
@@ -4963,7 +4971,7 @@ def _entered_secret(cmds: list) -> str:
         got = _shell_words(w, seen, "dir")
         rel = [x for x in (re.sub(r"^[\w-]+=", "", x) for x in got or ()) if x and not _expand_text(x).startswith("/")]
         try:
-            if got is None or rel and _sensitive_words(rel, bases):
+            if got is None or rel and (spent or _sensitive_words(rel, bases)):
                 return w.text
         except _Spent:
             return w.text
@@ -5080,8 +5088,7 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         _fed_stdin.set(False)
     # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it,
     # and a line met after a `cd` entered another folder is read again from there too (_cd_enter, #340).
-    scope = _scope.get()
-    key = ("shell", cmd, depth, _budgets(), _cd_into.get(), fed, len(scope.entered) if scope else 0)
+    key = ("shell", cmd, depth, _budgets(), _cd_into.get(), fed, _entered_mark())
     if key not in seen:
         own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
@@ -6130,21 +6137,39 @@ def _relative_bases() -> list[str] | None:
     return [b for b in dict.fromkeys([*scope.cwds, *scope.entered.values()]) if b]
 
 
+def _entered_mark() -> int:
+    """What the folders a `cd` entered add to a reading (#340), for the line, stdin and brace memos: how many there
+    are, or -1 once every relative word counts (_relative_bases is None), when more of them change nothing."""
+    scope = _scope.get()
+    return 0 if scope is None else -1 if _relative_bases() is None else len(scope.entered)
+
+
 def _charge(base: str, p: str) -> str:
     """``p`` joined to ``base`` as written. A join to a folder a `cd` entered, not one of the tool's, is looked up on
-    disk, so the first one of each path in a call takes its path parts from the budget _exo_relative's joins share
-    (_EXO_PARTS, #269). Raises _Spent past it, and every relative word counts after that (_relative_bases)."""
+    disk, so the first one of each path in a call takes its path parts from the budget (_spend). Raises _Spent past
+    it, and every relative word counts after that (_relative_bases)."""
     joined = os.path.join(base, p)
-    scope, memo = _scope.get(), _call_memo.get()
-    if scope is None or memo is None or not base or base in scope.cwds or joined in scope.charged:
+    scope = _scope.get()
+    if scope is None or _call_memo.get() is None or not base or base in scope.cwds or joined in scope.charged:
         return joined
     scope.charged.add(joined)
-    left = memo.setdefault("exo_parts", [_EXO_PARTS])
-    left[0] -= joined.count("/") + 1
-    if left[0] < 0:
-        memo["joins_spent"] = True
+    if not _spend(joined.count("/") + 1):
         raise _Spent
     return joined
+
+
+def _spend(parts: int) -> bool:
+    """Take ``parts`` from the call's budget of path parts, which _exo_relative's joins share (_EXO_PARTS, #269), for
+    the work the folders a `cd` entered add (#340): a join (_charge) or a stdin text read again (_once). False past
+    it, and every relative word counts after that (_relative_bases)."""
+    memo = _call_memo.get()
+    if memo is None:
+        return True
+    left = memo.setdefault("exo_parts", [_EXO_PARTS])
+    left[0] -= parts
+    if left[0] < 0:
+        memo["joins_spent"] = True
+    return left[0] >= 0
 
 
 def _cd_enter(dest: str) -> None:

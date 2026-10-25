@@ -1574,7 +1574,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the stdin memo, glob `cd`s, names in store folders and #453's `workdir` rows, under 12 wrappers. A first run of it
   lowered 5 reserved hits. With a `cwd`, the line alone read a key after a `cd` too, so the call's folder part (#311),
   named by its full path, was left off. The line alone now leaves that read to the folder's reading beside it, as on
-  main.
+  main. An independent check of that change found one more cost. With the stdin memo keyed by the folders, a
+  here-string fed to many shells, with a `cd` before each, was read once per `cd`: 3,000 words and 64 `cd`s took
+  10.8 s, against 0.41 s on main. Each such reading is now charged its words to the same budget, once per folder
+  entered. Past the budget every relative word counts for the secret stores too, so a reading no longer hangs on the
+  folders, and the text is not read again (`gate._entered_mark`). That line takes 0.92 s and asks. gate_diff then
+  ran main edeb4f89 against the final change. The built-in corpus, 73,908 actions under its 87 policies, lowers 0 of
+  6,429,996 pairs and tightens 1,531. The check's own focused corpus makes 2,710 actions: secret reads after a `cd`,
+  stdin texts that shells read after `cd`s, keys and store folders as a tool's folder, names after a `cd` into the
+  store, and `cd` chains near the cap and the budget. Under the 87 policies and 24 more it lowers 0 of 300,810
+  pairs. The focused corpus above lowers 0 of 1,723,087 pairs. The check also found a route that #340 leaves open,
+  as main does. In a loop, a `cd` later in the body runs before a write earlier in it on the next pass, and the
+  write is read only from the folders entered before it. So
+  `for i in 1 2; do cp x ../pdir/default.yaml; cd notes; done` is allowed. That is left for a follow-up.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
