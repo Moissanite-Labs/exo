@@ -2561,6 +2561,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   at the newest 12, in `_observe` and in `_carry_pins`: a deferral never expires on its own, and the
   uncapped list grew the pins file and the per-turn scan over it for the life of the session. The cap is
   the one the compaction block and the handoff already applied to the merged list.
+  *Amendment 2026-10-25 (#389):* the survival sentence of the #385 amendment holds until an undo, the core's or a
+  host's, removes the turn a pin came from. The D-041 amendment of 2026-10-24 has the details.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
@@ -2679,6 +2681,30 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and stay for good if none comes. A summary row and a handoff file written before the drop keep the ruling as written
   until the next compaction folds the row and writes the file again. The folded pins live in memory, so after a
   restart a ruling a compaction folded in an earlier run goes with an undone turn that says it again.
+  *2026-10-25 note (#389, review of #539):* five changes, and a new list of what is not covered. First, only the
+  engine that saw the session's last turn acts on a notice. Hermes can build a new agent on the same session (after
+  `/reasoning` or `/fast`, say), and the old engine stays registered until it is collected, with its old window and
+  its old copy of the pins. `exo.host_undo` numbers each session's turns, and an engine acts only when its last turn
+  has the latest number. Both undo steps read the pins file again before they write it. Second, the folded pins are
+  saved in the pins file as digests, each with the digests of the summary blocks it rides, and they follow the pins
+  to a compression child and a `/branch` child. So a restart or a new agent keeps them. Third, a folded pin stays
+  only while a summary row that carries it is left. Hermes keeps its first rows before its first summary row, so
+  `/undo N` can take that row too. A row carries a pin when its block was written by the compaction that folded the
+  pin's message, or by one that folded an earlier row that carried it. On the next turn, a pin the window showed, by
+  its message or by such a row, goes when the transcript shows it no longer. When no role alternates, Hermes merges
+  its summary into the next row. That row's own message counts as kept, not folded, and an undo of its turn keeps
+  only the summary part. Fourth, a pending undo waits for its own session's next turn. A request
+  for another session leaves it pending. So does a request that names no session and carries no user message:
+  Hermes names no session in `select_context`, so its `incoming_message` marks a turn. Fifth, the next turn drops
+  nothing unless the transcript reaches back to where the window started. It does when it holds the window's first
+  row, or the summary row of a compaction since the undo that folded that row, or nothing before the turn's own
+  message, which is an undo of every turn. A host that sent only the turn's own message would read as that. Hermes
+  sends its whole transcript. Any other transcript was cut short, not undone, and the skip is logged with the
+  session id. Not covered now, six cases. Hermes's messaging gateway sends no notice (#537). Neither does the CLI
+  while it has no agent, between `/reasoning` or `/fast` and the next turn. A host without exo-memory as its memory
+  provider never passes the notice on. An undo before the engine has seen a turn of that session since it started
+  finds no window. After `/undo N`, the earlier turns' pins go only when a next turn comes in the same agent. A
+  summary row and a handoff file written before the drop keep the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI

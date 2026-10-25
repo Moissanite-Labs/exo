@@ -7,6 +7,10 @@ can drop the pins it took from the undone turns (D-041 amendment). Every plugin 
 
 The Exo core tells its context plugin about an undo itself, with every message left (D-041), and never calls a
 memory provider's `on_session_switch`, so nothing passes through here on the core.
+
+Each listener also counts the turns it sees here (`turn`), so only the one that saw a session's latest turn acts on
+an undo. Hermes can build a new agent on the same session (after `/reasoning` or `/fast`, say), and the old one
+may live on.
 """
 from __future__ import annotations
 
@@ -19,6 +23,21 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _listeners: weakref.WeakSet[Any] = weakref.WeakSet()
+_turns: dict[str, int] = {}  # session -> number of its last turn any listener saw
+
+
+def turn(session_id: str) -> int:
+    """A listener saw a turn of `session_id`: count it and return its number. An undo of that session concerns the
+    listener whose last turn has the number `latest` gives."""
+    with _lock:
+        n = _turns[str(session_id)] = _turns.get(str(session_id), 0) + 1
+    return n
+
+
+def latest(session_id: str) -> int:
+    """The number of the last turn of `session_id` any listener saw, or 0."""
+    with _lock:
+        return _turns.get(str(session_id), 0)
 
 
 def listen(listener: Any) -> None:
