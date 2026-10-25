@@ -670,11 +670,16 @@ system or bash will.
 An odd spelling now takes the store's class, so it decides as main decides its plain spelling. Some lines decide lower
 than before because of that, much as for a thread's environment file (#313, below). A rule that matched the line as a
 `read` no longer matches it as `credentials`, so `sudo ssh host cat ~/.kube//config` under a rule that denies a costly
-`read` asks, as `sudo ssh host cat ~/.kube/config` does. A `target:` entry or a rule keyed on `target`, for a second
-store on the line, no longer matches when none names the first (`cat ~/.kube/./config; cat ~/.ssh/id_rsa` under
-`deny: [target:*/.ssh/*]` asks, as its plain spelling does). The first store can be a word with more than 16
-possible links, which counts (fails closed). So `ls` of `/proc/1/*` with sixteen `/../*` steps and `/usr/lib/x*`,
-then `; cat ~/.kube/config`, asks under `deny: [target:*/.kube/config]`.
+`read` asks, as `sudo ssh host cat ~/.kube/config` does. A line's target is the first store it names, and that can
+now be a spelling main did not read: an odd spelling, a glob such as `/pro?/self/environ`, a word with more than 16
+possible links (which counts, fails closed), or a store that a `$( )` or `bash -c` on the line reads. Main's target
+was then another store on the line, and it stays a credentials part of the line (#513 review). So a `target:` or
+`reserved:` entry, or a deny rule keyed on `target`, that named it still matches. Under `deny: [target:*/.ssh/*]`,
+`cat ~/.kube//config ~/.ssh/id_rsa`, `cat /pro?/self/environ ~/.ssh/id_rsa` and
+`cat ~/.ssh/id_rsa $(cat ~/.kube//config)` are denied, as on main. So is a file tool with both paths (`read_file`
+with `~/.kube//config` and `~/.ssh/id_rsa`). The part has no own text, so it only raises, and the target stays the
+first store. A line main read the same way gets no part: under that entry `cat ~/.kube/config ~/.ssh/id_rsa` asks,
+here and on main.
 A call that was `store_write` because its path goes through a descriptor or process folder
 (`/proc/<pid>/root`, `/dev/fd`, #217) is `credentials` once the path names a secret. Its store write stays a part
 (#447), so a `store_write` deny, category line or `reserved:` entry still applies to it. A file tool's own class,
