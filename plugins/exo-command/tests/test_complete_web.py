@@ -76,7 +76,7 @@ def test_commands_route_names_the_core_commands_the_composer_holds():
     rows = [{"name": "context", "description": "d", "args": ""}, {"name": "grants", "description": "d", "args": ""}, {"description": "no name"}]
     assert dispatch(Src(commands=rows), "/api/complete/commands")[1]["core"] == ["context", "grants"]
     code, d = dispatch(Src(commands=ConnectionError("core restarting")), "/api/complete/commands")
-    assert code == 200 and d["core"] is None and len(d["commands"]) == 8   # null: the page asks again
+    assert code == 200 and d["core"] is None and len(d["commands"]) == 9   # null: the page asks again
     # The terminal client's own names (its COMMANDS table), less what the page runs: held, not sent. Core plugin names
     # (/grants, /orchestra) are not the terminal client's: unknown unless commands.list has them, as in the TUI.
     from exo_tui.app import COMMANDS
