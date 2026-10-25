@@ -1363,6 +1363,38 @@ def test_an_undo_of_a_turn_hermes_merged_its_summary_into(tmp_path, ask):
     assert pins(tmp_path, "m1")["ruling"] == [MINE]
 
 
+class Quoting(Paraphrase):
+    """A summary that quotes the principal's short messages whole, as Hermes's summarizer is asked to, in the role
+    the host picked for its row. The last row stays as the tail."""
+
+    def __init__(self, role):
+        self.role = role
+
+    def compress(self, messages, **kw):
+        said = [hf.message_text(m) for m in messages[1:-1] if m.get("role") == "user"]
+        return [messages[0], {"role": self.role, "_compressed_summary": True,
+                              "content": "[CONTEXT COMPACTION] The user said:\n" + "\n".join(said) + "\n\n" + END_LINE},
+                messages[-1]]
+
+
+@pytest.mark.parametrize("role", ["user", "assistant"])
+def test_a_summary_that_quotes_the_last_message_it_folded_still_folds_it(tmp_path, role):
+    """A summary row that quotes the last message it folded is no merged row: Hermes merges into a row of that row's
+    own role. So the ruling still rides the summary row, also in an assistant row, whose text holds no pin, and an
+    undone turn that says it again does not drop it."""
+    h = Hermes(tmp_path, f"qf-{role}", inner=Quoting(role))
+    for text in ("start the importer", MINE):
+        h.turn(text)
+    h.compress()  # the tail is the last reply, so MINE's message is the last row folded
+    assert MINE in hf.message_text(h.history[1])
+    h.turn("next step")
+    h.turn(f"As I said: {MINE} Now write the summary.")
+    h.undo()
+    assert pins(tmp_path, f"qf-{role}")["ruling"] == [MINE]
+    h.turn("write the summary")
+    assert pins(tmp_path, f"qf-{role}")["ruling"] == [MINE]
+
+
 @pytest.mark.parametrize("how", ["resume", "session_id"])
 def test_an_undo_waits_for_its_own_sessions_next_turn(tmp_path, how):
     """exo-36 5642154107, blocking 2: a turn of another session between /undo 2 and the session's own next turn

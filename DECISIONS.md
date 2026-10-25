@@ -2701,10 +2701,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   message, which is an undo of every turn. A host that sent only the turn's own message would read as that. Hermes
   sends its whole transcript. Any other transcript was cut short, not undone, and the skip is logged with the
   session id. Not covered now, six cases. Hermes's messaging gateway sends no notice (#537). Neither does the CLI
-  while it has no agent, between `/reasoning` or `/fast` and the next turn. A host without exo-memory as its memory
-  provider never passes the notice on. An undo before the engine has seen a turn of that session since it started
-  finds no window. After `/undo N`, the earlier turns' pins go only when a next turn comes in the same agent. A
-  summary row and a handoff file written before the drop keep the ruling as written until the next compaction.
+  while it has no agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. A host
+  without exo-memory as its memory provider never passes the notice on. An undo before the engine has seen a turn
+  of that session since it started finds no window. After `/undo N`, the earlier turns' pins go only when a next
+  turn comes in the same agent, and a `/compress` between the last turn and the undo can keep them too. A summary
+  row and a handoff file written before the drop keep the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI

@@ -245,10 +245,11 @@ handoff a compaction wrote before the undo goes, as on the core. Each drop is lo
 session id, and a transcript cut short is logged with the session id.
 
 Some cases are not covered. Hermes's messaging gateway tells no one about `/undo`. Nor does the CLI while it has no
-agent, between `/reasoning` or `/fast` and the next turn. A host that runs exo-context without exo-memory never
-passes the notice on. An undo before the engine has seen a turn of that session since it started finds no window.
-After `/undo N`, the earlier turns' pins go only when a next turn comes in the same agent. A summary row or handoff
-file written before the drop keeps the ruling until the next compaction.
+agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. A host that runs exo-context
+without exo-memory never passes the notice on. An undo before the engine has seen a turn of that session since it
+started finds no window. After `/undo N`, the earlier turns' pins go only when a next turn comes in the same agent,
+and a `/compress` between the last turn and the undo can keep them too. A summary row or handoff file written
+before the drop keeps the ruling until the next compaction.
 
 ## Who wrote it: every message has an author (D-040)
 

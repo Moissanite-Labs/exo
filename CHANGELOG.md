@@ -162,9 +162,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   tail that `/compress here N` holds out stays pinned. A drop is logged as counts per kind and the session id.
   This also corrects the #385 entry below and the D-040 amendment: what a pinned block held survives
   compaction by the pins until an undo removes its turn. exo-context hears a Hermes undo only through
-  exo-memory. The messaging gateway's `/undo` tells no one, and neither does the CLI between `/reasoning` or
-  `/fast` and the next turn, so neither is covered yet. A summary row or handoff file written before the drop
-  keeps the ruling until the next compaction (D-041 amendment).
+  exo-memory. The messaging gateway's `/undo` tells no one, and neither does the CLI from a command such as
+  `/reasoning`, `/fast` or `/personality` to the next turn, so neither is covered yet. A summary row or
+  handoff file written before the drop keeps the ruling until the next compaction (D-041 amendment).
 - A handoff header field that spans lines can no longer add a section to the file (#395). The topic,
   session and principal, the path line and the path in the launch line are now folded to one line when
   written, so a value holding a forged `## Decisions made` heading stays inside the header or its list
