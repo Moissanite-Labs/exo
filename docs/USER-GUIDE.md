@@ -407,9 +407,22 @@ Peers are other live sessions on the machine: Exo sessions, Hermes agents and bu
 - Your own sessions deliver at once. A message from another person, or from a bus seat, is held until you allow it.
   A held message that nobody answers expires after 30 minutes.
 - A peer message shows as "from another session, not from you". It is input, not an order.
-- The receiving side trusts the key in the sender's presence file, which any program running as you can write. So
-  such a program can send a message that is labelled as you typing in another client, or as one of your sessions,
-  and is delivered at once (#132).
+- A peer counts as one of your sessions only when this Exo home holds its key and names you as its principal. Seats
+  that share one home hold each other's keys in `$EXO_HOME/keys/`, and each seat file names its principal, so they
+  deliver at once. A peer whose key this home does not hold is held, and the card says `key not pinned`. A presence
+  file that claims your name changes nothing (#132).
+- An unseated daemon or a Hermes profile on this home has no seat file. Toward a daemon with no seat principal of
+  its own, it counts as the principal `config.json` names (`exo config set principal <id>`). If it runs as another
+  principal (`EXO_PRINCIPAL`), its messages are held for you. A seat whose seat file names a principal holds its
+  messages for you too. To have them delivered at once, give it a seat file that names you:
+  `$EXO_HOME/seats/<name>.toml` with `principal = "<id>"`.
+- A seat from another home: copy its key from `<that home>/keys/<seat>.pub` and run `exo keys pin --peer <seat>
+  <key>` here. Its messages are then checked against that key, and still held for you. A `[peers] rules` entry for
+  its name delivers them at once. A message under a name whose key this home holds, signed by another key, is
+  refused. Use `--peer`: a plain `exo keys pin` also lets that key sign your ledgers.
+- If a seat's key was made again, its messages are refused until you pin the new key:
+  `exo keys pin <seat> $EXO_HOME/keys/<seat>.pub --replace`. A Hermes profile's name must be a seat id (lowercase
+  letters, digits, `-` and `_`), or its messages are refused. `docs/PEERS.md` "Peer keys" lists these cases.
 - A bus seat's message is checked against the key Exo pinned for that seat the first time, held for you by default,
   and answered on the bus only if your rules let that seat through on its own. `exo keys` shows the pinned seats.
 
@@ -502,7 +515,7 @@ Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` onc
 | `exo log append <kind> --author NAME --text "..."` | Adds one signed event. Kinds include `note`, `ruling`, `utterance`, `question`, `answer`. Needs the author's key. |
 | `exo log verify` | Re-checks every event, link and signature. Each key must be one Exo pinned, and the ledger must still reach the last head it recorded. Prints `{"ok": true, ...}` or fails. Run it when something feels off. |
 | `exo memory verify` | The same check for every store, plus each agent's memory log. A ledger that was cut short, edited or deleted fails here. A warning after `ok` (in `exo log verify`, a `warning` field) means the copy of the head it names is not being written: make that file writable again. |
-| `exo keys` | The keys Exo trusts: its own signing keys, the bus seats it has seen, and which ledger names are you. `exo keys pin` adds or replaces one. |
+| `exo keys` | The keys Exo trusts: its own signing keys, the bus seats it has seen, the peer seats of other homes you pinned, and which ledger names are you. `exo keys pin` adds or replaces one (`--peer` for a peer seat). |
 | `exo log tail` | The last events. `-n 20` for more, `--kind ruling` to filter. |
 
 Example: make a key, write a note, check the chain.
