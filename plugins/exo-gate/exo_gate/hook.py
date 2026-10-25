@@ -81,6 +81,33 @@ def _no_grant(c: gate.Classification) -> bool:
     return any(x.category in gate.NO_GRANT for x in _readings(c))
 
 
+def _every_part(c: gate.Classification) -> list:
+    """Each reading of the line and every part it was built from, nested ones included, each once."""
+    seen: set[int] = set()
+    out, todo = [], list(_readings(c))
+    while todo:
+        p = todo.pop(0)
+        if id(p) not in seen:
+            seen.add(id(p))
+            out.append(p)
+            todo += p.parts
+    return out
+
+
+def _body_path(f: str) -> Optional[Path]:
+    """``f`` when the hook may read it as a body file: an absolute path to a regular file of at most 256 KiB. /dev and
+    /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here they give exod's own,
+    not what gh will read, so they stay unseen (#208)."""
+    try:
+        p = Path(f)
+        if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
+               for y in (p, Path(os.path.realpath(p)))):
+            return None
+        return p if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE else None
+    except OSError:
+        return None
+
+
 @dataclass
 class Settings:
     principal_store: Optional[Path]
@@ -399,33 +426,29 @@ class Gate:
         The copies of the post on its other targets get the text too (`gate.fill_body`), and the line as read before
         #399 (`floor`) has its own body file read the same way, as the hook read it before.
 
-        Another part in either reading (a command, a redirection to a file, an assignment, a wrapper the gate does
-        not see through, an ssh hop, the code around a call) may change the file after this read and before gh
-        reads it, or give gh another file by that path. So on such a line the file stays unread and the post asks
-        once (#343). A copy of the post on another target is the post itself, not another part. Returns the files
-        left unread for that reason alone, so the card can say why (`gate.UNSEEN_ON_LINE`)."""
+        Another part in either reading (a command, a redirection to a file, an assignment that changes what runs, a
+        wrapper the gate does not see through, an ssh hop, the code around a call) may change the file after this
+        read and before gh reads it, or give gh another file by that path. So on such a line the file stays unread
+        and the post asks once (#343). A copy of the post on another target is the post itself, not another part.
+        Returns the files left unread for that reason alone, of every post on the line, so the card can say why
+        (`gate.UNSEEN_ON_LINE`): alone on its line, each would be read."""
+        if not self.settings.read_body_files or self.executor_required:
+            return []
         alone = all(p.alt_copy for x in _readings(c) for p in x.parts)
         held: list[str] = []
-        for x in _readings(c):
-            if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
+        for x in _readings(c) if alone else _every_part(c):
+            if not x.text_file or x.text or (p := _body_path(x.text_file)) is None:
+                continue
+            if not alone:
+                held.append(x.text_file)
                 continue
             try:
-                p = Path(x.text_file)
-                # /dev and /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read
-                # here they give exod's own, not what gh will read, so they stay unseen (#208).
-                if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
-                       for y in (p, Path(os.path.realpath(p)))):
-                    continue
-                if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
-                    if not alone:
-                        held.append(x.text_file)
-                        continue
-                    gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
-                    if not x.link:
-                        x.link = str(p)
+                gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
             except OSError:
-                pass
-        return held
+                continue
+            if not x.link:
+                x.link = str(p)
+        return list(dict.fromkeys(held))
 
     def _rule_key(self, tool: str, args: Mapping, c: gate.Classification, d: gate.Decision) -> str:
         # An "always" answer must not cover a different public or irreversible act, or different code the

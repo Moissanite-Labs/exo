@@ -209,8 +209,8 @@ def test_code_that_posts_a_body_file_asks_once(store, work):
 
 def test_the_card_says_the_file_was_not_read(store, work):
     # The file is not read, so the card names no word it holds now: gh may post another text. It says the file was
-    # not read and why. Alone on its line, the same post is read and checked. A second post's file is one the hook
-    # never reads, so its note stays the plain one, named after it.
+    # not read and why. Alone on its line, the same post is read and checked. A second post's file is left unread for
+    # the same reason, so its note says so too, named after it; a relative path keeps the plain note and its hint.
     _, ctx = make_gate(store)
     r = call(ctx, f"true && gh pr comment 5 {R} --body-file {work}/notes.md")
     assert gate.UNSEEN_ON_LINE in r["message"] and "forbidden word" not in r["message"], r
@@ -218,12 +218,29 @@ def test_the_card_says_the_file_was_not_read(store, work):
     assert "forbidden word: Zork" in r["message"] and gate.UNSEEN_ON_LINE not in r["message"], r
     r = call(ctx, f"gh pr comment 5 {R} --body-file {work}/notes.md && gh pr comment 6 {R} --body-file {work}/clean.md")
     assert r.get("once") is True and gate.UNSEEN_ON_LINE in r["message"], r
+    assert f"GitHub PR comment on myorg/app#6: {gate.UNSEEN_ON_LINE}" in r["message"], r
+    assert gate.UNSEEN_BODY not in r["message"], r
+    r = call(ctx, f"gh pr comment 5 {R} --body-file {work}/notes.md && gh pr comment 6 {R} --body-file clean.md")
     assert f"GitHub PR comment on myorg/app#6: {gate.UNSEEN_BODY}" in r["message"], r
+
+
+@pytest.mark.parametrize("line", [
+    "cd /tmp && gh pr create -R myorg/app --title \"$T\" --body-file {work}/clean.md",
+    "cd /tmp && gh pr comment 5 -R myorg/app --body-file {work}/clean.md --body-file {work}/clean.md",
+])
+def test_a_post_also_unseen_otherwise_keeps_the_plain_note(store, work, line):
+    # The file is left unread for the line, and the post is also unseen for a reason it keeps alone on its line (a
+    # title from a variable, a repeated option). The card gives both notes, so it does not ask for the post alone and
+    # then for the text inline (#343).
+    _, ctx = make_gate(store)
+    r = call(ctx, line.format(work=work))
+    assert r.get("once") is True and gate.UNSEEN_ON_LINE in r["message"] and gate.UNSEEN_BODY in r["message"], r
 
 
 @pytest.mark.parametrize("line", [
     "nice -n 5 " + P, "exec " + P, "sudo " + P, "env -u X " + P, "timeout 60 " + P, "command " + P, "nohup " + P,
     P + " 2>/dev/null", P + " >/dev/null 2>&1", "(" + P + ")", P + " &",
+    "NO_COLOR=1 " + P, "env NO_COLOR=1 " + P,      # a variable that does not change what runs
 ])
 def test_a_post_alone_under_a_wrapper_the_gate_sees_through_is_read(store, work, line):
     # These add no part, so the post is alone on its line and its file is read and checked (#343).

@@ -265,3 +265,14 @@ def test_only_the_post_whose_file_was_left_unread_gets_the_line_note():
     c = classify(sh(f"gh pr comment 5 {R} --body-file /tmp/clean.md && gh pr comment 6 {R} --body-file - < x.md"))
     d = decide(c, POLICY, {"held_body_files": ["/tmp/clean.md"]})
     assert UNSEEN_ON_LINE in d.violations and f"GitHub PR comment on myorg/app#6: {UNSEEN_BODY}" in d.violations, d
+
+
+def test_a_post_also_unseen_otherwise_keeps_the_plain_note():
+    # A title from a variable leaves the post unseen on a line of its own too, so the plain note stays beside the
+    # line's, and the card does not ask for the post alone and only then for the text inline.
+    c = classify(sh(f"cd /tmp && gh pr create {R} --title \"$T\" --body-file /tmp/clean.md"))
+    d = decide(c, POLICY, {"held_body_files": ["/tmp/clean.md"]})
+    assert d.outcome == "ask" and UNSEEN_ON_LINE in d.violations and UNSEEN_BODY in d.violations, d
+    c = classify(sh(f"cd /tmp && gh pr create {R} --title t --body-file /tmp/clean.md"))
+    d = decide(c, POLICY, {"held_body_files": ["/tmp/clean.md"]})
+    assert UNSEEN_ON_LINE in d.violations and UNSEEN_BODY not in d.violations, d
