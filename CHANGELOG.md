@@ -309,7 +309,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   rule keyed on `target` also match the target's lexical form, so `cat ~/.kube//config` is denied under
   `deny: [target:*/.kube/config]`, as its plain spelling is. Where a line's or a file tool's target is a spelling main
   did not read, main's target, another store on the line, stays a credentials part, so a `target:` entry that named it
-  still matches: `cat /pro?/self/environ ~/.ssh/id_rsa` is denied under `deny: [target:*/.ssh/*]`, as on main. Such a
+  still matches: `cat /pro?/self/environ ~/.ssh/id_rsa` is denied under `deny: [target:*/.ssh/*]`, as on main. A shell
+  call's own folders work the same way: with `cwd: ~/.config//gcloud` and `workdir: ~/.ssh`, the folder main read
+  first, `~/.ssh`, stays a part, so `deny: [target:*/.ssh*]` denies the call, as on main. Such a
   line now takes the store's class, so a deny that only its own class drew (a rule on a costly `read`) becomes the
   store's ask, as for the plain spelling. The D-038 amendment lists the groups.
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the

@@ -2308,7 +2308,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The part has no own text, like the part `_weigh` adds for a heavier command, so it only raises: an entry or deny rule
   that matched main's target matches the part (D-075, #191). The target itself does not change, and a line main read the
   same way gets no part. This also closes two of the three shapes (g) left: an entry for the second store alone, and a
-  first store that is a word with links. Group 2 now holds only the `dd` operand, which #568 tracks. (l) The drafter ran
+  first store that is a word with links. Group 2 then held the `dd` operand, which #568 tracks, and a shell call's own
+  folders, which the sixth round found and (m) closes. (l) The drafter ran
   a differential of main edeb4f89 against this change under the 87 built-in policies and 106 more: the 92 of (j), a
   deny, reserved and rule entry for four more pairs of stores (`/proc/*/environ` or `/proc/*` with the ssh keys, and the
   kube and docker configs both ways), `target:/proc/*/environ` alone, and a mapping entry on the ssh keys. The built-in
@@ -2321,6 +2322,29 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   decides as main decides the plain spelling. The same corpora with this branch before this change (882e79d8) as the
   base lowered no pair and tightened 26,870 pairs on 2,412 actions, each from ask to deny. No run had a classify or
   decide error.
+  *2026-10-25 (#513, sixth round):* (m) A shell call's own folders held the same shape. A call's read of a store from
+  its `cwd` or `workdir` (#311) takes the first folder that names a store, and since #446 that can be a spelling main
+  did not read. So `bash` with `cwd: ~/.config//gcloud` and `workdir: ~/.exo/keys` asked under
+  `deny: [target:*/.exo/*]`, where main denied it through the second folder, its target there. The same call with
+  `workdir: ~/.ssh` asked under `deny: [target:*/.ssh*]`, and a `reserved:` entry like it lost its hit. It held for each
+  shell tool name, for the `/./` and `x/..` spellings, and for a glob main did not read (`/pro?/self/environ`). It also
+  held for a plain folder that main read a store in by a relative name beside a later odd folder: `cat config` with
+  `~/.kube`, and `ls keys` with `~/.exo`, where `keys` resolves into the key store. The folders are now also read as
+  main read them, and where that gives another target, that target is a second credentials part, weighed as the first
+  one is. So these calls decide as on main. A call main read the same way gets no second part: with
+  `cwd: ~/.config/gcloud` and `workdir: ~/.ssh` the target is the gcloud folder, here and on main.
+  Group 2 now holds only the `dd` operand, which #568 tracks. (n) The drafter ran a differential of main edeb4f89
+  against this change under the 87 built-in policies and 128 more: the 106 of (l), a deny, reserved and rule entry for
+  five store folders spelt as a folder target (`*/.ssh*`) and for two store files read by a relative name, and a rule
+  on the ssh folder and an irreversible line. The built-in set, 75,784 actions, lowered 394 pairs on 80 actions, the
+  same pairs as in (l). Under the 87 built-in policies that is 31 pairs on 23 actions, 21 in group 1 and 10 in group 5.
+  The other 363 are 21 in group 1 and 342 on 57 `dd` actions. A focused run of 33,914 actions held the corpora of (l)
+  and 7,933 calls from this review. They give a shell call two folder arguments in both orders: each of six store
+  folders, plain and in five odd spellings, beside each other, under seven shell tool names and both keys. They also
+  hold a store folder beside a folder the line reads a store in by a relative name, glob folders, `$HOME` spellings, a
+  session folder, and `cd` and `pushd` forms. It lowered 198 pairs on 33 actions, the `dd` pairs of (l). The same
+  corpora with this branch before this round (0b35021a) as the base lowered no pair and tightened 2,105 pairs on 356
+  actions, each from ask to deny. No run had a classify or decide error.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
