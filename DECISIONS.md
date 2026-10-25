@@ -1923,7 +1923,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The part's target is the folder joined with the name, where a `cd` form's is the name alone, so a rule on
   `target: config` reaches only the `cd` form. The call's text has no `cd`, so an allow rule keyed on `command` that
   names a line of one command (`git push --force origin main` in `~/.ssh`) lifts the matrix deny on its parts, as on
-  any such line (#394), where the `cd` form keeps it. Each of these still asks. A differential against main
+  any such line (#394), where the `cd` form keeps it. Each is decided at least as on main, and all but the #453 store-write case ask. A differential against main
   (`gate_diff`, #423, at 3ddd89e9, whose gate is the same as 39cafcba's) finds 0 lowered pairs: 4,803,183 pairs on
   its built-in corpus (55,209 actions under 87 policies), and 1,905,648 pairs on 21,904 folder-argument actions (68
   lines under 42 folder spellings and 9 tool and key forms, with both keys, relative folders and session folders in

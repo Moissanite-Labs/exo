@@ -1692,7 +1692,7 @@ The folder is joined to the session's folder as written. So `sdir/../policies` i
 link `sdir`, as the kernel reads it, and also folded (`~/proj/policies`), as bash's `cd` and #209
 read it. With `~/proj/sdir` a link to `~/.exo/state`, `cat ../keys/seat` with `sdir/../policies` as
 `cwd` keeps its reading from before #311, and its part names `~/.exo/keys/seat`. So
-`deny: ["target:*/.exo/*"]` denies it. #340's store-write checks read the folder joined too.
+`deny: ["target:*/.exo/*"]` denies it.
 
 A folder in a repo's own `.claude` folder holds the repo's files, as the search tools judge it
 (#241): it is in `worktrees`, `commands`, `agents` or `skills`, the parent holds `.git`, and the
