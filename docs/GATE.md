@@ -1320,6 +1320,10 @@ gate does not read:
   named `-p`, `as` and `ls` in the folder, bash runs `hash [-]p /tmp/x ls` as
   `hash -p /tmp/x ls` and `hash -p [al]s` as `hash -p as ls`, so both are opaque. So is
   `hash [l]s`, as `hash l?` is. A quoted or escaped `[` (`hash -p '[al]s'`) is no glob.
+  An option word `~-`, `~+` or `~1` is opaque as well. Bash reads it from OLDPWD, PWD or the
+  directory stack, which a line may set, so after `OLDPWD=-p` it runs `hash ~- /tmp/x ls` as
+  `hash -p /tmp/x ls`. `~` and `~/x` are the home folder, which the gate reads, and
+  `HOME=-p` asks.
   A lone quoted word at the end (`hash "$cmd"`) is one word with no name after it,
   so it stays `read`. So do plain `hash`, `hash -r`, `-d` and `-t`, a `-p` after the first
   operand, one with no path, an empty path or no name after it, and a name with a slash, which

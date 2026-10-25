@@ -1874,16 +1874,20 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
     `-dp`) or with its path attached (`-p/tmp/x`), and more options after the path (the last `-p` wins). Nothing is
     bound with no path, an empty one, or no name but those with a slash, which bash skips. A word the gate cannot
     read (an expansion, a brace set, a glob, also one that starts with a `[` the lexer does not mark) may hold more.
-    Before a `-p` it may be one, unless it is a lone double-quoted word at the end (`hash "$cmd"`). From the path on,
+    Before a `-p` it may be one, unless it is a lone double-quoted word at the end (`hash "$cmd"`), and so may `~-`,
+    `~+` or `~1`, which bash reads from OLDPWD, PWD or the directory stack (`OLDPWD=-p`). From the path on,
     it may split into a path and a name (`hash -p $P` with P='/x ls'), unless it is one double-quoted word, and as a
     name it may lose its slash (`hash -p /x {ls,/}` binds ls). A glob keeps a slash it has."""
     def glob(w: _Word) -> bool:     # an unquoted `[` that starts a word, also after a `\<newline>`, as for unset
         return w.glob or w.raw.replace("\\\n", "")[:1] == "["
 
+    def tilde(w: _Word) -> bool:    # `~-`, `~+`, `~1`: OLDPWD, PWD or the directory stack, which a line may set
+        return bool(re.match(r"~(?:[+-]\d*|\d+)(?:/|$)", w.raw.replace("\\\n", "")))
+
     args, path, at, i = words[1:], None, 0, 0
     while i < len(args):
         w, a = args[i], args[i].text
-        if path is None and (w.dynamic or glob(w) or w.brace) and not (
+        if path is None and (w.dynamic or glob(w) or w.brace or tilde(w)) and not (
                 i + 1 == len(args) and re.fullmatch(r'"[^"@]*"', w.raw)):
             return f"hash may rebind a program name: an option word the gate cannot read ({a[:40]})", a
         if a == "--":

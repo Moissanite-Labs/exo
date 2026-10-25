@@ -99,6 +99,25 @@ BRACKET = [
 ]
 ASK += BRACKET
 
+# `~-`, `~+` and `~1` are OLDPWD, PWD and the directory stack, which a line may set to anything. After OLDPWD=-p,
+# bash runs `hash ~- /tmp/x ls` as `hash -p /tmp/x ls`, and `~-/tmp/x` as `-p/tmp/x`. Bash does not split or glob them.
+TILDE = [
+    "OLDPWD=-p; hash ~- /tmp/x ls; ls",
+    "PWD=-p; hash ~+ /tmp/x ls; ls",
+    "pushd -n -- -p; hash ~1 /tmp/x ls; ls",
+    "hash ~+1 /tmp/x ls; ls",
+    "hash ~-2 /tmp/x ls; ls",
+    "hash ~-/tmp/x ls; ls",
+    "hash -l ~- /tmp/x ls; ls",
+    "builtin hash ~- /tmp/x git; git log",
+    "sudo hash ~- /tmp/x ls; ls",
+    "sudo hash ~- /tmp/x ls > /tmp/f",       # the sudo write does not lead in its place (#454)
+    "ssh host 'OLDPWD=-p; hash ~- /tmp/x ls; ls'",
+    "ssh host hash ~- /tmp/x ls",
+    "hash ~\\\n- /tmp/x ls; ls",             # bash drops the \<newline> first
+]
+ASK += TILDE + ["hash -p /tmp/x ~-; ls"]     # as a name it binds OLDPWD, which may be ls
+
 READ = [
     "hash",
     "hash -r",
@@ -123,7 +142,17 @@ READ = [
     "hash \\[-]p /tmp/x ls; ls",
     "hash -p \\[al]s; ls",
     "hash -p ./[al]s; ls",
-    "hash ls $O",                            # words after the first operand are names
+    "hash ~/x ls; ls",                       # HOME, which the gate reads (HOME=-p asks), or a user's home
+    "hash ~user ls; ls",
+    "hash ~-x /tmp/x ls; ls",                # no such tilde prefix: bash keeps the word
+    "hash ~-'' /tmp/x ls; ls",               # a quoted or escaped tilde prefix is kept too
+    'hash ~"-" /tmp/x ls; ls',
+    "hash \\~- /tmp/x ls; ls",
+    "hash -p ~-; ls",                        # a tilde path does not split
+    "hash -p /tmp/x ~-/x; ls",               # and a tilde name keeps its slash
+    "hash -- ~- /tmp/x ls; ls",              # after `--` or the first operand, a tilde word is a name
+    "hash ls ~- /tmp/x; ls",
+    "hash ls $O",                         # words after the first operand are names
     "ls",
     "git log",
 ]
@@ -213,6 +242,20 @@ def test_an_unread_option_word_is_the_target():
 def test_a_bracket_option_word_is_the_target():
     c = classify(sh("hash [-]p /tmp/x ls; ls"))
     assert c.target == "[-]p" and "([-]p)" in c.summary, c
+
+
+@pytest.mark.parametrize("line", TILDE)
+@pytest.mark.parametrize("gates", [{"matrix": {"costly": {"public": "deny"}}}, {"categories": {"store_write": "deny"}},
+                                   {"reserved": ["tool:terminal"]}])
+def test_a_tilde_option_word_may_rebind(line, gates):
+    c = classify(sh(line))
+    assert c.category == "opaque_exec", c
+    assert decide(c, normalize_policies({"gates": gates})).outcome == "ask"
+
+
+def test_a_tilde_option_word_is_the_target():
+    c = classify(sh("OLDPWD=-p; hash ~- /tmp/x ls; ls"))
+    assert c.target == "~-" and "(~-)" in c.summary, c
 
 
 @pytest.mark.parametrize("line, word, path", [("hash -p $P; ls", "$P", "$P"), ("hash -p /a -l$O; ls", "-l$O", "/a"),

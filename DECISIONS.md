@@ -1909,10 +1909,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `sudo ssh host 'hash -p /x ls'`, `chroot /srv ssh host 'hash -p /x ls'`), goes from log, or ask inside a fed shell or
   under such a wrapper, to allow. So does a rebind beside a command such a wrapper runs over ssh
   (`ssh host 'hash -p /x ls | sudo sort x'`). On main the costly part was a `read` or a `shell` part whose matrix cell
-  logged. Now the rebind is the line's own `opaque_exec` part, and the category line replaces its matrix cell, as it
-  does for `ssh host 'sudo eval x && ls'` and `ssh host 'eval x | sudo sort x'` on main. Under the default policy each
-  asks. (2) 4,990 pairs on 4,990 actions, 5,843 on 5,843, 4,216 on 4,216, 6,452 on 6,452, and 97 on 96: under a
-  reservation that
+  logged. With a redirect on the sudo command it was the costly `local_write` that leads since #454
+  (`ssh host 'sudo hash -p /x ls > /tmp/f'`), which logged too. Now the rebind is the line's own `opaque_exec` part,
+  and the category line replaces its matrix cell, as it does for `ssh host 'sudo eval x && ls'` and
+  `ssh host 'eval x | sudo sort x'` on main. Under the default policy each asks. (2) 4,990 pairs on 4,990 actions,
+  5,843 on 5,843, 4,216 on 4,216, 6,452 on 6,452, and 97 on 96: under a reservation that
   matches the hash part (`tool:terminal`, or `command:\brm\b` on a line with `rm`), that part's entry is named
   `opaque_exec`, with the path as target, where it was `read`. Over ssh, where the rebind now names the line, another
   opaque part keeps its own empty target and the hop's entry keeps the host (`ssh host 'setsid ssh b "hash -p /x ls"'`).
@@ -1955,13 +1956,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `hash -p /tmp/x ls`, and `hash -p [al]s` as `hash -p as ls`. Such a word is now read as a glob in the option words
   and from the path on, also after a `\<newline>`, so both lines are opaque, also behind `builtin`, `command` or sudo
   and over ssh. A quoted or escaped `[` is no glob, so `hash -p '[al]s'` stays `read`. `hash [l]s` now asks, as
-  `hash l?` already did. Group (4) above comes from this review. Main's `scripts/gate_diff.py` against main edeb4f89
-  ran with 8 more policies, 7 of them on `read`. The built-in corpus runs 72,667 actions under 95 policies, and 1,475
-  pairs on 247 actions are lower: (1) 4 pairs on 1 action, (2) 123 on 122, (3) 16 on 16 and (4) 1,332 on 244. A
-  focused corpus of 3,489 lines (`[`, `?`, `*` and brace words in the option and path words, under `builtin`,
+  `hash l?` already did. The check of the fix found one more option word the gate cannot read: `~-`, `~+` or `~1`.
+  Bash reads it from OLDPWD, PWD or the directory stack, which a line may set, so after `OLDPWD=-p` it runs
+  `hash ~- /tmp/x ls` as `hash -p /tmp/x ls`. Such an option word is now opaque. Bash does not split or glob it, so
+  as a path it stays one word. `~` and `~/x` stay `read`: they are the home folder, which the gate reads, and
+  `HOME=-p` asks. Group (4) above comes from this review. Since #454, group (1) also holds a rebind that sudo runs
+  with a redirect over ssh, whose costly `local_write` logged on main. Main's `scripts/gate_diff.py` against main
+  edeb4f89 ran with 8 more policies, 7 of them on `read`. The built-in corpus runs 72,768 actions under 95 policies,
+  and 1,668 pairs on 292 actions are lower: (1) 12 pairs on 3 actions, (2) 139 on 138, (3) 39 on 39 and (4) 1,478 on
+  277. A focused corpus of 3,489 lines (`[`, `?`, `*` and brace words in the option and path words, under `builtin`,
   `command`, sudo, doas, env, eval, `bash -c`, ssh and mosh, beside a post, a force push or a store redirect, and the
   `BASH_CMDS` forms) ran alone. It runs 22,738 actions under the same 95 policies, and 49,713 pairs on 8,810 actions
-  are lower: (1) 712 on 178, (2) 5,503 on 5,503, (3) 3,142 on 3,142 and (4) 40,356 on 7,242. No posting violation is
+  are lower: (1) 712 on 178, (2) 5,503 on 5,503, (3) 3,142 on 3,142 and (4) 40,356 on 7,242. A second one of 4,996
+  items ran alone too: the `[` and tilde option and path words under 12 wrappers, after `OLDPWD=-p`, `PWD=-p` or
+  `pushd -n -- -p`, fed to ssh, in a `>( )`, beside a sudo redirect or a key read, after a `cd` into the store, and as
+  calls with a store or secret folder of their own. It runs 15,649 actions, and 20,076 pairs on 4,345 actions are
+  lower: (1) 240 on 60, (2) 2,042 on 1,963, (3) 2,000 on 2,000 and (4) 15,794 on 3,033. No posting violation is
   lost, and a deny is lost only in groups (3) and (4).
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
