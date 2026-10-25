@@ -130,5 +130,39 @@ def test_a_header_with_no_path_does_not_hide_the_next_header(bare, path, categor
     ("*** Move to:\n*** Add File: notes.txt\n+x\n", "local_write", "*** Add File: notes.txt", "allow"),
 ])
 def test_the_reading_across_a_line_is_kept(patch, category, target, outcome):
+    """The call's target stays the one main read, so an entry that matched it still does. The path read on its own
+    line is a part (below)."""
     c = gate.classify({"tool": "apply_patch", "args": {"patch": patch}})
     assert (c.category, c.target, gate.decide(c).outcome) == (category, target, outcome)
+
+
+@pytest.mark.parametrize("bare", BARE_HEADERS)
+def test_a_bare_header_does_not_hide_a_local_write_from_its_target_entries(bare):
+    """Each file a local write of more than one file names is a part, so an exact target entry reaches the path that
+    only the reading on one line found (#559 review)."""
+    patch = f"*** Begin Patch\n{bare}\n*** Add File: notes.txt\n+x\n*** End Patch\n"
+    c = gate.classify({"tool": "apply_patch", "args": {"patch": patch}})
+    assert c.category == "local_write" and "notes.txt" in [p.target for p in c.parts]
+    assert gate.decide(c).outcome == "allow"
+    assert gate.decide(c, {"gates": {"deny": ["target:notes.txt"]}}).outcome == "deny"
+    d = gate.decide(c, {"gates": {"reserved": ["target:notes.txt"]}})
+    assert d.outcome == "ask" and d.reserved
+
+
+@pytest.mark.parametrize("patch", [
+    "*** Update File: a.txt\n@@\n-a\n+b\n*** Add File: notes.txt\n+x\n",
+    "*** Update File: a.txt\n*** Move to: notes.txt\n@@\n-a\n+b\n",
+])
+def test_each_file_of_a_local_write_meets_its_target_entries(patch):
+    c = gate.classify({"tool": "apply_patch", "args": {"patch": patch}})
+    assert (c.category, c.target) == ("local_write", "a.txt")
+    assert gate.decide(c, {"gates": {"deny": ["target:notes.txt"]}}).outcome == "deny"
+    assert gate.decide(c, {"gates": {"deny": ["target:a.txt"]}}).outcome == "deny"
+
+
+def test_a_crlf_patch_reads_each_path_without_the_carriage_return(layout, monkeypatch):
+    monkeypatch.chdir(layout)
+    patch = "*** Begin Patch\r\n*** Move to:\r\n*** Add File: .ssh/config\r\n+x\r\n*** End Patch\r\n"
+    c = gate.classify({"tool": "apply_patch", "args": {"patch": patch}})
+    assert (c.category, c.target, gate.decide(c).outcome) == ("credentials", ".ssh/config", "ask")
+    assert all(not p.target.endswith("\r") for p in c.parts)
