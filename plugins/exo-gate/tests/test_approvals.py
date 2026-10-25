@@ -1,6 +1,8 @@
 """D-033: approvals bound to the exact text, who may approve, standing grants, outbound scrub."""
 import asyncio
+import dataclasses
 import json
+import os
 
 import pytest
 
@@ -204,6 +206,93 @@ def test_store_approvals_reach_the_ask(keyed_store):
     assert events(store)[-1]["approvers"] == ["principal", "seat:saga-divan"]
 
 
+# #399: a line whose gh subcommand moved past an option, or stands behind an expansion, is also read as before (its
+# floor). Who may answer is who may answer both readings, so a seat never answers a line only the principal answered.
+SEATS = """
+approvers:
+  default: [principal]
+  categories:
+    github_post: [principal, "seat:saga-divan"]
+    opaque_exec: [principal, "seat:saga-divan"]
+"""
+ASK_ALL = "categories: {read: ask, github_post: ask, vcs_push: ask, opaque_exec: ask}\n"
+
+
+@pytest.mark.parametrize("line", ["gh pr -b x comment 5 -R myorg/app", 'gh pr "$V" 5 -R myorg/app',
+                                  "git push origin f && gh issue -R myorg/app edit 5 -b x"])
+def test_who_may_answer_a_line_read_two_ways_may_answer_both_readings(tmp_path, line):
+    store = tmp_path / "st9"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    (store / "policies" / "approvals.yaml").write_text(SEATS)
+    key = tmp_path / "k9.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.floor is not None and c.category in ("github_post", "opaque_exec"), c
+    assert gate.approvers_for(c.floor.category, gate.normalize_approvals(gate.parse_yaml(SEATS))) == ["principal"]
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+    assert events(store)[-1]["approvers"] == ["principal"]
+    # The line read one way keeps its table.
+    r = call(ctx, "terminal", {"command": "gh pr comment 5 -R myorg/app -b x"})
+    assert r["approvers"] == ["principal", "seat:saga-divan"], r
+
+
+@pytest.fixture
+def floor_is(monkeypatch):
+    """Give a line a floor read from another line: the hook's checks past `decide` must read it as well."""
+    real = gate.classify
+
+    def set_floor(line, before):
+        def classify(action, *a, **k):
+            c = real(action, *a, **k)
+            args = action[1] if isinstance(action, tuple) else action.get("args") or {}
+            if args.get("command") == line:
+                c.floor = real({"tool": "terminal", "args": {"command": before}})
+            return c
+        monkeypatch.setattr(gate, "classify", classify)
+    return set_floor
+
+
+def test_a_line_read_before_as_credentials_is_answered_once_and_kept_in_observe_mode(tmp_path, floor_is):
+    store = tmp_path / "st10"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    key = tmp_path / "k10.key"
+    crypto.save_key(crypto.keygen(), key)
+    line = "gh pr view 5 -R myorg/app"
+    floor_is(line, "gh secret set X -b v")
+    g, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.category == "read" and c.floor.category == "credentials", c
+    binding = gate.approval_binding(c, {"command": line})
+    g.grants.add("read", "myorg/app#5", binding, 30, "principal:tui")     # a grant on this exact line runs no part
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True, r         # no grant runs it, no "always"
+    answer(ctx, r, "always")
+    assert [x["rule"] for x in g.grants.list()] == ["read"]                   # no new grant was kept
+    # The grant lookup reads the floor too, also where "once" would not stop it first.
+    d = gate.decide(c, g.policies())
+    assert g.grants.match("read", "myorg/app#5", binding, True) and g._grant_for(c, d, binding, True) is None
+    g.settings = dataclasses.replace(g.settings, mode="observe")
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve", r                                  # NO_GRANT holds in observe mode too
+
+
+def test_a_line_read_before_with_an_unseen_body_is_answered_once(tmp_path, floor_is):
+    store = tmp_path / "st11"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    key = tmp_path / "k11.key"
+    crypto.save_key(crypto.keygen(), key)
+    line = "gh pr comment 5 -R myorg/app -b x"
+    floor_is(line, 'gh pr comment 5 -R myorg/app -b "$X"')
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True, r
+
+
 # --- standing grants ------------------------------------------------------------------------
 
 def test_always_grant_survives_restart_and_expires(keyed_store):
@@ -247,6 +336,137 @@ def test_non_outward_grant_is_scoped_to_rule_and_target(tmp_path):
     assert call(ctx2, "mcp_notes_create_page", {"target": "notes:other", "title": "t"})["action"] == "approve"
 
 
+def _store454(tmp_path, name, gates, approvals=""):
+    store = tmp_path / name
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(gates)
+    if approvals:
+        (store / "policies" / "approvals.yaml").write_text(approvals)
+    key = tmp_path / f"{name}.key"
+    crypto.save_key(crypto.keygen(), key)
+    return (store, *make_gate(store, key))
+
+
+def test_a_grant_on_a_sudo_write_is_keyed_on_the_written_path(tmp_path):
+    # #454: `sudo echo hi > /tmp/f` is a costly local_write with the written path as target. Where only the write's
+    # category asks, its grant covers that path, as one for `echo hi > /tmp/f` would.
+    store, _, ctx = _store454(tmp_path, "st454", "categories: {local_write: ask}\n")
+    r = call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f"})
+    assert r["action"] == "approve" and "binding" not in r, r
+    answer(ctx, r, "always")
+    grants = json.loads((store / "state" / "approval-grants.json").read_text())
+    assert [(g["rule"], g["target"], g.get("binding") or "") for g in grants] == [("local_write", "/tmp/f", "")]
+    assert call(ctx, "terminal", {"command": "echo hi > /tmp/f"}) is None
+    assert call(ctx, "terminal", {"command": "sudo chmod 777 /x > /tmp/f"}) is None
+    assert call(ctx, "terminal", {"command": "sudo echo hi > /tmp/g"})["action"] == "approve"
+
+
+def test_a_grant_on_a_sudo_write_does_not_answer_an_ask_on_its_displaced_part(tmp_path):
+    # #454 re-check: where the line asks with the sudo command's own part leading (here its category), a grant keyed
+    # on the written path would answer that ask for any other command writing there. The "always" covers the exact
+    # line only, and a grant for a costly read keyed on the tool does not cover the line.
+    store, _, ctx = _store454(tmp_path, "st454c", "categories: {read: ask, shell: ask}\n")
+    r = call(ctx, "terminal", {"command": "sudo ls"})
+    assert r["action"] == "approve"
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": "sudo ls -la"}) is None
+    r = call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f"})
+    assert r["action"] == "approve" and r.get("binding"), r
+    answer(ctx, r, "always")
+    grants = json.loads((store / "state" / "approval-grants.json").read_text())
+    assert [(g["rule"], g["target"], bool(g.get("binding"))) for g in grants] == [
+        ("read", "terminal", False), ("local_write", "/tmp/f", True)]
+    assert call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f"}) is None
+    r = call(ctx, "terminal", {"command": "sudo chmod 4755 /usr/bin/python3 > /tmp/f"})
+    assert r["action"] == "approve" and "category shell" in r["message"], r
+
+
+@pytest.mark.parametrize("gates", ["categories: {shell: ask}\n", "categories: {read: ask, shell: ask}\n",
+                                   "escalate: {categories: [shell]}\n",
+                                   "rules: [{match: {category: shell, reversibility: costly}, decision: ask}]\n"])
+def test_only_who_may_answer_the_displaced_part_answers_its_ask(tmp_path, gates):
+    # #454 re-check: the ask comes from the line read with chmod leading, and chmod names no target. A seat that may
+    # answer only local_write must not answer it, as on main, where the line was chmod's.
+    _, _, ctx = _store454(tmp_path, "st454d", gates, "approvers: {local_write: ['seat:helper']}\n")
+    r = call(ctx, "terminal", {"command": "sudo chmod u+s /tmp/x > /tmp/log"})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
+def test_a_changed_policy_whose_displaced_reading_asks_binds_the_line_too(tmp_path):
+    # #454 re-check: mid-session the stricter of the pinned and the changed policy applies (D-038). The pinned one
+    # asks only on the write; the changed one asks on chmod too, so the approval is about chmod as well.
+    store, g, ctx = _store454(tmp_path, "st454e", "categories: {local_write: ask}\n",
+                              "approvers: {local_write: ['seat:helper']}\n")
+    g.policies()
+    line = {"command": "sudo chmod u+s /tmp/x > /tmp/log"}
+    r = call(ctx, "terminal", line)
+    assert r["action"] == "approve" and not r.get("binding") and r["approvers"] == ["principal", "seat:helper"], r
+    p = store / "policies" / "gates.yaml"
+    p.write_text("categories: {local_write: ask, shell: ask}\n")
+    os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 10_000_000))
+    r = call(ctx, "terminal", line)
+    assert r["action"] == "approve" and r.get("binding") and r["approvers"] == ["principal"], r
+
+
+@pytest.mark.parametrize("gates,line", [
+    ("version: 1\n", 'sudo gh pr "$V" 5 > /tmp/f'), ("categories: {read: ask}\n", 'sudo gh pr "$V" 5 > /tmp/f; ls'),
+    ("version: 1\n", 'sudo chmod u+s /tmp/x > /tmp/f; gh pr "$V" 5'),
+    ("categories: {shell: ask}\n", 'sudo chmod u+s /tmp/x > /tmp/f; gh pr "$V" 5')])
+def test_the_line_as_read_before_399_keeps_the_approvers_of_its_displaced_part(tmp_path, gates, line):
+    # #454 with #399: only who may answer the line as read before #399 (floor) may answer. That reading is a sudo write
+    # line here. On main it led with the gh read or chmod the write displaced, so a seat that may answer opaque_exec
+    # and local_write, but not that part's category, does not answer, as on main.
+    _, _, ctx = _store454(tmp_path, "st454f", gates, "approvers: {opaque_exec: ['seat:h'], local_write: ['seat:h']}\n")
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
+def test_a_grant_on_the_written_path_does_not_answer_a_rule_on_the_host_or_repo(tmp_path):
+    # #454: a sudo write line is also decided with the sudo command's own part leading, so a rule on the repo or host
+    # that part names asks. A grant keyed on the written path does not answer that ask, and a seat that may answer
+    # only local_write may not either. An "always" there covers the exact line only. With no repo or host, the
+    # approvers follow the line's category.
+    store = tmp_path / "st454b"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(
+        "categories: {local_write: ask}\nrules: [{match: {target: prod}, decision: ask, reason: host},"
+        " {match: {target: 'o/r*'}, decision: ask, reason: repo}]\n")
+    (store / "policies" / "approvals.yaml").write_text("approvers: {local_write: ['seat:helper']}\n")
+    key = tmp_path / "k454b.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    for path in ("/srv/out", "/tmp/f"):
+        r = call(ctx, "terminal", {"command": f"echo hi > {path}"})
+        assert r["action"] == "approve" and r["approvers"] == ["principal", "seat:helper"], r
+        answer(ctx, r, "always")
+    for line in ("ssh prod 'sudo echo hi > /srv/out'", "sudo gh pr view 1 -R o/r > /tmp/f"):
+        r = call(ctx, "terminal", {"command": line})
+        assert r["action"] == "approve" and r["approvers"] == ["principal"], (line, r)
+        answer(ctx, r, "always")
+        assert call(ctx, "terminal", {"command": line}) is None, line
+    assert call(ctx, "terminal", {"command": "sudo gh pr view 2 -R o/r > /tmp/f"})["action"] == "approve"
+    assert call(ctx, "terminal", {"command": "echo hi > /srv/out"}) is None
+    assert call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f"}) is None
+    r = call(ctx, "terminal", {"command": "sudo echo hi > /tmp/g"})
+    assert r["action"] == "approve" and r["approvers"] == ["principal", "seat:helper"], r
+
+
+@pytest.mark.parametrize("gates,line", [
+    ("reserved: [local_write]\n", "sudo echo hi > /tmp/f"), ("reserved: [local_write]\n", "x=$(sudo ls > /tmp/f)"),
+    ("reserved: [local_write]\n", "ssh prod 'sudo echo hi > /tmp/f'"),
+    ("reserved: [{category: local_write, target: '/etc/*'}]\n", "sudo echo hi >> /etc/hosts"),
+    ("categories: {local_write: ask}\nreserved: [local_write]\n", "sudo chmod 777 /x > /tmp/f")])
+def test_a_reserved_hit_on_a_sudo_write_keeps_its_ask_from_a_grant(tmp_path, gates, line):
+    # #454 with D-075: the write leads the line now, but the line is also the act of the part it displaced, which led
+    # it on main. There the write was another part of the line, so its reserved hit kept the principal's ask from any
+    # grant. An "always" still leaves the line asking.
+    _, _, ctx = _store454(tmp_path, "st454g", gates)
+    for _ in range(2):
+        r = call(ctx, "terminal", {"command": line})
+        assert r is not None and r["action"] == "approve" and "reserved for the principal" in r["message"], r
+        answer(ctx, r, "always")
+
+
 def test_a_grant_never_covers_a_reserved_part_of_the_line(tmp_path):
     # D-075: the push grant covers the push. A reserved merge on the same line keeps the principal's ask.
     store = tmp_path / "st3"
@@ -284,6 +504,68 @@ def test_a_grant_for_one_push_does_not_cover_a_second_push_with_other_credential
     assert r["action"] == "approve" and "reserved for the principal" in r["message"], r
     row = json.dumps(events(store)[-1]["decision"])
     assert "tokA" not in row and "tokB" not in row and "https://***@example.com/acme/app.git" in row
+
+
+MERGE_ELSEWHERE = "gh pr merge --auto https://github.com/pub/repo/pull/7 -R myorg/app"
+CLOSE_ELSEWHERE = "gh issue close 5 -R myorg/app --duplicate-of https://github.com/myorg/secret/issues/1"
+
+
+def test_a_grant_on_the_target_does_not_cover_a_gh_line_that_may_land_on_another(tmp_path):
+    # #399: gh merges the URL operand's PR, not one on the -R repo, and the gate decides the line on every target
+    # it cannot rule out. A grant on one of them must not run the line, and the "session" key must not cover it.
+    store = tmp_path / "st6"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(
+        "scopes: {internal: ['myorg/*']}\ncategories: {vcs_merge: ask, github_close: ask}\n")
+    key = tmp_path / "k6.key"
+    crypto.save_key(crypto.keygen(), key)
+    g, ctx = make_gate(store, key)
+    g.grants.add("vcs_merge", "myorg/app", "", 30, "principal:tui")      # what an "always" on a plain merge leaves
+    g.grants.add("github_close", "myorg/app#5", "", 30, "principal:tui")
+    assert call(ctx, "terminal", {"command": "gh pr merge -R myorg/app --squash"}) is None
+    assert call(ctx, "terminal", {"command": "gh issue close 5 -R myorg/app"}) is None
+    for line, category in ((MERGE_ELSEWHERE, "vcs_merge"), (CLOSE_ELSEWHERE, "github_close")):
+        c = gate.classify(("terminal", {"command": line}))
+        assert c.alt_targets, c
+        r = call(ctx, "terminal", {"command": line})
+        assert r and r["action"] == "approve", (line, r)
+        assert r["rule_key"] == f"exo-gate:{category}:{r['binding'][:16]}", r      # bound to the exact line
+        assert "grant" not in events(store)[-1], events(store)[-1]
+
+
+def test_always_on_a_gh_line_with_other_targets_covers_that_line_only(tmp_path):
+    store = tmp_path / "st7"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text("scopes: {internal: ['myorg/*']}\ncategories: {vcs_merge: ask}\n")
+    key = tmp_path / "k7.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": MERGE_ELSEWHERE})
+    answer(ctx, r, "always")
+    [g] = json.loads((store / "state" / "approval-grants.json").read_text())
+    # gh merges the URL operand's PR, so that is the target, and the grant binds the exact line.
+    assert g["rule"] == "vcs_merge" and g["target"] == "pub/repo#7" and g["binding"] == r["binding"], g
+    assert call(ctx, "terminal", {"command": MERGE_ELSEWHERE}) is None
+    assert call(ctx, "terminal", {"command": "gh pr merge -R myorg/app --squash"})["action"] == "approve"
+    assert call(ctx, "terminal", {"command": MERGE_ELSEWHERE.replace("/7", "/8")})["action"] == "approve"
+
+
+def test_a_grant_on_the_top_part_does_not_run_a_hop_a_rule_on_its_host_denies(tmp_path):
+    # #399 round 4: `gh repo view --web myorg/app` may also read with no repo, and on the hop the host stands for
+    # that empty target. The rule on the host's reads denies the line, as on main, whatever grant the merge has.
+    store = tmp_path / "st8"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(
+        "categories: {vcs_merge: ask}\nrules:\n  - match: {category: read, target: buildhost}\n    decision: deny\n")
+    key = tmp_path / "k8.key"
+    crypto.save_key(crypto.keygen(), key)
+    g, ctx = make_gate(store, key)
+    g.grants.add("vcs_merge", "myorg/app#9", "", 30, "principal:tui")      # what an "always" on the merge leaves
+    assert call(ctx, "terminal", {"command": "gh pr merge 9 -R myorg/app"}) is None
+    for line in ("ssh buildhost gh repo view --web myorg/app",
+                 "gh pr merge 9 -R myorg/app && ssh buildhost gh repo view --web myorg/app"):
+        r = call(ctx, "terminal", {"command": line})
+        assert r and r["action"] == "block", (line, r)
 
 
 def test_a_reserved_entry_added_by_a_pending_policy_also_holds_off_a_grant(tmp_path):

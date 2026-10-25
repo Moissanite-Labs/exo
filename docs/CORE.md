@@ -99,7 +99,8 @@ event's `prev`. `verify()` recomputes every id, link, chain hash and signature. 
 
 Each event carries the key that signed it, so a chain checked only against its own keys proves nothing about who
 wrote it: a fresh key can sign anything. `$EXO_HOME/keys/registry.json` (0600, `exo.keyring.KeyRegistry`) lists the
-keys this home trusts, the bus seats it has seen, and the ledger author ids that are the principal.
+keys this home trusts, the bus seats it has seen, the peer seats of other homes it pinned, and the ledger author ids
+that are the principal.
 
 - A key Exo makes in `$EXO_HOME/keys` is pinned when it is made (`crypto.save_key`). A name that already has a
   different pinned key is not changed: `exo keys pin NAME PUB --replace` does that by hand.
@@ -109,6 +110,9 @@ keys this home trusts, the bus seats it has seen, and the ledger author ids that
   or when its author has its own pinned key and the event is signed by another one. The principal's words may be
   signed by any pinned key, because the agent's seat records them.
 - `exo keys` lists the registry; `exo keys pin` and `exo keys principal` change it.
+- `peers` holds peer seats of other homes, pinned with `exo keys pin --peer SEAT PUB` (#132). Their keys check that
+  seat's peer messages and receipts only. `owners` and `allows` read `keys` alone, so a peer pin never signs a
+  ledger event (`docs/PEERS.md` "Peer keys").
 
 ### Head anchor (D-040)
 
@@ -206,9 +210,10 @@ length, how many nodes hold each word, and the average length. Later calls token
 and the default ranker of `assemble` call `find`, so they share the tables.
 
 The tables belong to the node set they were built from. `reload()` makes a new set, and so does a `refresh()` that
-sees a node file added, edited or removed. The next `find` then builds the tables again. So `find` always ranks the
-nodes that `nodes` returns. Like `nodes`, it does not see a file written after the last read until a `refresh()` or
-a `reload()`. Callers treat the node dicts as read-only and change a node by writing its file.
+sees a node file added, edited or removed. The reload drops the old tables at once, and the next `find` builds new
+ones. So `find` always ranks the nodes that `nodes` returns. Like `nodes`, it does not see a file written after the
+last read until a `refresh()` or a `reload()`. Callers treat the node dicts as read-only and change a node by
+writing its file.
 
 ## Store checks
 
