@@ -2228,7 +2228,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   this copies a gap main has for the plain spelling instead of closing it. Group 2 also holds a word with more than
   16 possible links, which counts as a store (fails closed). As a line's first store it is the target, so
   `ls /proc/1/*` with sixteen `/../*` steps and `/usr/lib/x*`, then `; cat ~/.kube/config`, asks under
-  `deny: [target:*/.kube/config]`, where main denies. Such a word has no plain spelling. A follow-up issue tracks the
+  `deny: [target:*/.kube/config]`, where main denies. Such a word has no plain spelling. #568 tracks the
   fix for both: take a `dd` operand's path without its `if=` or `of=` as the target, and report each store a line
   names as a target.
   (c) A word counts past 16 possible links: a test pins a word with 16 as a read and one with 17 as an ask, under
@@ -2267,7 +2267,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a `command` view (#136), and a part's deny veto (#191). An allow rule and a scope read the target as written, so the
   lexical form never lowers a decision. A link before a `..` may lead elsewhere, and then the entry matches when it need
   not (fails closed). This is the lexical form of #522's proposal. Its other two forms, the target with each `\` dropped
-  and the value of a `key=value` operand, stay with #522. Group 2 keeps three shapes, which a follow-up issue tracks.
+  and the value of a `key=value` operand, stay with #522, which proposes them in a comment. Group 2 keeps three shapes,
+  which #568 tracks.
   One is an entry for the second store alone: `cat ~/.kube/./config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]`.
   One is a `dd` operand, whose lexical form keeps its `if=` or `of=`. And one is a first store that is a word with
   links. (h) `normpath` keeps exactly two leading slashes, which the kernel reads as one. So what follows a root link
@@ -2307,7 +2308,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The part has no own text, like the part `_weigh` adds for a heavier command, so it only raises: an entry or deny rule
   that matched main's target matches the part (D-075, #191). The target itself does not change, and a line main read the
   same way gets no part. This also closes two of the three shapes (g) left: an entry for the second store alone, and a
-  first store that is a word with links. Group 2 now holds only the `dd` operand, which a follow-up issue tracks. (l) A
+  first store that is a word with links. Group 2 now holds only the `dd` operand, which #568 tracks. (l) A
   differential of main edeb4f89 against this change ran under the 87 built-in policies and 106 more: the 92 of (j), a
   deny, reserved and rule entry for four more pairs of stores (`/proc/*/environ` or `/proc/*` with the ssh keys, and the
   kube and docker configs both ways), `target:/proc/*/environ` alone, and a mapping entry on the ssh keys. The built-in
