@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import weakref
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -126,6 +127,29 @@ def _blocks(messages: list[dict[str, Any]]) -> set[str]:
     return out
 
 
+def _gone(messages: list[dict[str, Any]], result: list[dict[str, Any]], idx: int) -> list[dict[str, Any]]:
+    """The rows of `messages` a compaction did not keep. A message counts as kept only as many times as the result
+    holds its text outside the summary row `idx`, so a ruling said twice word for word, once folded and once kept,
+    still counts as folded (#389)."""
+    kept = Counter(hf.message_text(m) for i, m in enumerate(result) if i != idx and isinstance(m, dict))
+    gone = []
+    for m in messages:
+        if isinstance(m, dict):
+            text = hf.message_text(m)
+            if kept[text] > 0:
+                kept[text] -= 1
+            else:
+                gone.append(m)
+    return gone
+
+
+def _part_of(first: str, msg: dict[str, Any]) -> bool:
+    """Is `msg` the window's first row, or what Hermes keeps of it? When /undo N cuts at the row Hermes merged its
+    summary into, Hermes keeps that row's summary part up to its end marker (#389)."""
+    text = hf.message_text(msg)
+    return text == first or (END_MARKER in text and text.strip() in first)
+
+
 def _proxy(name: str) -> property:
     default = getattr(ContextEngine, name, 0)
 
@@ -190,7 +214,7 @@ class ExoContextEngine(ContextEngine):
         d['_x_handoffs'] = {}  # session -> (path, session of the window it was written from, topic): automatic only
         d['_x_folded'] = {}  # session -> {digest of a pin a compaction folded: digests of the summary blocks it rides}
         # A host's undo until that session's next turn: (session, window without the undone turn, the blocks of the
-        # summary rows written since that folded the window's first row)
+        # summary rows written since that folded the window's first row or its summary part)
         d['_x_undo'] = None
         d['_x_turn'] = 0  # host_undo's number for the last turn of the window's session that this engine saw
         host_undo.listen(self)  # a host's undo reaches the engine only through exo-memory (#389)
@@ -449,7 +473,8 @@ class ExoContextEngine(ContextEngine):
         message into a summary row the window holds. A pin whose message sits in a tail that a compaction held out
         stays too. The pins are read again from disk first, since another engine on the session may have written
         them. Then the window, the handoffs and the link are cleaned as after the core's undo, and the session's next
-        turn drops the pins of any earlier turn the same undo took (``_after_undo``)."""
+        turn drops the pins of any earlier turn the same undo took (``_after_undo``). A second undo before that turn
+        keeps the window the first one left, so the rows the second one took still show there."""
         sid = str(session_id or '')
         if not sid or sid != self._x_window_sid or self._x_turn != host_undo.latest(sid):
             return  # another session's window, or a later turn of it ran in another engine: nothing shows the undo
@@ -458,15 +483,17 @@ class ExoContextEngine(ContextEngine):
         if cut < 0:
             return  # the window holds no turn
         own = [i for i, m in enumerate(window) if m.get('role') == 'system' and hf.PIN_OPEN in hf.message_text(m)]
+        seen = [m for i, m in enumerate(window) if i not in own]
         rest = [m for i, m in enumerate(window[:cut]) if i not in own]
         pins = self._load_pins(sid, fresh=True)
         # A summary row in the undone turn is one Hermes merged into that turn's message. Hermes keeps that row's
         # summary part, so the pins it folded stay.
-        folded = self._folded(sid, [m for i, m in enumerate(window) if i not in own])
+        folded = self._folded(sid, seen)
         undone, left = _holder(window[cut:]), _holder(window[:cut])
         kept = {k: [t for t in items if left(k, t) or not undone(k, t) or folded(k, t)]
                 for k, items in pins.items()}
-        self._x_undo = (sid, rest, set())
+        if not self._x_undo or self._x_undo[0] != sid:
+            self._x_undo = (sid, rest, set())
         self._rewound(sid, pins, kept, rest, set())
 
     def _after_undo(self, kwargs: dict[str, Any]) -> None:
@@ -485,12 +512,12 @@ class ExoContextEngine(ContextEngine):
         last = max((i for i, m in enumerate(live) if m.get('role') == 'user'), default=-1)
         if last < 0:
             return
-        # The transcript must reach back to where the window started: it holds the window's first row, or the summary
-        # row of a compaction since the undo that folded that row. Only an undo of every turn leaves nothing before
-        # the new turn's message.
+        # The transcript must reach back to where the window started: it holds the window's first row or the summary
+        # part of it, or the summary row of a compaction since the undo that folded either. Only an undo of every turn
+        # leaves nothing before the new turn's message.
         first = next((hf.message_text(m) for m in before if m.get('role') != 'system'), None)
         if (first is not None and any(m.get('role') != 'system' for m in live[:last])
-                and first not in {hf.message_text(m) for m in live} and anchors.isdisjoint(_blocks(live))):
+                and not any(_part_of(first, m) for m in live) and anchors.isdisjoint(_blocks(live))):
             logger.info('exo-context: the transcript after an undo in session %s does not start where the window '
                         'did, so no pin was dropped', sid)
             return
@@ -730,8 +757,7 @@ class ExoContextEngine(ContextEngine):
         whole: Hermes merges its summary into the first tail row when no role alternates, and an undo of that row's
         turn keeps only the summary part. A summary row in another role that quotes the message was not merged."""
         try:
-            out = {hf.message_text(m) for m in result if isinstance(m, dict)}
-            gone = [m for m in messages if isinstance(m, dict) and hf.message_text(m) not in out]
+            gone = _gone(messages, result, idx)
             if (gone and gone[-1].get('role') == result[idx].get('role')
                     and hf.message_text(gone[-1]) in hf.strip_pinned(hf.message_text(result[idx]))):
                 gone.pop()  # the summary row's own block quotes the pins, so it is left out of the test
@@ -745,7 +771,7 @@ class ExoContextEngine(ContextEngine):
             self._save_pins(pins)
             undo = self._x_undo  # a pending undo's window start, folded here: this summary row now stands for it
             first = next((hf.message_text(m) for m in undo[1] if m.get('role') != 'system'), None) if undo else None
-            if undo and undo[0] == self._x_session_id and first in {hf.message_text(m) for m in gone}:
+            if first is not None and undo[0] == self._x_session_id and any(_part_of(first, m) for m in gone):
                 undo[2].add(tie)
         except Exception as e:  # never block compaction on it
             logger.warning('exo-context: folded pins not noted (%s)', type(e).__name__)

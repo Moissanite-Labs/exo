@@ -2690,16 +2690,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   to a compression child and a `/branch` child. So a restart or a new agent keeps them. Third, a folded pin stays
   only while a summary row that carries it is left. Hermes keeps its first rows before its first summary row, so
   `/undo N` can take that row too. A row carries a pin when its block was written by the compaction that folded the
-  pin's message, or by one that folded an earlier row that carried it. On the next turn, a pin the window showed, by
-  its message or by such a row, goes when the transcript shows it no longer. When no role alternates, Hermes merges
-  its summary into the next row. That row's own message counts as kept, not folded, and an undo of its turn keeps
-  only the summary part. Fourth, a pending undo waits for its own session's next turn. A request
-  for another session leaves it pending. So does a request that names no session and carries no user message:
-  Hermes names no session in `select_context`, so its `incoming_message` marks a turn. Fifth, the next turn drops
-  nothing unless the transcript reaches back to where the window started. It does when it holds the window's first
-  row, or the summary row of a compaction since the undo that folded that row, or nothing before the turn's own
-  message, which is an undo of every turn. A host that sent only the turn's own message would read as that. Hermes
-  sends its whole transcript. Any other transcript was cut short, not undone, and the skip is logged with the
+  pin's message, or by one that folded an earlier row that carried it. A message counts as kept only as many times
+  as the compaction's result holds its text. So a ruling said twice word for word, once in a folded turn and once in
+  the kept tail, still counts as folded. On the next turn, a pin the window showed, by its message or by such a row,
+  goes when the transcript shows it no longer. When no role alternates, Hermes merges its summary into the next row.
+  That row's own message counts as kept, not folded, and an undo of its turn keeps only the summary part. Fourth, a
+  pending undo waits for its own session's next turn. A second undo before that turn keeps the window the first one
+  left, so the rows the second one took still show there. A request for another session leaves it pending. So does a
+  request that names no session and carries no user message: Hermes names no session in `select_context`, so its
+  `incoming_message` marks a turn. Fifth, the next turn drops nothing unless the transcript reaches back to where
+  the window started. It does when it holds the window's first row or its summary part, or the summary row of a
+  compaction since the undo that folded either, or nothing before the turn's own message, which is an undo of every
+  turn. A host that sent only the turn's own message would read as that. Hermes sends its whole transcript. When
+  `/undo N` cuts at a row Hermes merged its summary into, Hermes keeps only that row's summary part. Any other
+  transcript was cut short, not undone, and the skip is logged with the
   session id. Not covered now, six cases. Hermes's messaging gateway sends no notice (#537). Neither does the CLI
   while it has no agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. A host
   without exo-memory as its memory provider never passes the notice on. An undo before the engine has seen a turn
