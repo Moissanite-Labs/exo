@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
+  after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
+  that path and its write was never read. A patch tool skips the bare line and applies the next header, so after
+  #548 a bare `*** Move to:` let `*** Add File: .ssh/config` through with no ask. Each header's path is now also
+  read on its own line, and the paths read as before still count.
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.

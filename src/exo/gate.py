@@ -6018,10 +6018,17 @@ _PATCH_PATHS = re.compile(
     r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|"
     r"^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$|"
     r"^\*\*\*\s*Move\s+to:\s*(.+?)\s*$", re.M)
+# The same headers with each path read on its own line (#548 follow-up). `\s` above may cross a line, so a header
+# with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) takes the next header line as its path and
+# that header is never read, while a patch tool skips the bare line and applies the next one.
+_PATCH_LINE_PATHS = re.compile(_PATCH_PATHS.pattern.replace(r"\s", r"[ \t]"), re.M)
 
 
 def _patch_paths(text: str) -> list[str]:
-    return [p for m in _PATCH_PATHS.finditer(text or "") for p in m.groups() if p]
+    """Each path a patch's headers name: those read as before first, then those read one line at a time."""
+    found = [p for m in _PATCH_PATHS.finditer(text or "") for p in m.groups() if p]
+    found += [p for m in _PATCH_LINE_PATHS.finditer(text or "") for p in m.groups() if p and p.strip()]
+    return list(dict.fromkeys(found))
 
 
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
