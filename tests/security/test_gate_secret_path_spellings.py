@@ -588,10 +588,37 @@ def test_a_redirection_to_a_backslash_spelling_names_the_word_the_shell_reads(li
     ("cat ~/.kube/\\\\config", ("read", "allow")),           # `\\` is one backslash in the name
     ('cat < "$HOME/.kube/\\config"', ("read", "allow")),
     ('echo x > "$HOME/.kube/\\config"', ("local_write", "allow")),
+    ('cat "$HOME/.kube/\\x/../\\config"', ("read", "allow")),   # `\x/..` is `~/.kube`, and `\config` stays
 ])
 def test_a_backslash_the_shell_keeps_names_no_store(line, expected):
     # #513 third review: the shell reads a file named `\config` in `~/.kube`, not the store, so it decides as on main
     assert bash(line) == expected
+
+
+@pytest.mark.parametrize("line", [
+    'cat "$HOME/.kube/\\x/../config"',
+    "cat ~/.kube/\\\\x/../config",
+    'cat "$HOME/\\x/../.kube//config"',
+    'cat < "$HOME/.kube/\\x/../config"',
+    'echo x > "$HOME/.kube/\\x/../config"',
+    'cp "$HOME/.kube/\\x/../config" /tmp/a',
+    'cat "$HOME/.config/gh/\\x/../hosts.yml"',
+])
+def test_a_folder_the_shell_keeps_a_backslash_in_is_still_taken_back_by_dotdot(line):
+    # The shell keeps `\x` as a folder name, and the kernel walks `\x/..` back to `~/.kube` when that folder exists,
+    # so the name is read in its lexical form with the backslash as a plain character (fails closed)
+    assert bash(line) == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("line", [
+    "bash -s \"$HOME/.kube/\\config\" <<'X'\ncat < ~/.kube/\\config\nX",
+    "bash -s \"$HOME/.kube/\\config\" <<'X'\ncat ~/.kube/\\config\nX",
+    "xargs cat \"$HOME/.kube/\\config\" <<X\n$HOME/.kube/\\config\nX",
+])
+def test_a_quoted_word_does_not_stand_in_for_a_heredoc_body_with_the_same_text(line):
+    # The body is text no word holds, so it keeps the text as the target (fails closed), though a quoted word on the
+    # line, whose backslash the shell keeps, holds the same text
+    assert bash(line) == ("credentials", "ask")
 
 
 @pytest.mark.parametrize("line, target", [

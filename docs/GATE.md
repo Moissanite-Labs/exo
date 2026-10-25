@@ -606,8 +606,9 @@ than before because of that, much as for a thread's environment file (#313, belo
 `read` no longer matches it as `credentials`, so `sudo ssh host cat ~/.kube//config` under a rule that denies a costly
 `read` asks, as `sudo ssh host cat ~/.kube/config` does. A `target:` entry or a rule keyed on `target`, for a second
 store on the line, no longer matches (`cat ~/.kube/./config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]`
-asks). The first store can be a word with more than 16 possible links, which counts (fails closed), so
-`ls /proc/1/*/../*/.../usr/lib/x*; cat ~/.kube/config` with 17 links asks under `deny: [target:*/.kube/config]`.
+asks). The first store can be a word with more than 16 possible links, which counts (fails closed). So `ls` of
+`/proc/1/*` with sixteen `/../*` steps and `/usr/lib/x*`, then `; cat ~/.kube/config`, asks under
+`deny: [target:*/.kube/config]`.
 A call that was `store_write` because its path goes through a descriptor or process folder
 (`/proc/<pid>/root`, `/dev/fd`, #217) is `credentials` once the path names a secret, so a `store_write` deny no
 longer applies to it. A file tool's own class, a part's matrix cell and a `cd` folder's target still count, since
@@ -626,9 +627,12 @@ text is read as the shell reads the word that holds it, a redirection's target i
 so `cat < ~/.kube/\config`, `sudo cat < ~/.kube/\config` and `echo x > ~/.kube/\config` name `~/.kube/config`, and
 that deny denies them, as it denies the plain spelling. In quotes, or after `\\`, the shell keeps the backslash and
 reads a file named `\config`. So `cat "$HOME/.kube/\config"` and `cat < "$HOME/.kube/\config"` stay reads, as on
-main. Two cases keep the text as the target and ask (fail closed): a word with a space or an operator, which another
-shell may read again (`su -c 'cat ~/.kube/\config'`), and text that no word holds, such as a heredoc body. A text
-that names a store as written stays the target, as on main. So `cat ~/.ssh/\id_rsa ~/.kube/config` keeps
+main. Such a word is still read in its lexical form, with the backslash as a plain character. A `..` takes back a
+folder whose name keeps a backslash, when that folder exists, so `cat "$HOME/.kube/\x/../config"` asks (fails
+closed). Two cases keep the text as the target and ask (fail closed): a word with a space or an operator, which
+another shell may read again (`su -c 'cat ~/.kube/\config'`), and text that no word holds, such as a heredoc body. A
+quoted word with the same text on the line does not change that. A text that names a store as written stays the
+target, as on main. So `cat ~/.ssh/\id_rsa ~/.kube/config` keeps
 `~/.ssh/\id_rsa`, and `deny: [target:*/.ssh/*]` still denies it, while `cat ~/.ssh/\id_rsa` under
 `deny: [target:*/.ssh/id_rsa]` asks.
 
