@@ -390,20 +390,24 @@ class Gate:
 
     # --- hooks ------------------------------------------------------------------------
 
-    def _load_body_file(self, c: gate.Classification) -> None:
+    def _load_body_file(self, c: gate.Classification) -> list[str]:
         """Read a post's body file into its text when the hook can be sure it reads the file the command will:
-        an absolute path to a regular file of at most 256 KiB, and the post the only command on the line —
-        on a compound line an earlier part (a copy, a redirect, a link, tee) can rewrite the file after this
-        read and before gh posts it, so the file stays unread and the post counts as unseen (#343). A
-        relative or `~` path names a file in the command's folder or home, which the hook does not know.
-        Anything not read stays unseen, so the post asks and gets no standing grant (#208). A required
-        executor reads none: tool-selected host paths, symlinks included, are never read before the worker,
-        and `_rules` refuses the call. The copies of the post on its other targets get the text too
-        (`gate.fill_body`), and the line as read before #399 (`floor`) has its own body file read the same way,
-        as the hook read it before."""
-        other = any(not p.alt_copy for p in c.parts)     # a copy of the post on another target is not another part
+        an absolute path to a regular file of at most 256 KiB, on a line where the gate finds no other part. A
+        relative or `~` path names a file in the command's folder or home, which the hook does not know. Anything not
+        read stays unseen, so the post asks and gets no standing grant (#208). A required executor reads none:
+        tool-selected host paths, symlinks included, are never read before the worker, and `_rules` refuses the call.
+        The copies of the post on its other targets get the text too (`gate.fill_body`), and the line as read before
+        #399 (`floor`) has its own body file read the same way, as the hook read it before.
+
+        Another part in either reading (a command, a redirection to a file, an assignment, a wrapper the gate does
+        not see through, an ssh hop, the code around a call) may change the file after this read and before gh
+        reads it, or give gh another file by that path. So on such a line the file stays unread and the post asks
+        once (#343). A copy of the post on another target is the post itself, not another part. Returns the files
+        left unread for that reason alone, so the card can say why (`gate.UNSEEN_ON_LINE`)."""
+        alone = all(p.alt_copy for x in _readings(c) for p in x.parts)
+        held: list[str] = []
         for x in _readings(c):
-            if not x.text_file or x.text or other or not self.settings.read_body_files or self.executor_required:
+            if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
                 continue
             try:
                 p = Path(x.text_file)
@@ -413,11 +417,15 @@ class Gate:
                        for y in (p, Path(os.path.realpath(p)))):
                     continue
                 if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
+                    if not alone:
+                        held.append(x.text_file)
+                        continue
                     gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
                     if not x.link:
                         x.link = str(p)
             except OSError:
                 pass
+        return held
 
     def _rule_key(self, tool: str, args: Mapping, c: gate.Classification, d: gate.Decision) -> str:
         # An "always" answer must not cover a different public or irreversible act, or different code the
@@ -528,9 +536,9 @@ class Gate:
         """Classification and the rule outcome (policies, then the registry risk floor)."""
         action = {"tool": tool, "args": args}
         c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
-        self._load_body_file(c)
+        held = self._load_body_file(c)
         today = _dt.date.today().isoformat()
-        ctx = {"spent_today": self._spent.get(today, 0.0)}
+        ctx = {"spent_today": self._spent.get(today, 0.0), "held_body_files": held}
         d = gate.decide(c, self.policies(), ctx)
         if self._policy_error:
             d.reason += f" (policy error, defaults used: {self._policy_error[:120]})"

@@ -6462,6 +6462,10 @@ def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
 
 UNSEEN_BODY = ("the gate cannot read the body (stdin, a file it did not read, $(..) or a variable); "
                "pass the text inline or as an absolute --body-file path")
+# A body file the caller left unread because the line does more than post (#343, ``held_body_files``): the rest of the
+# line may change the file before gh reads it, so an absolute path alone does not get it read.
+UNSEEN_ON_LINE = ("the gate did not read the body file, since the line does more than post and could change the "
+                  "file before gh reads it; run the post on a line of its own, or pass the text inline")
 
 
 def fill_body(c: Classification, text: str) -> None:
@@ -6519,7 +6523,8 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     posting violations (a body the gate cannot read is one) and the operator floor. A deny entry wins
     over everything, and so does a category line or rule that denies any part of a compound line. A line
     with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
-    `context` may carry `spent_today` for the daily budget.
+    `context` may carry `spent_today` for the daily budget, and `held_body_files`: the body files the caller left
+    unread because the line does more than post (#343), whose posts get UNSEEN_ON_LINE for their unseen note.
 
     On a compound line, a rule keyed on `command` that would lower the line (its decision is below the matrix cell
     and category line, or it is an allow or log rule that names opaque_exec) must match the line as before and also
@@ -6657,6 +6662,7 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
 
     violations: list[str] = []
     unseen = body_unseen(eff)
+    held_files = ctx.get("held_body_files") or ()
     applies_to = posting.get("applies_to") or POSTING_DEFAULT
     # Whether the combined classification alone would run the checks (kept for the line-wide
     # unseen note below): its category is under applies_to, or it is a close or merge carrying
@@ -6707,7 +6713,7 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
                            exposure=p.exposure)
         found += check_scrub(p.text, pol.get("scrub"), title=p.title, exposure=p.exposure)  # D-033
         if p_unseen:  # the checks above saw only part of this post, so they cannot pass it
-            found.append(UNSEEN_BODY)
+            found.append(UNSEEN_ON_LINE if p.text_file in held_files and not p.text else UNSEEN_BODY)
             post_unseen_seen = True
         found_on[id(p)] = found
         if p.alt_copy:
