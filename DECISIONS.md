@@ -1920,32 +1920,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the last value and each value with the first and the last key. bash keeps one of those two pairs. Checking each pair
   made `export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.{1..1000} GIT_CONFIG_VALUE_0=x{1..1000}; git status` a
   million pairs, 31 s of CPU, where main takes 0.07 s. Of the words bash makes, a part is kept only when the words as
-  written do not give it, so a word outside a set is read once: `declare 'a[$(rm -rf build)]' {X,Y}` has main's 2 parts, not 4. The builtin's checks
-  read the commands in each word again, so a word with n command or process substitutions now takes 4 x (n + 1)² times
-  its share of the third budget. A nest of seven `$( )` around a 1,000-word set was read 53,056 times, about 8 s of
-  CPU. It now asks as too large after 56 reads, as many as main makes. A brace set in `printf`'s first word now counts
-  as a command that changes the shell (#394), so an allow rule for `git push --force origin main` no longer lowers
-  `printf {-v,X} y; git push --force origin main`. *Reserved hits.* A `reserved:` entry for a line's old category
-  loses that hit when the line becomes `opaque_exec` or `delete`. `ssh h 'export {PATH,X}=; ls'` under `reserved:
-  [read]` has 1 hit, not main's 2, and still asks, as main decides `ssh h 'export PATH= X=; ls'`. Differential (#423)
-  against main edeb4f89. Built-in corpus: 72,067 actions x 87 policies, lowered 0 pairs, tightened 16,891 pairs on 226
-  actions. The focused corpus adds 291 lines to the 930: `declare -rx`, `typeset -xr`, `readonly`, `local -rx` and
-  `export` git config pairs with and without a set, PATH, LD_PRELOAD and GIT_SSH_COMMAND spelled in a set with line
-  joins and escapes, under `builtin`, `command`, `env`, `sudo`, `ssh` and `bash -c`, and `$( )` nests in a set. A
-  second pass adds 891 more: git config pairs set many times, with the pair that runs a command first, last or in the
-  middle, exec variables a readonly name keeps first, commands in a subscript beside a set, setters before a rule,
-  and everyday lines with braces. The 2,112 lines give 4,462 actions x 87 policies, lowered 0 pairs, tightened 131,769
-  pairs on 1,952 actions. Under the 6 mixed category policies, the built-in corpus lowers 561 pairs on 194 actions and
-  the focused corpus 3,598 pairs on 1,364 actions. Each is the mixed category case above. 21 and 276 of them are git
-  config lines that each value now reads, now `opaque_exec` under `{opaque_exec: allow, read: ask}` and the like. 48
-  of the 276 are lines past the 64-pair bound. Under 5 aimed policies (`reserved: [read]`,
-  `reserved: [delete, local_write, read, credentials, 'target:*/.exo/*']`, `deny: [opaque_exec]`, `deny: [delete]` and
-  an allow rule for `git push --force origin main`), the built-in corpus lowers 6 pairs on 3 actions and the focused
-  corpus 36 pairs on 20 actions. Each is an ssh line that loses a reserved hit as above, and it asks on both trees. No
-  other pair is lower. Left out: a word whose value is the command of an exec variable (`PAGER`, `EDITOR` and the
-  like) is read again in each word, and it takes only its plain share of the budget. So four 1,000-word sets of
-  `PAGER='ssh h ssh h ssh h ssh h ssh h ssh h ls'` and the like take about 3 s of CPU, where main takes 0.06 s. The
-  line asks on both trees. It is left for its own issue.
+  written do not give it, so a word outside a set is read once: `declare 'a[$(rm -rf build)]' {X,Y}` has main's 2
+  parts, not 4. The builtin's checks read the commands in each word again, so a word with n command or process
+  substitutions now takes 4 x (n + 1)² times its share of the third budget. A nest of seven `$( )` around a 1,000-word
+  set was read 53,056 times, about 8 s of CPU. It now asks as too large after 56 reads, as many as main makes. A brace
+  set in `printf`'s first word now counts as a command that changes the shell (#394), so an allow rule for
+  `git push --force origin main` no longer lowers `printf {-v,X} y; git push --force origin main`. *Reserved hits.* A
+  `reserved:` entry for a line's old category loses that hit when the line becomes `opaque_exec` or `delete`. `ssh h
+  'export {PATH,X}=; ls'` under `reserved: [read]` has 1 hit, not main's 2, and still asks, as main decides `ssh h
+  'export PATH= X=; ls'`. Differential (#423) against main edeb4f89. Built-in corpus: 72,067 actions x 87 policies,
+  lowered 0 pairs, tightened 16,891 pairs on 226 actions. The focused corpus adds 291 lines to the 930: `declare -rx`,
+  `typeset -xr`, `readonly`, `local -rx` and `export` git config pairs with and without a set, PATH, LD_PRELOAD and
+  GIT_SSH_COMMAND spelled in a set with line joins and escapes, under `builtin`, `command`, `env`, `sudo`, `ssh` and
+  `bash -c`, and `$( )` nests in a set. A second pass adds 891 more: git config pairs set many times, with the pair that
+  runs a command first, last or in the middle, exec variables a readonly name keeps first, commands in a subscript
+  beside a set, setters before a rule, and everyday lines with braces. The 2,112 lines give 4,462 actions x 87 policies,
+  lowered 0 pairs, tightened 131,769 pairs on 1,952 actions. Under the 6 mixed category policies, the built-in corpus
+  lowers 561 pairs on 194 actions and the focused corpus 3,598 pairs on 1,364 actions. Each is the mixed category case
+  above. 21 and 276 of them are git config lines that each value now reads, now `opaque_exec` under `{opaque_exec:
+  allow, read: ask}` and the like. 48 of the 276 are lines past the 64-pair bound. Under 5 aimed policies (`reserved:
+  [read]`, `reserved: [delete, local_write, read, credentials, 'target:*/.exo/*']`, `deny: [opaque_exec]`, `deny:
+  [delete]` and an allow rule for `git push --force origin main`), the built-in corpus lowers 6 pairs on 3 actions and
+  the focused corpus 36 pairs on 20 actions. Each is an ssh line that loses a reserved hit as above, and it asks on both
+  trees. No other pair is lower. Left out: a word whose value is the command of an exec variable (`PAGER`, `EDITOR` and
+  the like) is read again in each word, and it takes only its plain share of the budget. So four 1,000-word sets of
+  `PAGER='ssh h ssh h ssh h ssh h ssh h ssh h ls'` and the like take about 3 s of CPU, where main takes 0.06 s. The line
+  asks on both trees. It is left for its own issue.
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
   word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was
