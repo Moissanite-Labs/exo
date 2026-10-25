@@ -213,7 +213,12 @@ party, the footer and the scrub. The gate takes the target from `-R` and the ope
   may answer both readings may answer the line ("Who may approve"): `gh pr -b x comment 5` was a
   read, so a seat listed for `github_post` alone does not answer it. When either reading is
   credentials, a store write or a post with an unseen body, the line is answered once, gets no
-  standing grant, and asks in observe mode too.
+  standing grant, and asks in observe mode too. So it is when either reading has a `credentials`
+  or `store_write` part, and a `store_write` part in either reading leaves the principal alone to
+  answer (#447). Both readings of
+  `env; echo x > ~/.exo/policies/gates.yaml; gh pr -R pub/repo comment 5 -b x` have such parts. In
+  `env; gh -R pub/repo release download v1 -D ~/.exo/policies` only the earlier reading writes the
+  store, because gh's own reading takes `release download` for a read (#461).
 
 The gate also keeps every other reading it cannot rule out, and decides the line on each. The
 strictest outcome stands, with the widest exposure, a third party if any reading has one, and every
@@ -313,7 +318,8 @@ ingress client never can (D-026). The allowed list is sent as `approvers` on
 both files allow (`gate.strictest_approvers`); see "Policy changes during a session".
 
 A gh line the gate also reads as before #399 lists only those both readings' categories allow
-("Where a gh command lands").
+("Where a gh command lands"). The `credentials` and `store_write` parts of both readings narrow
+it too (#447, `gate.readings`).
 
 A client answers as a seat by setting `client` to `seat:<name>` and signing the answer with that
 seat's Ed25519 key: `sig = exo.core.approvals.sign_approval(key, request_id, decision, binding,
@@ -323,6 +329,38 @@ signed seat answer is refused as `forbidden`. The public key comes from the bus 
 that document verifies, else from `<keys dir>/<seat>.pub`. Both are store paths (#210, "The store is
 credentials" below): a tool call that writes the registry, the relay database or the keys folder is a
 `store_write`, which only the principal approves.
+
+A line's `credentials` and `store_write` parts narrow the list too, not only the category that
+leads it (#447). Such a line goes to those allowed for its own category and for each such part
+(`gate.call_approvers`). A secret read outranks a store write, so
+`env; echo x > ~/.exo/policies/gates.yaml` and
+`cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` are `credentials`. Their store write
+part keeps them with the principal alone, as `echo x > ~/.exo/policies/gates.yaml` is. The same
+holds behind a wrapper (`sudo sh -c '...'`, `timeout 5 bash -c '...'`), in a subshell, a `$( )` or
+a heredoc, and for a substitution's write after a `cd` into the store (#465):
+`cd ~/.exo/state && env; echo $(cp /tmp/evil x)` is the principal's alone. No standing grant
+covers a line with such a part, and observe mode still asks for it (`gate.no_grant`, see
+"Standing grants"). A secret read alone (`env`, `cat ~/.kube/config`) keeps
+the seats that `approvals.yaml` gives `credentials`. The line's category, its outcome and its
+matrix cell do not change. Other parts do not narrow the list. With
+`credentials: [principal, "seat:builder"]` and `force_push: [principal]`,
+`env; git push --force origin main` still goes to both, as before #447. Reading every part is
+#437.
+
+A file tool that names a secret and a store file is `credentials` too: `apply_patch` on
+`~/.ssh/config` and `~/.exo/policies/gates.yaml`, or `move_file` from `~/.ssh/id_rsa` to
+`~/.exo/policies/gates.yaml`. Each store file such a tool writes, moves, copies or deletes is a
+`store_write` part, so the call is the principal's alone as well. A move, rename or delete of a
+folder that holds the store counts too, as `mv` and `rm` do (`move_file` from `~/.exo` to
+`~/.ssh/x`). So does a tool with a camelCase name (`moveFile`, `deleteFile`). Its category is
+`unknown`, because the gate reads its name as one word, but this check splits the name. A file tool
+that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` from `~/.exo` to
+`~/.ssh/x`, as `cp -r` does), or writes a secret outside the store (`write_file ~/.ssh/config`),
+has no such part and keeps the delegation. With no secret, a file tool's move of a folder that
+holds the store is not read as a store write yet (#494). Nor is a delete of one by a tool with a
+camelCase name (`deleteFile` on `~/.exo`). Its category is `unknown`, so it runs under the default
+policy unless its registry risk is high, where `delete_file` asks the principal. The hook's error
+fallback reads the parts too (see "The store is credentials").
 
 ## Who answered: the connection, not the body (D-039)
 
@@ -626,10 +664,9 @@ They fall in four groups, all from how the gate already handles a secret store:
   `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does.
 
 The differential does not count one more change, because the outcome stays an ask. Beside a store write, the
-line is `credentials`, not `store_write`. So a seat that `approvals.yaml` delegates `credentials` to may answer
-it, where a store write is the principal's alone:
-`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`. Main does the same for any secret on the
-line, `env; echo x > ~/.exo/policies/gates.yaml` included.
+line is `credentials`, not `store_write`: `cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`.
+Before #447 a seat that `approvals.yaml` delegates `credentials` to could answer it, as for any secret on the
+line. Now the store write part keeps it with the principal alone ("Who may approve").
 
 Known limits. A doubled slash or a `..` inside a store name is matched as written. `cat /proc/1/task/1//environ`
 and `read_file /proc/1/task/1//environ` stay reads, as `cat ~/.kube//config` does. On Linux, where `/proc/self`
@@ -1936,6 +1973,11 @@ case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spellin
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
 followed, and the bash tool's `cwd` argument is not read here (the secret-store checks read it, #209).
+A copy or archive of `keys/` that the gate reads only as a key read has no store write part, so a
+seat that `approvals.yaml` delegates `credentials` to may still answer it, as before #447. It asks
+every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,
+`tar cf - -C ~/.exo keys | ...`, `cat < ~/.exo/keys/seat.key > /tmp/k` and
+`cat ~/.exo/keys/seat.key | tee /tmp/k`.
 
 Descriptor paths (#217). `/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/fd/N`, `/proc/<pid>/cwd`,
 `/proc/<pid>/root` and `/proc/<pid>/map_files` (`<pid>` also `self`, `thread-self` or `$$`, with or
@@ -1988,19 +2030,26 @@ One in the redirections of a compound that holds the `cd` (`done < <(sort list)`
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
 policy pattern that does not compile, for example), the hook's fallback card still asks the
-principal alone, once, in observe mode too (#464). Other calls keep their fallback: a read tool
+principal alone, once, in observe mode too (#464). A store write or secret part counts, also one
+of a gh line's reading before #399, as on the normal path (#399, #447). Other calls keep their fallback: a read tool
 runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,
 `rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`) is `credentials`. That covers moving or replacing
 the folder that holds the core sockets too: `mv ~/.exo/run ~/.exo/run.old`,
 `mv /tmp/x ~/.exo/run`, `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`,
-`mkdir -p ~/.exo/run` and `chmod 777 ~/.exo/run` are `credentials`, not `store_write`. It still
-always asks and is never granted, but a seat that `approvals.yaml` delegates `credentials` to
-(or a seat in `default:` with no `credentials:` line) may answer it, where only the principal
-answers a `store_write` (#169, the D-038 amendment; `keys/` was already so). A delete of job
-output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name (`rm ~/.exo/run/exod.sock`)
-stays `store_write`.
+`mkdir -p ~/.exo/run` and `chmod 777 ~/.exo/run` are `credentials`, not `store_write` (#169). It
+still always asks and is never granted. Its store write part keeps the answer with the principal
+alone, whatever `approvals.yaml` delegates (#447, "Who may approve"). Before #447 a seat that
+`approvals.yaml` delegates `credentials` to (or a seat in `default:` with no `credentials:` line)
+could answer it. A copy or archive of `keys/` that the gate reads as a write
+(`cp ~/.exo/keys/seat.key /tmp/k`, `cat ~/.exo/keys/seat.key > /tmp/k`, `tar czf - ~/.exo/keys`)
+has a store write part too, so it is the principal's alone. Some spellings read only as a key read
+and keep the delegation (see "Known limits" above). A file tool's write, move, copy or delete there
+(`write_file` or `delete_file` on `~/.exo/keys/seat.key`) is `credentials` with a store write part
+as well, so it is the principal's alone too. A read alone (`cat ~/.exo/keys/seat.key`, `read_file`
+on it) has none, so such a seat may answer it. A delete of job output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name
+(`rm ~/.exo/run/exod.sock`) stays `store_write`.
 
 What the floor does to a policy's denies. A shell write to the store keeps its own reading
 (`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category
@@ -2013,6 +2062,12 @@ the tool's own category (`delete`). `move_file` and `copy_file` name their files
 `destination`, so that part has no target. So a `local_write` or `delete` deny, a `reserved:` entry, a
 `target:` entry on another file the patch writes and a matrix cell on it still apply. A file tool on a secret store keeps its reading beside `credentials` the
 same way (`read_file ~/.ssh/id_rsa` is denied under `deny: [read]`, as `cat ~/.ssh/id_rsa` is).
+When such a tool also writes, moves, copies or deletes store files, each one is a `store_write`
+part (#447), and so is a folder holding the store that it moves, renames or deletes. So a
+`store_write` deny or `reserved:` entry, or a `target:` entry on any of those files, applies:
+`move_file` from `~/.ssh/id_rsa` to `~/.exo/policies/gates.yaml` is denied under
+`deny: [store_write]`, and `copy_file` from `~/.exo/keys/seat.key` to `~/.exo/policies/gates.yaml`
+under `deny: ["target:*/.exo/policies/*"]`, where they asked before.
 After `cd /dev` or `cd /proc/self/fd`, a line naming a store path (`printf x > update/allowed_signers`)
 has that path as its target, and the descriptor folder is a second store-write part (#464), so a
 `target:/dev*` or `target:/proc*` deny still denies it. On a store-write line, a relative key read after `tar -C` into
