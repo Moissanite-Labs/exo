@@ -27,6 +27,15 @@ def test_every_listener_hears_and_a_failing_one_is_skipped(caplog):
     assert "ValueError" in caplog.text and "British" not in caplog.text  # the error type only, never its text
 
 
+def test_turns_are_counted_per_session():
+    """A listener counts each turn it sees. An undo concerns only the listener that saw the session's last turn, so a
+    stale engine left on the session by an agent rebuild stays out of it."""
+    sid = "host-undo-turns"
+    assert host_undo.latest(sid) == 0
+    assert host_undo.turn(sid) == 1 and host_undo.turn(sid) == 2
+    assert host_undo.latest(sid) == 2 and host_undo.latest(sid + "-other") == 0
+
+
 def test_a_listener_is_held_weakly():
     gone = Listener()
     host_undo.listen(gone)

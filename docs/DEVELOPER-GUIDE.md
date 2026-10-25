@@ -306,7 +306,9 @@ anything kept from the undone turns (D-041), including the text of each `on_comp
 that may quote them. Hermes's CLI and TUI tell only their memory provider about `/undo`, so exo-memory passes the
 notice on with `exo.host_undo.report(session)`. exo-context drops the last undone turn's pins in
 `on_host_undo(session)`, and those of the earlier turns of `/undo N` in the next `select_context`, from its
-`conversation_messages` (#389). A memory provider used beside exo-context in exo-memory's place can do the same.
+`conversation_messages` (#389). A memory provider used beside exo-context in exo-memory's place can do the same. A
+listener calls `exo.host_undo.turn(session)` on each turn it sees, and acts on a notice only when its last number is
+`exo.host_undo.latest(session)`, so an old engine left behind by an agent rebuild stays out of it.
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat
