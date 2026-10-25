@@ -152,11 +152,15 @@ class Classification:
     # The same call as the gate read it before #311, where a shell call's own folder argument made it credentials as
     # a whole (#209). decide takes both readings and the stricter outcome stands.
     also: "Classification | None" = field(default=None, repr=False, compare=False)
+    # The part a sudo command's write took the lead from (#454). decide() also reads the line with that part leading,
+    # as before, and keeps the stricter outcome. None on any other result.
+    displaced: "Classification | None" = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
         d.pop("parts", None)
+        d.pop("displaced")
         d.pop("floor")
         d.pop("alt_copy")
         d.pop("_command_views")
@@ -188,6 +192,9 @@ class Decision:
     # (category, target) of each part a reserved entry matched, once each (D-075). A standing grant for the
     # line's own category must not cover a reserved part outside it, so the targets stay as written here.
     reserved: list[tuple[str, str]] = field(default_factory=list)
+    # A sudo write line read with its displaced part leading asks or denies (#454): the approval is then about that
+    # part too, so it binds to the exact line (binds_exact) and its approvers are those of both categories.
+    displaced_asks: bool = field(default=False, compare=False)
     # The other posts' violations `and N more on other posts` counts, so a merge of a line's readings counts each
     # entry one of them left out (#439 round 13). Not in the ledger view: the count stands for them there.
     hidden: list[str] = field(default_factory=list, repr=False, compare=False)
@@ -195,6 +202,7 @@ class Decision:
     def as_dict(self) -> dict:
         """Ledger view: reserved targets with URL userinfo redacted."""
         d = asdict(self)
+        d.pop("displaced_asks")
         d.pop("hidden")
         d["reserved"] = list(dict.fromkeys((cat, redact_userinfo(t)) for cat, t in self.reserved))
         return d
@@ -439,6 +447,14 @@ class _Cmd:
     subs_met: int = 0            # how many of the line's subs lie in its text and before it, in the lexer's order (#465)
     opens: tuple | None = None   # on a compound's closer: (the compound's first command, the subs met before the
                                  # closer's redirections), which bash expands before the compound runs (#465)
+    stdin_unknown: bool = False  # a stdin the gate cannot read reaches it: a compound's feed or its wrapper's (#316)
+    stdin_apart: bool = False    # a wrapper runs it with the wrapper's stdin, which is not its line's (#316)
+
+
+class _OutSub(str):
+    """The source of a >( ). Its commands are fed what the command around it writes, a stdin the gate cannot read
+    (#316). It stays in the line's substitution sources with the others, so every reader of them still reads it, and
+    is told apart by its type: only _classify_sub reads it as fed."""
 
 
 class _Lexer:
@@ -447,7 +463,7 @@ class _Lexer:
     def __init__(self, src: str, scan: bool = True, nest: int = 0):
         self.s = src
         self.i = 0
-        self.subs: list[str] = []          # sources of $( ), ` ` and <( ) met at this level
+        self.subs: list[str] = []          # sources of $( ), ` `, <( ) and >( ) (an _OutSub) met at this level
         self.pending: list[_Heredoc] = []
         self.scan = scan                   # record _Word.exps, which only _parse's words are read for (_hidden_sets)
         self.covered = 0                   # the source before here lies in a ${..} already recorded
@@ -574,7 +590,8 @@ class _Lexer:
                 self.nest += 1
                 self.run(closer=True)
                 self.nest -= 1
-                self.subs.append(self._source(start, max(start, self.i - 1)))
+                src = self._source(start, max(start, self.i - 1))
+                self.subs.append(_OutSub(src) if ch == ">" else src)
                 w.text += "<(..)"
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
@@ -653,12 +670,14 @@ class _Lexer:
         if self.nest >= _NEST:
             self._cut(w, self.i)
             return
+        out = self.s[self.i:self.i + 1] == ">"
         self.i += 2
         start = self.i
         self.nest += 1
         self.run(closer=True)
         self.nest -= 1
-        self.subs.append(self._source(start, max(start, self.i - 1)))
+        src = self._source(start, max(start, self.i - 1))
+        self.subs.append(_OutSub(src) if out else src)
         w.text += "<(..)"
         w.dynamic = w.started = True
 
@@ -1105,6 +1124,19 @@ _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_g
 # The folder a line entered by `cd` into the store or a descriptor folder (_classify_simple's store_cwd and fd_cwd),
 # for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or ""), or None.
 _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_cd_into", default=None)
+
+# Whether the next line read is fed a stdin whose text the gate cannot read (#316): a >( ) body, a $( ) that
+# inherits such a stdin, the remote command of an ssh that passes its stdin on. The mark travels here, not as a
+# classify_shell argument: classify_shell is a seam other code wraps with a callable of (cmd, depth), so its
+# signature keeps the shape it had. classify_shell takes the mark for the one line it names and clears it;
+# _classify_fed sets it for each line it hands over.
+_fed_stdin: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_fed_stdin", default=False)
+
+# The signal of an ssh part that runs the stdin its line was fed, a stdin the gate cannot read (#316). An ssh whose
+# remote command is that line passes its own stdin on to it, so it runs that stdin too: `ssh a ssh b`, `ssh a 'cd /;
+# ssh b'`, `ssh a ssh b ssh c`. The ssh around reads it from a reading of its remote command it keeps for that alone,
+# and a >( ) body takes it off its own result (_classify_sub), so it names the line it is on.
+_LINE_STDIN = "runs its line's stdin"
 
 
 def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
@@ -2846,7 +2878,7 @@ def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words)
     if prog in _PRIVILEGED_WRAPPERS:
         head.signals.append(prog)
         for p in parts:
-            p.reversibility = "costly" if p.reversibility == "reversible" else p.reversibility
+            _raise_axes(p, reversibility="costly")
     return parts
 
 
@@ -2938,6 +2970,20 @@ def _own_stdin(k: _Cmd) -> bool:
     return bool(k.heredocs or k.herestrings) or any(op in _READ_REDIRS for op, _ in k.redirs)
 
 
+def _wrapped(k: _Cmd, words: list) -> _Cmd:
+    """The command a wrapper k runs (uv run, nsenter, flock, git bisect run...), read as its own command: it keeps
+    k's heredocs and here-strings, and k's stdin for the #316 reading. A stdin of k the gate cannot read reaches it
+    too: k's own `<` from anything but /dev/null, a pipe into k or a compound's feed (`uv run ssh h < cmds.sh`, `cat
+    cmds.sh | uv run ssh h`, `{ uv run ssh h; } < cmds.sh`); a pipe whose text is known reaches it as `piped`. It
+    reads the stdin of a fed line only when k does: k's own `<`, a pipe into k or a compound around k gives it
+    another (`>(uv run ssh h < /dev/null)`). xargs is read so too, which reads more than runs: GNU xargs gives its
+    command /dev/null unless -a names its input file (-o gives it the terminal), so that fails closed."""
+    unread = k.stdin_unknown or k.piped_in or \
+        any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs)
+    return _Cmd(words=words, heredocs=k.heredocs, herestrings=k.herestrings, stdin_unknown=unread,
+                stdin_apart=k.stdin_apart or k.fed or k.piped_in or _own_stdin(k))
+
+
 def _sets_shell_stdin(k: _Cmd, fnames: set) -> bool:
     """Whether the compound's stdin stops being fed after this command. `exec < file` makes the file the
     stdin of every later command in that shell, and bash reaches it however exec is spelled or prefixed
@@ -3013,7 +3059,9 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
     already set keeps it: its own redirection, a pipe from a command inside, or a nested compound's closer
     or pipe (inner closers are fed first). After an `exec < file` inside, nothing more is fed. The closer's
     own redirection wins over a pipe in, and its `<` over its heredoc too (the lexer keeps no order between
-    them), so then nothing is fed. Every other inner command gets all of it, an over-approximation: only
+    them), so then nothing is fed. A feed whose text the gate cannot read — that `<`, or a pipe in whose
+    text is not known — marks the inner commands `stdin_unknown` instead (#316), so a reader of its stdin
+    still asks. Every other inner command gets all of it, an over-approximation: only
     shells, interpreters and gh read it."""
     if src is None and not _own_stdin(closer):
         return
@@ -3022,6 +3070,11 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
     piped = _piped_text(src, taken) if src is not None and not _own_stdin(closer) else None
     if piped is not None:
         texts.append(_Word(piped))
+    # A feed whose text the gate cannot read (#316): the closer's `<` (a file or a descriptor; a lone
+    # `< /dev/null` feeds nothing), or a pipe in whose text is not known. The inner commands are marked
+    # instead of fed, so a reader of its stdin (ssh) still asks.
+    unknown = (any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in closer.redirs)
+               or (src is not None and piped is None and not _own_stdin(closer)))
     i, sets = start, False
     while i < len(cmds) and not sets:
         if i in taken:                  # a nested compound with its own stdin, skipped whole (linear)
@@ -3031,7 +3084,9 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
         sets = _sets_shell_stdin(k, fnames)
         fed = not (sets or _own_stdin(k) or (i > start and k.piped_in))
         k.fed = k.fed or fed            # its own text does not name its stdin (#394)
-        if fed and not redirected:
+        if fed and unknown:
+            k.stdin_unknown = True
+        elif fed and not redirected:
             k.heredocs, k.herestrings = heredocs, texts      # shared, so _once reads them once per line
         i += 1
     if len(cmds) > start:
@@ -3145,9 +3200,9 @@ def _arith_scan(text: str, i: int, nested: bool = True, procsub: bool = False) -
 
 
 def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
-    """A compound value `(..)` that declare parses again as words: the $( ), ` ` and <( ) bodies in it, read in
-    any quoting, and whether it holds what bash evaluates again: an expansion or quoting in a `[key]=` subscript,
-    or with -i (`arith`) an expansion in an element."""
+    """A compound value `(..)` that declare parses again as words: the $( ), ` `, <( ) and >( ) bodies in it,
+    read in any quoting, and whether it holds what bash evaluates again: an expansion or quoting in a
+    `[key]=` subscript, or with -i (`arith`) an expansion in an element."""
     lx, q, start, other = _Lexer(value, scan=False), "", True, False
     lx.i = 1
     while lx.i < len(value):
@@ -3170,12 +3225,14 @@ def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
 
 
 def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: list[str],
-                     late: list[Classification]) -> list[Classification]:
+                     late: list[Classification], inherits: bool = False, line: bool = False) -> list[Classification]:
     """The commands inside the array subscripts of a name-taking builtin's name arguments, whatever their quoting
     (`done`: bodies the line's own parse already classified), and in the values declare evaluates again (into
     `late`, which the line adds after its own $( ) bodies, as it would for the same value unquoted). Any
     expansion there also asks: bash evaluates its value (a variable's, or a $( )'s output) as arithmetic or code
-    too, and a value such as `b[$(cmd)]` runs cmd."""
+    too, and a value such as `b[$(cmd)]` runs cmd. A command in a value read again is fed a stdin the gate cannot
+    read when a $( ) of the line would be, or the builtin has one of its own, set up before it reads the value
+    (`inherits`, #316); `line`: the line itself was fed one."""
     named, valued, operands = _NAME_BUILTINS[prog]
     args = [w.text for w in words]
     names, i, opts = [], 0, True
@@ -3205,9 +3262,12 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
     parts: list[Classification] = []
     # a body the line ran loses its \newlines too in a value bash reads again, but one that holds a single quote or
     # a here-document marker is compared as written (bash may keep its \newline), so a copy of it is read again
-    done_set = set(done)
-    bare = done_set | {re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", d) for d in done
-                       if "\\\n" in d and not re.search("'|<<", d)}
+    def unwrapped(ds: Iterable[str]) -> set[str]:
+        return set(ds) | {re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", d) for d in ds
+                          if "\\\n" in d and not re.search("'|<<", d)}
+
+    done_set, outs = set(done), [d for d in done if isinstance(d, _OutSub)]
+    bare, bare_outs = unwrapped(done), unwrapped(outs)
     for name, dynamic in names:
         m = re.match(r"[^=\[]*\[", name) if prog not in _DECLARES[3:] else None
         end, subs, other = _arith_scan(name, m.end()) if m else (name.find("="), [], False)
@@ -3222,10 +3282,12 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
             odd = odd or dynamic
         elif value and attrs & {"i", "n"}:   # arithmetic, or a name whose subscript runs when the nameref is used
             _, more, odd = _arith_scan(v, 0, nested=False)
-        seen = bare if v != raw else done_set
-        more = [sub for sub in more if sub not in seen]   # a command bash runs only as it reads the value again
+        seen, seen_out = (bare, bare_outs) if v != raw else (done_set, set(outs))
+        # a command bash runs only as it reads the value again; a >( ) body is read as fed, so only a >( ) body of
+        # the line covers it (#316)
+        more = [sub for sub in more if sub not in (seen_out if isinstance(sub, _OutSub) else seen)]
         parts += [classify_shell(sub, depth + 1) for sub in subs if depth < _DEPTH and sub not in done_set]
-        late += [classify_shell(sub, depth + 1) for sub in more if depth < _DEPTH]
+        late += [_classify_sub(sub, depth + 1, inherits, line) for sub in more if depth < _DEPTH]   # #316
         fresh = bool(more or set(subs) - done_set)   # commands the line's own parse did not see
         parts += [_too_deep(cmd)] if fresh and depth >= _DEPTH else []
         if other or odd or more:   # a signal, not an opaque part, so a deny on another part of the line still wins
@@ -3260,9 +3322,10 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
             # #465: a value bash runs again after a `cd` into the store runs there too
             token = _cd_into.set((True, ctx.get("fd_cwd") or "")) if ctx.get("store_cwd") else None
+            fed = bool(ctx.get("subs_fed")) or _stdin_given(k, piped)    # bash reads the value as it runs (#316)
             try:
                 parts += _subscript_parts(words[0].text, words[1:] + k.operands, cmd, depth, ctx.get("subs", []),
-                                          ctx.setdefault("late", []))
+                                          ctx.setdefault("late", []), fed, bool(ctx.get("stdin_unknown")))
             finally:
                 if token is not None:
                     _cd_into.reset(token)
@@ -3272,8 +3335,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
     if sudo:
         parts[0].signals.append("sudo")
-        if parts[0].reversibility == "reversible":
-            parts[0].reversibility = "costly"
+        _raise_axes(parts[0], reversibility="costly")
     if k.heredocs:
         # dash and ash may end the body early and run the rest: read it as commands too. Once per line, under
         # _once's key for a shell reading it: a compound's heredoc reaches every command inside it.
@@ -3289,6 +3351,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_opaque(f"writes to a path from a variable ({t.text[:60]})", cmd))
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
+            if sudo:
+                ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
     hit = _store_touch(k, words, parts, ctx)
     hits = [hit] if hit else []
     if hit and ctx.get("fd_cwd") not in (None, hit):
@@ -3336,8 +3400,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             return []
         if depth >= _DEPTH:
             return [_too_deep(cmd)]
-        return _classify_simple(_Cmd(words=ws, heredocs=k.heredocs, herestrings=k.herestrings), cmd,
-                                inner_depth, ctx, piped)
+        return _classify_simple(_wrapped(k, ws), cmd, inner_depth, ctx, piped)
 
     if prog in _WRAPPERS:
         return _classify_wrapper(prog, words, cmd, depth, inner_words)
@@ -3477,6 +3540,11 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if prog == "ssh" and tail[:1] == ["--"]:      # a `--` right after the host ends ssh's options
             tail = tail[1:]
         inner = " ".join(tail)
+        # ssh's stdin is its line's, and the line was fed one the gate cannot read: a >( ) body, or the remote
+        # command of an ssh that passes its stdin on (#316). A command's own `<`, a pipe into it or a compound
+        # around it gives it another, and so does one of these around a wrapper that runs it (_wrapped).
+        fed_line = bool(ctx.get("stdin_unknown")) and not (k.fed or k.piped_in or k.stdin_apart or _own_stdin(k))
+        forwards = prog == "ssh" and _ssh_forwards(words, k, piped, i, flags, fed_line)
         if inner and depth >= _DEPTH:
             # A chain past the cap is not read, so it asks (#153). The hops that were read keep the
             # first host as target, so a `target:` deny on it still matches.
@@ -3486,12 +3554,32 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c = classify_shell(inner, inner_depth)
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
-        if prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags):
+        # An ssh that passes a stdin on gives its remote command that stdin, and an ssh there that runs it runs it
+        # on the next host (#316). Only a line read as fed carries the signal. That reading finds the hop alone:
+        # ssh's own part reads the command as before, so a wrapper around ssh still marks it.
+        hop = forwards and bool(inner) and depth < _DEPTH and \
+            _LINE_STDIN in _classify_fed(inner, inner_depth, True).signals
+        fed = []
+        reads = prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags, fed_line)
+        if reads:
             # #240: the login shell on the host runs ssh's stdin. It is read as shell, as for `bash -s`, and asks.
             fed = [_runs_stdin(_opaque(f"ssh {dest} runs its stdin as commands on the remote host"[:120], cmd), k)]
+        elif hop:
+            # #316: ssh passes its stdin on to the remote command, and an ssh in it runs it on the next host.
+            fed = [_runs_stdin(_opaque(f"ssh {dest} passes its stdin to an ssh that runs it as commands"[:120], cmd), k)]
+        # Where the line gives ssh a stdin itself, #240 built the parts that run it into ssh's own part, and the
+        # part that led took the host as its target. One of them could lead while ssh's own part was still private
+        # (`echo 'gh pr merge 1' | ssh $H x`).
+        stdin, direct, lead = None, reads and _stdin_given(k, piped, unread=False), False
+        if fed:
+            if fed_line:
+                fed[0].signals.append(_LINE_STDIN)
             if depth < _DEPTH:
                 fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
-            c = _combine([c, *fed], cmd)
+            lead = direct and _lead([c, *fed]) is not c
+            # A part beside ssh's own, not built into it (#316): sudo or a privileged wrapper around ssh still marks
+            # ssh's own part costly, as when ssh reads no stdin, and the line takes the more severe part.
+            stdin = _combine(fed, cmd)
         dests = [host, dest]
         if dest != old_dest:
             # The gate used to read another word as the host. The line asks and both readings' parts are
@@ -3525,15 +3613,41 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 p.exposure = "internal"
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
-        c.target = dest if "unread hops" in c.signals else (c.target or dest)
+        if not lead:                          # ssh's own part names the host, as when it led before #316
+            c.target = dest if "unread hops" in c.signals else (c.target or dest)
         # #399: the host stands for an empty other target too, as for an empty target, so a rule on it sees each.
         # The copy of the action on it among the parts gets the host as well: a deny, reserved or rule entry on the
         # host's category sees it also when another part of the line outranks this one.
         c.alt_targets = [t for t in dict.fromkeys(t or dest for t in c.alt_targets) if t != c.target]
         c.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in c.parts]
+        if c.displaced is not None:           # #454: the part a sudo write displaced gets the host, as it did
+            q = c.displaced                   # and so do its other targets and their copies (#399)
+            _displace_with(c, target=q.target or dest,
+                           alt_targets=[t for t in dict.fromkeys(t or dest for t in q.alt_targets)
+                                        if t != (q.target or dest)],
+                           parts=[replace(p, target=dest) if p.alt_copy and not p.target else p for p in q.parts])
         if not here:
             c.signals.append("remote host")
-        return [c]
+        if stdin is None:
+            return [c]
+        stdin = copy.deepcopy(stdin)          # as for c: the stdin runs on the remote host (ssh, never mosh)
+        for p in _each_part(stdin):
+            if EXPOSURE.index(p.exposure) < 1:
+                p.exposure = "internal"
+        if lead:
+            stdin.target = dest if "unread hops" in c.signals else (stdin.target or dest)
+        elif not direct:                      # the part #316 adds names the host
+            stdin.target = stdin.target or dest
+        if lead or not direct:
+            # #399, as for c above: where this part names the host for an empty target, it names it for an empty
+            # other target too, and so does the copy of its action there (`echo 'gh pr comment -wR o/r -b hi' | ssh
+            # h`). After a hop that is the first host, where the line hands the stdin over, as for the target.
+            stdin.alt_targets = [t for t in dict.fromkeys(t or dest for t in stdin.alt_targets) if t != stdin.target]
+            stdin.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in stdin.parts]
+        stdin.signals.append("remote host")
+        # The line keeps the first of equal parts. Both parts now run on the remote host, so they can be equal where
+        # the part that runs the stdin led before: it comes first then, and the line is decided as before.
+        return [stdin, c] if lead and _severity(stdin) == _severity(c) else [c, stdin]
     if prog in ("vercel", "netlify"):
         if "login" in argv:
             return [_make("credentials", summary=f"{prog} login", command=cmd)]
@@ -3684,23 +3798,60 @@ def _ssh_options(args: list[str], i: int, after: bool = False) -> tuple[int, str
     return i, letters
 
 
-def _ssh_stdin_runs(words: list, k: _Cmd, piped: str | None, i: int, flags: str) -> bool:
+def _stdin_given(k: _Cmd, piped: str | None, unread: bool = True) -> bool:
+    """Whether the line gives the command a stdin: a pipe in, a heredoc or here-string, a `<` from anything but
+    /dev/null, or, with `unread`, a compound or wrapper around it fed a stdin whose text the gate cannot read
+    (k.stdin_unknown, #316)."""
+    return bool(k.piped_in or piped is not None or k.heredocs or k.herestrings or (unread and k.stdin_unknown)
+                or any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs))
+
+
+def _ssh_stdin_runs(words: list, k: _Cmd, piped: str | None, i: int, flags: str, fed: bool = False) -> bool:
     """Whether the login shell on the remote host runs ssh's stdin as commands (#240). That takes a stdin the line
-    gives ssh (a pipe, a heredoc, a here-string, a `<` from anything but /dev/null), none of `-n`, `-N` and `-f`
-    (ssh then does not read it) and no remote command: ssh reads options after the host too (`ssh host -T`), up
-    to the command, and an empty word is no command. A word that may expand to no word or several (`$A`, a glob)
-    among the options and the host, or as every word of the command, leaves them uncountable, so the stdin is read
-    then too. `words` is ssh's argv as words; `i` is the host's index in words[1:], `flags` the letters before it."""
-    if not (k.piped_in or piped is not None or k.heredocs or k.herestrings
-            or any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs)):
+    gives ssh (a pipe, a heredoc, a here-string, a `<` from anything but /dev/null, or a feed the gate cannot
+    read, #316), none of `-n`, `-N` and `-f` (ssh then does not read it) and no remote command: ssh reads
+    options after the host too (`ssh host -T`), up to the command, and an empty word is no command. A word
+    that may expand to no word or several (`$A`, a glob) among the options and the host, or as every word of
+    the command, leaves them uncountable, so the stdin is read then too, unless a `-n`, `-N` or `-f` comes
+    before that word (#316: `ssh -n "$h" uptime`). `words` is ssh's argv as words; `i` is the host's index in
+    words[1:], `flags` the letters before it. `fed`: ssh's stdin is that of a line fed one the gate cannot read
+    (a >( ) body, a hop's remote command, #316)."""
+    if not (fed or _stdin_given(k, piped)):
         return False
+    sure, j, wild = _ssh_sure_flags(words, i, flags)
+    if set(sure) & set("nNf"):
+        return False
+    texts = [w.text for w in words[1:]]
+    return any(wild[:j]) or " ".join(texts[j:]) == "" or all(wild[j:])
+
+
+def _ssh_sure_flags(words: list, i: int, flags: str) -> tuple[str, int, list[bool]]:
+    """(ssh's flag letters the gate is sure of, where its options after the host end, which of its words may expand
+    to no word or several). Such a word among the options and the host may end the options early or move later
+    ones into the remote command, so only the letters before it are sure: `-n` is an option in `ssh -n "$h"
+    uptime`, not in `ssh $OPTS -n host`. A `--` ends ssh's options, so no letter after it is sure: `-n` is the host in
+    `ssh -- -n "$h"`. `i` is the host's index in words[1:], `flags` the letters before it."""
     texts = [w.text for w in words[1:]]
     wild = [w.dynamic or (not w.quoted and (w.glob or bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
             for w in words[1:]]
-    j, late = (i + 1, "") if "--" in texts[:i] else _ssh_options(texts, i + 1, after=True)
-    if any(wild[:j]):
-        return True
-    return not set(flags + late) & set("nNf") and (" ".join(texts[j:]) == "" or all(wild[j:]))
+    j = i + 1 if "--" in texts[:i] else _ssh_options(texts, i + 1, after=True)[0]
+    first = next((n for n, x in enumerate(wild[:j]) if x), j)
+    if first > i:
+        return flags + _ssh_options(texts[:first], i + 1, after=True)[1], j, wild
+    sure = texts[:first]
+    return _ssh_options(sure[:sure.index("--")] if "--" in sure else sure, 0)[1], j, wild
+
+
+def _ssh_forwards(words: list, k: _Cmd, piped: str | None, i: int, flags: str, fed: bool = False) -> bool:
+    """Whether ssh passes a stdin of its line on to the remote host (#316): the line gives it one, as for
+    _ssh_stdin_runs, and none of `-n`, `-N` and `-f`, before the host or after it, keeps ssh from reading it. Its
+    remote command is then a line fed that stdin, and an ssh in it with no stdin of its own runs it on the next
+    host. A remote `bash` there already asks."""
+    if not (fed or _stdin_given(k, piped)):
+        return False
+    texts = [w.text for w in words[1:]]
+    late = "" if "--" in texts[:i] else _ssh_options(texts, i + 1, after=True)[1]
+    return not set(flags + late) & set("nNf")
 
 
 def _ssh_setting(text: str) -> tuple[str, str]:
@@ -3947,8 +4098,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             nested(v, f"git {sub} option")
         if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:
             parts.append(_opaque("git bisect run runs a command per step", cmd))
-            parts += _classify_simple(_Cmd(words=words[i + 2:], heredocs=k.heredocs, herestrings=k.herestrings),
-                                      cmd, depth + 1, ctx, piped)
+            parts += _classify_simple(_wrapped(k, words[i + 2:]), cmd, depth + 1, ctx, piped)
         if sub == "submodule":
             j = 0
             while j < len(rest) and rest[j].startswith("-") and rest[j] != "--":
@@ -3970,8 +4120,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             elif key in _SSH_EXEC_SETTINGS:
                 c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
                 if c is not None and key == "remotecommand":
-                    if EXPOSURE.index(c.exposure) < 1:
-                        c.exposure = "internal"
+                    _raise_axes(c, exposure="internal")
                     c.signals.append("remote host")
             elif key in _SSH_LIB_SETTINGS and value.strip().lower() != "internal":
                 parts.append(_opaque(f"ssh {_SSH_LIB_SETTINGS[key]} loads a library", cmd))
@@ -4211,12 +4360,64 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     return ""
 
 
+def _displace_with(c: Classification, **changes) -> None:
+    """Give the part a sudo write copy displaced (#454) a change made to the copy after it was made: the ssh host as its
+    target, or a raise in place (_raise_axes). That part is shared with stored results (_own_copy), so a changed copy
+    of it takes its place, also in c.parts."""
+    old = c.displaced
+    if old is None:
+        return
+    lead = replace(old, **changes)
+    c.parts, c.displaced = [lead if q is old else q for q in c.parts], lead
+
+
+def _raise_axes(c: Classification, exposure: str = "private", reversibility: str = "reversible") -> None:
+    """Raise c's exposure and reversibility in place to at least these: a remote command runs on the host, sudo and
+    the privileged wrappers make a reversible part costly. The part a sudo write copy displaced (#454) is raised with
+    it, so the two rank and decide alike: ssh -o RemoteCommand raised the copy alone, and _combine then ranked the
+    copy at its displaced part's old axes, where an earlier costly part took its place."""
+    def up(p: Classification) -> tuple[str, str]:
+        return (max(p.exposure, exposure, key=EXPOSURE.index),
+                max(p.reversibility, reversibility, key=REVERSIBILITY.index))
+    c.exposure, c.reversibility = up(c)
+    if c.displaced is not None and up(c.displaced) != (c.displaced.exposure, c.displaced.reversibility):
+        _displace_with(c, **dict(zip(("exposure", "reversibility"), up(c.displaced))))
+
+
+def _lead(parts: list[Classification]) -> Classification | None:
+    """The part _combine keeps: the first credentials part, else the first store write, else the most severe."""
+    credentials = [p for p in parts if p.category == "credentials"]
+    store = [p for p in parts if p.category == "store_write"]
+    c = credentials[0] if credentials else (store[0] if store else _most_severe(parts))
+    if c is not None and c.displaced is not None:
+        # #454: match _combine's ranking before a sudo write displaced a read, also when ssh asks which part leads
+        # before filling the host (#316). Selection stays pure: only _combine changes the summary and parts.
+        at = max(range(len(parts)), key=lambda i: (*_severity(parts[i])[:3], False) if parts[i].displaced is not None
+                 else _severity(parts[i]))
+        before = parts[at].displaced or parts[at]
+        if _severity(before)[3]:
+            return before
+    return c
+
+
 def _combine(parts: list[Classification], cmd: str) -> Classification:
     """The most severe part, with every part's signals. A store write outranks everything but credentials."""
     signals = [s for p in parts for s in p.signals]
-    credentials = [p for p in parts if p.category == "credentials"]
-    store = [p for p in parts if p.category == "store_write"]
-    c = credentials[0] if credentials else (store[0] if store else (_most_severe(parts) or _make("shell", command=cmd)))
+    c = _lead(parts) or _make("shell", command=cmd)
+    if c.displaced is not None:
+        # #454: the copy of a sudo write that a nested line (a $( ), an ssh hop) leads with is a costly write here, so
+        # it would also take the lead from a part it ties with, which led before as the first of the tie. So the
+        # parts are ranked as before too, each copy as a read with its own axes, which _raise_axes keeps in step with
+        # its displaced part's. A part that outranks a read leads again: an unknown program (`echo $(sudo echo hi >
+        # /tmp/f) $(foo)`), or ssh running its stdin. Any other is the part the copy displaces, and the summary names
+        # it, so a rule on the repo of `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line.
+        at = max(range(len(parts)), key=lambda i: (*_severity(parts[i])[:3], False) if parts[i].displaced is not None
+                 else _severity(parts[i]))
+        before = parts[at].displaced or parts[at]
+        if _severity(before)[3]:
+            c = before
+        elif before is not c.displaced:
+            c.summary, c.displaced = f"{before.summary or before.category}, write {c.target}"[:120], before
     if c.own_signals is None:
         c.own_signals = list(c.signals)
     c.signals = list(dict.fromkeys(c.signals + signals))
@@ -4774,7 +4975,9 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
 
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part. Within one top-level call a line is
-    classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy."""
+    classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy. A line
+    read under the _fed_stdin mark (#316) is a different read of the same text, so the mark is part of the key;
+    the mark names one line, and reading that line spends it."""
     seen = _shell_seen.get()
     if seen is None:
         token = _shell_seen.set({})
@@ -4782,12 +4985,15 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
             return classify_shell(cmd, depth)
         finally:
             _shell_seen.reset(token)
+    fed = _fed_stdin.get()
+    if fed:
+        _fed_stdin.set(False)
     # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it.
-    key = ("shell", cmd, depth, _budgets(), _cd_into.get())
+    key = ("shell", cmd, depth, _budgets(), _cd_into.get(), fed)
     if key not in seen:
         own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
-            seen[key] = _classify_shell(cmd, depth)
+            seen[key] = _classify_shell(cmd, depth, fed)
         finally:
             _own_text.reset(own)
     return _own_copy(seen[key])
@@ -4845,14 +5051,41 @@ def _weigh(line: Classification, whole: Classification, cmd: str) -> Classificat
     return line
 
 
-def _classify_shell(cmd: str, depth: int) -> Classification:
+def _classify_fed(cmd: str, depth: int, fed: bool) -> Classification:
+    """classify_shell(cmd, depth), for a line fed a stdin the gate cannot read when `fed` (#316)."""
+    mark = _fed_stdin.set(fed)
+    try:
+        return classify_shell(cmd, depth)
+    finally:
+        _fed_stdin.reset(mark)
+
+
+def _classify_sub(sub: str, depth: int, fed: bool, line: bool = False) -> Classification:
+    """A substitution's body, read as fed a stdin the gate cannot read when `fed` or when it is a >( ) (#316). An ssh
+    in it that runs that stdin runs the stdin of the line around it only when that line was fed one (`line`) and the
+    body is no >( ), whose stdin is what the command around it writes; else its signal stays in the body."""
+    out = isinstance(sub, _OutSub)
+    c = _classify_fed(sub, depth, fed or out)
+    if (out or not line) and _LINE_STDIN in c.signals:
+        c.signals.remove(_LINE_STDIN)
+    return c
+
+
+def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classification:
     # A run of stand-in lines (_Lexer._cut), also one written by hand, is one unread part, taken in one step so that no
     # number of them recurses. The lines after it end here-doc bodies, and are read as any line.
     if m := _STAND_INS.match(cmd or ""):
         rest = cmd[m.end():]
-        return _combine([_unread_nest(), classify_shell(rest, depth)], cmd) if rest else _unread_nest()
+        # the rest is the same line, read the same way
+        return _combine([_unread_nest(), _classify_fed(rest, depth, stdin_unknown)], cmd) if rest else _unread_nest()
     cmds, subs, func = _parse(cmd or "")
-    ctx: dict = {"subs": subs}
+    # A $( ) inherits the stdin of the command it is in, so on a line fed a stdin the gate cannot read, or where a
+    # pipe or a compound feeds a command, an ssh in it reads a stdin the gate cannot read (#316). A command's own `<`
+    # is set up after its words are expanded. A >( ) body is fed what the command around it writes, and its stdin
+    # is never its line's. A value declare reads again runs its $( ) the same way (_subscript_parts).
+    inherits = stdin_unknown or any(k.piped_in or k.stdin_unknown or (k.fed and bool(k.heredocs or k.herestrings))
+                                    for k in cmds)
+    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits}
     if into := _cd_into.get():            # a $( ) on a line that entered the store runs in it (#465)
         ctx["store_cwd"] = True
         if into[1]:
@@ -4894,16 +5127,29 @@ def _classify_shell(cmd: str, depth: int) -> Classification:
         seed = there if there and j >= upto and not any(j in r for r in early) else None
         token = _cd_into.set(seed) if seed else None
         try:
-            got = [classify_shell(sub, depth + 1) if depth < _DEPTH else _too_deep(cmd)]
+            got = [_classify_sub(sub, depth + 1, inherits, stdin_unknown) if depth < _DEPTH else _too_deep(cmd)]
         finally:
             if token is not None:
                 _cd_into.reset(token)
-        parts += _given_stdin(got, lambda: None, ctx) if given else got
+        parts += _given_stdin(got, lambda: None, ctx) if given or isinstance(sub, _OutSub) else got
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
     setters = [k.own for k in cmds if _sets_state(k)] + ([None] if func else [])
-    c = combined = _combine(parts, cmd)
+    # #454: bash opens a redirection's file as the calling user, before sudo runs, so the write of `sudo echo hi >
+    # /tmp/f` happens either way. Sudo makes the command's own read costly, so it outranked the write. When such a
+    # part leads the line, a copy of the first sudo write with its cost leads in its place, so the line has the
+    # category it has without sudo. Every other part ranks below the copy, and a part that outranks the read (an
+    # unknown program) keeps the lead. The copy keeps the part it displaced, so decide() still reads the line with
+    # that part leading (a rule on a gh read's repo), and its summary names both. The parts stay as they are.
+    lead, writes = _most_severe(parts), ctx.get("sudo_writes")
+    if writes and lead and lead.category in ("read", "shell") and lead.exposure == "private" and not lead.third_party:
+        top = replace(writes[0], reversibility=lead.reversibility, displaced=lead,
+                      summary=f"{lead.summary or lead.category}, write {writes[0].target}"[:120])
+        c = combined = _combine([top, *parts], cmd)
+    else:
+        c = combined = _combine(parts, cmd)
+
     if c.category == "credentials":
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
         c = _weigh(c, combined, cmd)
@@ -5778,6 +6024,11 @@ def _patch_paths(text: str) -> list[str]:
 
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
                   "src", "dest", "destination")
+# Name words of a file tool that moves or renames what it names, as `mv` does, or deletes it, as `rm` does (#447).
+# They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` keeps as one word.
+_WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
+                         "revoke", "trash"))
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 @_brace_budget
@@ -6134,6 +6385,14 @@ def _repo_claude(folder: str) -> bool:
     return not any(s in singles or (a, s) in pairs for a, s in zip(parts[n - 1:], parts[n:]))
 
 
+def _store_part(path: str, summary: str) -> Classification:
+    """The store write part of a file tool that also names a secret (#447): the call stays credentials, and
+    call_approvers reads the part, so only the principal answers it, as for `cat ~/.ssh/id_rsa > <store file>`."""
+    c = _make("store_write", summary=summary[:120], target=path, link=path)
+    c.signals.append("exo store")
+    return c
+
+
 @_brace_budget
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
@@ -6176,6 +6435,8 @@ def _classify_call(action: Any) -> Classification:
         if cat != "local_write":    # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
+        if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
+            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p)]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -6199,12 +6460,18 @@ def _classify_call(action: Any) -> Classification:
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
         if secret:
             cat = "credentials"
-        store = ""
-        if not secret and cat not in ("read", "web_read"):
-            store = next((v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
-                          else [args.get(k)]) if isinstance(v, str) and is_store_path(v, ancestors=cat == "delete")), "")
-            if store and cat in ("local_write", "delete"):
+        stores: list[str] = []
+        if own not in ("read", "web_read"):
+            # A delete reaches the store through a folder that holds it, as `rm` does. Beside a secret, so does a
+            # move or rename, as `mv` does, and a tool whose camelCase name says so (#447). A move of such a folder
+            # with no secret is #494.
+            wide = own == "delete" or bool(secret) and not _WIDE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+            named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
+                     else [args.get(k)]) if isinstance(v, str)]
+            stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide)))
+            if stores and not secret and cat in ("local_write", "delete"):
                 cat = "store_write"
+        store = stores[0] if stores and not secret else ""
         target = _first(args, _TARGET_KEYS)
         text = _first(args, _TEXT_KEYS) if cat in OUTBOUND else ""
         title = _first(args, _TITLE_KEYS) if cat in OUTBOUND else ""
@@ -6237,6 +6504,8 @@ def _classify_call(action: Any) -> Classification:
             out = own in OUTBOUND
             c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
+        if secret:      # #447: each store path beside a secret is a part, so only the principal answers
+            c.parts += [_store_part(p, f"{tool} {p}") for p in stores]
     for r in readings(c):
         r.tool = tool
         _local_post(r)
@@ -6696,6 +6965,20 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         base = replace(c, alt_targets=[])
         return _strictest([decide(base, pol, ctx)] + [decide(replace(base, target=t), pol, ctx) for t in c.alt_targets],
                           [""] + [f" (if it lands on {_target_names([t])})" for t in c.alt_targets])
+    if c.displaced is not None:
+        # #454: a sudo write leads the line in place of the command's own costly part. The line is also decided with
+        # that part leading, as before, with its other targets (#399), and the stricter stands. On a tie the decision
+        # keeps both reasons too, as bump() does for an equal level.
+        p = c.displaced
+        d = decide(replace(c, displaced=None), pol, ctx)
+        alt = decide(replace(c, category=p.category, cost=p.cost, summary=p.summary, target=p.target, own=p.own,
+                             alt_targets=list(p.alt_targets), displaced=None), pol, ctx)
+        both = _strictest([d, alt], ["", ""])
+        if alt.outcome == d.outcome:
+            both.reason = "; ".join(dict.fromkeys(d.reason.split("; ") + alt.reason.split("; ")))
+            both.rule = alt.rule if d.rule == "matrix" else d.rule
+        both.displaced_asks = OUTCOMES.index(alt.outcome) >= OUTCOMES.index("ask")
+        return both
     if _one_text(c):
         return _decide(c, pol, ctx, None)
     passed: list[Mapping] = []
@@ -6927,7 +7210,8 @@ _HIDDEN = re.compile(r"and (\d+) more on other posts")
 def _strictest(ds: list[Decision], why: list[str]) -> Decision:
     """The strictest of several decisions of one line, with the widest exposure, a third party if any has one, and
     every violation and reserved part any of them met (#399). ``why[i]`` ends the reason when ``ds[i]`` stands. A
-    violation two posts of one name both meet is listed as often as one decision lists it."""
+    violation two posts of one name both meet is listed as often as one decision lists it. An ask from the displaced
+    part of a sudo write line in any of them (#454) stays known, so the hook narrows who may answer for it."""
     i = max(range(len(ds)), key=lambda n: _strictness(ds[n]))
     violations: list[str] = []
     for d in ds:
@@ -6948,7 +7232,8 @@ def _strictest(ds: list[Decision], why: list[str]) -> Decision:
     return replace(ds[i], reason=ds[i].reason + why[i], violations=violations,
                    exposure=EXPOSURE[max(EXPOSURE.index(d.exposure) for d in ds)],
                    third_party=any(d.third_party for d in ds),
-                   reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)), hidden=hidden)
+                   reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)), hidden=hidden,
+                   displaced_asks=any(d.displaced_asks for d in ds))
 
 
 def _target_names(targets: Iterable[str]) -> str:
@@ -6967,12 +7252,15 @@ def summarize(c: Classification, d: Decision, default: str = "skip") -> str:
     if c.cost:
         axes.append(f"cost {c.cost:g}")
     line = f"{bits[0]} ({', '.join(axes)})."
-    if c.alt_targets:
+    alts = c.alt_targets or (c.displaced.alt_targets if c.displaced is not None and d.displaced_asks else [])
+    if alts:
         # #399: the gate cannot tell which of these gh acts on. The decision covers each, and so does the question.
-        line += f" It may land on {_target_names(c.alt_targets)} instead."
+        line += f" It may land on {_target_names(alts)} instead."
     line += f" Why: {d.reason}."
-    if c.link:
-        line += f" Link: {c.link}."
+    # #454: when the part a sudo write displaced asks, the link is that part's (a gh read's issue), as before
+    link = (c.displaced.link if c.displaced is not None and d.displaced_asks else "") or c.link
+    if link:
+        line += f" Link: {link}."
     line += f" Default if no reply: {default}."
     return " ".join(line.split())
 
@@ -7321,11 +7609,14 @@ DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, 
 def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     """True when an approval or grant must cover only this exact call: outward acts (``is_outward``),
     code the gate cannot see into (D-038), so one "always" never covers a different script, a call no grant may
-    cover (``no_grant``, a part of it too, #311), and a line the gate reads more than one way (#399): a gh command
+    cover (``no_grant``, a part of it too, #447), and a line the gate reads more than one way (#399): a gh command
     that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
-    with a ``floor``, whose stricter reading may be another act."""
+    with a ``floor``, whose stricter reading may be another act. A sudo write also binds when its displaced
+    part names a target or asks with that part leading (#454)."""
+    q = c.displaced
     return (is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
-            or bool(c.alt_targets) or c.floor is not None)
+            or bool(c.alt_targets) or c.floor is not None
+            or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
 
 
 def readings(c: Classification) -> list[Classification]:
