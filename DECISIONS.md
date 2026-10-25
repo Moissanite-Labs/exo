@@ -2020,6 +2020,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   approvers, the grant key, the reserved check and "once") over those 8,330 lines under the 26 policies finds no
   pair looser than on main, apart from the grant move above where only the write asks. Before the reserved check
   above, it found 2,600 such pairs.
+  *Integration 2026-10-24 (#454 with #316):* the pure `_lead` selector uses the same displaced-part ranking as
+  `_combine`. An ssh line with a sudo write and unread stdin therefore fills the host on the opaque stdin part
+  that leads, as before: `ssh -p 2? prod 'sudo echo hi > /tmp/f' < x.sh` keeps `prod` as its target, so a deny on
+  opaque execution at that host still denies. The two existing stdin/sudo regression rows fail without this join.
   *Amendment 2026-10-22 (issue #316, follow-up to #240):* ssh's stdin reached its login shell in five more ways the
   gate did not see, so the line read as plain `ssh` and was allowed, even under category denies. (1) A compound fed a
   stdin the gate cannot read: the closer's `<` from anything but a lone `/dev/null`, or a pipe in whose text is not
