@@ -2092,6 +2092,21 @@ word and every word it expands to are checked, and a hit on any counts, so
 checks have their own budget of 4,096 expanded words per tool call, so they never use up the secret-store
 checks' budget, and each spelling is expanded once per line, however many commands use it.
 
+Patch move destinations (#528). Codex `apply_patch` writes the path in `*** Move to:` after an
+`*** Update File:` header. The gate checks both paths, as it checks `*** Add File:`, `*** Delete File:`
+and Exo's `*** Move File: source -> destination` headers. A destination in a protected store is
+`store_write`. A secret destination is `credentials`. Both ask.
+
+Their `local_write` parts keep
+the source and destination's deny and reserved entries. A content line beginning with `+` or a
+space is not a patch header. The checks use the existing path rules, including absolute links,
+home and environment spellings, distinctive relative names and braces.
+
+A relative alias such as
+`pdir/default.yaml`, where `pdir` links to the policies folder, is still outside the store-write
+check until #340's relative-path resolution lands. Secret-path resolution already follows relative
+links. This reads header paths only. It does not parse a patch's hunks or change what the tool accepts.
+
 Known limits. These are classification checks, not a filesystem sandbox: a symlink can change
 between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
 without a link to resolve, so only distinctive names catch a write through it. Only the store roots

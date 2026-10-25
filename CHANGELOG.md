@@ -9,6 +9,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
+- The gate reads Codex `apply_patch` move destinations (`*** Move to:`) as file-write paths (#528).
+  A move into a protected store or secret folder now asks, as an Add or Update header on that path does.
+  Absolute links, home and environment spellings, distinctive relative names and braces use the existing checks.
+  Relative aliases into a non-secret store still need #340's path resolution.
 - `scripts/gate_diff.py` also runs each seed under `cmd` beside an empty `command` for a tool name the gate reads by
   its `terminal` or `shell` suffix, so a head that stops reading `cmd` there shows (#462 review). The summary shows
   each tree's violation total with what `and N more on other posts` counts.
