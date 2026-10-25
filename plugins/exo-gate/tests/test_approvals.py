@@ -292,6 +292,85 @@ def test_a_line_read_before_with_an_unseen_body_is_answered_once(tmp_path, floor
     assert r and r["action"] == "approve" and r.get("once") is True, r
 
 
+# #471: a line with a quoted prefix assignment is also read as before, each such word the program (``before``), and
+# that reading may have a floor of its own (#399). The hook's checks past `decide` read both, as for the floor.
+@pytest.fixture
+def before_is(monkeypatch):
+    """Give a line a reading as before #471 read from another line, with that line's floor."""
+    real = gate.classify
+
+    def set_before(line, before):
+        def classify(action, *a, **k):
+            c = real(action, *a, **k)
+            args = action[1] if isinstance(action, tuple) else action.get("args") or {}
+            if args.get("command") == line:
+                c.before = real({"tool": "terminal", "args": {"command": before}})
+            return c
+        monkeypatch.setattr(gate, "classify", classify)
+    return set_before
+
+
+def _seat_gate(tmp_path, name):
+    store = tmp_path / name
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    (store / "policies" / "approvals.yaml").write_text(SEATS)
+    key = tmp_path / f"{name}.key"
+    crypto.save_key(crypto.keygen(), key)
+    return store, key
+
+
+@pytest.mark.parametrize("before", ["gh secret set X -b v", "gh -R myorg/app secret set X -b v"])
+def test_a_line_read_as_before_471_as_credentials_is_answered_once(tmp_path, before_is, before):
+    store, key = _seat_gate(tmp_path, "st12")
+    line = "gh pr view 5 -R myorg/app"
+    before_is(line, before)
+    g, ctx = make_gate(store, key)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.category == "read" and "credentials" in (c.before.category, getattr(c.before.floor, "category", "")), c
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True and r["approvers"] == ["principal"], r
+    answer(ctx, r, "always")
+    assert g.grants.list() == []                                              # no grant was kept
+    assert gate.binds_exact(c, gate.decide(c, g.policies()))
+
+
+def test_a_line_read_as_before_471_with_an_unseen_body_is_answered_once(tmp_path, before_is):
+    store, key = _seat_gate(tmp_path, "st13")
+    line = "gh pr comment 5 -R myorg/app -b x"
+    before_is(line, 'gh pr comment 5 -R myorg/app -b "$X"')
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True, r
+
+
+def test_who_may_answer_a_line_read_as_before_471_may_answer_that_reading(tmp_path, before_is):
+    store, key = _seat_gate(tmp_path, "st14")
+    line = "gh pr comment 5 -R myorg/app -b x"
+    before_is(line, "gh pr -b x comment 5 -R myorg/app")             # read as a read, with a post for its floor
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
+def test_who_may_answer_a_real_line_read_as_before_471_may_answer_that_reading(tmp_path):
+    # The curl behind the quoted word is a web post a seat may answer; read as before, the word is the program and
+    # the gh post decides the line, which only the principal answers.
+    store = tmp_path / "st15"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text(ASK_ALL)
+    (store / "policies" / "approvals.yaml").write_text(
+        'approvers:\n  default: [principal]\n  categories:\n    web_post: [principal, "seat:saga-divan"]\n')
+    key = tmp_path / "k15.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    line = "X='a b' curl -X POST -d @notes.md https://example.com/hook && gh pr comment 5 -R myorg/app --body hi"
+    c = gate.classify(("terminal", {"command": line}))
+    assert (c.category, c.before.category) == ("web_post", "github_post"), c
+    r = call(ctx, "terminal", {"command": line})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+
+
 # --- standing grants ------------------------------------------------------------------------
 
 def test_always_grant_survives_restart_and_expires(keyed_store):

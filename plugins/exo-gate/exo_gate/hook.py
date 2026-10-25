@@ -72,8 +72,11 @@ def _readings(c: gate.Classification) -> tuple:
     """The line as the gate reads it and, when gh reads it otherwise than the gate did before #399 (a subcommand past
     an option or behind an expansion, gh api's method), as it read it then (``floor``). `decide` keeps the stricter
     of the two, and so does each check the hook makes past it: the required executor's body check, who may answer,
-    "once" and the categories that never get a grant."""
-    return (c,) if c.floor is None else (c, c.floor)
+    "once" and the categories that never get a grant. A line with a quoted prefix assignment is also read as before
+    #471 (``before``), each such word the program, with a floor of its own: `decide` reads those too, and so do these
+    checks."""
+    own = (c,) if c.floor is None else (c, c.floor)
+    return own if c.before is None else own + _readings(c.before)
 
 
 def _no_grant(c: gate.Classification) -> bool:
@@ -396,8 +399,8 @@ class Gate:
         command's folder or home, which the hook does not know. Anything not read stays unseen, so the post
         asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
         symlinks included, are never read before the worker, and `_rules` refuses the call. The copies of the post
-        on its other targets get the text too (`gate.fill_body`), and the line as read before #399 (`floor`) has
-        its own body file read the same way, as the hook read it before."""
+        on its other targets get the text too (`gate.fill_body`), and the line as read before #399 (`floor`) or
+        before #471 (`before`) has its own body file read the same way, as the hook read it before."""
         for x in _readings(c):
             if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
                 continue
@@ -525,8 +528,6 @@ class Gate:
         action = {"tool": tool, "args": args}
         c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
         self._load_body_file(c)
-        if c.before is not None:          # the call read as before #471, which decide reads too
-            self._load_body_file(c.before)
         today = _dt.date.today().isoformat()
         ctx = {"spent_today": self._spent.get(today, 0.0)}
         d = gate.decide(c, self.policies(), ctx)

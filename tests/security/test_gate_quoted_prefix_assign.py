@@ -7,9 +7,11 @@ logs, that unknown program's ask was dropped too, since the opaque floor fired o
 A word is now an assignment when its NAME= is unquoted in the source, and the floor fires on an
 unknown program as well. Classification and decision only; nothing is executed.
 """
+from collections import Counter
+
 import pytest
 
-from exo.gate import CATEGORIES, binds_exact, classify, decide, normalize_policies
+from exo.gate import CATEGORIES, OUTCOMES, binds_exact, classify, decide, normalize_policies
 
 DEFAULT = normalize_policies(None)
 DENY = normalize_policies({"gates": {"deny": ["delete"]}})
@@ -255,3 +257,56 @@ def test_the_reading_as_before_is_kept_only_for_a_quoted_assignment():
     assert c.category == "store_write", c          # the cd is read: yarn runs in /dev
     assert c.before is not None and c.before.category == "publish", c.before
     assert "before" not in c.as_dict()
+
+
+# gate_diff's posting policies. Two posts to one PR that both miss the footer list that violation twice, named after
+# the post, once a `cd` or `pushd` into the store, a descriptor folder or a secret folder is on top (#468). The line
+# read as before lists it twice; the stricter of both readings keeps each entry as often as either lists it (#439's
+# merge), not once.
+POSTING_POLICIES = {
+    "posting_footer": normalize_policies({"posting": {"footer": "-- sent by an agent"}}),
+    "posting_close_and_merge": normalize_policies({"posting": {
+        "applies_to": ["github_post", "github_close", "vcs_merge", "message_send"], "footer": "-- bot",
+        "forbid_words": ["done", "secret"]}}),
+    "posting_footer_everywhere": normalize_policies({"gates": {"scopes": {"private": ["*"]}}, "posting": {
+        "footer": "-- bot", "footer_exposures": ["private", "internal", "public"]}}),
+}
+MOVES = ["X='a b' pushd /dev/fd", "X=a\\ b cd ~/.exo/state", "X='a b' command cd ~/.exo/state", "X=a\\ b pushd ~/.ssh",
+         "X=a\\ b command cd ~/.ssh", "X='a b' builtin cd ~/.ssh", 'X="$Y" cd /dev/fd',
+         "X='a b' Y=\"c d\" pushd ~/.exo/state", "X='a b' cd $EXO_HOME/plugins", "X=a\\ b pushd /proc/self"]
+
+
+def _kept(d, before):
+    """Every violation and reserved part of the line decided as before is in ``d``, as often, and no lower."""
+    assert OUTCOMES.index(d.outcome) >= OUTCOMES.index(before.outcome), (d, before)
+    assert not Counter(before.violations) - Counter(d.violations), (d.violations, before.violations)
+    assert set(before.reserved) <= set(d.reserved), (d.reserved, before.reserved)
+
+
+@pytest.mark.parametrize("name", POSTING_POLICIES)
+@pytest.mark.parametrize("move", MOVES)
+def test_two_alike_violations_are_both_kept(name, move):
+    pol = POSTING_POLICIES[name]
+    line = f"{CLEAN} && {move} && gh pr comment 5 {R} --body hi"
+    c = classify(sh(line))
+    d = decide(c, pol)
+    footer = pol["posting"]["footer"]
+    assert d.outcome == "ask" and d.violations.count(f"GitHub PR comment on myorg/app#5: missing footer: {footer}") \
+        == 2, (line, name, d)
+    _kept(d, decide(c.before, pol))
+
+
+@pytest.mark.parametrize("line", [
+    f"{CLEAN} ; X='a b' cd ~/.exo/state ; gh pr comment 5 {R} --body hi ; git push --force origin main",
+    f"{CLEAN} && echo $(X='a b' pushd /dev/fd && gh pr comment 5 {R} --body hi) && gh pr comment 5 {R} --body hi",
+    f"{CLEAN} && bash -c 'X=a\\ b cd ~/.ssh && gh pr comment 5 {R} --body hi' && gh pr comment 5 {R} --body hi",
+    f"{CLEAN} && for i in 1; do X='a b' cd ~/.exo/plugins && gh pr comment 5 {R} --body hi; done",
+    f"gh pr comment 5 {R} --body 'secret done' && X='a b' cd /dev && gh pr merge 5 {R} --squash",
+    "gh -R myorg/app pr comment 5 -b hi && X='a b' pushd ~/.exo/state && gh pr -R myorg/app comment 5 -b hi | cat",
+])
+@pytest.mark.parametrize("name", POSTING_POLICIES)
+def test_the_line_decided_as_before_loses_nothing_in_the_merge(name, line):
+    pol = POSTING_POLICIES[name]
+    c = classify(sh(line))
+    assert c.before is not None, line
+    _kept(decide(c, pol), decide(c.before, pol))

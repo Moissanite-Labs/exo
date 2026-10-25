@@ -872,8 +872,13 @@ a word carry the signal `quoted assignment`, and `decide` also decides the line 
 that now outranks a post (`gh pr comment 5 ... && X='a b' rm -rf /srv/data`) does not lower what
 the post's matrix cell, category line or third-party escalation gave, which read the dominant part
 only (#437). The whole call is also read as before, each quoted prefix assignment the program
-(`Classification.before`), and `decide` decides that reading too: the stricter outcome stands, and
-at an equal one the reserved parts and violations of both. That covers what a quoted word changes
+(`Classification.before`), and `decide` decides that reading too. The two merge as a gh line's
+readings do (#399): the strictest outcome stands, with the widest exposure, the reserved parts of
+both, and each violation as often as one of them lists it. So two posts to one PR that both miss
+the footer after `X='a b' cd ~/.exo/state` list it twice, as the line read as before does. The
+exo-gate hook reads that reading, and its floor, wherever it reads a gh line's floor: a post's body
+file, the required executor's body check, who may answer, "once" and the categories that never get
+a grant. An "always" binds to the exact line when that reading would. That covers what a quoted word changes
 for the commands after it. A `cd` behind one (`X='a b' cd /dev && yarn publish`) moves their
 folder, as bash runs it, so their store write may outrank the publish that a matrix cell denied;
 read as before, the `cd` was an unknown program and the publish still decides. A reserved word
