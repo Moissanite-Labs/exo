@@ -244,17 +244,29 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   gate_diff's `rule_costly_part_deny`), and so does the unsplit line (`sudo ssh host 'cat ~/.kube/config'`), which
   asked on main. The parts stay as written, so a rule or entry keyed on `reversibility` reaches them as on main
   (`sudo ssh host 'ls; cat x'` still denies under a rule that denies a reversible `read`, and under `read: deny`
-  lifted by a rule that allows a costly `read`). gate_diff against main 77274ab9, under its 87 built-in policies and
-  under 57 policies keyed on `reversibility` (rules, lifted category lines, matrix rows, deny and reserved entries),
-  lowers no outcome; the reserved entries that list one part fewer at the same ask are in the D-038 amendment.
+  lifted by a rule that allows a costly `read`). gate_diff against main d79639f1, under its 87 built-in policies, 57
+  policies keyed on `reversibility` (rules, lifted category lines, matrix rows, deny and reserved entries) and 38
+  keyed on targets (`*keys*`, `*run*`, `*plugins*` and other store names as rules, deny and reserved entries, and
+  #468's four), lowers no pair (outcome, reserved hit or posting violation). Each form reaches the plugins folder
+  (#435) as it reaches `policies/` (`cp x ~/.exo/plug$(:)ins/foo/__init__.py`, `cd ~/.e$(:)xo && cp x plugins/foo/x.py`).
   Words that cannot spell a store name keep their class (`cat notes$(date +%F).txt`, `cat $f`,
   `cat ${OUT:-/tmp/out}/report.txt`, `cp x out/$(date +%F).json`), and so does a write whose file name only its folder
   ties to the store
   (`cp x state/$(date +%F).json`, `cp x src/state/$(basename $f)`, `sed -i s/a/b/ src/state/$(git ls-files | head -1)`).
+  A line is read first with its words as written, as main reads it, and that name decides the line and builds its
+  parts as on main, #468's key read beside a store write among them; these forms and readings come after it, and a
+  name they find that is another target is a `credentials` part beside it. So under a rule on `target: '*keys*'`,
+  `cd ~/.exo/state && echo $(cat ../keys/seat; rm -rf x)`, `cd ~/.exo && cat $(ls) keys/seat` and
+  `cd ~/.exo/state && cat ${x-.env} ../keys/seat` deny as on main d79639f1, and under one on `*run*` so does
+  `cd ~/.exo/state && grep -r x .. ../run`.
   This fails closed on a few lines. A word that is a substitution alone after a `cd` into a store folder asks
-  (`cd ~/.kube && echo $(date)`, `kubectl get pods -n $(cat ns.txt)`), and so do `cd ~/.exo && ls principals`, in
-  `run/jobs` `ls ../..`, `cat $(ls)` and `tail -f $(ls -t | head -1)`, a variable that starts a name (`cat ${x}rc`,
-  read as `.*rc`), a read of a folder that holds a store by a name made by output (`cat /tmp/$(cat last)`,
+  (`cd ~/.kube && echo $(date)`, `kubectl get pods -n $(cat ns.txt)`, `cd ~/.exo/policies && echo $(ls)`), also one
+  before the `cd` or a value set by one, as main reads `echo *; cd ~/.exo/policies`
+  (`echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies`, `V=$(sed -n 1p VERSION); cd ~/.exo && ls`): these are
+  `credentials` where #468 reads them as `read`, and no command in the substitution is a store write. These ask
+  too: `cd ~/.exo && ls principals`, in `run/jobs` `ls ../..`, `cat $(ls)` and `tail -f $(ls -t | head -1)`, a
+  variable that starts a name (`cat ${x}rc`, read as `.*rc`), a read of a folder that holds a store by a name made
+  by output (`cat /tmp/$(cat last)`,
   `ls /tmp/$(whoami)`, `ls ~/.config/$(whoami)`, `cat ~/.config/$(ls ~/.config | head -1)`, as `cat /tmp/*` asks),
   and `cat ${x:-'~/.kube'}/config`. A name whose own text fits a store file, split by output, is `store_write`
   (`cp x data/schedule$(date +%F).sqlite`, `cp x out/seat$(date +%F).json`), and so is a split spelling bash never
@@ -270,7 +282,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`cp x ~/.exo/polic?es/gates.yaml`), a default word with a `}` in it (`${x:-${HOME}/.kube}`), behind an indirect
   name (`${!x:-~/.kube}`, `${!x[0]:-.env}`) or a subscript with an expansion in braces (`${x[${i}]:-$HOME/.exo}`),
   a part that could be `..` after a literal part (`grep -r x ~/.exo/run/jobs/.?`), and a folder by its full path
-  (`tar czf - ${x:-$HOME/.kube}`, as `tar czf - ~/.kube`, and `grep -r x ~/.exo/principals/me`).
+  (`tar czf - ${x:-$HOME/.kube}`, as `tar czf - ~/.kube`, and `grep -r x ~/.exo/principals/me`). A line these forms
+  make a secret line beside a store write is `credentials`, as a literal secret makes it on main
+  (`cd ~/.exo/state && cat ${x-.netrc}; echo $(rm -rf x)`), so a seat `approvals.yaml` delegates `credentials` to
+  could answer it. Nested defaults and the field-split form `cat ${x:-a .env}` stay reads, on main
+  d79639f1 as here (#341).
 - Gate (#435, D-038 amendment): a write into `$EXO_HOME/plugins` asks the principal. The core loads each plugin it
   finds there and runs its code with the harness's rights, so a write there installs or changes code the next session
   runs. Most writes there were allowed: only a `cd` or `git -C` into the Exo home made one a store write, and a delete
