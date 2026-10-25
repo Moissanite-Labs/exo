@@ -1,4 +1,5 @@
-"""Pinned keys (D-040): which public keys may sign this home's ledgers, and which key each bus seat speaks with.
+"""Pinned keys (D-040): which public keys may sign this home's ledgers, which key each bus seat speaks with, and
+which keys a peer seat from another home may sign its messages with (D-026).
 
 The registry is one JSON file, ``$EXO_HOME/keys/registry.json`` (0600), next to the key files. The gate treats
 ``keys/`` as credentials, so the agent cannot change it without asking.
@@ -6,6 +7,7 @@ The registry is one JSON file, ``$EXO_HOME/keys/registry.json`` (0600), next to 
     {"v": 1,
      "keys":       {"<name>": ["<base64 Ed25519 public key>", ...]},   local signing keys, by key file name
      "seats":      {"<bus seat>": "<base64 public key>"},               bus seats, pinned on first sight
+     "peers":      {"<peer seat>": ["<base64 public key>", ...]},       peer seats of other homes, pinned by hand
      "principals": ["<principal id>", ...]}                             ledger authors that are the principal
 
 How keys get pinned:
@@ -17,6 +19,8 @@ How keys get pinned:
 - ``exo keys pin NAME PUB`` pins by hand; ``--replace`` swaps a name's key (key rotation).
 - A bus seat's key is pinned the first time the channel sees a message from it. A later message signed by a
   different key is refused until the principal pins the new key with ``exo keys pin --seat``.
+- ``exo keys pin --peer SEAT PUB`` pins a peer seat of another home (#132). Its key only verifies that seat's peer
+  messages and receipts (``exo.peers``). It is never a ledger signer: ``owners`` and ``allows`` read ``keys`` alone.
 
 What ``allows(author, pub)`` checks for a ledger event: the signing key is pinned under some name, and an
 author that is itself a pinned name (a seat or tool with its own key) is signed by its own key. The principal's
@@ -52,6 +56,8 @@ class KeyRegistry:
         self.keys: dict[str, list[str]] = {str(k): [str(x) for x in (v if isinstance(v, list) else [v])]
                                            for k, v in (d.get("keys") or {}).items()}
         self.seats: dict[str, str] = {str(k): str(v) for k, v in (d.get("seats") or {}).items()}
+        self.peers: dict[str, list[str]] = {str(k): [str(x) for x in (v if isinstance(v, list) else [v])]
+                                            for k, v in (d.get("peers") or {}).items()}
         self.principals: list[str] = [str(x) for x in d.get("principals") or []]
 
     # ---------------------------------------------------------------- load and save
@@ -97,7 +103,7 @@ class KeyRegistry:
                     self.principals.append(p.name)
 
     def to_dict(self) -> dict:
-        return {"v": 1, "keys": self.keys, "seats": self.seats, "principals": self.principals}
+        return {"v": 1, "keys": self.keys, "seats": self.seats, "peers": self.peers, "principals": self.principals}
 
     def _write(self) -> None:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -119,23 +125,25 @@ class KeyRegistry:
         with self._locked():
             if self.path.is_file():
                 fresh = KeyRegistry(self.path, json.loads(self.path.read_text(encoding="utf-8") or "{}"))
-                self.keys, self.seats, self.principals = fresh.keys, fresh.seats, fresh.principals
+                self.keys, self.seats, self.peers, self.principals = fresh.keys, fresh.seats, fresh.peers, fresh.principals
             out = fn(self)
             self._write()
             return out
 
     # ---------------------------------------------------------------- pinning
 
-    def pin(self, name: str, pub: str, *, replace: bool = False) -> str:
+    def pin(self, name: str, pub: str, *, replace: bool = False, peer: bool = False) -> str:
         """Pin ``pub`` as ``name``'s key. Returns ``pinned``, ``known`` (already pinned), or ``conflict`` (the
-        name has another key; nothing changed unless ``replace``, which makes it the only key)."""
+        name has another key; nothing changed unless ``replace``, which makes it the only key). ``peer`` pins a
+        peer seat of another home in ``peers`` instead of a ledger signer in ``keys``."""
         def fn(r: KeyRegistry) -> str:
-            have = r.keys.get(name, [])
+            table = r.peers if peer else r.keys
+            have = table.get(name, [])
             if pub in have:
                 return "known"
             if have and not replace:
                 return "conflict"
-            r.keys[name] = [pub]
+            table[name] = [pub]
             return "pinned"
         return str(self._update(fn))
 
