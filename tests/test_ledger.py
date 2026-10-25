@@ -535,9 +535,9 @@ def _temp_store_on_disk() -> bool:
 @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="lists open files through /proc")
 @pytest.mark.skipif(not _temp_store_on_disk(), reason="this SQLite keeps temporary databases in memory")
 def test_the_snapshot_is_kept_in_a_private_temporary_file(tmp_path, signer):
-    """The whole target was copied into memory: a 493 MB ledger added 534 MB to the reader (#317 review). It goes into
-    SQLite's private temporary database now. Past SQLite's page cache the copy is an owner-only temporary file,
-    unlinked at once and gone at close. None is made beside the target."""
+    """The whole target was copied into memory: opening a 99 MB ledger added 111 MB to the reader's resident memory
+    (#317). It goes into SQLite's private temporary database now. Past SQLite's page cache the copy is an
+    owner-only temporary file, unlinked at once and gone at close. None is made beside the target."""
     target, path = tmp_path / "target.sqlite", tmp_path / "ledger.sqlite"
     _padded(target, signer, 0, 80, pad="x" * 100_000)  # 8 MB, past SQLite's 2 MB page cache
     path.symlink_to(target)
