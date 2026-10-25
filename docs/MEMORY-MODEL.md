@@ -146,8 +146,8 @@ the protocol is full at 30 commands. No new command type and no new event.
   news not yet stored), and this thread's recent tail. Each part has a token estimate, and the total
   follows. It also counts tree nodes by state (done, pending, skipped, failed) and says how many leaf
   chunks `/compact` would fold. It reads only: it stores no note and starts no summary. In a private
-  thread whose leaves are pending, this holds during a turn. Between turns it keeps the last turn whole,
-  which the next turn's call can cut (#244).
+  thread whose leaves are pending, it matches the next call during a turn. Between turns it keeps the last
+  turn whole, which the next turn's call can cut (#244).
 - `/compact` summarizes now whatever is eligible for this agent. Every full leaf chunk is eligible, even
   inside the tail (the 12-message wait is skipped), then finished neighbours are merged even if the view
   is under budget. The size rules stay: a span under `min_compact_tokens`, or a summary that is not shorter
