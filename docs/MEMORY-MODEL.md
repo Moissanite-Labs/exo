@@ -242,6 +242,17 @@ every message from the path it came in by, never from its text (`src/exo/provena
 
 The author is stored in `meta.author`. A message stored before D-040 has none; it is read by its tags as before.
 
+Context notes and summary sources use that same author reading (D-057, stage 0.3). A user-role message reads as
+`user` / `USER` only when its author is the principal. Other labels are `schedule`, `trigger`, `peer`, `bus`,
+`job notice`, `local`, `delegate`, `system` and `non-principal input` for an unknown author. Summary sources use
+the uppercase form. A peer, bus or job tag still outranks a conflicting principal stamp. Labels never include
+sender-supplied names or ids, which stay in metadata. An imported user message therefore reads as
+`SYSTEM (imported)`, and an older untagged user message still reads as `USER`.
+
+The summary prompt says only `USER` labels identify the principal. This preserves attribution for the model.
+The existing author checks on capture and pinned-block escaping still enforce which text can become a ruling.
+Existing saved summaries and thread notes are not rewritten.
+
 What uses it:
 
 - `is_principal(msg)` is true only when the author is `principal` (and the old checks still pass).

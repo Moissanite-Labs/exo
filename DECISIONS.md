@@ -3010,7 +3010,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
 ## D-057 (2026-10-13) Event-driven activation: triggers, masked connectors, a runs dashboard, root causes
 - **Status:** Proposed 2026-10-13, revised 2026-10-18 after the reviews. Design in docs/EVENT-ACTIVATION.md, options and
-  recommendation first. Nothing built. Independent of D-048, D-058 and D-059.
+  recommendation first. Triggers are not built. Stage-0 progress is recorded below. Independent of D-048, D-058 and D-059.
 - **Amends:** D-052. Job edits (`schedule.edit`, every action but `list`) join the operations that need a live principal
   caller. D-052 left jobs off that list and let local automation drive turns, so a local script can edit jobs today.
 - **Why (principal, 2026-10-13):** Railtown AI's platform (railtown.ai: build, feed, observe the agent) gave the idea
@@ -3045,8 +3045,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Open:** how events enter (D-026's ingress path, recommended, or a separate path), what a trigger run may do (read
   only, in the folders it names, recommended), which source first (the webhook, recommended), root-cause default (off,
   recommended), default limits, who may add a trigger (only the principal, recommended).
-- **Depends on:** stage 0 (nothing in it exists on main), and for the ingress door a `Target` and a `trigger` branch in
+- **Depends on:** all of stage 0, and for the ingress door a `Target` and a `trigger` branch in
   `frame()` in `src/exo/core/ingress.py`.
+- **Amendment (2026-10-25, stage 0.3):** notes and summary sources label every user-role message by the same
+  `provenance.author_of` reading capture uses. Only the principal gets `user` / `USER`. Schedule, trigger, peer, bus,
+  job, local, delegate and system inputs get stable labels. Unknown authors get `non-principal input`. Sender ids
+  stay in metadata so a name cannot inject a heading. The summary prompt names these as non-principal, and pin
+  escaping remains unchanged. Learning treats `scheduled`, `triggered` and `subagent` kinds as unattended. An
+  ordinary thread's latest visible user input decides whether its current turn is unattended, ignoring harness
+  notes and undone messages. The store decodes only that input. An unreadable input suppresses learning. A later
+  principal reply restores learning in an ordinary thread. Rejected: matching display titles (renaming a scheduled
+  run bypassed it, while "schedule a meeting" blocked an ordinary chat) and scanning the entire transcript on every
+  turn. Legacy untagged user messages keep their principal reading, and agent-task records still identify legacy
+  delegates. The model-facing renderer moves to `exo.context_render`, outside the turn engine, with a compatible
+  re-export from `exo.core.context`. Summary and agent-log callers keep one renderer while the core gains headroom
+  for its public latest-input query. Existing notes and summaries are not rewritten. This implements a standalone
+  prerequisite, not the trigger runtime or the remaining D-057 choices. Revisit when new ingress paths add authors
+  or session kinds.
 
 ## D-058 (2026-10-13) Exopet: the community egg, x0, grows from repository activity
 - **Status:** Proposed 2026-10-13, revised the same day (instant and validated XP, the name x0, meditation) and

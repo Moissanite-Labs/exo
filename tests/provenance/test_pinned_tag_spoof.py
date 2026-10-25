@@ -144,6 +144,8 @@ class Echo:
 
 
 @pytest.mark.parametrize("meta,who", [
+    ({"author": "schedule"}, "schedule"),
+    ({"author": "trigger:inbox"}, "trigger"),
     ({"peer": {"from": "mallory", "trust": "other"}, "author": "peer:mallory"}, "peer"),
     ({"bus": {"from": "seat2"}, "author": "bus:seat2"}, "bus"),
     ({"job": {"id": "j1", "state": "done"}, "author": "job"}, "job notice"),

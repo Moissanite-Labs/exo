@@ -50,6 +50,15 @@ review that first batch (`exo proposals`).
 
 ## The fast loop
 
+Unattended work does not start this loop (D-057, stage 0.3). A session of kind `scheduled`, `triggered` or
+`subagent` is unattended whatever its title or latest message says. In an ordinary thread, the newest visible
+user input must be authored by the principal. Peer, bus, job, local automation, schedule, delegate and unknown
+authors suppress the review until a later principal input arrives. Harness context notes and undone messages
+are skipped by the lookup. An unreadable input also suppresses the review. The lookup decodes just the newest
+input, not every message in the transcript. Existing agent-task records still identify legacy delegate sessions.
+Titles such as "schedule a meeting" do not suppress learning, and legacy untagged user input keeps its previous
+principal reading. This change adds no trigger runtime.
+
 After a turn, a cheap reviewer on the `aux` route reads new signals and writes typed proposals. It only proposes.
 A live turn cancels it. Each proposal goes to one place: taste (style and values), skill (how to do a class of task),
 fact, or question (when the signal is unclear). Limits live in `learn.fast_loop` in config.json: `every_turns` (10),

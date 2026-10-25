@@ -126,6 +126,19 @@ def is_principal_author(author: Any) -> bool:
     return author == PRINCIPAL
 
 
+def user_label(author: str) -> str:
+    """A stable display label for a user-role message, never a label supplied by its author.
+
+    Only the principal reads as ``user``. Names after peer/bus/trigger prefixes stay in the stored metadata,
+    not in the label, so a sender name cannot inject another heading into a context note or summary source.
+    """
+    if author == PRINCIPAL:
+        return "user"
+    return {SCHEDULE: "schedule", "trigger": "trigger", "peer": "peer", "bus": "bus", JOB: "job notice",
+            LOCAL: "local", DELEGATE: "delegate", SYSTEM: "system"}.get(author.split(":", 1)[0],
+                                                                       "non-principal input")
+
+
 def _fold_views(text: str) -> list[str]:
     """Same-length views of `text` under the folds a downstream step may apply (#381): the text itself,
     each character whose NFKC form is one ASCII character folded to it (unicode tag characters left as

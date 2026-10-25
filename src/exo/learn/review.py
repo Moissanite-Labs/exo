@@ -82,11 +82,17 @@ def reviews_today(ledger: Any) -> int:
 
 
 def is_unattended(lr: Learner, session: str) -> bool:
-    """Cron, scheduled and delegated sessions never trigger a review (5.4)."""
+    """Unattended kinds and turns from anyone but the principal never trigger a review (D-057 §0.3)."""
     info = lr.session_info(session)
-    title = (getattr(info, "title", "") or "").lower()
-    if title.startswith(("cron", "schedule", "scheduled")):
+    if getattr(info, "kind", "") in ("scheduled", "triggered", "subagent"):
         return True
+    store = getattr(lr.engine, "store", None)
+    try:
+        latest = store.latest_user_message(session) if store is not None else None
+        if latest is not None and provenance.author_of(latest) != provenance.PRINCIPAL:
+            return True
+    except Exception:
+        return True  # unreadable provenance is not evidence of a principal turn
     agents = getattr(lr.engine, "agents", None)
     try:
         for t in (agents.list(None) if agents is not None else []):
