@@ -6467,24 +6467,51 @@ def _shell_call(cmd: str) -> Classification:
         if read is not None:                    # the line alone, as a call of its own in the session's folder
             c = _line_alone(cmd, scope, {k: v for k, v in seen.items() if k[:1] == ("parse",)})
             c.also = whole
-        if any(p.category == "credentials" for p in _each_part(c)):
+        secrets = [p for p in _each_part(c) if p.category == "credentials"]
+        # the line reads a store, so the call keeps the line's result and reads no folder, as main did where it read a
+        # store or a secret command on the line
+        if secrets and (not all(is_sensitive_path(p.target) or _glob_hits_secret(p.target) for p in secrets)
+                        or _plain_line_hit(cmd, scope)):
             return c
-        found = _tool_folder_read(cmd, folders, read)  # a store write stays the line's result, as for `tar -C` (#464)
-        # #513 review: main's target stays a part, where the first folder is a spelling only #446 reads
-        # (`~/.config//gcloud` beside `~/.ssh`), so a `target:` entry or rule for main's folder still matches
-        plain = _tool_folder_read(cmd, folders, read, plain=True) if found else None
+        if secrets:
+            # #513 review: main read no store on a line whose stores are all spellings only #446 reads
+            # (`cat ~/.kube//config` with `cwd: ~/.ssh`), so it read the folder, and its target was that read's: main's
+            # read stays a part. Main's `read` there is a word that resolves into a store from the folder
+            own = {p.target for p in secrets}
+            read = next((p for p in _each_part(whole) if p.category == "credentials" and p.target not in own), None)
+            found, plain = None, _tool_folder_read(cmd, folders, read, plain=True)
+        else:
+            # a store write stays the line's result, as for `tar -C` (#464)
+            found = _tool_folder_read(cmd, folders, read)
+            # #513 review: main's target stays a part, where the first folder is a spelling only #446 reads
+            # (`~/.config//gcloud` beside `~/.ssh`), so a `target:` entry or rule for main's folder still matches
+            plain = _tool_folder_read(cmd, folders, read, plain=True) if found else None
     finally:
         _shell_seen.reset(memo)
         _scope.reset(token)
-    if found:
+    pairs = [found] if found else []
+    if plain and (not found or plain[1] != found[1]):
+        pairs.append(plain)
+    if pairs:
         # each read keeps its own weight, and a heavier command on the line is a credentials part with that weight
         # beside it, as beside a secret line (#468). So each matrix cell or rule the cd form's parts meet is met.
         reads = [_weigh(_make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
-                              signals=["secret store"]), c, cmd)
-                 for summary, target in [found, *([plain] if plain and plain[1] != found[1] else [])]]
+                              signals=["secret store"]), c, cmd) for summary, target in pairs]
         c.parts = [*c.parts, *reads]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     return c
+
+
+def _plain_line_hit(cmd: str, scope: _Scope) -> str:
+    """What the line itself touches in ``scope``, the session's folder, as main read it before #446: the first store
+    path, the Keychain or an environment dump (_shell_credential_hit with ``plain``), or ''."""
+    cmds, _, _ = _parse(cmd)
+    token = _scope.set(scope)
+    try:
+        return _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
+                                     [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True)
+    finally:
+        _scope.reset(token)
 
 
 def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:

@@ -920,3 +920,60 @@ def test_a_call_main_read_the_same_way_gets_no_second_folder_part(cwd, workdir):
     assert len([p for p in c.parts if p.category == "credentials"]) == 1
     assert full(folder_call("bash", "command", "ls", cwd, workdir), SSH_ENTRIES[0])[1] == ("deny" if cwd == "~/.ssh"
                                                                                           else "ask")
+
+
+# A line that names a store only as #446 reads it is credentials on its own, so the call skipped its folder's read.
+# Main read no store on the line, so it read the folder, and its target was the folder (`~/.ssh`). That read stays a
+# part (#513 checker, sixth round).
+ODD_LINES = ["cat ~/.kube//config", "cat /pro?/self/environ", "cat ~/.docker/./config.json"]
+
+
+@pytest.mark.parametrize("policy", SSH_ENTRIES)
+@pytest.mark.parametrize("line", ODD_LINES)
+@pytest.mark.parametrize("tool, key", SHELL_TOOLS)
+def test_an_entry_for_the_store_folder_still_matches_when_the_line_names_a_store_only_446_reads(tool, key, line,
+                                                                                                policy):
+    _, outcome, hits, _ = full({"tool": tool, "args": {key: line, "workdir": "~/.ssh"}}, policy)
+    reserved = "reserved" in policy["gates"]
+    assert (outcome, "credentials" in hits) == ("ask" if reserved else "deny", reserved)
+
+
+@pytest.mark.parametrize("line, folder, policy", [
+    ("git status && cat ~/.docker//config.json", "~/.exo/keys", {"gates": {"deny": ["target:*/.exo/*"]}}),
+    ("cat //proc/self/env*", "~/.aws", {"gates": {"deny": ["target:*/.aws"]}}),
+    # the shell reads `~/.kube/config` from the redirection, which main did not read as a store
+    ("cat < ~/.kube/\\config", "~/.ssh", {"gates": {"deny": ["target:*/.ssh"]}}),
+    ("cat ~/.kube/x/../config; ls", "~/.ssh/", {"gates": {"deny": ["target:*/.ssh/"]}}),
+    # `keys` resolves into the key store from `~/.exo` (#209): main's target is that folder
+    ("ls keys; cat ~/.kube//config", "~/.exo", {"gates": {"deny": ["target:*.exo*"]}}),
+    ("cat ~/.kube//config; ls keys", "~/.exo", {"gates": {"deny": ["target:*.exo*"]}}),
+    ("rm -rf ~/.kube//config", "~/.ssh", {"gates": {"rules": [{"match": {"target": "*/.ssh*", "reversibility":
+                                                                         "irreversible"}, "decision": "deny",
+                                                               "reason": "r"}]}}),
+])
+def test_the_folder_part_beside_such_a_line_is_main_s_read(line, folder, policy):
+    assert full({"tool": "bash", "args": {"command": line, "cwd": folder}}, policy)[1] == "deny"
+
+
+@pytest.mark.parametrize("odd", ODD_GCLOUD)
+def test_the_folder_part_beside_such_a_line_is_the_folder_main_read_first(odd):
+    # main read the plain `~/.ssh`, not the odd gcloud folder before it
+    call = folder_call("bash", "command", "cat ~/.kube//config", odd, "~/.ssh")
+    assert full(call, SSH_ENTRIES[0])[1] == "deny"
+
+
+def test_such_a_line_keeps_its_target_and_the_folder_is_a_part(env):
+    c = gate.classify({"tool": "bash", "args": {"command": "cat ~/.kube//config", "cwd": "~/.ssh"}})
+    assert (c.category, c.target) == ("credentials", f"{env}/.kube//config")
+    assert {p.target for p in gate._each_part(c) if p.category == "credentials"} == {f"{env}/.kube//config",
+                                                                                     f"{env}/.ssh"}
+
+
+@pytest.mark.parametrize("line", ["cat ~/.kube/config", "cat ~/.kube//config ~/.aws/credentials", "env",
+                                  "ssh-keygen -t ed25519", "ssh-keygen -t ed25519; cat ~/.kube//config"])
+def test_a_line_main_read_as_credentials_gets_no_folder_part(line):
+    # Main read a store, the environment or a secret command on the line, so it kept the line's result and read no
+    # folder: an entry for the folder asks, here and on main
+    c = gate.classify({"tool": "bash", "args": {"command": line, "cwd": "~/.ssh"}})
+    assert not any(p.target.endswith("/.ssh") for p in gate._each_part(c))
+    assert full({"tool": "bash", "args": {"command": line, "cwd": "~/.ssh"}}, SSH_ENTRIES[0])[1] == "ask"
