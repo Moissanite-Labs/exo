@@ -5851,12 +5851,13 @@ def holds_secret_store(folder: str) -> bool:
                                             for f in forms for x in stores for s in _path_forms(x))
 
 
-def _glob_hits_secret(tok: str) -> bool:
+def _glob_hits_secret(tok: str, plain: bool = False) -> bool:
     """A shell glob that could expand to a secret store. Bare `*` or `*.json` do not count; the last
     component needs three literal characters, or the directory must itself be a secret store. Brace sets
-    are expanded first, as bash does; a hit on the word or on any word it expands to counts."""
+    are expanded first, as bash does; a hit on the word or on any word it expands to counts. With ``plain``, as main
+    read it before #446 (_glob_words)."""
     words = _brace_words(tok)
-    return words is None or _glob_words(words)
+    return words is None or _glob_words(words, plain=plain)
 
 
 def _glob_words(words: list[str], plain: bool = False) -> bool:
@@ -6469,16 +6470,19 @@ def _shell_call(cmd: str) -> Classification:
         if any(p.category == "credentials" for p in _each_part(c)):
             return c
         found = _tool_folder_read(cmd, folders, read)  # a store write stays the line's result, as for `tar -C` (#464)
+        # #513 review: main's target stays a part, where the first folder is a spelling only #446 reads
+        # (`~/.config//gcloud` beside `~/.ssh`), so a `target:` entry or rule for main's folder still matches
+        plain = _tool_folder_read(cmd, folders, read, plain=True) if found else None
     finally:
         _shell_seen.reset(memo)
         _scope.reset(token)
     if found:
-        summary, target = found
-        part = _make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
-                     signals=["secret store"])
-        # the read keeps its own weight, and a heavier command on the line is a credentials part with that weight
+        # each read keeps its own weight, and a heavier command on the line is a credentials part with that weight
         # beside it, as beside a secret line (#468). So each matrix cell or rule the cd form's parts meet is met.
-        c.parts = [*c.parts, _weigh(part, c, cmd)]
+        reads = [_weigh(_make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
+                              signals=["secret store"]), c, cmd)
+                 for summary, target in [found, *([plain] if plain and plain[1] != found[1] else [])]]
+        c.parts = [*c.parts, *reads]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     return c
 
@@ -6496,13 +6500,16 @@ def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
         _brace_left.reset(left)
 
 
-def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification | None) -> tuple[str, str] | None:
+def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification | None,
+                      plain: bool = False) -> tuple[str, str] | None:
     """How a shell call reads a secret store from its own folder argument (#311), as (summary, target), or None. In
     this order: the folder is itself a store, as a `cd` word is (a link resolved, a glob that could name one); a
     relative word resolves into one from it (#209; ``read`` is that reading's credentials part); or the line reads
     a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192). The target is the folder, or the
     folder joined with the name. A folder in a repo's own .claude worktrees, commands, agents or skills is the
-    repo's, not a store (_repo_claude), so only a word that resolves into a store counts there."""
+    repo's, not a store (_repo_claude), so only a word that resolves into a store counts there. With ``plain``, a
+    folder names a store only as main read it before #446 (_plain_secret), which gives main's target. The other two
+    readings are the same either way."""
     forms: list[tuple[str, str]] = []           # (the folder as the call gives it, a form to check)
     for f in folders:
         x = _expand_text(f)
@@ -6515,7 +6522,7 @@ def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification |
         linked = [real] if real and real != os.path.normpath(x) else []      # where a link leads, first
         forms += [(f, g) for g in [*linked, f] if not _repo_claude(g)]
     for f, g in forms:
-        if is_sensitive_path(g) or _glob_hits_secret(g):
+        if is_sensitive_path(g, plain) or _glob_hits_secret(g, plain):
             return f"shell runs in {f}", g
     if read is not None:                        # the target: the name in the folder it resolves into a store from
         where = folders[0] if len(folders) == 1 else " or ".join(folders)
