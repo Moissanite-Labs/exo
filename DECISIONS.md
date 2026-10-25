@@ -1850,6 +1850,117 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   101 are `unset \<newline>"arr[$k]"` forms. The double-quote check reads the raw word, so a `\<newline>` before it
   makes the word one the gate cannot read, and the line `opaque_exec`, as `unset a[$i]` is. That was so before this
   fix too.
+  *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
+  `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
+  word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was
+  missed, so `{"command": "cat config", "cwd": "~/.kube"}` was `read` and allowed where `cd ~/.kube && cat config`
+  asks, and `workdir` was not read at all. *The folder adds a part.* The line is now classified in the session's
+  folder alone. It keeps its own category, target, axes, text and parts. A `credentials` part is added when the call
+  reads a store from its folder, found in one of three ways. The folder is itself a store, as a `cd` word is (a link
+  is resolved). A relative word resolves into a store from it (#209). Or the line reads a relative name there as
+  after `cd <folder>` (#192), checked once per call on the whole line. The part's target is the folder, or the folder
+  joined with the name. The credentials floor reads every part, so the call asks. `no_grant` keeps a standing grant
+  off it and observe mode enforces it. `call_approvers` sends it to those who may answer both its category and
+  credentials. The line's deny entries, target rules, matrix deny cells, posting checks and reserved entries still
+  apply. Both arguments count, also for `bash`, which ignores `workdir`: the gate cannot tell which harness sent the
+  call, and the folder only ever adds an ask. *The reading from before is kept.* Where the line read in its folder
+  has a `credentials` part (#209 made such a call `credentials` as a whole), that reading is kept beside the line
+  (`Classification.also`). `decide` decides both, and the stricter outcome stands, with the reserved hits and
+  violations of both. `no_grant` and `call_approvers` read both. So no call decides lower than before, and the old
+  reading's own loss ends. With `~/.exo/run` as `cwd`, `tar czf /tmp/o.tgz . ; git push --force origin main` was
+  `credentials` and asked under a matrix that denies the push, and a seat that may answer credentials could answer
+  it. It is now denied, and only the principal answers it. *A repo's own `.claude` folder.* A folder in a repo's
+  `.claude/worktrees`, `commands`, `agents` or `skills` holds the repo's files, as the search tools judge it
+  (StoreSkip, #241: the parent holds `.git`, and the folder holds no Claude login or transcripts). Only a #209 hit
+  counts there, so `ls *`, `ls config`, `wc -l *`, `grep -r foo *`, `du -sh *`, `file *` and `rg -n config src` in
+  `<repo>/.claude/worktrees/x` keep their class. A store folder by its name inside such a folder (`x/.kube`,
+  `x/.config/gh`) is not the repo's, and is read as a `cd` there is. The `.claude` folder itself, `~/.claude` and a
+  `.claude` folder with no `.git` beside it are stores, so any call there asks. *History.* The first version (#415)
+  made the whole call `credentials`, as a `cd` does. exo-36's differential of it found 1,770 actions that went from
+  deny to ask, 118 that lost posting violations and 173 that lost reserved entries. It also read the folder in every
+  nested line, which read it into the text `ssh` runs on another host and spent the #269 budget at every level. The
+  next version added the part, but also put `workdir` among the #209 folders, which made the whole call `credentials`
+  again for `workdir`. exo-36 found 54 matrix denies that went to ask there, and 114 calls with a wider approver set.
+  A check of the version after that found these gaps. A NUL in the folder, or a relative folder while the
+  gate's own folder is gone, made `classify` raise, so the hook asked as for a call it could not classify, which any
+  seat may answer, where the line alone was denied. A store folder inside a repo's `.claude` worktree was not read.
+  With both folder arguments, the part named the first folder even when the name resolved into a store from the other,
+  so a target entry on the store missed it. *With #464.* Main's #464 made a store read after a `cd` on a store-write
+  line a `credentials` part beside the write. Its hook fallback, for a call whose decision fails, read the call's top
+  category only. This change had left the folder's read off a store-write line, so `deny: [credentials]` denied
+  `cd ~/.kube && cat config; echo x > ~/.exo/policies/a` and only asked for the same line with `~/.kube` as `cwd`.
+  That read is now a `credentials` part beside the write too. The line stays `store_write`, so only the principal
+  answers it. The fallback now reads `no_grant`, so a call with the folder's part asks the principal alone, once, in
+  every mode. abu-aska found the gap on a trial merge: `cat config` with `~/.kube` as `cwd`, under a deny entry
+  whose pattern does not compile, ran in observe mode. *With #468.* Main's #468 weighs the `credentials` part a
+  store read after a `cd` adds to a store-write line: the weight of the line's own parts, at least `costly`, and a
+  heavier command deeper in the line as a part beside it. The part this change adds for the folder kept the
+  `credentials` default, `costly`. So under `matrix: {irreversible: {private: deny}}`,
+  `cat *; touch ~/.exo/state/x; git push --force origin main` with `~/.kube` as `cwd` asked, as on main, while its
+  `cd` form was denied. A rule on `credentials` and `irreversible` split `cat *; rm -rf build` with `~/.ssh` as
+  `cwd` the same way, also before the merge. The folder's part now goes through the same helper (`_weigh`), on every
+  line the folder adds a part to, for `cwd` and `workdir`. It keeps the read's own weight, and a heavier command on
+  the line is a second `credentials` part with that weight beside it. The line keeps its category, card and
+  approvers. Since the read keeps its weight, a matrix whose `costly` cell is stricter than its `irreversible` one
+  still denies the folder form, as before. There the folder form can be stricter than its `cd` form, never lower.
+  The author found this gap in a check of the merge with main 5a9dc394. A differential from main 5a9dc394
+  (`gate_diff`) finds 0 lowered pairs: 4,977,270 on its built-in corpus (57,210 actions under 87 policies),
+  2,719,446 on the folder corpus (31,258 actions) and 1,412,532 on 16,236 actions of 396 lines with a force push or
+  `rm -rf` beside a store read. Those lines put the command plain, behind `sudo`, `env`, `timeout`, `nohup`,
+  `bash -c`, `ssh` and `mosh`, in a `$( )` and in a here-doc, each as a `cd` form and with `cwd` and `workdir` in 8
+  folders. Under 22 policies and three approval tables, none of them decides lower than before this weight or than
+  main, and no approver set widens. A folder form in a store can still decide lower than its `cd` form in four cases,
+  none lower than main, each in the limits below: under `deny: [store_write]` (#453), a line that reads a secret
+  itself under a `target:` entry on the folder, a rule or entry on the bare name, and a rule keyed on the text of a
+  line of one command. A check of this change found the last two. Rejected: the folder argument among the
+  #209 folders, which replaces the line. Keeping the old reading costs a second reading of the line and a second
+  decision, both only where the line read in its folder has a `credentials` part. That reading is a whole
+  classification, so nothing has to be found among the parts. A `cd` on the line is read as before. Limits: the
+  session's own folder (#209) is not a target. The file tools ignore a folder argument. A name that climbs out of a
+  repo's `.claude` worktree back into it is not caught (`cat ../../settings.local.json`), as before. The store-write
+  checks do not read the folder argument (`echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`,
+  #453). A line that reads a secret itself keeps that reading, so a `target:` entry on the folder does not reach it.
+  The part's target is the folder joined with the name, where a `cd` form's is the name alone, so a rule on
+  `target: config` reaches only the `cd` form. The call's text has no `cd`, so an allow rule keyed on `command` that
+  names a line of one command (`git push --force origin main` in `~/.ssh`) lifts the matrix deny on its parts, as on
+  any such line (#394), where the `cd` form keeps it. Each is decided at least as on main, and all but the #453 store-write case ask. A differential against main
+  (`gate_diff`, #423, at 3ddd89e9, whose gate is the same as 39cafcba's) finds 0 lowered pairs: 4,803,183 pairs on
+  its built-in corpus (55,209 actions under 87 policies), and 1,905,648 pairs on 21,904 folder-argument actions (68
+  lines under 42 folder spellings and 9 tool and key forms, with both keys, relative folders and session folders in
+  a store). On the 21,292 actions of that corpus, under 9 policies and three approval tables, no call gets a wider
+  approver set or loses `no_grant`, `binds_exact`, a reserved hit or a violation. No lowering is intended.
+  *With #399 (2026-10-24).* Main's #439 reads a gh line as gh does. It keeps the line as read before #399 as its
+  `floor`, and the targets gh may land on as `alt_targets`, and `decide` keeps the strictest of them on each axis
+  (`_strictest`). The exo-gate hook read the floor in its own `_readings`. In a shell call with its own folder the two
+  kinds meet: the floor is read in that folder too, so it can carry its own reading from before #311. `gate.readings`
+  now lists every reading: the call, its `also`, its `floor` and the floor's `also`. `decide` decides each, the
+  `also` reading through `_strictest` too, so its exposure, third party and repeated violations stand beside the
+  outcome, the reserved hits and the violations it kept before. `no_grant`, `call_approvers` and `body_unseen` read
+  every reading, and so does the hook: body files, the required executor, "once", grants, observe mode, who may
+  answer and the fallback for a failed decision. The hook's own `_readings` and `_no_grant` are gone. `binds_exact`
+  binds a call no grant may cover, one with other targets and one with a floor. Each reading matters. Under a scope
+  that makes myorg private and a matrix that allows a private force push,
+  `git push --force origin main ; gh -R pub/repo pr comment 5 -b x` with `~/.kube` as `cwd` asks from its floor, as
+  on main, and is allowed without it. With `~/.exo/keys` as `cwd`, `gh -R $R secret set X`
+  keeps a reserved `credentials` hit that only the floor's `also` has. A differential (`gate_diff`) from main
+  8c09c29c finds 0 lowered pairs: 5,762,445 on its built-in corpus (66,235 actions under 87 policies), and
+  1,209,742 on 11,306 actions under 107 policies, its 87 and 20 more on scopes, targets and posts. Those are 24 gh
+  lines with `-R`, URL operands and moved subcommands, alone and beside a store read, a store write, a force push,
+  `bash -c` and `ssh`, in 9 folders under 4 tool and key forms, and their `cd` forms. Against this branch before
+  the merge the same pairs lower 0 too. Under 20 of those policies and three approval tables, none of the 9,408
+  actions of that corpus decides lower than main or the branch on the exposure, the third party, `no_grant`,
+  "once", `binds_exact`, the executor's body check, the fallback or who may answer.
+  *Joined and folded (2026-10-24).* The reading from before #311 read the folder folded (`os.path.abspath`), as
+  #209 did. That erases a `..` after a link: the shell runs in `sdir/../policies` through `sdir`. The folder is now
+  read both ways: joined to the session's folder as written, as the kernel reads it, and folded, as bash's `cd` and
+  #209 read it. The part's target goes past a link the same way. So with `~/proj/sdir` a link to `~/.exo/state`,
+  `cat ../keys/seat` with `sdir/../policies` or `sdir` as `cwd` keeps its reading from before #311, and its part
+  names `~/.exo/keys/seat`, which `deny: ["target:*/.exo/*"]` reaches. Reading the folder joined alone would lose
+  main's ask for `tar czf /tmp/o.tgz .` with `xl/../kl` as `cwd`, where `~/proj/kl` links to `~/.ssh`. #527
+  (#340) reads relative store writes from the joined folder too. A trial merge with it found the folded folder
+  reopened its fix there. *With #435 (2026-10-24).* Main's #440 makes `~/.exo/plugins` a store folder. A read in
+  it by a relative name from the folder argument asks, as its `cd` form does. A write there by a relative name stays
+  a `local_write`, as on main: `echo x > hook.py` with `~/.exo/plugins/foo` as `cwd` (#453).
   *Amendment 2026-10-22 (issue #436):* bash and POSIX take `do` as the reserved word right after the name in
   `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before it, and run the loop over the
   positional parameters. The parser opened a loop body only after a `;` or a newline, so it read that `do` and the

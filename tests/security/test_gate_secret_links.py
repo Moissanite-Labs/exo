@@ -16,6 +16,14 @@ def outcome(tool, args, cwd=None):
     return c.category, gate.decide(c, POL).outcome
 
 
+def held(tool, args, cwd=None):
+    """outcome() for a shell call with its own folder argument: the line keeps its category, and a store read from
+    that folder is a credentials part beside it (#311), so either counts as credentials here."""
+    c = gate.classify({"tool": tool, "args": args}, cwd=cwd) if cwd else gate.classify({"tool": tool, "args": args})
+    secret = any(p.category == "credentials" for p in gate._each_part(c))
+    return ("credentials" if secret else c.category), gate.decide(c, POL).outcome
+
+
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
     home = tmp_path / "home"
@@ -62,8 +70,8 @@ def test_the_gate_own_folder_still_counts(tree, monkeypatch):
 
 
 def test_the_bash_tool_cwd_argument_is_read(tree):
-    assert outcome("bash", {"command": "cat notes.txt", "cwd": str(tree)}) == ("credentials", "ask")
-    assert outcome("bash", {"command": "cat notes.txt", "cwd": tree.name}, cwd=str(tree.parent)) == \
+    assert held("bash", {"command": "cat notes.txt", "cwd": str(tree)}) == ("credentials", "ask")
+    assert held("bash", {"command": "cat notes.txt", "cwd": tree.name}, cwd=str(tree.parent)) == \
         ("credentials", "ask")
 
 
@@ -77,8 +85,8 @@ def test_a_cwd_argument_moves_only_a_shell(tree):
     assert outcome("grep", {"pattern": "x", "path": "cfg", "cwd": "/tmp"}, cwd=w) == ("credentials", "ask")
     assert outcome("read_file", {"path": "README.md", "cwd": "/"}, cwd=w) == ("read", "allow")
     # A shell runs in its `cwd`, joined to the session's folder; the session's folder still counts too.
-    assert outcome("bash", {"command": "cat notes.txt", "cwd": w}, cwd="/tmp") == ("credentials", "ask")
-    assert outcome("bash", {"command": "cat work/notes.txt", "cwd": ".."}, cwd=w) == ("credentials", "ask")
+    assert held("bash", {"command": "cat notes.txt", "cwd": w}, cwd="/tmp") == ("credentials", "ask")
+    assert held("bash", {"command": "cat work/notes.txt", "cwd": ".."}, cwd=w) == ("credentials", "ask")
     assert outcome("bash", {"command": "cat notes.txt", "cwd": "/tmp"}, cwd=w) == ("credentials", "ask")
 
 
