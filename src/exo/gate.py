@@ -1536,6 +1536,7 @@ _EXEC_ENV_OPAQUE = {
 # git config from the environment, `git -c` by another name: GIT_CONFIG_KEY_<n> with GIT_CONFIG_VALUE_<n>
 # (GIT_CONFIG_COUNT alone sets nothing), and GIT_CONFIG_PARAMETERS. The pairs take _git_config_kind.
 _GIT_CONFIG_ENV = re.compile(r"GIT_CONFIG_(KEY|VALUE)_(\d+)")
+_GIT_ENV_PAIRS = 64   # the key and value pairs of one GIT_CONFIG_KEY_<n> read one by one (_exec_options, #438)
 _EXPORTERS = ("export", "declare", "typeset", "readonly", "local")
 
 
@@ -3047,8 +3048,8 @@ def _sets_state(k: _Cmd) -> bool:
         return False
     if name == "shopt":
         return any(a.dynamic or re.fullmatch(r"-[a-z]*[su][a-z]*", a.text) for a in args)
-    if name == "printf":
-        return bool(args) and (args[0].dynamic or args[0].text.startswith("-v"))
+    if name == "printf":                          # a brace set may hold the -v (`printf {-v,X} y`, #438)
+        return bool(args) and (args[0].dynamic or args[0].brace or args[0].text.startswith("-v"))
     return name in _STATE_ALWAYS or (name in _STATE_OPERANDS and bool(args))
 
 
@@ -3319,17 +3320,21 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(classify_shell(split, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
+        forms, big = _builtin_forms(words, cmd)      # also as bash brace-expands them (#438)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
             # #465: a value bash runs again after a `cd` into the store runs there too
             token = _cd_into.set((True, ctx.get("fd_cwd") or "")) if ctx.get("store_cwd") else None
             fed = bool(ctx.get("subs_fed")) or _stdin_given(k, piped)    # bash reads the value as it runs (#316)
+            late = ctx.setdefault("late", [])
             try:
-                parts += _subscript_parts(words[0].text, words[1:] + k.operands, cmd, depth, ctx.get("subs", []),
-                                          ctx.setdefault("late", []), fed, bool(ctx.get("stdin_unknown")))
+                parts += _each_form(forms, lambda f: _subscript_parts(words[0].text, f[1:] + k.operands, cmd, depth,
+                                                                      ctx.get("subs", []), late, fed,
+                                                                      bool(ctx.get("stdin_unknown"))), late)
             finally:
                 if token is not None:
                     _cd_into.reset(token)
-        parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
+        head = before[:len(before) - len(words)]
+        parts += big + _each_form(forms, lambda f: _exec_options(head + f, f, k, cmd, depth, ctx, piped))
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
@@ -3890,6 +3895,73 @@ def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
     return i, flags
 
 
+# a `\<newline>` bash drops before it reads a word; group 1 is what it keeps as written: an escaped character, and a
+# span in quotes (bash keeps the `\<newline>` in '..' and $'..', and the lexer drops it in "..")
+_LINE_JOIN = re.compile(r"""\\\n|(\\.|\$'(?:\\.|[^\\'])*'?|'[^']*'?|"(?:\\.|[^\\"])*"?)""", re.S)
+
+
+def _brace_operands(words: list) -> list | None:
+    """``words``, a builtin and its operands, as the builtin gets them: bash brace-expands each operand first, so
+    `export {PATH,X}=` is `export PATH= X=` (#438). Each word an operand makes is lexed again from its source text,
+    so a quoted brace stays (`export '{PATH,X}='`), and a word made twice stays twice, since a builtin reads its
+    operands by place (`printf {-v,X,-v,PATH}` fills PATH). None past the brace limits (_brace_words)."""
+    out = words[:1]
+    for w in words[1:]:
+        alts = _brace_words(_LINE_JOIN.sub(r"\1", w.raw), pool=2, every=True) if w.brace else [w.raw]
+        if alts is None:
+            return None
+        out += [w] if len(alts) < 2 else [t for a in alts[1:] for kind, t in
+                                          _Lexer("\\" + a if a.startswith("#") else a, scan=False).run() if kind == "w"]
+    return out
+
+
+def _builtin_forms(words: list, cmd: str) -> tuple[list[list], list[Classification]]:
+    """The forms of a name-taking builtin's words (_NAME_BUILTINS) that its checks read: as written and, when an
+    operand holds an unquoted brace, as bash expands them (_brace_operands, #438), so a word that asked still asks.
+    A set past the brace limits is not read in part: it is an opaque part. `unset` asks on any brace (#329)."""
+    prog = words[0].text.rsplit("/", 1)[-1] if words and not words[0].dynamic else ""
+    if prog not in _NAME_BUILTINS or prog == "unset" or not any(w.brace for w in words[1:]):
+        return [words], []
+    if (expanded := _brace_operands(words)) is None:
+        return [words], [_opaque(f"{prog} takes a brace set too large to read, which may name PATH", cmd)]
+    return [words, expanded], []
+
+
+def _each_form(forms: list[list], check: Callable[[list], list[Classification]],
+               late: list[Classification] | None = None) -> list[Classification]:
+    """``check`` run on each form of a builtin's words (_builtin_forms), each on its own, so a value one form sets
+    cannot hide one the other sets (a GIT_CONFIG_KEY_<n>, #438). Every part of the words as written is kept, as
+    before; of a later form, only the parts no form before it gave, so a word outside a set is not read twice.
+    ``late``: a list ``check`` adds to, whose new entries are kept the same way."""
+    late = [] if late is None else late
+    parts: list[Classification] = []
+    start = len(late)
+    for n, f in enumerate(forms):
+        mark, got = len(late), check(f)
+        if n:
+            got, late[mark:] = _new_parts(got, parts), _new_parts(late[mark:], late[start:mark])
+        parts += got
+    return parts
+
+
+# the fields that make two parts alike for _new_parts: what a Classification compares, its own text and its stdin
+_PART_FIELDS = tuple(n for n, f in Classification.__dataclass_fields__.items() if f.compare) + ("own", "inherits")
+
+
+def _new_parts(new: list[Classification], have: list[Classification]) -> list[Classification]:
+    """The parts of ``new`` that are not alike (_PART_FIELDS) to one in ``have`` or to one before them in ``new``."""
+    seen, out = {_part_key(p) for p in have}, []
+    for p in new:
+        if (key := _part_key(p)) not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
+def _part_key(p: Classification) -> tuple:
+    return tuple(tuple(v) if isinstance(v, list) else v for v in (getattr(p, name) for name in _PART_FIELDS))
+
+
 def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
     """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
     `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
@@ -3914,8 +3986,12 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
                         targets.append(val)
                     break
         targets += args[i:]
-    elif prog == "printf" and args[:1] and args[0].text.startswith("-v"):
-        targets = [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+    elif prog == "printf":
+        i = 0
+        while i < len(args) and args[i].text.startswith("-v"):   # bash fills the last one (`-v X -v PATH`, #438)
+            t = args[i]
+            targets += [_Word(text=t.text[2:], dynamic=t.dynamic, glob=t.glob)] if t.text != "-v" else args[i + 1:i + 2]
+            i += 1 if t.text != "-v" else 2
     elif prog in _EXPORTERS:
         i, flags = _builtin_options(args, prog in ("declare", "typeset", "local"))
         if "f" in flags or "F" in flags:                  # names functions, not variables
@@ -3952,7 +4028,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     gate cannot read (a script file, `.output FILE`) is opaque, and so is a variable that loads code or
     moves where programs and config are found (LD_PRELOAD, PATH...). Git config set on the line (`git -c`,
     `git --config-env`, `git clone --config`, GIT_CONFIG_*) takes _git_config_kind. `words` is empty for a
-    bare assignment."""
+    bare assignment. A builtin's words that bash brace-expands come here once as written and once expanded
+    (_each_form, #438)."""
     if words and words[0].dynamic:
         return []
     prog, argv = (words[0].text.rsplit("/", 1)[-1] if words else ""), [w.text for w in words]
@@ -4048,7 +4125,10 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             if any(_unreadable_name(w) or w.brace or w.raw.replace("\\\n", "")[:1] == "[" or
                    w.dynamic and not re.fullmatch(r'"(?:[^"\\]|\\.)*"', w.raw) for w in words[1:]):
                 parts.append(_opaque("unset takes a word the gate cannot read, which may unset PATH", cmd))
-    git_env: dict[tuple[str, ...], str] = {}
+    # each value a GIT_CONFIG_KEY_<n> or GIT_CONFIG_VALUE_<n> takes: bash keeps the last, but a readonly one the first
+    # (`declare -rx GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_KEY_0=a`), so each key is checked with each value, up
+    # to _GIT_ENV_PAIRS pairs
+    git_env: dict[tuple[str, ...], list[str]] = {}
     for name, value, runs_nothing, literal in sets:
         if name in _EXEC_ENV:
             c = nested(_prompt_text(value or "") if name == "PS4" else (value or "").lstrip("|"), name)
@@ -4060,15 +4140,23 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             except ValueError:
                 parts.append(_opaque(f"{name} sets git config the gate cannot read", cmd))
         elif m := _GIT_CONFIG_ENV.fullmatch(name):
-            git_env[m.groups()] = value or ""
+            git_env.setdefault(m.groups(), []).append(value or "")
         elif name == "PYTHONPATH" and not runs_nothing and runner:
             pass                                         # a test runner already runs the project's code
         elif why := _env_hazard(name, value, literal):   # _EXEC_ENV_OPAQUE, and LESS with a `+` command
             parts.append(_opaque(f"{name} {why}", cmd))
     parts += _indirect_sets(prog, words, cmd)
-    for (kind, num), value in git_env.items():
+    for (kind, num), taken in git_env.items():
         if kind == "KEY":
-            git_config([f"{value}={git_env.get(('VALUE', num), '')}"], f"GIT_CONFIG_KEY_{num}")
+            keys, vals = list(dict.fromkeys(taken)), list(dict.fromkeys(git_env.get(("VALUE", num), [""])))
+            if len(keys) * len(vals) <= _GIT_ENV_PAIRS:
+                pairs = [(key, value) for key in keys for value in vals]
+            else:    # bash keeps the first pair or the last: each key with the first and last value, each value
+                # with the first and last key, so a line that sets many is not read once for each pair (#438)
+                parts.append(_opaque(f"GIT_CONFIG_KEY_{num} takes more values than the gate pairs", cmd))
+                pairs = list(dict.fromkeys([(key, value) for key in keys for value in (vals[0], vals[-1])] +
+                                           [(key, value) for value in vals for key in (keys[0], keys[-1])]))
+            git_config([f"{key}={value}" for key, value in pairs], f"GIT_CONFIG_KEY_{num}")
         elif ("KEY", num) not in git_env:
             parts.append(_opaque(f"GIT_CONFIG_VALUE_{num} sets git config whose key is not on the line", cmd))
     for v in values(_EXEC_OPTS.get(prog, ())):
@@ -5437,8 +5525,8 @@ def _run_secrets() -> list[str]:
 
 
 _BRACE_CAP = 1024
-_BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost), once for the secret-store checks
-                       # and once for the Exo-store checks (#224)
+_BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost), once for the secret-store checks,
+                       # once for the Exo-store checks (#224) and once for the names a builtin reads (#438)
 _BRACE_SEQ = re.compile(r"([-+]?\d+)\.\.([-+]?\d+)(?:\.\.([-+]?\d+))?|([A-Za-z])\.\.([A-Za-z])(?:\.\.([-+]?\d+))?")
 _brace_left: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_brace_left", default=None)
 _call_memo: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_call_memo", default=None)
@@ -5449,9 +5537,12 @@ class _BraceLimit(Exception):
     pass
 
 
-def _brace_cost(word: str) -> int:
-    """What one expanded word takes from the budget: one, once more per 64 characters, four times for a glob."""
-    return (1 + len(word) // 64) * (4 if re.search(r"[*?\[]", word) else 1)
+def _brace_cost(word: str, pool: int = 0) -> int:
+    """What one expanded word takes from the budget: one, once more per 64 characters, four times for a glob. In a
+    builtin's names (pool 2), a word that holds n command or process substitutions takes 4 * (n + 1) ** 2 times as
+    much, since the builtin's checks read each one's commands again, in each word (#438)."""
+    subs = len(re.findall(r"[$<>]\(|`", word)) if pool == 2 else 0
+    return (1 + len(word) // 64) * (4 if re.search(r"[*?\[]", word) else 1) * (4 * (subs + 1) ** 2 if subs else 1)
 
 
 def _brace_budget(fn: _F) -> _F:
@@ -5461,7 +5552,7 @@ def _brace_budget(fn: _F) -> _F:
     def run(*a: Any, **kw: Any) -> Any:
         if _brace_left.get() is not None:
             return fn(*a, **kw)
-        token, memo = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET]), _call_memo.set({})
+        token, memo = _brace_left.set([_BRACE_BUDGET] * 3), _call_memo.set({})
         try:
             return fn(*a, **kw)
         finally:
@@ -5547,16 +5638,19 @@ def _brace_seq(s: str) -> list[str] | None:
     return [f"{v:0{width}d}" for v in vals]
 
 
-def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
+def _brace_words(tok: str, pool: int = 0, every: bool = False) -> list[str] | None:
     """``tok`` and the words bash brace expansion makes of it, read as bash's brace_gobbler does: a group
     ends at the first top-level `}` after a comma or `..`; quoted or escaped braces, ${...} and $(...) do
     not expand; a group without a comma is a {x..y[..n]} sequence or literal. None past _BRACE_CAP words (fewer
     for a long word: a million characters in all), past what is left of the call's _BRACE_BUDGET, or past 32
-    levels of nesting: callers count that as a hit. ``pool`` 1 charges the Exo-store checks' budget."""
+    levels of nesting: callers count that as a hit. ``pool`` 1 charges the Exo-store checks' budget, 2 the
+    builtin names' (_brace_operands). Each word comes once, unless ``every``: then each word bash makes comes
+    in its place, a repeated one too."""
     if "{" not in tok:
         return [tok]
     left = _brace_left.get()
-    cap = max(1, min(_BRACE_CAP, (1 << 20) // len(tok), _BRACE_CAP if left is None else left[pool] // _brace_cost(tok)))
+    cap = max(1, min(_BRACE_CAP, (1 << 20) // len(tok),
+                     _BRACE_CAP if left is None else left[pool] // _brace_cost(tok, pool)))
     ev: list[tuple[int, str]] = []   # unquoted { } , and `..`; `$` is the brace of ${
     i, quoted = 0, ""
     while i < len(tok):
@@ -5664,8 +5758,8 @@ def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
     except _BraceLimit:
         return None
     if left is not None and len(words) > 1:
-        left[pool] -= sum(map(_brace_cost, words))
-    return list(dict.fromkeys([tok] + words))
+        left[pool] -= sum(_brace_cost(w, pool) for w in words)
+    return [tok] + words if every and words != [tok] else list(dict.fromkeys([tok] + words))
 
 
 def _expand_words(words: list[str]) -> list[str]:
