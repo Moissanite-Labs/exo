@@ -1882,8 +1882,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   whose sets make more than 4,096 words in all asks, even when one small set repeats. *printf.* bash fills the last
   name `printf -v` is given, and the gate read only the first. It now reads each, so `printf -v X -v PATH .; ls` and
   `printf -v{X,PATH} .; ls` ask. A glob in a name joined to `-v` now asks as one apart does: a file named `-vPATH`
-  makes `printf -vPAT? .` set PATH. *Kept.* A word that asked on main still asks, since the words as written are still
-  read. The lexer reads a brace after a word's first character as a glob, so `export X{A,B}=1; ls`,
+  makes `printf -vPAT? .` set PATH. *Kept.* Under the default policy a word that asked on main still asks, since the
+  words as written are still read, each on its own (2026-10-25 below). The lexer reads a brace after a word's first
+  character as a glob, so `export X{A,B}=1; ls`,
   `export X={a,b}; ls` and `export PATH=/usr/bin{,}; ls` ask as words the gate cannot read. `unset` asks on any
   unquoted brace (#329), so `unset {PATH,}` and `unset {A,B}` ask as before, and its words are not expanded. A `for`
   name is not expanded either, since bash refuses `for {PATH,X} in`. Rejected: reading only the words bash makes. It
@@ -1906,6 +1907,36 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a `read` or exporter name (`read [P]ATH`) is still not read. `mapfile`, `getopts` and `let` ask already, and
   `wait -p NAME` is a known limit. A `-i` value that assigns (`declare -i X=PATH=0`, with a brace or not) is not read
   either. It is the integer-variable limit "Known limits" lists, left for its own issue.
+  *Review fixes (2026-10-25).* The first version gathered the names a builtin sets from both forms into one list, and
+  kept only the last value of each `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>`. So a member of a set replaced a
+  key the words as written set: `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h
+  {GIT_CONFIG_KEY_0=a,b}; git commit -m x` was `local_write` (allow) where main asked. bash's `-r` refuses the later
+  assignment, so git runs the hook path. The `export` form lowered too, though bash keeps the last value there. Each
+  form is now read on its own (`_each_form`), so the words as written decide as on main and the words bash makes add
+  their parts. A key or value set twice on one command is also checked with each value it takes, with a brace or not.
+  That closes main's own form, `declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h
+  GIT_CONFIG_KEY_0=a; git commit -m x`, which main allowed. It also asks for the `export` form, where bash keeps the
+  harmless last key. Of the words bash makes, a part is kept only when the words as written do not give it, so a word
+  outside a set is read once: `declare 'a[$(rm -rf build)]' {X,Y}` has main's 2 parts, not 4. The builtin's checks
+  read the commands in each word again, so a word with n command or process substitutions now takes 4 x (n + 1)² times
+  its share of the third budget. A nest of seven `$( )` around a 1,000-word set was read 53,056 times, about 8 s of
+  CPU. It now asks as too large after 56 reads, as many as main makes. A brace set in `printf`'s first word now counts
+  as a command that changes the shell (#394), so an allow rule for `git push --force origin main` no longer lowers
+  `printf {-v,X} y; git push --force origin main`. *Reserved hits.* A `reserved:` entry for a line's old category
+  loses that hit when the line becomes `opaque_exec` or `delete`. `ssh h 'export {PATH,X}=; ls'` under `reserved:
+  [read]` has 1 hit, not main's 2, and still asks, as main decides `ssh h 'export PATH= X=; ls'`. Differential (#423)
+  against main edeb4f89. Built-in corpus: 72,061 actions x 87 policies, lowered 0 pairs, tightened 16,891 pairs on 226
+  actions. The focused corpus adds 291 lines to the 930: `declare -rx`, `typeset -xr`, `readonly`, `local -rx` and
+  `export` git config pairs with and without a set, PATH, LD_PRELOAD and GIT_SSH_COMMAND spelled in a set with line
+  joins and escapes, under `builtin`, `command`, `env`, `sudo`, `ssh` and `bash -c`, and `$( )` nests in a set. It
+  gives 2,680 actions x 87 policies, lowered 0 pairs, tightened 111,283 pairs on 1,556 actions. Under the 6 mixed
+  category policies, the built-in corpus lowers 561 pairs on 194 actions and the focused corpus 3,272 pairs on 1,170
+  actions. Each is the mixed category case above. 21 and 200 of them are git config lines that each value now reads,
+  now `opaque_exec` under `{opaque_exec: allow, read: ask}` and the like. Under 5 aimed policies (`reserved: [read]`,
+  `reserved: [delete, local_write, read, credentials, 'target:*/.exo/*']`, `deny: [opaque_exec]`, `deny: [delete]` and
+  an allow rule for `git push --force origin main`), the built-in corpus lowers 6 pairs on 3 actions and the focused
+  corpus 36 pairs on 20 actions. Each is an ssh line that loses a reserved hit as above, and it asks on both trees. No
+  other pair is lower.
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
   word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was

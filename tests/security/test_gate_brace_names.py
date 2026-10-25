@@ -59,6 +59,9 @@ def _bash(cmd: str):
     'export {"}",PATH}=; ls',         # a quoted } does not close the set
     'export {PATH,"X Y"}=; ls',
     "export {#,PATH}=; ls",
+    "read -p {#,PATH} X; ls",         # `#` is the prompt, not a comment: read fills PATH
+    "export {P..\\\nP}ATH=; ls",      # bash drops the \<newline> first: the set is {P..P}
+    "declare {'a[PATH=0]=1',X}; ls",  # a subscript in a name the set makes
     # options, before and inside the set
     "declare -x {PATH,X}=; ls",
     "declare -g {PATH,X}=; ls",
@@ -193,10 +196,45 @@ def test_a_brace_set_decides_as_the_words_bash_makes(cmd, expanded):
     "declare -n r={PATH,X}; ls",
     "declare -{n,} r=PATH; ls",
     "read X{A,B} <<< x; ls",
+    # a member of a set sets a git config key the line set before it: the key as written is still read. With a
+    # readonly name bash keeps the first value, so git runs the hook (-r stops the later assignment); with export it
+    # keeps the last
+    "declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h {GIT_CONFIG_KEY_0=a,b}; "
+    "git commit -m x",
+    "declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=./x.sh {GIT_CONFIG_KEY_0=a,b}; "
+    "git status",
+    "typeset -xr GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h {GIT_CONFIG_KEY_0=a,b}; "
+    "git commit -m x",
+    "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h {GIT_CONFIG_KEY_0=a,b}; "
+    "git commit -m x",
+    "export GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=h {GIT_CONFIG_KEY_0=a,b}; git commit -m x",
 ])
 def test_a_brace_that_asked_before_still_asks(cmd):
     c = _bash(cmd)
     assert c.category == "opaque_exec" and gate.decide(c).outcome == "ask", c
+
+
+_SSH_KEY = "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.sshCommand 'GIT_CONFIG_VALUE_0=rm -rf build'"
+
+
+@pytest.mark.parametrize("cmd, policy, outcome", [
+    (f"typeset -xr {_SSH_KEY} {{GIT_CONFIG_KEY_0=a,b}}; git fetch", {}, "ask"),
+    (f"typeset -xr {_SSH_KEY} {{GIT_CONFIG_KEY_0=a,b}}; git fetch", {"gates": {"deny": ["delete"]}}, "deny"),
+    (f"declare -rx {_SSH_KEY} {{GIT_CONFIG_KEY_0=a,b}}; git fetch", {"gates": {"deny": ["delete"]}}, "deny"),
+    (f"export {_SSH_KEY} {{GIT_CONFIG_KEY_0=a,b}}; git fetch", {"gates": {"deny": ["delete"]}}, "deny"),
+    ("declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h {GIT_CONFIG_KEY_0=a,b}; "
+     "git commit -m x", {"gates": {"deny": ["opaque_exec"]}}, "deny"),
+    # bash keeps a readonly name's first value without a brace too, so each value a key takes is read
+    ("declare -rx GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=./h GIT_CONFIG_KEY_0=a; "
+     "git commit -m x", {}, "ask"),
+    ("typeset -xr GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=./x.sh GIT_CONFIG_KEY_0=a; "
+     "git status", {}, "ask"),
+    (f"declare -rx {_SSH_KEY} GIT_CONFIG_VALUE_0=x; git fetch", {"gates": {"deny": ["delete"]}}, "deny"),
+    ("declare -rx GIT_CONFIG_COUNT=1 {GIT_CONFIG_KEY_0=core.hooksPath,X=1} GIT_CONFIG_VALUE_0=./h GIT_CONFIG_KEY_0=a; "
+     "git commit -m x", {}, "ask"),
+])
+def test_a_git_config_key_the_line_set_is_read_with_each_value(cmd, policy, outcome):
+    assert gate.decide(_bash(cmd), policy).outcome == outcome
 
 
 @pytest.mark.parametrize("cmd", [
@@ -216,6 +254,49 @@ def test_a_brace_that_asked_before_still_asks(cmd):
 def test_a_brace_bash_does_not_expand_stays_read(cmd):
     c = _bash(cmd)
     assert c.category in ("read", "local_write") and gate.decide(c).outcome == "allow", c
+
+
+@pytest.mark.parametrize("cmd, apart", [
+    ("declare 'a[$(rm -rf build)]' {X,Y}", "declare 'a[$(rm -rf build)]' X Y"),
+    ('declare "a[$(rm -rf build)]" {X,Y}', 'declare "a[$(rm -rf build)]" X Y'),
+    ("declare -i 'A=$(rm -rf build)' {X,Y}", "declare -i 'A=$(rm -rf build)' X Y"),
+    ("export GIT_SSH_COMMAND='rm -rf build' {X,Y}=1; git fetch", "export GIT_SSH_COMMAND='rm -rf build' X=1 Y=1; git fetch"),
+    ("export LD_PRELOAD=/tmp/x.so {X,Y}=1; ls", "export LD_PRELOAD=/tmp/x.so X=1 Y=1; ls"),
+    ("read PATH {X,Y}; ls", "read PATH X Y; ls"),
+])
+def test_a_word_outside_the_set_is_read_once(cmd, apart):
+    """The words bash makes add only the parts the words as written do not give, so a word outside the set does not
+    give its parts twice."""
+    a, b = _bash(cmd), _bash(apart)
+    assert sorted(p.summary for p in gate._each_part(a)) == sorted(p.summary for p in gate._each_part(b)), (a, b)
+
+
+def test_a_set_of_command_substitutions_is_read_within_the_budget(monkeypatch):
+    """Each word a set makes is read again, a command in it too, so a word with a $( ), a backtick or a <( ) takes
+    more of the budget. A nest of seven $( ) around a 1,000-word set is read about as often as main reads it (56
+    times), not once per word (53,056 times), and asks."""
+    calls = []
+    real = gate.classify_shell
+    monkeypatch.setattr(gate, "classify_shell", lambda cmd, depth=0: calls.append(depth) or real(cmd, depth))
+    for cmd, most in [("declare -i 'A=$(" + "x=$(" * 6 + "ls '{1..1000}'" + ")" * 6 + ")'", 80),
+                      ("declare -i 'A=$(ls '{1..1000}')'", 10),
+                      ("declare -i 'A=`ls '{1..1000}'`'", 10),
+                      ("declare -i 'A[$(ls '{1..1000}')]=1'", 10)]:
+        calls.clear()
+        c = _bash(cmd)
+        assert len(calls) <= most, (cmd, len(calls))
+        assert gate.decide(c).outcome == "ask", cmd
+    calls.clear()
+    assert gate.decide(_bash("export {A,B,C}=\"$(git rev-parse HEAD)\"; ls")).outcome == "allow"   # a few still fit
+    assert len(calls) <= 10
+
+
+def test_a_printf_v_in_a_set_changes_the_shell_for_a_rule():
+    """A rule that allows a command must match each command before it that changes the shell (#394): `printf -v`
+    does, also in a set."""
+    policy = {"gates": {"rules": [{"match": {"command": "git push --force origin main"}, "decision": "allow"}]}}
+    for cmd in ("printf -v X y; git push --force origin main", "printf {-v,X} y; git push --force origin main"):
+        assert gate.decide(_bash(cmd), policy).outcome == "ask", cmd
 
 
 @pytest.mark.parametrize("prog", ["export", "declare", "read", "printf", "test"])
