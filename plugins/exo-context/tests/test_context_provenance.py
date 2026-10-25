@@ -1532,6 +1532,37 @@ def test_a_ruling_said_twice_word_for_word_rides_the_summary_that_folded_one(tmp
     assert pins(tmp_path, "tw")["ruling"] == [MINE]
 
 
+class TailCarrier(Paraphrase):
+    """A later Hermes compaction that keeps the last three rows, its summary merged into the first of them."""
+
+    def compress(self, messages, **kw):
+        summary = super().compress(messages, **kw)[1]
+        tail = [dict(m) for m in messages[-3:]]
+        tail[0] = {**tail[0], "_compressed_summary": True,
+                   "content": summary["content"] + "\n\n" + hf.message_text(tail[0])}
+        return tail
+
+
+def test_the_row_hermes_merged_its_summary_into_counts_as_kept_beside_repeated_replies(tmp_path):
+    """The rows a compaction kept after its summary row are matched from the end. So with replies of the same text in
+    the part it folded, the message Hermes merged its summary into still counts as kept, not folded, and /undo 2 that
+    cuts at that row drops its ruling on the next turn."""
+    h = Hermes(tmp_path, "rr", inner=TailCarrier())
+    for text in ("start the importer", "now the parser", MINE):
+        h.turn(text)
+    h.history = h.eng.compress([*h.history, mine("next step")], force=True)  # the tail: MINE, its reply, next step
+    assert len(h.history) == 3 and hf.message_text(h.history[0]).endswith(MINE)
+    h.eng.select_context([SYS, *h.history], conversation_messages=list(h.history), incoming_message=h.history[-1])
+    h.history.append(ok())
+    h.eng.on_turn_complete(list(h.history), usage=None)
+    text = hf.message_text(h.history[0])
+    h.history = [{**h.history[0], "content": text[:text.index(END_LINE) + len(END_LINE)]}]  # /undo 2
+    host_undo("rr")
+    assert pins(tmp_path, "rr")["ruling"] == [MINE]  # one notice: only the last turn is known yet
+    h.turn("write the summary")
+    assert pins(tmp_path, "rr")["ruling"] == []
+
+
 def test_a_second_undo_before_the_next_turn_keeps_the_first_ones_window(tmp_path):
     """Two undos before the next turn. /undo 2 reaches a turn before the summary row, so the row goes too, then
     /undo 1 takes the first turn. The second notice leaves the next turn the window the first one saw, which still

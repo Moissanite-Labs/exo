@@ -237,15 +237,15 @@ summary row folded the window's first row or that part.
 
 Each compaction ties the pins whose message it folded to the block it writes into its summary row, and the pins
 file keeps those ties. A summary row shows the pins tied to its block. So a folded pin stays while a summary row
-that carries it is left, even when the undone turn says the ruling again, word for word too: a message counts as
-kept only as many times as the compaction's result holds its text. That holds after a restart, in a new agent, and
-in a compression or `/branch` child. Hermes keeps its first rows before its first summary row, so `/undo N` can
-take that row too, and then the folded pin goes. When no role alternates, Hermes merges its summary into the next
-row. That row's own message counts as kept, not folded, and an undo of its turn keeps only the summary part. A pin
-whose message sits in a tail that `/compress here N` held out of `compress` stays: compaction never drops a pin. A
-compression child takes over its parent's window and pending undo. The link to a handoff a compaction wrote before
-the undo goes, as on the core. Each drop is logged as counts per kind and the session id, and a transcript cut
-short is logged with the session id.
+that carries it is left, even when the undone turn says the ruling again, word for word too: the rows a compaction
+kept are matched to its input from the start and from the end, each text as many times as the result holds it. That
+holds after a restart, in a new agent, and in a compression or `/branch` child. Hermes keeps its first rows before
+its first summary row, so `/undo N` can take that row too, and then the folded pin goes. When no role alternates,
+Hermes merges its summary into the next row. That row's own message counts as kept, not folded, and an undo of its
+turn keeps only the summary part. A pin whose message sits in a tail that `/compress here N` held out of `compress`
+stays: compaction never drops a pin. A compression child takes over its parent's window and pending undo. The link
+to a handoff a compaction wrote before the undo goes, as on the core. Each drop is logged as counts per kind and
+the session id, and a transcript cut short is logged with the session id.
 
 Some cases are not covered. Hermes's messaging gateway tells no one about `/undo`. Nor does the CLI while it has no
 agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. A host that runs exo-context

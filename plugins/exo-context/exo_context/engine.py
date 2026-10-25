@@ -128,19 +128,19 @@ def _blocks(messages: list[dict[str, Any]]) -> set[str]:
 
 
 def _gone(messages: list[dict[str, Any]], result: list[dict[str, Any]], idx: int) -> list[dict[str, Any]]:
-    """The rows of `messages` a compaction did not keep. A message counts as kept only as many times as the result
-    holds its text outside the summary row `idx`, so a ruling said twice word for word, once folded and once kept,
-    still counts as folded (#389)."""
-    kept = Counter(hf.message_text(m) for i, m in enumerate(result) if i != idx and isinstance(m, dict))
-    gone = []
-    for m in messages:
-        if isinstance(m, dict):
-            text = hf.message_text(m)
-            if kept[text] > 0:
-                kept[text] -= 1
-            else:
-                gone.append(m)
-    return gone
+    """The rows of `messages` a compaction did not keep, in order. The rows the result keeps before its summary row
+    `idx` are matched from the start and those after it from the end, each text as many times as the result holds
+    it. So a ruling said twice word for word, once folded and once kept, still counts as folded, and replies of the
+    same text leave the message Hermes merged its summary into last among the rows gone (#389)."""
+    rows = [m for m in messages if isinstance(m, dict)]
+    kept = [False] * len(rows)
+    for side, order in ((result[:idx], range(len(rows))), (result[idx + 1:], range(len(rows) - 1, -1, -1))):
+        want = Counter(hf.message_text(m) for m in side if isinstance(m, dict))
+        for i in order:
+            text = hf.message_text(rows[i])
+            if want[text] > 0 and not kept[i]:
+                kept[i], want[text] = True, want[text] - 1
+    return [m for m, k in zip(rows, kept) if not k]
 
 
 def _part_of(first: str, msg: dict[str, Any]) -> bool:
