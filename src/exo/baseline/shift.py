@@ -374,13 +374,14 @@ def replay(subject: Subject, signals: Sequence[Signal], *, origin: date, today: 
     pol = {**DEFAULTS, **pol}
     t = Track(subject.id, subject.cls)
     value = subject.cls == "value"
-    mine = [s for s in signals if s.item == subject.id]
+    mine = [s for s in signals if s.item == subject.id and origin <= local_day(s.ts, tz) <= today]
     eps_all = episodes(mine, tz, contra_delta=pol["value_contra_delta"] if value else 0.0,
                        min_confidence=pol["min_confidence"])
     active = set(active_weeks) | {week_index(e.day, origin) for e in eps_all}
     scope_weeks = {k: set(v) for k, v in (scope_weeks or {}).items()}
     sigs = sorted((s for s in mine if counts(s, pol["min_confidence"])), key=lambda s: s.ts)
-    acts = sorted((a for a in acts if a.item in (subject.id, "*")), key=lambda a: a.ts)
+    acts = sorted((a for a in acts if a.item in (subject.id, "*")
+                   and origin <= local_day(a.ts, tz) <= today), key=lambda a: a.ts)
     last_closed = week_index(today, origin) - 1
     t.weight = t.prompt_weight = subject.innate(origin)
 
@@ -390,10 +391,12 @@ def replay(subject: Subject, signals: Sequence[Signal], *, origin: date, today: 
     def quiet(on: date) -> bool:
         return t.quiet_until is not None and on < t.quiet_until
 
-    def change(kind: str, at: str, on: date, week: int) -> None:
+    def change(kind: str, at: str, on: date, week: int, snapshot: dict | None = None) -> None:
         """A swap, a scoped item, an adoption or a restore actually happening."""
-        emit(CHANGE[kind], at, week, claim=t.claim, evidence=_evidence(t.record), scope=t.scope,
-             challenger=round(t.challenger, 4), weight=round(t.weight, 4), weeks=len(t.history))
+        data = snapshot if snapshot is not None else {
+            "claim": t.claim, "evidence": _evidence(t.record), "scope": t.scope,
+            "challenger": round(t.challenger, 4), "weight": round(t.weight, 4), "weeks": len(t.history)}
+        emit(CHANGE[kind], at, week, **data)
         if kind in ("swap", "adopt"):
             t.swaps = [d for d in t.swaps if (on - d).days < pol["flip_window"]] + [on]
             t.status = "swapped" if kind == "swap" else "adopted"
@@ -405,16 +408,24 @@ def replay(subject: Subject, signals: Sequence[Signal], *, origin: date, today: 
                           "house version, keep yours, or limit yours to some kinds of work?")
         elif kind == "restore":
             t.status = "active"
-        elif kind == "scope" and t.scope:
-            t.done_scopes.add(t.scope)
+        elif kind == "scope" and data.get("scope"):
+            t.done_scopes.add(str(data["scope"]))
         t.clear(history=True)
 
     def propose_or_change(kind: str, at: str, on: date, week: int) -> None:
+        if kind != "restore" and taste.guards(t.claim, pol.get("guard_words", taste.GUARD_WORDS)):
+            emit("question", at, week, why="guarded_challenger",
+                 text=f"Your proposed preference '{t.claim}' concerns a guarded action. Review it explicitly.")
+            t.clear()
+            t.quiet_until = on + timedelta(days=pol["flip_cooldown"])
+            return
         if mode_at(at) != "ask":
             change(kind, at, on, week)
         elif t.proposal is None:
-            t.proposal = {"kind": kind, "at": at, "week": week}
-            emit("proposed", at, week, change=kind, claim=t.claim, scope=t.scope, challenger=round(t.challenger, 4))
+            snapshot = {"claim": t.claim, "evidence": _evidence(t.record), "scope": t.scope,
+                        "challenger": round(t.challenger, 4), "weight": round(t.weight, 4), "weeks": len(t.history)}
+            t.proposal = {"kind": kind, "at": at, "week": week, "snapshot": snapshot}
+            emit("proposed", at, week, change=kind, **snapshot)
 
     def apply_act(a: Act, week: int) -> None:
         on = local_day(a.ts, tz)
@@ -423,8 +434,11 @@ def replay(subject: Subject, signals: Sequence[Signal], *, origin: date, today: 
             if t.pinned and t.status == "armed":
                 t.clear()
         elif a.verb == "yes" and t.proposal is not None:
-            change(t.proposal["kind"], a.ts, on, week)
+            if not a.data or a.data == t.proposal["at"]:
+                change(t.proposal["kind"], a.ts, on, week, t.proposal["snapshot"])
         elif a.verb == "no" and t.proposal is not None:
+            if a.data and a.data != t.proposal["at"]:
+                return
             t.clear()
             t.quiet_until = on + timedelta(days=pol["flip_cooldown"])
         elif a.verb == "undo" and t.status == "active" and t.done_scopes:
@@ -471,7 +485,8 @@ def replay(subject: Subject, signals: Sequence[Signal], *, origin: date, today: 
         for kind_, x in sorted(events, key=lambda p: p[1].ts):
             if kind_ == "a":
                 apply_act(x, w)
-            elif value and t.status == "active" and not t.pinned and subject.source != "ruling":
+            elif value and t.status == "active" and not t.pinned and not subject.guarded \
+                    and not quiet(local_day(x.ts, tz)) and subject.source != "ruling":
                 why = single_step(x)
                 if why:
                     t.status, t.stepped_week = "stepped_back", w
@@ -503,8 +518,16 @@ def replay(subject: Subject, signals: Sequence[Signal], *, origin: date, today: 
         t.claim = next((e.claim for e in reversed(t.record) if e.claim), t.claim)
         t.d_mean = sum(e.delta for e in t.record) / len(t.record) if t.record else 0.0
         t.challenger = challenger_weight(t.record, close, pol["challenger_half_life"])
+        if (subject.source == "ruling" or subject.guarded) and t.s >= pol["arm_weeks"] \
+                and net_in_window(t.weeks, w, pol["arm_window_weeks"]) >= pol["arm_weeks"] and not quiet(close):
+            emit("question", at, w, why="ruling" if subject.source == "ruling" else "guarded",
+                 text=f"Your work has changed around '{subject.claim}'. Keep the rule, change it, or limit it?")
+            t.clear()
+            t.quiet_until = close + timedelta(days=pol["flip_cooldown"])
+            continue
         if value:
-            _value_close(t, w, close, at, pol, emit, propose_or_change, quiet)
+            if not subject.guarded:
+                _value_close(t, w, close, at, pol, emit, propose_or_change, quiet)
             continue
         # a scoped refinement: a record bound to one place or kind of task; the house item never fades
         sc = scope_of(t.record, pol) if t.status == "active" else None

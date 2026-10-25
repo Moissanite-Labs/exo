@@ -233,3 +233,19 @@ def test_attach_without_a_store_is_quiet_and_says_so_once(make_engine):
     eng.plugins.hooks.fire("on_turn_end", session_id="s1")
     eng.plugins.hooks.fire("on_turn_end", session_id="s1")
     assert len(lr.notices) == 1 and "learning is off" in lr.notices[0]
+
+
+def test_taste_scans_principal_utterance_without_a_learning_verdict(make_engine, monkeypatch):
+    from exo.baseline import classify
+    from exo.taste import signature
+    eng = make_engine()
+    eng.router.set_role("decision", [])
+    lr = attach(eng, env={})
+    lr.runtime.ledger.append("utterance", {"role": "user", "text": "bullet lists, not short paragraphs"},
+                             author="principal")
+    monkeypatch.setattr(classify, "_items", lambda *a: [
+        classify.Candidate("house-example", "short paragraphs, not bullet lists",
+                           signature("short paragraphs", "bullet lists"))])
+    out = asyncio.run(review(lr, promote=False))
+    assert out["status"] == "nothing_new" and out["taste"]["signals"] == 1, out
+    assert not eng.fake.calls  # Signature fallback needs no model.

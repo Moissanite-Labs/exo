@@ -1006,6 +1006,13 @@ The design is `docs/TASTE-BASELINE.md`; its "Build status" says what is built. C
 
 Run `tests/baseline` and the `exo-memory` plugin suite after a change.
 
+The restored waves 2 and 3 are in review. `baseline/prompt.py` refreshes taste independently of the fixed
+principal pack, by ledger revision, policy stamp, local day and exact project scope. A custom labeller consumes
+one budgeted question per call; the built-in adapter reserves each typed question before I/O. Its failed and
+cancelled calls still count. Generated notes use `exo-learn`, cite principal behavioral evidence, and ask-mode
+answers retain the proposal's frozen text. Test these boundaries in `tests/baseline/test_recovered_guards.py` and
+`plugins/exo-memory/tests/test_taste_prompt_refresh.py`. Task-kind client scope and nightly activation remain open.
+
 ### Add an `exo` subcommand
 
 `src/exo/cli.py` imports a command's module only when that command runs (#260), so `exo --help`, `exo --version`

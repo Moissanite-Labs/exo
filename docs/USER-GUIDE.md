@@ -248,6 +248,10 @@ appearing in the brief and only wait in `/taste`. A step back never waits for a 
 Safety settings (approvals, budget, posting rules) are not taste. They never come from the house taste and only
 change when you edit them. Details: `docs/TASTE-BASELINE.md`.
 
+Taste changes appear on the next model call. A project-specific preference applies only in the exact working
+folder where it was learned. Task-kind preferences are visible in the taste view but are not yet selected by
+client prompts. The bundled house pack is still empty; using these controls does not publish personal taste.
+
 ## 5. Background jobs and subagents
 
 The agent can start a long command, such as a build or a test run, and keep working. It uses `bash` with

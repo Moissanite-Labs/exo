@@ -2691,12 +2691,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   item ticked by the principal), per-item lookup with source tags, house precedence, `exo taste`,
   `exo taste export-house` with the privacy and value checks, `exo taste review`, and the taste block in the
   prompt. The shipped pack is an empty 0.0.0 placeholder until the principal releases the first one.
-  **Waves 2 and 3 built** 2026-10-13: the sustained-change rule and value step back as pure functions
+  **Waves 2 and 3 restored for review** 2026-10-25 (original work 2026-10-13): the sustained-change rule and value step back as pure functions
   (`baseline/shift.py`), signal labelling with a pluggable decision-model hook that is off without a `decision`
   route (`baseline/classify.py`), the replay and its ledger outcomes (`baseline/adapt.py`), promotion rule 3 holding
   inferred lessons that would replace existing taste, the brief's Taste section, and `/taste` with mode, pending,
   overridden and stepped-back lists, pin, off, undo, restore and reset, as a `command.run` built-in in both clients.
   Both worked examples are tests with the doc's numbers. Mode storage: D-072.
+  *Restoration amendment 2026-10-25 (#283):* preserve the original implementation's authorship and port it onto
+  current main. Learner notes require the learner author and cite principal behavior, not principal control
+  notes. Ask-mode answers bind to the proposal's frozen text and timestamp. Rulings, pins and guarded items keep
+  their precedence for scoped changes too; guarded challenger text becomes a question. Each model question is
+  reserved before I/O against the daily cap, including failed requests. Taste updates reach the next model call
+  through an invalidated per-project cache; the principal pack remains stable. Project scope is an exact working
+  directory. Task-kind scope and nightly activation remain follow-ups. The shipped pack remains empty.
+  Rejected: replaying whichever challenger text is newest when a user answers; trusting every note that cites a
+  principal event; rebuilding the entire principal pack on each turn. Tests cover these boundaries without model
+  calls or releasing a pack.
 - **Contested questions (principal, verbatim, 2026-10-12):** "C ship the implications behind the world view and the
   kind of thinking behind it rather than specifics like religious prescriptions and border-based politics". Value
   items on contested questions ship as reasoning style and its implications only; no faith, nation, party or
