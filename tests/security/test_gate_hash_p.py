@@ -118,6 +118,20 @@ TILDE = [
 ]
 ASK += TILDE + ["hash -p /tmp/x ~-; ls"]     # as a name it binds OLDPWD, which may be ls
 
+# A double-quoted "${!n}" is no lone word: with n=@ or n='a[@]' bash splits it as "$@", so after
+# `set -- -p /tmp/x ls` it runs `hash -p /tmp/x ls` (abu-aska, #409).
+INDIRECT = [
+    'set -- -p /tmp/x ls; n=@; hash "${!n}"; ls',
+    'hash "${!n}"; ls',
+    'hash "${!n:-}"; ls',
+    'hash -p "${!n}"; ls',
+    'hash -p "${!n/x/y}"; ls',
+    'builtin hash "${!n}"; ls',
+    'command hash -p "${!n}"; ls',
+    "ssh host 'hash \"${!n}\"; ls'",
+]
+ASK += INDIRECT
+
 READ = [
     "hash",
     "hash -r",
@@ -248,6 +262,15 @@ def test_a_bracket_option_word_is_the_target():
 @pytest.mark.parametrize("gates", [{"matrix": {"costly": {"public": "deny"}}}, {"categories": {"store_write": "deny"}},
                                    {"reserved": ["tool:terminal"]}])
 def test_a_tilde_option_word_may_rebind(line, gates):
+    c = classify(sh(line))
+    assert c.category == "opaque_exec", c
+    assert decide(c, normalize_policies({"gates": gates})).outcome == "ask"
+
+
+@pytest.mark.parametrize("line", INDIRECT)
+@pytest.mark.parametrize("gates", [{"matrix": {"costly": {"public": "deny"}}}, {"categories": {"store_write": "deny"}},
+                                   {"reserved": ["tool:terminal"]}])
+def test_a_quoted_indirect_word_may_rebind(line, gates):
     c = classify(sh(line))
     assert c.category == "opaque_exec", c
     assert decide(c, normalize_policies({"gates": gates})).outcome == "ask"

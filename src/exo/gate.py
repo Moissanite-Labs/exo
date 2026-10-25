@@ -1877,18 +1877,21 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
     Before a `-p` it may be one, unless it is a lone double-quoted word at the end (`hash "$cmd"`), and so may `~-`,
     `~+` or `~1`, which bash reads from OLDPWD, PWD or the directory stack (`OLDPWD=-p`). From the path on,
     it may split into a path and a name (`hash -p $P` with P='/x ls'), unless it is one double-quoted word, and as a
-    name it may lose its slash (`hash -p /x {ls,/}` binds ls). A glob keeps a slash it has."""
+    name it may lose its slash (`hash -p /x {ls,/}` binds ls). A glob keeps a slash it has. A double-quoted word
+    with `$@` or `${!` is never one word: `"${!n}"` with n=@ splits as `"$@"` does."""
     def glob(w: _Word) -> bool:     # an unquoted `[` that starts a word, also after a `\<newline>`, as for unset
         return w.glob or w.raw.replace("\\\n", "")[:1] == "["
 
     def tilde(w: _Word) -> bool:    # `~-`, `~+`, `~1`: OLDPWD, PWD or the directory stack, which a line may set
         return bool(re.match(r"~(?:[+-]\d*|\d+)(?:/|$)", w.raw.replace("\\\n", "")))
 
+    def lone(w: _Word) -> bool:     # one double-quoted word stays one word, but "${!n}" with n=@ splits as "$@"
+        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw
+
     args, path, at, i = words[1:], None, 0, 0
     while i < len(args):
         w, a = args[i], args[i].text
-        if path is None and (w.dynamic or glob(w) or w.brace or tilde(w)) and not (
-                i + 1 == len(args) and re.fullmatch(r'"[^"@]*"', w.raw)):
+        if path is None and (w.dynamic or glob(w) or w.brace or tilde(w)) and not (i + 1 == len(args) and lone(w)):
             return f"hash may rebind a program name: an option word the gate cannot read ({a[:40]})", a
         if a == "--":
             i += 1
@@ -1904,8 +1907,7 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
             path, at = a[j + 1:], i
         i += 1
     names = [w.text for w in args[i:] if w.dynamic or w.brace or "/" not in w.text]
-    split = [w.text for w in args[at:i] if (w.dynamic or w.brace or glob(w) and "/" not in w.text)
-             and not re.fullmatch(r'"[^"@]*"', w.raw)]
+    split = [w.text for w in args[at:i] if (w.dynamic or w.brace or glob(w) and "/" not in w.text) and not lone(w)]
     if not path or not names and not split:
         return None
     return (f"hash -p makes {', '.join(names)} run {path}" if names else
