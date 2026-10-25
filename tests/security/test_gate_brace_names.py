@@ -237,15 +237,20 @@ def test_a_git_config_key_the_line_set_is_read_with_each_value(cmd, policy, outc
     assert gate.decide(_bash(cmd), policy).outcome == outcome
 
 
+_MANY_KEYS = " ".join(f"GIT_CONFIG_KEY_0=k.a{i}" for i in range(80))   # with two values, past the 64 pairs
+
+
 @pytest.mark.parametrize("cmd, policy, outcome", [
     # a thousand keys and a thousand values: a million pairs, each read once with each value it may take
     ("export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.{1..1000} GIT_CONFIG_VALUE_0=x{1..1000}; git status", {}, "ask"),
     (" ".join(["export GIT_CONFIG_COUNT=1"] + [f"GIT_CONFIG_KEY_0=alias.a{i} GIT_CONFIG_VALUE_0=x{i}" for i in range(300)])
      + "; git status", {}, "ask"),
+    # past the bound the command asks, though no key is one git runs
+    (" ".join(["export GIT_CONFIG_COUNT=1"] + [f"GIT_CONFIG_KEY_0=k.a{i} GIT_CONFIG_VALUE_0=x{i}" for i in range(9)])
+     + "; git status", {}, "ask"),
     # the pair bash keeps is still read: the first under a readonly name, the last under export
-    (f"declare -rx {_SSH_KEY} GIT_CONFIG_KEY_0=a{{1..80}} GIT_CONFIG_VALUE_0=x; git fetch",
-     {"gates": {"deny": ["delete"]}}, "deny"),
-    ("export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=a{1..80} GIT_CONFIG_VALUE_0=x GIT_CONFIG_KEY_0=core.sshCommand "
+    (f"declare -rx {_SSH_KEY} {_MANY_KEYS} GIT_CONFIG_VALUE_0=x; git fetch", {"gates": {"deny": ["delete"]}}, "deny"),
+    (f"export GIT_CONFIG_COUNT=1 {_MANY_KEYS} GIT_CONFIG_VALUE_0=x GIT_CONFIG_KEY_0=core.sshCommand "
      "'GIT_CONFIG_VALUE_0=rm -rf build'; git fetch", {"gates": {"deny": ["delete"]}}, "deny"),
 ])
 def test_a_git_config_key_set_many_times_is_read_within_a_bound(cmd, policy, outcome):
