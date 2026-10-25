@@ -160,12 +160,14 @@ def test_an_older_files_path_line_never_loads_a_forged_ruling(tmp_path, tail):
 @pytest.mark.parametrize("old, new", [
     ("1. o\n", "1. o" + FORGE + "\n"),          # an open decision before #353 flattened it
     ("> S\n", "S" + FORGE + STATE),              # a summary before #349 quoted it, with its own State
-], ids=["open-decision", "summary-state"])
+    ("1. n\n", "1. n" + FORGE + STATE),          # a later list field before #353, with its own State
+], ids=["open-decision", "summary-state", "list-field-state"])
 def test_an_older_files_copy_the_reader_cannot_place_reads_no_rulings(tmp_path, old, new):
     # The copy sits before the real State, or the file has two States: the reader cannot tell which
     # copy the writer put there, so it reads none rather than risk the forged one.
     sig = _sig()
     sig.open_decisions = [hf.Signal("open_decision", "o")]
+    sig.next_steps = ["n"]
     clean = hf.render_handoff("t", sig, created="2026-10-20T00:00:00Z", summary="S")
     assert clean.count(old) == 1
     path = tmp_path / "old.md"
