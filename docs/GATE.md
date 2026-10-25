@@ -113,12 +113,13 @@ nobody read:
   does (#343). A copy, a move, a redirect, a link or `tee` can run before the post. A writer can
   run beside it, later in a pipe or in the background, and a redirection can truncate the file
   itself. An ssh hop runs `gh` on a host where the path names another file. So the hook leaves
-  the file unread when the gate finds any other part on the line, in either reading: another
-  command, a redirection to a file, an assignment that changes what runs (`GH_EDITOR=x gh ...`,
-  `LD_PRELOAD=...`) or one on its own (`X=1; gh ...`), a wrapper the gate does not see through
-  (`setsid`, `taskset`, `xargs`), a shell (`bash -c`), an ssh hop, a `{ ...; }` group, or the
-  code around the call in `execute_code` or `python -c`. It does not ask whether that part
-  writes the file. The post then counts as unseen: it asks once, and its violation says why
+  the file unread when the gate finds any other part on the line, in any reading of it
+  (`gate.readings`): another command, a redirection to a file, an assignment that changes what
+  runs (`GH_EDITOR=x gh ...`, `LD_PRELOAD=...`) or one on its own (`X=1; gh ...`), a wrapper the
+  gate does not see through (`setsid`, `taskset`, `xargs`), a shell (`bash -c`), an ssh hop, a
+  `{ ...; }` group, a store read from the tool's own folder (#311), or the code around the call
+  in `execute_code` or `python -c`. It does not ask whether that part writes the file. The post
+  then counts as unseen: it asks once, and its violation says why
   ("the gate did not read the body file, since the line does more than post ..."). Every post's
   body file on such a line gets that note, so a second post's says so too. Wrappers the gate
   sees through add no part, so the file is still read under `nice`, `exec`, `sudo`, `env`,

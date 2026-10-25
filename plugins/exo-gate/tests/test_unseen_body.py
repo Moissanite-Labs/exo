@@ -207,6 +207,42 @@ def test_code_that_posts_a_body_file_asks_once(store, work):
     assert gate.UNSEEN_ON_LINE in r["message"] and gate.UNSEEN_BODY not in r["message"], r
 
 
+def _has_folder_read(c):
+    return any(p.category == "credentials" for x in gate.readings(c) for p in gate._each_part(x))
+
+
+# The readings and parts main added since keep the rule (#343): a store read from the tool's own folder (#311), with
+# the call as read before #311 (`also`) beside it; a sudo write that took the lead from a read (#454, `displaced`); an
+# ssh that runs the line it is fed (#316). On main the hook read the file in all but the second, and ran both sudo rows.
+NEWER_READINGS = [
+    ("terminal", {"command": "cp config {work}/clean.md && " + P, "workdir": "~/.kube"}, _has_folder_read),
+    ("bash", {"command": "cat ../.kube/config > {work}/clean.md; " + P, "cwd": "~/.kube"}, lambda c: c.also),
+    ("terminal", {"command": "echo $(sudo cat {work}/notes.md > {work}/clean.md) && " + P},
+     lambda c: any(p.displaced for p in gate._each_part(c))),
+    ("terminal", {"command": "x=$(sudo gh pr view 1 -R o/r > /tmp/f); " + P},
+     lambda c: any(p.displaced for p in gate._each_part(c))),
+    ("terminal", {"command": "echo '" + P + "' | ssh prod-db"},
+     lambda c: any("runs its stdin" in p.summary for p in gate._each_part(c))),
+    ("terminal", {"command": "echo '" + P + "' | ssh prod-db ssh inner"},
+     lambda c: any("passes its stdin" in p.summary for p in gate._each_part(c))),
+]
+
+
+@pytest.mark.parametrize("tool, args, kind", NEWER_READINGS)
+def test_a_body_file_stays_unread_under_each_newer_reading(store, work, tmp_path, monkeypatch, tool, args, kind):
+    home = tmp_path / "home"
+    (home / ".kube").mkdir(parents=True)
+    (home / ".kube" / "config").write_text("apiVersion: v1\n")
+    monkeypatch.setenv("HOME", str(home))
+    args = {k: v.format(work=work) for k, v in args.items()}
+    assert kind(gate.classify({"tool": tool, "args": args})), args
+    _, ctx = make_gate(store)
+    [cb] = ctx.hooks["pre_tool_call"]
+    r = asyncio.run(cb(tool_name=tool, args=args, session_id="s1", tool_call_id="c1", turn_id="t1"))
+    assert r["action"] == "approve" and r.get("once") is True, r
+    assert gate.UNSEEN_ON_LINE in r["message"] and gate.UNSEEN_BODY not in r["message"], r
+
+
 def test_the_card_says_the_file_was_not_read(store, work):
     # The file is not read, so the card names no word it holds now: gh may post another text. It says the file was
     # not read and why. Alone on its line, the same post is read and checked. A second post's file is left unread for

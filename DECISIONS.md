@@ -1025,6 +1025,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   199,491 on a second one of 344. Through the hook, the first corpus's 426 lines lower nothing under 2 policies:
   446 of the 852 pairs ask once where main ran or offered "always". Limits: `docs/GATE.md` "What an approval
   covers".
+  *With main's newer readings (2026-10-25).* Main reads a call more ways now. `gate.readings` lists the call, the
+  call as read before #311 (`also`), its `floor` and the floor's `also` (#452). A store read from the tool's own
+  folder is a part (#311). A sudo write that takes the lead from a read keeps that read as `displaced`, and both are
+  parts (#454). An ssh fed a line the gate can read runs that line on the host (#316). The hook walks every reading:
+  it reads a body file only when no part of any reading is anything but a copy of the post, and on any other line
+  it names every post's file in `held_body_files`. So the file stays unread and the post asks once in
+  `cp config /w/clean.md && gh pr comment 5 -R myorg/app --body-file /w/clean.md` with `~/.kube` as the tool's
+  folder, in `echo $(sudo cat /w/notes.md > /w/clean.md) && gh ...` and in
+  `echo 'gh ... --body-file /w/clean.md' | ssh prod-db`. Main read the file in each, and ran the second.
+  `gate_diff` sets `held_body_files` only through a `CONTEXTS` entry. With the key set, it reports the swap of
+  `UNSEEN_BODY` for `UNSEEN_ON_LINE` as violations lost, and nothing else: outcome 0, reserved 0. Run from main
+  edeb4f89 against this head without the key, it finds nothing lowered or changed in 6,241,206 pairs on its own
+  corpus, and in 508,326 on a #343 corpus of 952 calls across the readings above. With the key, that corpus loses
+  violations in 15,880 pairs, each the swap, and lowers no outcome or reserved entry. Through the hook, its 952
+  calls lower nothing under 2 policies, widen no approvers and read no file main left unread. Another limit, also
+  on main: the gate does not see a command inside a parameter word (#143). So
+  `NO_COLOR=${X:-$(cp /w/notes.md /w/clean.md)} gh ...` reads the file and runs. The open PR #158 would fix that.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
