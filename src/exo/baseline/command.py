@@ -68,7 +68,8 @@ def pending_line(v: TasteView, iid: str) -> str | None:
     t = it.track
     yours = t.claim or "it your own way"
     if t.proposal is not None:
-        what = {"swap": "switch to your way", "scope": f"use your way in {t.scope or 'that work'}",
+        proposed_scope = t.proposal.get("snapshot", {}).get("scope")
+        what = {"swap": "switch to your way", "scope": f"use your way in {proposed_scope or 'that work'}",
                 "adopt": "take on your view", "restore": "bring back the house view"}[t.proposal["kind"]]
         yours = t.proposal.get("snapshot", {}).get("claim") or yours
         return (f"Waiting for you: {what}: {yours} (against '{it.subject.claim}'). "

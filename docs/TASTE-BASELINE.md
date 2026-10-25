@@ -775,7 +775,8 @@ How waves 2 and 3 settle details this page left open:
 - **Values.** Episodes with delta below 0.5 are refinements and do not count. A restore counts agreeing weeks after
   the week of the step back. Rulings never step back. The getting-to-know window applies to house values only.
 - **Ask mode.** A proposal freezes its claim, scope, evidence and weights. Its answer names the proposal timestamp;
-  a stale answer cannot accept another proposal, and later signals cannot change the accepted text. A proposal
+  a stale answer cannot accept another proposal, and later signals cannot change the displayed or accepted text
+  and scope. A proposal
   disarmed by the user going back lapses without an answer. "Three in a row" counts proposals in time order;
   an answer to any proposal resets the run.
 - **Protected items.** Rulings, pins and guarded items remain protected when evidence is project-scoped. A
