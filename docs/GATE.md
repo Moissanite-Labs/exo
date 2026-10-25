@@ -649,7 +649,7 @@ system or bash will.
   up a run folder in the lexical form of what follows, once per classify call, so a `..` there is read as text for
   that lookup: `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads as on main, while
   `cat <link>/../exod*` asks. A 100 KB word with 16 links costs about twice what it costs on main, and a line of
-  500 or 2,000 short words with 16 links each two and a half to four times, by the load on the machine. The cost
+  500 or 2,000 short words with 16 links each about two to four times, by the load on the machine. The cost
   grows with the line's length, as on main. Another link whose target the gate does not know, such as a folder's
   descriptor in `/proc/<pid>/fd`, is read as text.
 - **Doubled slashes, `.` and `..` (#446).** The shell and the kernel read `a//b` and `a/./b` as `a/b`, and
@@ -679,7 +679,10 @@ was then another store on the line, and it stays a credentials part of the line 
 `cat ~/.ssh/id_rsa $(cat ~/.kube//config)` are denied, as on main. So is a file tool with both paths (`read_file`
 with `~/.kube//config` and `~/.ssh/id_rsa`). The part has no own text, so it only raises, and the target stays the
 first store. A line main read the same way gets no part: under that entry `cat ~/.kube/config ~/.ssh/id_rsa` asks,
-here and on main.
+here and on main. A shell call's own folders work the same way (#311, "The tool's own folder"). The read's target is
+the first folder that names a store, and that can be a spelling main did not read. Main's folder then stays a part
+too (#513 review). So `bash` with `cwd: ~/.config//gcloud` and `workdir: ~/.ssh` is denied under
+`deny: [target:*/.ssh*]`, as on main, while `cwd: ~/.config/gcloud` there asks, here and on main.
 A call that was `store_write` because its path goes through a descriptor or process folder
 (`/proc/<pid>/root`, `/dev/fd`, #217) is `credentials` once the path names a secret. Its store write stays a part
 (#447), so a `store_write` deny, category line or `reserved:` entry still applies to it. A file tool's own class,
@@ -1752,7 +1755,9 @@ in one of three ways:
   glob that could name one). `ls` or `git status` with `~/.ssh` as `cwd` asks, as `cd ~/.ssh && ls`
   does, and so does `cat deploy_key` in `~/link-ssh`, a link to `~/.ssh`. The part's target is the
   folder, where a link leads, so `deny: ["target:*/.ssh"]` denies the call as it denies the `cd`
-  form.
+  form. The first such folder is the target. When it is a spelling main did not read
+  (`~/.config//gcloud`, #446), the folder main read first is a part too, so an entry for it still
+  matches.
 - A relative word resolves into a store from the folder (#209): any word in `~/.exo/keys` or
   `~/.claude`, `.` in `~/.exo/run`, or a link in the folder that leads into a store.
 - The line reads a relative name there as after `cd <folder>` (the #192 check): a store file name, a
