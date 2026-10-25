@@ -735,9 +735,10 @@ def test_a_line_with_no_target_meets_no_target_entry():
 # --- main's target stays a part (#513 fifth round) -----------------------------------------------------------------
 
 # A line's target is the first store it names. Since #446 that may be a spelling main did not read, and no lexical form
-# helps a glob (`/pro?/self/environ`) or a word with more than 16 links. Main's target was then another store on the
-# line, and a `target:` entry or deny rule that named it matched on main. It is now a part of the line (_plain_part),
-# so such an entry still matches, and the line decides as main decided it.
+# helps a glob (`/pro?/self/environ`) or a word with more than 16 links. A nested line (`$( )`, backticks, `<( )`,
+# `bash -c`, a heredoc) that reads such a spelling gives the line its target even after a plain store. Main's target
+# was then another store on the line, and a `target:` entry or deny rule that named it matched on main. It is now a
+# part of the line (_plain_part), so such an entry still matches, and the line decides as main decided it.
 SECOND = [
     {"gates": {"deny": ["target:*/.ssh/*"]}},
     {"gates": {"reserved": ["target:*/.ssh/*"]}},
@@ -745,7 +746,7 @@ SECOND = [
     {"gates": {"deny": [{"match": {"target": "*/.ssh/*", "category": "credentials"}}]}},
     {"gates": {"deny": ["target:/proc/*/environ", "target:*/.ssh/*"]}},
 ]
-BEFORE_SSH = [
+BESIDE_SSH = [
     "cat ~/.kube//config ~/.ssh/id_rsa",
     "cat ~/.kube/./config; cat ~/.ssh/id_rsa",
     "cat ~/.kube/x/../config ~/.ssh/id_rsa",
@@ -758,6 +759,13 @@ BEFORE_SSH = [
     "cat /$HOME/.docker/conf* ~/.ssh/id_rsa",
     "cat /proc/self/root/$HOME/.kube/conf* ~/.ssh/id_rsa",
     "ls /proc/1/*" + "/../*" * 16 + "/usr/lib/x*; cat ~/.ssh/id_rsa",     # a word with 17 possible links counts
+    "cat ~/.ssh/id_rsa $(cat ~/.kube//config)",
+    "cat ~/.ssh/id_rsa `cat /pro?/self/environ`",
+    "cat ~/.ssh/id_rsa <(cat /pro?/self/environ)",
+    "cat ~/.ssh/id_rsa; bash -c 'cat ~/.kube//config'",
+    "x=$(cat ~/.kube//config); cat ~/.ssh/id_rsa",
+    "echo $(cat ~/.kube/./\\config) > /tmp/o; cat ~/.ssh/id_rsa",
+    "cat ~/.ssh/id_rsa\nbash <<'EOF'\ncat ~/.kube//config\nEOF",
     {"tool": "read_file", "args": {"paths": ["~/.kube//config", "~/.ssh/id_rsa"]}},
     {"tool": "read_file", "args": {"paths": ["/pro?/self/environ", "~/.ssh/id_rsa"]}},
     {"tool": "copy_file", "args": {"source": "~/.kube//config", "destination": "~/.ssh/id_rsa"}},
@@ -768,7 +776,7 @@ BEFORE_SSH = [
 
 
 @pytest.mark.parametrize("policy", SECOND)
-@pytest.mark.parametrize("call", BEFORE_SSH)
+@pytest.mark.parametrize("call", BESIDE_SSH)
 def test_an_entry_for_main_s_target_still_matches_the_line(call, policy):
     category, outcome, hits, _ = full(call, policy)
     reserved = "reserved" in policy["gates"]
@@ -793,8 +801,12 @@ def test_an_entry_for_main_s_target_still_matches_beside_a_glob_after_a_link_and
     ("cat ~/.config/gh/\\hosts.yml ~/.kube//config", {"gates": {"deny": ["target:*/hosts.yml"]}}),
     ("sudo cat ~/.kube/\\config ~/.docker//config.json",
      {"gates": {"rules": [{"match": {"target": "*/.kube/config"}, "decision": "deny", "reason": "r"}]}}),
+    # a nested line gives the line its target: the `$( )` part's odd store, not the first store
+    ("cat ~/.kube/config $(cat /pro?/self/environ)", {"gates": {"deny": ["target:*/.kube/config"]}}),
+    ("cat /proc/self/environ $(cat /pro?/self/environ)", {"gates": {"deny": ["target:/proc/*/environ"]}}),
+    ("cat ~/.aws//credentials $(cat ~/.docker//config.json)", {"gates": {"reserved": ["target:*/.aws/*"]}}),
 ])
-def test_an_entry_for_a_backslash_first_store_still_matches_beside_an_odd_second_store(line, policy):
+def test_an_entry_for_the_first_store_still_matches_beside_an_odd_second_store(line, policy):
     # The text `~/.kube/\config` yields to the word the shell reads, and the words come after every text piece, so an
     # odd second store came first and was the target. Main's target, that word, is a part, so the entry for it
     # matches, as on main and for the plain spelling `cat ~/.kube/config ~/.docker/config.json`
