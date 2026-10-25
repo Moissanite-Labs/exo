@@ -363,6 +363,32 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Reads stay `read`, and a project folder called `update` is unchanged. A file tool's write to the pin is
   `store_write`, and since #448 it keeps its `local_write` reading as a part, so a `local_write` deny still
   denies it. `config.json` is left to #125 (D-074).
+- Gate (#316, follow-up to #240, D-038): ssh's stdin reached its login shell in five more ways the gate did not
+  see, so the line read as plain `ssh` and was allowed, even under category denies. A compound fed from a file or
+  an unread pipe (`{ ssh host; } < cmds.sh`, `while read h; do ssh host; done < hosts.txt`), an output process
+  substitution (`echo 'rm -rf /data' > >(ssh host)`, `tee >(ssh host)`), a `$( )` that inherits such a stdin
+  (`cat cmds.sh | echo $(ssh host)`), a remote hop (`ssh a ssh b`, `ssh a 'cd /; ssh b'`, `ssh a ssh b ssh c`) and
+  a wrapper's stdin (`uv run ssh host < cmds.sh`, `{ uv run ssh host; } < cmds.sh`) now ask as `opaque_exec`. A
+  known text fed through a hop is read, so `echo 'rm -rf /data' | ssh prod-db ssh inner` is denied under `deny:
+  [delete]`. `ssh -n` (also before a word that may expand, as in `while read h; do ssh -n "$h" uptime; done <
+  hosts.txt`), a command's own `< /dev/null` (also on a wrapper around it), an inner ssh with a command or a stdin
+  of its own, and a compound fed only `/dev/null` keep their reading. A `>( )` is still read for a `cd` in it
+  (`echo >(cd ~/.config); cat gh/hosts.yml` stays `credentials`) and in a declare value. The part that runs the
+  stdin sits beside ssh's own part, which keeps its reading, so sudo around ssh still makes that part costly and
+  reserved entries keep their hits. `sudo ssh host < cmds.sh` is now denied under a rule that denies `costly`
+  `shell` parts. Some lines decide lower. Under a policy that allows or logs
+  `opaque_exec`, a line where the new part displaces a logged part, such as sudo or a `git push` beside the ssh,
+  goes from `log` to `allow` (`{ sudo ssh host; } < cmds.sh`, as `sudo ssh host < cmds.sh` did). Under a rule
+  that denies `costly` `shell` parts, a nested line sudo runs whose `>( )` or `$( )` now reads an ssh as fed asks
+  (`sudo ssh jump 'tee >(ssh host)'`, as `sudo ssh jump 'ssh host < f'` does). And `ssh -n "$h" uptime <
+  hosts.txt` is allowed, where it asked, since ssh never reads its stdin then, also under `deny: [opaque_exec]`, as
+  `ssh -n host uptime < hosts.txt` is. Otherwise `deny` entries and category denies still see every part.
+  With #399's other targets, the part that runs the stdin names the host for an empty one too, so `echo 'gh pr
+  comment -wR myorg/app -b hi' | ssh buildhost` is still denied under a `github_post` deny on `buildhost`. A `$( )`
+  in a value declare reads again is read as fed too (`cat f | declare -a 'a=($(ssh host))'`). A post a hop reads
+  can displace a later post as the deciding part, so the line is decided on that post's targets, as with `ssh host`
+  in place of the hop. Under a scope that makes the hosts private, the later post's footer is then listed once, not
+  twice, and the line still asks.
 - Gate (#394, D-075 amendment): a rule keyed on `command` no longer lowers a compound line whose commands it does not
   name, and the change never makes a decision looser than before. The regex saw the whole line, so
   `{command: '^git status', decision: allow}` allowed `git status; git push --force origin main`, also under
