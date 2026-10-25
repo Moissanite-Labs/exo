@@ -694,6 +694,45 @@ def test_the_view_cut_stops_at_the_turns_own_leaf():
     assert all("FILE-c0 " in c[1].text() + "".join(texts(c)) for c in prov.calls[1:])
 
 
+class HoldsQuestion(Summ):
+    """Holds the leaf that holds QFIRST. The others land at once, each summary naming the results it covers."""
+
+    def __init__(self):
+        super().__init__()
+        self.gate = asyncio.Event()
+
+    async def summarize(self, content, previous=None, session=None, **kw):
+        if "QFIRST" in content:
+            await self.gate.wait()
+        await super().summarize(content, previous, session)
+        return "S[" + " ".join(sorted(set(re.findall(r"FILE-c\d+", content)))) + "]"
+
+
+def test_the_view_cut_keeps_a_question_in_the_oldest_pending_leaf():
+    """Issue #244, as in the reviews of f80c0444: a new private thread whose question is message 1, then a read per
+    call. Leaf 1-8 holds the question and stays pending, and leaves 9-16 and 17-24 land, so the view shows the
+    question verbatim and is over budget. The whole thread is the turn: no call cuts it, and each keeps the question
+    and every result so far, verbatim or in a summary."""
+    summ = HoldsQuestion()
+    store, ctx, prov, loop, _ = slow_private(summ, reads=20, size=3000, view_budget=600)
+
+    async def go():
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        await loop.send(p.id, "QFIRST summarize the files")
+        statuses = {(n.start, n.end): n.status for n in store.summaries(p.id) if n.level == 0}
+        summ.gate.set()
+        await settle_own(ctx, p.id)
+        return statuses
+    statuses = run(go())
+    assert statuses == {(1, 8): "pending", (9, 16): "done", (17, 24): "done"}
+    for n, call in enumerate(prov.calls):
+        text = "".join(texts(call))
+        assert "QFIRST summarize the files" in text and SUMMARIZING_MARKER not in text, n
+        assert all(f"FILE-c{i}" in text for i in range(n)), n
+    view = prov.calls[-1][1].text()
+    assert "## Messages 1-8 (verbatim, summary pending)" in view and estimate_tokens(view) > ctx.view_budget
+
+
 @pytest.mark.parametrize("big,status", [("results", "done"), ("arguments", "skipped")])
 def test_a_fast_summarizer_leaves_nothing_to_cut(big, status):
     """Issue #244: the overflow check measures a pending span as the view renders it, cut short, and cut_pending
