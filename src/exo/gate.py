@@ -5955,7 +5955,19 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
     words = [w for ws in groups.values() for w in ws]
     if words and (_sensitive_words(words) or _glob_words(words)):
         return next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
-    return late
+    if not late:
+        return ""
+    # #513, third review: such a piece is read as the shell reads the word that holds it. Unquoted, `\c` is `c`, so the
+    # input redirection `cat < ~/.kube/\config`, which no word of the command holds, names `~/.kube/config`, and a
+    # `target:` entry for it matches. In quotes or after `\\` the backslash stays in the name, so
+    # `cat "$HOME/.kube/\config"` names no store, as on main. Text no word holds (a heredoc body), or a word with a
+    # space or an operator that another shell may read again (`su -c '...'`), keeps the piece as the target (fails
+    # closed).
+    read = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for raw in dict.fromkeys(raws or [])
+            if late in _expand_text(raw) for d in _dequote(raw)]
+    if not read or any(re.search(r"[\s<>;|&()`]", d) for d in read):
+        return late
+    return next((d for d in read if _sensitive_words([d], lexical="\\" not in d) or _glob_words([d])), "")
 
 
 _PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it

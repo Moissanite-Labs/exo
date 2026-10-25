@@ -512,6 +512,14 @@ BACKSLASH = [
     ("sudo cat ~/.kube/\\config", "sudo cat ~/.kube/config"),
     ("cat ~/.kube/\\config | head", "cat ~/.kube/config | head"),
     ("cat ~/.ssh/\\id_rsa ~/.kube/config", "cat ~/.ssh/id_rsa ~/.kube/config"),
+    # #513 third review: no word of the command holds a redirection's target, so the text piece was the target. It is
+    # now read as the shell reads its word: `\c` outside quotes is `c`
+    ("cat < ~/.kube/\\config", "cat < ~/.kube/config"),
+    ("cat 0< ~/.config/gh/\\hosts.yml", "cat 0< ~/.config/gh/hosts.yml"),
+    ("sudo cat < ~/.kube/\\config", "sudo cat < ~/.kube/config"),
+    ("bash -c 'cat < ~/.kube/\\config'", "bash -c 'cat < ~/.kube/config'"),
+    ('cat < "$HOME"/.kube/\\config', 'cat < "$HOME"/.kube/config'),
+    ("echo x > ~/.kube/\\config", "echo x > ~/.kube/config"),
 ]
 
 # Group 2: a store word's target is the word as written, so `dd` names its `if=` or `of=` word, as main does for the
@@ -531,11 +539,35 @@ def test_a_lowered_line_decides_as_its_plain_spelling(odd, plain, policy):
     assert full(odd, policy) == full(plain, policy)
 
 
-@pytest.mark.parametrize("policy, outcome, hits", list(zip(TARGET, ["deny", "ask", "deny"], [[], ["local_write"], []])))
+@pytest.mark.parametrize("policy, outcome, hits", list(zip(TARGET, ["deny", "ask", "deny"],
+                                                             [[], ["credentials", "local_write"], []])))
 def test_a_write_to_a_backslash_spelling_keeps_its_target_entries(policy, outcome, hits):
-    # Nothing else on the line names the store, so the text piece is the line's target. The redirection stays a part
-    # with the word the shell writes (`~/.kube/config`), so a `target:` deny, reserved entry and rule apply, as on main
+    # The redirection stays a part with the word the shell writes (`~/.kube/config`), so a `target:` deny, reserved
+    # entry and rule apply, as on main. #513 third review: that word is the line's target too, not the text piece
+    # `$HOME/.kube/\config`, so the reserved entry hits the line as well as the part, as for the plain spelling
     assert full("echo x > ~/.kube/\\config", policy)[:3] == ("credentials", outcome, hits)
+
+
+@pytest.mark.parametrize("line, target", [
+    ("cat < ~/.kube/\\config", "~/.kube/config"),
+    ("echo x > ~/.kube/\\config", "~/.kube/config"),
+    ('cat < "$HOME"/.kube/\\config', "$HOME/.kube/config"),
+    ("sh -c 'cat < ~/.kube/\\config'", "~/.kube/config"),
+])
+def test_a_redirection_to_a_backslash_spelling_names_the_word_the_shell_reads(line, target):
+    assert gate.classify({"tool": "bash", "args": {"command": line}}).target == target
+
+
+@pytest.mark.parametrize("line, expected", [
+    ('cat "$HOME/.kube/\\config"', ("read", "allow")),       # in double quotes the shell keeps `\c`
+    ("cat '$HOME/.kube/\\config'", ("read", "allow")),
+    ("cat ~/.kube/\\\\config", ("read", "allow")),           # `\\` is one backslash in the name
+    ('cat < "$HOME/.kube/\\config"', ("read", "allow")),
+    ('echo x > "$HOME/.kube/\\config"', ("local_write", "allow")),
+])
+def test_a_backslash_the_shell_keeps_names_no_store(line, expected):
+    # #513 third review: the shell reads a file named `\config` in `~/.kube`, not the store, so it decides as on main
+    assert bash(line) == expected
 
 
 @pytest.mark.parametrize("line, target", [
