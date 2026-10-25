@@ -315,7 +315,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   gate_diff's `rule_costly_part_deny`), and so does the unsplit line (`sudo ssh host 'cat ~/.kube/config'`), which
   asked on main. The parts stay as written, so a rule or entry keyed on `reversibility` reaches them as on main
   (`sudo ssh host 'ls; cat x'` still denies under a rule that denies a reversible `read`, and under `read: deny`
-  lifted by a rule that allows a costly `read`). gate_diff against main d79639f1, under its 87 built-in policies, 57
+  lifted by a rule that allows a costly `read`). gate_diff against main edeb4f89, under its 87 built-in policies, 57
   policies keyed on `reversibility` (rules, lifted category lines, matrix rows, deny and reserved entries) and 38
   keyed on targets (`*keys*`, `*run*`, `*plugins*` and other store names as rules, deny and reserved entries, and
   #468's four), lowers no pair (outcome, reserved hit or posting violation). Each form reaches the plugins folder
@@ -328,10 +328,26 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   parts as on main, #468's key read beside a store write among them; these forms and readings come after it, and a
   name they find that is another target is a `credentials` part beside it. So under a rule on `target: '*keys*'`,
   `cd ~/.exo/state && echo $(cat ../keys/seat; rm -rf x)`, `cd ~/.exo && cat $(ls) keys/seat` and
-  `cd ~/.exo/state && cat ${x-.env} ../keys/seat` deny as on main d79639f1, and under one on `*run*` so does
-  `cd ~/.exo/state && grep -r x .. ../run`.
+  `cd ~/.exo/state && cat ${x-.env} ../keys/seat` deny as on main edeb4f89, and under one on `*run*` so does
+  `cd ~/.exo/state && grep -r x .. ../run`. A shell call's own folder argument (#311) is read in the same order,
+  so `echo $(cat config)` with `~/.kube` as `cwd` keeps its part on `~/.kube/config`, with one on `~/.kube/*`
+  beside it, and a rule or `target:` entry on `*config*` still denies it. The folder's read is a part beside a line
+  that reads a secret itself when it names another target, as beside the `cd` form: `cat id_rsa` with `~/.ssh` as
+  `cwd` is denied by `deny: [target:*/.ssh]` as `cd ~/.ssh && cat id_rsa` is (main asks), and a line these forms
+  make a secret line keeps the folder's part (`cat ${x-.netrc}; echo $(git push --force origin main)` with
+  `~/.exo/keys` as `cwd` under `deny: [target:*/.exo/*]`), with a copy of the push that has no own text, so an
+  allow rule on `command` does not lift a `force_push: deny` there, as on main. The copy keeps its body, so
+  `cat ${x-.env} config; gh pr comment 3 --body hi` with `~/.exo/keys` as `cwd` lists its footer violation twice, as
+  main does (once as the line's own, once named after the post), each named after the post here. The copy is the
+  line's first part, so on a line of more than 20 posts its entry is listed before the card's cap, as main lists the
+  line's own. A here-doc body on the line reaches the most severe post below a secret read, as it reaches one below
+  a store write (#435), so `cat ${x-.netrc}; mail -s s a@b.c <<EOF` keeps the mail's footer, forbidden-word and scrub
+  checks, as on main, where the mail decides the line; `cat .netrc; mail -s s a@b.c <<EOF` now has them too, which
+  main skips.
   This fails closed on a few lines. A word that is a substitution alone after a `cd` into a store folder asks
-  (`cd ~/.kube && echo $(date)`, `kubectl get pods -n $(cat ns.txt)`, `cd ~/.exo/policies && echo $(ls)`), also one
+  (`cd ~/.kube && echo $(date)`, `kubectl get pods -n $(cat ns.txt)`, `cd ~/.exo/policies && echo $(ls)`), and so
+  does one in a shell call whose own folder argument is a store folder (`echo x $(cat f) w` with `~/.kube` as
+  `cwd`, an allowed read on main), also one
   before the `cd` or a value set by one, as main reads `echo *; cd ~/.exo/policies`
   (`echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies`, `V=$(sed -n 1p VERSION); cd ~/.exo && ls`): these are
   `credentials` where #468 reads them as `read`, and no command in the substitution is a store write. These ask
@@ -356,8 +372,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`tar czf - ${x:-$HOME/.kube}`, as `tar czf - ~/.kube`, and `grep -r x ~/.exo/principals/me`). A line these forms
   make a secret line beside a store write is `credentials`, as a literal secret makes it on main
   (`cd ~/.exo/state && cat ${x-.netrc}; echo $(rm -rf x)`), and its store write part keeps the answer with the
-  principal alone (#447). Nested defaults and the field-split form `cat ${x:-a .env}` stay reads, on main
-  d79639f1 as here (#341).
+  principal alone (#447). Any line these forms make `credentials` is answered by those who may answer
+  `credentials`, as the literal line is on main (`cat ${x-.netrc}; echo $(git push --force origin main)`, a force
+  push on main). Nested defaults and the field-split form `cat ${x:-a .env}` stay reads, on main
+  edeb4f89 as here (#341).
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that

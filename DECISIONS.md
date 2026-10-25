@@ -1988,32 +1988,85 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `plugins/` line has the class and default outcome of its `policies/` line. The #435 amendment's remaining group (a
   costly rule on a write or send under `sudo` or `doas` over `ssh`) denies again through `_run_privileged`'s copies.
   #439's readings of a gh line (`alt_targets`, merged in `decide`) are not touched; its test lines are in the runs
-  below. *Differential against main d79639f1* (main's `scripts/gate_diff.py --jobs 2 --timeout 0`, base main d79639f1,
-  head this branch; the work folder and the shared HOME were in a scratch folder under `/tmp`): (a) the built-in
-  corpus with its variants under the 87 built-in policies: 65,321 actions, 5,682,927 pairs, none lowered (outcome,
-  reserved or posting violation), 35,845 pairs tightened on 774 actions. (b) `--only-corpus --no-variants` under 182
-  policies (the 87 built-in ones, the 57 keyed on `reversibility` above, and 38 keyed on targets: #468's four, a
-  costly-cell matrix, a rule and a deny entry on each of 15 store names such as `*keys*`, `*run*`, `*plugins*` and
-  `*netrc*`, and reserved entries on `*keys*`, `*run*` and `*plugins*`). On the 92,416 distinct lines of the earlier
-  aimed corpora (the 64,080 of round 4; round 6's #468 shapes, test literals and #341 default words beside a key or
-  run read), run in two halves: 92,416 actions, 16,819,712 pairs, none lowered, 2,903,875 pairs tightened on 45,255
-  actions, and 100 pairs reworded: a footer violation of a gh post in a `$( )` before the `cd` (`echo $(gh pr comment
-  3 --body hi); cd ~/.exo/state`) is named after its post, since the line is `credentials` here. On 11,845 more
-  actions (#468's test lines, #440's and #439's harvested by gate_diff's own reader, the #320 test files, 3,817 #468
-  shapes into `policies/`, `state/`, `plugins/` and `keys/` with this branch's spellings of the folder, and the 5,808
-  store-name forms on `policies/`, `plugins/`, `state/` and a principal's `policies/`): 2,155,790 pairs, none lowered,
-  458,096 pairs tightened on 6,092 actions. Before the fixes of this paragraph, round 6's aimed run on the merge with
-  main 5a9dc394 lowered 128 outcome pairs under the target rules, and with the first of them alone the 11,845 actions
-  still lowered 9 pairs (the `${x-.env}` key-read line above under a rule on costly `credentials` and under a lifted
-  category line, and the reserved groups). Now no run lowers a pair, and neither the 32-pair nor the 52-pair reserved
-  group remains.
+  below. *With #452, #489, #492, #520, #548, #549 and #541 (2026-10-25, merged at main edeb4f89).* #452 (the #311
+  amendment below) reads a shell call's own folder argument as a `cd` there, with `_cd_store_read`. On the merge that
+  call read the forms above alone, so the `*` of a word that is a `$( )` alone was the first name it met and the
+  folder's part took `<folder>/*` as its target: `echo $(cat config)` with `~/.kube` or `/proc/self` as `cwd` asked
+  under a rule or a `deny` entry on `*config*` or `*environ*` where main denies, and so did `tar czf - $(ls) ../keys`
+  with `~/.exo` as `cwd` under one on `*keys*`, whose reserved hit was lost too. And `_shell_call` added no folder
+  part to a line that reads a secret itself, so a line these forms make a secret line (`cat ${x-.netrc}; echo $(git
+  push --force origin main)` with `~/.exo/keys` as `cwd`, a force push with the folder's part on main) lost the part
+  on `~/.exo/keys`, and with it a deny or reserved entry on that target or on the push. `_tool_folder_read` now reads
+  as a `cd` line does: the words as written first, whose name builds the part as on main, then with the forms, whose
+  name is a second `credentials` part beside it when it is another target. The folder's read is a part beside any
+  line that reads a secret, when it names another target, as beside a `cd` form's secret line. That lifts the #311
+  amendment's limit on such a line: `cat id_rsa` with `~/.ssh` as `cwd` is denied by `deny: [target:*/.ssh]`, as
+  its `cd` form is, where main asks, and #452's rows for it now say so. These reads are made beside the #209 one too
+  (a word that resolves into a store from the folder), which these forms alone can make: `cat ${x-.env} keys` with
+  `~/.kube` as `cwd` keeps its part on `~/.kube/keys`. On a secret line the folder adds a part to, a copy of its
+  heaviest other command with no own text is a part as well, so a rule keyed on `command` does not lift that
+  command's category or matrix deny, as on main, where that command decides the line and the folder's part has no
+  own text (#394): `cat ${x-.netrc}; echo $(git push --force origin main)` with `~/.exo/keys` as `cwd` stays denied
+  under `force_push: deny` and an allow rule on `.*`. The copy keeps its body (its text, or one the gate cannot
+  read), so a post there is checked as often as on main, which in a folder that is itself a store checks it as the
+  line's own and as its part: `cat ${x-.env} config; gh pr comment 3 --body hi` with `~/.exo/keys` as `cwd` lists its
+  footer violation twice, each named after the post, where the merge listed it once. The copy is the line's first
+  part, so on a line of more than 20 posts (`_LISTED_VIOLATIONS`) its entry is listed before the cap, where main lists
+  the line's own bare: with 25 posts in `~/.exo/keys`, 21 entries and `and 5 more` on both, where the merge listed 20
+  and `and 6 more`. A here-doc body on the line reaches the most severe post below a secret read and a store write,
+  as below a store write (#435), so a line these forms make a secret line keeps the posting checks main makes on its
+  post (`cat ${x-.netrc}; mail -s s a@b.c <<EOF`, in any folder, where the merge checked none). The literal line
+  (`cat .netrc; mail -s s a@b.c <<EOF`) now has them too, where main checks none. #452's nested-line row is stricter,
+  by the cost below: a 12-level `echo x y z $( ) w` with `~/.kube` or `~/.exo/work` as `cwd` has a `credentials` part on
+  `<folder>/*` and asks, as after a `cd` there, where main reads it as an allowed `read`. #489's store-write readings
+  (`gate.readings`, `no_grant`, `call_approvers`), #492's `sudo` write redirections, #520's ssh stdin, #548's Codex
+  `Move to`, #549's escalation checks and #541 are not touched; the test lines of #452, #489, #492 and #520 are in
+  the runs below. *Differential against main edeb4f89* (main's `scripts/gate_diff.py --jobs 2 --timeout 0`, base
+  main edeb4f89, head this branch; the work folder and the shared HOME were in a scratch folder under `/tmp`): (a)
+  the built-in corpus with its variants under the 87 built-in policies: 73,198 actions, 6,368,226 pairs, none
+  lowered (outcome, reserved or posting violation), 36,703 pairs tightened on 905 actions, and 279 pairs reworded
+  (a post's violation named after its post, as below). (b) `--only-corpus --no-variants` under 182 policies (the 87
+  built-in ones, the 57 keyed on `reversibility` above, and 38 keyed on targets: #468's four, a costly-cell matrix, a
+  rule and a deny entry on each of 15 store names such as `*keys*`, `*run*`, `*plugins*` and `*netrc*`, and reserved
+  entries on `*keys*`, `*run*` and `*plugins*`). On the 92,416 distinct lines of the earlier aimed corpora (the 64,080
+  of round 4; round 6's #468 shapes, test literals and #341 default words beside a key or run read), run in two
+  halves: 92,416 actions, 16,819,712 pairs, none lowered, 2,903,875 pairs tightened on 45,255 actions, and 100 pairs
+  reworded: a footer violation of a gh post in a `$( )` before the `cd` (`echo $(gh pr comment 3 --body hi); cd
+  ~/.exo/state`) is named after its post, since the line is `credentials` here. On 14,480 more actions (the test lines
+  of #468, #440, #439, #452, #489, #492 and #520 and the #320 test files, harvested by gate_diff's own reader, 13
+  approval-binding lines, 3,817 #468 shapes into `policies/`, `state/`, `plugins/` and `keys/` with this branch's
+  spellings of the folder, and the 5,808 store-name forms on `policies/`, `plugins/`, `state/` and a principal's
+  `policies/`): 2,635,360 pairs, none lowered, 458,774 pairs tightened on 6,296 actions, and 120 pairs reworded as
+  above. On 79,749 shell calls with their own folder argument or a here-doc post (the `cd <folder> && <rest>` lines
+  of those corpora as `cwd` and `workdir` calls, #320's forms beside a relative store read and a heavier command in
+  the store's folders, the review's 7,412 calls, 19,872 calls that put a gh post beside these forms or a literal
+  secret, in 10 folders, `~/.exo`, `~/.exo/keys` and `~/.ssh` among them, and 6,768 calls of 378 lines that put a
+  here-doc post (`mail`, `sendmail`, `gh --body-file -`) beside them and 48 lines of 21 or 25 gh posts, plain and in
+  6 folders, as bash, terminal and exec_command calls): 14,514,318 pairs, none lowered, 1,138,879 pairs tightened on
+  41,216 actions, and 193,080 pairs reworded, each a post's violation on a line these forms make `credentials`,
+  named after its post as above. On a later review's 16,632 posting calls (lines of up to 25 posts and here-doc
+  mail beside these forms, in store folders and `/tmp`) under the 87 built-in policies: 1,446,984 pairs, none lowered, 34,232 pairs tightened on 6,424 actions,
+  and 163,980 pairs reworded as above. Before the
+  #452 fix above, the merge with edeb4f89 lowered 8 pairs of the test lines and 26,717 pairs on 2,975 of those
+  calls; before the copy kept its body, 1,480 posting pairs on 148 of the gh-post calls (a violation main lists
+  twice in a folder that is itself a store, listed once); and before the here-doc and listing fixes above, the
+  review's posting calls lowered 3,438 posting pairs on 846 actions (2,250 a here-doc mail beside these forms,
+  1,188 a line of more than 20 posts in a store folder); against main d79639f1 the earlier runs lowered none. Before the fixes of this paragraph, round 6's aimed run on
+  the merge with main 5a9dc394 lowered 128 outcome pairs under the target rules, and with the first of them alone the
+  11,845 actions still lowered 9 pairs (the `${x-.env}` key-read line above under a rule on costly `credentials` and
+  under a lifted category line, and the reserved groups). Now no run lowers a pair, and neither the 32-pair nor the
+  52-pair reserved group remains.
   *Known limits.* The default word is not read behind an indirect name or a subscript with an expansion in braces
   (`${!x:-~/.kube}`, `${!x[0]:-.env}`, `${x[${i}]:-$HOME/.exo}`), and a part that could be `..` after a literal part
   is not read as `..` (`grep -r x ~/.exo/run/jobs/.?`). A secret read beside a store write makes the line
   `credentials`, as on main (`cd ~/.exo/state && cat .netrc; echo $(rm -rf x)`), so a line that these forms make a
   secret line (`cd ~/.exo/state && cat ${x-.netrc}; echo $(rm -rf x)`, a store write on main) is `credentials`
   too. It asks and denies where main does, and since #447 its store write part keeps the answer with the principal
-  alone, as for the literal line. The other limits are in `docs/GATE.md` "Other spellings of
+  alone, as for the literal line. Any line these forms make `credentials` is answered by those who may answer
+  `credentials`, as the literal line is on main: `call_approvers` narrows that list only by the other `NO_GRANT`
+  categories among its parts, so a seat that may answer `credentials` and not `force_push` may answer `cat
+  ${x-.netrc}; echo $(git push --force origin main)`, a force push on main. Narrowing it by each part's category is
+  a possible follow-up. The other limits are in `docs/GATE.md` "Other spellings of
   a store path", "In `$EXO_HOME`" and "The store is credentials".
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
@@ -2074,17 +2127,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `rm -rf` beside a store read. Those lines put the command plain, behind `sudo`, `env`, `timeout`, `nohup`,
   `bash -c`, `ssh` and `mosh`, in a `$( )` and in a here-doc, each as a `cd` form and with `cwd` and `workdir` in 8
   folders. Under 22 policies and three approval tables, none of them decides lower than before this weight or than
-  main, and no approver set widens. A folder form in a store can still decide lower than its `cd` form in four cases,
-  none lower than main, each in the limits below: under `deny: [store_write]` (#453), a line that reads a secret
-  itself under a `target:` entry on the folder, a rule or entry on the bare name, and a rule keyed on the text of a
-  line of one command. A check of this change found the last two. Rejected: the folder argument among the
+  main, and no approver set widens. A folder form in a store can still decide lower than its `cd` form in three cases,
+  none lower than main, each in the limits below: under `deny: [store_write]` (#453), a rule or entry on the bare
+  name, and a rule keyed on the text of a line of one command. A check of this change found the last two. (A fourth,
+  a line that reads a secret itself under a `target:` entry on the folder, is lifted by the #320 amendment above: the
+  folder's read is a part beside such a line.) Rejected: the folder argument among the
   #209 folders, which replaces the line. Keeping the old reading costs a second reading of the line and a second
   decision, both only where the line read in its folder has a `credentials` part. That reading is a whole
   classification, so nothing has to be found among the parts. A `cd` on the line is read as before. Limits: the
   session's own folder (#209) is not a target. The file tools ignore a folder argument. A name that climbs out of a
   repo's `.claude` worktree back into it is not caught (`cat ../../settings.local.json`), as before. The store-write
   checks do not read the folder argument (`echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`,
-  #453). A line that reads a secret itself keeps that reading, so a `target:` entry on the folder does not reach it.
+  #453). A line that reads a secret itself keeps that reading (lifted by the #320 amendment above: the folder's read is
+  a part beside it when it names another target, so a `target:` entry on the folder reaches it).
   The part's target is the folder joined with the name, where a `cd` form's is the name alone, so a rule on
   `target: config` reaches only the `cd` form. The call's text has no `cd`, so an allow rule keyed on `command` that
   names a line of one command (`git push --force origin main` in `~/.ssh`) lifts the matrix deny on its parts, as on
