@@ -4384,7 +4384,16 @@ def _lead(parts: list[Classification]) -> Classification | None:
     """The part _combine keeps: the first credentials part, else the first store write, else the most severe."""
     credentials = [p for p in parts if p.category == "credentials"]
     store = [p for p in parts if p.category == "store_write"]
-    return credentials[0] if credentials else (store[0] if store else _most_severe(parts))
+    c = credentials[0] if credentials else (store[0] if store else _most_severe(parts))
+    if c is not None and c.displaced is not None:
+        # #454: match _combine's ranking before a sudo write displaced a read, also when ssh asks which part leads
+        # before filling the host (#316). Selection stays pure: only _combine changes the summary and parts.
+        at = max(range(len(parts)), key=lambda i: (*_severity(parts[i])[:3], False) if parts[i].displaced is not None
+                 else _severity(parts[i]))
+        before = parts[at].displaced or parts[at]
+        if _severity(before)[3]:
+            return before
+    return c
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
