@@ -148,21 +148,38 @@ class Learner:
         for t in list(self.tasks.values()):
             if not t.done():
                 t.cancel()
-        sid = kw.get("session_id") or ""
-        if sid:
-            self.turns[sid] = self.turns.get(sid, 0) + 1
 
     def on_turn_end(self, **kw: Any) -> None:
         """After a turn: capture corrections from the chat, then start a review if a signal or the turn count
         says so. Never raises."""
+        from exo import provenance
+
         from .review import is_unattended, needs_review, new_signals
         from .signals import record_chat_signals
         sid = kw.get("session_id") or None
         if not sid or not self.on or is_unattended(self, sid) or self.private(sid):
             return
         try:
-            record_chat_signals(self, sid, kw.get("messages"))
-            why = needs_review(new_signals(self), self.turns.get(sid, 0), int(self.settings["fast_loop"]["every_turns"]))
+            messages = kw.get("messages")
+            if messages is None:
+                transcript = self.messages(sid)
+                last_input = next((m for m in reversed(transcript)
+                                   if m.role == "user" and m.meta.get("note") is None), None)
+                principal_turn = last_input is not None and provenance.author_of(last_input) == provenance.PRINCIPAL
+                messages = [provenance.flat(m) for m in transcript[-12:]]
+            else:
+                latest = next((m for m in reversed(messages) if m.get("role") == "user"
+                               and (m.get("meta") or {}).get("note") is None), None)
+                principal_turn = bool(latest and latest.get("principal") is not False
+                                      and provenance.author_of(latest) == provenance.PRINCIPAL)
+            if principal_turn:
+                self.turns[sid] = self.turns.get(sid, 0) + 1
+            record_chat_signals(self, sid, messages[-12:])
+            every = int(self.settings["fast_loop"]["every_turns"])
+            turns = self.turns.get(sid, 0)
+            why = needs_review(new_signals(self), turns, every)
+            if why is None and principal_turn and turns >= every:
+                why = "taste"
         except Exception as exc:
             self.notice(f"learning: capture failed ({type(exc).__name__}: {exc})")
             return

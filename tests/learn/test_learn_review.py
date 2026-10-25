@@ -249,3 +249,58 @@ def test_taste_scans_principal_utterance_without_a_learning_verdict(make_engine,
     out = asyncio.run(review(lr, promote=False))
     assert out["status"] == "nothing_new" and out["taste"]["signals"] == 1, out
     assert not eng.fake.calls  # Signature fallback needs no model.
+
+
+def test_periodic_hook_scans_ordinary_principal_turns_but_does_not_count_peer_turns(make_engine, monkeypatch):
+    from exo import provenance
+    from exo.baseline import classify
+    from exo.core.types import ContentPart, Message
+    from exo.taste import signature
+
+    async def scenario():
+        eng = make_engine()
+        eng.router.set_role("decision", [])
+        lr = attach(eng, env={})
+        lr.settings["fast_loop"]["every_turns"] = 2
+        said = "bullet lists, not short paragraphs"
+        sid, _ = new_session(eng, ("user", said), ("assistant", "Understood."))
+        lr.runtime.ledger.append("utterance", {"role": "user", "text": said}, author="principal", session=sid)
+        monkeypatch.setattr(classify, "_items", lambda *a: [
+            classify.Candidate("house-example", "short paragraphs, not bullet lists",
+                               signature("short paragraphs", "bullet lists"))])
+
+        def turn_end():
+            eng.plugins.hooks.fire("on_turn_start", session_id=sid)
+            eng.plugins.hooks.fire("on_turn_end", session_id=sid)
+
+        turn_end()
+        assert not lr.tasks and lr.turns[sid] == 1
+        eng.store.append_message(sid, Message(role="user", content=[ContentPart.of_text(said)],
+                                             meta={"author": "peer:other"}), "peer-turn")
+        turn_end()
+        assert not lr.tasks and lr.turns[sid] == 1
+        eng.store.append_message(sid, Message(role="user", content=[ContentPart.of_text(said)],
+                                             meta={"author": "principal"}), "principal-turn")
+        eng.store.append_message(sid, Message(role="user", content=[ContentPart.of_text("Thread context")],
+                                             meta={"note": "thread-sync", "author": "system"}), "principal-turn")
+        for i in range(15):
+            eng.store.append_message(sid, Message(role="assistant", content=[ContentPart.of_text(str(i))]),
+                                     "principal-turn")
+        flattened = []
+        flat = provenance.flat
+
+        def count_flat(message):
+            flattened.append(message.id)
+            return flat(message)
+
+        monkeypatch.setattr(provenance, "flat", count_flat)
+        turn_end()
+        out = await lr.tasks[sid]
+        assert out["status"] == "nothing_new" and out["taste"]["signals"] == 1, out
+        assert lr.turns[sid] == 0
+        assert not list(lr.runtime.ledger.iter(kind=("verdict", "ruling", "answer")))
+        assert not eng.fake.calls
+        assert len(flattened) == 12  # A long tool round keeps provenance without flattening old messages.
+        lr.close()
+
+    asyncio.run(scenario())

@@ -753,7 +753,7 @@ The implementation preserves the original 2026-10-13 work and adds current-runti
 | Signals | `baseline/classify.py` | Reads the principal's verdicts and utterances after a `taste_scan` watermark, finds up to 3 candidate items by signature overlap (at least 0.3), labels each, writes a `taste_signal` note. Non-principal events are skipped before any model is asked. |
 | The labeller hook | `classify.decision_labeller` | Asks the `decision` role relation, delta, scope, task kind and (values, principal text) voice. Off when no `decision` route is configured: then `exo.taste.relation` labels (conflict means contradict, d = 0.5, confidence unknown). Below 0.6 a label counts as unrelated. 50 questions per local day, reserved durably before I/O, including failed or cancelled requests. It only labels; it can hold a signal back, never move an item. |
 | On the store | `baseline/adapt.py` | Replays every house and learned item from the ledger and writes each new outcome once: `taste_replaced`, `taste_scoped`, `value_stepped_back`, `value_adopted`, `taste_restored`, `taste_proposed`, `taste_question`, `taste_ask_quiet`. A swap, scoped item or adoption is also an accepted belief with `overrides: <item>`. |
-| Wiring | `learn/review.py` (`taste_step`), `learn/promote.py` (`shift_holds`) | After each fast-loop review: label, then close weeks. Promotion rule 3 now holds an inferred taste lesson that would replace an accepted belief or a house item, so only this rule or a ruling moves it. |
+| Wiring | `learn/learner.py`, `learn/review.py` (`taste_step`), `learn/climb.py`, `learn/promote.py` (`shift_holds`) | Label, then close weeks after fast-loop reviews, every `fast_loop.every_turns` completed principal turns even without a correction, and before the nightly climb. Private, unattended and non-principal turns do not count toward the cadence. Promotion rule 3 now holds an inferred taste lesson that would replace an accepted belief or a house item, so only this rule or a ruling moves it. |
 | Prompt | `baseline/layers.py` | Armed items use their faded weight (silent) or their weight at arming (ask). A stepped-back value is a neutral line, never the stance. A learned item that another overrides is not listed. |
 | `/taste` | `baseline/command.py`, `diagnostics.py` | The `taste` built-in of `command.run`, in the TUI and the web composer (`POST /api/taste`). Reads are open; writes are principal only (D-052). `exo taste show|why|mode` reads the same view. |
 | Brief | `brief.py` | A Taste section: swaps, scoped items, step backs, adoptions, restores, a count of new proposals, and the one notice when proposals go quiet. |
@@ -796,8 +796,8 @@ How waves 2 and 3 settle details this page left open:
 The `/intro` first-run text of section 8 is in the `exo-intro` skill. Project-scoped items apply only to a session
 whose working directory exactly matches the recorded project. Concurrent sessions keep separate prompt entries.
 Task-kind scope remains available to explicit `view(scope=...)` callers; clients do not yet supply a trusted task
-kind, so task-scoped items stay out of their prompts. The nightly loop does not yet run the taste step (the fast
-loop and `/taste` do). "Switch now" and "keep house" are not separate verbs (`/taste yes` after a proposal and
+kind, so task-scoped items stay out of their prompts. The nightly entry point runs the same bounded taste step
+before the climb. "Switch now" and "keep house" are not separate verbs (`/taste yes` after a proposal and
 `/taste pin` provide those controls).
 
 Not in wave 1: the first real pack (the principal runs the export on his own store, reads the review and
