@@ -896,6 +896,16 @@ def test_an_entry_for_a_store_read_by_name_still_matches_beside_a_later_odd_stor
     assert full(call, {"gates": {"reserved": [f"target:{entry}"]}})[1:3] == ("ask", ["credentials"])
 
 
+@pytest.mark.parametrize("odd", ODD_GCLOUD)
+def test_an_entry_for_the_folder_a_word_reads_a_store_from_still_matches_beside_an_odd_folder(odd):
+    # `keys` resolves into the key store from `~/.exo` (#209). The word names nothing of its own, so the read's target
+    # is the first folder main read as a store, else the first: `~/.exo` on main, which `target:*.exo*` names. With
+    # the odd folder first, main's target is the odd folder, and the call asks, here and on main
+    policy = {"gates": {"deny": ["target:*.exo*"]}}
+    assert full(folder_call("bash", "command", "ls keys", "~/.exo", odd), policy)[:2] == ("read", "deny")
+    assert full(folder_call("bash", "command", "ls keys", odd, "~/.exo"), policy)[:2] == ("read", "ask")
+
+
 def test_the_folder_read_keeps_the_first_folder_and_main_s_beside_it(env):
     c = gate.classify(folder_call("bash", "command", "ls", "~/.config//gcloud", "~/.ssh"))
     assert [p.target for p in c.parts if p.category == "credentials"] == [f"{env}/.config//gcloud", f"{env}/.ssh"]
