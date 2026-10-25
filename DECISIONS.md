@@ -1039,9 +1039,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   edeb4f89 against this head without the key, it finds nothing lowered or changed in 6,241,206 pairs on its own
   corpus, and in 508,326 on a #343 corpus of 952 calls across the readings above. With the key, that corpus loses
   violations in 15,880 pairs, each the swap, and lowers no outcome or reserved entry. Through the hook, its 952
-  calls lower nothing under 2 policies, widen no approvers and read no file main left unread. Another limit, also
-  on main: the gate does not see a command inside a parameter word (#143). So
-  `NO_COLOR=${X:-$(cp /w/notes.md /w/clean.md)} gh ...` reads the file and runs. The open PR #158 would fix that.
+  calls lower nothing under 2 policies, widen no approvers and read no file main left unread. The chroot limit
+  above holds for `sudo -RDIR gh ..` too, and #544 tracks both forms. Another limit, also on main: the gate does
+  not see a command inside a parameter word (#143). So `NO_COLOR=${X:-$(cp /w/notes.md /w/clean.md)} gh ...` reads
+  the file and runs. The open PR #158 would fix that.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows

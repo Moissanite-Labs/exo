@@ -15,12 +15,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   redirection to a file, an assignment that changes what runs (`GH_EDITOR=x`) or one on its own, a wrapper the gate
   does not see through, a shell, a `{ }` group, and the code around the call in `execute_code` or `python -c`.
   `nice`, `exec`, `sudo`, `env`, `timeout`, `command`, `nohup`, a variable such as `NO_COLOR=1`, a `( )` subshell
-  and a redirection to `/dev/null` add no part, so the file is still read there. A copy of the post on another
-  target (#399) is not another part. Every reading of the line counts, and a store read from the tool's own
-  folder (#311) is a part too. The card says the file was not read and why, for each post on the line, and
-  asks for the post on a line of its own, in place of the hint to pass an absolute path. A post also unseen another
-  way, such as a title from a variable, keeps that hint beside it. The card no longer names a word the unread file
-  holds.
+  and a redirection to `/dev/null` add no part, so the file is still read there. As on main, the gate reads
+  `sudo --chroot=DIR` and `sudo -RDIR` as plain `sudo`, so the hook reads the file by its path while `gh` reads the
+  one under `DIR` (#544). A copy of the post on another target (#399) is not another part. Every reading of the line
+  counts, and a store read from the tool's own folder (#311) is a part too. The card says the file was not read and
+  why, for each post on the line, and asks for the post on a line of its own, in place of the hint to pass an
+  absolute path. A post also unseen another way, such as a title from a variable, keeps that hint beside it. The
+  card no longer names a word the unread file holds.
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
