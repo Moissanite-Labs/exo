@@ -646,7 +646,10 @@ class Command:
         return cls(type=t, body=body, id=id or new_id("c"))
 
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "type": self.type, "body": to_dict(self.body)}
+        body = to_dict(self.body)
+        if self.type == "turn.send" and body.get("max_rounds") is None:
+            body.pop("max_rounds", None)  # default requests remain readable by older cores
+        return {"id": self.id, "type": self.type, "body": body}
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), separators=(",", ":"))
