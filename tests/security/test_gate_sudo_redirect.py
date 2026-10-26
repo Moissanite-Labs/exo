@@ -225,6 +225,56 @@ def test_a_rule_on_the_repo_or_the_host_reaches_an_ssh_line(line, target, level)
     assert (d.outcome, d.rule) == (level, "rule"), (line, d)
 
 
+# #493: the hop keeps the host among the line's other targets when the remote command's own part takes the target,
+# so a rule on the host reaches the line as the hop's part does for a deny or reserved entry (D-075).
+
+HOST_ASK = [{"match": {"target": "prod"}, "decision": "ask", "reason": "host"}]
+
+
+@pytest.mark.parametrize("line,direct", [
+    ("ssh prod 'ls'", "ls"),
+    ("ssh prod 'rm -rf /srv/x'", "rm -rf /srv/x"),
+    ("ssh prod 'echo hi > /etc/hosts'", "echo hi > /etc/hosts"),
+    ("ssh prod 'sudo echo hi > /etc/hosts'", "sudo echo hi > /etc/hosts"),
+    ("mosh prod -- 'echo hi > /etc/hosts'", "echo hi > /etc/hosts"),
+    ("ssh user@prod 'echo hi > /etc/hosts'", "echo hi > /etc/hosts"),
+])
+def test_a_rule_on_the_host_reaches_an_ssh_line_whose_command_has_its_own(line, direct):
+    # The issue's rows under rules: [{target: prod, decision: ask}]: the write on the remote host took the target,
+    # and a rule on the host allowed it where the direct line the command runs as asks no more than its matrix.
+    c = sh(line)
+    assert c.target == (sh(direct).target or "prod"), (line, c)   # the host when the direct line names none
+    allow = {r: {e: "allow" for e in ("private", "internal", "public")}
+             for r in ("reversible", "costly", "irreversible")}
+    d = decide(c, pol(matrix=allow, rules=HOST_ASK))
+    assert (d.outcome, d.rule) == ("ask", "rule"), (line, d)
+
+
+def test_a_host_rule_reaches_the_hop_when_the_command_has_no_target_of_its_own():
+    # On main the hop gave the host as the line's target only then; the row keeps deciding as it did.
+    assert decide(sh("ssh prod 'ls'"), pol(rules=HOST_ASK)).outcome == "ask"
+
+
+def test_an_ssh_hop_keeps_the_host_among_its_other_targets():
+    c = sh("ssh prod 'echo hi > /etc/hosts'")
+    assert (c.target, c.alt_targets) == ("/etc/hosts", ["prod"]), c
+    # A standing grant for the local write covers the direct line the remote command runs as, never the hop.
+    assert binds_exact(c) and not binds_exact(sh("echo hi > /etc/hosts")), c
+
+
+@pytest.mark.parametrize("line", ["ssh prod 'echo hi > /etc/hosts'", "mosh prod -- 'echo hi > /etc/hosts'",
+                                  "ssh user@prod 'echo hi > /etc/hosts'"])
+def test_a_scope_on_a_local_path_cannot_lower_the_hop(line):
+    # The scope named a path on another host, and made the line private where the host reading stays internal.
+    ask_internal = {r: {"private": "allow", "internal": "ask", "public": "ask"}
+                    for r in ("reversible", "costly", "irreversible")}
+    c = sh(line)
+    assert decide(c, pol(matrix=ask_internal)).outcome == "ask"
+    assert decide(c, pol(matrix=ask_internal, scopes={"private": ["/etc/*"]})).outcome == "ask"
+    # The direct line the remote command runs as stays under the local scopes, as before.
+    assert decide(sh("echo hi > /etc/hosts"), pol(matrix=ask_internal, scopes={"private": ["/etc/*"]})).outcome == "allow"
+
+
 COSTLY_ASK = {"reversible": {"private": "allow", "internal": "allow"}, "costly": {"private": "ask", "internal": "ask"}}
 
 
