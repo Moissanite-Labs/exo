@@ -219,6 +219,7 @@ class CoreRuntime:
         self.loop.on_turn_end = self.observe_turn
         self.loop.before_turn = self._refresh_soul
         self.loop.system_extra = self._tutorial_line
+        self.loop.watching = self.hub.has_subscribers  # an unlimited turn is capped once the client watching it leaves
         signer = None
         if seat:  # receipts are signed with the seat key (made on first use, mode 0600)
             from exo import crypto

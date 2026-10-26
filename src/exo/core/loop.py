@@ -76,6 +76,7 @@ class _Stream:
 WRAP_UP_PROMPT = ("[harness] You have used all {n} tool rounds for this turn; tools are now off. "
                   "In a short reply: what you finished, what is still open, and the next step to continue "
                   "(the user can say 'continue' to start a fresh set of rounds).")
+UNWATCHED_ROUNDS = 24  # a turn whose client left gets this many rounds, then a report: nobody can steer or stop it
 
 
 class _SessionState:
@@ -115,6 +116,7 @@ class Loop:
         self.approval_ms: dict[str, int] = {}  # session -> time spent waiting on approvals; the engine adds to it
         self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
+        self.watching: Callable[[], bool] | None = None  # whether a client is on the event stream (the engine wires it)
         self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
         self._state: dict[str, _SessionState] = {}
 
@@ -313,7 +315,11 @@ class Loop:
                       result: TurnResult, max_iterations: int) -> None:
         system, recall = await self._system(session, user.text())
         extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
+        watched = self.watching() if self.watching and max_iterations == 0 else False  # did a client start out here
         for _ in count() if max_iterations == 0 else range(max_iterations):
+            if watched and not self.watching() and _ >= UNWATCHED_ROUNDS:
+                max_iterations = UNWATCHED_ROUNDS  # the client left: nobody can steer or stop this turn
+                break
             if hasattr(self.context, "note"):
                 await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)

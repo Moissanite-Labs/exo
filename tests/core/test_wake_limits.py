@@ -142,6 +142,36 @@ async def test_principal_channel_turn_remains_unlimited_while_a_wake_runs(tmp_pa
         await eng.close()
 
 
+class LeavingTools(RepeatingTools):
+    """The client watching this turn closes its event stream three rounds in: nobody can steer it now."""
+
+    def __init__(self, sub):
+        super().__init__()
+        self.sub = sub
+
+    async def stream(self, messages, tools, **opts):
+        if len(self.calls) == 3:
+            self.sub.close()
+        async for event in super().stream(messages, tools, **opts):
+            yield event
+
+
+@aio
+async def test_a_watched_turn_is_capped_when_its_client_leaves_mid_turn(tmp_path):
+    eng = engine(tmp_path)
+    sub = eng.hub.subscribe()
+    try:
+        sid = (await eng.loop.create_session()).id
+        provider = eng.loop.provider = LeavingTools(sub)
+        response = await Dispatcher(eng, caller="principal:tui").run(s.Command.of(s.TurnSend(session=sid, text="pages")))
+        assert response.ok
+        await wait_completed(eng, sid)
+        assert_capped(eng, sid, provider)  # 24 rounds from the start, then a report
+    finally:
+        sub.close()
+        await eng.close()
+
+
 @aio
 async def test_wait_completed_drains_a_finished_tasks_queued_cleanup(tmp_path):
     eng = engine(tmp_path)

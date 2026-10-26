@@ -71,7 +71,7 @@ class EngineTarget(Target):
     def can_wake(self, session: str) -> bool:
         wake = self.e.peer_cfg.wake
         if wake is None:  # interactive means somebody is watching: no client on the event stream means headless
-            return not self.e.hub._subs
+            return not self.e.hub.has_subscribers()
         return bool(wake)
 
     def open_approvals(self) -> set[str]:
