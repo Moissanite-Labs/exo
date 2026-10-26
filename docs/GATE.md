@@ -22,7 +22,50 @@ The policy loader raises `PolicyError` for a list, scalar or null in place of th
 a string. Omitted settings and an empty mapping retain the defaults. `categories: []` disables category
 escalation, while independent floors, reserved entries, denies and other escalation checks still apply.
 Valid mappings keep their existing behavior.
-The plugin's existing policy-error path logs the error, records it with the decision and uses defaults.
+
+### A malformed escalate keeps the other sections (#557)
+
+The exo-gate plugin does not drop the whole policy for one of these mistakes. It loads the policy with an error
+list (`gate.load_policies(root, errors)`), which records the message and repairs only the escalation: the default
+escalation plus the category names the value gives. `escalate: [payment]` reads as the default categories plus
+`payment`, and a string, as `escalate` itself (`escalate: read`) or as its `categories`, adds each category name it
+contains. A null, false, number or empty list keeps the default escalation, and a mapping keeps its other keys.
+Deny, reserved, categories, rules, matrix, budget, posting, approvals and the internal-names scrub list stay in
+force. A caller without the list still gets `PolicyError`: the loader still rejects a bare list (#542), and only
+the plugin's repair honours its names, which can only add escalation.
+
+The plugin decides each call under that repaired policy and under the defaults, and the stricter outcome stands,
+merged as the gate merges a line's readings (#399): the widest exposure, so an approval binds to the exact line
+where either decision binds it; a third party if either has one; every violation, so the defaults' posting and
+scrub findings stay on the card with their fix; and every reserved part, which keeps its ask from a grant. So a
+deny, reserved entry, category line, rule or matrix cell that tightens the defaults still holds, and a section
+looser than the defaults (a permissive matrix, narrower posting rules, the scrub turned off) does not lower them.
+The reason says `policy error, stricter of your policy and the defaults applies: <message>`, and the plugin logs
+the message. An ask's approvers are those both the policy and the defaults allow (the principal alone), and an
+"always" answer lasts the shorter of the two `always` values. The no-reply default in the card is the policy's
+`ask_default`. A changed policy file with this error is decided the same way beside the defaults, also before
+`/gate accept`, and its `policy_change` row keeps the message in `error`. `/gate` shows a standing policy error for
+the pinned file and for a changed one.
+
+While the pinned or the changed file has this error, a standing grant applies only where the decision as before
+#557 (the defaults in place of the file with the error, then the decision model's verdict) also asks and finds a
+grant, so that decision allows the call too. Otherwise the merged decision stands and the call asks. So an unbound grant does not run a call that
+the defaults log but a restored `reserved` entry makes ask (`git push origin main` beside `reserved: [vcs_push]`),
+and a grant bound to the exact line does not run a call that the defaults ask for without that binding (a sudo
+write line, which an honoured `read` name or a restored `categories: {read: ask}` binds). Answering "always" there
+still writes a grant. It covers the line once `/gate accept` (or a new session) adopts a fixed file that still asks
+for the line and binds it the same way; a fixed file that waits for `/gate accept` leaves the error's rule in place.
+
+The decision is never lower than with the defaults alone (main after #542), the decision model and standing grants
+included, and a valid policy decides as before. It can be lower than main before #542 (1d2f32ac) in two known
+cases: a shape that crashed the classifier there (`escalate: {categories: 7}` asked on every call by accident);
+and, equal to the defaults alone, a grant bound to the exact line on a repo the policy's `scopes` narrow, which
+applies because the defaults read the repo as public and ask with that binding: `gh pr close 5 -R acme-org/app`
+beside `scopes: {internal: [acme-org/*]}`, which 1d2f32ac logged, or beside a private scope and a matrix ask,
+which 1d2f32ac asked for without a binding.
+
+Any other policy error (a YAML error, a bad matrix value, rules or deny that are not lists, an unreadable file)
+still falls back to the defaults alone: `policy error, defaults used: <message>`.
 
 ## Required executor audit
 
@@ -99,7 +142,8 @@ nobody read:
   `--config`, or an expansion outside `--header` and the login options. httpie: `k=@f`, `k:=@f`,
   `k@f`, a pipe or `<` into it, or an expansion outside `-a`.
 - The exo-gate hook reads a body file only by an absolute path, up to 256 KiB, with
-  `read_body_files` on. A relative or `~` path names a file in the command's folder or home, which
+  `read_body_files` on, and only on a line where the gate finds no other part (#343, below). A
+  relative or `~` path names a file in the command's folder or home, which
   the hook cannot pin down: it gets the session's folder (#209), but a `cd` or `pushd` on the line,
   or the call's `cwd` argument, moves it (`cd docs && gh ... --body-file notes.md` read `notes.md`
   from exod's own folder before). A path under `/dev` or `/proc`, as written or resolved
@@ -108,10 +152,39 @@ nobody read:
   gate reads more than one way ("Where a gh command lands") gets the text in each reading: the
   copy on each other target, and the line as read before #399, whose own body file is read the
   same way.
+- Another part of the line can change the body file after the hook reads it and before `gh`
+  does (#343). A copy, a move, a redirect, a link or `tee` can run before the post. A writer can
+  run beside it, later in a pipe or in the background, and a redirection can truncate the file
+  itself. An ssh hop runs `gh` on a host where the path names another file. So the hook leaves
+  the file unread when the gate finds any other part on the line, in any reading of it
+  (`gate.readings`): another command, a redirection to a file, an assignment that changes what
+  runs (`GH_EDITOR=x gh ...`, `LD_PRELOAD=...`) or one on its own (`X=1; gh ...`), a wrapper the
+  gate does not see through (`setsid`, `taskset`, `xargs`), a shell (`bash -c`), an ssh hop, a
+  `{ ...; }` group, a store read from the tool's own folder (#311), or the code around the call
+  in `execute_code` or `python -c`. It does not ask whether that part writes the file. The post
+  then counts as unseen: it asks once, and its violation says why
+  ("the gate did not read the body file, since the line does more than post ..."). Every post's
+  body file on such a line gets that note, so a second post's says so too. Wrappers the gate
+  sees through add no part, so the file is still read under `nice`, `exec`, `sudo`, `env`,
+  `timeout`, `command` and `nohup`, after a variable that changes nothing that runs
+  (`NO_COLOR=1 gh ...`), in a `( )` subshell, with a trailing `&`, and with a redirection to
+  `/dev/null`. A copy of the post on another target is the post itself, not another part. Since
+  the file is not read, the card names nothing its text holds now: on a line of two posts it no
+  longer names a forbidden word in the first post's file.
+- The hook reads the file before the command runs, so a process started by an earlier tool call
+  can still change the file between the read and `gh`. Closing that gap would need the post to
+  run on a snapshot of the text the hook read. The gate also reads `sudo --chroot=DIR gh ...` and
+  `sudo -RDIR gh ...` as `sudo gh ...`, so the hook reads the file by its path while `gh` reads
+  the one under `DIR` (#544).
 
 Under the posting rules (`posting.applies_to`) an unseen body adds the violation "the gate cannot
-read the body ..." and asks. In any category it offers no "always" (`once`) and no standing grant
-matches it, since its binding hashes only the line. A post the line spells out is checked as before.
+read the body ..." and asks. A body file the hook left unread because the line does more than post
+gets "the gate did not read the body file ..." in its place (`gate.UNSEEN_ON_LINE`): the hook names
+those files to `decide` in `held_body_files`. A post also unseen another way (a title from a
+variable, a repeated option) keeps the plain note beside it, since alone on its line it would still
+be unseen. In any category it offers no "always" (`once`) and no
+standing grant matches it, since its binding hashes only the line. A post the line spells out is
+checked as before.
 
 - An answer covers that hash only. If the agent edits one character, the next call has a new
   hash and is asked again. This is the same rule as a review verdict that a new head sha voids.
@@ -513,8 +586,9 @@ list`, `ls run`): the gate does not resolve `run` against its own working folder
 for `keys`, so with the gate's working folder at `$EXO_HOME`, `ls keys` asks and `ls run` does
 not. A `cd`, `tar -C` or `git -C` into `$EXO_HOME` on the line is followed, though: a relative
 name is then read as the path it names from there (#269, "The working folder" below), so
-`tar -C ~/.exo -czf - run`, `cd ~/.exo && ls run` and, from `run/jobs`, `cat ../exod*`,
-`grep -r . ..` and `cd .. && ls` ask, while `cat 1.log` there stays `read`. Brace sets are
+`tar -C ~/.exo -czf - run`, `tar -C ~/.exo -czf - ru?`, `cd ~/.exo && ls run` and, from `run/jobs`,
+`cat ../exod*`, `grep -r . ..`, `grep -r . .?`, `grep -r . ./.?`, `grep -r x ../..` and `cd .. &&
+ls` ask, while `cat 1.log` there stays `read`. Brace sets are
 expanded first (#184), so `run/{*,}`, `{$EXO_HOME/run,x}/*`,
 `$EXO_HOME/{run,x}/*` and `$EXO_HOME/r{u,}n/*` ask, and `run/jobs/{1,2}.log` stays `read`. A
 wildcard is matched with `.` and `..` resolved, for every secret store, so `cat ./.env*` asks like
@@ -536,12 +610,12 @@ and `cat ../exod*` do (see "The working folder" below).
 
 Limits. No environment variable carries the credential, and `tool_env` drops `EXOD_*`,
 `EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
-(`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`, also through `..`:
-`cd ~/.exo/run/jobs && grep -r secret ../..`); a `..` from a folder spelt with a wildcard
-(`cd ~/.e*o/run/jobs && ls ..`); a wildcard
-in a folder name above a file (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for
-the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
-characters, the same as for `~/.ss?`; `~/.exo/r*` asks); an upper-case spelling on a
+by its full path (`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`, though a relative name
+asks: `cd ~/.exo/run/jobs && grep -r secret ../..`); a wildcard in a folder name above a file
+(`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for the folder itself (`grep -r .
+~/.exo/ru?`, `ru[n]`: the last part needs three literal characters, the same as for `~/.ss?`, while
+`~/.exo/r*` asks, and so does `ru?` relative to a `cd` on the line: `cd ~/.exo && grep -r . ru?`);
+an upper-case spelling on a
 case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); a wildcard that spells part of an agent's name that is not sampled
 (`run/agent-scout*` when `scout` is neither `$EXO_SEAT` nor among the 64 sampled seats); the
 built-in `glob` with the folder in `pattern` rather than `path` (it lists names; the same for
@@ -613,13 +687,35 @@ system or bash will.
   `ls ${EXO_HOME:-$HOME/.exo}/run` ask with `EXO_HOME` set or not, and `write_file
   ${EXO_HOME:-$HOME/.exo}/policies/x.yaml` is a store write. A default is read to 8 levels of nesting; a deeper
   one stays as written.
-- **Expansions inside a name (#225).** Bash drops an empty command substitution, and an unset variable expands to
-  nothing, so `cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc` and `cat ${x}.env` read the store. A shell word
-  that holds a `$( )`, a backtick pair, or a `${..}` or `$name` other than the four variables above is also
-  matched with each of them removed. Where literal text stands on both sides of one, it is also read as `*`, for
-  any output: `cat .e$(echo n)v` is the glob `.e*v`, which asks as that glob would. Single quotes keep text
-  literal (`cat '.e$(:)nv'` names a file spelt that way). Ordinary lines keep their class: `cat notes-$(date
-  +%F).md`, `ls $(pwd)/src`, `cat ${OUT}/report-${N}.txt`.
+- **Expansions inside a name (#225, #309, #341).** Bash drops an empty command substitution, and an unset
+  variable expands to nothing, so `cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc` and `cat ${x}.env` read the
+  store. A shell word that holds a `$( )`, a backtick pair, a `$(( ))` or `$[ ]`, or a `${..}` or `$name` other
+  than the four variables above is also matched with each of them removed, and as `*` for any output: a
+  substitution anywhere but at the start of a word with text after it (`cat .e$(echo n)v` is the glob `.e*v`,
+  which asks as that glob would, and so do `cat ~/.config/gh/$(printf hosts.yml)`, `cat id_ed$((25519))` and
+  `cd ~/.kube && cat $(ls)`, but `$(pwd)/config` is not `*/config`), a variable only where literal text stands on
+  both sides of it (`cat $f` and `cat $OUT/config` stay reads). One that starts a name part with text after it
+  in the part is also read as `.*`, since its output may start with the dot a glob's `*` does not match
+  (`cat $(printf .e)nv`). In that form a part that is only an expansion is empty. The default word of an
+  unknown variable may be its value (#341): `${x:-word}`, `${x-word}`, `${x:=word}`, `${x=word}`, `${x:+word}`
+  and `${x+word}`, also on an array element (`${x[0]:-word}`), are also read with the word in place, so
+  `cat ${x-.env}`, `cat ${x:-~/.kube}/config`, `cat ${x[0]:-.env}` and `cat ${x:-$HOME/.exo}/keys/seat` ask,
+  while `cat ${OUT:-/tmp/out}/report.txt` and `cat ${1:-README.md}` stay reads. Single quotes keep text literal
+  (`cat '.e$(:)nv'` names a file spelt that way). The same reading reaches the working-folder targets and names
+  of "The working folder" below (`cd ~/.k$(:)ube && cat config`) and the Exo-store write checks of "The store is
+  credentials" below (#309). Each spelling is read once per tool call, a few strings per word, so the work stays
+  linear. A long write or `cd` line full of expansions costs 2 to 3 times what it did, since each form is also
+  matched against the store's protected names (2,000 `cp` words with a `$(:)` in each: about 2.4 times
+  the CPU time, about 1.7 times with a `${u}` in each), and a read line about the same. A line that enters a store
+  folder reads its relative names twice, as written and then in these forms (see "The working folder"), so
+  `cd ~/.exo/run/jobs && cat` with 3,000 plain names costs about 1.6 times main's CPU time. Ordinary lines keep
+  their class: `cat notes-$(date +%F).md`, `ls $(pwd)/src`, `cat ${OUT}/report-${N}.txt`,
+  `cp x out/$(date +%F).json`. The cost, failing closed: a variable that starts a name part with text after it is
+  read as `.*` too, so `cat ${x}rc` and `cat ~/${name}rc` ask (`.*rc` could be `.netrc`). A substitution that
+  ends a word is `*`, so a read of a folder that holds a secret store by its name made by output asks, as
+  `cat /tmp/*` and `ls ~/.config/*` do on main: `cat /tmp/$(cat last)`, `ls /tmp/$(whoami)`,
+  `ls ~/.config/$(whoami)` and `cat ~/.config/$(ls ~/.config | head -1)`. A quoted tilde in a default word is
+  read as the home folder, though bash leaves it as written (`cat ${x:-'~/.kube'}/config` asks).
 - **Bash glob syntax (#199).** A glob is matched as bash reads it (`_fn_glob`, which the `cd` checks already
   use): `[^x]` is `[!x]`, a `]` first in a set is a member, and a POSIX class is spelt out (`[[:alpha:]]` is
   `[a-zA-Z]`). A class bash does not know, or more than 32 `[`, could match anything and counts as a match. So
@@ -637,16 +733,24 @@ Known limits. A link made on the same line (`tar xf v.tar && cat notes.txt`) doe
 classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the store. Programs that follow links
 while they walk (`grep -r`, `rg -L`, `cp -rL`) are checked by their arguments only. In executor or broker mode the
 gate's view of the file system may differ from the worker's. A name built whole inside a substitution
-(`cat $(printf '.e%sv' n)`) is not read. Open issues:
-  - #309: the Exo-store write checks (`is_store_path`, "The store is credentials" below) read the `${VAR:-word}`
-    value but not expansions inside a name, so `cp x ~/.exo/polic$(:)ies/gates.yaml` is still a shell command (a
-    write redirection to a path with `$` already asks as `opaque_exec`);
-  - #310: an expansion at the end of a store name is read as empty only, so `cat .env.$(hostname)` stays a read, as
-    does the glob `cat .env.*` (the glob samples have no `.env.<suffix>`);
+(`cat $(printf '.e%sv' n)`) is not read, nor is a default word with a `}` in it past that `}`
+(`cat ${x:-${HOME}/.kube}/config`, and a nested default, `cat ${x:-${y:-.env}}`), as the lexer reads it, nor a
+default word that bash splits into fields (`cat ${x:-a .env}`); #341 tracks these, which main reads the same
+way. A default word that names a store folder walked whole stays as the folder by its full path does
+(`tar czf - ${x:-$HOME/.kube}`, as `tar czf - ~/.kube`). The
+`*` form is a glob, so a name left with fewer
+than three characters of its own is not matched (`cat .$(printf env)`), nor is a name a pattern matches rather
+than a sample, split by a substitution that prints text (`cat server.k$(printf e)y`, as the glob
+`cat server.k*y`, while `cat server.k$(:)ey` asks). The default word is not read behind an indirect name or a
+subscript with an expansion in braces (`cat ${!x:-~/.kube}/config`, `cat ${!x[0]:-.env}`,
+`cp x ${x[${i}]:-$HOME/.exo}/policies/a`), nor when the word is a substitution
+(`cat ${x:-$(printf ~/.kube)}/config`). Open issues:
+  - #310: a substitution at the end of a store name is read as empty and as `*`, so `cat .env.$(hostname)` is
+    read as the glob `cat .env.*`, which stays a read (the glob samples have no `.env.<suffix>`);
   - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved.
 
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
-`test_gate_expansions_in_names.py`, `test_gate_bash_glob_classes.py`, and
+`test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
 ### A thread's environment file (#313)
@@ -1483,8 +1587,18 @@ gate does not read:
   line or a rule that denies such a category denies the line too (#191). `chroot`, `nsenter`,
   `unshare` and `systemd-run` run the command with other privileges, namespaces or as a
   system unit: like `sudo`, the line carries a signal named after the wrapper and a reversible
-  part counts as costly. What the gate cannot read stays `opaque_exec`: a program from a
-  variable, `tmux send-keys`, a `screen -X` command other than `screen`, `parallel` with no
+  part counts as costly. For the parts each of these wrappers runs, nested ones too, over ssh or
+  through a shell (`chroot / bash -c 'cat ${x}rc'`), and for what `sudo` or `doas` runs over ssh
+  (`sudo ssh host 'cat ${x}rc'`), a costly copy of each reversible part is added beside it, so a
+  rule that denies a costly `read`, `shell` or `local_write` part still matches the command inside
+  when the line reads as a secret or a store write. The parts themselves stay as written, so a
+  rule or entry on reversible parts reaches them as before (`sudo ssh host 'ls; cat x'` still
+  denies under a rule that denies a reversible `read`). A copy carries no post, and the posting
+  checks read each post once. What `sudo` runs through a shell (`sudo bash -c '...'`) gets no
+  copies. gate_diff against main, under its built-in policies and under rules, lifted category
+  lines, matrix rows and entries keyed on `reversibility`, lowers no outcome (D-038 amendment
+  2026-10-22). What the gate cannot read stays `opaque_exec`: a program from a variable,
+  `tmux send-keys`, a `screen -X` command other than `screen`, `parallel` with no
   template (commands from its input or `:::`), a wrapper with no command (an interactive shell,
   `flock 9`), and options the tables do not know. As with `bash -c`, a wrapped command that
   outranks `opaque_exec` (`setsid git push`) takes the line's category, so a deny on
@@ -1688,6 +1802,34 @@ whole line in one pass:
   (`mkdir -p .kube && cd .kube && ls` keeps its class), a `git` subcommand, a jq filter (`jq .`;
   not one read from a file with `-f`), other heredoc text or a word with a space in it (a commit
   message, an `echo`, `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
+- A word or target with an expansion in it is also read in the forms "Expansions inside a name"
+  gives (#225), so `cd ~/.kube && cat c$(:)onfig`, `cd ~/.kube && cat $(ls)`, `cd ~/.k$(:)ube && cat
+  config`, `cd ~/$(printf .k)ube && cat config`, `cd ${x:-~/.kube} && cat config`, `env -C
+  ~/.k$(:)ube cat config` and `tar -C ~/.k$(:)ube -czf - .` ask. Failing closed, so does a word that
+  is a substitution alone on a line that enters a store folder, since its output may be any name
+  there (`cd ~/.kube && echo $(date)`, `cd ~/.kube && kubectl get pods -n $(cat ns.txt)`, `cd
+  ~/.config/gh && gh pr list --limit $((n+1))`), while a word with text of its own that no store
+  name fits keeps its class (`cd ~/.kube && cat $(date +%F).log`). A target made whole by a command
+  (`cd $(git rev-parse --show-toplevel)`) enters no dot folder. The order of the line is not
+  followed here, as for any name on the line, so a substitution before the `cd` counts too (main
+  reads `echo *; cd ~/.exo/policies` as `credentials`), and so does a value set by one, which may be
+  used after it: `echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies`, `V=$(sed -n 1p VERSION); cd
+  ~/.exo && ls`, `cd ~/.exo/policies && echo $(ls)` and `cd ~/.exo && echo "$(ssh prod 'ls /srv')"`
+  are `credentials`, where #465 alone reads them as `read`. The commands in such a substitution keep
+  the folder they run in (#465), so none of them is a store write. The line is read first with its
+  words as written, as before, and that name decides the line and builds the parts it did (the key
+  read beside a store write, #464, #468). These forms and the readings of "In `$EXO_HOME`" below are
+  read after it, and a name they find that is another target is a `credentials` part of its own
+  beside it, so a rule on the name read as written still matches: in `cd ~/.exo/state && echo $(cat
+  ../keys/seat; rm -rf x)` the key read targets `../keys/seat`, with the `*` of the `$( )` beside
+  it, and `cd ~/.exo/state && grep -r x .. ../run` targets `../run`, with `..` beside it. On a line
+  that these forms make a secret line (`cd ~/.exo/state && cat ${x-.env} ../keys/seat`), the name
+  read as written is such a part too, so a rule on `target: '*keys*'` denies these lines as before,
+  and so is the secret the line's own words name where a nested line already reads as a secret
+  (main's target for `ssh host 'cd ~/.exo/run/jo$(:)bs && grep -r x .?/..'`, the remote text). An
+  ssh remote line these forms make a secret or store line also keeps the part that decided it
+  before, with the host as its target (`ssh host 'cat ~/.exo/$(printf ledger.sqlite)'` is still a
+  read of `host` beside the secret), so a reserved or rule entry on it lists it as before.
 
 In `$EXO_HOME` (#269). The run folder is not a store folder by its name, since job output in `run/jobs`
 stays readable, so the checks above do not reach it through `..`. On a line that reaches a folder in
@@ -1706,8 +1848,32 @@ names as well (`exod.principal.key`, `exod.token`, the sampled `agent-<seat>.pri
 or name, and each level up, is charged the path parts it builds, as it is made, to one budget of 65,536
 parts for the whole tool call, which every `$( )` shares (each is classified again, nested ones too), so
 the work stays linear in the line however deep the names are. Past the budget, or on a line that reaches
-more than 64 such folders, the line asks (fails closed, no grant). A line that names no store folder
-makes no join. A folder spelt with a wildcard is left to the store-folder check above.
+more than 64 such folders, the line asks (fails closed, no grant). The budget counts the parts of
+each full path, so a deep home folder spends it sooner: a long line of expansion forms in a store
+folder that reads under `/home/me` can ask under a home folder six levels deep. A line that names no
+store folder makes no join. A target spelt with a glob or an expansion (read as a glob, `r$(printf
+u)n` as `r*n`) is read as the folders in the store it could be: its parts up to the store's own
+folder (or a `.exo` one) as that folder, and the parts below it along each tail of a principal's
+`principals/<name>/run/jobs` path they fit, a glob part as the part it could be and, past that tail,
+as `..` when it could be one. So `cd ~/.e*o/run/jobs`, `cd ~/$(printf .e)xo/run/jobs`, `cd
+~/.exo/r?n/jobs`, `cd ~/.exo/run/j?bs`, `cd ~/.exo/r$(printf u)n/jobs`, `cd
+~/.exo/principals/m?/run/jobs`, `cd ~/.exo/run/jobs/.?`, `cd ~/.exo && cd r?n/jobs` and `cd
+~/.exo/principals && cd m?/r?n/jobs` reach `run/jobs` or the run folder. A target whose parts fit no
+such path is left out (`cd ~/.exo/p?licies`). A `cd` target or a name's leading part that could be
+`..` is `..` too (`.?`, `.[.]`, `.$(:).`, `$(echo .).`, also after a `./` or `.//`: `./.?`,
+`.//.?`), and a target or name that `..` would shorten is read both ways (`.?/..` is `.` and
+`../..`, so from `run/jobs` `cd .?/.. && grep -r x .`, `cd $PWD/.?/.. && grep -r x .` and `grep -r x
+.?/..` ask; `$PWD/`, `${PWD}/` and `~+/` there are `./`). A name also counts when, joined, it could
+be the run folder by a glob (`tar -C ~/.exo -czf - ru?`, `r$(:)un`) or a folder that holds one:
+`$EXO_HOME` or a `.exo` folder, its `principals` folder or a principal's store, as `.` in
+`$EXO_HOME` already did (`cd ~/.exo/run/jobs && grep -r x ../..`, `cd ~/.exo && grep -r x
+principals/me`, `cd ~/.exo/principals/me && grep -r x .`, `tar -C ~/.exo/principals/me -czf - .`).
+The cost, failing closed: `cd ~/.exo && ls principals`, `cd ~/.exo/principals/me && ls .` and, in
+`run/jobs`, `ls ../..`, `tail -f $(ls -t | head -1)` and `cat $(ls)` ask (`cat $(date +%F).log` does
+not). Known limits: a walk over the store or a principal's store by its full path (`grep -r x
+~/.exo/principals/me`, as for `~/.exo` above), a target or name in a variable (`d=~/.exo/run/jobs;
+cd $d`), and a part that could be `..` after a literal part (`grep -r x ~/.exo/run/jobs/.?`, `cd
+~/.exo/run/jobs/.?/..`, `cd ~/.exo && grep -r x run/jobs/.?`).
 
 A line that enters no store folder, and names none, is classified as before. The work is linear
 in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
@@ -1719,9 +1885,9 @@ store file asks even when it is elsewhere or is not a file
 `cd ~/.config/fish && cat config`, `cd ~/.config/nvim && ls *`,
 `cd ~/.config/nvim && npm config get prefix`), and `.` asks in a store folder even for a listing
 (`cd ~/.config && find . -name '*.toml'`). A line that is already `store_write` stays
-`store_write` (the principal's alone). Known limits: a target in a variable or made by a command
-(`X=~/.kube; cd $X`, `cd $(...)`); a name made by a command or with a space in it (`cat $(ls)`,
-`"$(pwd -P)/config"`); a dot store folder named last in an operand
+`store_write` (the principal's alone). Known limits: a target in a variable or made whole by a
+command (`X=~/.kube; cd $X`, `cd $(...)`); a name in a variable, made whole by a command or with a
+space in it (`cat $f`, `"$(pwd -P)/config"`); a dot store folder named last in an operand
 (`cd ~/.config && tar czf x ../.kube`, as for `tar czf x ~/.kube`); a relative target taken from
 another relative one (`cd ~/.config && cd nvim && cd ../gcloud`); a glob in the parent of a
 plain store folder (`cd /sr?/exo-home && cd keys`); a relative path that reaches a plain store
@@ -1804,11 +1970,35 @@ by its name inside the checkout (`x/.kube`, `x/.config/gh`, `x/.docker`) is not 
 folder itself, `~/.claude` and a `.claude` folder with no `.git` beside it are stores, so any call
 there asks, as a `cd` there does.
 
-A line that already reads a store keeps that reading. A line that writes the Exo store stays
-`store_write`, and a store read from its folder is a `credentials` part beside the write, as a key
-read after `tar -C` is (#464). So `cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd`
-is denied by `deny: [credentials]`, as its `cd` form is, and only the principal answers it. A `cd`
-on the line is read as before. Limits:
+A line that already reads a store keeps that reading, and the folder's read is a `credentials` part
+beside it when it names another target, as beside a `cd` form's secret line (#320). So under
+`deny: [target:*/.ssh]`, `cat id_rsa` with `~/.ssh` as `cwd` is denied, as
+`cd ~/.ssh && cat id_rsa` is, and so is `cat ${x-.netrc}; echo $(git push --force origin main)`
+with `~/.exo/keys` as `cwd` under `deny: [target:*/.exo/*]`, whose `${x-.netrc}` makes it a secret
+line. A line that writes the Exo store stays `store_write`, and a store read from its folder is a
+`credentials` part beside the write, as a key read after `tar -C` is (#464). So
+`cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd` is denied by
+`deny: [credentials]`, as its `cd` form is, and only the principal answers it. A `cd` on the line
+is read as before.
+
+The folder reads a line's names as a `cd` there does, in the same order (#320, "The working folder"
+above): first the words as written, and that name is the part's target, as on main; then
+the expansion forms and `..` readings, and a name they find that is another target is a second
+`credentials` part beside it. So `echo $(cat config)` with `~/.kube` as `cwd` keeps its part on
+`~/.kube/config`, which a rule or `target:` entry on `*config*` denies, with one on `~/.kube/*`
+beside it. These reads are made beside the #209 one too, so `cat ${x-.env} keys` with `~/.kube` as
+`cwd`, which `${x-.env}` makes a secret line, keeps its part on `~/.kube/keys`. On a secret line the
+folder adds a part to, a copy of the line's heaviest other command with no own text is a part as
+well, so a rule keyed on `command` does not lift that command's category or matrix deny (#394), as
+when that command decides the line: `cat ${x-.netrc}; echo $(git push --force origin main)` with
+`~/.exo/keys` as `cwd` is denied under `force_push: deny` and an allow rule on `.*`. The copy
+keeps its body, read or unseen, so a post on such a line meets each posting check as often as
+when it decides the line, and it is the line's first part, so on a line of more posts than the
+card lists (20) its entry is listed before the others, as the line's own is. Its entries take none
+of those 20 places, so posts with no numbered target, whose entries all share them
+(`gh pr comment --body hi`, `gh issue create`, `gh pr review --comment`), list at least as many
+entries as on main. A word that is a substitution alone is `*` there, so `echo x $(cat f) w` with
+`~/.kube` as `cwd` asks, as after `cd ~/.kube`. Limits:
 
 - The session's own folder (the `cwd` the core passes with every call, #209) is not a target. A
   session started inside a store folder reads it by relative names as before.
@@ -1821,10 +2011,6 @@ on the line is read as before. Limits:
   write (#435). So `deny: [store_write]`
   does not reach `cat *; rm -rf build` with `~/.exo/keys` as `cwd`, whose `cd` form writes in the
   store. The call still asks, as on main.
-- A line that reads a secret itself keeps that reading, and the folder adds no part to it. So a
-  `target:` entry on the folder does not reach it: under `deny: [target:*/.ssh]`, `cat id_rsa` with
-  `~/.ssh` as `cwd` asks, where `cd ~/.ssh && cat id_rsa` is denied. That is no lower than main.
-  `deny: [credentials]` denies both.
 - The part's target is the folder joined with the name (`~/.kube/config`). A `cd` form's target is
   the name alone (`config`). So a rule or `target:` entry on the name alone, such as a deny rule on
   `credentials` and `target: config`, reaches only the `cd` form. One on the path, such as
@@ -1836,7 +2022,8 @@ on the line is read as before. Limits:
   denied, since the rule does not name the `cd`. Main asks or allows there. On a line of two or more
   commands, such as `cat *; git push --force origin main`, the deny stands.
 
-Tests: `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
+Tests: `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`,
+`tests/security/test_gate_store_name_forms.py` (the folder's reads beside each other).
 
 Compound commands (#161). The stdin of a compound command reaches the commands inside it, nested
 compounds included: a heredoc or here-string after its closing `}`, `)`, `done`, `fi` or `esac`,
@@ -2003,7 +2190,9 @@ line. The policy steps that read only that part then read it, so some lines deci
   only the deciding part of a nested line they run, such as a remote command or a `bash -c` line.
   Where a `>( )` or a `$( )` in that line now reads an `ssh` as fed, the new part decides it, so
   the rule above asks instead of denying: `sudo ssh jump 'tee >(ssh host)'`, `nsenter -t 1 bash -c
-  'echo x > >(ssh host)'`, as for `sudo ssh jump 'ssh host < f'`.
+  'echo x > >(ssh host)'`, as for `sudo ssh jump 'ssh host < f'`. With #320 a costly copy of each
+  part the wrapper runs sits beside it ("Shell commands: an allowlist"), so the rule denies these
+  lines and the direct form.
 - A `-n`, `-N` or `-f` before a word that may expand to no word or several now counts (see the
   `ssh` paragraph above). ssh never reads its stdin then, so `ssh -n "$h" uptime < hosts.txt`
   takes its own reading (`read`) and is allowed, where its stdin was read as run and it asked.
@@ -2123,17 +2312,18 @@ with its target and text (#435 review). Examples are an `email_send`, `web_post`
 for the call, a rule that matches it, its own matrix cell and the posting rules still apply to it. A
 tool that the gate reads as `local_write` or `delete` by its name, such as an `upload_file` tool
 that is not from MCP, keeps that reading as a part with the call's own URL as its target. A here-doc
-body on the line goes to the post, also inside a script fed to `bash`. Each of these still asks the
-principal alone when nothing denies it. One reading no longer reaches a write into the folder or a
-send of a file in it under `sudo` or `doas` over `ssh` or `mosh`. The wrapper makes the dominant part
-costly. A rule on `shell` or `local_write` with `reversibility: costly` matched that part, and so did
-a matrix that denies that cell while `store_write` has its own category line. The store write is now
-that part, so neither denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'` or `sudo ssh host
-'cp evil.py ~/.exo/plugins/foo/__init__.py'`. Each asks the principal alone, as for `policies/` on
-main. `deny: [store_write]` is the reliable way to refuse every write into the
-folder. A `target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*`
-denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the absolute path and
-`~/.exo/../.exo/plugins/...` still only ask.
+body on the line goes to the post, also inside a script fed to `bash`, and so it does on a line a
+secret read decides (#320): `cat ${x-.netrc}; mail -s s a@b.c <<EOF`, which that form makes a secret
+line, keeps the mail's footer, forbidden-word and scrub checks, and `cat .netrc; mail ...` now has
+them too. Each of these still asks the
+principal alone when nothing denies it. Under `sudo` or `doas` over `ssh` or `mosh`, the store write
+is the dominant part, and a costly copy of each reversible part the wrapper runs is added beside it
+(#320), so a rule on `shell` or `local_write` with `reversibility: costly`, or a matrix that denies
+that cell, still denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'` and `sudo ssh host
+'cp evil.py ~/.exo/plugins/foo/__init__.py'`. `deny: [store_write]` is the reliable way to refuse
+every write into the folder. A `target:` entry matches the path only as the call spells it:
+`target:~/.exo/plugins/*` denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the
+absolute path and `~/.exo/../.exo/plugins/...` still only ask.
 
 Known friction (fails closed, no grant). A command that names a path in the folder and is not a
 read command asks the principal, as for the rest of the store. That covers a writing command that
@@ -2176,10 +2366,53 @@ word and every word it expands to are checked, and a hit on any counts, so
 checks have their own budget of 4,096 expanded words per tool call, so they never use up the secret-store
 checks' budget, and each spelling is expanded once per line, however many commands use it.
 
+An expansion inside a word is read as for secret-store paths (#309, "Expansions inside a name"
+above): a word with one, a redirection target too, is also checked in each form, as a path and, with
+a `*` in it, as a glob matched one part at a time against the protected folders and names. So `cp x
+~/.exo/polic$(:)ies/gates.yaml`, the same with an empty backtick pair, `mv x
+~/.exo/polic${u}ies/gates.yaml`, `tee ~/.exo/polic$(:)ies/gates.yaml < x`, `cp x ~/.exo/$(printf
+policies)/default.yaml`, `cp x ${x:-$HOME/.exo}/policies/a`, `cd ~/.e$(:)xo && cp x policies/a` and
+`git -C ~/.e$(:)xo/policies checkout .` are `store_write`. They were `shell` writes, and `echo x >
+~/.exo/polic$(:)ies/gates.yaml` and `rm -rf ~/.exo/pol$(:)icies` asked as `opaque_exec` and
+`delete`, which a policy may allow. A write to `keys/` that the empty reading names is
+`credentials`, as unsplit (`cp x ~/.exo/ke$(:)ys/a`). One that only the `*` reading reaches is
+`store_write` (`cp x ~/.exo/$(printf keys)/a`). Both ask. The protected names are the ones
+`_STORE_NAMES` matches, from the same list, so the bus store and the update signers file count too
+(`cp x ~/.exo/bu$(printf s)/x`, `cp x ~/.exo/b$(printf u)s/registry.json`, and `cp x
+~/x/update/allowed_$(printf s)igners`, which matches in any folder as the unsplit name does), and so
+does the plugins folder (#435) in each form `policies/` is read in (`cp x
+~/.exo/plug$(:)ins/foo/__init__.py`, `cp x ${x:-$HOME/.exo}/plugins/foo/x.py`, `cd ~/.e$(:)xo && cp
+x plugins/foo/x.py`, `tar -C ~/.exo/plug$(:)ins -xf evil.tar`). As for a glob read, a match needs a
+part with three characters of its own before its extension, and a store file's name needs them
+itself. So `cp x out/$(date +%F).json` (which could print `seat`) stays a `shell` write, as do `cp x
+~/report-$(date +%F).txt` and `mv x "$dest/"`, and a store file's folder alone does not make the
+name that file: `cp x state/$(date +%F).json`, `cp x src/state/$(basename $f)`, `cp x
+lib/state/$1.json` and `sed -i s/a/b/ src/state/$(git ls-files | head -1)` keep their class, as `cp
+x state/*.json` does. Below the store's own folder the folder counts (`cp x ~/.exo/state/$(date
++%F).json`). A matrix cell or a `target:` entry that denies a part still denies the line (#464):
+under `deny: [target:/dev*]`, `cd /dev && cp x ~/.exo/polic$(date)ies/a` is denied by its
+descriptor-folder part, as `cd /dev && cp x out/$(date +%F).json` is. The cost, failing closed: a
+name whose own text fits a store file, split by output, is a store write on any line (`cp x
+data/schedule$(date +%F).sqlite`, `cp x policies/gates$(date +%F).yaml`, `cp x out/seat$(date
++%F).json`), and a split spelling that bash never makes a store path is one too (`cp x
+~/.exo/polic$(date)ies/a`, `cp x ~/.e$[0]xo/policies/a`). Known limits: a store file's name made
+whole by output (`cp x state/$(printf approval-grants).json`, as on main), output with a `/` in it,
+which fills one part (`cp x ~/$(printf .exo/policies)/x`), an expansion that ends a word names no
+part of its own (`cp x ~/.exo/$name`, as `cp x ~/.exo/p*`), and a literal glob in a write target is
+matched as written, not as the names it could be (`cp x ~/.exo/polic?es/gates.yaml`, `cp x
+~/.e*o/policies/a`).
+
 Patch move destinations (#528). Codex `apply_patch` writes the path in `*** Move to:` after an
 `*** Update File:` header. The gate checks both paths, as it checks `*** Add File:`, `*** Delete File:`
 and Exo's `*** Move File: source -> destination` headers. A destination in a protected store is
 `store_write`. A secret destination is `credentials`. Both ask.
+
+A header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) does not hide the header after
+it (#548 follow-up). Each header's path is read on its own line, as a patch tool reads it (a `\r` before the
+newline is trimmed), and also as before, across a line, so a path either reading finds counts. A local write of
+more than one file keeps each file as a `local_write` part, so `deny: [target:notes.txt]` or a reserved
+`target:` entry reaches every file the patch writes. The call's own target is the first path read as before: after
+a bare header, the card shows the swallowed header text.
 
 Their `local_write` parts keep
 the source and destination's deny and reserved entries. A content line beginning with `+` or a
@@ -2253,7 +2486,9 @@ non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, 
 writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
 `<( )` of a later command on that line (#465: `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`). There,
 as unwrapped, a command the gate does not read as a read (`sed -n`, `sort`, `curl`) counts as a write. A
-substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own folder. Its
+substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own
+folder (a word that is a substitution alone is still a name in the store folder, wherever it stands,
+so such a line can be `credentials`: see "Shell commands: an allowlist", #225). Its
 place in the line decides, not its text, and one in a here-doc body counts as after every command on its line.
 One in the redirections of a compound that holds the `cd` (`done < <(sort list)`) runs before it. A subshell
 `cd`, a later `cd` out and a `cd` in a function body fail closed. A loop that enters the store is not followed
@@ -2282,7 +2517,11 @@ and keep the delegation (see "Known limits" above). A file tool's write, move, c
 (`write_file` or `delete_file` on `~/.exo/keys/seat.key`) is `credentials` with a store write part
 as well, so it is the principal's alone too. A read alone (`cat ~/.exo/keys/seat.key`, `read_file`
 on it) has none, so such a seat may answer it. A delete of job output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name
-(`rm ~/.exo/run/exod.sock`) stays `store_write`.
+(`rm ~/.exo/run/exod.sock`) stays `store_write`. A secret read by another command on a store-write
+line makes the line `credentials` too, the store write a part of it (`cd ~/.exo/policies && cat
+~/.ssh/id_rsa; cp /tmp/evil gates.yaml`), and so does a name that "Expansions inside a name" reads
+as a secret (`cd ~/.exo/state && cat ${x-.netrc}; echo $(rm -rf x)`, #225), and that part keeps it
+the principal's alone as well.
 
 What the floor does to a policy's denies. A shell write to the store keeps its own reading
 (`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category
@@ -2324,9 +2563,14 @@ the pinned order (`gate.strictest_approvers`, an ordered intersection; the princ
 both, so the list is never empty), and an "always" answer lasts the shorter of the pinned and
 changed `always` values, so a 0 in either writes no grant. A seat the principal removes cannot
 answer the next ask; a seat they add waits for `/gate accept`. A changed file that does not load
-counts as the defaults: the principal alone, 30 and 7 days. Limits: an ask already open keeps the
-approvers it was sent with, and grants written before the change still match until they expire or
-`/grants revoke` removes them.
+counts as the defaults: the principal alone, 30 and 7 days. A changed `gates.yaml` whose only
+error is a malformed `escalate` keeps its other sections and is decided beside the defaults, with
+approvers no wider than theirs (#557). When the pinned or the changed file has that error, the
+old and new decisions merge as the readings of a line merge, so at an equal outcome the other's
+violations stay on the card, and a standing grant applies only where the decision with the defaults
+in place of that file also asks and finds it. Limits: an ask already
+open keeps the approvers it was sent with, and grants written before the change still match until
+they expire or `/grants revoke` removes them.
 
 ## Principal authority for policy and settings changes
 
@@ -2339,6 +2583,80 @@ records the authenticated caller, including its client label. `/gate status` sta
 403 when the core refuses authority. It does not rewrite config through its offline fallback.
 TCP and stdio callers remain local even when they possess a transport bearer token.
 
+`schedule.edit` requires a live principal caller for every action except `list`. The check is at the
+`Scheduler.edit` command handler, before a job can be added, paused, resumed, run or removed. Scheduled runs also
+check each tool call against the tool names they received. A refused name returns an error without reaching
+the gate or executor. Allowed names still pass through both (`docs/SCHEDULE.md`).
+
 Two other body fields cannot claim the principal. `peers send` with `via="human"` from a non-principal caller
 goes out as `via="agent"`, so the receiving daemon gives it `same-principal` trust, not `principal`. `unsteer`
 from a non-principal caller can pull back only steers that the principal did not write.
+
+## Bypass mode (D-065)
+
+Bypass is Exo's permissionless mode, like Claude Code's `--dangerously-skip-permissions`. While it is on, the gate
+auto-approves every call it would otherwise ask about, so the agent never stops to wait for you. Bypass
+auto-approves everything except changes to Exo's own records and reading secrets.
+
+**Turning it on.** Type `/permissions bypass` in the terminal client or the web page, or start the terminal client
+with `exo --skip-permissions` (`--dangerously-skip-permissions` is accepted too). The flag only makes the window
+send `/permissions bypass` once it has connected, so it works the same whether the window runs the core or joins
+one. `/permissions ask` turns asking back on, and so does the web banner's "Ask again" button. `/permissions` shows
+the mode and the counts.
+
+**Who can turn it on.** Only a principal connection (D-039, D-052): the terminal window, the web page, or a socket
+client holding the principal credential that is not a child of the core. A tool subprocess (even one holding the
+stolen credential), a channel, a peer, a bus message, a TCP or stdio client, and the agent itself are local callers
+and get `forbidden`. A message that says "/permissions bypass" is only text. Work the principal's command started
+(the agent's turn and its tools) does not keep the principal's standing once that command returns. Anyone may turn
+it off, because that only tightens. Every switch writes a ledger row (`phase: permissions`, with `mode`, `by` and
+`via`: `/permissions`, `launch flag` or `seat default`).
+
+**How long it lasts.** For this run of the core only. The state is in the gate's memory, never on disk. Every
+client of that core sees it. A restarted core starts in ask unless the flag is given again. A per-seat default
+exists: `[permissions] mode = "bypass"` in the seat file, read once when the core starts. A seat file is a store
+path, so writing one is `store_write` and asks you every time, even in bypass. Bypass can never make itself the
+default, and no policy file turns it on.
+
+**What still happens in bypass:**
+
+| Call | Without bypass | In bypass |
+|---|---|---|
+| Anything the policies say asks (a GitHub comment, `rm`, a network post, an unknown program, opaque code) | asks | runs; ledger row `decided_by: bypass` |
+| `store_write`: the policies, the ledger, `keys/`, the grants, seat files, the core sockets | asks the principal | asks the principal |
+| `credentials`: reading or filling a key, token or password | asks | asks |
+| A `deny` rule, or a decision-model deny | blocks | blocks |
+| A public post that breaks the posting rules (an internal name, a home path, a missing footer) | asks, with the fixes | held: the call fails with the fixes, so the agent rewrites the text and calls again |
+| A standing grant, `allow` or `log` | runs | runs |
+
+**Why that floor.** It is not about permission. It protects the record of what the agent did. If the agent could
+rewrite its own ledger, policies or grants while nobody is asked, the audit of a bypass session would be worthless,
+and it could make bypass permanent. Secrets stay asked because a key, once read, cannot be un-read, and the record
+cannot undo it. Deny rules are the principal's hard limits; Claude Code keeps deny rules in bypass too. Use a
+`deny` rule for anything that must never run, even in bypass. A post that breaks the posting rules is held rather
+than asked because nobody is there to answer, and a leaked internal name in a public repo cannot be taken back; the
+agent gets the list of fixes and goes on.
+
+**It is never silent.**
+
+- A banner: `permissions: bypass` with the auto-approved count, first in the terminal status line (a narrow window
+  cuts the other instruments, never this), and under the navigation on every web page. Both clients read
+  `/permissions json` every few seconds and after each turn.
+- Every auto-approved call has a ledger row: `outcome: allow`, `decision.rule: bypass`, `decided_by: bypass`,
+  `bypass: {would: ask, rule, reason}` (what the gate would have asked and why) and `call: {tool, args}`. The
+  arguments are recorded with obvious secrets redacted (`redacted` counts them) and cut at 8000 characters
+  (`truncated` gives the length); `args_sha256` still identifies the exact call. Held posts have `decided_by:
+  bypass` and `decision.rule: bypass_hold`. Floor calls that still asked carry `bypass: {floor: <category>}`.
+- `/permissions` gives the counts for this run: auto-approved, held, and still asked.
+
+**Exo OS.** With a required tool executor (D-020, #70) bypass is refused: `/permissions bypass` fails with
+`forbidden` and a seat default is ignored with a log line. Every call there must be decided and committed to the
+ledger before the broker runs it, and the installation exists to keep a person in that loop. If required mode
+starts after bypass was switched on, bypass is inert.
+
+**Not covered.** An internal gate error still falls back to asking (the gate could not classify the call, so it
+cannot know the call is off the floor). Bypass changes what the gate asks; it is not a sandbox, and the D-039 limit
+on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` and `Gate._bypass` in
+`plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
+`tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
+`plugins/exo-command/tests/test_permissions_web.py`.

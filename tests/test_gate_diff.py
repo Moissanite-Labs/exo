@@ -1077,6 +1077,9 @@ def test_the_built_in_policies_cover_the_listed_kinds():
 
 POLICY_READERS = ("check_post", "decide", "_decide", "normalize_policies", "normalize_scrub", "check_scrub")
 NOT_POLICY_KEYS = {"_normalized"}       # marks a policy normalize_policies already filled in: never a written key
+# The body files the exo-gate hook left unread on a line that does more than post (#343). The hook sets it, never a
+# policy, and it changes only how the unseen note is worded: the post asks once either way.
+NOT_POLICY_KEYS |= {"held_body_files"}
 
 
 def _keys_read(fn: ast.FunctionDef) -> set[str]:
