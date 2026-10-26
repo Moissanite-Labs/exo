@@ -7239,8 +7239,11 @@ def _classify_call(action: Any) -> Classification:
                        for p in dict.fromkeys(paths or [path])]
         if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
             c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p)]
-            _plain_part(c, next((p for p in paths if is_sensitive_path(p, plain=True)), "") or
-                        args_sensitive(args, plain=True), "write")     # #513 review: main's target stays a part
+            # #513 review: main's target stays a part. Where no `path` or patch header named the files (`paths`), main's
+            # write part (#448) was on its target too, so a `local_write` entry for it still matches
+            mine = next((p for p in paths if is_sensitive_path(p, plain=True)), "") or args_sensitive(args, plain=True)
+            if _plain_part(c, mine, "write") and not paths:
+                c.parts.append(_make("local_write", summary=f"write {mine}", target=mine, link=mine))
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
