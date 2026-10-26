@@ -1230,6 +1230,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-26 (issue #466):* a pattern a decision runs that does not compile is refused when the policy
+  loads, not when `decide` first reaches it. `normalize_policies` checked types and outcome names but compiled
+  nothing, so a rule's `match.command`, a `command:<regex>` entry or a mapping's `command` in `deny:` and
+  `reserved:`, and a `posting.forbid` pattern with a typo raised `re.PatternError` at decide — on the call the
+  pattern reached, only. The exo-gate hook caught it: with no required executor a read tool ran with no ask,
+  observe mode ran the call, and enforce mode showed a fallback card with no approver list whose "always" let a
+  seat answer every later call the gate failed on (`plugin_rule:exo-gate:error:<tool>`). Now
+  `normalize_policies` compiles each of those patterns (a forbid entry with its `ignore_case` flag) and raises
+  `PolicyError` naming the entry — `gates.deny[0].command: bad pattern '^(rm|shred': missing ), unterminated
+  subpattern at position 1` — and `load_policies` names the file before that, so the hook's policy-error fallback
+  (the defaults, which ask on anything irreversible or public) decides instead, with the message in every
+  decision's reason and in `/gate`. A store write, a secret and a force push still ask the principal alone, once,
+  in every mode, on a real rule key where the error card had none an approver list could be read from. Chosen
+  over dropping only the bad entry and keeping the rest: the defaults are the posture every other malformed
+  policy file already gets, and one refusal that names the file and the entry is easier to fix than a policy
+  silently missing the entry a principal added to tighten the gate, with a ledger row to notice it by. A policy
+  whose patterns compile decides identically; only the broken one changes, from a per-call failure to a
+  load-time refusal. The scrub's patterns were checked at load already (D-033). The differential against main
+  6054da56 (11405 actions, 88 policies) found nothing lowered. Tests:
+  `tests/security/test_gate_policy_patterns.py`, `plugins/exo-gate/tests/test_hook.py`
+  (`test_a_policy_pattern_that_does_not_compile_refuses_the_policy_*`),
+  `plugins/exo-gate/tests/test_tool_cwd.py`.
 - *Amendment 2026-10-26 (issue #493):* an ssh or mosh hop keeps its host among the line's other targets when the
   remote command names a target of its own. The hop gave the host as the line's target only when the remote
   command's dominant part had none (`c.target = c.target or dest`), so `ssh prod 'echo hi > /etc/hosts'` was a
