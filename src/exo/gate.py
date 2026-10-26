@@ -4525,6 +4525,30 @@ def _unknown_store(w: _Word, seen: dict, ancestors: bool = False, inside: bool =
                "*" in p and _store_glob(p, ancestors, inside) for p in pieces)
 
 
+# gh subcommands that write the paths on their line (#461): release, run and attestation download into
+# `-O`/`--output` or `-D`/`--dir`, and repo and gist clone into their directory word. The gate read them as
+# reads on GitHub, so the store check never looked at the paths, and `gh release download -O
+# ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, or the signed-update trust pin (#133).
+_GH_STORE_WRITES = (("release", "download"), ("run", "download"), ("attestation", "download"),
+                    ("repo", "clone"), ("gist", "clone"))
+
+
+def _gh_writes_store(words: list) -> bool:
+    """Whether a gh command here is one that writes the paths on its line (#461), so the store check reads them
+    as writes however gh reads on GitHub. `-O -` prints to stdout and stays a read; a subcommand the gate
+    cannot pin may be any of them."""
+    if not words or words[0].text.rsplit("/", 1)[-1] != "gh":
+        return False
+    argv = [w.text for w in words]
+    dyn = frozenset(i for i, w in enumerate(words) if _expands(w) or w.split)
+    order = _gh_verb_order(argv, dyn, frozenset(i for i in dyn if _gh_splits(words[i])))
+    if order is None:
+        return True
+    group = argv[order[1]] if len(order) > 1 else ""
+    verb = argv[order[2]] if len(order) > 2 else ""
+    return (group, verb) in _GH_STORE_WRITES
+
+
 def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
     """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
     seen = ctx.setdefault("store_braces", {})
@@ -4544,7 +4568,7 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
     # program named hash run by path (./hash), which is no builtin and rebinds nothing.
-    if all(_store_quiet(p) for p in parts):
+    if all(_store_quiet(p) for p in parts) and not _gh_writes_store(words):
         return ""
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]

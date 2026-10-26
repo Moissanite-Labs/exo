@@ -2495,7 +2495,13 @@ path is one the gate cannot resolve, not that the command writes it. A body file
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
-`sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
+`sqlite3`, `touch`, `ln`), a gh download or clone into it (#461): `gh release download` with `-O`
+or `--output` (also `=`-attached), `gh run download` and `gh attestation download` with `-D` or
+`--dir`, and `gh repo clone` and `gh gist clone` into their directory word, with or without `--`
+before it. These read on GitHub, so the store check took the line for a read and never looked at
+the paths before; now it does, under `sudo`, in `bash -c` and a `$( )`, and past a `-R` before the
+subcommand. `-O -` prints to stdout and stays a read, and so does a path outside the store. Also
+a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
 `unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and
 `exo interview`, which writes the principal store (also as `python -m exo.config`, `exo.cli` or

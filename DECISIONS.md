@@ -1210,6 +1210,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-26 (issue #461):* a gh download or clone writes the store the way `curl -o` and
+  `git clone` do. gh's download and clone subcommands read on GitHub, so the store check took a line whose
+  every part reads as a read for a read and never looked at their output paths: `gh release download -O
+  ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, `-O ~/.exo/update/allowed_signers`
+  replaced the signed-update trust pin (#133), `gh run download` and `gh attestation download` with
+  `-D`/`--dir` filled `state/`, and `gh repo clone` or `gh gist clone` with a store directory filled it too,
+  where `curl -o` and `git clone` on the same paths ask. Now the store check reads their output paths as
+  writes — `-O`/`--output` and `-D`/`--dir` in every spelling, the clone's directory word, also with `--`
+  before it — wherever the line stands: under `sudo`, in `bash -c` or a `$( )`, and past a `-R` before the
+  subcommand (#399). The line grows a `store_write` part and keeps the gh read as its other part (D-075), so
+  a deny, `reserved:` entry, rule or matrix cell on the gh reading still holds, and the decision is the
+  principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store and
+  every other gh read.
 - *Amendment 2026-10-24 (issue #542):* an explicit `gates.escalate` must be a mapping, and its `categories`, when
   present, must be a list. A malformed value raises `PolicyError` during normalization and store policy loading,
   rather than silently retaining defaults or using substring membership on a string. Omitted settings, an empty

@@ -6,6 +6,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A gh download or clone into the Exo store is a store write, as `curl -o` and `git clone` already are (#461).
+  gh release download, gh run download and gh attestation download write what they fetch into `-O`/`--output`
+  or `-D`/`--dir`, and gh repo clone and gh gist clone into their directory word, but they read as reads on
+  GitHub, so the gate's store check took the line for a read and never looked at the paths:
+  `gh release download -O ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy itself, and `-O
+  ~/.exo/update/allowed_signers` replaced the signed-update trust pin (#133), where `curl -o` and `git clone`
+  on the same paths ask. The store check now reads their output paths in every spelling (`-O`, `--output=`,
+  `-D`, `--dir`, the clone's directory operand, with `--` before it), wherever the line stands: under `sudo`,
+  in `bash -c` or a `$( )`, and past a `-R` before the subcommand (#399). The line keeps the gh read as a part
+  (D-075), so a deny, reserved entry, rule or matrix cell on it still applies, and the decision is the
+  principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store.
 - A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
   after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
   that path and its write was never read. A patch tool skips the bare line and applies the next header, so after
