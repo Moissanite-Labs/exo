@@ -451,7 +451,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `config.json` counted is also read as before (`Classification.ordinary`, one of `gate.readings`), and the stricter
   decision stands, so `matrix_deny_cells` still denies
   `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h` and `deny: [credentials]` still denies
-  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A copy or extraction into a folder that holds the file is #483.
+  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A quoted or split name (`~/.exo/con'fig'.json`) and a symlink
+  to the file (made earlier, or by an `ln` on the same line) count too; the name is matched case-sensitively, as the
+  other store names are. A copy or extraction into a folder that holds the file is #483.
 - Gate (#225, #269, #309, #341, D-038): store names an expansion hides, and relative names that reach the run
   folder, now ask. #307 read an expansion inside a secret-store name as empty and, between literal text, as `*`.
   That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,
