@@ -17,6 +17,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   in `bash -c` or a `$( )`, and past a `-R` before the subcommand (#399). The line keeps the gh read as a part
   (D-075), so a deny, reserved entry, rule or matrix cell on it still applies, and the decision is the
   principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store.
+- Gate (#587 follow-up, D-074): a `config.json` name an expansion hides keeps main's reading again. The merge of
+  #320 into #587 let #320's store glob count the home's `config.json` without marking the call, so the line kept no
+  reading as before D-074, or that reading counted the file too. Under `matrix_deny_cells`,
+  `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/con$(:)fig.json' h` asked where main before #587
+  denied it, and so did a delete beside such a name under `delete: deny` with a rule allowing `^rm`, and an
+  `echo x >` to it over ssh under an entry on `opaque_exec` at `internal` exposure. The glob now counts the file
+  only while it counts, so the call is also read as before D-074. Such a name still asks as a store write.
 - A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
   after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
   that path and its write was never read. A patch tool skips the bare line and applies the next header, so after

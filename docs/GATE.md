@@ -2295,7 +2295,10 @@ file counts, so a project's `config.json`, and `config.json.bak`, `config.json~`
 beside the home's, keep their class (one under `plugins/` asks with that folder, #435). A relative
 `.exo/config.json` is also read with `.`, `//` and `..` collapsed (`cd ~ && echo x > .exo/./config.json`),
 and a word a command prints counts by the name in it (`cp x $(echo ~/.exo/config.json)`), as
-`$(echo ~/.exo/policies/gates.yaml)` does. Reads stay `read` (`cat`, `jq`, `read_file`); a copy out
+`$(echo ~/.exo/policies/gates.yaml)` does. A name an expansion hides counts as the other store names do
+(#225): `cp x ~/.exo/con$(:)fig.json`, an unknown name in the home itself (`cp x ~/.exo/$(date).json`) and,
+through an expansion, a principal store's `config.json` ask, and the call is also read as before D-074.
+Reads stay `read` (`cat`, `jq`, `read_file`); a copy out
 of it (`cp ~/.exo/config.json /tmp/`) asks, as a copy out of `policies/` does. The CLI code that
 writes the file (`exo config set`, onboarding, `exo import-store`) is unchanged: run by the
 principal in a terminal, it is not a tool call.
