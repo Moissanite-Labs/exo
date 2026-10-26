@@ -2726,6 +2726,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.
 
 ## D-082 (2026-10-17) Canary operating decisions: verify first, hold high-exposure posts, finish adjacent work
+- **Scope pending:** The read-back requirement and the corresponding rejected item below conflict
+  with Rule 4 in `skills/choreography/references/anti-loop-discipline.md` for local file changes.
+  Their scope is undecided and should not be treated as a settled instruction until resolved.
 - **Decision:** how agents working on and in Exo operate, from canary use (agent exo-razi):
   - Verify by read-back before claiming an action is done (re-read the file, grep the result, fetch the
     record). Never invent a URL or claim a send that was not confirmed.
@@ -2739,6 +2742,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   asked inside fully delegated blocks instead of acting.
 - **Rejected:** holding delegated work for confirmation picks; substituting a channel on send
   failure; posting externally without release; skipping the read-back after a fix.
+- **Revisit if:** the principal resolves the read-back scope or the available verification tools change.
 - **Origin:** local canary notes appended to DECISIONS.md in the live install on 2026-10-17
   (numbered D-074 and D-075 locally). Those numbers were claimed by unrelated gate PRs
   (#125, #126); #125 closed without merging, while #126 landed as D-075. The notes are recorded
