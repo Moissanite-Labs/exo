@@ -4,6 +4,7 @@ import pytest
 
 from exo_tui import parse
 from exo_tui.app import ExoApp
+from exo.protocol import schema as s
 from test_tui import FakeServerClient, make_engine, send, until
 
 
@@ -12,6 +13,11 @@ def test_parse_rounds():
     assert parse(['--max-rounds', '60']).max_rounds == 60
     with pytest.raises(SystemExit):
         parse(['--max-rounds', '-1'])
+
+
+def test_default_wire_request_remains_compatible_with_older_cores():
+    assert 'max_rounds' not in s.Command.of(s.TurnSend(session='s')).to_dict()['body']
+    assert s.Command.of(s.TurnSend(session='s', max_rounds=0)).to_dict()['body']['max_rounds'] == 0
 
 
 def test_window_can_change_limit_for_future_turns(tmp_path):
