@@ -15,8 +15,7 @@ and Events (have ``seq``). ``events.subscribe`` starts the event feed.
 Every command runs with a caller the transport stamps (D-039, ``exo.principal``): ``principal`` only for an
 in-process client or a Unix socket request that carries the per-launch credential in ``X-Exo-Principal`` from a
 process that is not a descendant of the core; ``channel`` for the channels exod runs (``ChannelLink``, in process);
-``local`` for everything else, including stdio and TCP.
-"""
+``local`` for everything else, including stdio and TCP."""
 
 from __future__ import annotations
 
@@ -29,6 +28,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs, urlsplit
 
+from exo.core.private import umask
 from exo.core.types import to_dict
 from exo.protocol import schema as s
 from exo import principal as pr
@@ -197,16 +197,14 @@ class HttpServer:
                 path.unlink()
             if self.principal:  # before the socket accepts: no client may read a missing or a crashed core's record
                 self._principal_token = pr.issue(path, self.dispatcher.hub.instance)
-            old = os.umask(0o177)
             try:
-                self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
+                with umask(0o177):  # under the lock `atomic_write`'s probe takes, so neither undoes the other (#317)
+                    self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
             except BaseException:
                 if self._principal_token:
                     pr.revoke(path, self._principal_token)
                     self._principal_token = None
                 raise
-            finally:
-                os.umask(old)
             os.chmod(path, 0o600)
         except BaseException:
             self._release_start_lock(unlink_socket=False)
