@@ -172,6 +172,7 @@ class TurnSend:
     text: str = ""
     parts: list[ContentPart] = field(default_factory=list)
     mode: Literal["send", "queue", "steer"] = "send"
+    max_rounds: int | None = None  # principal only; 0 means unlimited; None uses the default
 
 
 @command("turn.interrupt")

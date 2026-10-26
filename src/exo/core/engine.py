@@ -612,6 +612,10 @@ class CoreRuntime:
 
     async def _turn_send(self, b: s.TurnSend) -> dict[str, Any]:
         self._info(b.session)
+        if b.max_rounds is not None:
+            require_principal("change the tool-round limit")
+            if type(b.max_rounds) is not int or b.max_rounds < 0:
+                raise CommandFailed("bad_request", "max_rounds must be a nonnegative integer")
         try:
             self.store.assert_open(b.session)
         except SessionLocked as exc:  # a finished child session takes no new turns
@@ -622,23 +626,26 @@ class CoreRuntime:
                 raise CommandFailed("conflict", "the subagent is starting or finishing and takes no message now")
             b.mode = "steer"
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
+        if b.mode == "steer" and self.loop.state(b.session).unlimited:
+            require_principal("steer an unlimited turn")
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
-        self._spawn_turn(b, meta)
+        self._spawn_turn(b, meta, b.max_rounds)
         return {"accepted": True}
 
     def start_turn(self, session: str, text: str, meta: dict[str, Any] | None = None) -> None:
         """Start a turn in the background (a peer woke an idle session)."""
         self._spawn_turn(s.TurnSend(session=session, text=text), meta)
 
-    def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None) -> None:
-        task = asyncio.create_task(self.run_turn(b, meta))
+    def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None, max_rounds: int | None = None) -> None:
+        task = asyncio.create_task(self.run_turn(b, meta, max_rounds=max_rounds))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
+    async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None,
+                       max_rounds: int | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
         meta = dict(meta or {})
@@ -648,7 +655,7 @@ class CoreRuntime:
         await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
         try:
             return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
-                                                 meta=meta)
+                                                 meta=meta, max_rounds=max_rounds)
         finally:
             await hooks.afire("on_turn_end", session_id=b.session)
 
