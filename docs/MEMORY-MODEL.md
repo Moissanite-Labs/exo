@@ -76,8 +76,9 @@ Each model call is built fresh, in this order:
    system message is byte-identical for every thread of the agent in the same folder until a real summary
    lands.
 2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its last
-   `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored in the
-   thread are part of it. A fork's copies count at their original's log position, so a fork opens with its
+   `tail_messages`, widened back so it never starts with an orphan tool result. A private thread's call can
+   leave out spans its own tree is still summarizing (below). Context notes stored in the thread are part of
+   it. A fork's copies count at their original's log position, so a fork opens with its
    parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too, except for the
    kept copies below. A copy counts only while the tree can hold its original. A private thread's fork has a
    tree of its own (below), which summarizes its copies. In any other fork, the parent may undo an entry after
@@ -102,13 +103,26 @@ thread therefore keeps a summary tree of its own over its own messages, as a sub
 session id, ranges: message numbers). Its tail starts at that tree's frontier, not the agent's, and the tree's
 view opens the tail as an unstored message headed "Earlier in this private thread". As in the agent view, that
 view ends at its last summarized node: spans too small to summarize, or a summary still running, stay whole in
-the tail. Until the first summary lands, the whole thread stays verbatim. A long private thread with no tree yet,
+the tail. Until the first summary lands, the whole thread is in the tail. A long private thread with no tree yet,
 such as one from before it had one, gets its leaves on its next turn. That turn waits for them as the agent
 tree's turns do (see "A turn does not wait for memory upkeep"), so a fast summarizer bounds the call. A slow one
-does not: the first calls can then carry most of the thread. The system message is the same as in the agent's
-other threads, so the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its
-`checkpoint`), `capture_principal` or `on_compacted`. `/context` counts its view in the recent tail, and
-`/compact` folds only the agent tree.
+does not, so while the private tree has leaves pending, the call leaves out their spans (#244). It cuts the
+oldest pending leaf first, a whole leaf at a time, until what comes before the turn fits `view_budget`. An
+unstored "[earlier messages are being summarized]" message stands in each gap. When a later leaf lands first, the
+view shows the pending leaves before it verbatim. Those are the oldest, so they go first, and each keeps its
+heading over the marker. Nothing else is cut. The turn stays whole: its user message, found by its turn id, and
+all after it, tool rounds and context notes included. The turn can start in such a leaf, and the cut stops there.
+A span that is not pending stays whole too: one skipped for good, one waiting to retry, and the last
+`tail_messages`, which are in no leaf yet. A tool call and its results
+are kept or cut together. The cut moves only when it must grow, and then by a whole leaf, so the calls in between
+extend the one before. The size counts tool-call arguments in full, but an image only as its placeholder. A span
+of large tool-call arguments can still be skipped as too small, since a leaf's size cuts each call's arguments at
+400 characters, and then it stays verbatim. The system message is the same as in the agent's other threads, so
+the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its `checkpoint`),
+`capture_principal` or `on_compacted`. `/context` counts its view and the marker in the recent tail, and its
+`from_seq` is the first stored message there. It finds the turn by the thread's last turn id, so during a turn it
+keeps the running turn whole, as the call does, steer messages included. Between turns it keeps the last turn
+whole too, though the next turn's call can cut it. `/compact` folds only the agent tree.
 
 A fork copies its parent's finished per-session summaries, but it numbers its copies 1 to n. Undo hides
 rows that are in the agent log, so their numbers stay used, and it deletes rows outside the log, such as a
@@ -131,7 +145,9 @@ the protocol is full at 30 commands. No new command type and no new event.
   the summary tree (summaries, nodes, levels, log range), the note of other threads' news (stored, plus
   news not yet stored), and this thread's recent tail. Each part has a token estimate, and the total
   follows. It also counts tree nodes by state (done, pending, skipped, failed) and says how many leaf
-  chunks `/compact` would fold. It reads only: it stores no note and starts no summary.
+  chunks `/compact` would fold. It reads only: it stores no note and starts no summary. In a private
+  thread whose leaves are pending, it matches the next call during a turn. Between turns it keeps the last
+  turn whole, which the next turn's call can cut (#244).
 - `/compact` summarizes now whatever is eligible for this agent. Every full leaf chunk is eligible, even
   inside the tail (the 12-message wait is skipped), then finished neighbours are merged even if the view
   is under budget. The size rules stay: a span under `min_compact_tokens`, or a summary that is not shorter
@@ -177,11 +193,18 @@ turn picks it up. Nothing the turn says is delayed by bookkeeping.
 The one exception is size. If that view (finished summaries, unfinished spans verbatim, and the tail) is over
 `view_budget`, the turn waits for pending summaries, but only for `overflow_settle` seconds (5 by default, never
 more than `settle_timeout`), then builds with what is ready. The rule lives in `src/exo/turn_settle.py`. A private
-thread checks its own tree the same way, after the agent tree.
+thread checks its own tree the same way, after the agent tree. Its tree also waits when the call would leave out a
+pending span (#244). That check counts each message in full, where the view cuts it short, so a leaf the call
+just scheduled gets its chance to run first. A fast summarizer, or a span too small to summarize, then leaves
+nothing to cut. Both waits of the private tree are for its own jobs only, leaves and merges: a merge shrinks the
+view the cut counts. The agent tree's jobs shrink neither the private view nor the cut, so they do not stretch
+either wait. So a private turn can now wait where it did not: while a cut would apply, each call waits up to
+`overflow_settle` for those jobs.
 
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf
-summaries or the finished summary. Messages are never both summarized and verbatim, and never neither. Memory
+summaries or the finished summary. Messages are never both summarized and verbatim, and never neither, except
+that a private thread's call can leave out a span whose summary is running, behind a marker. Memory
 content is the same once the summaries finish. Tests: `tests/core/test_turn_settle.py`.
 
 ## Undo and failed summaries (D-041)
@@ -219,6 +242,40 @@ topic with `/exo handoff` or `/exo branch` before the undo stays on disk as writ
 an automatic handoff written before the host last started, since exo-context keeps its summary nodes and its list of
 handoffs in memory. exo-context never puts an undone ruling back in the system message or in a handoff it writes
 after the undo. A ruling that was only summarized stays pinned.
+
+A host's undo reaches exo-context too (#389). Hermes's CLI and TUI report `/undo` only to their memory providers, as
+`on_session_switch(session, rewound=True)`. exo-memory passes the session id on through `exo.host_undo`, and
+exo-context takes it in `on_host_undo`. Only the engine that saw the session's last turn acts. Hermes can build a
+new agent on the same session (after `/reasoning` or `/fast`, say), and the old engine may live on with an old
+window, so `exo.host_undo` numbers each session's turns. The engine reads the pins file again, then the window it
+saw last. Hermes's `/undo N` removes the last N user turns with one notice, so the window's last user message opens
+an undone turn. A pin goes when that turn holds it and no message left in the window does. A pinned block holds
+nothing in this test, since it is the engine's own copy of the pins. The session's next turn reads the host's whole
+transcript, and a pin the window showed goes when that transcript shows it no longer. So `/undo 3` drops the pins
+of all three turns. A turn of another session in between leaves the undo pending, and a second undo before the next
+turn keeps the window the first one left. A transcript that does not reach back to where the window started was cut
+short, not undone, so it drops nothing. When `/undo N` cuts at a row Hermes merged its summary into, Hermes keeps
+only that row's summary part, and that part reaches back too. A compaction since the undo reaches back when its
+summary row folded the window's first row or that part.
+
+Each compaction ties the pins whose message it folded to the block it writes into its summary row, and the pins
+file keeps those ties. A summary row shows the pins tied to its block. So a folded pin stays while a summary row
+that carries it is left, even when the undone turn says the ruling again, word for word too: the rows a compaction
+kept are matched to its input from the start and from the end, each text as many times as the result holds it. That
+holds after a restart, in a new agent, and in a compression or `/branch` child. Hermes keeps its first rows before
+its first summary row, so `/undo N` can take that row too, and then the folded pin goes. When no role alternates,
+Hermes merges its summary into the next row. That row's own message counts as kept, not folded, and an undo of its
+turn keeps only the summary part. A pin whose message sits in a tail that `/compress here N` held out of `compress`
+stays: compaction never drops a pin. A compression child takes over its parent's window and pending undo. The link
+to a handoff a compaction wrote before the undo goes, as on the core. Each drop is logged as counts per kind and
+the session id, and a transcript cut short is logged with the session id.
+
+Some cases are not covered. Hermes's messaging gateway tells no one about `/undo`. Nor does the CLI while it has no
+agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. A host that runs exo-context
+without exo-memory never passes the notice on. An undo before the engine has seen a turn of that session since it
+started finds no window. After `/undo N`, the earlier turns' pins go only when a next turn comes in the same agent,
+and a `/compress` between the last turn and the undo can keep them too. A summary row or handoff file written
+before the drop keeps the ruling until the next compaction.
 
 ## Who wrote it: every message has an author (D-040)
 

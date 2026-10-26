@@ -303,7 +303,12 @@ like the memory hooks. After `session.undo` the core calls `on_session_switch(se
 summaries=)` with every message left in the thread and `{tree key: [ids of the summary nodes still stored]}`. Drop
 anything kept from the undone turns (D-041), including the text of each `on_compacted` node that is gone (its
 `node.session` is the tree key). exo-context drops their pins and those nodes, then writes again each handoff
-that may quote them.
+that may quote them. Hermes's CLI and TUI tell only their memory provider about `/undo`, so exo-memory passes the
+notice on with `exo.host_undo.report(session)`. exo-context drops the last undone turn's pins in
+`on_host_undo(session)`, and those of the earlier turns of `/undo N` in the next `select_context`, from its
+`conversation_messages` (#389). A memory provider used beside exo-context in exo-memory's place can do the same. A
+listener calls `exo.host_undo.turn(session)` on each turn it sees, and acts on a notice only when its last number is
+`exo.host_undo.latest(session)`, so an old engine left behind by an agent rebuild stays out of it.
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat
@@ -323,7 +328,9 @@ is 0600 unless you pass `mode` (`None` gives what a plain open gives). A file wr
 a cursor or a cache, can pass `sync=False` to skip the fsync. Do not write `<file>.tmp` and rename it, and do not
 open the final name for writing: a symlink planted at either name turns the write into a write to another file.
 To change the process umask for a while, use `with exo.core.private.umask(mask):`, not `os.umask`. It holds the
-lock the `mode=None` probe takes, so the two never undo each other (#317).
+lock the `mode=None` probe takes, so the two never undo each other (#317). Do not await or yield inside the block.
+The lock is not reentrant, so a second block on the same thread would wait forever (#563). To make a socket under
+a mask, bind it inside the block and start the server on it after the block, as `HttpServer.start_unix` does.
 
 ## 5. Add a seat
 
@@ -930,10 +937,15 @@ holds it as `engine.scheduler`. An engine built without composition has none, an
   `resume` or `run_now`, with `when` (cron or `every 30m`), `prompt`, `title`, `seat`, `tier` and `deliver`. The web
   Schedule page calls it through `POST /api/schedule` (`plugins/exo-command/exo_command/api.py`). There is no TUI
   command and no agent tool for it. The name `cronjob_manage` is only in the gate's category table and the
-  subagent blocked list.
+  subagent blocked list. Every action except `list` requires a live principal caller at
+  `handle_schedule_edit` (called by `Scheduler.edit`). In-process client tests pass `caller="principal:tui"`
+  to `Dispatcher`. A local, channel or seat caller cannot mutate jobs. Direct `Scheduler.add`, `pause`,
+  `remove` and `launch` methods are trusted internal APIs, used by the timer and unit tests, not transport entry points.
 - **Run.** Each run is an ordinary turn (D-041) in a fresh session of kind `scheduled`: the same context tree, memory
   provider, soul refresh and hooks, with the job's model tier, a narrowed toolset and an unattended-job prompt. It
-  reports through `task.updated` and a `notice`. The gate still applies, so an approval can stall a run.
+  reports through `task.updated` and a `notice`. The run freezes its available, non-blocked tool names before
+  starting and checks each call against that set before `engine.run_tool`. Tools added later are unavailable
+  to that run. The gate and executor still apply to allowed names, so an approval can stall a run.
 - Jobs live in `$EXO_HOME/schedule.sqlite`. A one-shot engine, such as a test, does not run the timer, so drive
   `Scheduler` directly in tests. Set `schedule` to `false` in `config.json` to turn it off.
 
