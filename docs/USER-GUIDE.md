@@ -317,6 +317,9 @@ press Ctrl+F from the composer, then the answer keys, with no click. Your draft 
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
+File searches with the agent's `grep` and `glob` tools stop after 30 seconds and ask it to narrow the pattern.
+Other sessions and approval cards remain responsive while a search runs. Stopping the turn also stops its search.
+
 What the gate asks about, and why:
 
 - **Credentials always ask.** Anything the gate sees reading or filling a password, token or key asks every time.
@@ -385,8 +388,13 @@ What the gate asks about, and why:
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, the core's socket, or the signed-update trust pin in `update/`
   (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. So does a write into
-  `~/.exo/plugins` (#435), because Exo loads and runs the code it finds there. To work on a plugin, point
-  `EXO_PLUGIN_DIRS` at your copy instead. Only you can answer such a write, whatever `approvals.yaml` says, also
+  `~/.exo/plugins` (#435), because Exo loads and runs the code it finds there, and into the other folders Exo loads
+  code from too (#459): the venv `${EXO_VENV:-$EXO_HOME/venv}` that holds the `exo` package and the gate itself,
+  Hermes' plugin home (`${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}/plugins`, loaded with `--with-hermes`), the source
+  copy `$EXO_HOME/src`, and every folder `EXO_PLUGIN_DIRS` names. A `pip install` into the venv Exo itself runs from
+  now asks; everyday work installs into a project or scratch venv instead. To work on a plugin, leave
+  `EXO_PLUGIN_DIRS` unset while you edit, or point it at your copy only for sessions that must load it. Only you can
+  answer such a write, whatever `approvals.yaml` says, also
   when the same command or file tool names a secret that a seat may approve (#447). Reading your policies or plugins
   with `cat`, `grep` or a read tool does not ask. Some other commands that only read, such as `sed -n` or `sort`, do
   ask. So does a write to your Exo home's `config.json` (D-074, #125), which names the plugins Exo loads, your
@@ -397,8 +405,9 @@ What the gate asks about, and why:
   a `config.json` into your Exo home without naming it (`cp /tmp/x/config.json ~/.exo/`) is not seen yet (#483). The
   gate resolves symbolic
   links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some writes are not
-  seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working folder is
-  `policies/`, a glob spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md`
+  seen as store writes yet: a relative name such as `gates.yaml` written by a shell command whose working folder is
+  `policies/` (a file tool's relative destination from a session folder inside the store is seen, #494), a glob
+  spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md`
   lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.

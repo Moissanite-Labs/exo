@@ -7,6 +7,7 @@ import fnmatch
 import os
 import re
 import stat
+from functools import partial
 from itertools import chain
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -68,10 +69,7 @@ def _root(args: dict[str, Any], ctx: ToolContext) -> Path:
 
 
 def _rel(p: Path, root: Path) -> str:
-    try:
-        return str(p.relative_to(root))
-    except ValueError:
-        return str(p)
+    return str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
 
 
 def _glob_regex(pattern: str) -> re.Pattern:
@@ -157,13 +155,15 @@ def grep(args: dict[str, Any], ctx: ToolContext) -> str:
 
 
 def register(reg: Registry) -> None:
+    from exo.search_worker import run_search
+
     reg.tool("glob", "Find files by glob pattern (e.g. '**/*.py', 'src/*.toml', 'README*'), "
              "newest first. Skips .git, node_modules, virtualenvs, caches and secret stores.",
              {"type": "object", "properties": {
                  "pattern": {"type": "string"},
                  "path": {"type": "string", "description": "Folder to search (default cwd)"},
                  "limit": {"type": "integer"}},
-              "required": ["pattern"]}, risk="low", toolset="search")(glob)
+              "required": ["pattern"]}, risk="low", toolset="search")(partial(run_search, "glob"))
     reg.tool("grep", "Search file contents with a Python regex. Returns path:line:text rows. "
              "Skips secret stores below the path.",
              {"type": "object", "properties": {
@@ -173,4 +173,4 @@ def register(reg: Registry) -> None:
                  "ignore_case": {"type": "boolean"},
                  "files_only": {"type": "boolean", "description": "List matching files only"},
                  "limit": {"type": "integer"}},
-              "required": ["pattern"]}, risk="low", toolset="search")(grep)
+              "required": ["pattern"]}, risk="low", toolset="search")(partial(run_search, "grep"))
