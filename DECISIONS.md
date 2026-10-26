@@ -2903,8 +2903,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (#209): `id_rsa` with `cwd: ~/.ssh`, or `keys` with `cwd: ~/.exo`. The part of (k) was made only for a target with a
   `/` or a `.`, as main's target on a shell line is. So `read_file` with `paths: [~/.kube//config, id_rsa]` in
   `~/.ssh` asked under `deny: [target:*id_rsa*]`, where main denies it. A file tool's part now takes any target main
-  gave the call. Both held at 0b35021a, merged with each main. Group 2 again holds only the `dd` operand, which #568
-  tracks.
+  gave the call. Both held at 0b35021a, merged with each main. (s) The check's focused differential found one more
+  on a shell call's folders. A word with no name of its own that resolves into a store from the call's folder (`keys`
+  with `cwd: ~/.exo`, #209) made main's line, read in that folder, a secret line with no target. Main's read of the
+  folder then took the folder itself as its path, `~/.exo`. Beside a store only #446 reads
+  (`cat ~/.kube//config keys`), the bare word gets no part of its own, as on a shell line main's target is a path, so
+  the folder pass of (m) had no read main made to start from, and that read was lost. The call asked under
+  `deny: [target:*/.exo]`, where main denies it, and a `reserved:` entry on credentials or on `*/.exo*` listed one hit
+  fewer. Where the call's reading has no credentials part main read, the folder pass now takes main's read of the
+  line, with no target for a bare word, so its path is the folder as written, as on main. It held at 0b35021a too.
+  Group 2 again holds only the `dd` operand, which #568 tracks.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

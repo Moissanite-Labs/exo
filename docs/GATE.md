@@ -2110,12 +2110,15 @@ beside it when it names another target, as beside a `cd` form's secret line (#32
 `cd ~/.ssh && cat id_rsa` is, and so is `cat ${x-.netrc}; echo $(git push --force origin main)`
 with `~/.exo/keys` as `cwd` under `deny: [target:*/.exo/*]`, whose `${x-.netrc}` makes it a secret
 line. The same holds for a line that names a store only in a spelling main did not read (#446):
-`cat ~/.kube//config` with `~/.ssh` as `cwd` is denied, as on main (#513 review). A line that
-writes the Exo store stays `store_write`, and a store read from its folder is a `credentials` part
-beside the write, as a key read after `tar -C` is (#464). So
-`cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd` is denied by
-`deny: [credentials]`, as its `cd` form is, and only the principal answers it. A `cd` on the line
-is read as before.
+`cat ~/.kube//config` with `~/.ssh` as `cwd` is denied, as on main (#513 review). A word with no
+name of its own that resolves into a store from the folder (`keys` with `~/.exo` as `cwd`, #209)
+made main's line, read in that folder, a secret line with no target, so main's read of the folder
+took the folder itself as its path. That read stays a part beside such a store too:
+`cat ~/.kube//config keys` with `~/.exo` as `cwd` is denied under `deny: [target:*/.exo]`, as on
+main. A line that writes the Exo store stays `store_write`, and a store read from its folder is a
+`credentials` part beside the write, as a key read after `tar -C` is (#464). So
+`cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd` is denied by `deny: [credentials]`,
+as its `cd` form is, and only the principal answers it. A `cd` on the line is read as before.
 
 The folder reads a line's names as a `cd` there does, in the same order (#320, "The working folder"
 above): first the words as written, and that name is the part's target, as on main; then
