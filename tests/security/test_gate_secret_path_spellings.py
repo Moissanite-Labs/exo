@@ -784,6 +784,40 @@ def test_an_entry_for_main_s_target_still_matches_the_line(call, policy):
     assert ("credentials" in hits) == reserved
 
 
+# A write tool that names its files under another key than `path` (`paths`, `files`, `source`) has its write part
+# (#448) on its target only. Main's target was the plain store, so its write part stays too, and an entry for a
+# `local_write` there still matches, as on main (#513 sixth round).
+WRITE_SSH = [
+    {"gates": {"deny": [{"match": {"category": "local_write", "target": "*/.ssh/*"}}]}},
+    {"gates": {"rules": [{"match": {"category": "local_write", "target": "*/.ssh/*"}, "decision": "deny",
+                          "reason": "w"}]}},
+    {"gates": {"reserved": [{"match": {"category": "local_write", "target": "*/.ssh/*"}}]}},
+]
+
+
+@pytest.mark.parametrize("policy", WRITE_SSH)
+@pytest.mark.parametrize("args", [
+    {"paths": ["~/.kube//config", "~/.ssh/id_rsa"], "content": "x"},
+    {"files": ["~/.kube/x/../config", "~/.exo/policies/gates.yaml", "~/.ssh/id_rsa"], "content": "x"},
+    {"source": "/pro?/self/environ", "destination": "~/.ssh/id_rsa"},
+])
+@pytest.mark.parametrize("tool", ["write_file", "edit_file", "patch", "apply_patch"])
+def test_main_s_target_keeps_its_write_part_where_no_path_names_the_files(tool, args, policy):
+    category, outcome, hits, _ = full({"tool": tool, "args": args}, policy)
+    reserved = "reserved" in policy["gates"]
+    assert (category, outcome, "local_write" in hits) == ("credentials", "ask" if reserved else "deny", reserved)
+
+
+@pytest.mark.parametrize("policy", WRITE_SSH)
+@pytest.mark.parametrize("args", [
+    {"paths": ["~/.kube/config", "~/.ssh/id_rsa"], "content": "x"},       # main's target is `~/.kube/config`
+    {"path": "/tmp/a", "paths": ["~/.kube//config", "~/.ssh/id_rsa"]},    # the write parts are on `path`, as on main
+])
+def test_main_s_target_gets_no_write_part_main_did_not_give_it(args, policy):
+    category, outcome, hits, _ = full({"tool": "write_file", "args": args}, policy)
+    assert (category, outcome, "local_write" in hits) == ("credentials", "ask", False)
+
+
 @pytest.mark.parametrize("policy", SECOND)
 @pytest.mark.parametrize("line", ["cat /dev/fd/../env* ~/.ssh/id_rsa", "cat /proc/thread-self/../../env*; cat ~/.ssh/id_rsa"])
 @pytest.mark.skipif(not (os.path.islink("/proc/thread-self") and os.path.islink("/dev/fd")),
