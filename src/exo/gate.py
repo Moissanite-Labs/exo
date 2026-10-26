@@ -6979,31 +6979,6 @@ def _read_core(action: Any, cwd: str | None = None) -> Classification:
 
 
 def _classify_call(action: Any) -> Classification:
-    if memo is not None:
-        memo.pop(_GH_MOVED, None)
-    marked = _config_mark.set(mark)
-    try:
-        c = _classify_call(action)
-        if memo is not None and memo.pop(_GH_MOVED, False) and not _gh_third_word.get():
-            third = _gh_third_word.set(True)
-            try:
-                c.floor = _classify_call(action)
-            finally:
-                _gh_third_word.reset(third)
-    finally:
-        _config_mark.reset(marked)
-    if mark[0]:
-        off, left, seen = _config_off.set(True), _brace_left.set(None), _shell_seen.set(None)
-        try:
-            c.ordinary = classify(action, cwd)      # its own budgets, memos and folders (_brace_budget, _in_tool_folder)
-        finally:
-            _shell_seen.reset(seen)
-            _brace_left.reset(left)
-            _config_off.reset(off)
-    return c
-
-
-def _classify_call(action: Any) -> Classification:
     tool, args = _args_of(action)
     if _runs_shell(tool, args):
         c = _shell_call(str(args.get("command") or args.get("cmd") or ""))
