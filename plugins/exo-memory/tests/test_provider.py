@@ -148,6 +148,28 @@ def test_session_switch_records_lineage(provider):
     assert {e["session"] for e in evs(provider, "utterance")} == {"s2"}
 
 
+def test_an_undo_is_passed_on_to_the_context_engine(provider):
+    """#389: Hermes reports /undo only to its memory providers. exo-memory passes it on through exo.host_undo, so
+    exo-context can drop what it kept from the undone turn. It does so with memory off too, and still records the
+    switch when memory is on. A plain switch is no undo and passes nothing on."""
+    from exo import host_undo
+
+    heard = []
+
+    class Listener:
+        def on_host_undo(self, session_id):
+            heard.append(session_id)
+
+    listener = Listener()
+    host_undo.listen(listener)
+    ExoMemoryProvider().on_session_switch("off-1", rewound=True)  # no principal store: memory is off
+    provider.on_session_switch("s1", rewound=True)
+    provider.on_session_switch("s2", parent_session_id="s1")
+    assert heard == ["off-1", "s1"]
+    sw = [e["body"] for e in evs(provider, "note") if e["body"]["type"] == "session_switch"]
+    assert [b["rewound"] for b in sw] == [True, False]
+
+
 # --- pre-compress capture ---------------------------------------------------------
 
 CONVO = [
