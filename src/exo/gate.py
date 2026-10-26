@@ -153,17 +153,23 @@ class Classification:
     # own unseen body from another post's. None for a part never combined: its signals are then its own.
     own_signals: list[str] | None = field(default=None, repr=False, compare=False)
     # The same call as the gate read it before #311, where a shell call's own folder argument made it credentials as
-    # a whole (#209). decide takes both readings and the stricter outcome stands.
+    # a whole (#209), and last, on a line also read with a `$` form's backslash-newline joined, the less severe of that
+    # reading and the line as written (#584). decide takes every reading and the strictest outcome stands.
     also: "Classification | None" = field(default=None, repr=False, compare=False)
     # The part a sudo command's write took the lead from (#454). decide() also reads the line with that part leading,
     # as before, and keeps the stricter outcome. None on any other result.
     displaced: "Classification | None" = field(default=None, repr=False, compare=False)
+    # The same call as the gate read it before D-074 (#125), with the Exo home's config.json an ordinary file, when
+    # that file or an exo command that writes it counted as the store. decide takes both readings and the stricter
+    # outcome stands, so a line main denied or asked about never decides lower.
+    ordinary: "Classification | None" = field(default=None, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
         d.pop("parts", None)
         d.pop("displaced")
+        d.pop("ordinary")
         d.pop("floor")
         d.pop("alt_copy")
         d.pop("line_copy")
@@ -1135,6 +1141,54 @@ _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gat
 # signature keeps the shape it had. classify_shell takes the mark for the one line it names and clears it;
 # _classify_fed sets it for each line it hands over.
 _fed_stdin: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_fed_stdin", default=False)
+
+# Set while classify reads a shell call (#584): [join, changed]. classify_shell sets `changed` when a line it reads,
+# nested ones too, holds a backslash-newline in a `$` form (_join_dollars), and with `join` reads it joined. classify
+# reads the call with `join` only when its first read set `changed`. None outside a shell call's classify.
+_joining: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_joining", default=None)
+_DOLLAR_OR_PAIR = re.compile(r"\\.|\$", re.S)
+_LINE_JOIN = re.compile(r"\\(.)", re.S)
+
+
+def _joins_past(s: str, i: int) -> int:
+    while s.startswith("\\\n", i):
+        i += 2
+    return i
+
+
+def _join_dollars(s: str) -> str:
+    """``s`` with each backslash-newline bash drops in a `$` form taken out (#584): right after the `$`, in a ${..}
+    up to its own `}`, between `$(` and the `(` of `$((`, and in a $((..)) up to its close. bash drops each one
+    outside single quotes before it reads a word, so `"$\\<newline>(cmd)"` runs cmd as "$(cmd)" does, and
+    `${PA\\<newline>TH:=x}` sets PATH, while the lexer read a `$` and then a backslash as a literal `$`, and a ${..}
+    or a $((..)) as it stands. A backslash before a backslash or a `$` escapes it, as outside single quotes. The
+    rest is taken as it stands: in single quotes, a comment or a quoted here-doc bash keeps them, and the joined
+    text is then still quoted or unread, or read again by a shell that drops them too. Linear in len(s)."""
+    if "$" not in s or "\\\n" not in s:
+        return s
+    out, i = [], 0
+    while (m := _DOLLAR_OR_PAIR.search(s, i)) is not None:
+        j = m.end()
+        if m.group() == "$":
+            k = _joins_past(s, j)
+            if s.startswith("{", k):
+                depth, j = 1, k + 1             # to its own `}`: a nested ${..} (`${a[${b}0,P\\<nl>ATH=5]}`) opens one
+                while j < len(s) and depth:
+                    depth += {"}": -1, "{": s[j - 1] == "$"}.get(s[j], 0)
+                    j += 2 if s[j] == "\\" else 1
+            elif s.startswith("(", k) and s.startswith("(", _joins_past(s, k + 1)):
+                depth, j = 2, _joins_past(s, k + 1) + 1
+                while j < len(s) and depth:
+                    depth += {"(": 1, ")": -1}.get(s[j], 0)
+                    j += 2 if s[j] == "\\" else 1
+            else:
+                j = k
+            out += [s[i:m.start() + 1], _LINE_JOIN.sub(lambda x: "" if x.group(1) == "\n" else x.group(), s[m.end():j])]
+        else:
+            out.append(s[i:j])
+        i = j
+    return "".join(out) + s[i:]
+
 
 # The signal of an ssh part that runs the stdin its line was fed, a stdin the gate cannot read (#316). An ssh whose
 # remote command is that line passes its own stdin on to it, so it runs that stdin too: `ssh a ssh b`, `ssh a 'cd /;
@@ -4321,6 +4375,8 @@ def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: 
                     return [_make("shell", summary=f"pip {' '.join(rest[:1])}".strip(), command=cmd) if ok
                             else _opaque(f"pip {rest[0]}", cmd)]
                 return [_make("shell", summary=f"{prog} -m {mod}", command=cmd)]
+            if mod in _EXO_MODULES and (w := _config_writer(["exo", *_EXO_MODULES[mod], *args[i + 2:]], cmd)):
+                return [w]
             return [_opaque(f"{prog} -m {mod} runs a module", cmd)]
         if a == "-" or not a.startswith("-"):
             if a != "-":
@@ -4337,7 +4393,10 @@ def _classify_exo(argv: list[str], cmd: str) -> Classification:
     sub = argv[1] if len(argv) > 1 else ""
     verb = argv[2] if len(argv) > 2 else ""
     if sub == "providers" and verb in ("add", "remove", "test", "default"):
-        return _make("credentials", summary=f"exo providers {verb}", command=cmd)  # D-034: key setup is the user's
+        c = _make("credentials", summary=f"exo providers {verb}", command=cmd)  # D-034: key setup is the user's
+        if verb == "default" and _config_on():      # it also rewrites config.json's model routes (D-074)
+            c.parts = [_make("store_write", summary="exo providers default writes config.json", command=cmd)]
+        return c
     if sub in ("keygen", "init") or (sub == "log" and verb == "append"):
         c = _make("store_write", summary=f"exo {sub} {verb}".strip(), command=cmd)
         c.signals.append("exo store")
@@ -4347,10 +4406,39 @@ def _classify_exo(argv: list[str], cmd: str) -> Classification:
         c.signals.append("exo store")
         c.parts = [_opaque("exo update starts, stops or changes Exo itself", cmd)]   # a deny on that still holds
         return c
+    if (w := _config_writer(argv, cmd)) is not None:
+        return w
     if sub in ("find", "get", "ctx", "links", "lint", "graph", "wire", "providers", "--version", "--help", "") or \
             (sub == "log" and verb in ("tail", "verify")):
         return _make("read", summary=f"exo {sub}".strip(), command=cmd)
     return _opaque(f"exo {sub} starts, stops or changes Exo itself", cmd)
+
+
+# D-074 (#125): the exo commands that write $EXO_HOME/config.json, and the modules `python -m` runs them from, each
+# with the words it puts before the command's own (`python -m exo.config set k v` is `exo config set k v`)
+_EXO_MODULES = {"exo.cli": [], "exo.onboard": [], "exo.config": ["config"]}
+
+
+def _config_writer(argv: list[str], cmd: str) -> Classification | None:
+    """A tool call that runs `exo config set` or `unset`, `exo import-store` or `exo providers default`, each of
+    which writes $EXO_HOME/config.json, or `exo interview`, which writes the principal store (D-074, #125): a store
+    write, as `exo update --pin-trust` is (#133), that keeps its old reading as a part (opaque_exec, or credentials
+    for `exo providers default`, D-034), so a deny on that still holds. `exo config -- set` is `exo config set`, as
+    its parser reads it. None for any other command, and while classify reads the call as before D-074
+    (_config_on)."""
+    sub, rest = (argv[1:] + [""])[0], argv[2:]
+    if sub == "config" and rest[:1] == ["--"]:      # its parser reads `--` as the end of options
+        rest = rest[1:]
+    verb = rest[0] if rest else ""
+    if not (sub == "config" and verb in ("set", "unset") or sub in ("import-store", "interview")
+            or sub == "providers" and verb == "default") or not _config_on():
+        return None
+    c = _make("store_write", summary=f"exo {sub} {verb}" if sub in ("config", "providers") else f"exo {sub}",
+              command=cmd)
+    c.signals.append("exo store")
+    c.parts = [_make("credentials", summary="exo providers default", command=cmd) if sub == "providers"
+               else _opaque(f"exo {sub} starts, stops or changes Exo itself", cmd)]
+    return c
 
 
 def _ln_targets(argv: list[str]) -> list[str]:
@@ -4437,6 +4525,30 @@ def _unknown_store(w: _Word, seen: dict, ancestors: bool = False, inside: bool =
                "*" in p and _store_glob(p, ancestors, inside) for p in pieces)
 
 
+# gh subcommands that write the paths on their line (#461): release, run and attestation download into
+# `-O`/`--output` or `-D`/`--dir`, and repo and gist clone into their directory word. The gate read them as
+# reads on GitHub, so the store check never looked at the paths, and `gh release download -O
+# ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, or the signed-update trust pin (#133).
+_GH_STORE_WRITES = (("release", "download"), ("run", "download"), ("attestation", "download"),
+                    ("repo", "clone"), ("gist", "clone"))
+
+
+def _gh_writes_store(words: list) -> bool:
+    """Whether a gh command here is one that writes the paths on its line (#461), so the store check reads them
+    as writes however gh reads on GitHub. `-O -` prints to stdout and stays a read; a subcommand the gate
+    cannot pin may be any of them."""
+    if not words or words[0].text.rsplit("/", 1)[-1] != "gh":
+        return False
+    argv = [w.text for w in words]
+    dyn = frozenset(i for i, w in enumerate(words) if _expands(w) or w.split)
+    order = _gh_verb_order(argv, dyn, frozenset(i for i in dyn if _gh_splits(words[i])))
+    if order is None:
+        return True
+    group = argv[order[1]] if len(order) > 1 else ""
+    verb = argv[order[2]] if len(order) > 2 else ""
+    return (group, verb) in _GH_STORE_WRITES
+
+
 def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
     """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
     seen = ctx.setdefault("store_braces", {})
@@ -4456,7 +4568,7 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
     # program named hash run by path (./hash), which is no builtin and rebinds nothing.
-    if all(_store_quiet(p) for p in parts):
+    if all(_store_quiet(p) for p in parts) and not _gh_writes_store(words):
         return ""
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
@@ -5223,7 +5335,14 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part. Within one top-level call a line is
     classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy. A line
     read under the _fed_stdin mark (#316) is a different read of the same text, so the mark is part of the key;
-    the mark names one line, and reading that line spends it."""
+    the mark names one line, and reading that line spends it. A line with a `$` form split by a backslash-newline is
+    noted for classify, and on its joined reading (_joining, #584) read joined, a line read again from a word
+    (`bash -c`, eval, ssh, a backquoted body) too."""
+    joining = _joining.get()
+    if joining is not None and cmd and (line := _join_dollars(cmd)) != cmd:
+        joining[1] = True
+        if joining[0]:
+            cmd = line
     seen = _shell_seen.get()
     if seen is None:
         token = _shell_seen.set({})
@@ -6320,7 +6439,14 @@ _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
     r"\.exo/(bus|update|plugins)(/|$)|(" +
     "|".join("[^/]*".join(map(re.escape, f.split("\0"))) for f in _EXO_STORE_FILES) + ")$)")
-_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "update", "plugins")
+# $EXO_HOME/config.json names the plugins the core loads (`core_plugins`, this gate among them), their config, the
+# environment that runs Hermes and Exo (`venv`), each provider's base_url and headers, and the principal a peer key
+# with no seat file speaks for (#525) (D-074, #125). Only the home's own file: a project's config.json is ordinary.
+# `.exo/config.json` counts by name whatever EXO_HOME is, as `.exo/update` does, also as a relative name read with
+# `.`, `//` and `..` collapsed, and in a word a command prints (`$(echo ~/.exo/config.json)`), while `config.json.bak`
+# does not. classify also reads a call it counts in as before (_config_on).
+_CONFIG_NAME = re.compile(r"(^|/)\.exo/config\.json(?![\w.~-])")
+_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "update", "plugins", "config.json")
 _STORE_PROTECTED = ("policies", "state", "keys")
 # #210: $EXO_HOME/bus, and the bus settings that move a file the gate trusts out of it: the registry, the relay
 # database and its sidecars, and the seat keys folder. Each name is read as EXO_BUS_<NAME> and as the legacy
@@ -6378,6 +6504,22 @@ def _path_forms(p: str) -> set[str]:
     except (OSError, ValueError, RecursionError):
         pass
     return forms
+
+
+# D-074 (#125): set while classify reads a call as before D-074 (``ordinary``), when the home's config.json was an
+# ordinary file. The mark is a call's own: _config_on sets it when the file, or an exo command that writes it,
+# counted as the store, and classify then reads the call that way too.
+_config_off: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_config_off", default=False)
+_config_mark: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_config_mark", default=None)
+
+
+def _config_on() -> bool:
+    """Whether the home's config.json counts as the store here (D-074), marking the call (_config_mark) when it does."""
+    if _config_off.get():
+        return False
+    if (mark := _config_mark.get()) is not None:
+        mark[0] = True
+    return True
 
 
 def is_store_path(path: str, ancestors: bool = False) -> bool:
@@ -6450,12 +6592,14 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
         return False
     if any(map(_STORE_NAMES.search, _lexical(p))) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
         return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
-    if not p.startswith("/"):
-        return False                     # relative: names only; the tool's working folder is not known here
+    if not p.startswith("/"):            # relative: names only; the tool's working folder is not known here
+        return bool(_CONFIG_NAME.search(os.path.normpath(p))) and _config_on()      # `.exo/./config.json` (D-074)
     # Resolve the original spelling: normpath first would erase symlink/.. traversal.
     # Keep the lexical candidate too, including protected paths that link out of the store.
     candidates = _path_forms(p)
     if any(_STORE_NAMES.search(c) for c in candidates):
+        return True
+    if any(_CONFIG_NAME.search(c) for c in candidates) and _config_on():
         return True
     roots = [(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)]
     roots += [(r, names, False) for root, names in _bus_paths() for r in _path_forms(root)]
@@ -6466,7 +6610,7 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
             if not candidate.startswith(r.rstrip("/") + "/"):
                 continue
             parts = candidate[len(r.rstrip("/")) + 1:].split("/")
-            if _protected_rel(parts, names):
+            if _protected_rel(parts, names) and (parts[0] != "config.json" or _config_on()):
                 return True
             if principals and parts[0] == "principals":
                 if len(parts) <= 2 and ancestors:
@@ -6492,10 +6636,18 @@ _PATCH_PATHS = re.compile(
     r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|"
     r"^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$|"
     r"^\*\*\*\s*Move\s+to:\s*(.+?)\s*$", re.M)
+# The same headers with each path read on its own line (#548 follow-up). `\s` above may cross a line, so a header
+# with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) takes the next header line as its path and
+# that header is never read, while a patch tool skips the bare line and applies the next one. A `\r` before the
+# newline is space, as a patch tool trims it.
+_PATCH_LINE_PATHS = re.compile(_PATCH_PATHS.pattern.replace(r"\s", r"[^\S\n]"), re.M)
 
 
 def _patch_paths(text: str) -> list[str]:
-    return [p for m in _PATCH_PATHS.finditer(text or "") for p in m.groups() if p]
+    """Each path a patch's headers name: those read as before first, then those read one line at a time."""
+    found = [p for m in _PATCH_PATHS.finditer(text or "") for p in m.groups() if p]
+    found += [p for m in _PATCH_LINE_PATHS.finditer(text or "") for p in m.groups() if p and p.strip()]
+    return list(dict.fromkeys(found))
 
 
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
@@ -6985,24 +7137,80 @@ def _store_part(path: str, summary: str) -> Classification:
     return c
 
 
+def _joined_call(action: Any) -> tuple[str, dict] | None:
+    """A shell call with its line joined (_join_dollars), for classify's joined reading (#584); None for any other
+    call, and inside a classify that already reads one."""
+    try:
+        tool, args = _args_of(action)
+    except (TypeError, ValueError):
+        return None
+    key = "command" if args.get("command") else "cmd"
+    line = args.get(key)
+    if _joining.get() is not None or not _runs_shell(tool, args) or not isinstance(line, str):
+        return None
+    return tool, {**args, key: _join_dollars(line)}
+
+
 @_brace_budget
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args. When a gh command in it has
     its subcommand past an option (_gh_verb_order), or a gh api method gh reads otherwise (_gh_api_method), the call
     is also read as before #399, with each gh command's third word for its subcommand, and that reading is its
-    ``floor``. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from
-    there too (_in_tool_folder sets it)."""
-    memo = _call_memo.get()
-    if memo is not None:
-        memo.pop(_GH_MOVED, None)
-    c = _classify_call(action)
-    if memo is not None and memo.pop(_GH_MOVED, False) and not _gh_third_word.get():
-        third = _gh_third_word.set(True)
+    ``floor``. A shell line with a `$` form split by a backslash-newline, there or in a line read again from it, is
+    also read with each one joined, as bash reads it (#584), with budgets of its own. The more severe of that
+    reading and the line as read before leads, and the other ends its ``also`` readings, so decide keeps the
+    stricter. When the Exo home's config.json counted as the store, or an exo command that writes it ran (D-074),
+    the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
+    ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
+    (_in_tool_folder sets it)."""
+    call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
+    seen = [False, False]
+    token = _joining.set(seen)
+    try:
+        c = _read_core(action, cwd)
+    finally:
+        _joining.reset(token)
+    if seen[1] and call is not None:
+        left, memo, token = _brace_left.set(None), _shell_seen.set(None), _joining.set([True, False])
         try:
-            c.floor = _classify_call(action)
+            j = _brace_budget(_read_core)(call, cwd)                # joined reading of the same call (#584)
         finally:
-            _gh_third_word.reset(third)
+            _joining.reset(token)
+            _shell_seen.reset(memo)
+            _brace_left.reset(left)
+        first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
+        x = first
+        while x.also is not None:
+            x = x.also
+        x.also, c = last, first
+    return c
+
+
+def _read_core(action: Any, cwd: str | None = None) -> Classification:
+    """The body classify reads the call with: the gh ``floor``, and the D-074 ``ordinary`` reading of a call whose
+    config.json the store counted, each with the call's own budgets, memos and folders. The join context is set by
+    classify, also for its joined reading; _read_core leaves it alone."""
+    memo, mark = _call_memo.get(), [False]
+    marked = _config_mark.set(mark)
+    try:
+        c = _classify_call(action)
+        if memo is not None and memo.pop(_GH_MOVED, False) and not _gh_third_word.get():
+            third = _gh_third_word.set(True)
+            try:
+                c.floor = _classify_call(action)
+            finally:
+                _gh_third_word.reset(third)
+    finally:
+        _config_mark.reset(marked)
+    if mark[0]:
+        off, left, seen = _config_off.set(True), _brace_left.set(None), _shell_seen.set(None)
+        try:
+            c.ordinary = classify(action, cwd)      # its own budgets, memos and folders (_brace_budget, _in_tool_folder)
+        finally:
+            _shell_seen.reset(seen)
+            _brace_left.reset(left)
+            _config_off.reset(off)
     return c
 
 
@@ -7024,7 +7232,9 @@ def _classify_call(action: Any) -> Classification:
         c = _make(cat, summary=f"write {path}", target=path, link=path)
         if cat == "store_write":
             c.signals.append("exo store")
-        if cat != "local_write":    # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply
+        # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply. A local write of more
+        # than one file too, so an exact target entry reaches a path that only the reading on one line found (#559).
+        if cat != "local_write" or len(set(paths)) > 1:
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
         if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
@@ -7141,8 +7351,9 @@ def _norm_outcome(v: Any, where: str) -> str:
     return out
 
 
-def normalize_policies(raw: Mapping | None) -> dict:
-    """Fill defaults and check types. Raises PolicyError on a bad value."""
+def normalize_policies(raw: Mapping | None, errors: list[str] | None = None) -> dict:
+    """Fill defaults and check types. Raises PolicyError on a bad value. Given ``errors``, a malformed
+    ``gates.escalate`` is recorded there instead and only that section is repaired (#557)."""
     raw = dict(raw or {})
     pol = json.loads(json.dumps(DEFAULT_POLICIES))
     gates = dict(raw.get("gates") or {})
@@ -7179,11 +7390,21 @@ def normalize_policies(raw: Mapping | None) -> dict:
             raise PolicyError(f"gates.{k} must be a list")
         pol["gates"][k] = v
     if "escalate" in gates:
-        esc = gates["escalate"]
+        esc, bad = gates["escalate"], ""
         if not isinstance(esc, Mapping):
-            raise PolicyError("gates.escalate must be a mapping")
-        if "categories" in esc and not isinstance(esc["categories"], list):
-            raise PolicyError("gates.escalate.categories must be a list")
+            esc, bad = {"categories": esc if isinstance(esc, (list, str)) else []}, "gates.escalate must be a mapping"
+        elif "categories" in esc and not isinstance(esc["categories"], list):
+            bad = "gates.escalate.categories must be a list"
+        if bad:
+            if errors is None:
+                raise PolicyError(bad)
+            # #557: the default escalation plus each category the value names (as a string named them before #542)
+            errors.append(bad)
+            v = esc.get("categories")
+            names = (v if isinstance(v, list) else list(v) if isinstance(v, Mapping)
+                     else [c for c in CATEGORIES if c in v] if isinstance(v, str) else [])
+            esc = {**esc, "categories": list(dict.fromkeys(pol["gates"]["escalate"]["categories"]
+                                                            + [str(n) for n in names]))}
         pol["gates"]["escalate"].update(esc)
     if gates.get("ask_default"):
         pol["gates"]["ask_default"] = str(gates["ask_default"])
@@ -7567,7 +7788,8 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     A line the gate reads more than one way is decided on each reading first (readings): the shell call as read
     before #311 (``also``), the gh line as read before gh's subcommand search (``floor``, #399) and that line's own
-    reading before #311, then the line on each other target it may land on (``alt_targets``). Each reading goes
+    reading before #311, the call as read before D-074 (``ordinary``, #125), then the line on each other target it may
+    land on (``alt_targets``). Each reading goes
     through all of the above, the own text pass and its fallback too, and the strictest stands on each axis
     (_strictest), so a reading only raises the line.
     """
@@ -7576,8 +7798,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     rs = readings(c)
     if len(rs) > 1:
         # #311: the call as read before (a shell call's folder made it credentials as a whole, #209), and #399: the
-        # line as the gate read it before gh's subcommand search, are decided too, so none decides lower.
-        return _strictest([decide(replace(r, also=None, floor=None), pol, ctx) for r in rs],
+        # line as the gate read it before gh's subcommand search, and D-074: the call with the Exo home's config.json
+        # an ordinary file, are decided too, so none decides lower.
+        return _strictest([decide(replace(r, also=None, floor=None, ordinary=None), pol, ctx) for r in rs],
                           [""] + [f" (for {redact_userinfo(r.summary or r.category)})" for r in rs[1:]])
     if c.alt_targets:
         # #399: decided on each target the gate cannot rule out.
@@ -7863,6 +8086,11 @@ def _strictest(ds: list[Decision], why: list[str]) -> Decision:
                    third_party=any(d.third_party for d in ds),
                    reserved=list(dict.fromkeys(r for d in ds for r in d.reserved)), hidden=hidden,
                    displaced_asks=any(d.displaced_asks for d in ds))
+
+
+def stricter(ds: list[Decision]) -> Decision:
+    """The strictest of one line's decisions under several policies, merged as its readings merge (#557)."""
+    return _strictest(ds, [""] * len(ds))
 
 
 def _target_names(targets: Iterable[str]) -> str:
@@ -8190,9 +8418,10 @@ def policy_files(root: str | Path) -> list[Path]:
                                "approvals.yaml")]
 
 
-def load_policies(root: str | Path | None) -> dict:
+def load_policies(root: str | Path | None, errors: list[str] | None = None) -> dict:
     """Read `<root>/policies/` and `<root>/agents/` into normalized policies. A missing root or
-    missing files fall back to the defaults (which ask on anything irreversible or public)."""
+    missing files fall back to the defaults (which ask on anything irreversible or public).
+    ``errors`` is passed to normalize_policies."""
     if not root:
         return normalize_policies({"internal_names": internal_names(None)})
     root = Path(root)
@@ -8218,7 +8447,7 @@ def load_policies(root: str | Path | None) -> dict:
         raw["agents"] = _agent_names(root / "agents")
     raw["approvals"] = load_approvals(root)  # D-033
     raw["internal_names"] = internal_names(root)
-    return normalize_policies(raw)
+    return normalize_policies(raw, errors)
 
 
 # --- approval binding, authority and standing grants (D-033) ---------------------------------
@@ -8240,21 +8469,34 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     code the gate cannot see into (D-038), so one "always" never covers a different script, a call no grant may
     cover (``no_grant``, a part of it too, #447), and a line the gate reads more than one way (#399): a gh command
     that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
-    with a ``floor``, whose stricter reading may be another act. A sudo write also binds when its displaced
-    part names a target or asks with that part leading (#454)."""
+    with a ``floor``, whose stricter reading may be another act, with ``also`` readings (#311, #584) or an
+    ``ordinary`` reading (D-074). A sudo write also binds when its displaced part names a target or asks with that
+    part leading (#454)."""
     q = c.displaced
     return (is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
-            or bool(c.alt_targets) or c.floor is not None
+            or bool(c.alt_targets) or c.floor is not None or c.also is not None or c.ordinary is not None
             or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
 
 
 def readings(c: Classification) -> list[Classification]:
     """Each way the gate reads the call, the call first: as it read it before #311 (``also``: a shell call's own
     folder argument made it credentials as a whole, #209), as it read it before #399 (``floor``: each gh command's
-    third word for its subcommand, gh api's first `-X` word), and the floor as read before #311. `decide` keeps the
+    third word for its subcommand, gh api's first `-X` word), and the floor as read before #311; then each reading of
+    the call as read before D-074 (``ordinary``: the Exo home's config.json an ordinary file, #125). `decide` keeps the
     strictest of them, and so does each check past it: no_grant, call_approvers, body_unseen and the exo-gate hook's
-    body files and required executor."""
-    return [r for x in (c, c.floor) if x is not None for r in (x, x.also) if r is not None]
+    body files and required executor. A line with a `$` form split by a backslash-newline (#584) is read joined and
+    as written: the more severe of the two leads (on a tie, the line as written) and the other ends its ``also``
+    readings, each with its own ``floor``."""
+    out: list[Classification] = []
+    todo: list[Classification | None] = [c]
+    while todo:
+        x = todo.pop()
+        if x is not None and not any(x is r for r in out):
+            out.append(x)
+            todo += [x.floor, x.also]
+    if c.ordinary is not None and not any(c.ordinary is r for r in out):
+        out += [r for r in readings(c.ordinary) if not any(r is e for e in out)]
+    return out
 
 
 def no_grant(c: Classification) -> bool:

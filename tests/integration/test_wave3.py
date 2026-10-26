@@ -58,7 +58,7 @@ def test_schedule_edit_round_trip(tmp_path):
     eng = _eng(tmp_path)
 
     async def main():
-        d = Dispatcher(eng)
+        d = Dispatcher(eng, caller="principal:tui")
         job = (await d.run(s.Command.of(s.ScheduleEdit(action="add", when="every 1d", prompt="hello",
                                                        title="daily")))).result["job"]
         jobs = (await d.run(s.Command.of(s.ScheduleEdit(action="list")))).result["jobs"]
