@@ -475,6 +475,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   line read again from it once decoded (`bash -c $'..'`, `eval "..."`, ssh, backquotes), and also as written, as
   before. `decide` keeps the stricter (`gate.readings`), the more severe reading leads the approval card, and an
   approval for such a line binds to its exact text. A line the join leaves as it is is read once, as before.
+- Gate (#515, D-038 amendment): The name parser adds camelCase words beside each separator part. The complete unsplit call is also
+  read as a policy floor: its secret and store checks, target, posting text and category rules still apply.
+  This prevents a new read hint from bypassing a store-source ask, an outbound hint from bypassing a
+  credential ask, and a draft hint from weakening an existing send reading. A policy that asks or denies
+  `unknown` still applies to a camelCase call previously read as unknown. `deleteFile` on `~/.exo`
+  now asks through its new store-write reading; `readFile` on a store file still asks through the old
+  store-source reading. Compact names such as `apiKey`, `checkOut` and `signUp` retain their old
+  reading. Empty separator parts are dropped, preserving the MCP remote-write flag for leading separators.
+  Earlier built-in differential counts covered the pre-review implementation only and do not validate
+  these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
+  rules, explicit unknown-category policies, and leading-separator MCP names.
 - Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
   (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
   #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under

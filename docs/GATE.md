@@ -447,8 +447,7 @@ A file tool that names a secret and a store file is `credentials` too: `apply_pa
 `store_write` part, so the call is the principal's alone as well. A move, rename or delete of a
 folder that holds the store counts too, as `mv` and `rm` do (`move_file` from `~/.exo` to
 `~/.ssh/x`), with or without a secret beside it (#494). So does a tool with a camelCase name
-(`moveFile`, `deleteFile`). Its category is `unknown`, because the gate reads its name as one word,
-but this check splits the name. The store path is read under every key a tool names a path by, not
+(`moveFile`, `deleteFile`). Its camelCase words add a reading while the complete unsplit call remains a policy floor (#515). The store path is read under every key a tool names a path by, not
 only `path` and `source`: `to`, `target`, `new_path`, `old_path`, `from` and `dst` among the others
 (#494). A tool named with a read verb that writes what it took where its path arguments say
 (`download_file`, `export_report`) reads the store as a write's, so a download into the policy
@@ -758,6 +757,22 @@ subscript with an expansion in braces (`cat ${!x:-~/.kube}/config`, `cat ${!x[0]
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
 `test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
+
+### A camelCase tool name reads its words beside the name's one word (#515)
+
+The name parser adds camelCase words beside each separator part. The complete unsplit call is also
+read as a policy floor: its secret and store checks, target, posting text and category rules still apply.
+This prevents a new read hint from bypassing a store-source ask, an outbound hint from bypassing a
+credential ask, and a draft hint from weakening an existing send reading. A policy that asks or denies
+`unknown` still applies to a camelCase call previously read as unknown. `deleteFile` on `~/.exo`
+now asks through its new store-write reading; `readFile` on a store file still asks through the old
+store-source reading. Compact names such as `apiKey`, `checkOut` and `signUp` retain their old
+reading. Empty separator parts are dropped, preserving the MCP remote-write flag for leading separators.
+Earlier built-in differential counts covered the pre-review implementation only and do not validate
+these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
+rules, explicit unknown-category policies, and leading-separator MCP names.
+
+Tests: `tests/security/test_gate_store_top_parts.py`, `plugins/exo-gate/tests/test_store_floor_any_part.py`.
 
 ### A thread's environment file (#313)
 
