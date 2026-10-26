@@ -342,8 +342,10 @@ What the gate asks about, and why:
   like (`printf -v 'a[$(...)]'`) is read (#179, fixed in #189), and so is a command run behind a wrapper such as
   `setsid`, `flock` or `watch` (#160, fixed in #196), and a heredoc or pipe into a group such as `{ bash; }`
   (#161, fixed in #198). The gate finds programs only in the shell forms its parser reads. A command inside a
-  parameter expansion such as `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in
-  #158). A command nested more than four levels deep
+  parameter expansion such as `${x:-$(...)}` is read too, and a quote or brace in such a word no longer hides the
+  command after it (#143, fixed in #158), down to three levels of `$( )` inside it; a deeper one, or one past the
+  24 such parts a call may open (a word inside a `$( )` counts again for each pass over it), asks. `${!name}` and `${name@P}`, which run code a variable holds, ask, also
+  for the positional parameters (`${@@P}`, `${!@}`, #554). A command nested more than four levels deep
   (`bash -c` inside `bash -c` and so on) or an `ssh` or `mosh` chain more than four hops deep (#153) asks, even
   when your policy denies it (#137).
 - **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
