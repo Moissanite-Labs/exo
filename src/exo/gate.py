@@ -5448,7 +5448,12 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     walked: list = []
     first = c.category
     found = _cd_store_read(cmds, subs, False, walked)
-    more = _cd_store_read(cmds, subs, True, walked) if first != "credentials" else ""
+    # #513 review: a line that is credentials only through stores named in spellings main did not read (#446) was no
+    # secret line on main, so main read the forms too, and their name stays a part: `config` beside
+    # `cat ~/.docker//config.json` in `cd ~/.k$(:)ube && cat config; cat ~/.docker//config.json`. Only a line with a
+    # folder to enter (``walked`` holds its targets first) can read a name there, so no other line pays for the check
+    more = _cd_store_read(cmds, subs, True, walked) if first != "credentials" or walked and walked[0] and \
+        _no_plain_store([p for p in _each_part(c) if p.category == "credentials"], cmd) else ""
     if found and (first != "credentials" or found != c.target):
         c = secret(c, found, found, c.category in ("store_write", "credentials"))
     if more and more != found:
@@ -6867,6 +6872,20 @@ def _shell_call(cmd: str) -> Classification:
         c.parts = [*c.parts, _weigh(part, c, cmd)]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     return c
+
+
+def _no_plain_store(secrets: list[Classification], cmd: str) -> bool:
+    """#513 review: whether main read no store on the line ``cmd``, whose credentials parts are ``secrets``, and so read
+    the relative names after a `cd` in #320's forms too (_cd_store_read). Each part names a store path, and the line
+    names none as main read it before #446 (_shell_credential_hit with ``plain``): `cat ~/.kube//config`, or
+    `cat < ~/.kube/\\config`, which main did not read. A store, the environment or a secret command (`ssh-keygen`) main
+    read on the line makes it a secret line there. The line is read first: where main read a store on it, no part
+    needs a store test of its own (test_work_is_linear)."""
+    cmds, _, _ = _parse(cmd)
+    if _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
+                             [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True):
+        return False
+    return all(is_sensitive_path(p.target) or _glob_hits_secret(p.target) for p in secrets)
 
 
 def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:

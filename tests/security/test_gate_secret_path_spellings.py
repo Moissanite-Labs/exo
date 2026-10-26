@@ -962,6 +962,20 @@ def test_the_folder_part_beside_such_a_line_is_the_folder_main_read_first(odd):
     assert full(call, SSH_ENTRIES[0])[1] == "deny"
 
 
+@pytest.mark.parametrize("line", ["cat ~/.kube//config; cat link/x", "cat /pro?/self/environ link/x",
+                                  "cat link/x; cat ~/.kube//config", "cat link/x"])
+def test_the_second_folder_pass_reads_with_the_word_main_read_from_the_folder(env, line):
+    # `link/x` resolves into the ssh folder from the call's folder (#209), and main took the folder joined with it as
+    # the target. The odd store is the line's first credentials part here, so the pass that reads the folders as main
+    # did takes main's word, the first credentials part main read (#513 checker, the merge of main 66c4ec6d)
+    (env / ".ssh").mkdir()
+    (env / "work").mkdir()
+    (env / "work" / "link").symlink_to(env / ".ssh")
+    call = {"tool": "bash", "args": {"command": line, "cwd": str(env / "work")}}
+    assert full(call, {"gates": {"deny": ["target:*/work/link/x"]}})[1] == "deny"
+    assert full(call, {"gates": {"reserved": ["target:*/work/link/x"]}})[2] == ["credentials"]
+
+
 def test_such_a_line_keeps_its_target_and_the_folder_is_a_part(env):
     c = gate.classify({"tool": "bash", "args": {"command": "cat ~/.kube//config", "cwd": "~/.ssh"}})
     assert (c.category, c.target) == ("credentials", f"{env}/.kube//config")
@@ -1005,6 +1019,30 @@ def test_a_line_main_read_a_store_on_keeps_the_name_after_its_cd_as_on_main(line
     # Main read a store or the environment on the line. Since #320 it reads the name after the `cd` on such a line too,
     # as a part: the entry denies, as on main
     assert full(line, {"gates": {"deny": [f"target:{entry}"]}})[1] == "deny"
+
+
+# Since #320 the names after a `cd` are also read in its forms (`cd ~/.k$(:)ube`, `${x-hosts.yml}`), on a line that is no
+# secret line. A line that is credentials only through a store only #446 reads was none on main, so main read those
+# names there, and the name stays a part (#513 checker, the merge of main 66c4ec6d).
+@pytest.mark.parametrize("line, entry", [
+    ("cd ~/.k$(:)ube && cat config; cat ~/.docker//config.json", "config"),
+    ("cd ~/.k$(:)ube && cat config; cat /pro?/self/environ", "config"),
+    ("cd ~/.config/gh && cat ${x-hosts.yml}; cat ~/.kube//config", "hosts.yml"),
+    ("env -C ~/.k$(:)ube cat config; cat ~/.docker//config.json", "config"),
+    ("cd ~/$(printf .k)ube && cat config; cat /proc/self/root/$HOME/.docker/conf*", "config"),
+    ("cd ~/.k$(:)ube && cat config < ~/.kube/\\config", "config"),
+])
+def test_an_entry_for_a_name_read_in_320_s_forms_still_matches_beside_a_store_only_446_reads(line, entry):
+    assert full(line, {"gates": {"deny": [f"target:{entry}"]}})[:2] == ("credentials", "deny")
+    assert full(line, {"gates": {"reserved": [f"target:{entry}"]}})[1:3] == ("ask", ["credentials"])
+
+
+@pytest.mark.parametrize("line", ["cd ~/.k$(:)ube && cat config; cat ~/.docker/config.json",
+                                  "cd ~/.k$(:)ube && cat config; env", "cd ~/.k$(:)ube && cat config; ssh-keygen"])
+def test_a_line_main_read_a_store_on_gets_no_part_for_a_name_read_in_320_s_forms(line):
+    # Main read a store, the environment or a secret command on the line, so it read no name in #320's forms: the
+    # entry asks, as on main
+    assert full(line, {"gates": {"deny": ["target:config"]}})[1] == "ask"
 
 
 # A nested line that reads a store through a redirection with a backslash (`$(cat < ~/.kube/\config)`) gives the line
