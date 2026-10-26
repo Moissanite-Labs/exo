@@ -17,6 +17,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   in `bash -c` or a `$( )`, and past a `-R` before the subcommand (#399). The line keeps the gh read as a part
   (D-075), so a deny, reserved entry, rule or matrix cell on it still applies, and the decision is the
   principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store.
+- A file tool's store path is read under every key it names a path by, and a move or rename of a folder that holds
+  the store is a store write with no secret beside it, as `mv` is (#494). `move_file ~/.exo -> /tmp/x` was a
+  `local_write` that ran with no ask where the shell spelling asked, `mcp__filesystem__move_file` with the same
+  args only logged, and a store path under `to`, `target`, `new_path`, `old_path`, `from` or `dst` was missed, so
+  `rename_file {"path": "~/.ssh/id_rsa", "new_path": "~/.exo/policies/gates.yaml"}` got no store write part beside
+  the secret and a seat delegated `credentials` could answer it. The scan now reads those keys, a tool whose name
+  says move, rename or delete passes `ancestors=` as `mv` and `rm` do (a camelCase name split, so `deleteFile` on
+  `~/.exo` asks), and a read-verb tool that writes what it took where its path arguments say (`download_file`,
+  `export_report`) runs the store scan, so a download into the policy files asks. A relative destination is read
+  from the session's folder the core passes, as a secret name is: `move_file` to `policies/default.yaml` from a
+  session folder in `~/.exo` asks. A plain read of the store stays a read, and a copy of the store keeps its
+  reading, as `cp -r` does. The resolution is the file tools' own; a shell line's store writes are still read from
+  its own words. D-074's config file is reached under the new keys and from the session folder as under `path`.
+  The gate differential against main finds nothing lowered.
 - A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
   after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
   that path and its write was never read. A patch tool skips the bare line and applies the next header, so after

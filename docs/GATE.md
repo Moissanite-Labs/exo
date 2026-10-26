@@ -446,15 +446,21 @@ A file tool that names a secret and a store file is `credentials` too: `apply_pa
 `~/.exo/policies/gates.yaml`. Each store file such a tool writes, moves, copies or deletes is a
 `store_write` part, so the call is the principal's alone as well. A move, rename or delete of a
 folder that holds the store counts too, as `mv` and `rm` do (`move_file` from `~/.exo` to
-`~/.ssh/x`). So does a tool with a camelCase name (`moveFile`, `deleteFile`). Its category is
-`unknown`, because the gate reads its name as one word, but this check splits the name. A file tool
-that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` from `~/.exo` to
+`~/.ssh/x`), with or without a secret beside it (#494). So does a tool with a camelCase name
+(`moveFile`, `deleteFile`). Its category is `unknown`, because the gate reads its name as one word,
+but this check splits the name. The store path is read under every key a tool names a path by, not
+only `path` and `source`: `to`, `target`, `new_path`, `old_path`, `from` and `dst` among the others
+(#494). A tool named with a read verb that writes what it took where its path arguments say
+(`download_file`, `export_report`) reads the store as a write's, so a download into the policy
+files asks; a plain read of the store stays a read. A relative destination is read from the
+session's folder, as a secret name is (#209): `move_file` to `policies/default.yaml` from a session
+folder in `~/.exo` asks, and beside a secret the store file is a part, so only the principal
+answers. A shell line still reads its store writes from its own words, so `echo x > gates.yaml`
+with `~/.exo/policies` as `cwd` stays a `local_write` there (see "The tool's own folder"). A file
+tool that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` from `~/.exo` to
 `~/.ssh/x`, as `cp -r` does), or writes a secret outside the store (`write_file ~/.ssh/config`),
-has no such part and keeps the delegation. With no secret, a file tool's move of a folder that
-holds the store is not read as a store write yet (#494). Nor is a delete of one by a tool with a
-camelCase name (`deleteFile` on `~/.exo`). Its category is `unknown`, so it runs under the default
-policy unless its registry risk is high, where `delete_file` asks the principal. The hook's error
-fallback reads the parts too (see "The store is credentials").
+has no such part and keeps the delegation. The hook's error fallback reads the parts too (see
+"The store is credentials").
 
 ## Who answered: the connection, not the body (D-039)
 
