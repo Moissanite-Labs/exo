@@ -2516,6 +2516,11 @@ records the authenticated caller, including its client label. `/gate status` sta
 403 when the core refuses authority. It does not rewrite config through its offline fallback.
 TCP and stdio callers remain local even when they possess a transport bearer token.
 
+`schedule.edit` requires a live principal caller for every action except `list`. The check is at the
+`Scheduler.edit` command handler, before a job can be added, paused, resumed, run or removed. Scheduled runs also
+check each tool call against the tool names they received. A refused name returns an error without reaching
+the gate or executor. Allowed names still pass through both (`docs/SCHEDULE.md`).
+
 Two other body fields cannot claim the principal. `peers send` with `via="human"` from a non-principal caller
 goes out as `via="agent"`, so the receiving daemon gives it `same-principal` trust, not `principal`. `unsteer`
 from a non-principal caller can pull back only steers that the principal did not write.
