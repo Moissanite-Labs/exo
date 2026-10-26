@@ -6885,12 +6885,13 @@ def _no_plain_store(secrets: list[Classification], cmd: str) -> bool:
     names none as main read it before #446 (_shell_credential_hit with ``plain``): `cat ~/.kube//config`, or
     `cat < ~/.kube/\\config`, which main did not read. A store, the environment or a secret command (`ssh-keygen`) main
     read on the line makes it a secret line there. The line is read first: where main read a store on it, no part
-    needs a store test of its own (test_work_is_linear)."""
+    needs a store test of its own, and a part's glob is tried before its path (test_work_is_linear: a `cd` into a
+    deep glob costs no path test)."""
     cmds, _, _ = _parse(cmd)
     if _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
                              [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True):
         return False
-    return all(is_sensitive_path(p.target) or _glob_hits_secret(p.target) for p in secrets)
+    return all(_glob_hits_secret(p.target) or is_sensitive_path(p.target) for p in secrets)
 
 
 def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
