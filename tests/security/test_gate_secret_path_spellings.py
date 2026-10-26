@@ -922,9 +922,9 @@ def test_a_call_main_read_the_same_way_gets_no_second_folder_part(cwd, workdir):
                                                                                           else "ask")
 
 
-# A line that names a store only as #446 reads it is credentials on its own, so the call skipped its folder's read.
-# Main read no store on the line, so it read the folder, and its target was the folder (`~/.ssh`). That read stays a
-# part (#513 checker, sixth round).
+# A line that names a store only as #446 reads it is credentials on its own, and before #320 the call skipped its
+# folder's read then. Main read no store on the line, so it read the folder, and its target was the folder (`~/.ssh`).
+# That read stays a part (#513 checker, sixth round), as main 66c4ec6d keeps it beside any secret line (#320).
 ODD_LINES = ["cat ~/.kube//config", "cat /pro?/self/environ", "cat ~/.docker/./config.json"]
 
 
@@ -971,12 +971,12 @@ def test_such_a_line_keeps_its_target_and_the_folder_is_a_part(env):
 
 @pytest.mark.parametrize("line", ["cat ~/.kube/config", "cat ~/.kube//config ~/.aws/credentials", "env",
                                   "ssh-keygen -t ed25519", "ssh-keygen -t ed25519; cat ~/.kube//config"])
-def test_a_line_main_read_as_credentials_gets_no_folder_part(line):
-    # Main read a store, the environment or a secret command on the line, so it kept the line's result and read no
-    # folder: an entry for the folder asks, here and on main
+def test_a_line_main_read_as_credentials_keeps_the_folder_part_as_on_main(line):
+    # Main read a store, the environment or a secret command on the line. Since #320 it reads the folder beside such a
+    # line too, and the folder is a part: an entry for the folder denies, here and on main
     c = gate.classify({"tool": "bash", "args": {"command": line, "cwd": "~/.ssh"}})
-    assert not any(p.target.endswith("/.ssh") for p in gate._each_part(c))
-    assert full({"tool": "bash", "args": {"command": line, "cwd": "~/.ssh"}}, SSH_ENTRIES[0])[1] == "ask"
+    assert any(p.target.endswith("/.ssh") for p in gate._each_part(c))
+    assert full({"tool": "bash", "args": {"command": line, "cwd": "~/.ssh"}}, SSH_ENTRIES[0])[1] == "deny"
 
 
 # The same on the line itself: after a `cd` into a store folder, main read a relative name there (D-038, #192) when the
@@ -1001,9 +1001,10 @@ def test_an_entry_for_the_name_read_after_a_cd_still_matches_beside_a_store_only
     ("cd ~/.kube && env; cat config", "config"),
     ("cd ~/.kube && cat ~/.docker/config.json config", "config"),
 ])
-def test_a_line_main_read_a_store_on_gets_no_part_for_the_name_after_its_cd(line, entry):
-    # Main read a store or the environment on the line, so it read no name after the `cd`: the entry asks, as on main
-    assert full(line, {"gates": {"deny": [f"target:{entry}"]}})[1] == "ask"
+def test_a_line_main_read_a_store_on_keeps_the_name_after_its_cd_as_on_main(line, entry):
+    # Main read a store or the environment on the line. Since #320 it reads the name after the `cd` on such a line too,
+    # as a part: the entry denies, as on main
+    assert full(line, {"gates": {"deny": [f"target:{entry}"]}})[1] == "deny"
 
 
 # A nested line that reads a store through a redirection with a backslash (`$(cat < ~/.kube/\config)`) gives the line
@@ -1030,6 +1031,7 @@ def test_an_entry_for_a_store_folder_still_matches_beside_a_nested_redirection_w
     assert full(line, policy)[:2] == ("credentials", "deny")
 
 
-def test_a_nested_store_main_read_gets_no_part_for_the_line_s_first_store():
-    # Main read the nested line's store too and took it as the target, so the first store is no target, as on main
-    assert full("cat ~/.kube/config $(cat ~/.ssh/id_rsa)", {"gates": {"deny": ["target:*/.kube/config"]}})[1] == "ask"
+def test_a_nested_store_main_read_keeps_the_line_s_first_store_as_a_part():
+    # Main read the nested line's store too and took it as the target. Since #320 the store the line's own words name
+    # is a part beside it, so an entry for the first store denies, as on main
+    assert full("cat ~/.kube/config $(cat ~/.ssh/id_rsa)", {"gates": {"deny": ["target:*/.kube/config"]}})[1] == "deny"
