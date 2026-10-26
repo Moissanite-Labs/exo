@@ -2847,12 +2847,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the humps add (`apiKey` is a credential word, `checkOut` pays, `signUp` opens an account). Where the #447
   amendment read a camelCase name as one word and split it in the wide check alone, the words now count
   everywhere the name does, so `deleteFile {"path": "~/.exo"}` is `store_write` and asks for the reason
-  `delete_file` does. Two readings read lighter than main where a policy sets the category, which the gate
-  differential's built-ins do not: a policy that asks the `unknown` category and allows `local_write` lets a
-  camelCase `writeFile` or `moveFile` pass where main asked it, and a camelCase read of a store file is a `read`
-  where main asked the unnamed call's store-source reading, as `read_file` always was. `scripts/gate_diff.py`
-  over the built-in corpus (10,823 actions × 87 policies) reports 0 lowered pairs against main a8a4ffbd, 297
-  pairs on 31 actions tightened and 186 same-outcome detail changes.
+  `delete_file` does. Main asked a camelCase name as `unknown`; where a policy asks `unknown` and allows the
+  name's new category, the call passes where main asked. The categories the words introduce beside what main
+  asked are `read`, `local_write`, `delete` and `message_send`: a policy that asks `unknown` and allows
+  `local_write` lets a camelCase `writeFile` or `moveFile` pass where main asked it, one that allows `delete`
+  lets `deleteFile` pass, one that allows `message_send` lets `sendMessage` pass, and one that allows `read`
+  lets a camelCase read pass, `readFile` on a store file where main asked the unnamed call's store-source
+  reading, as `read_file` always was. `store_write` and `credentials` keep the D-038 principal-only floor, so
+  no policy passes them. `scripts/gate_diff.py` over the built-in corpus reports 0 lowered pairs against main
+  `dcab371a` (10,962 actions × 87 policies), 297 pairs on 31 actions tightened and 186 same-outcome detail
+  changes; the same run against `a8a4ffbd` gave the same 0 lowered with 10,823 actions.
   *Revisit if:* a camelCase name whose humped words split a word main read whole into two lighter words other
   than a read, or tools that name themselves with acronyms (`getHTTPResponse` keeps one word).
 
