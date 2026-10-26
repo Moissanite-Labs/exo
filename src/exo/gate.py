@@ -153,7 +153,8 @@ class Classification:
     # own unseen body from another post's. None for a part never combined: its signals are then its own.
     own_signals: list[str] | None = field(default=None, repr=False, compare=False)
     # The same call as the gate read it before #311, where a shell call's own folder argument made it credentials as
-    # a whole (#209). decide takes both readings and the stricter outcome stands.
+    # a whole (#209), and last, on a line also read with a `$` form's backslash-newline joined, the less severe of that
+    # reading and the line as written (#584). decide takes every reading and the strictest outcome stands.
     also: "Classification | None" = field(default=None, repr=False, compare=False)
     # The part a sudo command's write took the lead from (#454). decide() also reads the line with that part leading,
     # as before, and keeps the stricter outcome. None on any other result.
@@ -1140,6 +1141,54 @@ _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gat
 # signature keeps the shape it had. classify_shell takes the mark for the one line it names and clears it;
 # _classify_fed sets it for each line it hands over.
 _fed_stdin: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_fed_stdin", default=False)
+
+# Set while classify reads a shell call (#584): [join, changed]. classify_shell sets `changed` when a line it reads,
+# nested ones too, holds a backslash-newline in a `$` form (_join_dollars), and with `join` reads it joined. classify
+# reads the call with `join` only when its first read set `changed`. None outside a shell call's classify.
+_joining: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_joining", default=None)
+_DOLLAR_OR_PAIR = re.compile(r"\\.|\$", re.S)
+_LINE_JOIN = re.compile(r"\\(.)", re.S)
+
+
+def _joins_past(s: str, i: int) -> int:
+    while s.startswith("\\\n", i):
+        i += 2
+    return i
+
+
+def _join_dollars(s: str) -> str:
+    """``s`` with each backslash-newline bash drops in a `$` form taken out (#584): right after the `$`, in a ${..}
+    up to its own `}`, between `$(` and the `(` of `$((`, and in a $((..)) up to its close. bash drops each one
+    outside single quotes before it reads a word, so `"$\\<newline>(cmd)"` runs cmd as "$(cmd)" does, and
+    `${PA\\<newline>TH:=x}` sets PATH, while the lexer read a `$` and then a backslash as a literal `$`, and a ${..}
+    or a $((..)) as it stands. A backslash before a backslash or a `$` escapes it, as outside single quotes. The
+    rest is taken as it stands: in single quotes, a comment or a quoted here-doc bash keeps them, and the joined
+    text is then still quoted or unread, or read again by a shell that drops them too. Linear in len(s)."""
+    if "$" not in s or "\\\n" not in s:
+        return s
+    out, i = [], 0
+    while (m := _DOLLAR_OR_PAIR.search(s, i)) is not None:
+        j = m.end()
+        if m.group() == "$":
+            k = _joins_past(s, j)
+            if s.startswith("{", k):
+                depth, j = 1, k + 1             # to its own `}`: a nested ${..} (`${a[${b}0,P\\<nl>ATH=5]}`) opens one
+                while j < len(s) and depth:
+                    depth += {"}": -1, "{": s[j - 1] == "$"}.get(s[j], 0)
+                    j += 2 if s[j] == "\\" else 1
+            elif s.startswith("(", k) and s.startswith("(", _joins_past(s, k + 1)):
+                depth, j = 2, _joins_past(s, k + 1) + 1
+                while j < len(s) and depth:
+                    depth += {"(": 1, ")": -1}.get(s[j], 0)
+                    j += 2 if s[j] == "\\" else 1
+            else:
+                j = k
+            out += [s[i:m.start() + 1], _LINE_JOIN.sub(lambda x: "" if x.group(1) == "\n" else x.group(), s[m.end():j])]
+        else:
+            out.append(s[i:j])
+        i = j
+    return "".join(out) + s[i:]
+
 
 # The signal of an ssh part that runs the stdin its line was fed, a stdin the gate cannot read (#316). An ssh whose
 # remote command is that line passes its own stdin on to it, so it runs that stdin too: `ssh a ssh b`, `ssh a 'cd /;
@@ -3441,11 +3490,10 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
             if sudo:
                 ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
-    hit = _store_touch(k, words, parts, ctx)
-    hits = [hit] if hit else []
-    if hit and ctx.get("fd_cwd") not in (None, hit):
-        # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
-        # so a `target:/dev*` entry still matches it, as it matches any other write there
+    hits = _store_touch(k, words, parts, ctx)
+    # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
+    # so a `target:/dev*` entry still matches it, as it matches any other write there
+    if hits and ctx.get("fd_cwd") and ctx["fd_cwd"] not in hits:
         hits.append(ctx["fd_cwd"])
     for t in hits:
         # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
@@ -4476,9 +4524,35 @@ def _unknown_store(w: _Word, seen: dict, ancestors: bool = False, inside: bool =
                "*" in p and _store_glob(p, ancestors, inside) for p in pieces)
 
 
-def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
-    """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
+# gh subcommands that write the paths on their line (#461): release, run and attestation download into
+# `-O`/`--output` or `-D`/`--dir`, and repo and gist clone into their directory word. The gate read them as
+# reads on GitHub, so the store check never looked at the paths, and `gh release download -O
+# ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, or the signed-update trust pin (#133).
+_GH_STORE_WRITES = (("release", "download"), ("run", "download"), ("attestation", "download"),
+                    ("repo", "clone"), ("gist", "clone"))
+
+
+def _gh_writes_store(words: list) -> bool:
+    """Whether a gh command here is one that writes the paths on its line (#461), so the store check reads them
+    as writes however gh reads on GitHub. `-O -` prints to stdout and stays a read; a subcommand the gate
+    cannot pin may be any of them."""
+    if not words or words[0].text.rsplit("/", 1)[-1] != "gh":
+        return False
+    argv = [w.text for w in words]
+    dyn = frozenset(i for i, w in enumerate(words) if _expands(w) or w.split)
+    order = _gh_verb_order(argv, dyn, frozenset(i for i in dyn if _gh_splits(words[i])))
+    if order is None:
+        return True
+    group = argv[order[1]] if len(order) > 1 else ""
+    verb = argv[order[2]] if len(order) > 2 else ""
+    return (group, verb) in _GH_STORE_WRITES
+
+
+def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> list[str]:
+    """Each store path in a simple command that a write reaches, in the order the scan meets them (#514), or [].
+    Reads of the store are fine."""
     seen = ctx.setdefault("store_braces", {})
+    hits: list[str] = []
     for op, t in k.redirs:
         # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
         # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. A
@@ -4490,13 +4564,13 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             targets = _shell_words(t, seen, "target")
             if targets is None or any(_store_word(x) for x in targets) or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
-                return t.text
+                hits.append(t.text)
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
     # program named hash run by path (./hash), which is no builtin and rebinds nothing.
-    if all(_store_quiet(p) for p in parts):
-        return ""
+    if all(_store_quiet(p) for p in parts) and not _gh_writes_store(words):
+        return hits
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
@@ -4507,19 +4581,20 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     for i, w in enumerate(words):
         expanded = _shell_words(w, seen, "wide" if wide else "narrow")   # braces first: `of=x{a,b}` is `of=xa of=xb`
         if expanded is None:
-            return w.text
+            hits.append(w.text)
+            continue
         for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
             if piece and _store_word(piece, ancestors=wide):
-                return piece
+                hits.append(piece)
         if _unknown_store(w, seen, ancestors=wide):    # `cp x ~/.exo/polic$(:)ies/`, `polic${u}ies` (#309)
-            return w.text
+            hits.append(w.text)
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and (
                 _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")) or
                 _unknown_store(words[i + 1], seen, inside=True)):
-            return words[i + 1].text            # git checkout, reset or commit inside the store
+            hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
-        return ctx.get("fd_cwd") or "a path inside the store (after cd)"
-    return ""
+        hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
+    return list(dict.fromkeys(hits))
 
 
 def _store_quiet(p: Classification) -> bool:
@@ -5259,7 +5334,14 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part. Within one top-level call a line is
     classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy. A line
     read under the _fed_stdin mark (#316) is a different read of the same text, so the mark is part of the key;
-    the mark names one line, and reading that line spends it."""
+    the mark names one line, and reading that line spends it. A line with a `$` form split by a backslash-newline is
+    noted for classify, and on its joined reading (_joining, #584) read joined, a line read again from a word
+    (`bash -c`, eval, ssh, a backquoted body) too."""
+    joining = _joining.get()
+    if joining is not None and cmd and (line := _join_dollars(cmd)) != cmd:
+        joining[1] = True
+        if joining[0]:
+            cmd = line
     seen = _shell_seen.get()
     if seen is None:
         token = _shell_seen.set({})
@@ -6143,6 +6225,52 @@ def _glob_words(words: list[str]) -> bool:
 _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
 
 
+def _glob_part(g: str, s: str) -> bool:
+    """Could bash glob part g name s? fnmatch as bash reads it (_fn_glob), except a leading dot in s
+    must be spelt with a literal dot in g: bash's *, ? and [ never match a leading dot (#594, verified
+    against bash 5.2: `[.]ssh` and `[!a]ssh` do not expand to `.ssh`, while `.*` and `.s*` do)."""
+    if s.startswith(".") and not g.startswith("."):
+        return False
+    pat = _fn_glob(g)
+    return True if pat is None else fnmatch.fnmatchcase(s, pat)
+
+
+def _glob_folder_hit(d: str, home: str, folders: list[str]) -> tuple[bool, bool]:
+    """(hit, secret_folder): could the glob folder d name one of ``folders`` (the folders of the samples
+    _glob_word is tried against, and the samples themselves, so `.exo/keys` counts as a folder)? The
+    parts must match one by one, and the match needs discipline: a part that starts with a literal dot,
+    or three literal characters across the matched parts (`.ss?`, `.aw?`, `.exo/key?` qualify; a bare
+    `*` does not, so `src/*` and `~/*` stay ordinary). ``secret_folder`` is True when the matched
+    folder is itself a secret store by name (_SENSITIVE_PATH: `.ssh`, `.aws`, `.exo/keys`), so any file
+    below it counts, as a literal folder does (`~/.ssh/xyz*` already asks)."""
+    if not d or not re.search(r"[*?\[]", d):
+        return False, False
+
+    def forms(p: str) -> set[str]:
+        # One form only, so the home path's own literal characters never count toward the
+        # three-literal discipline: a folder under home is read home-relative, anything else as is.
+        p = os.path.normpath(p)
+        root = home.rstrip("/") + "/"
+        if p.startswith(root):
+            return {p[len(root):]}
+        if p == home:
+            return {""}
+        return {p}
+
+    dforms = forms(d)
+    for folder in folders:
+        for ff in forms(folder):
+            for df in dforms:
+                gp, fp = df.split("/"), ff.split("/")
+                if len(gp) != len(fp) or not all(_glob_part(g, s) for g, s in zip(gp, fp)):
+                    continue
+                lits = sum(len(re.sub(r"[*?\[\]]", "", g)) for g in gp)
+                if not any(g.startswith(".") for g in gp) and lits < 3:
+                    continue
+                return True, bool(_SENSITIVE_PATH.search(ff.replace("\\", "/")))
+    return False, False
+
+
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
@@ -6162,7 +6290,24 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
         reach = keys or linked or (d_abs in [os.path.normpath(os.path.join(home, r)) for r in runs] if d_abs else any(
             q and not re.fullmatch(r"[*?]+|\.{1,2}", q) for q in d.split("/")))
         samples = samples + [os.path.join(r, x) for r in runs for x in secrets if reach or x.startswith("exod.")]
-    in_store_dir = linked or bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
+    # #594: a glob in the folder part used to give up here, because d_abs is set only for a literal
+    # folder. Test the globbed folder against each sample's folder instead: a hit counts as
+    # in_store_dir, so the full glob is then matched against the samples. When the matched folder is
+    # itself a secret store and the file part is itself a glob, any file below it counts, as a
+    # literal folder does -- this is what makes `~/.exo/k*/l*` ask even though no sample file is
+    # spelt `l*` (the folder's real files, like lead.key, are not samples). The file part must be a
+    # glob: a literal file part under a `*` folder stays a store_write for a write target, as the
+    # substitution readings in test_gate_store_name_forms require (`cp x ~/.exo/$(printf keys)/a`
+    # is store_write, not credentials). A `.pub` file part stays out, as for a literal folder.
+    # A sample counts as a folder only when another sample sits below it (`.exo/keys` below
+    # `.exo/keys/seat.key`); a sample file (`auth.json`) is never a folder, or `~/*/*` would hit it.
+    all_samples = list(samples) + list(_SENSITIVE_SAMPLES)
+    folder_samples = [x for x in all_samples if any(y != x and y.startswith(x + "/") for y in all_samples)]
+    folders = [os.path.dirname(x) for x in all_samples] + folder_samples
+    folder_hit, secret_folder = _glob_folder_hit(d, home, folders)
+    in_store_dir = linked or folder_hit or bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
+    if secret_folder and re.search(r"[*?\[]", base) and not base.endswith(".pub"):
+        return True
     if len(stem) < 3 and not in_store_dir:
         return False
     if "/" not in tok:   # a bare name: a run secret by its own name, an agent key only by its `agent-` or key part
@@ -6186,12 +6331,15 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 
 
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files,
-# the core sockets, the bus folder (the seat registry signed answers trust and the relay database, #210) and
-# the plugins folder (code the next session loads and runs, #435) steer the gate itself, so a write to them
-# always asks the principal. Names that are distinctive match anywhere (a relative `policies/gates.yaml` may
-# sit in the tool's working folder); absolute paths are also checked against EXO_HOME, its principal stores,
-# EXO_PRINCIPAL_STORE, every store root recorded in config `principals` (`exo init --root`, `exo import-store
-# --root`) and the bus folder and files (_bus_paths).
+# the core sockets, the bus folder (the seat registry signed answers trust and the relay database, #210), the
+# plugins folder and the other folders Exo loads code from (_code_paths, #459) steer the gate itself, so a
+# write to them always asks the principal. Names that are distinctive match anywhere (a relative
+# `policies/gates.yaml` may sit in the tool's working folder), and so, by their name whatever EXO_HOME is, do
+# `.exo/venv`, `.exo/src` and `.exo/hermes-home/plugins`, as `.exo/plugins` does; the rest of hermes-home (the
+# launch script's target folder, a live Hermes's state) is not the code. Absolute paths are also checked
+# against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
+# `principals` (`exo init --root`, `exo import-store --root`), the bus folder and files (_bus_paths) and the
+# code folders.
 # $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
 # The file names that end a path, one string per name ("\0": any text), which _STORE_NAMES and _store_glob share.
 _EXO_STORE_FILES = (
@@ -6202,7 +6350,7 @@ _EXO_STORE_FILES = (
     *(f"{n}.sqlite{x}" for n in ("ledger", "schedule", "bus/relay") for x in ("", "-wal", "-shm", "-journal")))
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
-    r"\.exo/(bus|update|plugins)(/|$)|(" +
+    r"\.exo/(bus|update|plugins)(/|$)|\.exo/(venv|src)(/|$)|\.exo/hermes-home/plugins(/|$)|(" +
     "|".join("[^/]*".join(map(re.escape, f.split("\0"))) for f in _EXO_STORE_FILES) + ")$)")
 # $EXO_HOME/config.json names the plugins the core loads (`core_plugins`, this gate among them), their config, the
 # environment that runs Hermes and Exo (`venv`), each provider's base_url and headers, and the principal a peer key
@@ -6249,6 +6397,34 @@ def _bus_paths() -> list[tuple[str, tuple]]:
     return out
 
 
+def _code_paths() -> list[str]:
+    """The folders Exo loads code from (#459), each the environment this gate sees spells, as it does EXO_HOME: the
+    venv `scripts/install.sh` puts the `exo` package and this gate in (EXO_VENV, else the home's own `venv`; a
+    gate.py there decides every later call, a .pth in its site-packages runs on each start), Hermes's plugin home
+    (EXO_HERMES_HOME, else the home's own `hermes-home/plugins`: with --with-hermes the core loads exo-gate from
+    there), the source copy it clones a git URL into and `exo update` refreshes from (`$EXO_HOME/src`; `exo web`
+    reads plugins on `<package>/../../plugins` of the copy too) and every folder EXO_PLUGIN_DIRS names, which
+    default_dirs searches first and where a duplicate plugin name keeps the first found. Non-absolute spellings are
+    not read: a relative EXO_VENV or dir is a constant of the tool's working folder, which the gate cannot see; a
+    `.venv` name is not Exo's (no install script makes one, EXO_VENV is the only override)."""
+    home = _exo_home()
+    out = []
+    venv = os.path.expanduser(os.environ.get("EXO_VENV") or "")   # install.sh: ${EXO_VENV:-$EXO_HOME/venv}
+    out.append(venv if venv.startswith("/") else os.path.join(home, "venv"))
+    if (hermes := os.path.expanduser(os.environ.get("EXO_HERMES_HOME") or "")).startswith("/"):
+        out.append(os.path.join(hermes, "plugins"))
+    out.append(os.path.join(home, "hermes-home", "plugins"))
+    out.append(os.path.join(home, "src"))
+    out += [d for d in (os.path.expanduser(p) for p in
+                        filter(None, os.environ.get("EXO_PLUGIN_DIRS", "").split(os.pathsep))) if d.startswith("/")]
+    return out
+
+
+def _code_forms() -> list[str]:
+    """Each absolute folder _code_paths names, as written and resolved: the two spellings _store_word reads."""
+    return [f for d in _code_paths() for f in _path_forms(d)]
+
+
 def _fd_path(p: str) -> bool:
     """A descriptor or process-folder path (_FD_PATH), as written or normalised, other than stdout or stderr spelt
     plainly. As written counts too: the kernel resolves `/dev/fd/3/../..` from descriptor 3's folder."""
@@ -6287,17 +6463,20 @@ def _config_on() -> bool:
     return True
 
 
-def is_store_path(path: str, ancestors: bool = False) -> bool:
+def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) -> bool:
     """True when ``path`` is (or, with ``ancestors``, contains) a protected part of the Exo store. A brace set
-    counts when the path or any word bash expands it to is in the store, or when it expands past the cap (#224)."""
+    counts when the path or any word bash expands it to is in the store, or when it expands past the cap (#224).
+    With ``from_cwd``, a relative name is read from the session folder too, as a file tool's write is (#494)."""
     words = _brace_words(str(path or ""), pool=1)
-    return words is None or any(_store_word(w, ancestors) for w in words)
+    return words is None or any(_store_word(w, ancestors, from_cwd) for w in words)
 
 
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
-# counts too) and file names that end a path.
+# counts too) and file names that end a path. The code folders (_code_paths, #459) join: the home's own `venv` and
+# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles.
 _STORE_GLOB_DIRS = tuple([".exo", *p, n] for p in ((), ("principals", "\0")) for n in _HOME_PROTECTED +
-                         ("ledger.sqlite\0",)) + ([".exo", "bus"],)
+                         ("ledger.sqlite\0",)) + ([".exo", "bus"], [".exo", "venv"], [".exo", "src"],
+                                                  [".exo", "hermes-home", "plugins"])
 _STORE_GLOB_FILES = tuple(f.split("/") for f in _EXO_STORE_FILES)
 
 
@@ -6334,10 +6513,13 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
 
     tops: list = []
     if p.startswith("/"):
-        tops = [r.rstrip("/").split("/") for root, _, _ in _store_roots() for r in _path_forms(root)] if inside else [
+        code = [c.rstrip("/").split("/") for c in _code_forms()]     # #459: the code folder's own subtree counts
+        tops = ([r.rstrip("/").split("/") for root, _, _ in _store_roots() for r in _path_forms(root)] + code
+                if inside else [
             r.rstrip("/").split("/") + x for root, names, principals in _store_roots() for r in _path_forms(root)
             for x in [[n] for n in names + ("ledger.sqlite\0", "schedule.sqlite\0")] +
             ([["principals", "\0", n] for n in _STORE_PROTECTED + ("ledger.sqlite\0",)] if principals else [])]
+            + code)
     dirs, files = ([[".exo"]], ()) if inside else (_STORE_GLOB_DIRS, _STORE_GLOB_FILES)
     for form in _path_forms(p) if p.startswith("/") else [os.path.normpath(p)] if p else []:
         gs = form.split("/")
@@ -6350,18 +6532,24 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
     return False
 
 
-def _store_word(path: str, ancestors: bool = False) -> bool:
+def _store_word(path: str, ancestors: bool = False, from_cwd: bool = False) -> bool:
     """is_store_path for one word whose braces are already expanded."""
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
     if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
         return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
-    if not p.startswith("/"):            # relative: names only; the tool's working folder is not known here
-        return bool(_CONFIG_NAME.search(os.path.normpath(p))) and _config_on()      # `.exo/./config.json` (D-074)
-    # Resolve the original spelling: normpath first would erase symlink/.. traversal.
-    # Keep the lexical candidate too, including protected paths that link out of the store.
-    candidates = _path_forms(p)
+    if not p.startswith("/"):            # relative: a name the store knows, or, for a file tool's write (#494),
+        return bool(_CONFIG_NAME.search(os.path.normpath(p))) and _config_on() or \
+            from_cwd and _store_from_cwd(p, ancestors)      # one read from the session folder
+    return _store_forms(_path_forms(p), ancestors)
+
+
+def _store_forms(candidates: set[str], ancestors: bool) -> bool:
+    """_store_word's check on a path's spellings: the names _STORE_NAMES matches anywhere, the config file by name
+    (D-074), and each against the store roots' and the bus folders' forms. The spellings come from the original
+    text, normpath first would erase symlink/.. traversal, and the lexical candidate counts beside the real one,
+    including protected paths that link out of the store."""
     if any(_STORE_NAMES.search(c) for c in candidates):
         return True
     if any(_CONFIG_NAME.search(c) for c in candidates) and _config_on():
@@ -6382,6 +6570,26 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
                     return True
                 if _protected_rel(parts[2:], _STORE_PROTECTED):
                     return True
+        # #459: a write inside a folder Exo loads code from; with ``ancestors`` (a delete), also a remove or move of
+        # the folder itself or of a folder above it that holds it (`rm -rf ~/.exo`, `mv ~/.exo/venv x`).
+        code = _code_forms()
+        if any(candidate == c or candidate.startswith(c.rstrip("/") + "/") for c in code) or \
+                ancestors and any(c.startswith(candidate.rstrip("/") + "/") for c in code):
+            return True
+    return False
+
+
+def _store_from_cwd(p: str, ancestors: bool) -> bool:
+    """A relative write target read from the session's working folder (#494), as _sensitive_words reads a relative
+    secret name: joined to each folder the core passed, then read as an absolute path. The gate's own folder is
+    not one of them — a bare `run` word from it is not the run folder (#D-039) — and with no session folder
+    known, only the name rules above count."""
+    scope = _scope.get()
+    if scope is None or not scope.cwds:
+        return False
+    for base in scope.cwds:
+        if _store_forms(_path_forms(os.path.join(base, p)), ancestors):
+            return True
     return False
 
 
@@ -6394,7 +6602,7 @@ def _in_store_dir(path: str) -> bool:
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
     roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
-    return any(c == r or c.startswith(r.rstrip("/") + "/") for c in _path_forms(p) for r in roots)
+    return any(c == r or c.startswith(r.rstrip("/") + "/") for c in _path_forms(p) for r in roots + _code_forms())
 
 
 _PATCH_PATHS = re.compile(
@@ -6415,12 +6623,15 @@ def _patch_paths(text: str) -> list[str]:
     return list(dict.fromkeys(found))
 
 
-_PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
-                  "src", "dest", "destination")
+_PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "new_path", "paths", "files", "directory", "dir", "root",
+                  "source", "src", "from", "old_path", "dest", "dst", "destination", "to", "target")
 # Name words of a file tool that moves or renames what it names, as `mv` does, or deletes it, as `rm` does (#447).
 # They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` keeps as one word.
 _WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
                          "revoke", "trash"))
+# Name words of a tool whose name reads as a read but that writes what it took where its path arguments say
+# (`download_file`, `export_csv`): the store scan reads those arguments as a write's (#494).
+_FETCH_WRITE_WORDS = frozenset(("download", "export"))
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
@@ -6845,19 +7056,61 @@ def _store_part(path: str, summary: str) -> Classification:
     return c
 
 
+def _joined_call(action: Any) -> tuple[str, dict] | None:
+    """A shell call with its line joined (_join_dollars), for classify's joined reading (#584); None for any other
+    call, and inside a classify that already reads one."""
+    try:
+        tool, args = _args_of(action)
+    except (TypeError, ValueError):
+        return None
+    key = "command" if args.get("command") else "cmd"
+    line = args.get(key)
+    if _joining.get() is not None or not _runs_shell(tool, args) or not isinstance(line, str):
+        return None
+    return tool, {**args, key: _join_dollars(line)}
+
+
 @_brace_budget
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args. When a gh command in it has
     its subcommand past an option (_gh_verb_order), or a gh api method gh reads otherwise (_gh_api_method), the call
     is also read as before #399, with each gh command's third word for its subcommand, and that reading is its
-    ``floor``. When the Exo home's config.json counted as the store, or an exo command that writes it ran (D-074),
+    ``floor``. A shell line with a `$` form split by a backslash-newline, there or in a line read again from it, is
+    also read with each one joined, as bash reads it (#584), with budgets of its own. The more severe of that
+    reading and the line as read before leads, and the other ends its ``also`` readings, so decide keeps the
+    stricter. When the Exo home's config.json counted as the store, or an exo command that writes it ran (D-074),
     the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
     ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
     (_in_tool_folder sets it)."""
+    call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
+    seen = [False, False]
+    token = _joining.set(seen)
+    try:
+        c = _read_core(action, cwd)
+    finally:
+        _joining.reset(token)
+    if seen[1] and call is not None:
+        left, memo, token = _brace_left.set(None), _shell_seen.set(None), _joining.set([True, False])
+        try:
+            j = _brace_budget(_read_core)(call, cwd)                # joined reading of the same call (#584)
+        finally:
+            _joining.reset(token)
+            _shell_seen.reset(memo)
+            _brace_left.reset(left)
+        first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
+        x = first
+        while x.also is not None:
+            x = x.also
+        x.also, c = last, first
+    return c
+
+
+def _read_core(action: Any, cwd: str | None = None) -> Classification:
+    """The body classify reads the call with: the gh ``floor``, and the D-074 ``ordinary`` reading of a call whose
+    config.json the store counted, each with the call's own budgets, memos and folders. The join context is set by
+    classify, also for its joined reading; _read_core leaves it alone."""
     memo, mark = _call_memo.get(), [False]
-    if memo is not None:
-        memo.pop(_GH_MOVED, None)
     marked = _config_mark.set(mark)
     try:
         c = _classify_call(action)
@@ -6892,7 +7145,7 @@ def _classify_call(action: Any) -> Classification:
         path = next((p for p in paths if is_sensitive_path(p)), "") or args_sensitive(args)
         cat = "credentials"
         if not path:
-            path = next((p for p in paths if is_store_path(p)), "")
+            path = next((p for p in paths if is_store_path(p, from_cwd=True)), "")
             cat = "store_write" if path else "local_write"
         path = path or (paths[0] if paths else "")
         c = _make(cat, summary=f"write {path}", target=path, link=path)
@@ -6904,7 +7157,7 @@ def _classify_call(action: Any) -> Classification:
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
         if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
-            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p)]
+            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p, from_cwd=True)]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -6929,15 +7182,18 @@ def _classify_call(action: Any) -> Classification:
         if secret:
             cat = "credentials"
         stores: list[str] = []
-        if own not in ("read", "web_read"):
-            # A delete reaches the store through a folder that holds it, as `rm` does. Beside a secret, so does a
-            # move or rename, as `mv` does, and a tool whose camelCase name says so (#447). A move of such a folder
-            # with no secret is #494.
-            wide = own == "delete" or bool(secret) and not _WIDE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+        # A tool named with a read verb that writes what it took where its path arguments say (`download_file`)
+        # reads the store as a write's too (#494); a plain read of the store stays a read.
+        fetch = own in ("read", "web_read") and not _FETCH_WRITE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+        if own not in ("read", "web_read") or fetch:
+            # A delete reaches the store through a folder that holds it, as `rm` does, and so does a move or
+            # rename, as `mv` does, with or without a secret beside it (#494). A tool whose camelCase name says so
+            # counts too (#447).
+            wide = own == "delete" or not _WIDE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
             named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
                      else [args.get(k)]) if isinstance(v, str)]
-            stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide)))
-            if stores and not secret and cat in ("local_write", "delete"):
+            stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide, from_cwd=True)))
+            if stores and not secret and (cat in ("local_write", "delete") or fetch):
                 cat = "store_write"
         store = stores[0] if stores and not secret else ""
         target = _first(args, _TARGET_KEYS)
@@ -6972,8 +7228,10 @@ def _classify_call(action: Any) -> Classification:
             out = own in OUTBOUND
             c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
-        if secret:      # #447: each store path beside a secret is a part, so only the principal answers
-            c.parts += [_store_part(p, f"{tool} {p}") for p in stores]
+        # #514: the store paths the tool names beyond the first are store write parts, each with its path as
+        # target, as they all are beside a secret (#447): a target entry on any of them matches, whatever path
+        # the scan met first. The first path is the call's own target, as before.
+        c.parts += [_store_part(p, f"{tool} {p}") for p in (stores if secret else stores[1:])]
     for r in readings(c):
         r.tool = tool
         _local_post(r)
@@ -8118,11 +8376,12 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     code the gate cannot see into (D-038), so one "always" never covers a different script, a call no grant may
     cover (``no_grant``, a part of it too, #447), and a line the gate reads more than one way (#399): a gh command
     that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
-    with a ``floor`` or an ``ordinary`` reading (D-074), whose stricter reading may be another act. A sudo write also
-    binds when its displaced part names a target or asks with that part leading (#454)."""
+    with a ``floor``, whose stricter reading may be another act, with ``also`` readings (#311, #584) or an
+    ``ordinary`` reading (D-074). A sudo write also binds when its displaced part names a target or asks with that
+    part leading (#454)."""
     q = c.displaced
     return (is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
-            or bool(c.alt_targets) or c.floor is not None or c.ordinary is not None
+            or bool(c.alt_targets) or c.floor is not None or c.also is not None or c.ordinary is not None
             or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
 
 
@@ -8132,9 +8391,19 @@ def readings(c: Classification) -> list[Classification]:
     third word for its subcommand, gh api's first `-X` word), and the floor as read before #311; then each reading of
     the call as read before D-074 (``ordinary``: the Exo home's config.json an ordinary file, #125). `decide` keeps the
     strictest of them, and so does each check past it: no_grant, call_approvers, body_unseen and the exo-gate hook's
-    body files and required executor."""
-    out = [r for x in (c, c.floor) if x is not None for r in (x, x.also) if r is not None]
-    return out + (readings(c.ordinary) if c.ordinary is not None else [])
+    body files and required executor. A line with a `$` form split by a backslash-newline (#584) is read joined and
+    as written: the more severe of the two leads (on a tie, the line as written) and the other ends its ``also``
+    readings, each with its own ``floor``."""
+    out: list[Classification] = []
+    todo: list[Classification | None] = [c]
+    while todo:
+        x = todo.pop()
+        if x is not None and not any(x is r for r in out):
+            out.append(x)
+            todo += [x.floor, x.also]
+    if c.ordinary is not None and not any(c.ordinary is r for r in out):
+        out += [r for r in readings(c.ordinary) if not any(r is e for e in out)]
+    return out
 
 
 def no_grant(c: Classification) -> bool:
