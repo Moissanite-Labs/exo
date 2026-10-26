@@ -68,6 +68,33 @@ _SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
 _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 
+def _every_part(c: gate.Classification) -> list:
+    """Each reading of the line (``gate.readings``) and every part it was built from, nested ones included, once."""
+    seen: set[int] = set()
+    out, todo = [], list(gate.readings(c))
+    while todo:
+        p = todo.pop(0)
+        if id(p) not in seen:
+            seen.add(id(p))
+            out.append(p)
+            todo += p.parts
+    return out
+
+
+def _body_path(f: str) -> Optional[Path]:
+    """``f`` when the hook may read it as a body file: an absolute path to a regular file of at most 256 KiB. /dev and
+    /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here they give exod's own,
+    not what gh will read, so they stay unseen (#208)."""
+    try:
+        p = Path(f)
+        if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
+               for y in (p, Path(os.path.realpath(p)))):
+            return None
+        return p if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE else None
+    except OSError:
+        return None
+
+
 @dataclass
 class Settings:
     principal_store: Optional[Path]
@@ -377,31 +404,40 @@ class Gate:
 
     # --- hooks ------------------------------------------------------------------------
 
-    def _load_body_file(self, c: gate.Classification) -> None:
+    def _load_body_file(self, c: gate.Classification) -> list[str]:
         """Read a post's body file into its text when the hook can be sure it reads the file the command will:
-        an absolute path to a regular file of at most 256 KiB. A relative or `~` path names a file in the
-        command's folder or home, which the hook does not know. Anything not read stays unseen, so the post
-        asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
-        symlinks included, are never read before the worker, and `_rules` refuses the call. The copies of the post
-        on its other targets get the text too (`gate.fill_body`), and each other reading of the line
-        (`gate.readings`: as read before #399, #311 or #471) has its own body file read the same way, as the hook
-        read it before."""
-        for x in gate.readings(c):
-            if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
+        an absolute path to a regular file of at most 256 KiB, on a line where the gate finds no other part. A
+        relative or `~` path names a file in the command's folder or home, which the hook does not know. Anything not
+        read stays unseen, so the post asks and gets no standing grant (#208). A required executor reads none:
+        tool-selected host paths, symlinks included, are never read before the worker, and `_rules` refuses the call.
+        The copies of the post on its other targets get the text too (`gate.fill_body`), and each other reading of the
+        line (`gate.readings`: as read before #399, #311 or #471) has its own body file read the same way, as the hook
+        read it before.
+
+        Another part in any reading (a command, a redirection to a file, an assignment that changes what runs, a
+        wrapper the gate does not see through, an ssh hop, the code around a call) may change the file after this
+        read and before gh reads it, or give gh another file by that path. So on such a line the file stays unread
+        and the post asks once (#343). Any part counts, a store read from the tool's folder (#311) and a sudo write
+        that displaced a part (#454) among them. A copy of the post on another target is the post itself, not another
+        part. Returns the files left unread for that reason alone, of every post on the line, so the card can say why
+        (`gate.UNSEEN_ON_LINE`): alone on its line, each would be read."""
+        if not self.settings.read_body_files or self.executor_required:
+            return []
+        alone = all(p.alt_copy for x in gate.readings(c) for p in x.parts)
+        held: list[str] = []
+        for x in gate.readings(c) if alone else _every_part(c):
+            if not x.text_file or x.text or (p := _body_path(x.text_file)) is None:
+                continue
+            if not alone:
+                held.append(x.text_file)
                 continue
             try:
-                p = Path(x.text_file)
-                # /dev and /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read
-                # here they give exod's own, not what gh will read, so they stay unseen (#208).
-                if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
-                       for y in (p, Path(os.path.realpath(p)))):
-                    continue
-                if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
-                    gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
-                    if not x.link:
-                        x.link = str(p)
+                gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
             except OSError:
-                pass
+                continue
+            if not x.link:
+                x.link = str(p)
+        return list(dict.fromkeys(held))
 
     def _rule_key(self, tool: str, args: Mapping, c: gate.Classification, d: gate.Decision) -> str:
         # An "always" answer must not cover a different public or irreversible act, or different code the
@@ -513,9 +549,9 @@ class Gate:
         """Classification and the rule outcome (policies, then the registry risk floor)."""
         action = {"tool": tool, "args": args}
         c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
-        self._load_body_file(c)
+        held = self._load_body_file(c)
         today = _dt.date.today().isoformat()
-        ctx = {"spent_today": self._spent.get(today, 0.0)}
+        ctx = {"spent_today": self._spent.get(today, 0.0), "held_body_files": held}
         d = gate.decide(c, self.policies(), ctx)
         if self._policy_error:
             d.reason += f" (policy error, defaults used: {self._policy_error[:120]})"
