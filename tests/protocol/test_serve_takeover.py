@@ -19,9 +19,10 @@ import pytest
 
 from exo import cli_chat
 from exo import ensure_core as ensure
+from exo import principal as pr
 from exo.protocol import schema as s
 from exo.protocol.client import Client
-from exo.server.app import Dispatcher, HttpServer
+from exo.server.app import Dispatcher, HttpServer, SocketBusy
 from exo.server.echo import EchoEngine
 
 
@@ -76,6 +77,49 @@ def test_start_unix_still_replaces_a_stale_socket_file(home):
         srv = HttpServer(Dispatcher(EchoEngine()))
         await srv.start_unix(path)
         try:
+            async with Client(socket=str(path)) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    _run(main())
+
+
+def test_start_unix_replaces_a_dangling_link_as_a_stale_file(home):
+    """The stale-file removal before the bind is unlink(missing_ok=True). A link at the socket path whose target is
+    gone is replaced as a stale file is. path.exists() follows the link, so on main the bind then failed."""
+    path = home / "exod.sock"
+    path.symlink_to(home / "gone.sock")
+
+    async def main():
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(path)
+        try:
+            assert not path.is_symlink() and (home / "gone.sock").exists() is False
+            async with Client(socket=str(path)) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    _run(main())
+
+
+def test_a_second_start_on_a_live_server_keeps_its_lock_and_record(home):
+    """A second start_unix on a server that already started is refused before it takes anything. With the lock taken
+    inside the try, its SocketBusy went through the except clause, which revoked the live start's principal record and
+    let go of its start lock (#590 review)."""
+    path = home / "exod.sock"
+
+    async def main():
+        srv = HttpServer(Dispatcher(EchoEngine()), principal=True)
+        await srv.start_unix(path)
+        try:
+            lock, record = srv._lock_fd, pr.token_path(path).read_text()
+            with pytest.raises(SocketBusy, match="already holds"):
+                await srv.start_unix(path)
+            assert srv._lock_fd == lock and srv._principal_token and pr.token_path(path).read_text() == record
+            with pytest.raises(SocketBusy, match="another exo core"):  # the lock still refuses a new instance
+                await HttpServer(Dispatcher(EchoEngine())).start_unix(path)
             async with Client(socket=str(path)) as c:
                 assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
         finally:
