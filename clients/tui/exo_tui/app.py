@@ -162,7 +162,7 @@ class ExoApp(App):
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
                  seat: str | None = None, title: str = "", home: str | None = None,
                  auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False,
-                 skip_permissions: bool = False, cwd: str | None = None) -> None:
+                 skip_permissions: bool = False, cwd: str | None = None, remote: bool = False) -> None:
         super().__init__()
         self.skip_permissions = skip_permissions  # exo --skip-permissions: ask the core for bypass at boot (D-065)
         self.perm: dict[str, Any] = {}  # the core's /permissions json; {} when it has no gate
@@ -195,8 +195,10 @@ class ExoApp(App):
         self.resume = resume
         self.seat = seat
         self.title_arg = title
-        self.new_cwd = str(Path(cwd).expanduser().resolve()) if cwd else None
-        self.session_cwd = os.getcwd()
+        self.remote = remote
+        self.local_cwd = os.getcwd()
+        self.new_cwd = cwd if remote else str(Path(cwd or self.local_cwd).expanduser().resolve())
+        self.session_cwd = self.new_cwd or ""
         self.model = ""
         self.memory = ""  # the memory plugin's state (a MEMORY_WORDS key; "" unknown), read once at boot
         self.clipboard_verified = False
@@ -896,8 +898,10 @@ class ExoApp(App):
         return f"thread {name}" + (" (private)" if info.get("kind") == "private" else "")
 
     def set_session_cwd(self, cwd: str | None) -> None:
-        self.session_cwd = cwd or os.getcwd()
-        self.files = cm.FileIndex(self.session_cwd, executor_required=self.files.executor_required)
+        self.session_cwd = cwd or ""
+        root = self.local_cwd if self.remote else self.session_cwd
+        if root and self.files.cwd != Path(root):
+            self.files = cm.FileIndex(root, executor_required=self.files.executor_required)
 
     async def load_session(self, sid: str, resume: bool = True) -> None:
         got = await self.client.call(s.SessionResume(session=sid) if resume else s.SessionGet(session=sid))
@@ -1078,7 +1082,8 @@ class ExoApp(App):
         if self.hist.browsing or not c.at_end():
             self.sug = cm.Suggestion()
         else:
-            self.sug = cm.suggest(c.text, self.catalog, self.arg_ctx, self.files)
+            self.sug = cm.suggest(c.text, self.catalog, self.arg_ctx,
+                                  self.files if self.remote or self.session_cwd else None)
         if self.sug.need and self.sug.need not in self.arg_at:
             self.arg_at[self.sug.need] = time.monotonic()
             self.run_worker(self.fetch_ctx(self.sug.need), exit_on_error=False)
@@ -1183,7 +1188,9 @@ class ExoApp(App):
             rel = m.group(1).rstrip(".,;:)")
             p = Path(rel).expanduser()
             if not p.is_absolute():
-                p = Path(self.session_cwd) / p
+                if not self.remote and not self.session_cwd:
+                    continue  # an older core has not supplied an effective directory
+                p = self.files.cwd / p
             if rel in seen or not p.is_file():
                 continue
             seen.add(rel)
@@ -1401,15 +1408,25 @@ class ExoApp(App):
             self.hint("new_thread")
         elif name == "tab":
             from exo_tui import restart as rs
-            path = Path(args.strip()).expanduser() if args.strip() else Path(self.session_cwd)
-            if not path.is_absolute():
-                path = Path(self.session_cwd) / path
-            path = path.resolve()
-            if not path.is_dir():
-                self.note("working directory must be an existing directory", "warn")
+            directory = args.strip() or self.session_cwd
+            if not directory:
+                self.note("choose a working directory: /tab <directory>", "warn")
                 return
-            cmd = rs.new_command(str(path))
-            result = rs.open_tab(cmd)
+            if self.remote:
+                # This is a server-side path; file attachments remain local to this client.
+                cwd = directory
+            else:
+                from exo_tui import directory as checked_directory
+                path = Path(directory).expanduser()
+                if not path.is_absolute():
+                    path = Path(self.session_cwd or self.local_cwd) / path
+                try:
+                    cwd = checked_directory(str(path))
+                except ValueError as exc:
+                    self.note(str(exc), "warn")
+                    return
+            cmd = rs.new_command(cwd)
+            result = await asyncio.to_thread(rs.open_tab, cmd)
             self.note("opened a new conversation window" if result == "opened" else "open a new window and run: " + result)
         elif name == "intro":
             await self.intro("manual")

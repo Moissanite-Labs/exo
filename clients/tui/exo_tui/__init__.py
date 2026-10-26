@@ -11,7 +11,7 @@ from pathlib import Path
 def directory(value: str) -> str:
     path = Path(value).expanduser().resolve()
     if not path.is_dir():
-        raise argparse.ArgumentTypeError("working directory must be an existing directory")
+        raise ValueError("working directory must be an existing directory")
     return str(path)
 
 
@@ -24,13 +24,19 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--url", help="exod TCP URL")
     p.add_argument("--token-file", help="bearer token file for --url")
     p.add_argument("--title", default="", help="title for a new session")
-    p.add_argument("--cwd", type=directory, help="working directory for new sessions (existing sessions keep their own directory)")
+    p.add_argument("--cwd", help="working directory for new sessions (existing sessions keep their own directory)")
     p.add_argument("--skip-permissions", "--dangerously-skip-permissions", dest="skip_permissions",
                    action="store_true", help="permissions bypass for this run of the core: the gate stops asking, except "
                    "for changes to Exo's own records and reading secrets (D-065). Every auto-approved call is in the ledger")
     p.add_argument("--no-intro", action="store_true",
                    help="skip the first-run orientation (and do not offer it again on this EXO_HOME)")
-    return p.parse_args(argv)
+    a = p.parse_args(argv)
+    if a.cwd and not a.url:
+        try:
+            a.cwd = directory(a.cwd)
+        except ValueError as exc:
+            p.error(str(exc))
+    return a
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,5 +57,5 @@ def main(argv: list[str] | None = None) -> int:
         onb.mark_onboarded("skipped")
     intro = not a.no_intro and not os.environ.get("EXO_NO_INTRO")  # the env var skips without writing anything
     ExoApp(client, session=a.session, resume=a.resume, seat=a.seat, title=a.title, cwd=a.cwd, auto_intro=intro, boot_anim=True,
-           provider_check=True, skip_permissions=a.skip_permissions).run()
+           provider_check=True, skip_permissions=a.skip_permissions, remote=bool(a.url)).run()
     return 0
