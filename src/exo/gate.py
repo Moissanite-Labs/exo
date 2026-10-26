@@ -6477,11 +6477,18 @@ def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) ->
 
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
 # counts too) and file names that end a path. The code folders (_code_paths, #459) join: the home's own `venv` and
-# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles.
+# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles. The home's config.json comes
+# from _HOME_PROTECTED; _store_glob counts it only while it counts (_config_on, D-074), so the call is marked and its
+# reading as before is main's.
 _STORE_GLOB_DIRS = tuple([".exo", *p, n] for p in ((), ("principals", "\0")) for n in _HOME_PROTECTED +
                          ("ledger.sqlite\0",)) + ([".exo", "bus"], [".exo", "venv"], [".exo", "src"],
                                                   [".exo", "hermes-home", "plugins"])
 _STORE_GLOB_FILES = tuple(f.split("/") for f in _EXO_STORE_FILES)
+
+
+def _counts(sample: list) -> bool:
+    """Does a store name _store_glob matched count: every one, but the home's config.json only while it does."""
+    return sample[-1] != "config.json" or _config_on()
 
 
 def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> bool:
@@ -6527,11 +6534,12 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
     dirs, files = ([[".exo"]], ()) if inside else (_STORE_GLOB_DIRS, _STORE_GLOB_FILES)
     for form in _path_forms(p) if p.startswith("/") else [os.path.normpath(p)] if p else []:
         gs = form.split("/")
-        if any(fits(gs, 0, t, short=ancestors) for t in tops):
+        if any(fits(gs, 0, t, short=ancestors) and _counts(t) for t in tops):
             return True
         named = own(gs[-1])                 # a store file's folder alone (`src/state/$(..)`) is not its name
         for j in range(1 if form.startswith("/") else 0, len(gs)):
-            if any(fits(gs, j, d) for d in dirs) or named and any(fits(gs, j, f, whole=True) for f in files):
+            if any(fits(gs, j, d) and _counts(d) for d in dirs) or \
+                    named and any(fits(gs, j, f, whole=True) for f in files):
                 return True
     return False
 

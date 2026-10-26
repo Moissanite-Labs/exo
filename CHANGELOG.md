@@ -38,6 +38,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   in `bash -c` or a `$( )`, and past a `-R` before the subcommand (#399). The line keeps the gh read as a part
   (D-075), so a deny, reserved entry, rule or matrix cell on it still applies, and the decision is the
   principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store.
+- Gate (#587 follow-up, D-074): a `config.json` name an expansion hides keeps main's reading again. The merge of
+  #320 into #587 let #320's store glob count the home's `config.json` without marking the call, so the line kept no
+  reading as before D-074, or that reading counted the file too. Under `matrix_deny_cells`,
+  `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/con$(:)fig.json' h` asked where main before #587
+  denied it, and so did a delete beside such a name under `delete: deny` with a rule allowing `^rm`, and an
+  `echo x >` to it over ssh under an entry on `opaque_exec` at `internal` exposure. The glob now counts the file
+  only while it counts, so the call is also read as before D-074. Such a name still asks as a store write.
 - A file tool's store path is read under every key it names a path by, and a move or rename of a folder that holds
   the store is a store write with no secret beside it, as `mv` is (#494). `move_file ~/.exo -> /tmp/x` was a
   `local_write` that ran with no ask where the shell spelling asked, `mcp__filesystem__move_file` with the same
@@ -513,7 +520,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `config.json` counted is also read as before (`Classification.ordinary`, one of `gate.readings`), and the stricter
   decision stands, so `matrix_deny_cells` still denies
   `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h` and `deny: [credentials]` still denies
-  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A copy or extraction into a folder that holds the file is #483.
+  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A quoted or split name (`~/.exo/con'fig'.json`) and a symlink
+  to the file (made earlier, or by an `ln` on the same line) count too; the name is matched case-sensitively, as the
+  other store names are. A copy or extraction into a folder that holds the file is #483.
 - Gate (#225, #269, #309, #341, D-038): store names an expansion hides, and relative names that reach the run
   folder, now ask. #307 read an expansion inside a secret-store name as empty and, between literal text, as `*`.
   That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,
