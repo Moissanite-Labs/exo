@@ -386,18 +386,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the calling user before sudo runs, so the write happens either way. Where that `read` would lead the line, the first
   sudo write now leads in its place, with its cost. The line is a costly `local_write` with the written path as
   target, so an ask or log line, a rule or an escalation on `local_write` or on that path reaches it. Its summary
-  names the program and the path. The line is also decided with the displaced `read` leading, as before, and the
-  stricter outcome stands, so `{read: ask}` and a rule on a gh read's repo or on an `ssh` host still reach it. A part
-  that outranks the `read`, such as an unknown program or ssh running its stdin, still leads, also beside a sudo write
-  in a `$( )` or an ssh hop (`echo $(sudo echo hi > /tmp/f) $(foo)` asks), and a store path stays `store_write`. This
-  also ends the #436 lowering of `for x do sudo echo hi > /tmp/f; done`. An `ssh -o RemoteCommand=` raises the
-  displaced part with the copy, so `sudo ls; ssh -o RemoteCommand='sudo gh pr view 9 -R a/b > /tmp/f' h` still asks
-  under a rule on `a/b`. Where only the write asks, a standing grant and the approvers follow the new category and
-  target. Where the displaced part names a repo or a host, or the line asks with that part leading, the approval is
-  bound to the exact command, and only those who may answer both categories may answer it, so a grant or a seat for
-  the written path does not answer a rule on that repo or host, or an ask on that part's category. A reserved hit on
-  the write keeps the principal's ask from a grant, as before. The displaced part keeps #399's other targets, and the
-  line as #399 read it before keeps that reading's approvers.
+  names the program and the path, the two apart when the write is on another command (`gh pr view; write /tmp/f`).
+  The line is also decided with the displaced `read` leading, as before, and the stricter outcome stands, so
+  `{read: ask}` and a rule on a gh read's repo or on the host of an `ssh` hop still reach it. `ssh -o RemoteCommand=`
+  gives its host to neither part, so a rule that asks or logs on the host does not reach that form, as before #454
+  (#493). A deny on the host still reaches it through ssh's own part. A part that outranks the `read`, such as an
+  unknown program or ssh running its stdin, still leads, also beside a sudo write in a `$( )` or an ssh hop
+  (`echo $(sudo echo hi > /tmp/f) $(foo)` asks), and a store path stays `store_write`. This also ends the #436
+  lowering of `for x do sudo echo hi > /tmp/f; done`. An `ssh -o RemoteCommand=` raises the displaced part with the
+  copy, so `sudo ls; ssh -o RemoteCommand='sudo gh pr view 9 -R a/b > /tmp/f' h` still asks under a rule on `a/b`.
+  Where only the write asks, a standing grant and the approvers follow the new category and target. Where the
+  displaced part names a repo or a host, or the line asks with that part leading, the approval is bound to the exact
+  command, and only those who may answer both categories may answer it, so a grant or a seat for the written path does
+  not answer a rule on that repo or host, or an ask on that part's category. A reserved hit on the write keeps the
+  principal's ask from a grant, as before. The displaced part keeps #399's other targets, and the line as #399 read it
+  before keeps that reading's approvers.
 - Gate (#435, D-038 amendment): a write into `$EXO_HOME/plugins` asks the principal. The core loads each plugin it
   finds there and runs its code with the harness's rights, so a write there installs or changes code the next session
   runs. Most writes there were allowed: only a `cd` or `git -C` into the Exo home made one a store write, and a delete
