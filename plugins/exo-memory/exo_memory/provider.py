@@ -13,6 +13,7 @@ All state is per Exo home (seat) and lives in the principal store.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -432,7 +433,7 @@ class ExoMemoryProvider(MemoryProvider):
 
     # -- recall ------------------------------------------------------------------
 
-    def _assemble(self, st: _State, query: str, budget: int) -> dict:
+    def _assemble(self, st: _State, query: str, budget: int, session_id: str = "") -> dict:
         limit = max(budget, 50) * 4
         epi = st.epi
         has_epi = epi is not None and len(epi) > 0
@@ -451,7 +452,10 @@ class ExoMemoryProvider(MemoryProvider):
             head = ("## Your log (memory_zoom(start) opens an entry)" if st.core_log is not None else
                     "## Episodic memory (past sessions; exo_zoom(id, n) opens a line)")
             lines = []
-            hits = epi.search(query, n=st.cfg["episodic_hits"], skip_recent=st.cfg["recent_skip"])
+            search_kw = {"n": st.cfg["episodic_hits"], "skip_recent": st.cfg["recent_skip"]}
+            if "session_id" in inspect.signature(epi.search).parameters:
+                search_kw["session_id"] = session_id
+            hits = epi.search(query, **search_kw)
             for hit in hits:
                 line = f"#{hit['id']} {hit['kind']} {hit['date'][:10]}: {hit['text']}"
                 if sum(len(x) + 1 for x in lines) + len(line) + 1 > room // 2:
@@ -474,7 +478,7 @@ class ExoMemoryProvider(MemoryProvider):
                 st.last_recall = 0
             return ""
         try:
-            out = self._assemble(st, query, st.cfg["prefetch_budget"])
+            out = self._assemble(st, query, st.cfg["prefetch_budget"], session_id=session_id)
         except Exception as exc:
             logger.warning("exo-memory: prefetch failed: %s", exc)
             st.last_recall = 0
@@ -750,7 +754,7 @@ class ExoMemoryProvider(MemoryProvider):
                 if not query:
                     return json.dumps({"error": "exo_recall needs a query"})
                 budget = int(args.get("budget") or st.cfg["prefetch_budget"])
-                out = self._assemble(st, query, max(100, min(budget, 16000)))
+                out = self._assemble(st, query, max(100, min(budget, 16000)), session_id=kwargs.get("session_id") or "")
                 return json.dumps({"result": out["text"] or "(nothing found)", "node_ids": out["node_ids"],
                                    "episodic_ids": out["episodic_ids"], "tokens": out["tokens"]})
             if tool_name == "exo_get":

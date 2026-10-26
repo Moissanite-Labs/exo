@@ -71,11 +71,13 @@ class AgentLogView:
     def __len__(self) -> int:
         return self.store.last_pos(self.agent)
 
-    def search(self, query: str, n: int = 5, skip_recent: int = 0) -> list[dict[str, Any]]:
+    def search(self, query: str, n: int = 5, skip_recent: int = 0, session_id: str = "") -> list[dict[str, Any]]:
         last = len(self)
+        recent = {r[0] for r in self.store._q("SELECT pos FROM messages WHERE agent=? AND session=? AND hidden=0 AND pos IS NOT NULL "
+                                               "ORDER BY pos DESC LIMIT ?", (self.agent, session_id, skip_recent))} if session_id and skip_recent > 0 else set()
         out = []
-        for hit in self.store.search(query, limit=n * 3, agent=self.agent):
-            if skip_recent and hit["pos"] > last - skip_recent:
+        for hit in self.store.search(query, limit=n * 3 + min(256, max(0, skip_recent)), agent=self.agent):
+            if hit["pos"] in recent or (not session_id and skip_recent and hit["pos"] > last - skip_recent):
                 continue
             entry = self.store.log(self.agent, hit["pos"] - 1, hit["pos"])
             role = entry[0].message.role if entry else "user"
