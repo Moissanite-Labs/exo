@@ -6518,17 +6518,18 @@ def _no_plain_store(secrets: list[Classification], cmd: str, scope: _Scope | Non
     on to read the relative names after a `cd` (_cd_store_read) or the call's own folder (_tool_folder_read). Each
     part names a store path, and the line names none as main read it before #446 (_shell_credential_hit with
     ``plain``), in ``scope`` when given: `cat ~/.kube//config`, or `cat < ~/.kube/\\config`, which main did not read.
-    A store, the environment or a secret command (`ssh-keygen`) main read on the line keeps the line alone."""
-    if not all(is_sensitive_path(p.target) or _glob_hits_secret(p.target) for p in secrets):
-        return False
+    A store, the environment or a secret command (`ssh-keygen`) main read on the line keeps the line alone. The line
+    is read first: where main read a store on it, no part needs a store test of its own (test_work_is_linear)."""
     cmds, _, _ = _parse(cmd)
     token = _scope.set(scope) if scope is not None else None
     try:
-        return not _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
-                                         [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True)
+        if _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
+                                 [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True):
+            return False
     finally:
         if token is not None:
             _scope.reset(token)
+    return all(is_sensitive_path(p.target) or _glob_hits_secret(p.target) for p in secrets)
 
 
 def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
