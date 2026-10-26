@@ -1230,6 +1230,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-26 (issue #493):* an ssh or mosh hop keeps its host among the line's other targets when the
+  remote command names a target of its own. The hop gave the host as the line's target only when the remote
+  command's dominant part had none (`c.target = c.target or dest`), so `ssh prod 'echo hi > /etc/hosts'` was a
+  `local_write` of `/etc/hosts` alone: a `target: prod` rule did not reach it and allowed it, `scopes:
+  {private: [/etc/*]}` read a path on another host as the principal's own, and a standing grant for a local write
+  to `/etc/hosts` covered the same write on any host. A deny or `reserved:` entry on the host still reached the
+  hop's part (D-075). Now the host and the destination stay among the other targets (#399) whenever the line's
+  target is not one of them, so `decide` runs the line on the host too and the strictest stands. The written path
+  stays the line's target, so a rule on it still matches as before, and the host reading only raises: the rule
+  reaches the line as a deny reaches the hop's part, a scope on a local path stops at the host's reading, which
+  keeps the exposure the hop gives the line, and a line with other targets binds its approval to the exact
+  command, so no grant for a local write runs the hop. A rule on the bare host reaches a `user@host` destination
+  too. Against main df4195ab the differential with a policy keyed on the host lowers no pair. Tests:
+  `tests/security/test_gate_sudo_redirect.py`, `tests/security/test_gate_gh_target_operands.py`.
 - *Amendment 2026-10-26 (issue #514):* a store write names every store path it writes a target, not only the
   first one the scan meets. The scan returned at the first store path and made one `store_write` part of it, so a
   `target:` deny or `reserved:` entry on a later path missed: `cp ~/.exo/policies/a.yaml
