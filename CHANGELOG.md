@@ -337,17 +337,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `cp x ${x:-$HOME/.exo}/policies/a`, `cp x ~/.exo/bu$(printf s)/x` and `cp x ~/x/update/allowed_$(printf s)igners`
   are `store_write`. They were allowed `shell` writes. #305's resolution of names from a folder in `$EXO_HOME` now
   reads a target spelt with a glob or an expansion, in the store's own folder or below it
-  (`cd ~/.e*o/run/jobs && grep -r x ..`, `cd ~/.exo/r?n/jobs && grep -r x ..`, `cd ~/.exo/r$(printf u)n/jobs && ls ..`,
-  `cd ~/.exo && cd r$(:)un/jobs`, `cd ~/.exo/principals/m?/run/jobs && ls ..`), a part that could be `..`
+  (`cd ~/.e*o/run/jobs && grep -r x ..`, `cd ~/.exo/r?n/jobs && grep -r x ..`, `cd ~/.exo/r$(printf u)n/jobs && ls
+  ..`, `cd ~/.exo && cd r$(:)un/jobs`, `cd ~/.exo/principals/m?/run/jobs && ls ..`), a part that could be `..`
   (`cd .? && grep -r .`, `cd .?/.. && grep -r x .`, `cd $PWD/.?/.. && grep -r x .`, `grep -r . .$(:).`,
-  `grep -r . ./.?`, `grep -r . .//.?`, `grep -r . .?/..`), a glob that could be the run folder (`tar -C ~/.exo -czf - ru?`), and a folder that holds a
-  run folder (`cd ~/.exo/run/jobs && grep -r x ../..`, `cd ~/.exo && grep -r x principals/me`,
-  `tar -C ~/.exo/principals/me -czf - .`). Each spelling is read once per tool call, so the work stays linear. A
-  matrix cell or a `target:/dev*` entry that denied such a line on main still denies it (#464): the `*` reading
-  makes some lines `store_write`, and the line's other parts keep their own cells and targets. A rule that denies a
-  costly `read`, `shell` or `local_write` part still denies such a line run over ssh by `sudo` or `doas`, or by a
-  privileged wrapper over ssh or through a shell: a costly copy of each reversible part the wrapper runs, nested ones
-  too, is added beside it (`sudo ssh host 'cat ${x}rc'` and `doas ssh host 'cp x ~/.exo/polic$(date)ies/a'` under
+  `grep -r . ./.?`, `grep -r . .//.?`, `grep -r . .?/..`), a glob that could be the run folder (`tar -C ~/.exo -czf -
+  ru?`), and a folder that holds a run folder (`cd ~/.exo/run/jobs && grep -r x ../..`, `cd ~/.exo && grep -r x
+  principals/me`, `tar -C ~/.exo/principals/me -czf - .`). Each spelling is read once per tool call, so the work stays
+  linear. A matrix cell or a `target:/dev*` entry that denied such a line on main still denies it (#464): the `*`
+  reading makes some lines `store_write`, and the line's other parts keep their own cells and targets. A rule that
+  denies a costly `read`, `shell` or `local_write` part still denies such a line run over ssh by `sudo` or `doas`, or
+  by a privileged wrapper over ssh or through a shell: a costly copy of each reversible part the wrapper runs, nested
+  ones too, is added beside it (`sudo ssh host 'cat ${x}rc'` and `doas ssh host 'cp x ~/.exo/polic$(date)ies/a'` under
   gate_diff's `rule_costly_part_deny`), and so does the unsplit line (`sudo ssh host 'cat ~/.kube/config'`), which
   asked on main. The parts stay as written, so a rule or entry keyed on `reversibility` reaches them as on main
   (`sudo ssh host 'ls; cat x'` still denies under a rule that denies a reversible `read`, and under `read: deny`
@@ -355,13 +355,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   policies keyed on `reversibility` (rules, lifted category lines, matrix rows, deny and reserved entries) and 38
   keyed on targets (`*keys*`, `*run*`, `*plugins*` and other store names as rules, deny and reserved entries, and
   #468's four), lowers no pair (outcome, reserved hit or posting violation). Each form reaches the plugins folder
-  (#435) as it reaches `policies/` (`cp x ~/.exo/plug$(:)ins/foo/__init__.py`, `cd ~/.e$(:)xo && cp x plugins/foo/x.py`).
-  Words that cannot spell a store name keep their class (`cat notes$(date +%F).txt`, `cat $f`,
+  (#435) as it reaches `policies/` (`cp x ~/.exo/plug$(:)ins/foo/__init__.py`, `cd ~/.e$(:)xo && cp x
+  plugins/foo/x.py`). Words that cannot spell a store name keep their class (`cat notes$(date +%F).txt`, `cat $f`,
   `cat ${OUT:-/tmp/out}/report.txt`, `cp x out/$(date +%F).json`), and so does a write whose file name only its folder
   ties to the store
-  (`cp x state/$(date +%F).json`, `cp x src/state/$(basename $f)`, `sed -i s/a/b/ src/state/$(git ls-files | head -1)`).
-  A line is read first with its words as written, as main reads it, and that name decides the line and builds its
-  parts as on main, #468's key read beside a store write among them; these forms and readings come after it, and a
+  (`cp x state/$(date +%F).json`, `cp x src/state/$(basename $f)`, `sed -i s/a/b/ src/state/$(git ls-files | head
+  -1)`). A line is read first with its words as written, as main reads it, and that name decides the line and builds
+  its parts as on main, #468's key read beside a store write among them; these forms and readings come after it, and a
   name they find that is another target is a `credentials` part beside it. So under a rule on `target: '*keys*'`,
   `cd ~/.exo/state && echo $(cat ../keys/seat; rm -rf x)`, `cd ~/.exo && cat $(ls) keys/seat` and
   `cd ~/.exo/state && cat ${x-.env} ../keys/seat` deny as on main edeb4f89, and under one on `*run*` so does
@@ -376,7 +376,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `cat ${x-.env} config; gh pr comment 3 --body hi` with `~/.exo/keys` as `cwd` lists its footer violation twice, as
   main does (once as the line's own, once named after the post), each named after the post here. The copy is the
   line's first part, so on a line of more than 20 posts its entry is listed before the card's cap, as main lists the
-  line's own. A here-doc body on the line reaches the most severe post below a secret read, as it reaches one below
+  line's own, and its entries take none of the cap's 20 places, so posts with no numbered target
+  (`gh pr comment --body hi`, `gh issue create`) list at least as many entries as on main too. A here-doc body on
+  the line reaches the most severe post below a secret read, as it reaches one below
   a store write (#435), so `cat ${x-.netrc}; mail -s s a@b.c <<EOF` keeps the mail's footer, forbidden-word and scrub
   checks, as on main, where the mail decides the line; `cat .netrc; mail -s s a@b.c <<EOF` now has them too, which
   main skips.
