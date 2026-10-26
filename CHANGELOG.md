@@ -6,6 +6,31 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `hash -p` is opaque, so a rebound program name no longer runs another file under a read's cover
+  (#330). `hash -p PATH NAME` makes the shell run PATH for every later NAME, and the gate filed the
+  line under NAME's own program, so `hash -p /tmp/x ls; ls` read as a plain `ls`. The call now
+  classifies as `opaque_exec`, with the path as its target and a card naming the program it
+  rebinds. Its options are read as bash reads them: after `builtin` or `command`, in a flag
+  cluster, with the path attached and after the path. An option word the gate cannot read
+  (`hash $O ls`, a glob that starts with `[` such as `hash [-]p /tmp/x ls`, or `~-`, `~+` or `~1`,
+  which bash reads from OLDPWD, PWD or the directory stack) is opaque too.
+  So is a path or name word it cannot read, which may split or lose its slash (`hash -p $P`,
+  `hash -p [al]s`, `hash -p /tmp/x {ls,/}`), and setting `BASH_CMDS` or
+  `BASH_ALIASES`. A double-quoted `${!n}` may split as `"$@"` does, so `hash "${!n}"` is opaque
+  too. Plain `hash`,
+  `hash -r`, `hash -d` and `hash "$cmd"` stay read, as do a `-p` after the first operand and one
+  with no name to bind. The path alone is not read as a store write, nor is a `BASH_CMDS` or
+  `BASH_ALIASES` value, whatever runs it (ssh, mosh, `man -P`, `printf -v`). So a post on the same
+  line keeps its matrix cell and posting rules: `hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`
+  and `ssh host 'hash -p /dev/fd/3 ls'; gh pr comment 1 --body hi` are denied under a matrix deny
+  for the post, as before. Some lines decide lower than before. A rebind run with sudo, doas,
+  chroot, nsenter, unshare or systemd-run asks under a rule that denies costly reads, and over ssh
+  a policy that allows `opaque_exec` allows it. A policy that names `read` no longer reaches the
+  rebind, so `hash -p /tmp/x ls` asks under `categories: {read: deny}`. The D-038 amendment lists
+  them. A plain shell command
+  or a login to another host (`ssh a 'ssh b; hash -p /x ls'`) beside the rebind keeps the store
+  check in either order, so
+  `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'` is a store write.
 - Two follow-ups to #296 (#317). A ledger opened read-only through a symlink to a closed target held an
   `immutable=1` connection to the target itself: a writer that appended and checkpointed replaced the file
   under it, so the reader stayed stale and reading raised `database disk image is malformed`. The target is
