@@ -306,6 +306,9 @@ press Ctrl+F from the composer, then the answer keys, with no click. Your draft 
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
+File searches with the agent's `grep` and `glob` tools stop after 30 seconds and ask it to narrow the pattern.
+Other sessions and approval cards remain responsive while a search runs. Stopping the turn also stops its search.
+
 What the gate asks about, and why:
 
 - **Credentials always ask.** Anything the gate sees reading or filling a password, token or key asks every time.
