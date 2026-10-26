@@ -413,6 +413,56 @@ def test_who_may_answer_a_real_line_read_as_before_471_may_answer_that_reading(t
     assert r["action"] == "approve" and r["approvers"] == ["principal"], r
 
 
+@pytest.mark.parametrize("prefix", ["X='a b'", 'X="$Y"'])
+@pytest.mark.parametrize("gates, line", [
+    ("reserved: [local_write]\n", "{p} sudo git commit -m x; sudo git commit -m x"),
+    ("reserved: [schedule]\n", "{p} systemctl enable foo.timer; systemctl enable foo.timer"),
+    ("reserved: [web_read]\n", "{p} sudo curl https://example.com/x; sudo curl https://example.com/x"),
+    ("reserved: [local_write]\n", "git commit -m x; {p} sudo git commit -m x")])
+def test_a_reserved_hit_off_the_act_of_the_line_read_as_before_471_keeps_its_ask(tmp_path, prefix, gates, line):
+    # D-075 with #471: read as before, the quoted word is an unknown program that leads the line, and the commit, the
+    # timer or the curl is another part of it, so main asks every time. The command behind the word leads the line
+    # now (a costly act ties with the unknown program and comes first), but the grant check still reads the line as
+    # before against that reading's own act. An "always" still leaves the line asking.
+    line = line.format(p=prefix)
+    _, _, ctx = _store454(tmp_path, "st471r", gates)
+    c = gate.classify(("terminal", {"command": line}))
+    assert c.before is not None and c.category != c.before.category, c
+    for _ in range(2):
+        r = call(ctx, "terminal", {"command": line})
+        assert r is not None and r["action"] == "approve" and not r.get("once"), r
+        answer(ctx, r, "always")
+
+
+@pytest.mark.parametrize("gates, line", [
+    ("reserved: [local_write]\n", "X=ab sudo git commit -m x; sudo git commit -m x"),
+    ("reserved: [vcs_push]\n", "X='a b' git push origin main")])
+def test_a_reserved_hit_on_the_act_of_each_reading_471_takes_the_grant_as_on_main(tmp_path, gates, line):
+    # An unquoted prefix is read one way, with the commit leading it. Read as before, `X='a b' git push origin main` is
+    # an unknown program with no reserved hit, and the push it reads now is the act of the line. Main takes the grant
+    # on both, and so does the hook.
+    _, _, ctx = _store454(tmp_path, "st471g", gates)
+    r = call(ctx, "terminal", {"command": line})
+    assert r is not None and r["action"] == "approve", r
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": line}) is None
+
+
+def test_a_pending_reserved_entry_holds_off_a_grant_on_the_line_read_as_before_471(tmp_path):
+    # D-038: a reserved entry not yet accepted reaches the check on the line read as before too.
+    line = "X='a b' sudo git commit -m x; sudo git commit -m x"
+    store, g, ctx = _store454(tmp_path, "st471p", "categories: {opaque_exec: ask}\n")
+    r = call(ctx, "terminal", {"command": line})
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": line}) is None
+    p = store / "policies" / "gates.yaml"
+    p.write_text("categories: {opaque_exec: ask}\nreserved: [local_write]\n")
+    os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 10_000_000))
+    assert g.changed_policies() is not None
+    r = call(ctx, "terminal", {"command": line})
+    assert r is not None and r["action"] == "approve" and "policy files changed this session" in r["message"], r
+
+
 # --- standing grants ------------------------------------------------------------------------
 
 def test_always_grant_survives_restart_and_expires(keyed_store):

@@ -764,8 +764,18 @@ logged with the grant id.
 - Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`). The same
   holds for a call that keeps another category but has such a part (`gate.no_grant`), such as a
   store read in a shell call's own folder (#311, "The working folder").
-- Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
-  granted for the exact command only, like an outward act.
+- Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` or
+  `unknown program` signal) is granted for the exact command only, like an outward act. A line
+  with a quoted prefix assignment is also read as before #471, each such word the program
+  (`Classification.before`), and it is also granted for the exact command whenever that reading
+  would be (`gate.binds_exact`).
+- A reserved hit on another part of the line than its act keeps the principal's ask from every
+  grant (D-075). A line also read as before #471 is checked on each reading against that reading's
+  own act: a reserved hit in the line read as before that is not that reading's act keeps the ask,
+  as on main, where that reading was the line. So `X='a b' sudo git commit -m x; sudo git commit
+  -m x` under `reserved: [local_write]` asks every time: read as before, an unknown program leads
+  it, and the commit is another part. Under `reserved: [vcs_push]`, `X='a b' git push origin
+  main` has no hit as read before, so an "always" covers that exact line, as on main.
 - A sudo write line whose displaced part names a repo or a host, or asks with that part leading
   (#454), is granted for the exact command only too. So a grant on the written path does not
   answer a rule on that repo or host, or an ask on that part's category. A reserved hit on any
@@ -950,7 +960,8 @@ a grant. `gate.readings` lists it, with its own floor and its reading from befor
 line's own, so `no_grant`, `call_approvers` and `body_unseen` read its parts too: a store write
 part only that reading has keeps the answer with the principal, once (#447), and a sudo write it
 reads keeps its displaced part's approvers (#454). An "always" binds to the exact line when
-that reading would. That covers what a quoted word changes
+that reading would, and a reserved hit there that is not that reading's own act keeps the ask from
+a grant, as on main ("Standing grants"). That covers what a quoted word changes
 for the commands after it. A `cd` behind one (`X='a b' cd /dev && yarn publish`) moves their
 folder, as bash runs it, so their store write may outrank the publish that a matrix cell denied;
 read as before, the `cd` was an unknown program and the publish still decides. A reserved word
@@ -1425,7 +1436,10 @@ gate does not read:
   (it comes from a variable) for an exec key, and `git clone --template` or `git init
   --template` are opaque. `env` and `sudo` read `NAME=VALUE` from their
   own argv, so after them a word quoted whole (`env 'LD_PRELOAD=x' ls`) is an assignment too;
-  elsewhere only its value may be quoted (#471). `IFS` is left
+  elsewhere only its value may be quoted (#471). That holds for env's argv, not for the text of
+  `env -S` or `--split-string`: the gate reads that text as a shell line, so a leading assignment
+  quoted whole there (`env -S "'X=a b' rm -rf /srv/data"`) reads as an unknown program, which
+  asks under the defaults, although GNU env runs the command behind it (#591). `IFS` is left
   out: it does not change how literal words split, and `while IFS= read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,

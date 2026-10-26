@@ -2226,11 +2226,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (a program from a variable, before) still has to be named by an allow rule that would lower `X="$Y" ls; git push
   --force origin main`. And the parts read from the command behind such a word carry the signal `quoted
   assignment`: `decide` also decides the line with the part `_combine` would put on top without them, as main did,
-  and keeps the stricter outcome. Without that step the differential lowered 110 pairs on 44 actions, each a post
-  followed by a delete or a force push behind a quoted assignment (`gh pr comment 5 ... && X='a b' rm -rf
-  /srv/data`): the delete now outranks the post, and the matrix cell, category lines and third-party escalation read
-  the dominant part only (#437), so an all-allow or all-log category policy allowed or logged what the post's
-  third-party escalation asked for, and a deny cell for irreversible public acts asked. Those steps read one simple
+  and keeps the stricter outcome. That step holds a post followed by a delete or a force push behind a quoted
+  assignment (`gh pr comment 5 ... && X='a b' rm -rf /srv/data`) at main's decision. There the delete now outranks
+  the post, and the matrix cell, category lines and third-party escalation read the dominant part only (#437), so
+  without the step an all-allow or all-log category policy would allow or log what the post's third-party
+  escalation asks for, and a deny cell for irreversible public acts would ask. Those steps read one simple
   command at a time, and the new reading also changes what the commands after it see. A `cd` behind a quoted word
   (`X='a b' cd /dev && yarn publish`) moves their folder, as bash runs it, and their store write then outranks the
   publish a deny cell denied (the same as `X=ab cd /dev && yarn publish` on main); a reserved word after one is read
@@ -2277,18 +2277,34 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line (`opaque_exec allow -> delete ask`): a command read behind a quoted assignment now asks or denies as it does
   alone, and an unknown program (the quoted word read as before) asks beside a push that logged.
   The everyday cost is a script that calls a local tool the gate does not know after a
-  push or a post (`git push origin feature && notify-send done`): it asks where it logged.
+  push or a post (`git push origin feature && notify-send done`): it asks where it logged. Not covered: the text of
+  `env -S` or `--split-string` is read as a shell line, not as env's argv, so a leading assignment quoted whole there
+  (`env -S "'X=a b' rm -rf /srv/data"`) still reads as an unknown program, which asks under the defaults, as on main
+  (#591).
   On main 2cc0c32f (2026-10-25), which took #311, #447, #454 and #316, `gate.readings` lists the line read as
   before, with its own floor and its reading from before #311, after the line's own readings. So `no_grant`,
   `call_approvers` and `body_unseen` read its parts as `decide` does, and so do the hook's body files, its required
   executor check and its approvers for a sudo write's displaced part, which iterate the readings: a store write or
   secret part only that reading has keeps the answer with the principal, once, and a sudo write only it reads keeps
-  its displaced part's approvers. The hook's grant check (D-075) compares a reserved hit with the line's own act, as
-  on main; an "always" on such a line covers that exact line only (`binds_exact`). Main's `scripts/gate_diff.py`
-  lowers nothing on its built-in corpus or on the aimed corpora above with the test lines of #311, #447, #454, #316
-  and #528 behind `X='a b'` and `X="$Y"`, in front and after the first joiner, also in a shell call's own folder.
+  its displaced part's approvers. An "always" on such a line covers that exact line only (`binds_exact`). The
+  hook's grant check (D-075) reads each reading against its own act (2026-10-26, review of #546): a reserved hit in
+  the line read as before that differs from that reading's act, or from the act of the part its sudo write displaced
+  (#454), keeps the ask, as on main, where that reading was the line. Comparing the hits with the line's own act
+  alone let an "always" cover `X='a b' sudo git commit -m x; sudo git commit -m x` under `reserved: [local_write]`,
+  and the same with `systemctl enable foo.timer` under `reserved: [schedule]` or `sudo curl` under `reserved:
+  [web_read]`, which main asks every time: a costly act ties with the unknown program, comes first and leads the line
+  now, so the hit is on the line's own act. Rejected: comparing every hit with the act of the line read as before,
+  which keeps the ask on lines main grants (`X='a b' git push origin main` under `reserved: [vcs_push]`, which has no
+  hit as read before). Main's `scripts/gate_diff.py` lowers nothing on its built-in corpus or on the aimed corpora
+  above with the test lines of #311, #447, #454, #316 and #528 behind `X='a b'` and `X="$Y"`, in front and after the
+  first joiner, also in a shell call's own folder.
   Through the exo-gate hook, those prefixed lines under several policy and approval setups, each asked twice with
-  an "always" between, lose no ask, exact binding, approver or "once" against main. The runs and counts are in #546.
+  an "always" between, lose no ask, exact binding, approver or "once" against main. So do commands across the
+  categories (sudo, schedule and sudo write forms among them) behind `X='a b'` and `X="$Y"`, alone and joined by `;`
+  or `&&` with the prefix on either side, under a reserved entry for each category a grant may cover and all of them
+  at once: no ask that main never lets a grant answer takes one. Some lines ask where main took a grant: a reserved
+  entry names a part main never read there (the command behind the quoted word, or the unknown program kept beside
+  it), and D-075 keeps a hit on another part than the line's act from a grant. The runs and counts are in #546.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

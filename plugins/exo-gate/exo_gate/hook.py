@@ -666,13 +666,25 @@ class Gate:
         # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.
         # #454: a sudo write line is also the act of the part its write displaced, which led it before, so a hit on
         # the write keeps the ask too, as it did then (`sudo echo hi > /tmp/f` under `reserved: [local_write]`).
-        if any(hit != (x.category, x.target) for x in (c, c.displaced) if x is not None for hit in d.reserved):
+        # #471: the line read as before keeps this check as main made it, on that reading's own decision and act.
+        # There an unknown program led `X='a b' sudo git commit -m x; sudo git commit -m x`, so a hit on the commit
+        # under `reserved: [local_write]` keeps the ask, although the commit leads the line now.
+        if c.before is not None and _off_act(c.before, self._reserved_hits(c.before)):
+            return None
+        if _off_act(c, d.reserved):
             return None
         try:
             return self.grants.match(c.category, c.target or c.tool, binding, outward)
         except Exception:
             logger.warning("exo-gate: grant lookup failed; asking instead", exc_info=True)
             return None
+
+    def _reserved_hits(self, c: gate.Classification) -> list:
+        """The reserved parts one reading of the call meets, under the policies `_rules` decides with: the pinned one
+        and a changed one (D-038). It spends nothing, and `_rules` already logged a changed policy."""
+        ctx = {"spent_today": self._spent.get(_dt.date.today().isoformat(), 0.0)}
+        pols = [p for p in (self.policies(), self.changed_policies()) if p is not None]
+        return [hit for pol in pols for hit in gate.decide(c, pol, ctx).reserved]
 
     def _grant_days(self, outward: bool) -> float:
         """How long an "always" lasts: the pinned approvals.yaml, or the shorter of pinned and changed while a
@@ -755,6 +767,12 @@ def gate_command(g: "Gate", args: str = "") -> str:
     if g.changed_policies() is None:
         return "policy as loaded at session start"
     return "policy files changed this session; the stricter of old and new applies. Run /gate accept to adopt them."
+
+
+def _off_act(c: gate.Classification, hits: list) -> bool:
+    """D-075: a reserved hit that differs from the act of the line, or from that of the part its sudo write displaced
+    (#454)."""
+    return any(hit != (x.category, x.target) for x in (c, c.displaced) if x is not None for hit in hits)
 
 
 def _iso(ts: float) -> str:
