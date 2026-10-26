@@ -337,9 +337,6 @@ FAIL_CLOSED = [
     "cd ~/.kube && kubectl get pods -n $(cat ns.txt)",
     "cd ~/.exo && ls principals",
     "cat ${x}rc",                                     # `.*rc` could be .netrc
-    # a trailing substitution is `*`, and `cat /tmp/*` or `ls ~/.config/*` asks on main too
-    "cat /tmp/$(cat last)",
-    "ls /tmp/$(whoami)",
     "ls ~/.config/$(whoami)",
     "cat ~/.config/$(ls ~/.config | head -1)",
 ]
@@ -348,6 +345,14 @@ FAIL_CLOSED = [
 @pytest.mark.parametrize("cmd", FAIL_CLOSED)
 def test_an_everyday_line_that_could_reach_a_store_asks(cmd):
     _asks(sh(cmd))
+
+
+# A trailing substitution is `*`, and a bare `*` in a folder holding stores asks. The folder is spelt from the
+# fixture, not /tmp: whether /tmp holds the test home differs by platform (Linux tmp_path is under /tmp, macOS
+# under /private/var/folders), which is exactly what the in-store-folder check reads (#596).
+@pytest.mark.parametrize("template", ["cat {top}/$(cat last)", "ls {top}/$(whoami)"])
+def test_a_trailing_substitution_in_the_homes_parent_asks(home, template):
+    _asks(sh(template.format(top=home.parent)))
 
 
 # A store file's folder with output for the file name is not that file: the name needs three characters of its own
@@ -528,7 +533,6 @@ COSTLY = {"gates": {"rules": [{"match": {"category": ["local_write", "shell", "r
                                "decision": "deny"}]}}
 PRIVILEGED = [
     "sudo ssh host 'cat ${x}rc'",
-    "doas ssh host 'cat /tmp/$(cat last)'",
     "sudo -u bob ssh host 'cat ${x:-~/.kube}/config'",
     "sudo env ssh host 'cat ~/.ku$[0]be/config'",
     "sudo timeout 5 ssh host 'cd ~/.kube && echo $(date)'",
@@ -551,6 +555,13 @@ PRIVILEGED = [
 @pytest.mark.parametrize("cmd", PRIVILEGED)
 def test_a_privileged_wrappers_cost_reaches_what_it_runs_over_ssh(cmd):
     c = gate.classify(sh(cmd))
+    assert gate.decide(c, COSTLY).outcome == "deny", c
+    assert gate.decide(c).outcome == "ask"
+
+
+def test_a_privileged_wrapper_reaches_a_trailing_substitution_in_the_homes_parent(home):
+    # the /tmp spelling of this row only reached a store where the test home sits under /tmp (#596)
+    c = gate.classify(sh(f"doas ssh host 'cat {home.parent}/$(cat last)'"))
     assert gate.decide(c, COSTLY).outcome == "deny", c
     assert gate.decide(c).outcome == "ask"
 
