@@ -140,6 +140,29 @@ def test_a_destination_a_command_prints_counts_by_name(line, home):
     _assert_store_write(_sh(line))
 
 
+@pytest.mark.parametrize("line", [
+    "cp /tmp/evil.json ~/.exo/con'fig'.json",
+    'cp /tmp/evil.json ~/.exo/"config".json',
+    'cp /tmp/evil.json "$HOME/.exo/config.json"',
+    "echo x > ~/'.exo/config.json'",
+])
+def test_a_quoted_or_split_name_counts_as_the_file(line, home):
+    """The store checks read a shell word unquoted and joined, as they read `~/.exo/pol'icies'/gates.yaml` on main."""
+    _assert_store_write(_sh(line))
+
+
+@pytest.mark.parametrize("name", ["config.json", "policies/gates.yaml"])
+def test_a_symlink_to_config_json_counts_as_for_other_store_files(name, home, tmp_path):
+    """A link made on the line names the file in its `ln`, which is the store write; a link made earlier is resolved
+    (_path_forms). Main read the policies/ rows the same way and the config.json rows as shell or local_write."""
+    link, made = tmp_path / "l", tmp_path / "made"
+    made.symlink_to(home / ".exo" / name)
+    for line in (f"ln -s ~/.exo/{name} {link} && cp /tmp/evil.json {link}",
+                 f"ln -sf ~/.exo/{name} {link}; echo x > {link}",
+                 f"cp /tmp/evil.json {made}"):
+        _assert_store_write(_sh(line))
+
+
 @pytest.mark.parametrize("tool, args", [
     ("write_file", {"path": CONFIG, "content": "{{}}"}),
     ("write_file", {"file_path": CONFIG, "content": "{{}}"}),
@@ -220,6 +243,8 @@ def test_a_file_tool_read_of_config_json_stays_a_read(exo_home):
     ("printf x > {h}/config.jsonl", "local_write"),
     ("cp /tmp/x $(echo ~/.exo/config.json.bak)", "shell"),
     ("cp /tmp/x ~/.exo/config.json-old", "shell"),
+    # names are matched case-sensitively, as `~/.exo/POLICIES/gates.yaml` is on main (a limit in docs/GATE.md)
+    ("cp /tmp/x {h}/CONFIG.JSON", "shell"),
 ])
 def test_other_config_like_paths_keep_their_class(line, category, exo_home):
     c, d = _decide(_sh(line.format(h=exo_home)))

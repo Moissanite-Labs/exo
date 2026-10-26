@@ -2436,16 +2436,19 @@ check until #340's relative-path resolution lands. Secret-path resolution alread
 links. This reads header paths only. It does not parse a patch's hunks or change what the tool accepts.
 
 Known limits. These are classification checks, not a filesystem sandbox: a symlink can change
-between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
-without a link to resolve, so only distinctive names catch a write through it. Only the store roots
-are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
+between classification and execution (TOCTOU). A symlink to a store file made earlier is resolved,
+and one made on the same line names the file in its `ln`, which is the store write
+(`ln -s ~/.exo/config.json /tmp/l && cp x /tmp/l`, as with `policies/gates.yaml`). A hardlink
+made earlier (`cp -al`) shares the file without a link to resolve, so only distinctive names catch
+a write through it. Only the store roots are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
 write to the outside spelling is a local write. A copy or an archive unpacked into the home folder
 itself, which makes a protected folder or `config.json` from its source name
 (`cp -r /tmp/x/update ~/.exo/`, `cp /tmp/x/config.json ~/.exo/`, `cp -t ~/.exo /tmp/x/config.json`,
 `tar -C ~/.exo -xf x.tar`, `unzip -d ~/.exo x.zip`), is not seen either (#483). Nor is a path held in a variable or made by a
 command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 `cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks are case-sensitive, so a
-case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
+case-insensitive filesystem (APFS) accepts `STATE/` for `state/`, and `CONFIG.JSON` for the home's
+`config.json`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
 followed, and a shell tool's `cwd` or `workdir` argument is not read here (the secret-store checks read
@@ -2504,9 +2507,10 @@ subcommand. `-O -` prints to stdout and stays a read, and so does a path outside
 a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
 `unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and
-`exo interview`, which writes the principal store (also as `python -m exo.config`, `exo.cli` or
-`exo.onboard`, D-074, #125), `git -C <store>` with a
-writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
+`exo interview`, which writes the principal store (D-074, #125; run as a module,
+`python -m exo.config set` reads as `exo config set`, while `python -m exo.cli` and
+`python -m exo.onboard` read as `exo` with the words that follow, as in
+`python -m exo.onboard import-store`), `git -C <store>` with a writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
 `<( )` of a later command on that line (#465: `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`). There,
 as unwrapped, a command the gate does not read as a read (`sed -n`, `sort`, `curl`) counts as a write. A
 substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own
