@@ -60,3 +60,48 @@ def test_older_host_log_without_session_argument_still_works(tmp_path, store):
         assert 'orchard history' in p.prefetch('orchard history', session_id='thread-a')
     finally:
         p.shutdown()
+
+
+def test_private_descendants_never_enter_shared_recall_or_zoom(tmp_path, store):
+    db = SessionStore()
+    private = db.create_session(agent='razi', kind='private')
+    child = db.create_session(agent='razi', kind='thread', parent=private.id)
+    grandchild = db.create_session(agent='razi', kind='thread', parent=child.id)
+    public = db.create_session(agent='razi')
+    for session in (private, child, grandchild):
+        db.append_message(session.id, Message.user('orchard confidential'))
+    db.append_message(public.id, Message.user('orchard public result'))
+    view = AgentLogView(db, 'razi')
+    p = make(tmp_path, store, view)
+    try:
+        assert db.private(child.id) and db.private(grandchild.id)
+        assert [h['session'] for h in db.search('orchard', limit=1, agent='razi')] == [public.id]
+        for sid in ('', public.id):
+            assert {h['session'] for h in view.search('orchard', n=5, session_id=sid)} == {public.id}
+            assert 'confidential' not in p.prefetch('orchard confidential', session_id=sid)
+        assert 'confidential' not in view.zoom(1, 4)
+        assert db.search('confidential', session=grandchild.id)  # explicit local history remains available
+        db._q('UPDATE sessions SET parent=? WHERE id=?', (grandchild.id, private.id))
+        assert [h['session'] for h in db.search('orchard', limit=1, agent='razi')] == [public.id]
+    finally:
+        p.shutdown()
+        db.close()
+
+
+def test_shared_search_filters_private_descendants_before_result_limit():
+    db = SessionStore()
+    private = db.create_session(agent='razi', kind='private')
+    parent = private
+    for _ in range(24):
+        parent = db.create_session(agent='razi', parent=parent.id)
+        db.append_message(parent.id, Message.user('orchard confidential'))
+    public = db.create_session(agent='razi')
+    child = db.create_session(agent='razi', parent=public.id)
+    db.append_message(child.id, Message.user('orchard public child'))
+    db._q('UPDATE sessions SET parent=? WHERE id=?', (child.id, public.id))  # public cycle remains public
+    try:
+        assert not db.private(child.id)
+        assert [h['session'] for h in db.search('orchard', limit=1, agent='razi')] == [child.id]
+        assert [h['session'] for h in AgentLogView(db, 'razi').search('orchard', n=1)] == [child.id]
+    finally:
+        db.close()
