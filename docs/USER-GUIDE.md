@@ -69,7 +69,14 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 
 **Terminal (`exo tui`).** Type a message and press Enter. Options: `--resume` continues the newest thread
 with messages (each launch opens a thread, so it skips the empty ones), `--session ID` continues one, `--seat NAME`
-picks the seat, `--title TEXT` names a new thread. Keys:
+picks the seat, `--title TEXT` names a new thread.
+
+`--max-rounds 0` removes the tool-round cap for new turns sent from this window; a positive number sets a limit.
+`/rounds` changes the setting for later turns without changing a turn already running. Only a principal connection
+may request an override. A turn with no limit can keep running after its window closes; reopen its thread and use
+`/stop` to interrupt it. Scheduled runs, wakes and delegated children keep their existing limits.
+
+Keys:
 
 | Key or prefix | Does |
 |---|---|
@@ -126,6 +133,7 @@ The technical reference, with arguments and where each command is implemented, i
 | Command | Does |
 |---|---|
 | `/new` | Start a new thread: a fresh focus, the same memory. |
+| `/rounds [default\|off\|number]` | Choose the tool-round limit for new turns sent from this window. `off` removes the limit; `default` restores the core default. A running turn keeps its original limit. |
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
