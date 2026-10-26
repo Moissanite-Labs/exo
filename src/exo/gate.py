@@ -2059,6 +2059,8 @@ _EXEC_ENV_OPAQUE = {
         GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE PERL5LIB PERLLIB
         RUBYLIB NODE_PATH PSQLRC""".split(), "changes which programs, modules or startup and config files are used"),
     "CDPATH": "moves cd, so the gate cannot tell whether writes land in the Exo store",
+    "BASH_CMDS": "rebinds a program name to another file, as hash -p does",
+    "BASH_ALIASES": "defines an alias",
     "GIT_ALLOW_PROTOCOL": "lets git use transports such as ext::, whose URL is a command git runs",
 }
 # git config from the environment, `git -c` by another name: GIT_CONFIG_KEY_<n> with GIT_CONFIG_VALUE_<n>
@@ -2393,9 +2395,63 @@ def _has(argv: list[str], *flags: str) -> bool:
     return False
 
 
-def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection") -> Classification:
+def _hash_rebind(words: list) -> tuple[str, str] | None:
+    """What a `hash` call rebinds, as (card text, target), or None when it binds nothing (#330). `hash -p PATH NAME`
+    makes the shell run PATH for every later NAME, so a file planted by an earlier write runs under a trusted
+    program's name. Options are read as bash reads them: up to the first operand or `--`, `-p` in a cluster (`-rp`,
+    `-dp`) or with its path attached (`-p/tmp/x`), and more options after the path (the last `-p` wins). Nothing is
+    bound with no path, an empty one, or no name but those with a slash, which bash skips. A word the gate cannot
+    read (an expansion, a brace set, a glob, also one that starts with a `[` the lexer does not mark) may hold more.
+    Before a `-p` it may be one, unless it is a lone double-quoted word at the end (`hash "$cmd"`), and so may `~-`,
+    `~+` or `~1`, which bash reads from OLDPWD, PWD or the directory stack (`OLDPWD=-p`). From the path on,
+    it may split into a path and a name (`hash -p $P` with P='/x ls'), unless it is one double-quoted word, and as a
+    name it may lose its slash (`hash -p /x {ls,/}` binds ls). A glob keeps a slash it has. A double-quoted word
+    with `$@` or `${!` is never one word: `"${!n}"` with n=@ splits as `"$@"` does."""
+    def glob(w: _Word) -> bool:     # an unquoted `[` that starts a word, also after a `\<newline>`, as for unset
+        return w.glob or w.raw.replace("\\\n", "")[:1] == "["
+
+    def tilde(w: _Word) -> bool:    # `~-`, `~+`, `~1`: OLDPWD, PWD or the directory stack, which a line may set
+        return bool(re.match(r"~(?:[+-]\d*|\d+)(?:/|$)", w.raw.replace("\\\n", "")))
+
+    def lone(w: _Word) -> bool:     # one double-quoted word stays one word, but "${!n}" with n=@ splits as "$@"
+        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw
+
+    args, path, at, i = words[1:], None, 0, 0
+    while i < len(args):
+        w, a = args[i], args[i].text
+        if path is None and (w.dynamic or glob(w) or w.brace or tilde(w)) and not (i + 1 == len(args) and lone(w)):
+            return f"hash may rebind a program name: an option word the gate cannot read ({a[:40]})", a
+        if a == "--":
+            i += 1
+            break
+        if len(a) < 2 or not a.startswith("-"):
+            break
+        j = a.find("p")
+        if j > 0 and j + 1 == len(a):      # -p with its path in the next word
+            if i + 1 == len(args):
+                return None                # no path: bash stops with a usage error
+            i, path, at = i + 1, args[i + 1].text, i + 1
+        elif j > 0:
+            path, at = a[j + 1:], i
+        i += 1
+    names = [w.text for w in args[i:] if w.dynamic or w.brace or "/" not in w.text]
+    split = [w.text for w in args[at:i] if (w.dynamic or w.brace or glob(w) and "/" not in w.text) and not lone(w)]
+    if not path or not names and not split:
+        return None
+    return (f"hash -p makes {', '.join(names)} run {path}" if names else
+            f"hash -p may rebind a program name: a word the gate cannot read ({split[0][:40]})", path)
+
+
+# The signal of a part that only records a path for a later program name to run: `hash -p`, or setting BASH_CMDS or
+# BASH_ALIASES (#330). It opens nothing, so the store check takes the part as the read it was (_store_quiet).
+_REBINDS = "rebinds a name"
+_REBIND_VARS = ("BASH_CMDS", "BASH_ALIASES")
+
+
+def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection",
+            rebinds: bool = False) -> Classification:
     c = _make("opaque_exec", summary=summary[:120], target=target, command=cmd)
-    c.signals.append(signal)
+    c.signals += [signal, _REBINDS] if rebinds else [signal]
     return c
 
 
@@ -4237,6 +4293,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if (sub or "_") in TOOL_SUBCOMMANDS[prog] or (prog == "yarn" and not sub):
             return [_make("shell", summary=f"{prog} {sub}".strip(), command=cmd)]
         return [_opaque(f"{prog} {sub} runs project scripts or code the gate cannot see".strip(), cmd)]
+    if prog == "hash" and (rebind := _hash_rebind(words)):     # `hash -p` rebinds a name to another file (#330)
+        return [_opaque(rebind[0], cmd, target=rebind[1], rebinds=True)]
     if prog in READ_PROGRAMS:
         return [_make("read", summary=prog, command=cmd)]
     if prog in SHELL_PROGRAMS:
@@ -4466,8 +4524,8 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
         if _unreadable_name(w):
             parts.append(_opaque(f"{prog} sets a variable whose name the gate cannot read", cmd))
         elif why := _env_hazard(name):
-            parts.append(_opaque(f"{name} {why} (set by {prog})", cmd))
-        parts += [_opaque(f"{n} {why} (set in a subscript)", cmd)    # `read 'a[PATH=1]'` sets PATH too
+            parts.append(_opaque(f"{name} {why} (set by {prog})", cmd, rebinds=name in _REBIND_VARS))
+        parts += [_opaque(f"{n} {why} (set in a subscript)", cmd, rebinds=n in _REBIND_VARS)  # `read 'a[PATH=1]'`
                   for n in _subscript_sets(w.text) if (why := _env_hazard(n))]
     return parts
 
@@ -4592,7 +4650,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         elif name == "PYTHONPATH" and not runs_nothing and runner:
             pass                                         # a test runner already runs the project's code
         elif why := _env_hazard(name, value, literal):   # _EXEC_ENV_OPAQUE, and LESS with a `+` command
-            parts.append(_opaque(f"{name} {why}", cmd))
+            parts.append(_opaque(f"{name} {why}", cmd, rebinds=name in _REBIND_VARS))
     parts += _indirect_sets(prog, words, cmd)
     for (kind, num), value in git_env.items():
         if kind == "KEY":
@@ -4864,7 +4922,11 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             if targets is None or any(_store_word(x) for x in targets) or held and n in ("1", "2") and (
                     t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 return t.text
-    if all(p.category == "read" for p in parts):
+    # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
+    # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
+    # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
+    # program named hash run by path (./hash), which is no builtin and rebinds nothing.
+    if all(_store_quiet(p) for p in parts):
         return ""
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
@@ -4886,6 +4948,19 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     if ctx.get("store_cwd"):
         return ctx.get("fd_cwd") or "a path inside the store (after cd)"
     return ""
+
+
+def _store_quiet(p: Classification) -> bool:
+    """A part the store check takes as a read: a read, or an opaque part that only records a path for a later name
+    to run (_REBINDS) and was built from such parts and the plain shell part of an ssh or mosh hop alone
+    (`ssh host 'hash -p /x ls'`): the bare part naming its host, not a login to another host on the line
+    (`ssh a 'ssh b; hash -p /x ls'`). Any other shell part keeps the check of the words around the line, whatever its
+    order, as a plain one before the rebind did on main: ssh's own `-E ~/.exo/state/log` is a store write. The
+    category is checked too: a credentials floor carries every signal of the line as its own."""
+    own = p.signals if p.own_signals is None else p.own_signals
+    return p.category == "read" or p.category == "opaque_exec" and _REBINDS in own and all(
+        q.category == "shell" and q.reversibility == "reversible" and q.target and not q.parts and "remote host" in (
+            q.signals if q.own_signals is None else q.own_signals) or _store_quiet(q) for q in p.parts)
 
 
 def _displace_with(c: Classification, **changes) -> None:

