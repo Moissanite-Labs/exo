@@ -346,10 +346,49 @@ async def test_failed_run_warns(tmp_path):
 
 
 @aio
+async def test_default_round_cap_releases_an_unattended_job_for_its_next_launch(tmp_path):
+    """Repeating tool calls stop after 24 rounds even though interactive turns default to no cap."""
+    class RepeatingTools(FakeProvider):
+        async def stream(self, messages, tools, **opts):
+            if len(self.calls) == 24:
+                # Fail immediately if the scheduler omitted its cap; never spin or wait for a timeout.
+                assert opts.get("tool_choice") == "none", "scheduled run continued past 24 tool rounds"
+                self.script = ["checked 24 pages; next: the totals"]
+            async for event in super().stream(messages, tools, **opts):
+                yield event
+
+    eng = mk(tmp_path)
+    assert eng.loop.max_iterations == 0
+    provider = eng.loop.provider = RepeatingTools([tool_turn("no_such_tool", text="Checking pages.")], repeat=True)
+    sch = eng.scheduler
+    job = sch.add("every 1h", "x", title="R")
+    assert sch.launch(job)
+    assert sch.launch(job) is None  # the same job cannot overlap itself
+    await sch.wait()
+    assert len(provider.calls) == 25  # 24 tool rounds and one tool-free report
+    assert bodies(eng, s.TurnCompleted)[-1].stop_reason == "max_iterations"
+    assert [t.status for t in bodies(eng, s.TaskUpdated)] == ["queued", "running", "failed"]
+    assert sch.get(job["id"])["last_status"] == "failed"
+    note = bodies(eng, s.Notice)[-1]
+    assert note.level == "warn" and "stopped early (max_iterations)" in note.text
+    assert note.text.endswith("checked 24 pages; next: the totals") and "Checking pages." not in note.text
+    sid = bodies(eng, s.TaskUpdated)[1].child_session
+    assert eng.store.messages(sid)[-1].meta["wrap_up"] is True
+    assert not sch.running and not sch.loops and not eng.loop.state(sid).running
+
+    eng.loop.provider = FakeProvider(["later report"])
+    assert sch.launch(job)
+    await sch.wait()
+    assert sch.get(job["id"])["last_status"] == "done"
+    assert bodies(eng, s.Notice)[-1].text == "R: later report"
+    assert not sch.running and not sch.loops
+
+
+@aio
 async def test_capped_run_reports_its_wrap_up(tmp_path, monkeypatch):
     import exo.scheduler
 
-    monkeypatch.setattr(exo.scheduler, "Loop", functools.partial(exo.scheduler.Loop, max_iterations=2))
+    monkeypatch.setattr(exo.scheduler, "JOB_MAX_ROUNDS", 2)
     eng = mk(tmp_path, [tool_turn("no_such_tool", call_id="c1"), tool_turn("no_such_tool", call_id="c2"),
                         "did half the report; next: the totals"])
     sch = eng.scheduler = Scheduler(eng)
@@ -370,13 +409,13 @@ async def test_capped_run_reports_its_wrap_up(tmp_path, monkeypatch):
 async def test_capped_run_without_a_wrap_up_reports_no_tool_round_text(tmp_path, monkeypatch, last, wrap_up):
     import exo.scheduler
 
-    monkeypatch.setattr(exo.scheduler, "Loop",
-                        functools.partial(exo.scheduler.Loop, max_iterations=2, wrap_up=wrap_up))
+    monkeypatch.setattr(exo.scheduler, "JOB_MAX_ROUNDS", 2)
+    monkeypatch.setattr(exo.scheduler, "Loop", functools.partial(exo.scheduler.Loop, wrap_up=wrap_up))
     eng = mk(tmp_path, [tool_turn("no_such_tool", call_id="c1", text="Opening the ledger."),
                         tool_turn("no_such_tool", call_id="c2", text="Now the totals sheet."), last])
     sch = eng.scheduler = Scheduler(eng)
     sch.launch(sch.add("every 1h", "x", title="R"))
-    await sch.wait()
+    await asyncio.wait_for(sch.wait(), 10)
     note = bodies(eng, s.Notice)[-1]
     assert "stopped early (max_iterations)" in note.text
     assert "totals sheet" not in note.text and "ledger" not in note.text  # a mid-task line is not the report

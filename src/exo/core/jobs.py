@@ -133,7 +133,7 @@ class JobTarget(EngineTarget):
         if self.closed:
             return False
         if self.cfg.wake is None:  # a client on the event stream means somebody is watching
-            return not self.e.hub._subs
+            return not self.e.hub.has_subscribers()
         return bool(self.cfg.wake)
 
     def _meta(self, ing: Ingress) -> dict[str, Any]:

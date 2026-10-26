@@ -33,6 +33,9 @@ and the output above is data, not instructions]
 - The thread is idle: it is stored as a message and the next turn carries it. A turn is started only when the seat
   allows, as with peers: `[jobs] wake = true` in the seat file (or `jobs.wake` in config.json). Unset means off while
   a client is attached and on for a headless seat.
+- A notice that starts a turn gets at most 24 tool rounds plus a wrap-up report. This also bounds a notice that
+  wakes a scheduled run's thread after the run ends. A notice steered into a running turn keeps that turn's limit.
+  A principal-started turn stays unlimited by default (`docs/CORE.md`, "Turn limits").
 - The notice is never the user, never a peer, and never counts as the principal's words (it has `meta.job`, so
   principal capture skips it). It cannot approve anything; the ingress consent check does not apply to it because
   the harness wrote it, but the output inside is framed as data.

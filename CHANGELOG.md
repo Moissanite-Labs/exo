@@ -6,6 +6,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Principal-started interactive turns no longer stop after 24 tool rounds (#363, #360), including channel turns.
+  `Loop` defaults to `max_iterations=0` (unlimited). Unattended scheduled runs keep a 24-round cap and release the
+  job for its next launch. Turns started by a job notice, peer or bus message also stop after 24 tool rounds
+  plus a wrap-up, including background-job notices on scheduled threads and bus wakes with a client attached.
+  Explicit positive limits retain their cap and progress report, and children retain `max_turns` (24 by default).
+  A message steered into a running wake shares its cap. The wrap-up prompt and model-call trace use the actual
+  per-turn limit, including an interrupted wrap-up. User stops, approvals, spend limits, bounded retries and
+  child token/time limits still apply. `LOCAL` `turn.send` requests still inherit the shared default, including
+  TCP TUI and automation callers. Their separate caller-limit policy remains unresolved (`docs/CORE.md`).
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
   `reserved:` entry on a later path missed and an approver could have waved the write through:

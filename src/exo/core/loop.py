@@ -2,7 +2,7 @@
 
 One turn: store the user message, build a fresh model input (context engine),
 stream the reply, run any tool calls, and loop until the model stops, the
-iteration cap is hit, or the turn is interrupted. Every step is an event,
+explicit iteration cap is hit, or the turn is interrupted. Every step is an event,
 written to sessions.sqlite before it is published (``EventBus.emit``).
 
 Injected, never imported: the provider (any ``exo.core.types.Provider``), the
@@ -26,6 +26,7 @@ import asyncio
 import inspect
 import time
 from dataclasses import dataclass, field
+from itertools import count
 from typing import Any, Awaitable, Callable, Iterable
 
 from exo import provenance
@@ -75,6 +76,7 @@ class _Stream:
 WRAP_UP_PROMPT = ("[harness] You have used all {n} tool rounds for this turn; tools are now off. "
                   "In a short reply: what you finished, what is still open, and the next step to continue "
                   "(the user can say 'continue' to start a fresh set of rounds).")
+UNWATCHED_ROUNDS = 24  # a turn whose client left gets this many rounds, then a report: nobody can steer or stop it
 
 
 class _SessionState:
@@ -92,7 +94,7 @@ class Loop:
                  context: Any = None, memory: Any = None,
                  tool_specs: Iterable[ToolSpec] | Callable[[], Iterable[ToolSpec]] = (),
                  run_tool: ToolRunner | None = None, system_prompt: str = "",
-                 model: str | None = None, max_iterations: int = 24, max_retries: int = 3,
+                 model: str | None = None, max_iterations: int = 0, max_retries: int = 3,
                  retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None,
                  wrap_up: bool = True):
         self.store = store
@@ -106,7 +108,7 @@ class Loop:
         self.run_tool = run_tool
         self.system_prompt = system_prompt
         self.model = model
-        self.max_iterations = max_iterations
+        self.max_iterations = max_iterations  # zero: no round cap; positive values keep finite limits
         self.wrap_up = wrap_up  # at the round cap, one tool-less call to report progress and what remains
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -114,6 +116,7 @@ class Loop:
         self.approval_ms: dict[str, int] = {}  # session -> time spent waiting on approvals; the engine adds to it
         self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
+        self.watching: Callable[[], bool] | None = None  # whether a client is on the event stream (the engine wires it)
         self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
         self._state: dict[str, _SessionState] = {}
 
@@ -170,7 +173,8 @@ class Loop:
         return gone
 
     async def send(self, session: str, text: str = "", parts: list[ContentPart] | None = None,
-                   mode: str = "send", meta: dict[str, Any] | None = None) -> TurnResult | None:
+                   mode: str = "send", meta: dict[str, Any] | None = None,
+                   max_iterations: int | None = None) -> TurnResult | None:
         """Run a turn. ``steer`` while a turn still takes steers injects the message between tool rounds and returns None
         (the newest of ``state(session).steer``); otherwise, as ``queue`` and ``send`` do, it waits for the running turn."""
         if self.store.get_session(session) is None:
@@ -194,7 +198,7 @@ class Loop:
             st.running = st.accepting_steers = True
             st.interrupt.clear()
             try:
-                return await self._turn(session, msg, st)
+                return await self._turn(session, msg, st, self.max_iterations if max_iterations is None else max_iterations)
             finally:
                 st.running = st.accepting_steers = False
                 st.interrupt.clear()
@@ -214,7 +218,7 @@ class Loop:
         await self._emit(ev.MessageCompleted(message=msg), session)
         return msg
 
-    async def _turn(self, session: str, user: Message, st: _SessionState) -> TurnResult:
+    async def _turn(self, session: str, user: Message, st: _SessionState, max_iterations: int) -> TurnResult:
         turn_id, t0 = new_id("t"), time.monotonic()
         st.stats = {"model_ms": 0, "tool_ms": 0, "model_calls": 0, "fallbacks": 0, "tool_errors": 0}
         waited = self.approval_ms.get(session, 0)
@@ -234,13 +238,13 @@ class Loop:
             await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
         result = TurnResult(turn_id=turn_id, stop_reason="end")
         try:
-            await self._rounds(session, turn_id, user, st, result)
+            await self._rounds(session, turn_id, user, st, result, max_iterations)
             while st.steer and result.stop_reason == "end":  # arrived between the last call and the turn's end
                 late = list(st.steer)
                 st.steer.clear()
                 for m in late:
                     await self._add(session, m, turn_id)
-                await self._rounds(session, turn_id, late[-1], st, result)
+                await self._rounds(session, turn_id, late[-1], st, result, max_iterations)
         except _Interrupted:
             result.stop_reason = "interrupted"
         except Exception as exc:  # unexpected bug in a collaborator: end the turn cleanly
@@ -308,10 +312,14 @@ class Loop:
         return "\n\n".join(p for p in parts if p), recall
 
     async def _rounds(self, session: str, turn_id: str, user: Message, st: _SessionState,
-                      result: TurnResult) -> None:
+                      result: TurnResult, max_iterations: int) -> None:
         system, recall = await self._system(session, user.text())
         extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
-        for _ in range(self.max_iterations):
+        watched = self.watching() if self.watching and max_iterations == 0 else False  # did a client start out here
+        for _ in count() if max_iterations == 0 else range(max_iterations):
+            if watched and not self.watching() and _ >= UNWATCHED_ROUNDS:
+                max_iterations = UNWATCHED_ROUNDS  # the client left: nobody can steer or stop this turn
+                break
             if hasattr(self.context, "note"):
                 await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)
@@ -323,9 +331,8 @@ class Loop:
             reply = self._assemble(stream, msg_id)
             result.message = await self._add(session, reply, turn_id)
             if not reply.tool_calls:
-                result.stop_reason = stream.done.stop_reason or "end"
-                if result.stop_reason == "tool_use":
-                    result.stop_reason = "end"
+                if (stop := stream.done.stop_reason) and stop != "tool_use":
+                    result.stop_reason = stop
                 if st.steer and result.stop_reason == "end":  # a message came in during this call: answer it now
                     await self._drain_steer(session, turn_id, st)
                     continue
@@ -341,13 +348,13 @@ class Loop:
             await self._tools(session, turn_id, reply.tool_calls, st)
             await self._drain_steer(session, turn_id, st)
         result.stop_reason = "max_iterations"
-        await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
+        await self._emit(ev.Notice(text=f"stopped after {max_iterations} tool rounds",
                                    level="warn"), session)
         if self.wrap_up:
-            await self._wrap_up(session, turn_id, system, extra, st, result)
+            await self._wrap_up(session, turn_id, system, extra, st, result, max_iterations)
 
     async def _wrap_up(self, session: str, turn_id: str, system: str, extra: dict[str, Any],
-                       st: _SessionState, result: TurnResult) -> None:
+                       st: _SessionState, result: TurnResult, n: int) -> None:
         """One last call with tool use off, so a capped turn ends with a report, not a dangling tool round.
 
         The same tools stay declared and ``tool_choice="none"`` turns them off: removing them is an edit to the
@@ -356,10 +363,10 @@ class Loop:
         and the Error event say why); an interrupt still ends the turn "interrupted", like any other call."""
         try:
             messages = await self.context.build(session, system, **extra)
-            messages.append(Message.user(WRAP_UP_PROMPT.format(n=self.max_iterations)))
+            messages.append(Message.user(WRAP_UP_PROMPT.format(n=n)))
             msg_id = new_id("m")
-            stream = await self._call(session, messages, msg_id, st, result, self.max_iterations, tool_choice="none")
-            settled = await self._settle(session, turn_id, stream, msg_id, self.max_iterations, st, result)
+            stream = await self._call(session, messages, msg_id, st, result, n, tool_choice="none")
+            settled = await self._settle(session, turn_id, stream, msg_id, n, st, result)
             if settled or not (stream.text or stream.reasoning):
                 return
             # Stray tool calls are dropped: the cap is spent, nothing runs. So is the signed thinking: it was

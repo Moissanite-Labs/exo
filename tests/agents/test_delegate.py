@@ -187,6 +187,20 @@ def test_interrupting_one_child_from_a_client(tmp_path):
     assert r.status == "cancelled" and r.error_code == "interrupted"
 
 
+def test_default_child_round_limit_remains_finite(tmp_path, monkeypatch):
+    from exo.core.context import TreeContext
+    # Keyed chooses its script by a verbatim user message; keep that fake's task out of summaries.
+    monkeypatch.setattr("exo.core.agents.delegate.TreeContext", lambda *a: TreeContext(*a, leaf_size=1000))
+    rules = [("PARENT", [tool_turn("delegate", {"goal": "BUSY"}), "ok"]),
+             ("BUSY", [tool_turn("glob", {"pattern": "*.none"})])]
+    eng, _ = engine(tmp_path, rules)
+    sid, res = asyncio.run(parent_turn(eng, "PARENT go"))
+    receipt = decode(task_events(eng)[-1].body.packet)
+    assert res.stop_reason == "end" and res.message.text() == "ok"
+    assert receipt.status == "failed" and receipt.error_code == "turns" and receipt.rounds == 24
+    assert "Reason: turns" in tool_text(eng, sid)
+
+
 def test_timeout_turn_and_token_limits(tmp_path):
     hold = asyncio.Event()
     loop_forever = [tool_turn("glob", {"pattern": "*.none"})]

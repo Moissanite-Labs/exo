@@ -116,6 +116,45 @@ def test_tool_rounds_and_events_written_before_publish(tmp_path):
     assert [e.seq for e in store.events_since(0)] == [e.seq for e in seen]
 
 
+@pytest.mark.parametrize("limits", [{}, {"max_iterations": 0}], ids=["default", "zero"])
+def test_unlimited_turn_completes_after_more_than_24_tool_rounds(tmp_path, limits):
+    prov = Script(*_spin(30), reply("finished"))
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=echo_tool, **limits)
+
+    async def go():
+        s = await loop.create_session()
+        return s, await loop.send(s.id, "long task")
+
+    s, res = run(go())
+    assert res.stop_reason == "end" and res.message.text() == "finished"
+    assert len(prov.calls) == 31
+    assert sum(e.type == "tool.completed" for e in seen) == 30
+    assert [e.body.iteration for e in seen if e.type == "model.call"] == list(range(1, 32))
+    assert not any(m.meta.get("wrap_up") for m in store.messages(s.id))
+    assert not any(e.type == "notice" and "stopped after" in e.body.text for e in seen)
+
+
+def test_unlimited_turn_can_be_interrupted_after_round_24(tmp_path):
+    ran = []
+
+    async def stop_after_25(call, ctx):
+        ran.append(call.id)
+        if len(ran) == 25:
+            assert loop.interrupt(ctx["session"])
+        return ToolResult.of_text(call.id, "done")
+
+    prov = Script(*_spin(30), reply("never"))
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=stop_after_25)
+
+    async def go():
+        s = await loop.create_session()
+        return await asyncio.wait_for(loop.send(s.id, "long task"), 5)
+
+    res = run(go())
+    assert res.stop_reason == "interrupted" and len(ran) == 25 and len(prov.calls) == 25
+    assert seen[-2].type == "turn.completed" and seen[-2].body.stop_reason == "interrupted"
+
+
 def test_max_iterations_and_retry(tmp_path):
     loop_call = [ToolCall(id="c", name="echo", arguments={})]
     prov = Script(*[reply("", loop_call) for _ in range(5)])
@@ -703,8 +742,15 @@ def test_compaction_skips_tiny_spans_and_summaries_that_do_not_shrink():
     assert {st for st, _ in tree(lean)} == {"done"}  # big enough and shrinks
 
 
-def test_steer_during_the_final_reply_gets_its_own_answer(tmp_path):
-    prov = Script(["WAIT", *reply("first answer")], reply("answer to the steer"))
+@pytest.mark.parametrize(("stop_reason", "expected"), [
+    (None, "end"), ("", "end"), ("tool_use", "end"), ("end", "end"),
+    ("max_tokens", "max_tokens"), ("interrupted", "interrupted"), ("error", "error"),
+])
+def test_steer_during_the_final_reply_gets_its_own_answer(tmp_path, stop_reason, expected):
+    first, last = reply("first answer"), reply("answer to the steer")
+    first[-1].stop_reason = "tool_use"  # no actual tool call: normalize to end and answer the queued steer
+    last[-1].stop_reason = stop_reason
+    prov = Script(["WAIT", *first], last)
     prov.gate = asyncio.Event()
     store, loop, seen = make(tmp_path, prov)
 
@@ -718,10 +764,38 @@ def test_steer_during_the_final_reply_gets_its_own_answer(tmp_path):
         return s, await task
 
     s, res = run(go())
+    assert res.stop_reason == expected
+    assert [e.body.stop_reason for e in seen if e.type == "turn.completed"] == [expected]
     assert res.message.text() == "answer to the steer"
     assert len(prov.calls) == 2 and "one more thing" in [m.text() for m in prov.calls[1]]
     roles = [(m.role, m.text()) for m in store.messages(s.id)]
     assert roles[-2:] == [("user", "one more thing"), ("assistant", "answer to the steer")]
+
+
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "interrupted", "error"])
+def test_steer_during_a_terminal_reply_does_not_continue_the_turn(tmp_path, stop_reason):
+    terminal = reply("partial answer")
+    terminal[-1].stop_reason = stop_reason
+    prov = Script(["WAIT", *terminal], reply("must not run"))
+    prov.gate = asyncio.Event()
+    store, loop, seen = make(tmp_path, prov)
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "start"))
+        while not prov.calls:
+            await asyncio.sleep(0.005)
+        assert await loop.send(s.id, "one more thing", mode="steer") is None
+        prov.gate.set()
+        return s, await task
+
+    s, res = run(go())
+    assert res.stop_reason == stop_reason and res.message.text() == "partial answer"
+    assert len(prov.calls) == 1
+    assert [e.body.stop_reason for e in seen if e.type == "turn.completed"] == [stop_reason]
+    assert [(m.role, m.text()) for m in store.messages(s.id)][-2:] == [
+        ("assistant", "partial answer"), ("user", "one more thing")]
+    assert not loop.state(s.id).steer and not loop.state(s.id).running
 
 
 def test_steer_after_the_last_call_still_gets_an_answer(tmp_path):

@@ -170,6 +170,41 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   envelope, so the bound is checked before the stream opens. A malformed request line still closes the
   connection with no reply.
 
+- *Amendment 2026-10-20 (#360, continuous interactive turns):* the core loop defaults to `max_iterations=0`, with
+  no tool-round cap, so an interactive task can continue beyond 24 rounds until it finishes or a user stop, error
+  or spend boundary ends it. Unattended scheduled runs explicitly pass `JOB_MAX_ROUNDS=24`, so a repeating run
+  stops and releases the job for a later launch. Explicit positive limits retain the existing cap and wrap-up
+  report. Delegated children still pass `max_turns or 24`. Approvals, interrupts, spend admission, bounded provider
+  retries and child token/time limits are unchanged. A larger fixed default was rejected because it would interrupt
+  longer tasks at another arbitrary count. Revisit if a separate principal-controlled interactive round policy is
+  needed. Terminal replies without tool calls retain the turn's initial `end` for a missing, empty or `tool_use`
+  stop reason, and copy other stop reasons. Only `end` continues for queued steers, preserving that default before
+  each reply. This normalization removes a redundant assignment. User behavior is unchanged. Developers must
+  preserve the default when extending the continuation path.
+- *Amendment 2026-10-22 (#363, unattended wakes):* `CoreEngine.start_turn` bounds job-notice, peer and bus wakes
+  at 24 tool rounds plus wrap-up, including a background job waking a scheduled thread and a bus wake with a
+  client attached. `Loop.send` accepts a per-turn limit, so the shared loop stays unchanged and concurrent
+  principal-started terminal and channel turns keep the unlimited default. A stricter explicit loop limit
+  remains in force. Steers retain the running turn's limit and terminal stop behavior. An author-based cap was
+  rejected because principal-started channel turns must remain unlimited. Spend admission remains opt-in.
+  Unattended turns need a finite bound even when nobody can stop them. The engine copies supplied metadata and
+  retains a truthy author, defaulting missing or empty authors to `system`. Its direct fallback avoids a separate
+  conditional branch and keeps the current-main integration inside the unchanged core budget. Revisit if wakes
+  gain a separate policy.
+- *Follow-up 2026-10-22 (#363, review 5616435458):* carry the effective per-turn limit through the wrap-up prompt,
+  provider call and settlement. A wake capped at 24 reports 24 rounds and records its wrap-up as iteration 25,
+  including an interrupted call, even when the shared loop defaults to zero. Tests drain queued finished-task
+  cleanup callbacks after `gather`, which need not yield on Python 3.12 and later. They retain the cleanup
+  assertion and use the real `ChannelLink` for channel-caller coverage. A principal message steered into a wake
+  shares its cap, as the user guide now states.
+  **Unresolved caller policy:** `turn.send` still inherits the shared default for every caller, `LOCAL` included.
+  That includes both automation and a TCP TUI. Only verified Unix/in-process principal callers and the internal
+  `CHANNEL` route provide distinct trusted attribution today. Channel provenance remains local. A TCP bearer
+  token authorizes access, not human intent. Do not derive an exemption from body text, client labels or author
+  tags. Principal standing is authority, not proof a human is typing. A separate decision must authorize
+  unlimited TCP turns independently of general bearer access before defaulting other requests to finite limits,
+  or explicitly accept finite TCP turns. No authentication or caller-limit policy changes here.
+
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
   anima), group (Eldunari nexus); agent and group stores nest inside the person's store so one folder can

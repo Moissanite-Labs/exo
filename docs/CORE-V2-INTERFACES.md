@@ -38,15 +38,21 @@ use off: Anthropic sends `{"type": "none"}`, OpenAI-compatible transports send `
 cannot say it, ignores it. `muse-cli` is text only and refuses any call that declares tools, so a wrap-up on that
 route falls through to the next route, as a tool round does.
 
-Round cap (issue #92): a turn that reaches `max_iterations` tool rounds (24) emits the `stopped after N tool rounds`
-notice, then makes one more model call with `tool_choice="none"` and a transient `[harness]` prompt asking what was
-done, what is open and the next step. The prompt is never stored. The reply is stored with `meta.wrap_up` (and the
-route's `meta.model`); a tool call in it is dropped and never runs, and its signed thinking is not kept (it was
-signed against the unstored prompt). `stop_reason` stays `max_iterations`. A failed wrap-up stores any shown text
-as above, emits the same coded `error` as a failed round (`provider_error`, `model_spend_refused`,
-`model_spend_stopped`) and sets the turn's error; another exception is a `harness.error` (`wrap-up`). An interrupt
-ends the turn `interrupted`. The call is one more model call and spend-journal entry per capped turn;
-`Loop(wrap_up=False)` turns it off.
+Round cap (issue #92): `Loop(max_iterations=0)` is the default and has no tool-round cap. Interactive turns can
+continue past 24 rounds, including principal-started channel turns. Unattended scheduled runs explicitly pass
+`JOB_MAX_ROUNDS=24`. Job-notice, peer and bus wakes get a per-turn limit of at most 24, including wakes on a
+scheduled thread and bus wakes with a client attached. Positive caller limits and children's `max_turns` remain
+finite (24 by default for children). Interrupts, approvals, spend checks and retry limits still apply. A turn that
+reaches its `max_iterations` limit emits the `stopped after N tool rounds` notice, then makes one more model call
+with `tool_choice="none"` and a transient `[harness]` prompt asking what was done, what is open and the next step.
+That prompt uses the effective per-turn limit `N`, and the wrap-up model call is trace iteration `N + 1`, including
+an interrupted provider call. It never substitutes the shared loop default for this turn's limit.
+The prompt is never stored. The reply is stored with `meta.wrap_up` (and the route's `meta.model`). A tool call in
+it is dropped and never runs, and its signed thinking is not kept (it was signed against the unstored prompt).
+`stop_reason` stays `max_iterations`. A failed wrap-up stores any shown text as above, emits the same coded `error`
+as a failed round (`provider_error`, `model_spend_refused`, `model_spend_stopped`) and sets the turn's error;
+another exception is a `harness.error` (`wrap-up`). An interrupt ends the turn `interrupted`. The call is one more
+model call and spend-journal entry per capped turn. `Loop(wrap_up=False)` turns it off.
 
 Codec: `to_dict(obj)` and `from_dict(cls, data, strict=True)` work for every dataclass here and in the
 protocol. Nested dataclasses, lists, optionals and Literals are decoded and checked. `strict=True`

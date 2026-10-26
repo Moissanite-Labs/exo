@@ -172,6 +172,9 @@ class Hub:
     def subscribe(self, since: int = 0, session: str | None = None) -> Subscription:
         return Subscription(self, since, session)
 
+    def has_subscribers(self) -> bool:
+        return bool(self._subs)
+
     def close(self) -> None:
         self.closed = True
         for q in self._subs:
