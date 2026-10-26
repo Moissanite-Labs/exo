@@ -23,6 +23,7 @@ Restart the shared core after changing these settings.
 | `enabled` | `false` | Replace the full skill catalog in prompts with a per-turn shortlist. |
 | `max_chars` | `2048` | Maximum characters contributed by the block, including its heading and joining blank line. Allowed range: 0–32768. |
 | `top_k` | `6` | Maximum skill rows. Allowed range: 0–50. |
+| `max_files` | `256` | Maximum indexed files whose metadata is read per turn, in sorted name order. Allowed range: 0–4096. |
 
 `max_chars` is a hard character ceiling, not an exact token limit. It covers discovery text,
 not tool schemas, loaded skill bodies or the rest of the conversation. A zero budget, or one
@@ -48,9 +49,16 @@ It keeps at most 300 description characters for ranking. Missing or nonregular f
 On supported Unix systems, final file symlinks are refused. Oversized or absent frontmatter has
 no usable description, but the existing name can still match.
 
+A per-turn cap reads at most `max_files` files, in sorted name order. Names past the cap are not
+read that turn: they are reported with the unavailable names, and the block carries a
+`[read cap: N of M indexed files this turn]` note when the character budget has room left. A zero
+cap reads nothing and contributes no discovery text. Selection for a catalog under the cap is
+unchanged, and repeats of a truncated turn truncate the same way.
+
 Descriptions are reread for every selection, so same-size edits with unchanged timestamps still
-take effect. No query or result cache is shared between sessions. Adding or renaming skills
-requires a restart. The existing client skill listing remains the startup index.
+take effect. The read cap is not a cache; it only limits how many files are read per turn. No query
+or result cache is shared between sessions. Adding or renaming skills requires a restart. The
+existing client skill listing remains the startup index.
 
 The starting request contributes at most its first 8192 characters to ranking. Selection runs
 at the start of each turn's tool loop. A steer handled inside that loop does not rerank it.
@@ -84,8 +92,8 @@ names. It does not mutate the index or remember a session's selection. Use it fo
 
 Tests exercise actual composed model requests, exact default prompt preservation, explicit loading
 outside the shortlist, scheduled and concurrent turns, edited metadata, SOUL refresh, seat filtering,
-plugin precedence, invalid configuration, special files and character ceilings. They use fake models
-and temporary stores. Reduced prompt text is not evidence of improved task success.
+plugin precedence, invalid configuration, special files, character ceilings and per-turn read caps.
+They use fake models and temporary stores. Reduced prompt text is not evidence of improved task success.
 
 ### Reproduce the catalog footprint
 

@@ -386,7 +386,8 @@ generic. Nothing about one person or one team goes in it. Their rules live in th
 
 Optional `skill_discovery` selects descriptions from the runtime's enabled index using local ranking.
 It respects seat allowlists and source precedence. Descriptions refresh each turn without a shared
-query cache. Full instructions still use `skill`, including explicit names outside the shortlist.
+query cache; reads are bounded per file and per turn (`max_files`, sorted name order). Full
+instructions still use `skill`, including explicit names outside the shortlist.
 The character budget includes headings and separators. See [SKILL-DISCOVERY.md](SKILL-DISCOVERY.md).
 
 Composition sets `skills_prompt=False` and supplies the typed `Loop.turn_extra(session, query)`

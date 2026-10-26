@@ -22,7 +22,8 @@ def selector(root, **settings):
 
 
 @pytest.mark.parametrize("value", [None, [], True, {"extra": 1}, {"enabled": 1}, {"max_chars": True},
-                                      {"max_chars": -1}, {"max_chars": 32769}, {"top_k": 1.0}, {"top_k": 51}])
+                                      {"max_chars": -1}, {"max_chars": 32769}, {"top_k": 1.0}, {"top_k": 51},
+                                      {"max_files": True}, {"max_files": -1}, {"max_files": 4097}])
 def test_strict_settings(value):
     with pytest.raises(ConfigError, match="skill_discovery"):
         Settings.of(value)
@@ -129,6 +130,39 @@ def test_metadata_reads_are_bounded_and_special_files_not_read(tmp_path):
     path.symlink_to(target)
     if hasattr(os, "O_NOFOLLOW"):
         assert discovery.select("charts").unavailable == ("huge",)
+
+
+def test_per_turn_read_cap_stops_reading_and_names_the_sorted_remainder(tmp_path, monkeypatch):
+    for i in range(30):
+        skill(tmp_path, f"s-{i:02}", "charts")
+    import exo.skill_discovery as module
+    reads = []
+    real = module._description
+    monkeypatch.setattr(module, "_description", lambda sk: (reads.append(sk.name), real(sk))[1])
+    discovery = selector(tmp_path, max_files=10)
+    result = discovery.select("charts")
+    assert reads == [f"s-{i:02}" for i in range(10)]
+    assert result.considered == 10
+    assert result.unavailable == tuple(f"s-{i:02}" for i in range(10, 30))
+    assert set(result.names) <= set(reads)
+    assert "[read cap: 10 of 30 indexed files this turn]" in result.text
+    assert result == discovery.select("charts")
+    reads.clear()
+    zero = selector(tmp_path, max_files=0).select("charts")
+    assert reads == [] and zero.text == "" and zero.names == ()
+    assert zero.unavailable == tuple(f"s-{i:02}" for i in range(30))
+
+
+def test_catalog_under_the_cap_reads_every_file_and_selects_the_same(tmp_path, monkeypatch):
+    for i in range(200):
+        skill(tmp_path, f"s-{i:03}", f"topic {i % 10} Postgres schema migration")
+    import exo.skill_discovery as module
+    reads = []
+    real = module._description
+    monkeypatch.setattr(module, "_description", lambda sk: (reads.append(sk.name), real(sk))[1])
+    result = selector(tmp_path).select("Postgres schema migration")
+    assert len(reads) == 200 and result.unavailable == ()
+    assert result == selector(tmp_path, max_files=4096).select("Postgres schema migration")
 
 
 def test_authority_tags_are_escaped_before_budget_accounting(tmp_path):
