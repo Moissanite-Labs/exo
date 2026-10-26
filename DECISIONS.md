@@ -2068,6 +2068,130 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   ${x-.netrc}; echo $(git push --force origin main)`, a force push on main. Narrowing it by each part's category is
   a possible follow-up. The other limits are in `docs/GATE.md` "Other spellings of
   a store path", "In `$EXO_HOME`" and "The store is credentials".
+  *Amendment 2026-10-22 (issue #330, PR #409):* `hash` is on the read list, but `hash -p PATH NAME` makes the shell run
+  PATH for every later NAME, so `hash -p /tmp/x ls; ls` read as a plain `ls` and ran the file. A `hash` call that binds
+  a name is now `opaque_exec`, with the path as its target and a card naming the rebound program. Its options are read
+  as bash reads them: a cluster (`-dp`), an attached path, options after the path, and the last of several `-p`. A name
+  with a slash binds nothing, since bash skips it. An option word the gate cannot read may hold `-p`, so it is opaque
+  too, except one double-quoted word at the end (`hash "$cmd"`), which has no name after it. From the path on, such a
+  word may hold a name. It may split into a path and a name (`hash -p $P` with `P='/tmp/x ls'`, or `hash -p *`),
+  unless it is one double-quoted word. As a name it may lose its slash: bash runs `hash -p /tmp/x {ls,/}` as
+  `hash -p /tmp/x ls /`, skips `/` and binds `ls`. So each is opaque. A glob keeps a slash it has, so
+  `hash -p /tmp/x*` binds nothing. Setting `BASH_CMDS`, the
+  table `hash -p` fills, or `BASH_ALIASES` is opaque, like the variables of #231. *No store write.* `hash -p` and a
+  `BASH_CMDS` or `BASH_ALIASES` value record a path and open nothing. Their `opaque_exec` part is marked (signal
+  `rebinds a name`), and the store check takes a marked part as the `read` it was, whatever runs or sets it: the shell,
+  sudo, ssh, mosh, an ssh `ProxyCommand`, `man -P`, `printf -v` or `declare`. A line that ssh, mosh, `man -P`, less or
+  more runs counts so when its other commands are reads or marked parts, and the hop of the ssh or mosh that runs it
+  counts too. Any other command keeps the check of the words around the line, in either order: a plain shell command
+  (`ssh host 'sort x; hash -p /x ls'`), one run with sudo, or a login to another host (`ssh a 'ssh b; hash -p /x ls'`).
+  So a store or descriptor path in these words alone makes no
+  store write. This matters because a store write outranks a post on the line: the line then asks
+  the principal alone, and an allow, log or ask cell reads the store write only (#437). The first draft checked the hash
+  part's words, so a descriptor path in them turned a matrix deny on the post into an ask and dropped its posting
+  violations (main has read a deny cell on every part since #464). The second draft exempted only a simple command named
+  hash, so the same held over ssh, mosh, `man -P` and an ssh `ProxyCommand`, and for
+  `printf -v 'BASH_CMDS[ls]' /proc/self/fd/3`. Only an `opaque_exec` part counts as marked, since the credentials floor
+  of an environment dump carries every signal on its line as its own. A store or descriptor path a rebound name runs
+  later is still behind the opaque ask. A redirect is still checked as for any read, also after a `cd` into the store
+  (`cd ~/.exo/state && hash > notes`), and so is a program named hash run by path (`./hash ~/.exo/state/x`), which is no
+  builtin. *Differential (#423).* Main's `scripts/gate_diff.py` (with #488) against main 5a9dc394 runs 55,855 actions
+  and 87 policies, and 111 pairs on 98 actions are lower. Four probe sets ran alone (`--only-corpus`). The first has
+  8,305 lines: the review's lines and every rebinding form under sudo, doas, env, timeout, nice, `bash -c`, ssh, mosh,
+  `man -P`, a `ProxyCommand`, `$( )` and a here-doc, alone and beside a post or a force push. It runs 33,244 actions,
+  and 13,754 pairs on 7,252 actions are lower. The second has 5,948 lines: the rebind under chroot, nsenter, unshare,
+  systemd-run and other wrappers, with and without ssh or mosh, and a plain shell command before or after a rebind in 82
+  forms that run a nested line (`man -P`, less, an ssh `LocalCommand`, pagers, `find -exec` and `git rebase --exec`
+  among them), with a store or descriptor path in the other words. It runs 24,170 actions, and 22,111 pairs on 10,291
+  actions are lower. The third has 11,037 lines: ssh with its own `-E`, `-S`, `UserKnownHostsFile` or `ControlPath` on
+  a store file, running a rebind and a shell command in either order, also as a `ProxyCommand`, a `LocalCommand`, a
+  second hop or a here-doc fed to ssh, the same lines under mosh, `man -P`, less and more, and under sudo, env,
+  timeout, nice, `bash -c`, `$( )` and a here-doc, alone and beside a post. It runs 29,434 actions, and 6,564 pairs on
+  4,586 actions are lower. The fourth has 12,556 lines: a rebind whose path or name word the gate cannot read (a brace
+  set, an expansion, a glob) and plain rebinds, under the same wrappers and nested lines, beside a login to another
+  host over ssh, alone and beside a post, a force push or a store redirect. It runs 42,360 actions, and 12,592 pairs on
+  8,982 actions are lower. No posting violation is lost in any run. The pairs fall in four groups, all kept on
+  purpose, and a deny is lost only in groups (3) and (4). Each count in groups (1) to (3) is for the first probe set,
+  the second, the third, the fourth, then the script's own corpus. (1) 5,924 pairs on 1,481 actions, 9,120 on 2,280,
+  1,844 on 481, 1,856 on 464, and 4 on
+  1: under a policy
+  that lowers `opaque_exec` (a category line or an allow rule naming it), a rebinding form that sudo, doas or another
+  wrapper that makes its part costly (chroot, nsenter, unshare, systemd-run) runs, inside or around ssh or mosh
+  (`ssh host 'sudo hash -lp ./tool ls && ls'`, `ssh host 'sudo BASH_CMDS[ls]=/tmp/x ls'`,
+  `sudo ssh host 'hash -p /x ls'`, `chroot /srv ssh host 'hash -p /x ls'`), goes from log, or ask inside a fed shell or
+  under such a wrapper, to allow. So does a rebind beside a command such a wrapper runs over ssh
+  (`ssh host 'hash -p /x ls | sudo sort x'`). On main the costly part was a `read` or a `shell` part whose matrix cell
+  logged. With a redirect on the sudo command it was the costly `local_write` that leads since #454
+  (`ssh host 'sudo hash -p /x ls > /tmp/f'`), which logged too. Now the rebind is the line's own `opaque_exec` part,
+  and the category line replaces its matrix cell, as it does for `ssh host 'sudo eval x && ls'` and
+  `ssh host 'eval x | sudo sort x'` on main. Under the default policy each asks. (2) 4,990 pairs on 4,990 actions,
+  5,843 on 5,843, 4,216 on 4,216, 6,452 on 6,452, and 97 on 96: under a reservation that
+  matches the hash part (`tool:terminal`, or `command:\brm\b` on a line with `rm`), that part's entry is named
+  `opaque_exec`, with the path as target, where it was `read`. Over ssh, where the rebind now names the line, another
+  opaque part keeps its own empty target and the hop's entry keeps the host (`ssh host 'setsid ssh b "hash -p /x ls"'`).
+  A line that is now a store write gains a store entry too (`ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'`).
+  Each line still asks as reserved, and the grant check of D-075 refuses each line it refused on main. (3) 2,840 pairs
+  on 2,840 actions, 7,148 on 7,148, 504 on 504, 4,284 on 4,284, and 10 on 10: under a deny rule on costly `read`,
+  `shell` or
+  `local_write` parts, a rebinding form run by sudo, doas, chroot, nsenter, unshare or systemd-run goes from deny to ask
+  (`sudo hash -p /x git`, `sudo builtin hash -p /x git`, `sudo -u bob hash -p /x ls`, `doas hash -p /x git`,
+  `sudo hash $O ls`, `sudo hash "$@"`, `chroot /srv hash -p /x ls`). So does a line that holds one, also over ssh or
+  beside a post or a force push, and `sudo hash -p ~/.exo/state/x ls > out` stays a store write that asks. A privileged
+  wrapper makes its part costly. On main that part was a costly `read`, which the rule names. Now it is `opaque_exec`,
+  which it does not, as for `sudo eval x` on main. Under the default policy each asks. (4) Under a policy that names
+  the `read` category (a category line, or a `deny`, `reserved` or rule entry), the rebind's part was a `read` on
+  main, and the entry reached it. Now it is `opaque_exec`, which the entry does not name. So a line the entry denied
+  only through the rebind goes from deny to ask, or to log under `opaque_exec: log`: `hash -p /tmp/x ls` and
+  `hash $O ls` under `categories: {read: deny}` or `deny: [read]`, a post beside the rebind
+  (`hash -p /tmp/x ls; gh pr comment 1 --body Zork`), and over ssh a line that is now a store write, which main read
+  as a `read` (`ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'`). Under `reserved: [read]` with
+  `categories: {opaque_exec: allow}`, `hash -p /tmp/x ls` goes from ask to allow, since the reserved hit is gone. A
+  read beside the rebind still meets the entry, so `hash -p /tmp/x ls; ls` is denied. Under the default policy each
+  asks. The script's built-in policies name `read` only in a rule on costly parts, group (3), so the runs above hold
+  none of these. The note of 2026-10-25 below counts them. *A shell command beside the
+  rebind.* On main the hash part was a `read` that tied with a plain shell command in a line that ssh, `man -P`, less or
+  more runs, and the first of the two named the line. So main checked the words around the line for store paths when the
+  shell command came first and not when the rebind did. Now they are checked in either order. ssh's own `-E`, `-S` and
+  `UserKnownHostsFile` name a local file it writes, so `ssh -E ~/.exo/state/log host 'sort x && hash -p /x ls'` stays a
+  store write and `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'` becomes one. Beside a line of reads alone,
+  ssh's own options are read on neither tree (`ssh -E ~/.exo/state/log host ls` is allowed, #484), and neither are
+  less's log options `-o`, `-O` and `--log-file` (`cat f | less -o ~/.exo/state/y` is allowed). *Rejected:* deciding
+  the matrix cell and the posting rules on every part of a line here. The D-075 amendment of 2026-10-22 for #464 and
+  #448 now does it for a deny cell, so a post beside `eval /proc/self/fd/3` or a store redirect is denied under a matrix
+  deny for the post. An allow, log or ask cell still reads the dominant part only (#437). Also rejected: taking a plain
+  shell command beside the rebind as a read too. An earlier draft did, so that a post beside
+  `ssh host 'hash -p /proc/self/fd/3 ls; sort x'` would not sit under a store write that main does not make. Since #464
+  that costs the post nothing: a deny cell on it still denies the line, and its posting violations are kept, named after
+  the post. The draft cost the store check instead: ssh's own `-E ~/.exo/state/log` in such a line made no store write.
+  *Note 2026-10-25 (review of PR #409).* A word that starts with an unquoted `[` is a glob the lexer does not mark, as
+  for `unset` (#329). With files named `-p`, `as` and `ls` in the folder, bash runs `hash [-]p /tmp/x ls` as
+  `hash -p /tmp/x ls`, and `hash -p [al]s` as `hash -p as ls`. Such a word is now read as a glob in the option words
+  and from the path on, also after a `\<newline>`, so both lines are opaque, also behind `builtin`, `command` or sudo
+  and over ssh. A quoted or escaped `[` is no glob, so `hash -p '[al]s'` stays `read`. `hash [l]s` now asks, as
+  `hash l?` already did. The check of the fix found one more option word the gate cannot read: `~-`, `~+` or `~1`.
+  Bash reads it from OLDPWD, PWD or the directory stack, which a line may set, so after `OLDPWD=-p` it runs
+  `hash ~- /tmp/x ls` as `hash -p /tmp/x ls`. Such an option word is now opaque. Bash does not split or glob it, so
+  as a path it stays one word. `~` and `~/x` stay `read`: they are the home folder, which the gate reads, and
+  `HOME=-p` asks. Group (4) above comes from this review. Since #454, group (1) also holds a rebind that sudo runs
+  with a redirect over ssh, whose costly `local_write` logged on main. Main's `scripts/gate_diff.py` against main
+  edeb4f89 ran with 8 more policies, 7 of them on `read`. The built-in corpus runs 72,768 actions under 95 policies,
+  and 1,668 pairs on 292 actions are lower: (1) 12 pairs on 3 actions, (2) 139 on 138, (3) 39 on 39 and (4) 1,478 on
+  277. A focused corpus of 3,489 lines (`[`, `?`, `*` and brace words in the option and path words, under `builtin`,
+  `command`, sudo, doas, env, eval, `bash -c`, ssh and mosh, beside a post, a force push or a store redirect, and the
+  `BASH_CMDS` forms) ran alone. It runs 22,738 actions under the same 95 policies, and 49,713 pairs on 8,810 actions
+  are lower: (1) 712 on 178, (2) 5,503 on 5,503, (3) 3,142 on 3,142 and (4) 40,356 on 7,242. A second one of 4,996
+  items ran alone too: the `[` and tilde option and path words under 12 wrappers, after `OLDPWD=-p`, `PWD=-p` or
+  `pushd -n -- -p`, fed to ssh, in a `>( )`, beside a sudo redirect or a key read, after a `cd` into the store, and as
+  calls with a store or secret folder of their own. It runs 15,649 actions, and 20,076 pairs on 4,345 actions are
+  lower: (1) 240 on 60, (2) 2,042 on 1,963, (3) 2,000 on 2,000 and (4) 15,794 on 3,033. No posting violation is
+  lost, and a deny is lost only in groups (3) and (4).
+  A second review of PR #409 found one more word the gate took as one: a double-quoted `${!n}`. With `n=@` or
+  `n='a[@]'`, bash splits it as it splits `"$@"`, so after `set -- -p /tmp/x ls`, `hash "${!n}"` runs `hash -p /tmp/x
+  ls`. A double-quoted word with `${!` is no longer one word, before the `-p` or from the path on, so such lines are
+  opaque. `hash "$cmd"` stays `read`. Main reads them as `read`, as c833d5b0 did. Main's `scripts/gate_diff.py` ran
+  against c833d5b0 with the same 95 policies, the built-in corpus, the check's corpus of 3,287 lines and 490 lines of
+  double-quoted indirect words under seven wrappers. It runs 83,465 actions, and 1,231 pairs on 241 actions are lower.
+  Each is a line with `${!`, in group (2) 89, (3) 60 or (4) 1,082.
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
   word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was
@@ -2844,6 +2968,35 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   read as the section. `resume_text` folds the header to one line too, so a header value no longer reaches the
   system message as a section. An older file's path and launch lines, title, list fields and summary still reach
   it as that writer left them.
+- *Amendment 2026-10-24 (#317):* two follow-ups to #296. First, a reader opened through a symlink to a closed ledger
+  held an `immutable=1` connection to the target. A writer that appended and checkpointed changed the file under it, so
+  the reader stayed stale and then raised `database disk image is malformed`. Such a target is now copied at open, and
+  reads come from the copy: a snapshot of the target as it stood at open. A fresh open sees later appends. A target with
+  a `-wal` file beside it is still read live. `immutable=1` takes no lock, so a writer during the copy could tear it,
+  and every read of a torn copy can fail for the reader's life. The open checks the target's inode, size and mtime, and
+  that no `-wal` file is beside it, before and after the copy. It takes the copy again when any of them changed. After
+  three changed copies it reads the target live. It does so at once when a copy fails while the target stays the same (a
+  full temporary folder), since a second copy would fill the folder again. SQLite then makes `-wal` and `-shm` files
+  beside the target. They stay after the reader closes, until a writer closes the ledger while no reader has it open.
+  Until then, later opens read the target live. Every write moves the mtime, but many appends keep the size. So the
+  check misses a write that keeps the size and lands in the same tick of the file system's clock as the write before it.
+  The copy goes into SQLite's private temporary database, not into memory. Held in memory, the copy of a 99 MB ledger
+  added 111 MB to the reader's resident memory. This one adds about 6 MB, and an owner-only temporary file the size of
+  the ledger, unlinked at once and gone at close. The copy is read-only (`query_only`), as the target was. Second, where
+  there is no `/proc` (macOS), `atomic_write(mode=None)` learns the umask by setting 077 and back. Unlocked, two threads
+  interleaved: files came out 0600 under a 022 mask, and the process could be left at 077. The probe now runs in
+  `exo.core.private.umask`, which sets the mask for a block under one lock. The socket bind in `server/app.py` sets its
+  0177 through it too, so neither undoes the other. The bind awaits inside its block, so the lock is reentrant: another
+  task on that thread probes and reads 0177 instead of waiting on itself. *2026-10-25 (#536 review):* the same-tick miss
+  is likeliest where the tick is long: 1 s on HFS+ and ext3, 2 s on FAT, and as coarse on some NFS mounts. There, a
+  write that keeps the size within a second or two of the write before it can leave a torn copy that the check accepts.
+  A check of the copy after it is taken would narrow the gap. It has to be `integrity_check`. In a probe, a one-event
+  append tore copies of a 2,000-event ledger. Of 7 copies that `integrity_check` failed, `quick_check` passed 3, and so
+  did a count through the table against one through each index. It can ride #535, which moves the copy to the first
+  read. A live read fails where SQLite cannot make the `-wal` and `-shm` files (read-only media, or a folder the reader
+  cannot write), and the ledger then read as empty. A target with no `-wal` file is now read with `immutable=1` there,
+  as before. The lock does not order two `umask` blocks on one thread: two socket binds that overlap on one event loop
+  can still restore out of order and leave the process at 0177, as they could before.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
