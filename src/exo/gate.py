@@ -6329,12 +6329,15 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 
 
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files,
-# the core sockets, the bus folder (the seat registry signed answers trust and the relay database, #210) and
-# the plugins folder (code the next session loads and runs, #435) steer the gate itself, so a write to them
-# always asks the principal. Names that are distinctive match anywhere (a relative `policies/gates.yaml` may
-# sit in the tool's working folder); absolute paths are also checked against EXO_HOME, its principal stores,
-# EXO_PRINCIPAL_STORE, every store root recorded in config `principals` (`exo init --root`, `exo import-store
-# --root`) and the bus folder and files (_bus_paths).
+# the core sockets, the bus folder (the seat registry signed answers trust and the relay database, #210), the
+# plugins folder and the other folders Exo loads code from (_code_paths, #459) steer the gate itself, so a
+# write to them always asks the principal. Names that are distinctive match anywhere (a relative
+# `policies/gates.yaml` may sit in the tool's working folder), and so, by their name whatever EXO_HOME is, do
+# `.exo/venv`, `.exo/src` and `.exo/hermes-home/plugins`, as `.exo/plugins` does; the rest of hermes-home (the
+# launch script's target folder, a live Hermes's state) is not the code. Absolute paths are also checked
+# against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
+# `principals` (`exo init --root`, `exo import-store --root`), the bus folder and files (_bus_paths) and the
+# code folders.
 # $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
 # The file names that end a path, one string per name ("\0": any text), which _STORE_NAMES and _store_glob share.
 _EXO_STORE_FILES = (
@@ -6345,7 +6348,7 @@ _EXO_STORE_FILES = (
     *(f"{n}.sqlite{x}" for n in ("ledger", "schedule", "bus/relay") for x in ("", "-wal", "-shm", "-journal")))
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
-    r"\.exo/(bus|update|plugins)(/|$)|(" +
+    r"\.exo/(bus|update|plugins)(/|$)|\.exo/(venv|src)(/|$)|\.exo/hermes-home/plugins(/|$)|(" +
     "|".join("[^/]*".join(map(re.escape, f.split("\0"))) for f in _EXO_STORE_FILES) + ")$)")
 # $EXO_HOME/config.json names the plugins the core loads (`core_plugins`, this gate among them), their config, the
 # environment that runs Hermes and Exo (`venv`), each provider's base_url and headers, and the principal a peer key
@@ -6390,6 +6393,34 @@ def _bus_paths() -> list[tuple[str, tuple]]:
             folder, base = os.path.split(os.path.abspath(os.path.expanduser(value)))
             out.append((folder, tuple(base + e for e in ends)))
     return out
+
+
+def _code_paths() -> list[str]:
+    """The folders Exo loads code from (#459), each the environment this gate sees spells, as it does EXO_HOME: the
+    venv `scripts/install.sh` puts the `exo` package and this gate in (EXO_VENV, else the home's own `venv`; a
+    gate.py there decides every later call, a .pth in its site-packages runs on each start), Hermes's plugin home
+    (EXO_HERMES_HOME, else the home's own `hermes-home/plugins`: with --with-hermes the core loads exo-gate from
+    there), the source copy it clones a git URL into and `exo update` refreshes from (`$EXO_HOME/src`; `exo web`
+    reads plugins on `<package>/../../plugins` of the copy too) and every folder EXO_PLUGIN_DIRS names, which
+    default_dirs searches first and where a duplicate plugin name keeps the first found. Non-absolute spellings are
+    not read: a relative EXO_VENV or dir is a constant of the tool's working folder, which the gate cannot see; a
+    `.venv` name is not Exo's (no install script makes one, EXO_VENV is the only override)."""
+    home = _exo_home()
+    out = []
+    venv = os.path.expanduser(os.environ.get("EXO_VENV") or "")   # install.sh: ${EXO_VENV:-$EXO_HOME/venv}
+    out.append(venv if venv.startswith("/") else os.path.join(home, "venv"))
+    if (hermes := os.path.expanduser(os.environ.get("EXO_HERMES_HOME") or "")).startswith("/"):
+        out.append(os.path.join(hermes, "plugins"))
+    out.append(os.path.join(home, "hermes-home", "plugins"))
+    out.append(os.path.join(home, "src"))
+    out += [d for d in (os.path.expanduser(p) for p in
+                        filter(None, os.environ.get("EXO_PLUGIN_DIRS", "").split(os.pathsep))) if d.startswith("/")]
+    return out
+
+
+def _code_forms() -> list[str]:
+    """Each absolute folder _code_paths names, as written and resolved: the two spellings _store_word reads."""
+    return [f for d in _code_paths() for f in _path_forms(d)]
 
 
 def _fd_path(p: str) -> bool:
@@ -6439,9 +6470,11 @@ def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) ->
 
 
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
-# counts too) and file names that end a path.
+# counts too) and file names that end a path. The code folders (_code_paths, #459) join: the home's own `venv` and
+# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles.
 _STORE_GLOB_DIRS = tuple([".exo", *p, n] for p in ((), ("principals", "\0")) for n in _HOME_PROTECTED +
-                         ("ledger.sqlite\0",)) + ([".exo", "bus"],)
+                         ("ledger.sqlite\0",)) + ([".exo", "bus"], [".exo", "venv"], [".exo", "src"],
+                                                  [".exo", "hermes-home", "plugins"])
 _STORE_GLOB_FILES = tuple(f.split("/") for f in _EXO_STORE_FILES)
 
 
@@ -6478,10 +6511,13 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
 
     tops: list = []
     if p.startswith("/"):
-        tops = [r.rstrip("/").split("/") for root, _, _ in _store_roots() for r in _path_forms(root)] if inside else [
+        code = [c.rstrip("/").split("/") for c in _code_forms()]     # #459: the code folder's own subtree counts
+        tops = ([r.rstrip("/").split("/") for root, _, _ in _store_roots() for r in _path_forms(root)] + code
+                if inside else [
             r.rstrip("/").split("/") + x for root, names, principals in _store_roots() for r in _path_forms(root)
             for x in [[n] for n in names + ("ledger.sqlite\0", "schedule.sqlite\0")] +
             ([["principals", "\0", n] for n in _STORE_PROTECTED + ("ledger.sqlite\0",)] if principals else [])]
+            + code)
     dirs, files = ([[".exo"]], ()) if inside else (_STORE_GLOB_DIRS, _STORE_GLOB_FILES)
     for form in _path_forms(p) if p.startswith("/") else [os.path.normpath(p)] if p else []:
         gs = form.split("/")
@@ -6532,6 +6568,12 @@ def _store_forms(candidates: set[str], ancestors: bool) -> bool:
                     return True
                 if _protected_rel(parts[2:], _STORE_PROTECTED):
                     return True
+        # #459: a write inside a folder Exo loads code from; with ``ancestors`` (a delete), also a remove or move of
+        # the folder itself or of a folder above it that holds it (`rm -rf ~/.exo`, `mv ~/.exo/venv x`).
+        code = _code_forms()
+        if any(candidate == c or candidate.startswith(c.rstrip("/") + "/") for c in code) or \
+                ancestors and any(c.startswith(candidate.rstrip("/") + "/") for c in code):
+            return True
     return False
 
 
@@ -6558,7 +6600,7 @@ def _in_store_dir(path: str) -> bool:
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
     roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
-    return any(c == r or c.startswith(r.rstrip("/") + "/") for c in _path_forms(p) for r in roots)
+    return any(c == r or c.startswith(r.rstrip("/") + "/") for c in _path_forms(p) for r in roots + _code_forms())
 
 
 _PATCH_PATHS = re.compile(
