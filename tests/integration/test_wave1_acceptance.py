@@ -8,6 +8,8 @@ The model is the config-scripted fake, so nothing touches the network.
 from __future__ import annotations
 
 import asyncio
+import ast
+import collections
 import json
 import os
 import re
@@ -187,8 +189,13 @@ CORE = ["src/exo/core", "src/exo/protocol", "src/exo/server", "src/exo/cli_chat.
 
 # The core budget is a ratchet with headroom (D-077, docs/ENGINE-SPLIT.md "Budget policy").
 CORE_FLOOR = 14813  # counted lines right after the last real reduction (#124, D-067). It only ever goes down.
-CORE_HEADROOM = 1000  # room for shipping. A security or robustness fix may raise it, by the minimum, with a note.
+CORE_HEADROOM = 2000  # room for shipping. A security or robustness fix may raise it, by the minimum, with a note.
 BIG_FILE = 1000  # the report flags counted files above this many lines. Information, not an assertion.
+
+# Step 4 of the engine split is asserted, not only printed. Both numbers come from ``_scorecard`` below and only
+# go down, like CORE_FLOOR (D-082, docs/ENGINE-SPLIT.md "Budget policy"). They cover src/exo/core.
+INWARD_IMPORTS_MAX = 36  # imports of a product module (a non-core exo module) from the core
+PRIVATE_STATE_MAX = 7  # reads of another module's private state: no call, not the reader's own state
 
 
 def test_core_line_budget():
@@ -197,8 +204,8 @@ def test_core_line_budget():
     A ratchet with headroom (D-077, docs/ENGINE-SPLIT.md "Budget policy"). The principal's ruling of 2026-10-15:
     "important to be lean and optimized but not at the cost of functionality and robustness and product-market fit".
 
-    1. Two recorded numbers, CORE_FLOOR and CORE_HEADROOM. The only assertion is
-       ``total < CORE_FLOOR + CORE_HEADROOM``.
+    1. Two recorded numbers, CORE_FLOOR and CORE_HEADROOM. `total < CORE_FLOOR + CORE_HEADROOM` is asserted, and
+       the same run asserts the two step 4 structure caps below (D-082).
     2. The floor ratchets down. Every real reduction PR (deletions, simplification, real seams per ENGINE-SPLIT)
        sets CORE_FLOOR to its post-merge count in the same PR. The floor never goes up.
     3. Headroom is for shipping. Fixes and features land inside it with no ceremony. The test prints the count,
@@ -207,16 +214,19 @@ def test_core_line_budget():
        CORE_HEADROOM by the minimum needed with a one-line DECISIONS note, and the lead schedules a reduction within
        the week. A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
     5. The structural goal carries the real intent: ENGINE-SPLIT step 4's criteria (no private-state reads across
-       module boundaries, no product imports into the engine, one responsibility per module). The count is a
-       signal. The printed report lists the largest counted files and flags any above 1,000 lines. It asserts
-       nothing.
+       module boundaries, no product imports into the engine, one responsibility per module). Two of them are
+       counted in ``_scorecard`` and capped by INWARD_IMPORTS_MAX and PRIVATE_STATE_MAX, which ratchet down like the
+       floor. The report also lists the largest counted files and flags any above 1,000 lines; that part is
+       information, not an assertion.
     6. The CORE list is never edited to dodge the count.
 
     History. Wave 1 shipped under 8k. STANDALONE.md section 6 allows 15k by the end of wave 3; delegation (D-016)
     is a wave 3 item, so the budget moved to 15k on 2026-10-12. Raised to 16k the same day for the audit security
     wave (D-038..D-042). Engine split step 4 (D-067, #124) brought the count to 14,813, and the cap went back to
     15k on 2026-10-13 as a hard wall. On 2026-10-15 the wall became this ratchet (D-077): floor 14,813, headroom
-    1,000, ceiling 15,813. Issue #46 tracks the rest of the split."""
+    1,000, ceiling 15,813. On 2026-10-26 main counted 15,812, so 1 line of 1,000 was left, and D-082 raised the
+    headroom to 2,000 (ceiling 16,813) and capped the step 4 structure at its measured count: the ratchet now
+    prices lines and coupling instead of lines alone. Issue #46 tracks the rest of the split."""
     files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
              if "generated" not in p.parts]
     counts = {p.relative_to(REPO).as_posix(): len(p.read_text().splitlines()) for p in files}
@@ -234,10 +244,81 @@ def test_core_line_budget():
         print(f"  {n:6,}  {name}" + (f"  <- above {BIG_FILE:,} lines" if n > BIG_FILE else ""))
     print(f"{big} counted file{'s' if big > 1 else ''} above {BIG_FILE:,} lines" if big
           else f"no counted file above {BIG_FILE:,} lines")
+    imports, reads = _scorecard(REPO / "src/exo/core")
+    item = f"step 4 structure: {imports}, {reads}"
+    print(item)
+    print("  " + ", ".join(f"exo.{k} {n}" for k, n in imports.by_name.most_common(5)))  # the report, not asserted
+    print("  " + ", ".join(f"{k} {n}" for k, n in reads.by_name.most_common(5)))
     assert total < CORE_FLOOR + CORE_HEADROOM, (
-        f"{status}. A security or robustness fix raises CORE_HEADROOM by the minimum, {1 - left:,}, with a one-line "
-        f"DECISIONS note. A feature waits for a reduction or carries a recorded decision. "
+        f"{status}. A security or robustness fix raises CORE_HEADROOM by the minimum, {total - ceiling + 1:,}, with a "
+        f"one-line DECISIONS note. A feature waits for a reduction or carries a recorded decision. "
         f"See docs/ENGINE-SPLIT.md 'Budget policy'.")
+    assert imports.total <= INWARD_IMPORTS_MAX and reads.total <= PRIVATE_STATE_MAX, (
+        f"{item}. Both caps only go down: a PR that removes some sets the cap to its own count, "
+        f"and one that adds some has to remove others first. See docs/ENGINE-SPLIT.md 'Budget policy'.")
+
+
+class _Score:
+    """A measured count, its hotspots, and a string for the failure message."""
+
+    def __init__(self, title: str, cap: int, hits: list[tuple[str, str]]) -> None:
+        self.title, self.cap = title, cap
+        self.hits = hits
+        self.total = len(hits)
+        self.by_file = collections.Counter(f for f, _ in hits)
+        self.by_name = collections.Counter(n for _, n in hits)
+
+    def __str__(self) -> str:
+        return f"{self.total} {self.title} (cap {self.cap})"
+
+
+def _scorecard(root: Path) -> tuple[_Score, _Score]:
+    """Measure ENGINE-SPLIT step 4 over ``src/exo/core``: inward product imports, cross-module private reads.
+
+    An inward import is an ``exo`` module outside the core (core, protocol, server, cli_chat, upstream). A
+    private-state read is a ``_name`` attribute read that is not part of a call and is not a ``_name`` the reader
+    module defines itself. Parse errors fail the caller; a false positive is fixed by renaming the reader's own
+    name or by ``atest`` the same PR, not by raising the cap.
+    """
+    hits: dict[str, list[tuple[str, str]]] = {"import": [], "read": []}
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        where = path.relative_to(REPO).as_posix()
+        for node in ast.walk(tree):
+            modules = []
+            if isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                modules = [node.module]
+            elif isinstance(node, ast.Import):
+                modules = [a.name for a in node.names]
+            for module in modules:
+                parts = module.split(".")
+                if parts[0] == "exo" and len(parts) > 1 and parts[1] not in {"core", "protocol", "server"}:
+                    hits["import"].append((where, parts[1]))
+        defined, own, called = set(), set(), set()
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)) or (
+                    isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)):
+                name = getattr(node, "attr", None) or getattr(node, "id", "")
+                defined.add(name)
+                if not isinstance(node, ast.Attribute) or (isinstance(node.value, ast.Name)
+                                                           and node.value.id == "self"):
+                    own.add(name)  # a module-level name, a local, or this object's own state
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.arg)):
+                own.add(getattr(node, "name", None) or node.arg)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                called.add(id(node.func))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or not isinstance(node.ctx, ast.Load):
+                continue
+            if not node.attr.startswith("_") or node.attr.startswith("__"):
+                continue
+            if isinstance(node.value, ast.Name) and node.value.id in {"self", "cls"}:
+                continue  # the reader's own state, inherited or not (a provider's own timeout, say)
+            if node.attr not in own and node.attr not in defined and id(node) not in called:
+                hits["read"].append((where, node.attr))
+    return _Score("inward product imports", INWARD_IMPORTS_MAX, hits["import"]), _Score(
+        "cross-module private-state reads", PRIVATE_STATE_MAX, hits["read"])
 
 
 def test_dependencies_are_listed():

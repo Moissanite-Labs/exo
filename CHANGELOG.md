@@ -5,6 +5,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Changed
+- The core budget prices coupling, not only lines (D-082, amending D-077). `CORE_HEADROOM` goes from 1,000 to
+  2,000, so the ceiling is 16,813 against 15,812 counted lines, and the engine split's step 4 counts are
+  asserted and ratcheted in `tests/integration/test_wave1_acceptance.py`: at most 36 product imports into the
+  core (`INWARD_IMPORTS_MAX`) and at most 7 cross-module private-state reads (`PRIVATE_STATE_MAX`). The floor
+  keeps its rule, it only ratchets down, and each of the two counts may only go down. The numbers are priced
+  here with the reason: a line budget alone pushed work around itself, into long function bodies and coupling
+  across module boundaries, so the coupling is now counted where the split is going.
+
 ### Fixed
 - A glob in a secret store's folder asks (#594). `cat ~/.ss?/*`, `cat ~/.aw?/*` and `cat ~/.exo/key?/*` read as ordinary reads because `_glob_word` gave up whenever the folder part held a glob; the globbed folder is now tested against each sample's folder, with the same three-literal discipline the file side keeps and bash's rule that only a literal dot matches a leading dot, so `cat ~/*/*` stays a read.
 - A gh download or clone into the Exo store is a store write, as `curl -o` and `git clone` already are (#461).

@@ -4556,3 +4556,41 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and a first launch from a clean home with the claude CLI: no approval card for the intro skill, no decision
   call to the CLI, and read-only tool calls at 0.0 s.
 - **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.
+
+## D-082 (2026-10-26) The core budget prices coupling, not only lines
+- **Status:** Accepted 2026-10-26 by the lead (reversible). It amends D-077: it raises `CORE_HEADROOM` from 1,000 to
+  2,000 and makes two of the engine split's step 4 numbers assertions instead of printouts. D-077's ratchet stands
+  unchanged otherwise.
+- **Why:** on 2026-10-26 main counted 15,812 of the 15,813 lines the ratchet allowed, so one line was left. D-077's
+  own record went from 14,999 (2026-10-15) to that count in eleven days, and the two rule-4 raises so far (#314 +58,
+  #346 +29) were each undone by the reduction they called for. At one line of headroom the next security or robustness
+  fix would have had to wait for a cut, which is the one thing rule 4 says the budget must never do. The count was also
+  pricing size alone, while D-077's point 5 names structure as the real goal, and structure was only printed.
+- **Decision:** `tests/integration/test_wave1_acceptance.py` records `CORE_HEADROOM = 2000`, so the ceiling is
+  16,813 and 1,001 lines were free at 15,812. It also records `INWARD_IMPORTS_MAX = 36` and
+  `PRIVATE_STATE_MAX = 7` and asserts them in the same test, from a `_scorecard` helper that walks `src/exo/core`
+  with `ast`:
+  - *inward product imports* count every import of a non-core `exo` module from the core (`exo.model_spend`,
+    `exo.bus`, `exo.gate`, `exo.envscrub`, `exo.wire`, and so on). This is the import direction ENGINE-SPLIT step 4
+    asks for.
+  - *cross-module private-state reads* count reads of another module's private state: a `_name` attribute read that
+    is not a call, is not `self` or `cls`, and is not a name the reader's own class body assigns.
+  - Both numbers ratchet down like `CORE_FLOOR`: a reduction sets the constant to its new, lower count. Neither may be
+    raised to make a false positive pass; fix the reader instead.
+- **Rejected:**
+  - Keeping the headroom at 1,000 and cutting before the next fix. Rule 4 forbids blocking a security or robustness
+    fix on the count, and the count was already at one line free.
+  - Setting `CORE_FLOOR` to the current count to make room. The floor never goes up (D-077).
+  - Counting every read of a private name. Most are not state at all (methods, module helpers, locals): about 590,
+    and the number moves with unrelated edits. Counting method calls on private names is about 353 for the same
+    reason.
+  - Allow-lists by name. They hide the reads instead of counting them, and they rot.
+- **Numbers:** measured 2026-10-26 on the branch after merging main `dcab371a` (`0d680b83`): 15,812 counted lines in
+  58 files, floor 14,813, headroom 2,000, 1,001 left. Step 4: 36 inward imports (by module `exo.model_spend` 10,
+  `exo.bus` 4, `exo.gate` 4, `exo.envscrub` 4, `exo.wire` 2) and 7 private-state reads (`loop._state` 3 in
+  `engine.py`, `hub._subs` in `jobs.py` and in `peer_target.py`, `loop._state` 2 in `peer_target.py`).
+- **Revisit if:** the two step 4 caps stay still for a long stretch, or the headroom is raised again.
+- **Validation:** `tests/integration/test_wave1_acceptance.py -k line_budget` (1 passed) and the whole of
+  `tests/integration` with `tests/docs` (10 passed).
+- **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md` §27,
+  `docs/DOCS-MAP.md`, `CHANGELOG.md`.
