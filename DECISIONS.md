@@ -2327,6 +2327,110 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   secret links use the existing secret-path check. No patch is applied while classifying, and no tool schema or
   executor behavior changes.
 
+  *Amendment 2026-10-24 (issue #342, review of #421):* the #202 reading took every operator of a store variable other
+  than `-`, `=` and `+` as the value. A pattern substitution can add text: `${HOME/%//.kube}` is `$HOME/.kube` in
+  bash. So `cat ${HOME/%//.kube}/config` was matched as `$HOME/config` and allowed, and `cp x
+  ${HOME/%//.exo}/policies/default.yaml` was a shell command. Now a `/`, `//`, `/#` or `/%` substitution of `HOME`,
+  `EXO_HOME`, `CLAUDE_CONFIG_DIR` or `EXO_PRINCIPAL_STORE` whose replacement is not empty fails closed. A shell line
+  that holds one reads a secret store, as a relative read after a `cd` into a store does: the line is `credentials`,
+  or a store-write line keeps a `credentials` part beside it. A read tool whose path holds one is `credentials`. A
+  word that holds one is a store path to the store-write checks, and a `cd` into it enters the store. This holds with
+  a subscript (`${HOME[0]/%//.exo}`), nested at any depth in another form, for a form not closed on its line, across
+  a line continuation, and in a word a brace set builds: bash expands braces first, so `{$,}{HOME/%//.exo}` is
+  `${HOME/%//.exo}`. It holds with a quote, `$( )`, `<( )` or backticks in the form or its subscript, or a `[` in its
+  subscript. Bash does not end the form at a `}` inside one of those, or the subscript at the first `]`
+  (`${HOME[a[0]]/%//.exo}`), so the gate cannot tell where it ends: `${HOME/%[!"}"]/u\/.exo}` is `$HOME/.exo` when
+  `$HOME` ends in `u`, and main read it as `$HOME`. Such a form fails closed even with an empty replacement. Any other
+  substitution with an empty replacement only removes text and reads as the value. The value is still read for every
+  form, so each line main asks on still asks. *Chosen
+  over* reading the replacement (appended for `%`, prepended for `#`, alone for an unanchored pattern), which #421
+  first did. That reading dropped the value when an anchored pattern did not match, so `cat
+  ${EXO_HOME/%x/y}/keys/seat` (credentials on main) and `cp x ${EXO_HOME/%x/y}/policies/default.yaml` (store_write on
+  main) were allowed. It read `${HOME/#*/~/.exo}` as replacement then value, and missed a partial match
+  (`${EXO_HOME/-home/-home\/keys}`), a subscript, a backslash or `$'..'` in the replacement, and a store write or `cd`
+  through an unanchored form. A form 8 levels deep was not read at all, and spelling out each nested replacement made
+  a 138 KB line take 10 s. Both reviews of #421 proposed the fail-closed rule, and the issue offered it. Working out
+  the result needs the pattern matched against the value bash holds, and a non-matching pattern, a partial match and a
+  subscript each change it. *Cost.* Every such substitution of a store variable asks, also one that leaves an ordinary
+  path: `cp x ${HOME/%//backup}/a` is `store_write` and `cat ${HOME//x/y}/notes.txt` is `credentials`, where the issue
+  asked to keep their class. A form in single quotes or a here-doc body asks too, as a store path written there does,
+  and so does a quote in a form with an empty replacement (`cat ${HOME/"x"/}/notes.txt`).
+  Other variables keep their reading (`echo ${PATH//:/ }`, `echo ${PWD/#$HOME/~}`). *Differential (#423).* Main's
+  `scripts/gate_diff.py` ran main d79639f1 against this change with two focused corpora. The first has 1,338
+  actions: the forms above under 29 wrappers and compounds (`sudo`, `env`, `timeout`, `bash -c`, `ssh`, `xargs`,
+  `$( )`, here-docs, loops), `cd` chains, quoted forms, gh posts of such a path with an option before the subcommand
+  (#399), writes into the plugins folder (#435) and 416 file-tool calls. Alone it gives 2,260 actions x 87 policies:
+  0 pairs lowered, 83,960 pairs on 1,517 actions tightened. The second, from the review of the takeover, has 3,166
+  actions: forms a brace set builds, a `[` in a subscript, line continuations, forms that only remove text, other
+  variables, 7 file tools and 21 wrappers and compounds. With the built-in corpus it gives 69,497 actions x 87
+  policies: 0 pairs lowered, 139,893 pairs on 2,144 actions tightened, 0 errors. A gh line's violation text now
+  starts with the post's name (5,042 pairs in the first run, 1,178 in the second), since the line is a store write or
+  `credentials` that holds the post as a part. The script sets no `EXO_HOME` or `CLAUDE_CONFIG_DIR`. A copy that sets
+  both ran the second corpus alone: 5,103 actions x 87 policies, 0 lowered. Not done (`docs/GATE.md` "Known
+  limits"): `XDG_CONFIG_HOME` is not a store variable, so neither `$XDG_CONFIG_HOME/gh/hosts.yml` nor a substitution
+  of it is read. A removal whose text the path puts back (`${EXO_HOME%/*}/exo-home`, `${EXO_HOME/%home/}home`), a
+  subscript before another operator (`${HOME[1]:-~/.exo}`) and a substitution of another variable whose replacement
+  names a store (`${PWD/*/$HOME/.exo}`) stay reads, as on main.
+  2026-10-25 (reviews of #534): a word that builds the form with a brace set was missed when the call's other
+  checks had spent the shared brace budget. `_brace_words` then gave nothing, and the check read that as no form,
+  so `cat {$,}{HOME/%//.kube}/config` beside about 4,000 filler brace words was a read, and so was `read_file` of
+  it. Such a word now counts, as it does for the other callers. A name read through indirection counts as a store
+  variable, since the gate does not know which variable it names: `x=HOME; cat ${!x/%//.exo}/keys/seat` is
+  `$HOME/.exo/keys/seat` in bash. This holds for a positional name (`${!1}`, `${!*}`, `${!@}`) and with a
+  subscript. The cost: every `/` substitution through an indirect name whose replacement is not empty asks
+  (`for v in PATH; do echo ${!v//:/ }; done`). A file tool's store write to such a path keeps a `credentials` part
+  beside it, as a shell line's does. This covers `write_file`, `edit_file`, `apply_patch`, `delete_file`, a move
+  and an upload. So `categories: {credentials: deny}` denies `write_file ${HOME/%//.kube}/config`, as it denies
+  `write_file ~/.kube/config`. Still not done: a variable that holds a store variable's value or name (a copy
+  `h=$HOME`, a nameref, a positional parameter or an indirect name with no substitution, #475), and a removal whose
+  text the path puts back, which hides a write too (`cp x ${EXO_HOME%-home}-home/policies/default.yaml`, #531).
+  An independent check of this round found a lower decision that dates from `98a3efbe`. A path that is a store
+  path only by such a substitution took the call's target from a store path the gate spells beside it. So a deny,
+  rule or reserved entry on the spelled path no longer reached the call. Under `deny: [target:*/.exo/*]`,
+  `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml` and a `move_file` of `${HOME/%//.kube}/config` to
+  `~/.exo/policies/x.yaml` asked, where main denies. Now the store path main finds comes first (`gate._spelt`). It
+  stays the target of the shell store check and of the file tools, as on main. The substituted path is a store
+  write part beside it, with its `credentials` part, so an entry on that path still reaches the call too.
+  *Differential (#423).* Main's `scripts/gate_diff.py` ran main edeb4f89 against this change with 130 more
+  policies: deny, reserved and rule entries on the store names, the host and each category, escalations with
+  `credentials` allowed, posting rules and an all-allow matrix. A focused corpus of 3,915 actions holds the indirect
+  names with 30 operators, the store and `XDG_*` variables under each substitution, wrappers, `cd`, filler that
+  spends the brace budget, the forms beside gh posts, pushes, deletes, ssh, sudo, curl and mail, file tools under
+  every path key, and a form beside a store path the gate spells. With the built-in corpus it gives 77,722 actions x
+  217 policies: 431,374 pairs on 3,147 actions tightened, 4,654 pairs reworded as above, 0 errors, and 144 pairs on
+  36 actions lowered, all in one group and none from the built-in corpus. An ssh line whose remote command holds
+  such a form was a read on main (`ls; ssh h 'cat ${HOME/%//.kube}/config'`). Under a reserved entry on `read` or
+  on the host (`target:h`), it asked with a hit for the line's read of `h` beside the others. It is now
+  `credentials` and that hit is gone, since the host's read no longer leads the line. Main reads
+  `ls; ssh h 'cat ~/.kube/config'` the same way. The line still asks and is still reserved, and only the principal
+  answers it. Its `${HOME/..}` rows lower the same way on the head before this note. On the focused corpus, this
+  note's last change against the commit before it (`91b6d2e6`) lowers 0 pairs and tightens 1,780 pairs on 412
+  actions.
+  A third check of this round found two more lower decisions that the corpus above did not hold. A nested line
+  that holds such a form (an ssh remote command, `bash -c`, a `$( )`) is `credentials` with the form for its
+  target, and it led the line. So a secret path the gate spells on the same line was no longer the target, and a
+  deny, rule or reserved entry on that path missed the line: under `deny: [target:*/.ssh/*]`,
+  `ssh h 'cat ${HOME/%//x}/a'; cp x ~/.ssh/id_rsa` asked, where main denies. This dates from `98a3efbe`. Now that
+  path stays the target, as on main, and the nested line is a part. A nested line that is `credentials` for another
+  reason keeps the lead, as on main. And once a file tool's other paths spent the brace budget, `_spelt` read each
+  path as spelled. So a form a brace set builds could stay the target while the store path main targets had no
+  part: `delete_file` of the filler words, `{$,}{HOME/%//.exo}/keys/seat` and `~/.exo/policies/x.yaml` asked under
+  `deny: [target:*/.exo/*]`. This dates from `b7d3af4d`. Now each store path other than the target is a store write
+  part. *Differential (#423).* Main's `scripts/gate_diff.py` ran main edeb4f89 against this change. The built-in
+  corpus gives 72,041 actions x 87 policies: 0 lowered, 19,568 pairs on 306 actions tightened, 234 reworded as
+  above, 0 errors. Two focused corpora ran with 145 more policies: deny, reserved
+  and rule entries on each category, on 16 target patterns, on 10 tools and on 10 commands, escalations with
+  `credentials` allowed, posting rules and an all-allow matrix. The first, of 4,970 actions, holds the store and
+  indirect variables under 10 operators and 5 tails, a form beside a spelled store or secret path under 14
+  commands and 9 file tools, a form beside outbound and destructive lines, and filler that spends the brace
+  budget. With the script's variants it gives 8,416 actions x 232 policies: 398,269 pairs on 5,894 actions
+  tightened, 0 errors, and 112 pairs on 112 actions lowered. The second, of 7,392 actions, holds 6 forms in 12
+  nested lines beside 8 commands on 9 secret, store and plain paths, and 6 file tools whose filler comes before,
+  between or after the paths. It gives 13,872 actions x 232 policies: 178,487 pairs on 12,682 actions tightened,
+  0 errors, and 1,530 pairs on 810 actions lowered. Each lowered pair is in the ssh group above: under a reserved
+  entry on `read` or on the host, the line loses the hit for its read of `h`, and it still asks and is still
+  reserved. Against the commit before this change, both corpora lower 0 pairs.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own

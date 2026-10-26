@@ -3353,9 +3353,9 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
             if sudo:
                 ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
-    hit = _store_touch(k, words, parts, ctx)
-    hits = [hit] if hit else []
-    if hit and ctx.get("fd_cwd") not in (None, hit):
+    hits = _store_touch(k, words, parts, ctx)
+    hit = hits[0] if hits else ""
+    if hit and ctx.get("fd_cwd") not in (None, *hits):
         # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
         # so a `target:/dev*` entry still matches it, as it matches any other write there
         hits.append(ctx["fd_cwd"])
@@ -4321,9 +4321,16 @@ def _in_store_dir_words(words: list[str] | None) -> bool:
     return words is None or any(_in_store_dir(x) for x in words)
 
 
-def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
-    """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
+def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> list[str]:
+    """What in a simple command writes to the Exo store, the target first, or []. Reads of the store are fine. A word
+    that is a store path only by a `/` substitution the gate does not spell out comes after the one main finds
+    (_spelt, #342), so that one stays the target: `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml` keeps
+    `~/.exo/policies/x.yaml`, and `${HOME/%//x}/a` is a store write beside it."""
     seen = ctx.setdefault("store_braces", {})
+    later = ""
+
+    def hit(t: str) -> list[str]:
+        return [t, later] if later and later != t else [t]
     for op, t in k.redirs:
         # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
         # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. A
@@ -4333,11 +4340,16 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         held = op == "<" and n != ""
         if op in _WRITE_REDIRS or held:
             targets = _shell_words(t, seen, "target")
-            if targets is None or any(_store_word(x) for x in targets) or held and n in ("1", "2") and (
+            if targets is None or held and n in ("1", "2") and (
                     t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
-                return t.text
+                return hit(t.text)
+            for x in targets:
+                if _store_word(x):
+                    if not _store_subst(x) or _spelt(_store_word, x):
+                        return hit(t.text)
+                    later = later or t.text
     if all(p.category == "read" for p in parts):
-        return ""
+        return [later] if later else []
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
@@ -4348,16 +4360,21 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     for i, w in enumerate(words):
         expanded = _shell_words(w, seen, "wide" if wide else "narrow")   # braces first: `of=x{a,b}` is `of=xa of=xb`
         if expanded is None:
-            return w.text
+            return hit(w.text)
         for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
             if piece and _store_word(piece, ancestors=wide):
-                return piece
-        if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and \
-                _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")):
-            return words[i + 1].text            # git checkout, reset or commit inside the store
+                if not _store_subst(piece) or _spelt(_store_word, piece, ancestors=wide):
+                    return hit(piece)
+                later = later or piece
+        if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words):
+            dirs = _shell_words(words[i + 1], seen, "dir")
+            if _in_store_dir_words(dirs):
+                if _spelt(_in_store_dir_words, dirs):
+                    return hit(words[i + 1].text)   # git checkout, reset or commit inside the store
+                later = later or words[i + 1].text
     if ctx.get("store_cwd"):
-        return ctx.get("fd_cwd") or "a path inside the store (after cd)"
-    return ""
+        return hit(ctx.get("fd_cwd") or "a path inside the store (after cd)")
+    return [later] if later else []
 
 
 def _displace_with(c: Classification, **changes) -> None:
@@ -5154,19 +5171,29 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
         c = _weigh(c, combined, cmd)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
-    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
-    if hit and c.category != "credentials":
+    raws = [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]]
+    hit = _shell_credential_hit(cmd, segs, raws)
+    # #342: a nested line (an ssh remote command, `bash -c`, a `$( )`) that holds a `/` substitution of a store
+    # variable is `credentials` with the form for its target, and it may lead the line. A secret path the gate spells
+    # on the line stays the target, as on main, and the nested line stays a part, so a deny, rule or reserved entry
+    # on either still reaches the line (`ssh h 'cat ${HOME/%//x}/a'; cp x ~/.ssh/id_rsa`).
+    led = bool(hit) and c.category == "credentials" and c.target != hit and bool(
+        _store_subst(c.target) or _brace_store_subst([c.target]))
+    if hit and c.category != "credentials" or led:
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
         signals = c.signals
         c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
-        c.signals = signals + ["secret store"]
+        c.signals = list(signals) if led else signals + ["secret store"]
         c.parts = list(parts)
         c = _weigh(c, combined, cmd)
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
-    # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
-    found = _cd_store_read(cmds, subs) if c.category != "credentials" else ""
+    # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`). So does a `/` substitution of a store variable the gate
+    # does not spell out (#342: `cat ${HOME/%//.kube}/config`), anywhere on the line or in a word a brace set makes,
+    # as a secret path is.
+    found = "" if c.category == "credentials" else (
+        _cd_store_read(cmds, subs) or _store_subst(cmd) or _brace_store_subst(raws))
     if found and c.category == "store_write":
         # it weighs as a secret line does: its own parts' weight, and a heavier command deeper in it beside (#468 review)
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
@@ -5325,6 +5352,9 @@ def _exo_home() -> str:
 
 _STORE_VAR = re.compile(r"\$\{(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?=[^}\w])")
 _BRACE_EVENTS = re.compile(r"\\.|\$\{|\}|\n", re.S)
+_SUBST_HIDES = re.compile(r"[$<>]\(|[`'\"]")   # text in a `${..}` that bash reads as a unit, so a `}` in it may not close
+# A store variable, or a name read through indirection (`${!x}`, `${!1}`, `${!*}`), which may be one (#342)
+_SUBST_VAR = re.compile(r"\$\{(?:HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR|!(?:[A-Za-z_]\w*|\d+|[*@]))(?=[^}\w])")
 
 
 def _store_var(name: str) -> str | None:
@@ -5340,22 +5370,99 @@ def _store_var(name: str) -> str | None:
     return os.path.expanduser(store) if store else None
 
 
-def _store_var_ops(text: str, unset: bool, depth: int) -> str:
-    """``text`` with each `${VAR<op>word}` of a store variable spelt out (#202). `:-`, `-`, `:=` and `=` give the
-    value (_store_var), or the word when ``unset`` or the variable has none; `:+` and `+` give the word, or nothing
-    when ``unset``; `:?`, `?` and any other operator (`%/`, `#*/`, `:0`) give the value. The word is spelt out in turn,
-    its quotes dropped, to 8 levels. A form that does not close on its line, or with no value to give, stays as is."""
-    m = _STORE_VAR.search(text)
-    if not m:
-        return text
-    closes, opened = {}, []          # where each `${` closes, in one pass: a hostile line costs linear time
-    for e in _BRACE_EVENTS.finditer(text, m.start()):
+def _brace_closes(text: str, start: int) -> dict[int, int]:
+    """Where each `${` in ``text`` from ``start`` on closes, in one pass: a hostile line costs linear time. A form that
+    does not close on its line has no entry."""
+    closes, opened = {}, []
+    for e in _BRACE_EVENTS.finditer(text, start):
         if e[0] == "${":
             opened.append(e.start())
         elif e[0] == "}" and opened:
             closes[opened.pop()] = e.start()
         elif e[0] == "\n":
             opened.clear()
+    return closes
+
+
+def _store_subst(text: str) -> str:
+    """The first `/` substitution of a store variable in ``text`` that may add text, or '' (#342). Its pattern may
+    match any part of the value, so the gate does not spell it out and fails closed: a word with one is a store path
+    to the store-write and `cd` checks, and a shell line or read tool with one reads a secret store. That is a `/`,
+    `//`, `/#` or `/%` form whose replacement is not empty, also with a subscript (`${HOME[0]/%//.exo}`), nested in
+    any other form, or not closed on its line. A quote, `$( )`, `<( )` or backticks in it or its subscript may hide a
+    `}` and so where it ends (`${HOME/%[!"}"]/u\\/.exo}`), so it counts too, as does a `[` in its subscript, which may
+    hide the subscript's end (`${HOME[a[0]]/%//.exo}`). A name read through indirection counts as a store variable,
+    since the gate does not know which variable it names (`x=HOME; cat ${!x/%//.exo}/keys/seat`). Line continuations
+    go first, as bash drops them. A form with an empty replacement only removes text: it reads as the value."""
+    text = text.replace("\\\n", "")
+    m = _SUBST_VAR.search(text)
+    if not m:
+        return ""
+    closes = _brace_closes(text, m.start())
+    hiders = [h.start() for h in _SUBST_HIDES.finditer(text, m.start())]   # found once, so a hostile nest costs
+    shuts = [s.start() for s in re.finditer(r"\]", text)]                  # n log n, as each form looks them up
+    opens = [s.start() for s in re.finditer(r"\[", text)]
+
+    def first(marks: list[int], start: int, end: int) -> int:
+        n = bisect.bisect_left(marks, start)
+        return marks[n] if n < len(marks) and marks[n] < end else -1
+    while m:
+        j = closes.get(m.start())
+        end = len(text) if j is None else j
+        sub = text.startswith("[", m.end())
+        shut = first(shuts, m.end(), end) if sub else -1
+        hides = first(hiders, m.end(), end) >= 0 or 0 <= first(opens, m.end() + 1, end) < shut
+        k = shut + 1 if shut >= 0 else m.end()                                  # past a subscript
+        if text.startswith("/", k) or hides and sub:
+            cut = text.find("/", k + 2 if text.startswith("//", k) else k + 1, end)
+            if j is None or hides or 0 <= cut < end - 1:
+                return text[m.start():end + (j is not None)]
+        m = _SUBST_VAR.search(text, m.end())
+    return ""
+
+
+def _brace_store_subst(raws: list[str]) -> str:
+    """_store_subst of the words a brace set makes of each source word in ``raws``: a `$` that ends one of the set's
+    words starts a form after it (`{$,}{HOME/%//.exo}` is `${HOME/%//.exo}`). Only a word with such a `$` is
+    expanded. A word past the brace cap, or past what is left of the call's budget, counts, as it does for the other
+    callers of _brace_words: other checks may have spent the budget on the same call."""
+    for raw in (r.replace("\\\n", "") for r in raws):
+        if not re.search(r"\$[,}]", raw):
+            continue
+        words = _brace_words(raw)
+        if words is None:
+            return raw
+        found = next((s for w in words if (s := _store_subst(w))), "")
+        if found:
+            return found
+    return ""
+
+
+_subst_off: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_subst_off", default=False)
+
+
+def _spelt(check: Callable[..., bool], *a: Any, **kw: Any) -> bool:
+    """``check(*a, **kw)`` with a `/` substitution of a store variable not counted (_store_subst): whether the store
+    check finds the path by its spelling, as before #342. Where a call names a store path only by such a substitution
+    and another one the gate spells, the spelled one stays the call's target, so a deny, rule or reserved entry on it
+    still reaches the call."""
+    mark = _subst_off.set(True)
+    try:
+        return check(*a, **kw)
+    finally:
+        _subst_off.reset(mark)
+
+
+def _store_var_ops(text: str, unset: bool, depth: int) -> str:
+    """``text`` with each `${VAR<op>word}` of a store variable spelt out (#202). `:-`, `-`, `:=` and `=` give the
+    value (_store_var), or the word when ``unset`` or the variable has none; `:+` and `+` give the word, or nothing
+    when ``unset``; `:?`, `?` and any other operator (`%/`, `#*/`, `:0`, `/x`) give the value. A `/` substitution that
+    may add text fails closed in the store checks (_store_subst, #342). The word is spelt out in turn, its quotes
+    dropped, to 8 levels. A form that does not close on its line, or with no value to give, stays as is."""
+    m = _STORE_VAR.search(text)
+    if not m:
+        return text
+    closes = _brace_closes(text, m.start())
     out, i = [], 0
     while m:
         j = closes.get(m.start())
@@ -5970,7 +6077,10 @@ def is_store_path(path: str, ancestors: bool = False) -> bool:
 
 
 def _store_word(path: str, ancestors: bool = False) -> bool:
-    """is_store_path for one word whose braces are already expanded."""
+    """is_store_path for one word whose braces are already expanded. A word with a `/` substitution of a store variable
+    the gate does not spell out counts (_store_subst), but not under _spelt."""
+    if not _subst_off.get() and _store_subst(path):
+        return True
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
@@ -6004,9 +6114,10 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
 
 def _in_store_dir(path: str) -> bool:
     """A `cd` target inside EXO_HOME or the principal store: relative names after it may be the store. So is a
-    descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217)."""
+    descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217). So is a
+    target with a `/` substitution of a store variable the gate does not spell out (_store_subst), but not under _spelt."""
     p = _expand_text(path).strip()
-    if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")):
+    if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")) or not _subst_off.get() and _store_subst(path):
         return True
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
@@ -6395,6 +6506,21 @@ def _store_part(path: str, summary: str) -> Classification:
     return c
 
 
+def _subst_parts(stores: list[str], verb: str, target: str) -> list[Classification]:
+    """A `credentials` part for the first of a call's store paths ``stores`` with a `/` substitution of a store
+    variable that the gate does not spell out (_store_subst, #342). It may be a secret store, so a file tool's store
+    write keeps a secret read beside it, as a shell line's does, and a deny on credentials reaches it (`write_file
+    ${HOME/%//.kube}/config`). Each store path other than the call's ``target`` is a store write part too. The target
+    is one the gate spells where _spelt can tell, but not when the call's other paths spent the brace budget, so a
+    deny, rule or reserved entry on any of them still reaches the call."""
+    hid = next((p for p in stores if _store_subst(p) or _brace_store_subst([p])), "")
+    if not hid:
+        return []
+    c = _make("credentials", summary=f"{verb} {hid}"[:120], target=hid, link=hid)
+    c.signals.append("secret store")
+    return [*(_store_part(p, f"{verb} {p}") for p in dict.fromkeys(stores) if p != target), c]
+
+
 @_brace_budget
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
@@ -6428,7 +6554,10 @@ def _classify_call(action: Any) -> Classification:
         path = next((p for p in paths if is_sensitive_path(p)), "") or args_sensitive(args)
         cat = "credentials"
         if not path:
-            path = next((p for p in paths if is_store_path(p)), "")
+            in_store = [p for p in paths if is_store_path(p)]
+            if len(in_store) > 1:   # #342: a store path the gate spells stays the target (_spelt)
+                in_store.sort(key=lambda p: not _spelt(is_store_path, p))
+            path = in_store[0] if in_store else ""
             cat = "store_write" if path else "local_write"
         path = path or (paths[0] if paths else "")
         c = _make(cat, summary=f"write {path}", target=path, link=path)
@@ -6439,6 +6568,8 @@ def _classify_call(action: Any) -> Classification:
                        for p in dict.fromkeys(paths or [path])]
         if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
             c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p)]
+        elif cat == "store_write":  # #342: a store path the gate does not spell out may be a secret store too
+            c.parts += _subst_parts(in_store, "write", path)
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -6460,6 +6591,10 @@ def _classify_call(action: Any) -> Classification:
     else:
         cat = own = TOOLS.get(tool) or classify_by_name(tool)
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
+        if not secret and cat == "read":         # #342: a write to such a path is caught by is_store_path below
+            items = [args.get(k) for k in _PATH_ARG_KEYS]
+            secret = next((v for x in items for v in (x if isinstance(x, (list, tuple)) else [x])
+                           if isinstance(v, str) and (_store_subst(v) or _brace_store_subst([v]))), "")
         if secret:
             cat = "credentials"
         stores: list[str] = []
@@ -6471,6 +6606,8 @@ def _classify_call(action: Any) -> Classification:
             named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
                      else [args.get(k)]) if isinstance(v, str)]
             stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide)))
+            if len(stores) > 1:     # #342: a store path the gate spells stays the target (_spelt)
+                stores.sort(key=lambda v: not _spelt(is_store_path, v, ancestors=wide))
             if stores and not secret and cat in ("local_write", "delete"):
                 cat = "store_write"
         store = stores[0] if stores and not secret else ""
@@ -6508,6 +6645,8 @@ def _classify_call(action: Any) -> Classification:
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
         if secret:      # #447: each store path beside a secret is a part, so only the principal answers
             c.parts += [_store_part(p, f"{tool} {p}") for p in stores]
+        else:           # #342: a store path the gate does not spell out may be a secret store too
+            c.parts += _subst_parts(stores, tool, store)
     for r in readings(c):
         r.tool = tool
         _local_post(r)

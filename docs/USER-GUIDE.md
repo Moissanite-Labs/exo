@@ -314,7 +314,9 @@ What the gate asks about, and why:
   ~/.exo`) is still an ordinary read, and so is a harmlessly named symbolic link to a key file, read by its own
   name (#209). A read by a short name inside a secret store asks too when the shell tool was told to run there
   (its `cwd` or `workdir`), as it does after a `cd` there: `cat config` run in `~/.kube` asks every time and offers
-  no "always" (#311). `docs/GATE.md` lists the other spellings it misses.
+  no "always" (#311). A path that changes `$HOME` or Exo's folder with a `/` substitution
+  (`cat ${HOME/%//.kube}/config`) asks, since the gate does not work out what it gives (#342). `docs/GATE.md` lists
+  the other spellings it misses.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another. A post whose text the gate cannot

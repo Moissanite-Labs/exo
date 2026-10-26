@@ -6,6 +6,26 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A pattern substitution on a store variable no longer hides a store folder (#342). `${HOME/%//.kube}` is
+  `$HOME/.kube` in bash: the `%` pattern matches at the end of the value and the replacement is appended. The gate
+  read the form as the plain value, so `cat ${HOME/%//.kube}/config` was matched as `$HOME/config` and allowed. A
+  `/`, `//`, `/#` or `/%` substitution of `HOME`, `EXO_HOME`, `CLAUDE_CONFIG_DIR` or `EXO_PRINCIPAL_STORE` whose
+  replacement is not empty now fails closed, since the gate does not work out what the pattern matches. A read of
+  it asks as a store read (`credentials`). A write to it, or a `cd` into it, is a store write. This holds with a
+  subscript (`${HOME[0]/%//.exo}`), at any nesting depth and for any pattern, so a pattern that does not match
+  (`cat ${EXO_HOME/%x/y}/keys/seat`) asks as the plain path does. It holds across a line continuation and in a word a
+  brace set builds (`{$,}{HOME/%//.exo}`). A quote, `$( )`, `<( )` or backticks in the form, or a `[` in its
+  subscript, can hide where it ends (`${HOME/%[!"}"]/u\/.exo}`), so such a form asks too. Any other substitution
+  with an empty replacement still reads as the value. The cost: every such substitution of a store variable asks,
+  also on an ordinary path (`cp x ${HOME/%//backup}/a`). Operators that only remove text (`%`, `#`, `:0`) still
+  read as the value. A name read through indirection counts as a store variable, so
+  `x=HOME; cat ${!x/%//.exo}/keys/seat` asks. A brace set that builds the form asks also when the call's other
+  checks have spent its brace budget. A file tool's write to such a path keeps a `credentials` part, as a shell
+  line's does, so a deny on `credentials` denies `write_file ${HOME/%//.kube}/config`. When a call also names a
+  store path the gate spells, that path stays its target, so a deny on it still denies
+  `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml`. A file tool keeps each such store path as a part when its other paths
+  spend the brace budget. A secret path the gate spells stays a shell line's target beside a nested line with the
+  form, so a deny on it still denies `ssh h 'cat ${HOME/%//x}/a'; cp x ~/.ssh/id_rsa`.
 - Two follow-ups to #296 (#317). A ledger opened read-only through a symlink to a closed target held an
   `immutable=1` connection to the target itself: a writer that appended and checkpointed replaced the file
   under it, so the reader stayed stale and reading raised `database disk image is malformed`. The target is

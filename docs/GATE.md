@@ -586,10 +586,10 @@ walk every file under their path, and since #241 they leave the stores below it 
 search tools read" below).
 Tests: `tests/security/test_gate_brace_sets.py`.
 
-### Other spellings of a store path (#209, #202, #225, #199)
+### Other spellings of a store path (#209, #202, #342, #225, #199)
 
 A path can reach a store without spelling the store's name. The gate reads four such spellings the way the file
-system or bash will.
+system or bash will. A fifth, a pattern substitution, it does not spell out: it fails closed.
 
 - **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
   the session's working folder (the core passes it to tool hooks as `cwd`), and, for a shell tool, from that folder
@@ -607,12 +607,41 @@ system or bash will.
 - **Defaults (#202).** `${VAR:-word}` and the other operators are read for `HOME`, `EXO_HOME`,
   `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE`. The path is checked with the variable's value (as `$EXO_HOME`
   reads: Exo's folder, set or not) and with the variable unset (the default word, spelt out in turn, quotes
-  dropped). Both count. `-`, `:=` and `=` take the word when unset; `:+` and `+` give the word when set and
-  nothing when unset; `:?` and any other operator (`%/`, `#*/`, `:0`) read as the value. So
+  dropped). Both count. `-`, `:=` and `=` take the word when unset. `:+` and `+` give the word when set and
+  nothing when unset. `:?` and the operators that only remove text (`%/`, `#*/`, `:0`) read as the value. So
   `cat ${EXO_HOME:-$HOME/.exo}/keys/seat`, `tar czf - ${EXO_HOME:-$HOME/.exo}/keys` and
   `ls ${EXO_HOME:-$HOME/.exo}/run` ask with `EXO_HOME` set or not, and `write_file
   ${EXO_HOME:-$HOME/.exo}/policies/x.yaml` is a store write. A default is read to 8 levels of nesting; a deeper
   one stays as written.
+- **Pattern substitution (#342).** A `/`, `//`, `/#` or `/%` substitution of one of these four variables can add
+  text: `${HOME/%//.kube}` is `$HOME/.kube` in bash. Its pattern may match all of the value, part of it or none, so
+  the gate does not work out the result. When the replacement is not empty, the word fails closed. A read of it
+  asks as a store read (`credentials`). A write to it, or a `cd` into it, is a store write. This holds for every
+  anchoring, with a subscript (`${HOME[0]/%//.exo}`), nested at any depth in another form, and across a line
+  continuation. It holds in a word a brace set builds: bash expands braces first, so `{$,}{HOME/%//.exo}` is
+  `${HOME/%//.exo}`. It holds with a quote, `$( )`, `<( )` or backticks in the form, or a `[` in its subscript. Bash
+  does not end the form at a `}` inside one of those, or the subscript at the first `]` (`${HOME[a[0]]/%//.exo}`),
+  so the gate cannot tell where it ends: `${HOME/%[!"}"]/u\/.exo}` is `$HOME/.exo` when `$HOME` ends in `u`. Such
+  a form asks even with an empty replacement. So `cat ${HOME/%//.kube}/config`, `cat ${HOME/#*/~/.exo}/keys/seat` and
+  `cat ${EXO_HOME/%x/y}/keys/seat` ask, and `cp x ${HOME/%//.exo}/policies/default.yaml` and
+  `write_file ${HOME/*/~/.exo}/policies/x.yaml` are store writes. The replacement may name a secret store as
+  well, so a store write keeps a `credentials` part beside it, from a shell line or a file tool. A deny on
+  `credentials` denies `write_file ${HOME/%//.kube}/config` as it denies `write_file ~/.kube/config`. A word that
+  builds the form with a brace set fails closed too when it makes more words than the brace cap, or than what
+  the call's other checks left of its brace budget. A name read through indirection counts as one of the four
+  variables, since the gate does not know which variable it names: `x=HOME; cat ${!x/%//.exo}/keys/seat` is
+  `$HOME/.exo/keys/seat` in bash and asks. When the call also names a store path the gate spells, that path stays
+  its target, so a deny or reserved entry on it still reaches the call:
+  `cp ${HOME/%//x}/a ~/.exo/policies/x.yaml` is a store write to `~/.exo/policies/x.yaml`, with `${HOME/%//x}/a`
+  as a store write part beside it. When a file tool's other paths spend the brace budget, the gate cannot tell
+  which store path it spells, so each store path other than the target is a store write part too. A nested line
+  that holds the form, such as an ssh remote command, `bash -c` or a `$( )`, is `credentials` with the form for its
+  target. A secret path the gate spells on the same line stays the line's target, as on main, and the nested line
+  is a part. So `deny: [target:*/.ssh/*]` denies `ssh h 'cat ${HOME/%//x}/a'; cp x ~/.ssh/id_rsa`. A substitution
+  with an empty replacement only removes text and reads as the
+  value (`cat ${HOME//x}/notes.txt` stays a read). The cost: every such substitution of a store variable asks,
+  also one that leaves an ordinary path (`cp x ${HOME/%//backup}/a`), and so does one through any indirect name
+  (`echo ${!v//:/ }`). Other variables keep their reading (`echo ${PATH//:/ }`, `echo ${PWD/#$HOME/~}`).
 - **Expansions inside a name (#225).** Bash drops an empty command substitution, and an unset variable expands to
   nothing, so `cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc` and `cat ${x}.env` read the store. A shell word
   that holds a `$( )`, a backtick pair, or a `${..}` or `$name` other than the four variables above is also
@@ -637,7 +666,17 @@ Known limits. A link made on the same line (`tar xf v.tar && cat notes.txt`) doe
 classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the store. Programs that follow links
 while they walk (`grep -r`, `rg -L`, `cp -rL`) are checked by their arguments only. In executor or broker mode the
 gate's view of the file system may differ from the worker's. A name built whole inside a substitution
-(`cat $(printf '.e%sv' n)`) is not read. Open issues:
+(`cat $(printf '.e%sv' n)`) is not read. Some forms that bash resolves into a store stay reads or ordinary
+writes, as before #342. One is an operator that removes text which the path then puts back (#531):
+`cat ${EXO_HOME%/*}/exo-home/keys/seat` is a read, and `cp x ${EXO_HOME%-home}-home/policies/default.yaml` is a
+shell command. A substitution with an empty replacement is read the same way
+(`cat ${EXO_HOME/%home/}home/keys/seat`). Others are a subscript before another operator
+(`cat ${HOME[1]:-~/.exo}/keys/seat`, where bash takes the default), a substitution of another variable whose
+replacement names a store (`cat ${PWD/*/$HOME/.exo}/keys/seat`, #532), and a variable that holds a store variable's
+value or name (#475): a copy (`h=$HOME; cat ${h/%//.kube}/config`), a nameref
+(`declare -n r=EXO_HOME; cat $r/keys/seat`), a positional parameter (`set -- $HOME`) or an indirect name with no
+substitution (`x=EXO_HOME; cat ${!x}/keys/seat`). `XDG_CONFIG_HOME` is not one of the four store variables, so
+`cat $XDG_CONFIG_HOME/gh/hosts.yml` is a read too. Open issues:
   - #309: the Exo-store write checks (`is_store_path`, "The store is credentials" below) read the `${VAR:-word}`
     value but not expansions inside a name, so `cp x ~/.exo/polic$(:)ies/gates.yaml` is still a shell command (a
     write redirection to a path with `$` already asks as `opaque_exec`);
@@ -646,6 +685,7 @@ gate's view of the file system may differ from the worker's. A name built whole 
   - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved.
 
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
+`test_gate_store_var_substitution.py`,
 `test_gate_expansions_in_names.py`, `test_gate_bash_glob_classes.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
