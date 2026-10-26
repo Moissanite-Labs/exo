@@ -4446,6 +4446,14 @@ def _displace_with(c: Classification, **changes) -> None:
     c.parts, c.displaced = [lead if q is old else q for q in c.parts], lead
 
 
+def _write_summary(lead: Classification, write: Classification) -> str:
+    """The summary of a sudo write copy (#454): the program of the part it displaced and the written path. The write
+    is named under that program only when it is on that program's own command (`chmod, write /tmp/f`), else apart
+    from it (`gh pr view; write /tmp/f` for `sudo gh pr view 1; sudo echo hi > /tmp/f`)."""
+    sep = ", " if lead.own is not None and lead.own == write.own else "; "
+    return f"{lead.summary or lead.category}{sep}write {write.target}"[:120]
+
+
 def _raise_axes(c: Classification, exposure: str = "private", reversibility: str = "reversible") -> None:
     """Raise c's exposure and reversibility in place to at least these: a remote command runs on the host, sudo and
     the privileged wrappers make a reversible part costly. The part a sudo write copy displaced (#454) is raised with
@@ -4486,13 +4494,14 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
         # its displaced part's. A part that outranks a read leads again: an unknown program (`echo $(sudo echo hi >
         # /tmp/f) $(foo)`), or ssh running its stdin. Any other is the part the copy displaces, and the summary names
         # it, so a rule on the repo of `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line.
+        # It names the two apart when that part is on another command than the write (`gh pr view; write /tmp/f`).
         at = max(range(len(parts)), key=lambda i: (*_severity(parts[i])[:3], False) if parts[i].displaced is not None
                  else _severity(parts[i]))
         before = parts[at].displaced or parts[at]
         if _severity(before)[3]:
             c = before
         elif before is not c.displaced:
-            c.summary, c.displaced = f"{before.summary or before.category}, write {c.target}"[:120], before
+            c.summary, c.displaced = _write_summary(before, c), before
     if c.own_signals is None:
         c.own_signals = list(c.signals)
     c.signals = list(dict.fromkeys(c.signals + signals))
@@ -5216,11 +5225,12 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # part leads the line, a copy of the first sudo write with its cost leads in its place, so the line has the
     # category it has without sudo. Every other part ranks below the copy, and a part that outranks the read (an
     # unknown program) keeps the lead. The copy keeps the part it displaced, so decide() still reads the line with
-    # that part leading (a rule on a gh read's repo), and its summary names both. The parts stay as they are.
+    # that part leading (a rule on a gh read's repo), and its summary names both (_write_summary). The parts stay as
+    # they are. No read or shell part is a third party, so that axis needs no check.
     lead, writes = _most_severe(parts), ctx.get("sudo_writes")
-    if writes and lead and lead.category in ("read", "shell") and lead.exposure == "private" and not lead.third_party:
+    if writes and lead and lead.category in ("read", "shell") and lead.exposure == "private":
         top = replace(writes[0], reversibility=lead.reversibility, displaced=lead,
-                      summary=f"{lead.summary or lead.category}, write {writes[0].target}"[:120])
+                      summary=_write_summary(lead, writes[0]))
         c = combined = _combine([top, *parts], cmd)
     else:
         c = combined = _combine(parts, cmd)

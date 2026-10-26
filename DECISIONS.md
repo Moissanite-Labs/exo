@@ -2323,6 +2323,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `_combine`. An ssh line with a sudo write and unread stdin therefore fills the host on the opaque stdin part
   that leads, as before: `ssh -p 2? prod 'sudo echo hi > /tmp/f' < x.sh` keeps `prod` as its target, so a deny on
   opaque execution at that host still denies. The two existing stdin/sudo regression rows fail without this join.
+  *Amendment 2026-10-25 (issue #454, after #492 merged):* #492 merged (0889b351) with 040702d0 and the integration
+  fix f8b5e2f7, before the answer to its last review (5640972780) was pushed. This amendment carries that answer. The
+  host reaches the displaced part only in the hop form (`ssh prod 'sudo echo hi > /srv/out'`). `ssh -o RemoteCommand=`
+  names no host in the line it runs, so no host reaches the copy or the part it displaced, and a rule that asks or
+  logs on the host does not reach `ssh -o RemoteCommand='sudo echo hi > /srv/out' prod`. Before #454 that line was
+  logged the same way, as a costly `read` with no target, and the line without sudo misses the rule too. So this is
+  parity, not a lowering, and issue #493 covers it. ssh's own part still names the host, so a rule that denies it, and
+  a deny or reserved entry for it, still reach the line (D-075). The copy's summary names the write under the
+  displaced part's program only when the write is on that part's own command.
+  `sudo gh pr view 1 -R o/r; sudo echo hi > /tmp/f` read `gh pr view, write /tmp/f`, as if gh wrote the file, and now
+  reads `gh pr view; write /tmp/f`. A nested copy whose displaced part is on another command reads the same way. When
+  the line asks with the displaced part leading, the card links to that part. A `shell` part with no link, such as
+  `chmod`, falls back to the written path as its Link. The copy no longer checks whether that part is a third party,
+  since no `read` or `shell` part is one. Against main edeb4f89 the differential lowers and tightens no pair. The
+  built-in corpus (71,740 actions x 87 policies) changes nothing else either. 459 lines of sudo writes beside another
+  sudo command, after `;`, `&&`, `||` and `|`, behind wrappers, in `bash -c`, `sh -c`, ssh hops,
+  `ssh -o RemoteCommand=`, `xargs`, `$( )`, subshells, heredocs and cd chains (1,577 actions x 111 policies, 24 of
+  them keyed on the host, the repo, the path, categories, reserved and deny entries, escalations, third party and
+  `command`) change 108 pairs in their reason only, where a deny names the new summary. A second corpus of 1,270 lines
+  (24 other sudo commands beside a sudo write, the same nests, spellings of sudo and of the redirection, and everyday
+  `git`, `make` and `pytest` lines) under 20 more policies (4,014 actions x 107) changes 786 pairs, each only in the
+  summary its reason quotes.
   *Amendment 2026-10-22 (issue #316, follow-up to #240):* ssh's stdin reached its login shell in five more ways the
   gate did not see, so the line read as plain `ssh` and was allowed, even under category denies. (1) A compound fed a
   stdin the gate cannot read: the closer's `<` from anything but a lone `/dev/null`, or a pipe in whose text is not
