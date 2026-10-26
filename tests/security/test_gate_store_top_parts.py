@@ -328,3 +328,13 @@ def test_leading_separator_keeps_remote_write_policy(tool):
 def test_unknown_category_policy_still_applies_after_camel_split(tool):
     c = classify({'tool': tool, 'args': {'path': 'notes.md'}})
     assert decide(c, pol(categories={'unknown': 'deny'})).outcome == 'deny'
+
+
+def test_camel_floor_keeps_each_store_target_from_main():
+    paths = ['~/.exo/config.json', '~/.exo/policies/gates.yaml']
+    c = classify({'tool': 'mcp__fs__readFile', 'args': {'paths': paths}})
+    assert c.floor is not None and c.floor.category == 'store_write'
+    assert c.floor.target == paths[0]
+    assert paths[1] in [p.target for p in c.floor.parts]
+    for path in paths:
+        assert decide(c, pol(deny=[f'target:{path}'])).outcome == 'deny'

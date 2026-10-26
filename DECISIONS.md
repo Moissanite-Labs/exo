@@ -470,13 +470,33 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   pins the old one (`exo keys pin --replace`), a seat file naming a key outside `keys/` (pin it), a profile name that
   is not a seat id, and a key with no principal of its own toward a seat that names one (a seat file). Not changed:
   under D-039 any same-uid socket client can ask a daemon to `peers send`, which arrives as `same-principal`
-  automation, by design. A process outside the gate can still read seat keys or write `keys/`. A forged presence
-  file still says where its name listens: it can receive the messages sent to that name and answer a send with the
-  first receipt, which is not signed (a follow-up). A tool call may change `config.json`, which after a restart can
-  change the principal a key with no seat file counts as toward a daemon with no seat principal. Rejected: holding
+  automation, by design. A process outside the gate can still read seat keys or write `keys/`. A tool call may
+  change `config.json`, which after a restart can change the principal a key with no seat file counts as toward a
+  daemon with no seat principal. Rejected: holding
   a same-name seat with a different key as `other` without a pin, which would let any presence file under a pinned
   name reach the card. Rejected: giving a key with no seat file the receiver's `EXO_PRINCIPAL`, which a seated exod
   sets to its own seat's principal, so every such key reached that seat as its principal (#525 review).
+  *Amendment 2026-10-26 (#523, forged presence cannot take a send or answer for its name):* the #132 amendment left
+  the named gap above: a forged presence file under a name whose key this home pins named the attacker's own socket
+  and `send` shipped the text there, and its unsigned first receipt was published to the sending model (later
+  receipts were checked already). Both halves close with the same primitives. A daemon's presence entry now signs
+  itself: the entry carries its seat key's signature over the whole entry but the signature. Before the text
+  ships, `send` re-reads the file the row came from and requires the entry to hold a key pinned for that seat here
+  and to carry that key's signature, and the socket shipped to is the socket inside the entry that verified: a
+  file with a socket of its own, with the pinned key's public half copied into it beside that socket, or with no
+  signature, is refused and nothing is sent, and the socket the scan saw is not shipped to once the file no longer
+  verifies. The receiver signs the first answer to a `deliver` with its seat key (`msg_id`, `state`, `detail`,
+  `mode`, `session`, `by`, `daemon`, `ts`, the same doc shape a later receipt uses), and the sender verifies it
+  against the keys pinned here for the seat the message went to, as `receipt` does since #132; a reply that does
+  not verify is not published and the send fails. A name this home holds no key for is unchanged: no ship check,
+  no reply check, the receive side's trust ladder decides what arrived, and such a peer is still held as `other`.
+  A bus seat keeps the old shape on purpose: the bus routes by seat through the relay the send already posts to,
+  never through a socket a presence file names, so a forged file cannot redirect a bus send, and the bus ack
+  carries no outcome of the peer's own (its `delivered` names the relay's seq), so there is no first receipt to
+  verify. Stricter than before for one honest setup: a daemon whose presence file or first receipt is unsigned, as
+  an older `exo`'s are, cannot be sent to while a key is pinned for its seat; update it, or leave its seat
+  unpinned, and the trust ladder applies. Rejected: requiring a pinned key for every name, which breaks messaging
+  an unpinned peer of another home until `exo keys pin --peer`, a step the receive side does not ask for either.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -1210,6 +1230,29 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-26 (issue #514):* a store write names every store path it writes a target, not only the
+  first one the scan meets. The scan returned at the first store path and made one `store_write` part of it, so a
+  `target:` deny or `reserved:` entry on a later path missed: `cp ~/.exo/policies/a.yaml
+  ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from `a.yaml` to `gates.yaml` and `delete_file` on
+  both paths asked under `deny: ["target:*/gates.yaml"]`, where an approver could have waved the write through.
+  The scan now keeps each store path a shell line or file tool writes, in the order it meets them, and each is a
+  `store_write` part with that path as its target, as beside a secret (#447). The first path still leads the line,
+  `rm` of both paths was denied already (its `delete` part names the last path), reads keep their class, and the
+  first path alone decides as before. Each new part only adds a match, so no decision is lower; gate_diff ran
+  main 5a5a535d against this change and found 0 lowered.
+- *Amendment 2026-10-26 (issue #461):* a gh download or clone writes the store the way `curl -o` and
+  `git clone` do. gh's download and clone subcommands read on GitHub, so the store check took a line whose
+  every part reads as a read for a read and never looked at their output paths: `gh release download -O
+  ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, `-O ~/.exo/update/allowed_signers`
+  replaced the signed-update trust pin (#133), `gh run download` and `gh attestation download` with
+  `-D`/`--dir` filled `state/`, and `gh repo clone` or `gh gist clone` with a store directory filled it too,
+  where `curl -o` and `git clone` on the same paths ask. Now the store check reads their output paths as
+  writes — `-O`/`--output` and `-D`/`--dir` in every spelling, the clone's directory word, also with `--`
+  before it — wherever the line stands: under `sudo`, in `bash -c` or a `$( )`, and past a `-R` before the
+  subcommand (#399). The line grows a `store_write` part and keeps the gh read as its other part (D-075), so
+  a deny, `reserved:` entry, rule or matrix cell on the gh reading still holds, and the decision is the
+  principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store and
+  every other gh read.
 - *Amendment 2026-10-24 (issue #542):* an explicit `gates.escalate` must be a mapping, and its `categories`, when
   present, must be a list. A malformed value raises `PolicyError` during normalization and store policy loading,
   rather than silently retaining defaults or using substring membership on a string. Omitted settings, an empty
@@ -1243,6 +1286,39 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   every tightening) and over the other sections alone (lower than after #542 for a section looser than the defaults);
   a malformed list's names count, tighten only; merging the old and new decisions of two valid files is a separate
   issue.
+- *Amendment 2026-10-26 (issue #494):* a file tool's store path is read under every key it names a path by, and a
+  move of a folder that holds the store is a store write with no secret beside it, as `mv` is. The generic
+  file-tool branch read a store path only under `path` and the other `_PATH_ARG_KEYS` names, and passed
+  `ancestors=` only for a delete, so `move_file ~/.exo -> /tmp/x` was a `local_write` that ran with no ask where
+  `mv ~/.exo /tmp/x` asked, `mcp__filesystem__move_file` with the same args was a `remote_write` that only logged,
+  and a store path under `to`, `target`, `new_path`, `old_path`, `from` or `dst`
+  (`rename_file {"path": "~/.ssh/id_rsa", "new_path": "~/.exo/policies/gates.yaml"}`,
+  `move_file {"source": "/tmp/a", "to": "~/.exo/policies/gates.yaml"}`) was missed: beside a secret it got no store
+  write part, so a seat delegated `credentials` could answer it, and with no secret it was no store write at all.
+  Now the scan reads those keys too, a tool whose name says move or rename (`_WIDE_WORDS`, a camelCase name split)
+  passes `ancestors=` as `mv` does, with or without a secret, so a camelCase delete of the home
+  (`deleteFile ~/.exo`) asks as `rm -rf ~/.exo` does, and a read-verb tool that writes what it took where its path
+  arguments say (`download_file`, `export_report`; `_FETCH_WRITE_WORDS`) runs the store scan, so a download into
+  the policy files asks while a plain read of the store stays a read. A relative destination is read from the
+  session's folder the core passes (#209), as `_sensitive_words` reads a relative secret name:
+  `move_file` to `policies/default.yaml` from a session folder in `~/.exo` is a store write, and beside a secret it
+  is a part, so only the principal answers. The resolution is the file tools' own: a shell line still reads its
+  store writes from its own words, so `echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`
+  (#453), and the gate's own folder is not one of the bases, where a bare `run` word is not the run folder
+  (#D-039). A copy of the store keeps its reading (`copy_file ~/.exo -> /tmp/x` is no store write, as `cp -r`
+  reads it), and a read tool without a write word (`fetch_log`) is not scanned. Chosen over scanning every string
+  argument for the store, which would read a write's `content:` that quotes a store path, and over resolving
+  relative names in the shell's per-word scan, which cannot tell a write's operand from a read's
+  (`cat *` beside the folder's read part in `~/.exo/run` would have made the line a store write where the
+  #452 tests keep it a force push beside a part). D-074's config file is reached under the new keys and from the
+  session folder as under `path` (`move_file {"source": "/tmp/a", "to": "~/.exo/config.json"}`,
+  `write_file "config.json"` from a session folder in the home), read as before D-074 in the ordinary reading as
+  every other way of reaching it is. The gate differential against the main checkout dcab371a (`scripts/
+  gate_diff.py --no-variants --jobs 4`, base main, head this branch) finds 0 lowered pairs: 11,114 actions x 87
+  policies, 5,988 pairs tightened on 102 actions (unknown, read, local_write and remote_write allow to
+  `store_write` ask, and to `credentials` ask where the new keys name a secret), 409 pairs reworded in detail.
+  Tests beside the #489 rows (`plugins/exo-gate/tests/test_store_floor_any_part.py`) and in the D-074 file
+  (`tests/security/test_gate_config_store.py`).
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
   `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
   grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on
@@ -1537,6 +1613,39 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `cd ~/.exo/policies && echo $(echo $(gh pr comment 3 --body hi))` the post's bare violation is now named after the
   post, since the store write sets the card. Both trees list it, and the #460 script counts it as reworded. 685,477
   pairs are stricter, nearly all the store-write ask on the forms above.
+  *Amendment 2026-10-26 (issue #459):* the other folders Exo loads code from join the protected list, as the
+  plugins folder did (above, #435): the venv, Hermes' plugin home, the source copy and the folders
+  `$EXO_PLUGIN_DIRS` names. Each is code the next session or this one loads and runs: the venv holds the `exo`
+  package and this gate itself, so a changed `gate.py` decides every later call and a `.pth` file in its
+  site-packages runs on every interpreter start (a changed gate could rule its own change and any later write
+  through); with `--with-hermes` the core loads exo-gate from Hermes' plugin home; the installer clones a git
+  URL into `$EXO_HOME/src/exo` and `exo update` copies plugins from the copy, and `exo web` reads plugins from
+  `<package>/../../plugins` of the installed copy; `default_dirs` searches `$EXO_PLUGIN_DIRS` first and keeps
+  the first plugin found of a name, so a plugin named `exo-gate` in a folder there takes the real one's place.
+  Each is read as the environment the gate sees spells it, as EXO_HOME is: the venv `EXO_VENV` names, else the
+  home's own `venv`; Hermes' plugin home under `EXO_HERMES_HOME`, else the home's own `hermes-home/plugins`;
+  the home's `src`; every non-empty, absolute dir in `EXO_PLUGIN_DIRS` split on `os.pathsep`. A Hermes home
+  only config.json or a later `set_cfg` names is not read: the gate reads no config.json content (D-074), so
+  write the locations into the environment. And, by name, `.exo/venv`, `.exo/src` and
+  `.exo/hermes-home/plugins` match anywhere in a path, as `.exo/plugins` does — the two names stay out of the
+  default spellings: a relative `EXO_VENV` or dir is a constant of the tool's working folder, which the gate
+  cannot see, and a `.venv` name is not Exo's (no install script makes one, EXO_VENV is the only override),
+  as `hermes-home`'s own other contents are not (the launch scripts the installer writes live in
+  `$EXO_HOME/bin`, and Hermes' own state — its database, its registry — is not code). `cd` into a code folder
+  also counts, like a `cd` into the store (#203's reading): a relative write after it asks. Now `cp evil.py
+  ~/.exo/venv/lib/python3.13/site-packages/exo/gate.py` (an allowed `shell`), a `write_file` there (an allowed
+  `local_write`), `pip install --target ~/.exo/venv/lib/python3.13/site-packages`, `tar -C ~/.exo/src`, `git
+  clone ... ~/.exo/venv/evil` and a `.pth` beside `exo` ask. Reads stay reads. A delete or move counts like a
+  `delete` of a store folder: `rm -rf ~/.exo/venv` and `mv ~/.exo/src x` ask, and so does `rm -rf ~/.exo`,
+  since a code folder sits below the home it covers. A file tool keeps a `local_write` part and a line keeps
+  its own command and parts, exactly as #435's amendment keeps them. Not protected, each for the reasons the
+  #435 amendment gave first, now for the folders themselves: a developer's checkout named in
+  `$EXO_PLUGIN_DIRS` (protected since this change, the cost accepted: the principal is asked for every edit in
+  a checkout the session points the variable at, which everyday work avoids by leaving the variable unset), a
+  `pip install` into the live venv (the gate is in it, so an installed wheel now asks; everyday work installs
+  into a project or scratch venv), and `exo update`, `exo` venv inspections, which are reads and stay reads.
+  The gate differential against main dcab371a (#423) ran the built-in corpus and the #435 review corpora,
+  then the new writes of this change as rows, and lowered nothing.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,

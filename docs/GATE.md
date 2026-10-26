@@ -446,15 +446,20 @@ A file tool that names a secret and a store file is `credentials` too: `apply_pa
 `~/.exo/policies/gates.yaml`. Each store file such a tool writes, moves, copies or deletes is a
 `store_write` part, so the call is the principal's alone as well. A move, rename or delete of a
 folder that holds the store counts too, as `mv` and `rm` do (`move_file` from `~/.exo` to
-`~/.ssh/x`). So does a tool whose camelCase name's words are a move, rename or delete
-(`moveFile`, `deleteFile`), which the name reads beside the name's own word (#515). A file tool
-that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` from `~/.exo` to
+`~/.ssh/x`), with or without a secret beside it (#494). So does a tool with a camelCase name
+(`moveFile`, `deleteFile`). Its camelCase words add a reading while the complete unsplit call remains a policy floor (#515). The store path is read under every key a tool names a path by, not
+only `path` and `source`: `to`, `target`, `new_path`, `old_path`, `from` and `dst` among the others
+(#494). A tool named with a read verb that writes what it took where its path arguments say
+(`download_file`, `export_report`) reads the store as a write's, so a download into the policy
+files asks; a plain read of the store stays a read. A relative destination is read from the
+session's folder, as a secret name is (#209): `move_file` to `policies/default.yaml` from a session
+folder in `~/.exo` asks, and beside a secret the store file is a part, so only the principal
+answers. A shell line still reads its store writes from its own words, so `echo x > gates.yaml`
+with `~/.exo/policies` as `cwd` stays a `local_write` there (see "The tool's own folder"). A file
+tool that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` from `~/.exo` to
 `~/.ssh/x`, as `cp -r` does), or writes a secret outside the store (`write_file ~/.ssh/config`),
-has no such part and keeps the delegation. With no secret, a file tool's move of a folder that
-holds the store is not read as a store write yet (#494), and a delete of one asks the principal as
-`delete_file`'s does, the camelCase name included ("Secret-store paths", "A camelCase tool name
-reads its words beside the name's one word (#515)"). The hook's error
-fallback reads the parts too (see "The store is credentials").
+has no such part and keeps the delegation. The hook's error fallback reads the parts too (see
+"The store is credentials").
 
 ## Who answered: the connection, not the body (D-039)
 
@@ -2293,7 +2298,9 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of `$EXO_HOME`,
 `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus` (the bus registry
 that signed seat answers and the relay trust, the relay database and its `-wal`, `-shm` and
-`-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435), `$EXO_HOME/update`
+`-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435) and the other folders Exo loads
+code from (#459, below: the venv, Hermes' plugin home, the source copy and the folders
+`$EXO_PLUGIN_DIRS` name), `$EXO_HOME/update`
 (`allowed_signers`, the signed-update trust pin of D-073, #133), `$EXO_HOME/config.json` (D-074,
 #125: the plugins the core loads, this gate among them, as `core_plugins`, their config, the `venv`
 that runs Hermes and Exo, each provider's `base_url` and headers, and the `principal` a peer key
@@ -2304,8 +2311,9 @@ file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and `EXO_B
 the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_`
 name, and both spellings when both are set. Distinctive names match anywhere, so a relative
 `policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or
-`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins`, `.exo/update` and
-`.exo/config.json` count whatever `EXO_HOME` is. A project folder called `update` is ordinary. Only a
+`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins`, `.exo/venv`, `.exo/src`,
+`.exo/hermes-home/plugins`, `.exo/update` and `.exo/config.json` count whatever `EXO_HOME` is. A project
+folder called `update` is ordinary. Only a
 file in it named `allowed_signers` asks. `config.json` is not a distinctive name: only the home's own
 file counts, so a project's `config.json`, and `config.json.bak`, `config.json~` or `config.jsonl`
 beside the home's, keep their class (one under `plugins/` asks with that folder, #435). A relative
@@ -2326,6 +2334,30 @@ it, with the folder spelt with `~`, `$HOME` or `$EXO_HOME`, as its resolved path
 it, or as a relative `.exo/plugins/...`. That covers a plugin's own files too, such as its
 `config.json`. A read with a read command stays a read: `cat`, `ls`, `grep -r`, `find`, `diff`,
 `git -C <folder> log`, and the read tools (`read_file`, `list_dir`, `grep`, `glob`).
+
+The other code folders (#459). Exo loads code from four more, and a write into any of them is a
+`store_write` in the same ways the plugins paragraph names, with the same reads left alone. They are
+read as the environment the gate sees spells them, as EXO_HOME is. The venv, `${EXO_VENV:-$EXO_HOME/venv}`
+(scripts/install.sh), whose `site-packages` holds the `exo` package and this gate: a changed `gate.py`
+decides every later call, and a `.pth` file in `site-packages` runs on every interpreter start, so `cp
+evil.py ~/.exo/venv/lib/python3.13/site-packages/exo/gate.py` or `cp x
+~/.exo/venv/lib/python3.13/site-packages/evil.pth`, `pip
+install --target` or `--prefix` or `--root` into it and `git clone` into the venv ask. Hermes' plugin
+home, `${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}/plugins`, which the core loads exo-gate from with
+`--with-hermes`. The source copy, `$EXO_HOME/src`, which the installer clones a git URL into and `exo
+update` refreshes, and whose copy `exo web` reads plugins under `<package>/../../plugins` of.
+And the folders `$EXO_PLUGIN_DIRS` names (`default_dirs` searches them first and keeps the first plugin
+found of a name, so a plugin of a core name there takes the real one's place). Each absolute spelling is
+checked against the folder's own, so a link into or out of it counts both ways, and a `cd` into one, or a
+`git -C` on it, makes the relative names after it count. Not code, and not protected: a `.venv` folder
+under the home (no install script makes one, EXO_VENV is the only override), the rest of
+`hermes-home` (Hermes' own state, its database and registry, not the code), a relative `EXO_VENV` or
+`EXO_PLUGIN_DIRS` value (a constant of the tool's working folder, which the gate cannot see), and a
+Hermes home that only config.json names (D-074: the gate reads no config.json content). The cost: a `pip
+install` into the venv Exo itself runs from now asks; everyday work installs into a project or scratch
+venv, not into `$EXO_HOME/venv`, so the ask is rare. Editing a checkout named in `$EXO_PLUGIN_DIRS`
+now asks on every write, so leave the variable unset while the principal edits, or point it at the
+checkout only for sessions that must load it.
 
 What a policy can still do there. As for every protected folder, the call keeps its own reading as a
 part. A shell line keeps its own command. A file tool keeps a `local_write` part for each file it
@@ -2360,10 +2392,8 @@ only read but that the gate reads as `shell` or `opaque_exec`: `sed -n 1,10p`, `
 goes to a file elsewhere. The installer puts every core plugin in the folder, so read plugin code
 with `cat`, `grep` or a read tool. Main reads `policies/` and `state/` the same way. Running a
 plugin's own script by its path (`~/.exo/plugins/foo/tool.sh`) asks the principal alone too, where
-before a seat could answer its `opaque_exec` ask. Not covered here: the folders in
-`$EXO_PLUGIN_DIRS`. Section 4 of the developer guide points that variable at a checkout's `plugins/`,
-so a principal-only floor there would ask on every edit, and protecting it is a separate change. The
-installer and `exo update`, which copy Exo's plugins into the folder, stay `opaque_exec`. A copy that
+before a seat could answer its `opaque_exec` ask. The installer and `exo update`, which copy Exo's
+plugins into the folder, stay `opaque_exec`. A copy that
 lands on the folder by a source's name (`cp -r /tmp/x/plugins ~/.exo/`) or an archive unpacked into
 the home (`tar -xf x.tar -C ~/.exo`) is not seen as a write to it, as for every protected folder. Nor
 is a relative path written by a tool whose working folder is in the plugins folder or in `$EXO_HOME`
@@ -2407,7 +2437,8 @@ policies)/default.yaml`, `cp x ${x:-$HOME/.exo}/policies/a`, `cd ~/.e$(:)xo && c
 `_STORE_NAMES` matches, from the same list, so the bus store and the update signers file count too
 (`cp x ~/.exo/bu$(printf s)/x`, `cp x ~/.exo/b$(printf u)s/registry.json`, and `cp x
 ~/x/update/allowed_$(printf s)igners`, which matches in any folder as the unsplit name does), and so
-does the plugins folder (#435) in each form `policies/` is read in (`cp x
+does the plugins folder (#435) and the other code folders (#459, `venv`, `src`, `hermes-home/plugins`) in
+each form `policies/` is read in (`cp x
 ~/.exo/plug$(:)ins/foo/__init__.py`, `cp x ${x:-$HOME/.exo}/plugins/foo/x.py`, `cd ~/.e$(:)xo && cp
 x plugins/foo/x.py`, `tar -C ~/.exo/plug$(:)ins -xf evil.tar`). As for a glob read, a match needs a
 part with three characters of its own before its extension, and a store file's name needs them
@@ -2511,7 +2542,13 @@ path is one the gate cannot resolve, not that the command writes it. A body file
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
-`sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
+`sqlite3`, `touch`, `ln`), a gh download or clone into it (#461): `gh release download` with `-O`
+or `--output` (also `=`-attached), `gh run download` and `gh attestation download` with `-D` or
+`--dir`, and `gh repo clone` and `gh gist clone` into their directory word, with or without `--`
+before it. These read on GitHub, so the store check took the line for a read and never looked at
+the paths before; now it does, under `sudo`, in `bash -c` and a `$( )`, and past a `-R` before the
+subcommand. `-O -` prints to stdout and stays a read, and so does a path outside the store. Also
+a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
 `unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and
 `exo interview`, which writes the principal store (also as `python -m exo.config`, `exo.cli` or
@@ -2572,7 +2609,13 @@ part (#447), and so is a folder holding the store that it moves, renames or dele
 `store_write` deny or `reserved:` entry, or a `target:` entry on any of those files, applies:
 `move_file` from `~/.ssh/id_rsa` to `~/.exo/policies/gates.yaml` is denied under
 `deny: [store_write]`, and `copy_file` from `~/.exo/keys/seat.key` to `~/.exo/policies/gates.yaml`
-under `deny: ["target:*/.exo/policies/*"]`, where they asked before.
+under `deny: ["target:*/.exo/policies/*"]`, where they asked before. With no secret beside it the
+same (#514): each store path a shell line or file tool writes is a `store_write` part, with that
+path as its target, not only the first one the scan meets, which is still the call's own target.
+So `cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from
+`a.yaml` to `gates.yaml` and `delete_file` on both paths are denied under
+`deny: ["target:*/gates.yaml"]`, where they asked before; `rm` of both was denied already, as its
+`delete` part names the last path.
 After `cd /dev` or `cd /proc/self/fd`, a line naming a store path (`printf x > update/allowed_signers`)
 has that path as its target, and the descriptor folder is a second store-write part (#464), so a
 `target:/dev*` or `target:/proc*` deny still denies it. On a store-write line, a relative key read after `tar -C` into
