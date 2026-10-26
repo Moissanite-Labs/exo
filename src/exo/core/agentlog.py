@@ -91,7 +91,7 @@ class AgentLogView:
         """Entries ``start`` .. ``start + n - 1`` in full (one long entry is paged)."""
         n = max(1, min(int(n), 64))
         entries = [e for e in self.store.log(self.agent, int(start) - 1, int(start) - 1 + n)
-                   if not e.hidden and e.kind != "private"]
+                   if not e.hidden and not self.store.private(e.session)]
         if not entries:
             return f"no log entries {start}-{int(start) + n - 1}"
         if n == 1:

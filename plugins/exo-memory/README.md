@@ -20,6 +20,7 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 When the host supplies a session id and supports session-aware search, the recent-entry exclusion applies to that
 session. Relevant recent entries from other non-private sessions can still be recalled. Older hosts keep the global
 recent-entry exclusion. Recall is keyword-based and budgeted; it does not guarantee a complete or optimal context.
+Shared core recall and memory zoom exclude descendants of private threads as well as private threads themselves.
 
 Tools: `exo_recall(query, budget)`, `exo_get(id, body_only)` (a whole belief node, same store and access as recall; D-032), `exo_note(text, kind)`, `exo_should_have_been(target, wanted, reason)`,
 `exo_zoom(id, n)`, `exo_date(id)`.

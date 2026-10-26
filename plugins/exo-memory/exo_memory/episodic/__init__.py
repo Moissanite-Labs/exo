@@ -166,8 +166,8 @@ class EpisodicLayer:
     # -- reading -----------------------------------------------------------------
 
     def search(self, query: str, n: int = 5, skip_recent: int = 0, session_id: str = "") -> list[dict]:
-        """Messages that share words with `query`, best first. The newest `skip_recent`
-        messages are left out (they are still in the live context)."""
+        """Messages that share words with `query`, best first. Skip the session's newest `skip_recent`
+        entries when `session_id` is given; without one, retain the global recent-entry exclusion."""
         q = set(self._tokens(query))
         if not q:
             return []
