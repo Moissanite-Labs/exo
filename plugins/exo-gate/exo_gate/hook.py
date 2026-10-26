@@ -91,7 +91,7 @@ def _body_path(f: str) -> Optional[Path]:
                for y in (p, Path(os.path.realpath(p)))):
             return None
         return p if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE else None
-    except OSError:
+    except (OSError, ValueError):                       # ValueError: a NUL in the path, which gh never opens
         return None
 
 
