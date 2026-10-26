@@ -67,6 +67,19 @@ which 1d2f32ac asked for without a binding.
 Any other policy error (a YAML error, a bad matrix value, rules or deny that are not lists, an unreadable file)
 still falls back to the defaults alone: `policy error, defaults used: <message>`.
 
+### A pattern that does not compile refuses the policy (#466)
+
+The loader compiles every pattern a decision runs when the policy loads: a rule's `match.command`, a
+`command:<regex>` entry or a mapping's `command` in `deny:` and `reserved:`, and a `posting.forbid` pattern (with
+its `ignore_case` flag). One that does not compile raises `PolicyError` naming the file and the entry —
+`<store>/policies/gates.yaml: gates.deny[0].command: bad pattern '^(rm|shred': missing ), unterminated subpattern
+at position 1` — and the hook loads the defaults on it (`policy error, defaults used: <message>` in every
+decision and in `/gate`). Before, the pattern compiled only when `decide` reached it: one typo in a deny entry a
+principal added to tighten the gate made every call it touched raise `re.PatternError` there, the hook's fallback
+card had no approver list and its "always" let a seat answer every later failing call, and a read tool or an
+observe-mode call ran with no ask. A policy whose patterns all compile decides as before; only the broken one
+changes, from a per-call failure to a refusal at load. The scrub's own patterns were checked at load already.
+
 ## Required executor audit
 
 With a required tool executor, the gate refuses execution unless its signed
@@ -1011,6 +1024,8 @@ Tests: `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/
 Command regexes in `deny` and `reserved` match both the original command and a literal-word
 view from the shell lexer, so `command:rm -rf` also vetoes `r"m" -"rf" ~`, `'rm' -rf ~`,
 `r\m -rf ~`, `$'rm' -rf ~` and `$"rm" -rf ~`: common literal quoting cannot weaken a veto.
+Each pattern a decision runs is compiled when the policy loads (#466); one that does not
+compile refuses the policy naming the file and the entry, and the hook decides on the defaults.
 A word that holds a variable or a substitution is a placeholder in the view, so a regex that needs
 the literal part of such a word matches only the original text.
 A `$"..."` word is read as bash reads it without a catalog, so the line keeps its category and
@@ -1189,7 +1204,8 @@ gate does not read:
   before. When it passes a rule over, the gate also decides the line as before, and that decision
   stands, reason and all, unless the new one is stricter. This pass reads rules and patterns that
   deciding as before never reaches (the walk past a rule passed over, each regex of a matched
-  list), so when it fails, for example on a bad regex, the gate decides the line as before.
+  list), so when it fails, the gate decides the line as before. A bad regex is checked when the
+  policy loads now (#466); any other failure there still falls back.
   An anchored rule such as
   `'^git push --force origin main$'` still matches no compound line, as before.
   `{command: '^git status', decision: allow}` no longer allows
@@ -1949,8 +1965,10 @@ in one of three ways:
 
 The credentials floor reads every part, so the call asks and no rule, category line, matrix cell or
 scope lowers it. `gate.no_grant` keeps a standing grant off it, and observe mode still enforces it.
-When `decide` fails on the call (a policy pattern that does not compile), the exo-gate hook's
+When `decide` fails on the call for a reason the policy loader does not check, the exo-gate hook's
 fallback card reads the parts too, so it still asks the principal alone, once, in every mode (#464).
+A pattern that does not compile is checked at load now (#466), so it refuses the policy there and
+the defaults decide.
 `gate.call_approvers` sends it to those who may answer both its category and credentials. The line's
 own deny entries, target rules, matrix deny cells, posting checks and reserved entries still apply.
 So `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir` is still
@@ -2577,9 +2595,10 @@ One in the redirections of a compound that holds the `cd` (`done < <(sort list)`
 (#480).
 `rm -rf ~/.exo` counts (an ancestor). A `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
-observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
-policy pattern that does not compile, for example), the hook's fallback card still asks the
-principal alone, once, in observe mode too (#464). A store read that a shell call's own folder adds
+observe mode too. When the decision fails on a call the gate reads as a store write or secret for a
+reason the policy loader does not check, the hook's fallback card still asks the
+principal alone, once, in observe mode too (#464; a pattern that does not compile is refused when
+the policy loads now, #466). A store read that a shell call's own folder adds
 as a part counts too, and so does each other reading of the call (`gate.no_grant`, #311, #399).
 Other calls keep their fallback: a read tool
 runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets

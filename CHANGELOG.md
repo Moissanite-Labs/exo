@@ -6,6 +6,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A policy pattern that does not compile is refused when the policy loads (#466). `normalize_policies` checked
+  types and outcome names but compiled nothing, so a rule's `match.command`, a `command:` entry or a mapping's
+  `command` in `deny:` and `reserved:`, and a `posting.forbid` pattern with a typo raised `re.PatternError` only
+  when `decide` reached it. The exo-gate hook caught that: with no required executor a read tool ran with no ask,
+  observe mode ran the call, and enforce mode showed a fallback card with no approver list offering "always", so
+  one typo in a deny entry a principal added to tighten the gate could let a seat answer every later call the
+  gate failed on. The loader now compiles each of those patterns and raises `PolicyError` naming the entry, and
+  `load_policies` names the file before it (`policies/gates.yaml: gates.deny[0].command: bad pattern '^(rm|shred':
+  missing ), unterminated subpattern at position 1`), so the hook's fallback runs on the defaults, which ask on
+  anything irreversible or public, with the message in every decision's reason and in `/gate`; a store write, a
+  secret and a force push still ask the principal alone, once, in every mode, on a real rule key. A policy whose
+  patterns compile decides identically; only the broken one changes. Tests: `tests/security/
+  test_gate_policy_patterns.py`, `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
+  **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
   `reserved:` entry on a later path missed and an approver could have waved the write through:

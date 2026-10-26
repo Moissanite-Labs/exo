@@ -748,40 +748,45 @@ def test_internal_error_on_a_secret_read_is_not_a_free_pass(keyed_store, monkeyp
     assert g.pre_tool_call("read_file", {"path": "README.md"}) is None
 
 
-@pytest.mark.parametrize("cat, tool, args, plain_args", [
+@pytest.mark.parametrize("cat, tool, args, plain_args, key", [
     ("local_write", "write_file", {"path": "~/.exo/policies/gates.yaml", "content": "version: 1\n"},
-     {"path": "notes.md", "content": "x"}),
+     {"path": "notes.md", "content": "x"}, "store_write"),
     # #311: a read line whose store read from the shell call's own folder is a credentials part (abu-aska's repro
     # on the #452 + #467 merge: the fallback read the top category only, so observe mode ran the call)
-    ("read", "bash", {"command": "cat config", "cwd": "~/.kube"}, {"command": "cat config", "cwd": "~/proj"}),
-    ("read", "terminal", {"command": "cat config", "workdir": "~/.kube"}, {"command": "cat notes.md"}),
+    ("read", "bash", {"command": "cat config", "cwd": "~/.kube"}, {"command": "cat config", "cwd": "~/proj"}, "read"),
+    ("read", "terminal", {"command": "cat config", "workdir": "~/.kube"}, {"command": "cat notes.md"}, "read"),
     ("force_push", "bash", {"command": "cat * && git push --force origin main", "cwd": "~/.claude/projects"},
-     {"command": "git push --force origin main", "cwd": "~/proj"}),
+     {"command": "git push --force origin main", "cwd": "~/proj"}, "force_push"),
 ])
-def test_a_policy_that_breaks_decide_still_asks_the_principal_once_for_a_store_write(cat, tool, args, plain_args,
-                                                                                     keyed_store, tmp_path,
-                                                                                     monkeypatch):
-    # #464: a regex that does not compile raises in decide, now also on a store write's own part. The error card
-    # for a call the gate read as a store write or secret asks the principal alone, once, in every mode.
-    store, key = keyed_store
+def test_a_policy_pattern_that_does_not_compile_refuses_the_policy_and_the_defaults_still_ask_the_principal(
+        cat, tool, args, plain_args, key, keyed_store, tmp_path, monkeypatch):
+    # #466: the loader refuses a policy whose pattern does not compile, naming the file and the entry, and the hook
+    # decides on the defaults. The floors stand without the policy, so a store write, a secret and the force push
+    # still ask the principal alone, once, in every mode -- on a real rule key now, where #464's error card carried
+    # no approver list and its "always" let a seat answer every later call the gate failed on.
+    store, key_path = keyed_store
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (store / "policies" / "gates.yaml").write_text(f"deny:\n  - category: {cat}\n    command: '^(rm|shred'\n")
     for extra in ({}, {"mode": "observe"}):
-        g, _ = make_gate(store, key, decision_model=False, **extra)
+        g, _ = make_gate(store, key_path, decision_model=False, **extra)
         r = g.pre_tool_call(tool, args)
-        assert r["action"] == "approve" and r["rule_key"] == f"exo-gate:error:{tool}", r
+        assert r["action"] == "approve" and r["rule_key"].startswith(f"exo-gate:{key}:"), r
         assert (r["approvers"], r["once"]) == (["principal"], True), r
+        assert "policy error, defaults used" in r["message"], r
         plain = g.pre_tool_call(tool, plain_args)
         if extra:
             assert plain is None                      # observe mode, as before
+        elif cat == "force_push":
+            assert plain["action"] == "approve" and plain["rule_key"].startswith("exo-gate:force_push:"), plain
         else:
-            assert plain["action"] == "approve" and "once" not in plain and "approvers" not in plain
+            assert plain is None                      # the defaults allow a plain read and a local write
 
 
-def test_a_policy_that_breaks_decide_still_asks_once_for_a_store_write_only_the_floor_reads(keyed_store, tmp_path,
-                                                                                            monkeypatch):
-    # #439 review: the fallback read only the top reading, so a gh download into the store, which the line as read
-    # before #399 (its floor) reads as a store write, got the plain error card, and ran in observe mode.
+def test_a_policy_pattern_that_does_not_compile_refuses_the_policy_and_the_store_write_still_asks_once(
+        keyed_store, tmp_path, monkeypatch):
+    # #466, on #439 review's rows: a gh download into the store, which the line as read before #399 (its floor)
+    # reads as a store write. The refused policy's defaults still ask the principal alone, once, in every mode, on
+    # a real store_write ask -- where the plain error card ran in observe mode.
     store, key = keyed_store
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (store / "policies" / "gates.yaml").write_text("deny:\n  - 'command:^(rm|shred'\n")
@@ -792,8 +797,9 @@ def test_a_policy_that_breaks_decide_still_asks_once_for_a_store_write_only_the_
         g, _ = make_gate(store, key, decision_model=False, **extra)
         for line in lines:
             r = g.pre_tool_call("terminal", {"command": line})
-            assert r and r["rule_key"] == "exo-gate:error:terminal", (line, extra, r)
+            assert r["rule_key"].startswith("exo-gate:store_write:"), (line, extra, r)
             assert (r.get("approvers"), r.get("once")) == (["principal"], True), (line, extra, r)
+            assert "policy error, defaults used" in r["message"], (line, extra, r)
 
 
 # --- settings precedence under Exo's plugin loader (issue #19) -----------------------------
