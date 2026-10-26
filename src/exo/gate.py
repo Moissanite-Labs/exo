@@ -6223,6 +6223,52 @@ def _glob_words(words: list[str]) -> bool:
 _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
 
 
+def _glob_part(g: str, s: str) -> bool:
+    """Could bash glob part g name s? fnmatch as bash reads it (_fn_glob), except a leading dot in s
+    must be spelt with a literal dot in g: bash's *, ? and [ never match a leading dot (#594, verified
+    against bash 5.2: `[.]ssh` and `[!a]ssh` do not expand to `.ssh`, while `.*` and `.s*` do)."""
+    if s.startswith(".") and not g.startswith("."):
+        return False
+    pat = _fn_glob(g)
+    return True if pat is None else fnmatch.fnmatchcase(s, pat)
+
+
+def _glob_folder_hit(d: str, home: str, folders: list[str]) -> tuple[bool, bool]:
+    """(hit, secret_folder): could the glob folder d name one of ``folders`` (the folders of the samples
+    _glob_word is tried against, and the samples themselves, so `.exo/keys` counts as a folder)? The
+    parts must match one by one, and the match needs discipline: a part that starts with a literal dot,
+    or three literal characters across the matched parts (`.ss?`, `.aw?`, `.exo/key?` qualify; a bare
+    `*` does not, so `src/*` and `~/*` stay ordinary). ``secret_folder`` is True when the matched
+    folder is itself a secret store by name (_SENSITIVE_PATH: `.ssh`, `.aws`, `.exo/keys`), so any file
+    below it counts, as a literal folder does (`~/.ssh/xyz*` already asks)."""
+    if not d or not re.search(r"[*?\[]", d):
+        return False, False
+
+    def forms(p: str) -> set[str]:
+        # One form only, so the home path's own literal characters never count toward the
+        # three-literal discipline: a folder under home is read home-relative, anything else as is.
+        p = os.path.normpath(p)
+        root = home.rstrip("/") + "/"
+        if p.startswith(root):
+            return {p[len(root):]}
+        if p == home:
+            return {""}
+        return {p}
+
+    dforms = forms(d)
+    for folder in folders:
+        for ff in forms(folder):
+            for df in dforms:
+                gp, fp = df.split("/"), ff.split("/")
+                if len(gp) != len(fp) or not all(_glob_part(g, s) for g, s in zip(gp, fp)):
+                    continue
+                lits = sum(len(re.sub(r"[*?\[\]]", "", g)) for g in gp)
+                if not any(g.startswith(".") for g in gp) and lits < 3:
+                    continue
+                return True, bool(_SENSITIVE_PATH.search(ff.replace("\\", "/")))
+    return False, False
+
+
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
@@ -6242,7 +6288,24 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
         reach = keys or linked or (d_abs in [os.path.normpath(os.path.join(home, r)) for r in runs] if d_abs else any(
             q and not re.fullmatch(r"[*?]+|\.{1,2}", q) for q in d.split("/")))
         samples = samples + [os.path.join(r, x) for r in runs for x in secrets if reach or x.startswith("exod.")]
-    in_store_dir = linked or bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
+    # #594: a glob in the folder part used to give up here, because d_abs is set only for a literal
+    # folder. Test the globbed folder against each sample's folder instead: a hit counts as
+    # in_store_dir, so the full glob is then matched against the samples. When the matched folder is
+    # itself a secret store and the file part is itself a glob, any file below it counts, as a
+    # literal folder does -- this is what makes `~/.exo/k*/l*` ask even though no sample file is
+    # spelt `l*` (the folder's real files, like lead.key, are not samples). The file part must be a
+    # glob: a literal file part under a `*` folder stays a store_write for a write target, as the
+    # substitution readings in test_gate_store_name_forms require (`cp x ~/.exo/$(printf keys)/a`
+    # is store_write, not credentials). A `.pub` file part stays out, as for a literal folder.
+    # A sample counts as a folder only when another sample sits below it (`.exo/keys` below
+    # `.exo/keys/seat.key`); a sample file (`auth.json`) is never a folder, or `~/*/*` would hit it.
+    all_samples = list(samples) + list(_SENSITIVE_SAMPLES)
+    folder_samples = [x for x in all_samples if any(y != x and y.startswith(x + "/") for y in all_samples)]
+    folders = [os.path.dirname(x) for x in all_samples] + folder_samples
+    folder_hit, secret_folder = _glob_folder_hit(d, home, folders)
+    in_store_dir = linked or folder_hit or bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
+    if secret_folder and re.search(r"[*?\[]", base) and not base.endswith(".pub"):
+        return True
     if len(stem) < 3 and not in_store_dir:
         return False
     if "/" not in tok:   # a bare name: a run secret by its own name, an agent key only by its `agent-` or key part
