@@ -6,6 +6,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
+  after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
+  that path and its write was never read. A patch tool skips the bare line and applies the next header, so after
+  #548 a bare `*** Move to:` let `*** Add File: .ssh/config` through with no ask. Each header's path is now also
+  read on its own line (a `\r` before the newline is trimmed), and the paths read as before still count. A local
+  write of more than one file keeps each file as a part, so an exact `target:` deny or reserved entry reaches a path
+  only the reading on one line found, and any later file of a patch. The call's own target and summary stay as
+  main reads them: after a bare header that is still the swallowed header text.
 - A post's `--body-file` is read only on a line where the gate finds no other part (#343). The exo-gate hook read
   an absolute body file before the line ran, but another part of the line could change the file before `gh` read
   it: a copy, a move, a redirect, a link or `tee` before the post, a writer after it in a pipe or in the
