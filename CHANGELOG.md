@@ -6,6 +6,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
+  took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
+  `reserved:` entry on a later path missed and an approver could have waved the write through:
+  `cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from `a.yaml` to
+  `gates.yaml` and `delete_file` on both paths asked under `deny: ["target:*/gates.yaml"]`. The store scan now
+  keeps each store path a shell line or file tool writes, in the order it meets them, and each is a `store_write`
+  part with that path as its target, as beside a secret (#447), so the entry matches whichever path it names. The
+  first path still leads the line, `rm` of both paths was denied already (its `delete` part names the last path),
+  reads keep their class, and the first path alone decides as before.
 - A glob in a secret store's folder asks (#594). `cat ~/.ss?/*`, `cat ~/.aw?/*` and `cat ~/.exo/key?/*` read as ordinary reads because `_glob_word` gave up whenever the folder part held a glob; the globbed folder is now tested against each sample's folder, with the same three-literal discipline the file side keeps and bash's rule that only a literal dot matches a leading dot, so `cat ~/*/*` stays a read.
 - An ssh or mosh hop keeps its host among the line's other targets when the remote command names a target of its
   own (#493). The hop gave the host as the line's target only when the remote command's dominant part had none, so
