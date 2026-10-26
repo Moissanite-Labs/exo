@@ -7097,6 +7097,11 @@ def _shell_call(cmd: str) -> Classification:
             plain_read = next((p for p in _each_part(whole) if p.category == "credentials" and (
                 is_sensitive_path(p.target, True) or _glob_hits_secret(p.target, True) or not (
                     is_sensitive_path(p.target) or _glob_hits_secret(p.target)))), None)
+            # A word main read with no name of its own (`keys` in `~/.exo`) made main's line a secret line with no
+            # target and gets no part (_plain_part), so main's read is the line, and its path the folder as written
+            if plain_read is None and (mine := _plain_hit(cmd)):
+                plain_read = _make("credentials", summary=f"shell touching {mine}"[:120],
+                                   target=mine if "/" in mine or "." in mine else "")
             found += [f for f in _tool_folder_read(cmd, folders, plain_read, plain=True)
                       if f[1] not in {t for _, t in found}]
     finally:
@@ -7129,11 +7134,17 @@ def _no_plain_store(secrets: list[Classification], cmd: str) -> bool:
     read on the line makes it a secret line there. The line is read first: where main read a store on it, no part
     needs a store test of its own, and a part's glob is tried before its path (test_work_is_linear: a `cd` into a
     deep glob costs no path test)."""
-    cmds, _, _ = _parse(cmd)
-    if _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
-                             [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True):
+    if _plain_hit(cmd):
         return False
     return all(_glob_hits_secret(p.target) or is_sensitive_path(p.target) for p in secrets)
+
+
+def _plain_hit(cmd: str) -> str:
+    """What on the line ``cmd`` touches a secret store as main read it before #446 (_shell_credential_hit with
+    ``plain``), in the folders of the scope it is read in, or ''."""
+    cmds, _, _ = _parse(cmd)
+    return _shell_credential_hit(cmd, [[w.text for w in k.words] for k in cmds if k.words],
+                                 [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], plain=True)
 
 
 def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:

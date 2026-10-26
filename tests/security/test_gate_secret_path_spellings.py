@@ -1016,6 +1016,35 @@ def test_the_folder_part_beside_such_a_line_is_main_s_read(line, folder, policy)
     assert full({"tool": "bash", "args": {"command": line, "cwd": folder}}, policy)[1] == "deny"
 
 
+# `keys` resolves into the key store from `~/.exo` (#209) and names nothing of its own, so main's line was a secret line
+# with no target and no part, and main's read of the folder had the folder as written for its path. Beside a store only
+# #446 reads, that read stays a part too, so an entry for the folder itself still matches (#513 checker, after the merge
+# of main 5a5a535d)
+EXO_FOLDER_ENTRIES = [
+    {"gates": {"deny": ["target:*/.exo"]}},
+    {"gates": {"reserved": ["target:*/.exo"]}},
+    {"gates": {"rules": [{"match": {"target": "*/.exo"}, "decision": "deny", "reason": "exo"}]}},
+]
+
+
+@pytest.mark.parametrize("policy", EXO_FOLDER_ENTRIES)
+@pytest.mark.parametrize("line", ["cat ~/.kube//config keys", "cat ~/.kube//config; ls keys",
+                                  "cp /pro?/self/environ keys"])
+@pytest.mark.parametrize("folder_key", ["cwd", "workdir"])
+@pytest.mark.parametrize("tool, key", SHELL_TOOLS)
+def test_main_s_read_of_the_folder_a_bare_word_reads_from_stays_a_part(tool, key, folder_key, line, policy):
+    _, outcome, hits, _ = full({"tool": tool, "args": {key: line, folder_key: "~/.exo"}}, policy)
+    reserved = "reserved" in policy["gates"]
+    assert (outcome, "credentials" in hits) == ("ask" if reserved else "deny", reserved)
+
+
+@pytest.mark.parametrize("line", ["cat ~/.kube/config keys", "cat ~/.kube//config ./keys"])
+def test_no_folder_part_where_main_s_read_named_its_own_path(line):
+    # main's line had a target here (the kube config, or `./keys`), so its read of the folder was not the folder
+    # itself, and an entry for `~/.exo` alone asks, here and on main
+    assert full({"tool": "bash", "args": {"command": line, "cwd": "~/.exo"}}, EXO_FOLDER_ENTRIES[0])[1] == "ask"
+
+
 @pytest.mark.parametrize("odd", ODD_GCLOUD)
 def test_the_folder_part_beside_such_a_line_is_the_folder_main_read_first(odd):
     # main read the plain `~/.ssh`, not the odd gcloud folder before it
