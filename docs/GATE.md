@@ -670,19 +670,28 @@ system or bash will.
 An odd spelling now takes the store's class, so it decides as main decides its plain spelling. Some lines decide lower
 than before because of that, much as for a thread's environment file (#313, below). A rule that matched the line as a
 `read` no longer matches it as `credentials`, so `sudo ssh host cat ~/.kube//config` under a rule that denies a costly
-`read` asks, as `sudo ssh host cat ~/.kube/config` does. A line's target is the first store it names, and that can
+`read` asks, as `sudo ssh host cat ~/.kube/config` does. A category line on the line's own class works the same way.
+Under `delete: deny` and a rule that allows the rest, `cat ~/.kube//config; rm -rf keys` with `cwd: ~/.ssh` asks, as
+`cat ~/.kube/config; rm -rf keys` does there on main. Main denied the odd spelling through its `delete` line, which
+the rule did not lower beside the folder's part (#394). A line's target is the first store it names, and that can
 now be a spelling main did not read: an odd spelling, a glob such as `/pro?/self/environ`, a word with more than 16
 possible links (which counts, fails closed), or a store that a `$( )` or `bash -c` on the line reads. Main's target
 was then another store on the line, and it stays a credentials part of the line (#513 review). So a `target:` or
 `reserved:` entry, or a deny rule keyed on `target`, that named it still matches. Under `deny: [target:*/.ssh/*]`,
 `cat ~/.kube//config ~/.ssh/id_rsa`, `cat /pro?/self/environ ~/.ssh/id_rsa` and
-`cat ~/.ssh/id_rsa $(cat ~/.kube//config)` are denied, as on main. So is a file tool with both paths (`read_file`
+`cat ~/.ssh/id_rsa $(cat ~/.kube//config)` are denied, as on main. So is
+`cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)`, whose target is the name the shell reads in the `$( )`,
+`~/.kube/config`, which main did not read. So is a file tool with both paths (`read_file`
 with `~/.kube//config` and `~/.ssh/id_rsa`). The part has no own text, so it only raises, and the target stays the
 first store. A line main read the same way gets no part: under that entry `cat ~/.kube/config ~/.ssh/id_rsa` asks,
 here and on main. A shell call's own folders work the same way (#311, "The tool's own folder"). The read's target is
 the first folder that names a store, and that can be a spelling main did not read. Main's folder then stays a part
 too (#513 review). So `bash` with `cwd: ~/.config//gcloud` and `workdir: ~/.ssh` is denied under
 `deny: [target:*/.ssh*]`, as on main, while `cwd: ~/.config/gcloud` there asks, here and on main.
+A line that reads a store keeps its own result, and its call reads no folder. Main read no store on a line that
+names a store only in such spellings and no other secret (`env`, `ssh-keygen`). So it read the folder, and that
+read stays a part too. So `cat ~/.kube//config` with `cwd: ~/.ssh` is denied under `deny: [target:*/.ssh*]`, as on
+main, while `cat ~/.kube/config` there asks, here and on main.
 A call that was `store_write` because its path goes through a descriptor or process folder
 (`/proc/<pid>/root`, `/dev/fd`, #217) is `credentials` once the path names a secret. Its store write stays a part
 (#447), so a `store_write` deny, category line or `reserved:` entry still applies to it. A file tool's own class,
@@ -1702,6 +1711,12 @@ whole line in one pass:
   not one read from a file with `-f`), other heredoc text or a word with a space in it (a commit
   message, an `echo`, `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
 
+The check runs on a line that is not `credentials` already, and the name it reads is the line's
+target. A line can be `credentials` only through a store named in a spelling main did not read
+(#446). Main read the name on such a line, so the name stays a credentials part (#513 review):
+under `deny: [target:*hosts.yml]`, `cd ~/.config/gh && cat /pro?/self/environ hosts.yml` is
+denied, as on main.
+
 In `$EXO_HOME` (#269). The run folder is not a store folder by its name, since job output in `run/jobs`
 stays readable, so the checks above do not reach it through `..`. On a line that reaches a folder in
 `$EXO_HOME` or in any `.exo`, that folder and each relative name read from it are checked as the paths
@@ -1769,6 +1784,11 @@ in one of three ways:
   shell runs included. A quoted command for `ssh` to run on another host is not read for names, so
   `ssh host 'cat config'` keeps its class. The part's target is the folder joined with the name
   (`~/.kube/config`).
+
+A line that reads a store itself keeps its result, and the folder is not read: the call asks
+already. Where such a line names a store only in a spelling main did not read (#446) and no other
+secret, main read the folder, and that read stays a part (#513 review). So `cat ~/.kube//config`
+with `~/.ssh` as `cwd` is denied under `deny: ["target:*/.ssh"]`, as on main.
 
 The credentials floor reads every part, so the call asks and no rule, category line, matrix cell or
 scope lowers it. `gate.no_grant` keeps a standing grant off it, and observe mode still enforces it.
