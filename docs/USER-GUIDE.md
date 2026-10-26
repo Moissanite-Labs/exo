@@ -321,9 +321,12 @@ What the gate asks about, and why:
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another. A post whose text the gate cannot
   read (piped in, a file given by a relative path, `$( )` or a variable) asks, and offers no "always". The gate
-  reads a body file given by its full path. When the gate cannot tell which repo a `gh` command acts on, it reads
-  the command on each one, and the question names the others ("It may land on pub/repo#7 instead."). A deny in
-  your policy for any of them holds. An "always" on such a command covers that exact command only (#399).
+  reads a body file given by its full path when the post is alone on its line. On a line that does more
+  (`cd /tmp && gh ...`, a copy, a redirect to a file, `GH_EDITOR=x gh ...`), the rest of the line could change the
+  file first, so the gate leaves it unread: the post asks once and says why (#343). When the gate cannot tell which
+  repo a `gh` command acts on, it reads the command on each one, and the question names the others ("It may land on
+  pub/repo#7 instead."). A deny in your policy for any of them holds. An "always" on such a command covers that
+  exact command only (#399).
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
   the post and lists what it found. The sweep and the exact-text check see only text the gate can read, so a body
   it cannot read asks instead (#208, above).
