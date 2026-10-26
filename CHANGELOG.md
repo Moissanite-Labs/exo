@@ -299,6 +299,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#584, D-038 amendment): a backslash-newline right after a `$` no longer hides a command substitution, a
+  parameter expansion or a `$@` split. Bash drops each `\<newline>` outside single quotes before it reads a word,
+  so `echo "$\<newline>(git push --force origin main)"` runs the push, but the gate read the `$` as text and
+  allowed the line under `deny: [force_push]`; `echo "$\<newline>(curl -X POST ...)"` was an allowed read too, and
+  `echo "${PA\<newline>TH:=/tmp}"; ls` hid a PATH change. A shell line is now also read with each `\<newline>`
+  dropped after a `$`, in a `${..}`, between `$(` and the `(` of `$((` and in a `$((..))`, on the line and on each
+  line read again from it once decoded (`bash -c $'..'`, `eval "..."`, ssh, backquotes), and also as written, as
+  before. `decide` keeps the stricter (`gate.readings`), the more severe reading leads the approval card, and an
+  approval for such a line binds to its exact text. A line the join leaves as it is is read once, as before.
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that
