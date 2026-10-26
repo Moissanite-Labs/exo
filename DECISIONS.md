@@ -2517,7 +2517,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   session folder, and `cd` and `pushd` forms. It lowered 198 pairs on 33 actions, the `dd` pairs of (l). The same
   corpora with this branch before this round (0b35021a) as the base lowered no pair and tightened 2,105 pairs on 356
   actions, each from ask to deny. No run had a classify or decide error.
-  *2026-10-25 (#513, sixth round, an independent check):* (o) A store folder beside a line that names a store only in
+  *2026-10-26 (#513, sixth round, an independent check):* (o) A store folder beside a line that names a store only in
   a spelling main did not read held the same shape. Such a line is credentials on its own, so its call kept the line's
   result and read no folder (#311). Main read no store on the line, so it read the call's `cwd` or `workdir`, and the
   call's target was that folder. So `cat ~/.kube//config` with `cwd: ~/.ssh` asked under `deny: [target:*/.ssh*]`,
@@ -2534,26 +2534,30 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   redirection with a backslash gives the line the name the shell reads, so `cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)`
   took `~/.kube/config` as its target, where main took `~/.ssh/id_rsa`, and asked under `deny: [target:*/.ssh/*]`. The
   check now also asks that the line spell the target, so main's target is a part again. Group 2 now holds only the
-  `dd` operand, which #568 tracks. (p) The check ran its own differential of main edeb4f89 against this round's head:
-  6c2974d7's gate, merged with main 7785ffbb, which changes no gate file. 9bb58909 after it only reorders a check and
-  decides the same. The run used the 87 built-in policies and 223 more: the 128 of (n), and a `target:` entry in
-  `deny:` and in `reserved:`, a deny rule and an ask rule for each of 23 store folders, files and names, two rules and
-  a mapping entry. The built-in set, 76,054 actions, lowered the same 394 pairs on 80 actions as (n), 31 on 23 under
-  the 87 built-in policies. A focused run of 83,769 actions held the corpora of (n), 31,417 calls and lines from this
-  check's first pass and 18,836 from its second. The first pass gave each shell tool name a line that names a store
-  only #446 reads, beside each store folder, plain and odd, as `cwd`, `workdir` or both. It also held code tools, file
-  tools, ssh and nested lines, and `cd`, `pushd`, `tar -C` and `git -C` lines. The second mixes such a store, in a
-  call with a folder, with relative reads and store writes, a delete, a force push, a post, secret commands, nested
-  lines and `cd` forms. It also puts a nested redirection with a backslash beside nine first stores. It lowered 1,337
-  pairs on 980 actions. 198 are the `dd` pairs of (l). The other 1,139 are on calls whose folder is a store and whose
-  line mixes such a store with a delete, a force push or a post. 899 are group 1, with a category line in place of the
+  `dd` operand, which #568 tracks. (p) The check ran its own differential of main 358c3a39 against this round's head,
+  merged with it at 2d2bab32. Main 358c3a39 holds #409 (#330), whose gate changes are in other functions. 9bb58909
+  only reorders a check and decides the same. The run used the 87 built-in policies and 223 more: the 128 of (n), and
+  a `target:` entry in `deny:` and in `reserved:`, a deny rule and an ask rule for each of 23 store folders, files and
+  names, two rules and a mapping entry. The built-in set, 77,197 actions, lowered the same 394 pairs on 80 actions as
+  (n), 31 on 23 under the 87 built-in policies. A focused run of 88,300 actions held the corpora of (n), 31,417 calls
+  and lines from this check's first pass, 18,836 from its second and 4,556 from its third. The first pass gave each
+  shell tool name a line that names a store only #446 reads, beside each store folder, plain and odd, as `cwd`,
+  `workdir` or both. It also held code tools, file tools, ssh and nested lines, and `cd`, `pushd`, `tar -C` and
+  `git -C` lines. The second mixes such a store, in a call with a folder, with relative reads and store writes, a
+  delete, a force push, a post, secret commands, nested lines and `cd` forms. It also puts a nested redirection with a
+  backslash beside nine first stores. The third puts #409's rebinds (`hash -p`, `BASH_CMDS`, `BASH_ALIASES`) beside a
+  store path in each spelling. It also holds relative names that resolve into a store from a folder that is no store,
+  and folders given relatively, through a link, as `$HOME` text or with a trailing slash. It lowered 1,633 pairs on
+  1,252 actions. 198 are the `dd` pairs of (l). The other 1,435 are on calls whose folder is a store and whose line
+  mixes such a store with a delete, a force push or a post. 1,163 are group 1, with a category line in place of the
   rule. Under gate_diff's `order_ask_under_category_deny` (`delete: deny`, `force_push: deny` and a rule that allows
   the rest), `cat ~/.kube//config; rm -rf keys` with `cwd: ~/.ssh` was denied on main by its `delete` line, which the
   rule did not lower beside the folder's part (#394). Here the line is `credentials` and asks, as
-  `cat ~/.kube/config; rm -rf keys` does there on main. 240 are group 5. A post with a forbidden word on such a line,
+  `cat ~/.kube/config; rm -rf keys` does there on main. 272 are group 5. A post with a forbidden word on such a line,
   with `cwd: ~/.exo/keys`, lists the word once, named after its post. Main listed it in both wordings, once for each
-  reading of the call (#311). Each of the 1,139 decides as main decides the plain spelling, and each held at 0b35021a
-  too. Both sets with 0b35021a as the base lowered no pair. No run had a classify or decide error.
+  reading of the call (#311). Each of the 1,435 decides as main decides the plain spelling, and each held at 0b35021a
+  too. Both sets with 0b35021a, merged with main 358c3a39, as the base lowered no pair. No run had a classify or
+  decide error.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
