@@ -3490,11 +3490,10 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
             if sudo:
                 ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
-    hit = _store_touch(k, words, parts, ctx)
-    hits = [hit] if hit else []
-    if hit and ctx.get("fd_cwd") not in (None, hit):
-        # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
-        # so a `target:/dev*` entry still matches it, as it matches any other write there
+    hits = _store_touch(k, words, parts, ctx)
+    # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
+    # so a `target:/dev*` entry still matches it, as it matches any other write there
+    if hits and ctx.get("fd_cwd") and ctx["fd_cwd"] not in hits:
         hits.append(ctx["fd_cwd"])
     for t in hits:
         # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
@@ -4553,9 +4552,11 @@ def _gh_writes_store(words: list) -> bool:
     return (group, verb) in _GH_STORE_WRITES
 
 
-def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
-    """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
+def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> list[str]:
+    """Each store path in a simple command that a write reaches, in the order the scan meets them (#514), or [].
+    Reads of the store are fine."""
     seen = ctx.setdefault("store_braces", {})
+    hits: list[str] = []
     for op, t in k.redirs:
         # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
         # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. A
@@ -4567,13 +4568,13 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             targets = _shell_words(t, seen, "target")
             if targets is None or any(_store_word(x) for x in targets) or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
-                return t.text
+                hits.append(t.text)
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
     # program named hash run by path (./hash), which is no builtin and rebinds nothing.
     if all(_store_quiet(p) for p in parts) and not _gh_writes_store(words):
-        return ""
+        return hits
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
@@ -4584,19 +4585,20 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     for i, w in enumerate(words):
         expanded = _shell_words(w, seen, "wide" if wide else "narrow")   # braces first: `of=x{a,b}` is `of=xa of=xb`
         if expanded is None:
-            return w.text
+            hits.append(w.text)
+            continue
         for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
             if piece and _store_word(piece, ancestors=wide):
-                return piece
+                hits.append(piece)
         if _unknown_store(w, seen, ancestors=wide):    # `cp x ~/.exo/polic$(:)ies/`, `polic${u}ies` (#309)
-            return w.text
+            hits.append(w.text)
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and (
                 _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")) or
                 _unknown_store(words[i + 1], seen, inside=True)):
-            return words[i + 1].text            # git checkout, reset or commit inside the store
+            hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
-        return ctx.get("fd_cwd") or "a path inside the store (after cd)"
-    return ""
+        hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
+    return list(dict.fromkeys(hits))
 
 
 def _store_quiet(p: Classification) -> bool:
@@ -7230,8 +7232,10 @@ def _classify_call(action: Any) -> Classification:
             out = own in OUTBOUND
             c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
-        if secret:      # #447: each store path beside a secret is a part, so only the principal answers
-            c.parts += [_store_part(p, f"{tool} {p}") for p in stores]
+        # #514: the store paths the tool names beyond the first are store write parts, each with its path as
+        # target, as they all are beside a secret (#447): a target entry on any of them matches, whatever path
+        # the scan met first. The first path is the call's own target, as before.
+        c.parts += [_store_part(p, f"{tool} {p}") for p in (stores if secret else stores[1:])]
     for r in readings(c):
         r.tool = tool
         _local_post(r)
