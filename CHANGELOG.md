@@ -6,6 +6,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- The gate reads `${...}` words and `$((` as bash's parser reads them (#143, #553, #554, PR #158). The lexer ended a
+  `${...}` word at its first `}` and read nothing in it, so `echo ${X:-$(git push --force origin main)}` was an
+  allowed `read` under every policy, and a `'}'` in a word hid the command after it
+  (`echo ${x:-'}'} && rm -rf ./work`). Now each `$( )`, backquote, `$((` and unquoted `<( )` in a word is
+  classified, a `'` pairs with the next one in the word (in double quotes too), and a part opened in quoted text
+  ends at its quote. `$((` is arithmetic only when bash reads it so: `echo $((echo '((' ; git push --force origin
+  main) )` is a `force_push` (#553). `${name@P}`, `${@@P}`, `${*@P}`, `${!name}`, `${!@}` and `${!*}`, which run a
+  value, ask (#554); the listing forms `${!prefix*}` and `${!arr[@]}` do not. A here-document opened in a `$( )`
+  stays with it, a backslash-newline after `$` is dropped, `$'` in double quotes is no ANSI-C string, and bash
+  5.3's `${ cmd; }` is read and asks, and so does a line that ends inside a quote (`'`, `"` or `$'`). A part only
+  bash's reading opens (a `$( )`, `<( )`, `>( )`, backquote or arithmetic `$((` in a word, a `$((` bash runs as a
+  subshell, quoted text bash expands, the text of `${ cmd; }`) is read three levels deep, its first `$(` or
+  backquote level 1, and a call opens 24 such parts; a command deeper or past them asks. Where bash's reading may
+  differ from the one before, the call is read both ways, the stricter decision holds, and an approval on a line whose
+  readings are different acts is bound to its exact text. `scripts/gate_diff.py` finds no decision lower than
+  before on its built-in corpus (with and without variants) and on an aimed corpus of these forms.
+  `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.

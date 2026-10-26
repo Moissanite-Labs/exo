@@ -772,6 +772,10 @@ logged with the grant id.
 - A gh command that may land on more than one target (`alt_targets`, "Where a gh command
   lands") is granted for the exact command only, like an outward act. A grant on one of its targets
   does not cover it (#399).
+- A line the gate reads more than one way (`gate.readings`) is granted for the exact command only
+  when one reading is another act, or would be granted that way itself: a `${...}` word or a `$((`
+  read as bash reads it and as before (#143, "Shell parameter expansion"). A grant on its first
+  reading's category and target does not cover it.
 - A post whose body the gate did not read never gets a grant, and an older grant does not cover it
   (#208, "What an approval covers").
 - Only the principal can create a grant.
@@ -902,7 +906,8 @@ boundaries; whitespace, control characters and shell syntax inside a word are es
 dynamic words and heredoc bodies become placeholders made of control characters, which no
 literal word renders to and no regex naming letters or operators matches, so a veto on `>` or
 `exo` does not fire on `ls $HOME`. It does not expand variables or run a shell. A `$"..."` inside
-`${...}` is left to the parameter-expansion work (#143, #158). Nested views come from the text the
+`${...}` is read by the parameter-word scan ("Shell parameter expansion" below): its `$( )` is
+classified, without the locale-translation signal (#143). Nested views come from the text the
 classifier already reads: command substitutions and backticks, `bash -c`, `eval`, shell stdin and
 every string literal of code (`python -c`, `execute_code`), with the existing depth limit of
 four. The gate can only guess which literals in code are commands, so each literal is matched as
@@ -1155,7 +1160,9 @@ gate does not read:
   the lexer does not read the nest. It finds where the nest ends in one pass, reading the text
   as it would (quotes, comments, backquotes, the `$` forms, redirections and here-documents) but
   keeping only that end. The nest stands as an `opaque_exec` part, `a $( ) nested more than 16
-  levels deep, not read`, with the `unread nest` signal. It asks, also in an exported value
+  levels deep, or in a ${..} word or $(( past 3 levels or 24 parts, not read`, with the
+  `unread nest` signal ("Shell parameter expansion" has the three-level depth and the 24-part
+  budget of the parts only bash's reading opens). It asks, also in an exported value
   (`export` drops other values it cannot read, as values that run nothing), and a command after
   it is still read. So `export PROMPT_COMMAND='$($(...'; git push --force origin main` is denied
   under `deny: [force_push]` at any depth, the same in `PS4`, `BROWSER`, `GIT_PAGER`, `git -c
@@ -1538,11 +1545,13 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   `printf -v 'a[$(g"h" pr comment 3 --body hi)]' %s x`,
   `declare -a 'b=($(g"h" pr comment 3 --body hi))'`,
   `git clone -c core.sshCommand='g"h" pr comment 3 --body hi' git@host:x/y`; the last is also
-  denied under `deny: [github_post]`). In the forms below the regex sees only
-  the raw text, so quoting still evades it: `echo ${X:-$(g'h' pr comment 3 --body hi)}` is
-  allowed under `command:gh pr comment`. The known forms:
-  - `${...}` bodies are skipped by the lexer, so `echo ${X:-$(gh pr comment 3 --body hi)}` is
-    `read` and allowed (#143; open PR #158).
+  denied under `deny: [github_post]`). Since #158 the commands in a `${...}` word are read too:
+  `echo ${X:-$(g'h' pr comment 3 --body hi)}` is a `github_post`, denied under `command:gh pr
+  comment` and under `deny: [github_post]`; before, the lexer skipped the word and allowed the
+  line (#143). The known form left:
+  - Arithmetic on a bare name (`$((x))`, `${s:x}`) evaluates the variable's value, and `a[$(cmd)]`
+    in it runs `cmd`. A value assigned from a visible `$( )` on the same line is classified where
+    it is assigned; one set earlier or read from a file is not, and the line is allowed.
 - **Project code.** A trusted program that runs project code (pytest runs conftest.py, git runs
   hooks, `npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
   `~/.ssh/config` with a `ProxyCommand`) can run code the agent wrote earlier with a local write.
@@ -1997,6 +2006,110 @@ it), a brace expansion in a name (`export {PATH,FOO}=x`), indirect expansion (`$
 arithmetic in a substring offset (`${x:PATH=1}`), the old `$[...]` arithmetic, an integer
 variable (`declare -i x; x=PATH=5`), `wait -p NAME` and `{NAME}<<<x`. This is one more reason
 the sandbox is the real fix.
+
+### Shell parameter expansion (D-038)
+
+The lexer reads a `${...}` word and a `$((` as bash's parser reads them in its default mode, which
+is how exo runs commands (`bash -c`) (#143, #553, #554). Before, it ended a `${...}` word at its
+first `}` and read nothing in it, so `echo ${X:-$(git push --force origin main)}` was an allowed
+`read` under every policy, and a `'}'` in a word hid the command after it
+(`echo ${x:-'}'} && rm -rf ./work`).
+
+- **Words.** Only a `}` outside quotes and escapes closes a word. A `'` pairs with the next one, in
+  double quotes too and after every operator; a `$'..'` ends at its first `'` that is not escaped
+  (`\'` stays escaped); in a `".."` inside the word a `'` is text. A nested `${` opens a level on a
+  stack, not a recursion, so a nest of any depth is read in one pass and is no level of the
+  16-level `$( )` cap (#334).
+- **Commands in a word.** Each `$( )`, `$((` and backquote in the word, under every operator
+  (`:-`, `-`, `:=`, `=`, `:+`, `+`, `:?`, `?`, `/`, `//`, `#`, `##`, `%`, `%%`, `^`, `,` and a
+  `[..]` subscript), and each `<( )` and `>( )` outside double quotes, is read as one elsewhere on
+  the line, by a lexer of its own, so its category counts: `echo ${X:-$(git push --force origin
+  main)}` is a `force_push`, and `deny: [force_push]` or `categories: {force_push: deny}` denies it.
+  A here-document opened in it stays in it, as in bash: one left open at its `)` does not take the
+  lines after the word (`echo ${x:-$(cat<<EOF)'`, a line `EOF`, a line `'}`, then a push on its own
+  line is denied under a push deny). Single-quoted text that bash expands (in double quotes, after
+  an operator other than a pattern, case, `?` or `@` one: `"${x:-'$(cmd)'}"` runs `cmd`,
+  `"${x#'$(cmd)'}"` does not) is read within that text alone, so nothing opened in it runs past its
+  closing `'` (`echo "${x#'${y'}" ; git push --force origin main ; echo "'}'}"` is denied under a
+  push deny).
+- **Depth.** A part only bash's reading opens is read three levels deep, counted the same way for
+  every kind of part: a `$( )`, `<( )`, `>( )`, backquote or arithmetic `$((` in a word, a `$((`
+  bash runs as a subshell (below), quoted text bash expands and the text of `${ cmd; }`. The
+  part's own `$(`, `<(`, `>(` or backquote is level 1 (in arithmetic, in quoted text and in
+  `${ cmd; }`, the first `$(` or backquote in it), and each `$( )`, `<( )`, `>( )` or backquote
+  inside it is one level more. The reading before reads none of these levels, so a deeper level is
+  not read and asks, as a part past the 16-level cap does: `echo ${x:-$(a $(a $(git push --force
+  origin main)))}` is denied under a push deny, and ``echo ${x:-`a $(a $(a $(git push --force
+  origin main)))`}`` asks, also under that deny.
+- **Budget.** One classify call opens 24 such parts at most, counted in the order the gate reads
+  them. A part counts once for each pass that opens it: a word on the line counts once, a word
+  inside a `$( )` once more for each level of that `$( )`, and a `$( )` inside a `${..}` word is
+  passed over again to find where it ends and to scan it for secret-store paths. A part's inner
+  levels are read when its source is classified, after the rest of the line, so parts later on the
+  line can use up the budget first. A part past the budget is cut as a part past the depth is, and
+  asks.
+- **Values that run.** `${!name}`, `${!1}`, `${!@}`, `${!*}` and every other indirect form, with or
+  without an operator, use a value as a variable name, and `a[$(cmd)]` in it runs; `${name@P}`,
+  `${arr[0]@P}`, `${@@P}`, `${*@P}` and `${@:2@P}` expand a value as a prompt, whose `$( )` runs.
+  These ask, also under a deny on the hidden command's category, since the gate does not see the
+  value: `set -- '$(git push --force origin main)'; echo ${@@P}` asks under `deny: [force_push]`.
+  The listing forms `${!prefix*}`, `${!prefix@}`, `${!arr[@]}` and `${!arr[*]}` do not ask, and
+  neither does `${!#}`. bash 5.3 runs `${ cmd; }` and `${| cmd; }` in the current shell (bash 5.2
+  rejects them): the text up to the first `}` is read as commands, as the text of a `$( )` in the
+  word is, and the line asks.
+- **`$((`.** bash reads `$((` as arithmetic only when its parser's match of the group (quotes,
+  escapes, `$'..'`, backquotes and nested `$( )` stepped over, a `#` in a nested `$( )` a comment,
+  a `${` plain text) and its second reading when it expands the word (a `#` after a blank a
+  comment, `'..'` with no escapes) end at the same `)`, and the text between `$(` and that `)` is a
+  group whose inside balances with only quotes skipped (bash's `chk_arithsub`, which counts the
+  parentheses of a `${...}` in a nested `$( )` that the parser steps over). Any other `$((` is
+  a `$( )` holding a subshell, read up to where the parser ends the word: `echo $((echo '((' ; git
+  push --force origin main) )`, `echo $((true);(git push --force origin main))` and
+  `echo $(( $(: ${x:-(}) ; git push --force origin main ))` are `force_push`; it is read three
+  levels deep, its `$(` level 1 ("Depth" above). A group whose nested `$( )` holds a comment or a
+  here-document, which bash checks as it prints it back, is read as a `$( )` (stricter than
+  bash). A `$((` that never closes, which
+  bash rejects, asks, also under a deny on a command in it: nothing on the line runs.
+- **Other spellings.** A backslash-newline right after a `$` is dropped before the `$` is read, as
+  bash and dash drop it (`"$\`, a newline and `(cmd)"` runs `cmd`), and in double quotes `$'` is a
+  `$` and a quote, not ANSI-C quoting (`echo "$'" ; rm -rf ./work # '"` is a delete). A `$( )` or
+  `<( )` reads its own here-documents: a newline inside it does not start the body of one opened
+  before it on the line, which bash reads after the line.
+
+The reading before is kept. Where bash's reading may differ from it anywhere in a call (a word
+closed past its first `}`, a command in a word, a `$((` matched otherwise, an ask above), classify
+reads the call that way too, with budgets of its own, and adds that reading at the end of the
+call's `also` readings (`gate.readings`); `decide` keeps the stricter decision, with both readings'
+reserved parts and violations. A part bash's reading adds can lead the line and turn a category
+line or the opaque floor (a push a word hid outranks a visible delete beside it; `deny: [delete]`
+still denies the line, as a deny matches any part, D-075). The second reading keeps such a line at
+its decision before, and it reads the words dash (the `/bin/sh` fallback, used when bash is
+missing) ends at their first `}` as dash reads them: dash has no `<( )` and takes a `'` inside
+`"${x:-..}"` as text, so `echo "${x:-'}" ; rm -rf ./work ; echo "'}"` stays a delete. An
+approval on a line whose two readings are different acts is bound to its exact text ("Standing
+grants"). A line that ends inside a quote (`'`, `"` or `$'`), which bash and dash reject, asks,
+also under a deny and under a catch-all `log` rule (#394): a shell that closes the quote elsewhere
+runs the rest
+(`echo "${x:-'}"; rm -rf ./work; echo '}"'`: dash runs the `rm`). The reading before is kept for
+it, so the line is never one a rule allows. A line left inside a `$( )` or a backquote is read as
+before (a catch-all `log` rule logs `echo $(`). An over-deep part past the cap ends where the
+lexer would end it, `${...}` words and `$((` included (`_nest_end`); where the reading before ends
+it elsewhere, or a here-document opens in it, the call is read both ways. Each `$((` group's end
+is found once for a chain of them. Cost: bash's reading of a part only it opens costs what the same
+nest written as plain `$( )` costs, level for level, and the reading before, which reads none of
+it, costs next to nothing there. The three-level depth and the 24-part budget keep each line within
+3 times the reading before, or 15 ms more on a short line, where reading all 16 levels took 10 to
+40 times as long; a line of 32 nests in words, each 16 deep (about 5,900 characters), takes about
+twice the reading before.
+
+Known limits. Arithmetic on a bare name (`$((x))`, `${s:x}`) evaluates a value the gate does not
+see. A command more than three levels deep in a part only bash's reading opens, or in a part past
+a call's 24, is not read: the line asks, also under a deny on that command (a force push four
+levels deep in a `${...}` word asks rather than denies), and a rule that allows `opaque_exec`
+allows it, as main allows the line. dash's other differences, and bash 3.2's pairing inside
+`"${...}"`, are not modelled; a line both shells close, at different places, is decided on both
+readings. A `${...}` word bash never closes asks, and a command after it is read only by the
+reading before, which ends the word at its first `}`.
 
 ## The store is credentials (D-038)
 

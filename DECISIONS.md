@@ -1486,12 +1486,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (`gh pr comment 3 --body hi && rm -rf build` is `delete`; lifted by the D-075 amendment for #191, 2026-10-19). An entry in the `deny:` list has matched every part
   the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
   at or below `opaque_exec` split the same way (denied under `deny: [web_read]`; asked under
-  `categories: {web_read: deny}`, lifted by the D-075 amendment for #191, 2026-10-19, to deny as well). The known unread forms below are allowed outright on main, not asked, and no entry
-  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158). Two forms left this list on
-  2026-10-19: text piped or fed by heredoc to `ssh` with no remote command (#240), read since #303, and `git clone -c`
-  with a command-running key, read as `git -c` is since #231. A `command:`
-  regex reaches them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
-  still evades the regex inside these forms, while it no longer does inside an array subscript (read since #189), a
+  `categories: {web_read: deny}`, lifted by the D-075 amendment for #191, 2026-10-19, to deny as well). The known unread forms below were allowed outright on main, not asked, and no entry
+  for the hidden action's category reached them. All have left this list: `${...}` bodies (#143), read since #158
+  (the D-038 amendment of 2026-10-25), and on 2026-10-19 text piped or fed by heredoc to `ssh` with no remote command
+  (#240), read since #303, and `git clone -c` with a command-running key, read as `git -c` is since #231. A `command:`
+  regex reached them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
+  evaded the regex inside these forms, as it no longer does inside them or inside an array subscript (read since #189), a
   value given to `declare` (read since #194, for #188), a command-valued option (read since #164 and #288) or a git
   config value (read since #231). The
   other deny-to-ask paths (`eval $(...)`, stdin-fed `xargs -I{} sh -c '{}'`, the body of `time { ...; }`, and the
@@ -1575,8 +1575,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   vetoes keyed on them, and adds the `indirection` and `locale translation` signals, so it asks unless
   opaque_exec is named: with a message catalog and a non-C locale bash runs the translation, and expands
   `$( )` in it. The line is also decided as opaque_exec and the stricter outcome stands, so a veto on
-  opaque_exec holds for it too. `$"..."` inside `${...}` is left to the parameter-expansion work (#143,
-  #158). A heredoc delimiter spelled `$"EOF"` or `$'EOF'` ends the body on different lines in bash and in
+  opaque_exec holds for it too. `$"..."` inside `${...}` is read by the parameter-word scan since #158, without
+  the locale-translation signal (#143). A heredoc delimiter spelled `$"EOF"` or `$'EOF'` ends the body on different lines in bash and in
   dash (the shell tool's fallback when bash is missing), so that body is read as commands too. A `deny` or
   `ask` rule keyed on `command:` sees the view in a second pass that only raises; the first-match rule is still
   chosen on the original text. Allow and lower rules and grants match the original text only: the view adds
@@ -2326,6 +2326,73 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   Relative aliases into non-secret stores still need #340's resolution. Relative
   secret links use the existing secret-path check. No patch is applied while classifying, and no tool schema or
   executor behavior changes.
+
+  *Amendment 2026-10-25 (issues #143, #553, #554, PR #158):* the lexer ended a `${...}` word at its first `}` and
+  read nothing in it, and counted every parenthesis of a `$((`. So `echo ${X:-$(git push --force origin main)}` was
+  an allowed `read` under every policy, a `'}'` in a word hid the command after it, `echo $((echo '((' ; git push
+  --force origin main) )` was arithmetic (#553), and `${@@P}`, `${*@P}`, `${!@}` and `${!*}` were reads while
+  `${name@P}` already asked when its value was set on the line (#554). `_Lexer` now reads these as bash's parser
+  does in its default mode, on main's lexer: the same `run`, `_NEST` cap, `_nest_end`, token marks, `_own_text`,
+  `_given_stdin`, parse memo and three-value `_parse`. *Words* (`_Lexer._param`): a `}` closes only outside quotes
+  and escapes; a `'` pairs with the next one, in double quotes too; `$'..'` keeps `\'` escaped; a nested `${` is a
+  level on a stack. Each `$( )`, `$((` and backquote in a word, and each `<( )` and `>( )` outside double quotes, is
+  read by a lexer of its own and listed as a source, so a here-document opened in it stays in it (fdn-0's second
+  blocking row, review 5641579458). Single-quoted text bash expands is read within that text alone, so a part opened
+  in it ends at its quote (the first blocking row). `${!name}` and the other indirect forms of a name, a digit, `@`
+  or `*`, and `${name@P}`, `${@@P}`, `${*@P}` and `${@:n@P}`, run a value and ask; the listing forms do not. bash
+  5.3's `${ cmd; }` is read and asks. *`$((`* (`_Lexer._arith`): arithmetic only when bash's parser match
+  (`_group_end`, `_arith_end`) and its second reading at expansion (`_expand_end`) end at the same `)` and the text
+  balances as `chk_arithsub` counts it (it counts the parentheses of a `${...}` in a nested `$( )`, which the parser
+  steps over); a group whose nested `$( )` holds a comment or a here-document is read as a `$( )` (stricter than
+  bash). Else it is a `$( )` holding a subshell, read up to the parser's end (`_group_sub`); one that never closes
+  takes the rest of the text and asks (bash rejects the line). Each group's end is kept for a chain of them.
+  *Depth and budget:* a part only the new reading opens (a `$( )`, `<( )`, `>( )`, backquote or arithmetic `$((`
+  in a word, a `$((` read as a subshell, quoted text bash expands, the text of `${ cmd; }`) is read three levels
+  deep, counted alike for each kind: its own `$(`, `<(`, `>(` or backquote is level 1 (in arithmetic, quoted text
+  and `${ cmd; }`, the first `$(` or backquote in it), and each one inside is a level more (`_WORD_NEST`,
+  `_Lexer._part`, `_Lexer._deeper`; a backquote in such a part is a level too). A deeper level is an unread part
+  that asks, as one past `_NEST` does: the reading before costs next to nothing on such a nest, and reading it to
+  `_NEST` cost 10 to 40 times as much as that reading. One classify call opens `_WORD_PARTS` (24) such parts, in
+  classify order, each counted once for each lexer pass that opens it: the line's, each `$( )` level around it, and
+  the passes of `_dollar_brace` and `_unknown_forms` over a `$( )` in a `${..}` word (the lexer of a line's
+  literal-word view, `_policy_command_view`, opens none: a word holding a part is dynamic there either way). Inner
+  levels are opened when their source is classified, after the rest of the line, so later parts can spend the budget
+  first; a part past them is cut the same way. A part's
+  source no longer lists the parts inside it a second time: they are listed when that source is read, a level
+  deeper. So each line costs at most 3 times the reading before, or 15 ms more, on the review's families (CPU, best
+  of 9).
+  *Also:* a `$( )` or `<( )` reads its own here-documents (`_Lexer._nested`), a backslash-newline after `$` is
+  dropped, `$'` in double quotes is a `$` and a quote, and `_nest_end` ends a part past the cap where the lexer
+  would, both readings (#334's equality test holds for each). *Two readings.* Where the new reading may differ
+  anywhere in a call (`_Lexer._differ`: a word closed past its first `}`, a source read in a word, a `$((` matched
+  otherwise, an over-deep part the reading before ends elsewhere or one holding a here-document), `classify` reads
+  the call again with the lexer as before (`_flat_words`), with budgets of its own, and puts that reading at the end
+  of the call's `also` chain; `readings` walks the chain, so `decide`, `no_grant`, `call_approvers`, `body_unseen`
+  and the hook read both and the stricter holds. `binds_exact` and `is_outward` read each reading too, and a line
+  whose readings are different acts binds its approval to the exact text, so an "always" on its first reading's
+  category and target covers no line main bound to its text. A part the new reading adds can lead a line and turn
+  a category line or the opaque floor (a push a word hid outranks a visible delete), and dash, the `/bin/sh`
+  fallback, ends a word at its first `}` where it has no `<( )` or pairs no `'` in `"${x:-..}"`: the reading before
+  keeps both at their decision on main. A line that ends inside a quote (`'`, `"` or `$'`), which bash and dash
+  reject, asks (a shell
+  closing the quote elsewhere runs the rest), also under #394's catch-all `log` rule, with the reading before kept;
+  one left inside a `$( )` or a backquote is read as before, so that rule still logs `echo $(`. *Checked:*
+  `scripts/gate_diff.py` of main against this tree lowers nothing: the built-in corpus (9,676 actions x 87
+  policies, no variants, 16,240 pairs tightened on 264 actions), an aimed corpus (27,251 actions: every line of the
+  parameter-expansion, ANSI-C and command-quote tests and of the earlier port's tests, every heredoc, `$((` or `${`
+  literal of `tests/security`, generated words for each operator, nested source and quoting with a push or a delete
+  after, the review's repro lines, over-deep nests, nests in words and in `$((` at each depth up to 20, each kind of
+  part at each level from 1 to 7, lines past the 24-part budget, 1,200 fuzzed lines and the review rounds' corpora,
+  under the 87 policies and 19 deny, category and reserved policies on force_push, vcs_push, delete, web_post and
+  opaque_exec; 660,606 pairs tightened on 15,595 actions), and the built-in corpus with variants (72,373 actions x
+  87 policies, 26,409 pairs tightened on 422 actions). Rejected: keeping main's reading alone and adding
+  bash's sources as parts (a word closed past its first `}` hides the command after it, which no part reaches);
+  re-applying #158's earlier lexer (main's `_nest_end`, marks and memo would be lost). Limits, in `docs/GATE.md`
+  "Shell parameter expansion (D-038)": arithmetic on a bare name (`$((x))`, `${s:x}`) evaluates a value the gate
+  does not see; a command more than three levels deep in a part only the new reading opens, or in a part past a
+  call's 24, is not read: it asks, also under a deny on it, and a rule allowing `opaque_exec` allows it, as main
+  does; dash's other differences and bash 3.2's pairing are not modelled; a word bash never closes asks, and what
+  follows it is read only the way before.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -3551,8 +3618,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   read since #140 / #181), nesting past the depth cap (#137, #141), `eval $(...)`, a command arriving on stdin
   (`echo ... | xargs -I{} sh -c '{}'`) and the
   wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`; the list is not closed. Deny → allow: the fallback
-  has gaps where the line is `allow` outright even under `deny`: `${...}` bodies, which the lexer does not read
-  (#143; open PR #158). Since #164 an `ssh`/`mosh` chain past the hop cap asks (#153) and command-valued options of
+  had gaps where the line is `allow` outright even under `deny`: `${...}` bodies, which the lexer did not read
+  (#143; read since #158). Since #164 an `ssh`/`mosh` chain past the hop cap asks (#153) and command-valued options of
   allowlisted programs are read (#154).
 - **Revisit if:** a principal wants a denied action to be allowed when it is part of a longer line. None asked;
   the entry format says "no agent may take" the action.
