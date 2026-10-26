@@ -3595,7 +3595,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 
 ## D-057 (2026-10-13) Event-driven activation: triggers, masked connectors, a runs dashboard, root causes
 - **Status:** Proposed 2026-10-13, revised 2026-10-18 after the reviews. Design in docs/EVENT-ACTIVATION.md, options and
-  recommendation first. Nothing built. Independent of D-048, D-058 and D-059.
+  recommendation first. Triggers remain unbuilt. Independent stage-0 work is noted below. Independent of D-048,
+  D-058 and D-059.
 - **Amends:** D-052. Job edits (`schedule.edit`, every action but `list`) join the operations that need a live principal
   caller. D-052 left jobs off that list and let local automation drive turns, so a local script can edit jobs today.
 - **Why (principal, 2026-10-13):** Railtown AI's platform (railtown.ai: build, feed, observe the agent) gave the idea
@@ -3630,9 +3631,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Open:** how events enter (D-026's ingress path, recommended, or a separate path), what a trigger run may do (read
   only, in the folders it names, recommended), which source first (the webhook, recommended), root-cause default (off,
   recommended), default limits, who may add a trigger (only the principal, recommended).
-- **Depends on:** stage 0 (nothing in it exists on main), and for the ingress door a `Target` and a `trigger` branch in
+- **Depends on:** all five stage-0 prerequisites, and for the ingress door a `Target` and a `trigger` branch in
   `frame()` in `src/exo/core/ingress.py`.
 
+  *Amendment 2026-10-25 (bounded search, stage 0.5):* registered `grep` and `glob` calls run in an owned Python
+  process with a 30-second wall-clock limit. Timeout and turn cancellation kill and reap the child, including
+  cancellation while it starts. This prevents regex backtracking from holding the core's interpreter lock.
+  The existing search implementation keeps its file guards, store skips, ordering and result text. Only the
+  environment paths needed for store recognition reach the isolated interpreter. Gate and executor dispatch
+  precede the local handler, so a required executor is never bypassed. Chosen over a timeout on a worker thread,
+  which cannot fire while the regex holds the interpreter lock, and over a regex syntax filter, which cannot
+  bound every expensive pattern. Cost: a Python process per search. It bounds time, not memory or filesystem
+  access. The broader trigger design stays proposed. Docs: `docs/TOOLS.md`, `docs/EVENT-ACTIVATION.md` section 0.5.
 ### Amendment (2026-10-25): scheduled-run boundaries, stage 0.1 and 0.2
 - **Decision:** the D-052 amendment above implements stage 0.1. Stage 0.2 freezes each scheduled run's
   initially available tool names after removing `BLOCKED_TOOLS`. Its runner returns an error for any

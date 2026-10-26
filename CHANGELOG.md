@@ -75,6 +75,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the process mask to 077 and restored it with no lock: concurrent writes with `mode=None` interleaved set and
   restore, so files came out 0600 under a 022 mask and a run could leave the process at 077. The probe runs under
   a lock now, and so does the server's socket bind, which sets 0177 (`exo.core.private.umask`).
+- `grep` and `glob` run in an owned process with a 30-second limit, so expensive regex and glob patterns no
+  longer freeze the core. Timeout and turn cancellation kill and reap the worker. Secret-store skips and
+  gate/executor dispatch remain in force (D-057 stage 0.5).
 - Scheduled job changes require a live principal caller (#552), while listing stays available to local
   callers. A scheduled run rejects tool names outside its initial available-tool list before the gate or
   executor runs them, including blocked tools and tools registered after the run starts (D-057 stage 0.1–0.2).
