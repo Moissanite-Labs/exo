@@ -6728,8 +6728,9 @@ def _name_tokens(name: str) -> list[str]:
     """One word per separator part, as main read it; and when a part is camelCase, that part's words beside it: a
     hump is a word edge, so `deleteFile` deletes and `readFile` reads as `delete_file` and `read_file` do (#515).
     The name's own word is kept first, beside the words, so a name main already read the compact spelling of keeps
-    its reading (`apiKey` is the credential word, `checkOut` pays, `signUp` opens an account. Nothing main allowed
-    is read lighter)."""
+    its reading (`apiKey` is the credential word, `checkOut` pays, `signUp` opens an account. Main asked a camel
+    name as `unknown`; where a policy asks `unknown` and allows the name's new category, the call passes where
+    main asked — the amendment names those categories)."""
     whole = [p.lower() for p in re.split(r"[_\-.:/]+", name)]
     if _CAMEL.search(name):
         whole += re.split(r"[_\-.:/]+", _CAMEL.sub("_", name).lower())

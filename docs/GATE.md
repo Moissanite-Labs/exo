@@ -764,7 +764,10 @@ a delete of the folder that holds the store ran under the default policy: `delet
 `unknown` and allowed, where `delete_file` asks the principal.
 
 The words are read beside the name's own word now (#515): a camelCase call reads what its snake_case spelling
-reads, and the name's own word is kept, so nothing main allowed is read lighter. `deleteFile` on a folder that
+reads, and the name's own word is kept. Main asked a camelCase name as `unknown`; where a policy asks `unknown`
+and allows the name's new category, the call passes where main asked. The categories the words introduce beside
+what main asked are `read`, `local_write`, `delete` and `message_send`; `store_write` and `credentials` keep the
+principal-only floor, so no policy passes them. `deleteFile` on a folder that
 holds the store (`deleteFile {"path": "~/.exo"}`) is the same `store_write` ask `delete_file` is; the
 #447 check on a secret reads the folder beside one, as it did. `readFile` on a store file is a `read`, where main
 asked the unnamed call's store-source reading; a camelCase read beside a secret is `credentials` as `read_file`'s
