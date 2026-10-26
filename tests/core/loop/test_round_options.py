@@ -49,3 +49,34 @@ def test_unlimited_turn_remains_interruptible_after_24_rounds(tmp_path):
 
     result = asyncio.run(go())
     assert len(provider.calls) == 26 and result.stop_reason == 'interrupted'
+
+
+def test_principal_wire_override_and_local_default_through_engine(tmp_path):
+    from exo.core.engine import CoreEngine
+    from exo.protocol import schema as s
+    from exo.server.app import Dispatcher
+
+    async def go():
+        eng = CoreEngine(tmp_path / 'home', {'roles': {'main': ['fake:x']}, 'fake': {'reply': 'ok'}},
+                         cwd=str(tmp_path), env={})
+        principal = Dispatcher(eng, caller='principal:tui')
+        local = Dispatcher(eng, caller='local')
+        sid = (await principal.run(s.Command.of(s.SessionCreate()))).result['session']['id']
+        call = ToolCall(id='call', name='echo', arguments={})
+        provider = Script(*([reply('', [call])] * 30 + [reply('done')]))
+        eng.loop.provider, eng.loop.run_tool = provider, echo_tool
+        answer = await principal.run(s.Command.of(s.TurnSend(session=sid, text='long task', max_rounds=0)))
+        assert answer.ok
+        await asyncio.gather(*list(eng._tasks))
+        assert len(provider.calls) == 31
+        assert eng.loop.max_iterations == 24
+        # A subsequent local turn without an override retains the default cap.
+        provider = Script(*([reply('', [call])] * 30 + [reply('done')]))
+        eng.loop.provider = provider
+        answer = await local.run(s.Command.of(s.TurnSend(session=sid, text='local task')))
+        assert answer.ok
+        await asyncio.gather(*list(eng._tasks))
+        assert len(provider.calls) == 25  # 24 rounds and the tool-less wrap-up
+        await eng.close()
+
+    asyncio.run(go())
