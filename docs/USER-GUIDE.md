@@ -379,8 +379,13 @@ What the gate asks about, and why:
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, the core's socket, or the signed-update trust pin in `update/`
   (also `exo update --pin-trust`, #133) asks you every time, and no "always" covers it. So does a write into
-  `~/.exo/plugins` (#435), because Exo loads and runs the code it finds there. To work on a plugin, point
-  `EXO_PLUGIN_DIRS` at your copy instead. Only you can answer such a write, whatever `approvals.yaml` says, also
+  `~/.exo/plugins` (#435), because Exo loads and runs the code it finds there, and into the other folders Exo loads
+  code from too (#459): the venv `${EXO_VENV:-$EXO_HOME/venv}` that holds the `exo` package and the gate itself,
+  Hermes' plugin home (`${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}/plugins`, loaded with `--with-hermes`), the source
+  copy `$EXO_HOME/src`, and every folder `EXO_PLUGIN_DIRS` names. A `pip install` into the venv Exo itself runs from
+  now asks; everyday work installs into a project or scratch venv instead. To work on a plugin, leave
+  `EXO_PLUGIN_DIRS` unset while you edit, or point it at your copy only for sessions that must load it. Only you can
+  answer such a write, whatever `approvals.yaml` says, also
   when the same command or file tool names a secret that a seat may approve (#447). Reading your policies or plugins
   with `cat`, `grep` or a read tool does not ask. Some other commands that only read, such as `sed -n` or `sort`, do
   ask. So does a write to your Exo home's `config.json` (D-074, #125), which names the plugins Exo loads, your

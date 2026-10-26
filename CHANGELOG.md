@@ -6,7 +6,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
+  took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
+  `reserved:` entry on a later path missed and an approver could have waved the write through:
+  `cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from `a.yaml` to
+  `gates.yaml` and `delete_file` on both paths asked under `deny: ["target:*/gates.yaml"]`. The store scan now
+  keeps each store path a shell line or file tool writes, in the order it meets them, and each is a `store_write`
+  part with that path as its target, as beside a secret (#447), so the entry matches whichever path it names. The
+  first path still leads the line, `rm` of both paths was denied already (its `delete` part names the last path),
+  reads keep their class, and the first path alone decides as before.
 - A glob in a secret store's folder asks (#594). `cat ~/.ss?/*`, `cat ~/.aw?/*` and `cat ~/.exo/key?/*` read as ordinary reads because `_glob_word` gave up whenever the folder part held a glob; the globbed folder is now tested against each sample's folder, with the same three-literal discipline the file side keeps and bash's rule that only a literal dot matches a leading dot, so `cat ~/*/*` stays a read.
+- An ssh or mosh hop keeps its host among the line's other targets when the remote command names a target of its
+  own (#493). The hop gave the host as the line's target only when the remote command's dominant part had none, so
+  `ssh prod 'echo hi > /etc/hosts'` was a `local_write` of `/etc/hosts` alone: a `target: prod` rule allowed it,
+  `scopes: {private: [/etc/*]}` read a path on another host as the principal's own, and a standing grant for a
+  local write to `/etc/hosts` covered the same write on any host. A deny or `reserved:` entry on the host still
+  reached the hop's part (D-075). Now the host and the destination stay among the other targets (#399) whenever
+  the line's target is not one of them, so the line is decided on the host too and the strictest stands: the rule
+  reaches the line as a deny reaches the hop's part, a scope on a local path stops at the host's reading, which
+  keeps the exposure the hop gives the line, and the other targets bind the call to the exact command, so no grant
+  for a local write runs the hop. The written path stays the line's target, so a rule on it still matches as
+  before, and a rule on the bare host reaches a `user@host` destination too.
 - A gh download or clone into the Exo store is a store write, as `curl -o` and `git clone` already are (#461).
   gh release download, gh run download and gh attestation download write what they fetch into `-O`/`--output`
   or `-D`/`--dir`, and gh repo clone and gh gist clone into their directory word, but they read as reads on
@@ -32,6 +52,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   reading, as `cp -r` does. The resolution is the file tools' own; a shell line's store writes are still read from
   its own words. D-074's config file is reached under the new keys and from the session folder as under `path`.
   The gate differential against main finds nothing lowered.
+- A write into a folder Exo loads code from is a store write, as a write into `$EXO_HOME/plugins` has been since
+  #435 (#459). The gate itself, the plugins the core loads and the exo-gate plugin live in four others: the venv
+  (its site-packages holds the `exo` package, so a changed `gate.py` decides every later call and a `.pth` there
+  runs on each start; `${EXO_VENV:-$EXO_HOME/venv}`), Hermes' plugin home (loaded with `--with-hermes`;
+  `${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}/plugins`), the source copy the installer clones a git URL into and
+  `exo update` and `exo web` read plugins from (`$EXO_HOME/src`), and every folder `$EXO_PLUGIN_DIRS` names
+  (`default_dirs` searches them first and keeps the first plugin found of a name, so a plugin named `exo-gate`
+  there takes the real one's place). Each is read as the environment the gate sees spells it, as EXO_HOME is, and
+  `.exo/venv`, `.exo/src` and `.exo/hermes-home/plugins` match anywhere by name, as `.exo/plugins` does. So `cp
+  evil.py ~/.exo/venv/lib/python3.13/site-packages/exo/gate.py`, a `write_file` there, `pip install --target` into
+  any of the folders, `tar -C ~/.exo/src`, `git clone` into the venv and a `.pth` beside the `exo` package now ask
+  the principal, where the same line was an allowed `shell` or `local_write`. A `cd` into one counts like a `cd`
+  into the store, and a delete or move of a code folder (or of the home that holds one) counts as a delete of it.
+  Reads stay reads. A relative `EXO_VENV` or dir, a `.venv` under the home and Hermes' own state are not code and
+  keep their class. The cost: a `pip install` into the venv Exo itself runs from now asks; everyday work installs
+  into a project or scratch venv instead, so the ask is rare. The D-038 amendment of 2026-10-26 records it.
 - A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
   after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
   that path and its write was never read. A patch tool skips the bare line and applies the next header, so after
@@ -487,6 +523,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   line read again from it once decoded (`bash -c $'..'`, `eval "..."`, ssh, backquotes), and also as written, as
   before. `decide` keeps the stricter (`gate.readings`), the more severe reading leads the approval card, and an
   approval for such a line binds to its exact text. A line the join leaves as it is is read once, as before.
+- Gate (#515, D-038 amendment): The name parser adds camelCase words beside each separator part. The complete unsplit call is also
+  read as a policy floor: its secret and store checks, target, posting text and category rules still apply.
+  This prevents a new read hint from bypassing a store-source ask, an outbound hint from bypassing a
+  credential ask, and a draft hint from weakening an existing send reading. A policy that asks or denies
+  `unknown` still applies to a camelCase call previously read as unknown. `deleteFile` on `~/.exo`
+  now asks through its new store-write reading; `readFile` on a store file still asks through the old
+  store-source reading. Compact names such as `apiKey`, `checkOut` and `signUp` retain their old
+  reading. Empty separator parts are dropped, preserving the MCP remote-write flag for leading separators.
+  Earlier built-in differential counts covered the pre-review implementation only and do not validate
+  these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
+  rules, explicit unknown-category policies, and leading-separator MCP names.
 - Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
   (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
   #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under
