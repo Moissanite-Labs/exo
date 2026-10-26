@@ -170,6 +170,11 @@ FILE_ROWS = [
     ({"tool": "write_file", "args": {"path": "~/.ssh/config", "content": "x"}}, "credentials", "local_write"),
     ({"tool": "delete_file", "args": {"path": "~/.exo/state/x"}}, "store_write", "delete"),
     ({"tool": "read_file", "args": {"path": "~/.ssh/id_rsa"}}, "credentials", "read"),
+    # the same calls under a camelCase name, which the name reading now read as its words (#515): main read it as
+    # one word, so the delete of the folder that holds the store ran and a write named the unknown's reading
+    ({"tool": "deleteFile", "args": {"path": "~/.exo"}}, "store_write", "delete"),
+    ({"tool": "writeFile", "args": {"path": "~/.exo/policies/gates.yaml", "content": "x"}}, "store_write",
+     "local_write"),
 ]
 
 
@@ -192,6 +197,55 @@ def test_a_delete_tool_on_the_store_keeps_its_matrix_deny():
     c = classify({"tool": "delete_file", "args": {"path": "~/.exo/state/x"}})
     d = decide(c, pol(matrix=DENY_IRREVERSIBLE))
     assert (d.outcome, d.rule) == ("deny", "matrix"), d
+
+
+# A camelCase tool name is read as its words beside the name's one word (#515), so it reads what its snake_case
+# spelling reads. Main read the name as one word, and every camelCase row here was `unknown`.
+CAMEL_FORMS = [
+    ("deleteFile", "delete_file", "delete"),
+    ("moveFile", "move_file", "local_write"),
+    ("writeFile", "write_file", "local_write"),
+    ("readFile", "read_file", "read"),
+    ("sendMessage", "send_message", "message_send"),
+    ("copyFile", "copy_file", "unknown"),
+    ("openFile", "open_file", "unknown"),
+    ("applyPatch", "apply_patch", "unknown"),
+]
+
+
+@pytest.mark.parametrize("name,snake,want", CAMEL_FORMS)
+def test_a_camelcase_name_reads_as_its_snake_form(name, snake, want):
+    assert gate.classify_by_name(name) == want, name
+    if snake is not None:
+        assert gate.classify_by_name(snake) == want, snake
+
+
+def test_a_camelcase_delete_of_the_folder_that_holds_the_store_asks_the_principal():
+    """`delete_file` on `~/.exo` asks; a camelCase name whose words are the same delete read as one word and ran
+    (#515). Every decision on the snake spelling holds on the camel spelling."""
+    for tool in ("delete_file", "deleteFile"):
+        c = classify({"tool": tool, "args": {"path": "~/.exo"}})
+        assert c.category == "store_write", (tool, c)
+        assert c.category in gate.NO_GRANT, c
+        assert decide(c).outcome == "ask", c
+        loose = normalize_policies({"gates": {"categories": {"credentials": "allow", "read": "allow"}}})
+        assert decide(c, loose).outcome == "ask", c
+
+
+def test_a_camelcase_read_keeps_the_snake_forms_check():
+    """`readFile` reads as `read_file` reads (#515), from the name: a `read`, so a camelCase read beside a secret
+    is the same `credentials` call. Main read the camelCase name as one word, `unknown`; on a store file it asked
+    the unnamed call's store-source reading, and `read_file`'s call rows keep that reading."""
+    assert gate.classify_by_name("readFile") == gate.classify_by_name("read_file") == "read"
+    assert gate.classify_by_name("listFiles") == gate.classify_by_name("list_files") == "read"
+
+
+def test_a_camelcase_word_main_read_keeps_mains_class():
+    """Every name main read stays read as it was, beside the words the humps add (#515): `apiKey` is the credential
+    word, `checkOut` pays, `signUp` opens an account. Nothing main allowed reads lighter."""
+    for name, want in (("apiKey", "credentials"), ("checkOut", "payment"), ("signUp", "account"),
+                       ("logIn", "credentials"), ("payOut", "payment")):
+        assert gate.classify_by_name(name) == want, name
 
 
 def test_a_post_tool_on_a_store_path_keeps_its_text_for_the_posting_checks():

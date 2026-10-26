@@ -6474,7 +6474,7 @@ def _patch_paths(text: str) -> list[str]:
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
                   "src", "dest", "destination")
 # Name words of a file tool that moves or renames what it names, as `mv` does, or deletes it, as `rm` does (#447).
-# They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` keeps as one word.
+# They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` reads beside the name's word.
 _WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
                          "revoke", "trash"))
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
@@ -6725,7 +6725,15 @@ NAME_HINTS: list[tuple[set[str], set[str] | None, str]] = [
 
 
 def _name_tokens(name: str) -> list[str]:
-    return [t for t in re.split(r"[_\-.:/]+|(?<=[a-z])(?=[A-Z])", name.lower()) if t]
+    """One word per separator part, as main read it; and when a part is camelCase, that part's words beside it: a
+    hump is a word edge, so `deleteFile` deletes and `readFile` reads as `delete_file` and `read_file` do (#515).
+    The name's own word is kept first, beside the words, so a name main already read the compact spelling of keeps
+    its reading (`apiKey` is the credential word, `checkOut` pays, `signUp` opens an account. Nothing main allowed
+    is read lighter)."""
+    whole = [p.lower() for p in re.split(r"[_\-.:/]+", name)]
+    if _CAMEL.search(name):
+        whole += re.split(r"[_\-.:/]+", _CAMEL.sub("_", name).lower())
+    return list(dict.fromkeys(whole))
 
 
 def classify_by_name(tool: str) -> str:
@@ -7056,7 +7064,7 @@ def _classify_call(action: Any) -> Classification:
             # A delete reaches the store through a folder that holds it, as `rm` does. Beside a secret, so does a
             # move or rename, as `mv` does, and a tool whose camelCase name says so (#447). A move of such a folder
             # with no secret is #494.
-            wide = own == "delete" or bool(secret) and not _WIDE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+            wide = own == "delete" or bool(secret) and not _WIDE_WORDS.isdisjoint(_name_tokens(tool))
             named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
                      else [args.get(k)]) if isinstance(v, str)]
             stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide)))
