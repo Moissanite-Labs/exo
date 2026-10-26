@@ -342,7 +342,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and the exo-gate hook's checks past the decision (body files, who may answer, "once", the required executor, an
   "always" bound to the exact line) read the line as before too. That reading is one of the line's readings
   (`gate.readings`), so a store write or secret part only it has keeps the answer with the principal, once (#447,
-  #311), and a sudo write only it reads keeps its displaced part's approvers (#454).
+  #311), and a sudo write only it reads keeps its displaced part's approvers (#454). The hook's grant check (D-075)
+  reads it against its own act too: a reserved hit there that is not that reading's act keeps the ask from an
+  "always", as on main, so `X='a b' sudo git commit -m x; sudo git commit -m x` under `reserved: [local_write]`
+  asks every time, although the commit leads the line now.
   An unknown program now asks beside a more severe part that logs (`git push origin feature && mytool --wipe`,
   `git push origin feature; kill -9 1`), unless a category line names `opaque_exec` below ask, and an "always" on
   such a line covers that exact line only. A script that calls a local tool the gate does not know after a push or
