@@ -209,16 +209,293 @@ def test_bad_policy_file_falls_back_to_defaults(keyed_store):
 
 @pytest.mark.parametrize("yaml, error", [
     ("escalate: [read]\n", "gates.escalate must be a mapping"),
+    ("escalate: read\n", "gates.escalate must be a mapping"),
     ("escalate: {categories: read}\n", "gates.escalate.categories must be a list"),
 ])
 def test_malformed_escalation_reports_the_policy_error_in_the_hook(keyed_store, yaml, error, caplog):
     store, key = keyed_store
     (store / "policies" / "gates.yaml").write_text(yaml)
     _, ctx = make_gate(store, key)
-    assert call(ctx, "terminal", {"command": "ls"}) is None
+    assert call(ctx, "terminal", {"command": "ls"})["action"] == "approve"   # #557: read joins the escalation
     [ev] = events(store)
     assert "policy error" in ev["body"]["decision"]["reason"]
     assert error in caplog.text
+
+
+# #557: a malformed escalate beside a tightening decides at least as strictly as both main before #549 (1d2f32ac,
+# which ignored a non-mapping escalate) and main after it (edeb4f89, which used the defaults for the whole policy).
+ESCALATE_SHAPES = ["escalate: [payment]\n", "escalate: []\n", "escalate: null\n",
+                   "escalate:\n  # categories: [payment]\n  # third_party: true\n", "escalate: false\n",
+                   "escalate: 0\n", "escalate: payment\n", "escalate: read\n", "escalate: {categories: payment}\n",
+                   "escalate:\n  categories:\n"]
+ESCALATE_TIGHTENINGS = [
+    ("deny: [delete]\n", "rm -rf build", "deny"),
+    ("reserved: [vcs_push]\n", "git push origin main", "ask"),
+    ("categories: {read: deny}\n", "ls", "deny"),
+    ("rules:\n  - match: {category: read}\n    decision: deny\n", "ls", "deny"),
+    ("matrix:\n  reversible: {private: ask}\n", "touch x", "ask"),
+]
+PERMISSIVE = "matrix:\n" + "".join(f"  {r}: {{private: allow, internal: allow, public: allow}}\n"
+                                   for r in ("reversible", "costly", "irreversible"))
+APPROVERS_WITH_SCOUT = ("approvers:\n  default: [principal, seat:scout]\n  delete: [seat:scout]\n"
+                        "always: {days: 90, outward_days: 60}\n")
+
+
+def _decision(store):
+    return [e for e in events(store) if e["body"].get("phase") == "decision"][-1]["body"]["decision"]
+
+
+@pytest.mark.parametrize("shape", ESCALATE_SHAPES)
+@pytest.mark.parametrize("tight, line, outcome", ESCALATE_TIGHTENINGS)
+def test_malformed_escalation_keeps_the_principals_other_sections(keyed_store, shape, tight, line, outcome):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text(tight + shape)
+    _, ctx = make_gate(store, key)
+    call(ctx, "terminal", {"command": line})
+    d = _decision(store)
+    assert d["outcome"] == outcome
+    if "reserved" in tight:
+        assert d["reserved"] == [["vcs_push", "origin"]]
+
+
+@pytest.mark.parametrize("shape", ESCALATE_SHAPES)
+def test_malformed_escalation_says_the_stricter_applies(keyed_store, shape, caplog):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text("deny: [delete]\n" + shape)
+    _, ctx = make_gate(store, key)
+    call(ctx, "terminal", {"command": "rm -rf build"})
+    reason = _decision(store)["reason"]
+    assert "policy error, stricter of your policy and the defaults applies: gates.escalate" in reason
+    assert "defaults used" not in reason
+    assert "stricter of the policy and the defaults applies: gates.escalate" in caplog.text
+
+
+@pytest.mark.parametrize("shape", ESCALATE_SHAPES + ["escalate: {categories: [payment]}\n"])
+@pytest.mark.parametrize("line, outcome", [("rm -rf build", "ask"), ("git push origin main", "log")])
+def test_permissive_matrix_beside_malformed_escalation_keeps_the_defaults(keyed_store, shape, line, outcome):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text(PERMISSIVE + shape)
+    _, ctx = make_gate(store, key)
+    call(ctx, "terminal", {"command": line})
+    valid = shape.startswith("escalate: {categories: [")
+    assert _decision(store)["outcome"] == ("allow" if valid else outcome)   # a valid policy decides as before
+
+
+@pytest.mark.parametrize("tight, line, outcome", ESCALATE_TIGHTENINGS)
+def test_valid_escalation_beside_a_tightening_decides_as_before(keyed_store, tight, line, outcome):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text(tight + "escalate: {categories: [payment]}\n")
+    _, ctx = make_gate(store, key)
+    call(ctx, "terminal", {"command": line})
+    d = _decision(store)
+    assert d["outcome"] == outcome and "policy error" not in d["reason"]
+
+
+def test_template_escalate_block_commented_out_keeps_the_other_sections(keyed_store):
+    from gate_fixtures import TEMPLATE
+    text = (TEMPLATE / "policies" / "gates.yaml").read_text()
+    lines = text.splitlines(keepends=True)
+    at = next(i for i, ln in enumerate(lines) if ln.startswith("escalate:")) + 1
+    while lines[at].startswith("  "):
+        lines[at] = "  # " + lines[at][2:]
+        at += 1
+    text = "".join(lines).replace("\ndeny: []", "\ndeny: [delete]")
+    assert "escalate:\n  # cost_over_budget" in text and "deny: [delete]" in text
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text(text)
+    _, ctx = make_gate(store, key)
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "block"
+
+
+def test_malformed_escalation_keeps_the_internal_names(keyed_store):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text("escalate: [payment]\n")
+    (store / "policies" / "internal-names.txt").write_text("zebrafinch\n")
+    _, ctx = make_gate(store, key)
+    call(ctx, "terminal", {"command": 'gh pr comment 5 -R acme-org/app -b "zebrafinch notes"'})
+    assert any("zebrafinch" in v for v in _decision(store)["violations"])
+
+
+# #557: when both policies ask, the defaults' violations still stand (the card's Fix line, the text-bound key), as
+# they did when the defaults alone applied (edeb4f89).
+@pytest.mark.parametrize("shape", ESCALATE_SHAPES)
+@pytest.mark.parametrize("posting, line, hit", [
+    ("applies_to: [web_post]\n", "gh pr comment 5 -R acme-org/app -F body.md", "cannot read the body"),
+    ("scrub: {enabled: false}\n", 'gh pr comment 5 -R acme-org/app -b "see /home/alice/notes"', "home path"),
+    ("scrub: {home_paths: false, internal_ids: false}\n",
+     'gh issue comment 7 -R other-org/lib -b "job jb_0123456789abcdef failed"', "internal id"),
+])
+def test_malformed_escalation_keeps_the_defaults_violations(keyed_store, shape, posting, line, hit):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text(shape)
+    (store / "policies" / "posting.yaml").write_text(posting)
+    _, ctx = make_gate(store, key)
+    result = call(ctx, "terminal", {"command": line})
+    d = _decision(store)
+    assert d["outcome"] == "ask" and any(hit in v for v in d["violations"])
+    assert hit in d["reason"]                       # at an equal outcome and exposure the defaults' reason stands
+    assert hit in result["message"] and "Fix:" in result["message"]
+
+
+# #557: the widest exposure of the two stands, so an approval binds to the exact line as the defaults bind it (here
+# both ask: the principal's private scope as costly, the defaults' as public).
+@pytest.mark.parametrize("shape", ESCALATE_SHAPES)
+def test_malformed_escalation_keeps_the_defaults_binding(keyed_store, shape):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text("scopes:\n  private: [acme-org/*]\n"
+                                                  "matrix:\n  costly: {private: ask}\n" + shape)
+    _, ctx = make_gate(store, key)
+    result = call(ctx, "terminal", {"command": "gh pr close 5 -R acme-org/app"})
+    assert result["action"] == "approve" and result.get("binding")
+    assert _decision(store)["exposure"] == "public"
+
+
+def test_malformed_escalation_keeps_the_defaults_approvers_and_grant_days(keyed_store):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text(PERMISSIVE + "escalate: [payment]\n")
+    (store / "policies" / "approvals.yaml").write_text(APPROVERS_WITH_SCOUT)
+    g, ctx = make_gate(store, key)
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["approvers"] == ["principal"]
+    assert (g._grant_days(False), g._grant_days(True)) == (30.0, 7.0)
+
+
+def test_valid_escalation_keeps_the_principals_approvers(keyed_store):
+    store, key = keyed_store
+    (store / "policies" / "gates.yaml").write_text(PERMISSIVE.replace("irreversible: {private: allow",
+                                                                      "irreversible: {private: ask")
+                                                   + "escalate: {categories: [payment]}\n")
+    (store / "policies" / "approvals.yaml").write_text(APPROVERS_WITH_SCOUT)
+    g, ctx = make_gate(store, key)
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["approvers"] == ["principal", "seat:scout"]
+    assert (g._grant_days(False), g._grant_days(True)) == (90.0, 60.0)
+
+
+def test_policy_changed_to_malformed_escalation_decides_beside_the_defaults_before_accept(keyed_store):
+    store, key = keyed_store
+    p = store / "policies" / "gates.yaml"
+    p.write_text(PERMISSIVE + "escalate: {categories: [payment]}\n")
+    (store / "policies" / "approvals.yaml").write_text(APPROVERS_WITH_SCOUT)
+    _, ctx = make_gate(store, key)
+    assert call(ctx, "terminal", {"command": "rm -rf build"}) is None
+    _bump(p, PERMISSIVE + "escalate: [payment]\n")
+    r = call(ctx, "terminal", {"command": "rm -rf build"})   # as on edeb4f89, where the changed file was the defaults
+    assert r["action"] == "approve" and r["approvers"] == ["principal"]
+
+
+def test_policy_changed_to_malformed_escalation_tightens_and_accept_keeps_the_defaults(keyed_store):
+    store, key = keyed_store
+    p = store / "policies" / "gates.yaml"
+    p.write_text("escalate: {categories: [payment]}\n")
+    g, ctx = make_gate(store, key)
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "approve"
+    _bump(p, "deny: [delete]\nescalate: [payment]\n")
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "block"
+    row = [e["body"] for e in events(store) if e["body"].get("phase") == "policy_change"][-1]
+    assert row["error"] == "gates.escalate must be a mapping"
+    _bump(p, PERMISSIVE + "escalate: [payment]\n")
+    from exo import principal
+    token = principal.CALLER.set(principal.Caller("principal:tui"))
+    try:
+        assert g.accept_policies().startswith("accepted")
+    finally:
+        principal.CALLER.reset(token)
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "approve"   # the defaults still ask
+    assert "stricter of your policy and the defaults" in _decision(store)["reason"]
+
+
+# #557: a malformed pinned escalate changed to a valid policy that asks as the pinned one does keeps the changed
+# policy's violation (the Fix line, the text-bound key), so a standing grant still asks, as on edeb4f89. Before the
+# change the grant does not cover the line either: the defaults, in place of the pinned file there, do not ask for it.
+@pytest.mark.parametrize("granted", [False, True])
+def test_policy_changed_from_malformed_escalation_keeps_the_changed_violations(keyed_store, granted):
+    from exo import gate
+    store, key = keyed_store
+    p, line = store / "policies" / "gates.yaml", "curl -X POST -d 'zebrafinch' http://localhost:8080/x"
+    p.write_text("categories: {local_write: ask, web_post: ask}\nescalate: [payment]\n")
+    g, ctx = make_gate(store, key)
+    if granted:
+        c = gate.classify({"tool": "terminal", "args": {"command": line}})
+        g.grants.add(c.category, c.target, "", 30, "principal", "terminal")
+    assert call(ctx, "terminal", {"command": line})["action"] == "approve"   # pins the policy
+    assert "grant" not in [e["body"] for e in events(store)][-1]
+    _bump(p, "categories: {local_write: ask, web_post: ask}\n")
+    _bump(store / "policies" / "posting.yaml", "applies_to: [local_write, web_post]\nforbid_words: [zebrafinch]\n")
+    result = call(ctx, "terminal", {"command": line})
+    assert result["action"] == "approve" and "Fix: forbidden word: zebrafinch" in result["message"]
+    d = _decision(store)
+    assert d["violations"] == ["forbidden word: zebrafinch"] and "zebrafinch" in d["reason"]
+
+
+# #557: while a policy error stands, a standing grant applies only where the decision as on edeb4f89 (the defaults in
+# place of the file with the error, then the decision model's verdict) asks and finds a grant too. Otherwise an
+# unbound grant would run a call edeb4f89 logs (a restored reserved entry asks), and a grant bound to the exact line a
+# call it asks for (a restored or honoured `read` binds the sudo write line, which edeb4f89 does not bind).
+VALID_ESC, LW_ASK = "escalate: {categories: [payment]}\n", "categories: {local_write: ask}\n"
+SUDO_LINES = ["sudo echo hi > /tmp/f", "sudo cat /etc/hosts > /tmp/f"]
+GRANT_ASKS = [   # the first gates.yaml, the changed one (None: unchanged), the line, bound, the model's verdict
+    ("reserved: [vcs_push]\nescalate: [payment]\n", None, "git push origin main", False, None),
+    ("reserved: [vcs_push]\nescalate: [payment]\n", None, "ls; git push origin main", False, None),
+    ('reserved: ["target:acme-org/*"]\nescalate: [payment]\n', None, "gh pr merge 3 -R acme-org/app", False, None),
+    *[row for line in SUDO_LINES for row in (
+        ("escalate: [read]\n", LW_ASK + VALID_ESC, line, True, None),
+        (LW_ASK + VALID_ESC, "escalate: [read]\n", line, True, None),
+        (LW_ASK + "escalate: [read]\n", LW_ASK + VALID_ESC, line, True, None),
+        ("escalate: [read]\n", None, line, True, "ask"),
+        ("categories: {read: ask}\nescalate: [payment]\n", None, line, True, "ask"),
+        ("categories: {read: ask}\nescalate: [payment]\n", LW_ASK + VALID_ESC, line, True, None))],
+]
+GRANT_APPLIES = [   # edeb4f89 applies the grant too, so it still applies
+    ("reserved: [vcs_push]\n" + VALID_ESC, None, "git push origin main", False, None),
+    ("reserved: [vcs_push]\nescalate: [payment]\n", None, "git push origin main", False, "ask"),
+    ("categories: {read: ask}\nescalate: [payment]\n", "categories: {read: ask, local_write: ask}\n" + VALID_ESC,
+     SUDO_LINES[0], True, None),
+    (LW_ASK + VALID_ESC, "categories: {read: ask, local_write: ask}\n" + VALID_ESC, SUDO_LINES[0], True, None),
+    # an unbound and a bound grant for one line: the merged decision binds the line and finds the bound grant, the
+    # decision as on edeb4f89 does not bind it and finds the unbound one, so the call runs as it does there
+    *[("escalate: [read]\n", None, line, "both", "ask") for line in SUDO_LINES],
+    ("categories: {read: ask}\nescalate: [payment]\n", None, SUDO_LINES[0], "both", "ask"),
+]
+
+
+def _granted(store, key, first, changed, line, bound, verdict):
+    from exo import gate
+    p, args = store / "policies" / "gates.yaml", {"command": line}
+    p.write_text(first)
+    g, _ = make_gate(store, key)
+    c = gate.classify({"tool": "terminal", "args": args})
+    for b in (False, True) if bound == "both" else (bound,):
+        g.grants.add(c.category, c.target, gate.approval_binding(c, args) if b else "", 30, "principal", "terminal")
+    g.policies()    # pins the first file
+    if changed is not None:
+        _bump(p, changed)
+    result = g.pre_tool_call("terminal", args, session_id="s1", tool_call_id="c1", _verdict=verdict)
+    return result, [e["body"] for e in events(store) if e["body"].get("phase") == "decision"][-1]
+
+
+@pytest.mark.parametrize("first, changed, line, bound, verdict", GRANT_ASKS)
+def test_malformed_escalation_grant_applies_only_where_the_defaults_find_it(keyed_store, first, changed, line, bound,
+                                                                           verdict):
+    result, body = _granted(*keyed_store, first, changed, line, bound, verdict)
+    assert result["action"] == "approve" and body["outcome"] == "ask" and "grant" not in body
+
+
+@pytest.mark.parametrize("first, changed, line, bound, verdict", GRANT_APPLIES)
+def test_grant_the_defaults_apply_still_applies(keyed_store, first, changed, line, bound, verdict):
+    result, body = _granted(*keyed_store, first, changed, line, bound, verdict)
+    assert result is None and body["outcome"] == "allow" and body["grant"]
+
+
+def test_gate_status_shows_a_standing_policy_error(keyed_store):
+    store, key = keyed_store
+    p = store / "policies" / "gates.yaml"
+    p.write_text("escalate: [payment]\n")
+    g, _ = make_gate(store, key)
+    assert hook.gate_command(g, "status") == ("policy as loaded at session start\npolicy error (the stricter of your "
+                                              "policy and the defaults applies): gates.escalate must be a mapping")
+    _bump(p, "matrix:\n  costly: {public: maybe}\n")
+    status = hook.gate_command(g, "status").splitlines()
+    assert status[0].startswith("policy files changed") and len(status) == 3
+    assert status[2].startswith("policy error in the changed files (the defaults apply): ")
 
 
 def test_policy_reload_on_change(keyed_store):
