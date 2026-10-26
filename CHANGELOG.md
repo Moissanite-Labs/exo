@@ -75,6 +75,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the process mask to 077 and restored it with no lock: concurrent writes with `mode=None` interleaved set and
   restore, so files came out 0600 under a 022 mask and a run could leave the process at 077. The probe runs under
   a lock now, and so does the server's socket bind, which sets 0177 (`exo.core.private.umask`).
+- Scheduled job changes require a live principal caller (#552), while listing stays available to local
+  callers. A scheduled run rejects tool names outside its initial available-tool list before the gate or
+  executor runs them, including blocked tools and tools registered after the run starts (D-057 stage 0.1–0.2).
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
