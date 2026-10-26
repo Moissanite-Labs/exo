@@ -6,6 +6,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A glob in a secret store's folder asks (#594). `cat ~/.ss?/*`, `cat ~/.aw?/*` and `cat ~/.exo/key?/*` read as ordinary reads because `_glob_word` gave up whenever the folder part held a glob; the globbed folder is now tested against each sample's folder, with the same three-literal discipline the file side keeps and bash's rule that only a literal dot matches a leading dot, so `cat ~/*/*` stays a read.
 - A gh download or clone into the Exo store is a store write, as `curl -o` and `git clone` already are (#461).
   gh release download, gh run download and gh attestation download write what they fetch into `-O`/`--output`
   or `-D`/`--dir`, and gh repo clone and gh gist clone into their directory word, but they read as reads on
@@ -24,6 +25,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   denied it, and so did a delete beside such a name under `delete: deny` with a rule allowing `^rm`, and an
   `echo x >` to it over ssh under an entry on `opaque_exec` at `internal` exposure. The glob now counts the file
   only while it counts, so the call is also read as before D-074. Such a name still asks as a store write.
+- A file tool's store path is read under every key it names a path by, and a move or rename of a folder that holds
+  the store is a store write with no secret beside it, as `mv` is (#494). `move_file ~/.exo -> /tmp/x` was a
+  `local_write` that ran with no ask where the shell spelling asked, `mcp__filesystem__move_file` with the same
+  args only logged, and a store path under `to`, `target`, `new_path`, `old_path`, `from` or `dst` was missed, so
+  `rename_file {"path": "~/.ssh/id_rsa", "new_path": "~/.exo/policies/gates.yaml"}` got no store write part beside
+  the secret and a seat delegated `credentials` could answer it. The scan now reads those keys, a tool whose name
+  says move, rename or delete passes `ancestors=` as `mv` and `rm` do (a camelCase name split, so `deleteFile` on
+  `~/.exo` asks), and a read-verb tool that writes what it took where its path arguments say (`download_file`,
+  `export_report`) runs the store scan, so a download into the policy files asks. A relative destination is read
+  from the session's folder the core passes, as a secret name is: `move_file` to `policies/default.yaml` from a
+  session folder in `~/.exo` asks. A plain read of the store stays a read, and a copy of the store keeps its
+  reading, as `cp -r` does. The resolution is the file tools' own; a shell line's store writes are still read from
+  its own words. D-074's config file is reached under the new keys and from the session folder as under `path`.
+  The gate differential against main finds nothing lowered.
 - A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
   after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
   that path and its write was never read. A patch tool skips the bare line and applies the next header, so after

@@ -173,6 +173,13 @@ def test_a_symlink_to_config_json_counts_as_for_other_store_files(name, home, tm
     ("move_file", {"source": "/tmp/evil.json", "destination": CONFIG}),
     ("copy_file", {"source": "/tmp/evil.json", "destination": CONFIG}),
     ("delete_file", {"path": CONFIG}),
+    # The store path under the other keys the scan reads now (#494)
+    ("move_file", {"source": "/tmp/evil.json", "to": CONFIG}),
+    ("move_file", {"source": "/tmp/evil.json", "target": CONFIG}),
+    ("rename_file", {"path": "/tmp/a", "new_path": CONFIG}),
+    ("rename_file", {"old_path": CONFIG, "new_path": "/tmp/x"}),
+    # A copy out of it asks under its own key, as `cp {h}/config.json /tmp/backup.json` does
+    ("copy_file", {"from": CONFIG, "to": "/tmp/backup.json"}),
 ])
 def test_a_file_tool_write_to_config_json_is_a_store_write(tool, args, exo_home):
     if "$" in exo_home:
@@ -183,6 +190,20 @@ def test_a_file_tool_write_to_config_json_is_a_store_write(tool, args, exo_home)
 def test_a_relative_file_tool_path_counts_by_name(home):
     _assert_store_write({"tool": "write_file", "args": {"path": ".exo/config.json", "content": "x"}})
     _assert_store_write({"tool": "write_file", "args": {"path": ".exo/./config.json", "content": "x"}})
+
+
+def test_a_relative_config_json_from_the_session_folder_is_a_store_write(home):
+    """#494: a file tool's relative write is read from the session folder, as a shell write after a `cd` there is,
+    and only the principal answers. A read of the same name stays a read."""
+    for tool, args in (("write_file", {"path": "config.json", "content": "x"}),
+                       ("move_file", {"source": "/tmp/evil.json", "to": "config.json"})):
+        c = gate.classify({"tool": tool, "args": args}, cwd=str(home / ".exo"))
+        assert (c.category, gate.decide(c).outcome) == ("store_write", "ask"), (tool, c)
+        assert gate.call_approvers(c, {"default": ["seat:lead"],
+                                       "categories": {"store_write": ["seat:lead"]}}) == ["principal"], (tool, c)
+        assert gate.no_grant(c) and gate.binds_exact(c), (tool, c)
+    c = gate.classify({"tool": "read_file", "args": {"path": "config.json"}}, cwd=str(home / ".exo"))
+    assert (c.category, gate.decide(c).outcome) == ("read", "allow"), c
 
 
 def test_config_json_is_a_store_path(exo_home):

@@ -391,8 +391,9 @@ What the gate asks about, and why:
   a `config.json` into your Exo home without naming it (`cp /tmp/x/config.json ~/.exo/`) is not seen yet (#483). The
   gate resolves symbolic
   links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some writes are not
-  seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working folder is
-  `policies/`, a glob spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md`
+  seen as store writes yet: a relative name such as `gates.yaml` written by a shell command whose working folder is
+  `policies/` (a file tool's relative destination from a session folder inside the store is seen, #494), a glob
+  spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md`
   lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
