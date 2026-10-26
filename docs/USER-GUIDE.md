@@ -196,7 +196,9 @@ Different seats are different agents. They share your store and talk through pee
   thread's recent messages.
 - Your rulings and corrections are kept verbatim in summaries and are copied to your principal store, so a
   summary cannot blur an instruction. `/context` says how many of your messages are not yet captured.
-- A private thread (`/new private`) is logged but never shared.
+- A private thread (`/new private`) is logged but never shared. It keeps summaries of its own. While they are
+  being written, a long private thread's call can leave out the older messages they cover. A line saying
+  `[earlier messages are being summarized]` marks the gap. Your current turn is never cut.
 - Only what you type counts as you. Messages from peers, bus seats, job notices and the agent's own notes are kept,
   but never saved as your rulings or corrections, and never teach the agent your taste.
 - What Exo keeps about you lives in your principal store. An install that skipped the interview has none yet. The
@@ -319,9 +321,12 @@ What the gate asks about, and why:
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another. A post whose text the gate cannot
   read (piped in, a file given by a relative path, `$( )` or a variable) asks, and offers no "always". The gate
-  reads a body file given by its full path. When the gate cannot tell which repo a `gh` command acts on, it reads
-  the command on each one, and the question names the others ("It may land on pub/repo#7 instead."). A deny in
-  your policy for any of them holds. An "always" on such a command covers that exact command only (#399).
+  reads a body file given by its full path when the post is alone on its line. On a line that does more
+  (`cd /tmp && gh ...`, a copy, a redirect to a file, `GH_EDITOR=x gh ...`), the rest of the line could change the
+  file first, so the gate leaves it unread: the post asks once and says why (#343). When the gate cannot tell which
+  repo a `gh` command acts on, it reads the command on each one, and the question names the others ("It may land on
+  pub/repo#7 instead."). A deny in your policy for any of them holds. An "always" on such a command covers that
+  exact command only (#399).
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
   the post and lists what it found. The sweep and the exact-text check see only text the gate can read, so a body
   it cannot read asks instead (#208, above).
