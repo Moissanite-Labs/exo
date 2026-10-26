@@ -153,7 +153,8 @@ class Classification:
     # own unseen body from another post's. None for a part never combined: its signals are then its own.
     own_signals: list[str] | None = field(default=None, repr=False, compare=False)
     # The same call as the gate read it before #311, where a shell call's own folder argument made it credentials as
-    # a whole (#209). decide takes both readings and the stricter outcome stands.
+    # a whole (#209), and last, on a line also read with a `$` form's backslash-newline joined, the less severe of that
+    # reading and the line as written (#584). decide takes every reading and the strictest outcome stands.
     also: "Classification | None" = field(default=None, repr=False, compare=False)
     # The part a sudo command's write took the lead from (#454). decide() also reads the line with that part leading,
     # as before, and keeps the stricter outcome. None on any other result.
@@ -1140,6 +1141,54 @@ _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gat
 # signature keeps the shape it had. classify_shell takes the mark for the one line it names and clears it;
 # _classify_fed sets it for each line it hands over.
 _fed_stdin: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_fed_stdin", default=False)
+
+# Set while classify reads a shell call (#584): [join, changed]. classify_shell sets `changed` when a line it reads,
+# nested ones too, holds a backslash-newline in a `$` form (_join_dollars), and with `join` reads it joined. classify
+# reads the call with `join` only when its first read set `changed`. None outside a shell call's classify.
+_joining: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_joining", default=None)
+_DOLLAR_OR_PAIR = re.compile(r"\\.|\$", re.S)
+_LINE_JOIN = re.compile(r"\\(.)", re.S)
+
+
+def _joins_past(s: str, i: int) -> int:
+    while s.startswith("\\\n", i):
+        i += 2
+    return i
+
+
+def _join_dollars(s: str) -> str:
+    """``s`` with each backslash-newline bash drops in a `$` form taken out (#584): right after the `$`, in a ${..}
+    up to its own `}`, between `$(` and the `(` of `$((`, and in a $((..)) up to its close. bash drops each one
+    outside single quotes before it reads a word, so `"$\\<newline>(cmd)"` runs cmd as "$(cmd)" does, and
+    `${PA\\<newline>TH:=x}` sets PATH, while the lexer read a `$` and then a backslash as a literal `$`, and a ${..}
+    or a $((..)) as it stands. A backslash before a backslash or a `$` escapes it, as outside single quotes. The
+    rest is taken as it stands: in single quotes, a comment or a quoted here-doc bash keeps them, and the joined
+    text is then still quoted or unread, or read again by a shell that drops them too. Linear in len(s)."""
+    if "$" not in s or "\\\n" not in s:
+        return s
+    out, i = [], 0
+    while (m := _DOLLAR_OR_PAIR.search(s, i)) is not None:
+        j = m.end()
+        if m.group() == "$":
+            k = _joins_past(s, j)
+            if s.startswith("{", k):
+                depth, j = 1, k + 1             # to its own `}`: a nested ${..} (`${a[${b}0,P\\<nl>ATH=5]}`) opens one
+                while j < len(s) and depth:
+                    depth += {"}": -1, "{": s[j - 1] == "$"}.get(s[j], 0)
+                    j += 2 if s[j] == "\\" else 1
+            elif s.startswith("(", k) and s.startswith("(", _joins_past(s, k + 1)):
+                depth, j = 2, _joins_past(s, k + 1) + 1
+                while j < len(s) and depth:
+                    depth += {"(": 1, ")": -1}.get(s[j], 0)
+                    j += 2 if s[j] == "\\" else 1
+            else:
+                j = k
+            out += [s[i:m.start() + 1], _LINE_JOIN.sub(lambda x: "" if x.group(1) == "\n" else x.group(), s[m.end():j])]
+        else:
+            out.append(s[i:j])
+        i = j
+    return "".join(out) + s[i:]
+
 
 # The signal of an ssh part that runs the stdin its line was fed, a stdin the gate cannot read (#316). An ssh whose
 # remote command is that line passes its own stdin on to it, so it runs that stdin too: `ssh a ssh b`, `ssh a 'cd /;
@@ -5259,7 +5308,14 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part. Within one top-level call a line is
     classified once per depth and state of the budgets (_shell_seen), and each caller gets its own copy. A line
     read under the _fed_stdin mark (#316) is a different read of the same text, so the mark is part of the key;
-    the mark names one line, and reading that line spends it."""
+    the mark names one line, and reading that line spends it. A line with a `$` form split by a backslash-newline is
+    noted for classify, and on its joined reading (_joining, #584) read joined, a line read again from a word
+    (`bash -c`, eval, ssh, a backquoted body) too."""
+    joining = _joining.get()
+    if joining is not None and cmd and (line := _join_dollars(cmd)) != cmd:
+        joining[1] = True
+        if joining[0]:
+            cmd = line
     seen = _shell_seen.get()
     if seen is None:
         token = _shell_seen.set({})
@@ -6845,17 +6901,84 @@ def _store_part(path: str, summary: str) -> Classification:
     return c
 
 
+def _joined_call(action: Any) -> tuple[str, dict] | None:
+    """A shell call with its line joined (_join_dollars), for classify's joined reading (#584); None for any other
+    call, and inside a classify that already reads one."""
+    try:
+        tool, args = _args_of(action)
+    except (TypeError, ValueError):
+        return None
+    key = "command" if args.get("command") else "cmd"
+    line = args.get(key)
+    if _joining.get() is not None or not _runs_shell(tool, args) or not isinstance(line, str):
+        return None
+    return tool, {**args, key: _join_dollars(line)}
+
+
 @_brace_budget
 @_in_tool_folder
 def classify(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args. When a gh command in it has
     its subcommand past an option (_gh_verb_order), or a gh api method gh reads otherwise (_gh_api_method), the call
     is also read as before #399, with each gh command's third word for its subcommand, and that reading is its
-    ``floor``. When the Exo home's config.json counted as the store, or an exo command that writes it ran (D-074),
+    ``floor``. A shell line with a `$` form split by a backslash-newline, there or in a line read again from it, is
+    also read with each one joined, as bash reads it (#584), with budgets of its own. The more severe of that
+    reading and the line as read before leads, and the other ends its ``also`` readings, so decide keeps the
+    stricter. When the Exo home's config.json counted as the store, or an exo command that writes it ran (D-074),
     the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
     ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
     (_in_tool_folder sets it)."""
+    call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
+    seen = [False, False]
+    token = _joining.set(seen)
+    try:
+        c = _read_core(action, cwd)
+    finally:
+        _joining.reset(token)
+    if seen[1] and call is not None:
+        left, memo, token = _brace_left.set(None), _shell_seen.set(None), _joining.set([True, False])
+        try:
+            j = _brace_budget(_read_core)(call, cwd)                # joined reading of the same call (#584)
+        finally:
+            _joining.reset(token)
+            _shell_seen.reset(memo)
+            _brace_left.reset(left)
+        first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
+        x = first
+        while x.also is not None:
+            x = x.also
+        x.also, c = last, first
+    return c
+
+
+def _read_core(action: Any, cwd: str | None = None) -> Classification:
+    """The body classify reads the call with: the gh ``floor``, and the D-074 ``ordinary`` reading of a call whose
+    config.json the store counted, each with the call's own budgets, memos and folders. The join context is set by
+    classify, also for its joined reading; _read_core leaves it alone."""
     memo, mark = _call_memo.get(), [False]
+    marked = _config_mark.set(mark)
+    try:
+        c = _classify_call(action)
+        if memo is not None and memo.pop(_GH_MOVED, False) and not _gh_third_word.get():
+            third = _gh_third_word.set(True)
+            try:
+                c.floor = _classify_call(action)
+            finally:
+                _gh_third_word.reset(third)
+    finally:
+        _config_mark.reset(marked)
+    if mark[0]:
+        off, left, seen = _config_off.set(True), _brace_left.set(None), _shell_seen.set(None)
+        try:
+            c.ordinary = classify(action, cwd)      # its own budgets, memos and folders (_brace_budget, _in_tool_folder)
+        finally:
+            _shell_seen.reset(seen)
+            _brace_left.reset(left)
+            _config_off.reset(off)
+    return c
+
+
+def _classify_call(action: Any) -> Classification:
     if memo is not None:
         memo.pop(_GH_MOVED, None)
     marked = _config_mark.set(mark)
@@ -8118,11 +8241,12 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     code the gate cannot see into (D-038), so one "always" never covers a different script, a call no grant may
     cover (``no_grant``, a part of it too, #447), and a line the gate reads more than one way (#399): a gh command
     that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
-    with a ``floor`` or an ``ordinary`` reading (D-074), whose stricter reading may be another act. A sudo write also
-    binds when its displaced part names a target or asks with that part leading (#454)."""
+    with a ``floor``, whose stricter reading may be another act, with ``also`` readings (#311, #584) or an
+    ``ordinary`` reading (D-074). A sudo write also binds when its displaced part names a target or asks with that
+    part leading (#454)."""
     q = c.displaced
     return (is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
-            or bool(c.alt_targets) or c.floor is not None or c.ordinary is not None
+            or bool(c.alt_targets) or c.floor is not None or c.also is not None or c.ordinary is not None
             or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
 
 
@@ -8132,9 +8256,19 @@ def readings(c: Classification) -> list[Classification]:
     third word for its subcommand, gh api's first `-X` word), and the floor as read before #311; then each reading of
     the call as read before D-074 (``ordinary``: the Exo home's config.json an ordinary file, #125). `decide` keeps the
     strictest of them, and so does each check past it: no_grant, call_approvers, body_unseen and the exo-gate hook's
-    body files and required executor."""
-    out = [r for x in (c, c.floor) if x is not None for r in (x, x.also) if r is not None]
-    return out + (readings(c.ordinary) if c.ordinary is not None else [])
+    body files and required executor. A line with a `$` form split by a backslash-newline (#584) is read joined and
+    as written: the more severe of the two leads (on a tie, the line as written) and the other ends its ``also``
+    readings, each with its own ``floor``."""
+    out: list[Classification] = []
+    todo: list[Classification | None] = [c]
+    while todo:
+        x = todo.pop()
+        if x is not None and not any(x is r for r in out):
+            out.append(x)
+            todo += [x.floor, x.also]
+    if c.ordinary is not None and not any(c.ordinary is r for r in out):
+        out += [r for r in readings(c.ordinary) if not any(r is e for e in out)]
+    return out
 
 
 def no_grant(c: Classification) -> bool:
