@@ -26,7 +26,7 @@ config_schema:
   read_body_files:
     type: bool
     default: true
-    description: "Load the text of a --body-file given by an absolute path so posting rules can check it. A body the gate does not read asks."
+    description: "Load the text of a --body-file given by an absolute path, on a line that only posts, so posting rules can check it. A body the gate does not read asks."
   decision_model:
     type: bool
     default: true
