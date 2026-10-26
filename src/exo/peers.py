@@ -7,8 +7,9 @@ engine's ingress target (``exo.core.peer_target.EngineTarget``), so policy, hold
 
 Three parts, none of which knows whether it runs in exod or inside a Hermes plugin:
 
-- ``Directory``: one small presence file per daemon in a shared runtime dir. A daemon writes its file
-  when it starts, removes it on exit, and anyone who scans prunes files whose pid is gone.
+- ``Directory``: one small presence file per daemon in a shared runtime dir. A daemon writes its file, signed
+  with its seat key (#523), when it starts, removes it on exit, and anyone who scans prunes files whose pid is
+  gone.
 - envelopes: ``make_envelope`` and ``verify_envelope`` use the bus wire format (``exo.bus.wire``), signed
   with the sender seat's key, so a message is the same object on a socket or on the bus.
 - ``PeerNode``: list, send, deliver and receipt for one daemon. Inbound messages become an ``Ingress``
@@ -27,7 +28,7 @@ import secrets
 import stat
 import time
 from collections import OrderedDict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -79,6 +80,13 @@ class Presence:
     cwd: str = ""
     started: str = ""
     v: int = 1
+    sig: str = ""  # the seat key's signature over the entry without it (#523)
+
+    def signed(self, signer: crypto.Signer) -> "Presence":
+        """The entry with ``sig`` made (#523): the daemon's own seat key signs every field but the signature. A
+        sender checks it against the keys it pins for the seat, so an entry the pinned key did not make — its
+        public half copied into a forged file beside a socket of its own — does not pass."""
+        return replace(self, sig=crypto.sign_doc(asdict(self), signer.key)["sig"])
 
 
 def pid_alive(pid: int) -> bool:
@@ -318,7 +326,7 @@ class PeerNode:
 
     def start(self) -> None:
         if self.config.enabled and self.socket:
-            self.directory.write(self.presence())
+            self.directory.write(self.presence().signed(self.signer))
 
     def stop(self) -> None:
         self.directory.remove(self.daemon)
@@ -496,8 +504,11 @@ class PeerNode:
         row = self.resolve(to, rows)
         if row["where"] == "bus":
             return await self._send_bus(row, text, session)
+        socket = str(row["socket"])
         if row["where"] == "machine":
-            self._check_presence_key(row)  # the text never ships to a socket a forged presence file names (#523)
+            # the text never ships to a socket a forged presence file names, and it ships to the socket of the
+            # entry that verified, not the one the scan saw (#523)
+            socket = self._check_presence_key(row)
         env = make_envelope(self.signer, to=row["name"], text=text, session=session, daemon=self.daemon,
                             to_session=row["session"], via=via)
         mid = msg_id(env)
@@ -508,7 +519,7 @@ class PeerNode:
             if row["daemon"] == self.daemon:
                 receipt = await self.deliver(env)
             else:
-                receipt = await self.rpc(row["socket"], s.Peers(action="deliver", envelope=env))
+                receipt = await self.rpc(socket, s.Peers(action="deliver", envelope=env))
         except Exception as exc:
             receipt = {"msg_id": mid, "state": "denied", "detail": f"{row['name']} could not be reached ({type(exc).__name__}: {exc})"}
         else:
@@ -517,19 +528,24 @@ class PeerNode:
         await self._publish_out(session, out)
         return out
 
-    def _check_presence_key(self, row: dict[str, Any]) -> None:
+    def _check_presence_key(self, row: dict[str, Any]) -> str:
         """The sender's half of #132's key rule (#523): the text ships only when the presence file the row came
-        from holds a key this home pins for that seat. Any same-user process can write a presence file for a
-        pinned name, with a socket of its own, and it would then receive the messages sent to that name. For a
-        name this home holds no key for, the receipt-side trust ladder decides what the receiver makes of the
-        message, as it did before."""
+        from holds a key this home pins for that seat and carries that key's signature over the entry, and the
+        socket returned is the one the verified entry names. Any same-user process can write a presence file for
+        a pinned name: with a socket of its own, or with the pinned key's public half copied into it beside that
+        socket. Neither carries a signature the pinned key made, and neither is sent to. The file is re-read here,
+        so the entry checked and the socket shipped to are one, not the entry the scan happened to see. For a name
+        this home holds no key for, the receipt-side trust ladder decides what the receiver makes of the message,
+        as it did before, and the scanned socket stands."""
         here, peer = self._pins(str(row["seat"]))
         if not here and not peer:
-            return
+            return str(row["socket"])
         p = self.directory.get(str(row["daemon"]))
-        if p is None or p.seat != row["seat"] or p.pub not in here + peer:
-            raise ValueError(f"{row['name']}'s presence file does not hold a key pinned for {row['seat']} here; "
-                             "not sent")
+        if p is None or p.daemon != row["daemon"] or p.seat != row["seat"] or p.pub not in here + peer \
+                or not any(crypto.verify_doc(asdict(p), k) for k in here + peer):
+            raise ValueError(f"{row['name']}'s presence file does not verify against a key pinned for "
+                             f"{row['seat']} here; not sent")
+        return p.socket
 
     def _check_reply(self, receipt: dict[str, Any], mid: str, row: dict[str, Any]) -> None:
         """The first reply to a deliver is signed like a later receipt (#523, with #132's primitives): the
