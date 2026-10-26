@@ -112,7 +112,8 @@ def test_fresh_install_with_an_empty_store_runs_end_to_end_with_the_house_layer(
     with redirect_stdout(buf):
         assert cli.main(["taste", "--principal", "newuser"]) == 0
     out = buf.getvalue()
-    assert out.startswith("house: on, house taste 1.3.0 (6 items: 3 method, 3 value)")
+    assert out.startswith("mode: silent (policies/consolidate.yaml)")         # a new user: silent (wave 3)
+    assert out.splitlines()[1].startswith("house: on, house taste 1.3.0 (6 items: 3 method, 3 value)")
     assert out.count("[house 1.3]") == 6
     assert "0.50  value" in out and "0.70  method" in out          # values start lower in the window
     store = PrincipalStore.for_principal("newuser")

@@ -5,6 +5,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Restore house-taste waves 2 and 3 for review (#283): sustained weekly adaptation, value step-back,
+  principal-only `/taste` controls, bounded decision questions, and visible changes in the brief.
+  Ask-mode answers apply the text shown when proposed. Rulings, pins and guarded choices stay protected.
+  Taste prompts refresh without restarting the daemon, and project-scoped preferences stay in their project.
+  Ordinary principal turns trigger periodic taste review, and nightly runs scan taste before the climb.
+  The bundled house pack remains empty; task-kind prompt scope remains a follow-up.
+
 ### Fixed
 - Two follow-ups to #296 (#317). A ledger opened read-only through a symlink to a closed target held an
   `immutable=1` connection to the target itself: a writer that appended and checkpointed replaced the file

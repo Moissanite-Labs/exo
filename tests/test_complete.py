@@ -310,3 +310,9 @@ def test_failed_call_tip_does_not_assume_a_key():
     """A keyless local server or a CLI login fails too: the tip names all three, not only keys."""
     tip = guide()[0].pick(cm.State(provider_error=True))
     assert tip.text == "that model call failed: /providers checks keys, servers and logins"
+
+
+def test_taste_is_a_listed_command_with_verbs():
+    assert "taste" in cm.ARG_HINTS
+    slot = cm.plan("taste", [])
+    assert slot is not None and "mode" in [v for v, _ in slot.choices]

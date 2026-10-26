@@ -4,7 +4,9 @@
 
 1. For an ordinary unguarded, ungated lesson, a principal ruling or answer among the evidence promotes it now.
 2. Guarded (irreversible, public, financial, third party): never auto-promote. It becomes a question once.
-3. Conflict with an existing belief: stays held; consolidation already raised the question. Never silent.
+3. Conflict with an existing belief: stays held; consolidation already raised the question. Never silent. An
+   unguarded inferred taste lesson that would replace an accepted belief or a house item is held too: only the
+   sustained-change rule (D-044, exo.baseline.shift) or the principal's own ruling moves it.
 4. Taste or fact, not guarded, weight high, evidence from at least `min_sessions` different sessions, no critic
    objection: auto-promote, logged as `learn_promotion` for the brief. Evidence that is all imported history
    (`exo ingest` rows) waits for the principal's review instead.
@@ -151,6 +153,10 @@ def _decide(lr: Learner, p: Proposal, weight: float, held: bool, gated: bool, al
     # Rule 1 only shortcuts ordinary lessons after the mandatory checks.
     if principal_said(rt.ledger, p, provenance.principal_names(rt.store)):
         return Decision(p.id, "promoted", 1, "the principal said it")
+    # Rule 3 (D-044): an inferred taste lesson that would replace an accepted belief or a house item waits for
+    # the sustained-change rule (exo.baseline.shift). Only sustained change, or the principal's ruling, moves it.
+    if shift_holds(lr, p):
+        return Decision(p.id, "held", 3, "would replace existing taste; the sustained-change rule decides (D-044)")
     # Rule 4. A first import is a batch the principal reviews (ARCHITECTURE section 5): history alone never applies it.
     if p.ptype in ("taste", "fact") and lab == "high" and n_sessions >= int(cfg["min_sessions"]) \
             and not p.critic_note:
@@ -158,6 +164,29 @@ def _decide(lr: Learner, p: Proposal, weight: float, held: bool, gated: bool, al
             return Decision(p.id, "wait", 4, "evidence is all imported history: waits for the principal's review")
         return Decision(p.id, "auto_promoted", 4, f"high weight, {n_sessions} sessions, no objection")
     return _rule6(lr, p, weight, lab, cfg, now)
+
+
+def shift_holds(lr: Learner, p: Proposal) -> bool:
+    """True for an unguarded inferred taste proposal that supersedes an accepted belief or conflicts with an
+    active house item. Such a change moves only by the sustained-change rule (D-044 section 3)."""
+    if p.ptype != "taste" or p.guarded:
+        return False
+    rt = lr.runtime
+    if rt is None:
+        return False
+    if p.supersedes:
+        st = load_state(rt.ledger)
+        older = st.beliefs.get(p.supersedes)
+        if older is not None and older.status == "accepted":
+            return True
+    try:
+        from exo.baseline.layers import view
+        v = view(rt.store)
+        house = {h.id: h.sig for h in v.pack.items} if v.house_on else {}
+        return any(e.source == "house" and taste.relation(frozenset(p.sig), house.get(e.id, frozenset())) == "conflict"
+                   for e in v.entries)
+    except Exception:
+        return False
 
 
 def _rule6(lr: Learner, p: Proposal, weight: float, lab: str, cfg: dict, now: str) -> Decision:

@@ -265,10 +265,15 @@ def _sync_nightly(lr: Learner, budget: E.Budget) -> dict:
 
 
 async def nightly(lr: Learner, budget: E.Budget | None = None) -> dict:
-    """The function the lead calls once a night. Offloads to a worker thread; returns a report dict."""
+    """The function the lead calls once a night. Scan taste, then offload the climb to a worker thread."""
+    from .review import taste_step
+
     if lr.runtime is None:
         return {"status": "off", "reason": lr.notices[0] if lr.notices else "learning is off"}
     c = lr.settings["climb"]
     budget = budget or E.Budget(candidates=int(c["candidates"]), judge_samples=int(c["judge_samples"]),
                                 margin=float(c["margin"]))
-    return await asyncio.to_thread(_sync_nightly, lr, budget)
+    taste = await taste_step(lr)
+    out = await asyncio.to_thread(_sync_nightly, lr, budget)
+    out["taste"] = taste
+    return out

@@ -2731,8 +2731,25 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   export, `src/exo/baseline/`): the pack loader (a pack is used only once released, with every value and contested
   item ticked by the principal), per-item lookup with source tags, house precedence, `exo taste`,
   `exo taste export-house` with the privacy and value checks, `exo taste review`, and the taste block in the
-  prompt. The shipped pack is an empty 0.0.0 placeholder until the principal releases the first one. Waves 2 and 3
-  are not built.
+  prompt. The shipped pack is an empty 0.0.0 placeholder until the principal releases the first one.
+  **Waves 2 and 3 restored for review** 2026-10-25 (original work 2026-10-13): the sustained-change rule and value step back as pure functions
+  (`baseline/shift.py`), signal labelling with a pluggable decision-model hook that is off without a `decision`
+  route (`baseline/classify.py`), the replay and its ledger outcomes (`baseline/adapt.py`), promotion rule 3 holding
+  inferred lessons that would replace existing taste, the brief's Taste section, and `/taste` with mode, pending,
+  overridden and stepped-back lists, pin, off, undo, restore and reset, as a `command.run` built-in in both clients.
+  Both worked examples are tests with the doc's numbers. Mode storage: D-072.
+  *Restoration amendment 2026-10-25 (#283):* preserve the original implementation's authorship and port it onto
+  current main. Learner notes require the learner author and cite principal behavior, not principal control
+  notes. Ask-mode answers bind to the proposal's frozen text, scope and timestamp, and its pending line shows that snapshot. Rulings, pins and guarded items keep
+  their precedence for scoped changes too; guarded challenger text becomes a question. Each model question is
+  reserved before I/O against the daily cap, including failed requests. Taste updates reach the next model call
+  through an invalidated per-project cache; the principal pack remains stable. Project scope is an exact working
+  directory. Completed principal turns trigger a taste review at the configured cadence even without a correction;
+  peer turns do not count. The nightly entry point scans taste before its climb. Task-kind scope remains a
+  follow-up. The shipped pack remains empty.
+  Rejected: replaying whichever challenger text is newest when a user answers; trusting every note that cites a
+  principal event; rebuilding the entire principal pack on each turn. Tests cover these boundaries without model
+  calls or releasing a pack.
 - **Contested questions (principal, verbatim, 2026-10-12):** "C ship the implications behind the world view and the
   kind of thinking behind it rather than specifics like religious prescriptions and border-based politics". Value
   items on contested questions ship as reasoning style and its implications only; no faith, nation, party or
@@ -3350,6 +3367,24 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs no turn. A peer
   message with no session never picks a child (docs/AGENT-WIRE.md).
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-072 (2026-10-13) Where the taste mode lives, and how the principal's install defaults to ask
+- **Why:** TASTE-BASELINE section 6 says the mode is stored in `policies/consolidate.yaml` and changing it is a
+  ledger row, and that the principal defaults to ask and new users to silent. Rewriting the user's yaml from a
+  command risks clobbering their comments and edits, and with only the empty placeholder pack shipped, the
+  principal's install cannot be told apart by the pack's source hash.
+- **Decision:** the newest `taste_mode` note written by the principal is the mode. Without one, `taste: mode` in
+  `policies/consolidate.yaml` is the default. Without that key, the mode is ask. The template store now ships
+  `taste: mode: silent`, so every store made by `exo init` from now on starts silent, and an older store without
+  the key, which is the principal's own, starts ask. A store whose first ledger event matches a released pack's
+  source is also ask. `/taste` never edits the yaml. Only the principal's notes count (D-052); the same note from
+  an agent is ignored.
+- **Rejected:** writing the yaml from `/taste mode` (edits a hand-kept file); a separate marker file for the
+  principal's install (one more thing to keep in step); defaulting every store without the key to silent (the
+  principal would get silent swaps, against ruling 1).
+- **Limit:** another older store made before this change also starts in ask. That is the safer mode; the first
+  run text names `/taste mode`.
+- **Docs:** `docs/TASTE-BASELINE.md` "Build status", `docs/USER-GUIDE.md` "Taste", `docs/COMMANDS.md`.
 
 ## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)
 - **Decision:** `update.require_signed` (default false) makes `exo update` verify the upstream tip with

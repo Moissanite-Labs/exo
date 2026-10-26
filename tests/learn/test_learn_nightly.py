@@ -21,6 +21,30 @@ def run(lr, **kw):
     return asyncio.run(lr.nightly(**kw))
 
 
+def test_nightly_scans_ordinary_utterances_before_the_climb(learner, monkeypatch):
+    from exo.baseline import classify
+    from exo.learn import climb
+    from exo.taste import signature
+
+    learner.engine.router.set_role("decision", [])
+    rt = learner.runtime
+    rt.ledger.append("utterance", {"role": "user", "text": "bullet lists, not short paragraphs"},
+                     author="principal")
+    monkeypatch.setattr(classify, "_items", lambda *a: [
+        classify.Candidate("house-example", "short paragraphs, not bullet lists",
+                           signature("short paragraphs", "bullet lists"))])
+
+    def climb_after_taste(lr, budget):
+        assert any(e["body"].get("type") == "taste_signal" for e in rt.ledger.iter(kind="note"))
+        return {"status": "done"}
+
+    monkeypatch.setattr(climb, "_sync_nightly", climb_after_taste)
+    out = run(learner)
+    assert out["status"] == "done" and out["taste"]["signals"] == 1
+    assert run(learner)["taste"]["signals"] == 0  # Repeated nights cannot duplicate evidence.
+    assert not learner.engine.fake.calls
+
+
 def test_nightly_keeps_a_helpful_lesson_and_records_it(learner):
     rt = learner.runtime
     write_qa(rt.root)

@@ -995,8 +995,28 @@ The design is `docs/TASTE-BASELINE.md`; its "Build status" says what is built. C
 - **Release.** A pack loads only when final (`baseline/pack.py`, `release_problem`). Tests build one with
   `export_house`, then `review.tick` on every value and contested item, then `review.finalise`.
 - Policy files are product policy, not taste. Nothing in `baseline/` exports them.
+- **The sustained-change rule** is pure: `baseline/shift.py` (`episodes`, `weekly_record`, `persistence`,
+  `effective_weight`, `challenger_weight`, `ready_to_swap`, `scope_of`, and `replay` for one item). Never read the
+  clock or the ledger there. `baseline/adapt.py` reads the ledger and writes each outcome once (keyed by `key`);
+  `baseline/classify.py` turns the principal's events into `taste_signal` notes; `baseline/command.py` is `/taste`.
+  The worked examples in `docs/TASTE-BASELINE.md` are tests (`tests/baseline/test_shift.py`); a change that moves a
+  number must change the doc and the test together.
+- **The labeller** is a hook (`record_signals(labeller=...)`). It only classifies; the rule decides. Below
+  `min_confidence` its label is ignored. It is never given non-principal text (D-040).
+- **Writes from `/taste`** are notes authored `principal`, and only after the core checked the caller (D-052). The
+  replay ignores the same notes from any other author.
 
 Run `tests/baseline` and the `exo-memory` plugin suite after a change.
+
+The restored waves 2 and 3 are in review. `baseline/prompt.py` refreshes taste independently of the fixed
+principal pack, by ledger revision, policy stamp, local day and exact project scope. A custom labeller consumes
+one budgeted question per call; the built-in adapter reserves each typed question before I/O. Its failed and
+cancelled calls still count. Generated notes use `exo-learn`, cite principal behavioral evidence, and ask-mode
+answers retain the proposal's frozen text. Test these boundaries in `tests/baseline/test_recovered_guards.py` and
+`plugins/exo-memory/tests/test_taste_prompt_refresh.py`. The turn-end hook counts completed principal turns and
+starts a taste scan at `fast_loop.every_turns` even without a correction; private and unattended sessions stay
+excluded. The async nightly entry scans taste before its worker-thread climb. Hook and nightly regressions live
+in `tests/learn`. Task-kind client scope remains open.
 
 ### Add an `exo` subcommand
 

@@ -1,6 +1,7 @@
 # Taste baseline: ship one person's taste, then fit the next person (D-044)
 
-Status: **Accepted; wave 1 built** (layers and export, see "Build status" below). Waves 2 and 3 are not built.
+Status: **Accepted; wave 1 built; waves 2 and 3 implemented for review** (see "Build status" below).
+The shipped pack is still the empty placeholder; no personal pack is released by this change.
 D-044, with the principal's rulings of 2026-10-12 (see "Rulings" at the end).
 Builds on D-040 (author provenance), D-012 and D-022 (the learning loop), D-015 (decision models) and D-028
 (one continuous memory).
@@ -700,7 +701,7 @@ thresholds; `/taste` renders a pending line with the right weeks and estimate.
 | Privacy check | `baseline/privacy.py` | The general check, the store deny list and the value-domain check (section 1). |
 | Export | `baseline/export.py` | `exo taste export-house`. Writes nothing on any fail; byte-identical when its source, code, explicit inputs, privacy-check results and skill manifest match. |
 | Review and release | `baseline/review.py` | `exo taste review OUT --tick ID`, then `--final`. |
-| Prompt block | `plugins/exo-memory` | The taste block sits in the system message after the principal pack, under `taste_budget` (400 tokens; 0 turns it off). Built once per process. |
+| Prompt block | `plugins/exo-memory` | The taste block sits in the system message after the principal pack, under `taste_budget` (400 tokens; 0 turns it off). The principal pack stays fixed; taste refreshes on a local day boundary, relevant ledger change or policy edit. |
 | Listing | `baseline/cli.py` | `exo taste`: house on or off (and why), then each item with weight, class and source. The `/taste` view comes in wave 3. |
 
 How wave 1 settles details this page left open:
@@ -741,10 +742,67 @@ How wave 1 settles details this page left open:
   counted only when the author is the principal (D-040). The commands that write them come with `/taste` in
   wave 3.
 
+**Waves 2 and 3 (the sustained-change rule, value step back, mode and `/taste`): restored for review 2026-10-25.**
+The implementation preserves the original 2026-10-13 work and adds current-runtime and authority checks. Tests in
+`tests/baseline/test_shift.py` (both worked examples, number by number, and property tests) and
+`tests/baseline/test_adapt.py` (the ledger, `/taste`, the brief and the guards).
+
+| Part | Where | Notes |
+|---|---|---|
+| The rule, pure | `baseline/shift.py` | `episodes`, `weekly_record`, `persistence`, `effective_weight`, `challenger_weight`, `ready_to_swap`, `scope_of`, `estimate_weeks`, and `replay`, which runs one item week by week and returns its state and outcomes. No clock, no I/O. |
+| Signals | `baseline/classify.py` | Reads the principal's verdicts and utterances after a `taste_scan` watermark, finds up to 3 candidate items by signature overlap (at least 0.3), labels each, writes a `taste_signal` note. Non-principal events are skipped before any model is asked. |
+| The labeller hook | `classify.decision_labeller` | Asks the `decision` role relation, delta, scope, task kind and (values, principal text) voice. Off when no `decision` route is configured: then `exo.taste.relation` labels (conflict means contradict, d = 0.5, confidence unknown). Below 0.6 a label counts as unrelated. 50 questions per local day, reserved durably before I/O, including failed or cancelled requests. It only labels; it can hold a signal back, never move an item. |
+| On the store | `baseline/adapt.py` | Replays every house and learned item from the ledger and writes each new outcome once: `taste_replaced`, `taste_scoped`, `value_stepped_back`, `value_adopted`, `taste_restored`, `taste_proposed`, `taste_question`, `taste_ask_quiet`. A swap, scoped item or adoption is also an accepted belief with `overrides: <item>`. |
+| Wiring | `learn/learner.py`, `learn/review.py` (`taste_step`), `learn/climb.py`, `learn/promote.py` (`shift_holds`) | Label, then close weeks after fast-loop reviews, every `fast_loop.every_turns` completed principal turns even without a correction, and before the nightly climb. Private, unattended and non-principal turns do not count toward the cadence. Promotion rule 3 now holds an inferred taste lesson that would replace an accepted belief or a house item, so only this rule or a ruling moves it. |
+| Prompt | `baseline/layers.py` | Armed items use their faded weight (silent) or their weight at arming (ask). A stepped-back value is a neutral line, never the stance. A learned item that another overrides is not listed. |
+| `/taste` | `baseline/command.py`, `diagnostics.py` | The `taste` built-in of `command.run`, in the TUI and the web composer (`POST /api/taste`). Reads are open; writes are principal only (D-052). `exo taste show|why|mode` reads the same view. |
+| Brief | `brief.py` | A Taste section: swaps, scoped items, step backs, adoptions, restores, a count of new proposals, and the one notice when proposals go quiet. |
+
+How waves 2 and 3 settle details this page left open:
+
+- **Days and weeks.** Weeks run Monday to Sunday in `taste: timezone` (default: the machine's zone). A week's values
+  are taken on its Sunday, counted in whole days from install, which is the worked example's day 7k - 1. A week is
+  closed once its Sunday is over.
+- **Arming window.** "Those contradicting weeks fall within the last 8" is read as: the net of contradicting minus
+  agreeing weeks among the last 8 calendar weeks is at least 3.
+- **Episode strength and time.** An episode counts at the strength of its strongest contradicting signal, dated by
+  its first signal. A stated view counts 0.6 like an edit; an accepted answer only ever agrees.
+- **Which evidence is trusted.** A `taste_signal` note must be authored by `exo-learn`. Its evidence must be a
+  principal verdict or user-role utterance, not a control note or assistant message. Scan and outcome notes also
+  require the learner author. Quoted, fenced, attached and long pasted paragraphs are removed from utterances and
+  correction text before classification. A single paragraph of 600 characters or more is conservatively treated
+  as a paste. The signal's time is the evidence time. Future evidence and controls do not affect a present replay.
+- **Values.** Episodes with delta below 0.5 are refinements and do not count. A restore counts agreeing weeks after
+  the week of the step back. Rulings never step back. The getting-to-know window applies to house values only.
+- **Ask mode.** A proposal freezes its claim, scope, evidence and weights. Its answer names the proposal timestamp;
+  a stale answer cannot accept another proposal, and later signals cannot change the displayed or accepted text
+  and scope. A proposal
+  disarmed by the user going back lapses without an answer. "Three in a row" counts proposals in time order;
+  an answer to any proposal resets the run.
+- **Protected items.** Rulings, pins and guarded items remain protected when evidence is project-scoped. A
+  challenger whose own text matches the consolidation guard words becomes a question, never an automatic belief.
+- **Interrupted writes.** Deterministic proposal IDs let a retry finish a partially written replacement without
+  appending its proposal or acceptance twice.
+- **Flip limit.** A swap or adoption that is the second inside 365 days stops automatic changes for that item and
+  raises one question in the queue.
+- **Where the mode lives** (D-072): the newest `taste_mode` note by the principal, else `taste: mode` in
+  `policies/consolidate.yaml`, else ask. New stores get `mode: silent` from the template, so a store without the
+  key, which predates this wave, is treated as the principal's own: ask. The yaml is never rewritten by `/taste`.
+- **Undo and reset.** `/taste undo`, `restore` and `reset` write the act and a `belief_rejected` note for the learned
+  version, so the ledger keeps every row. Only taste preferences, values, rules and procedures enter this view;
+  `reset all` leaves facts, skills, other learned material and rulings untouched. Undo and restore start the 90-day quiet period; reset does not.
+- **The CLI only reads.** `exo taste` cannot change taste, because the core cannot check who runs a shell command.
+
+The `/intro` first-run text of section 8 is in the `exo-intro` skill. Project-scoped items apply only to a session
+whose working directory exactly matches the recorded project. Concurrent sessions keep separate prompt entries.
+Task-kind scope remains available to explicit `view(scope=...)` callers; clients do not yet supply a trusted task
+kind, so task-scoped items stay out of their prompts. The nightly entry point runs the same bounded taste step
+before the climb. "Switch now" and "keep house" are not separate verbs (`/taste yes` after a proposal and
+`/taste pin` provide those controls).
+
 Not in wave 1: the first real pack (the principal runs the export on his own store, reads the review and
 ticks); publishing (a public act through the gate, as section 1 says); wiring the house soul into seats; the
-current scope (project or task kind) in the prompt block, which is unscoped for now; everything in waves 2
-and 3.
+task-kind scope in client prompts. No real-model evaluation or principal canary is claimed by these tests.
 
 ## Rulings (2026-10-12)
 

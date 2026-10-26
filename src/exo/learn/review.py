@@ -201,10 +201,10 @@ async def review(lr: Learner, session: str | None = None, reason: str = "manual"
     if not fl.get("enabled", True):
         return {"status": "disabled"}
     if reviews_today(rt.ledger) >= int(fl["daily_cap"]):
-        return {"status": "capped"}
+        return {"status": "capped", "taste": await taste_step(lr)}
     events = new_signals(lr)
     if not events:
-        return {"status": "nothing_new"}
+        return {"status": "nothing_new", "taste": await taste_step(lr)}
     text, labels = _label_events(events)
     prompt = PROMPT.format(events=text, digest=_digest(lr, session) if session else "(none)",
                            touched=_touched(lr, events), do_not=DO_NOT_CAPTURE)[: int(fl["max_chars"])]
@@ -220,7 +220,7 @@ async def review(lr: Learner, session: str | None = None, reason: str = "manual"
     except Exception as exc:
         lr.notice(f"fast loop: reviewer model failed ({type(exc).__name__}); used the rules instead")
         items = None
-    # ---- write block: no awaits from here, so a cancel cannot split it ----
+    # ---- write block: no awaits inside, so a cancel cannot split it ----
     with rt.lock:
         if items is None:
             res = consolidate_run(rt.store, rt.ledger, author=rt.agent)
@@ -234,8 +234,30 @@ async def review(lr: Learner, session: str | None = None, reason: str = "manual"
     if promote:
         from .promote import apply_policy
         out["promotions"] = [d.to_dict() for d in apply_policy(lr, allow_eval=False)]
+    out["taste"] = await taste_step(lr)
     lr.reviews.append(out)
     return out
+
+
+async def taste_step(lr: Learner) -> dict | None:
+    """The sustained-change rule (D-044): label the principal's new signals against the taste items, then write
+    whatever finished weeks decided. The decision model labels only when a `decision` route is configured."""
+    rt = lr.runtime
+    if rt is None:
+        return None
+    try:
+        from exo.baseline.classify import decision_labeller
+        from exo.baseline.command import tick
+        router = getattr(lr.engine, "router", None)
+        async with lr._taste_lock:
+            with rt.lock:
+                return await tick(rt.store, rt.ledger,
+                                  labeller=decision_labeller(router) if router is not None else None)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        lr.notice(f"taste: the sustained-change step failed ({type(exc).__name__}: {exc})")
+        return None
 
 
 async def run_review(lr: Learner, session: str | None, reason: str) -> dict:
