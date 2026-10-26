@@ -288,6 +288,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
+  (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
+  #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under
+  `deny: [store_write]`: `cp /tmp/evil ~/.exo/config.json`, `mv`, `install`, `tee` and `ln -sf` were an allowed
+  `shell`, a redirection an allowed `local_write`, and `write_file`, `edit_file` or `apply_patch` there an allowed
+  `local_write`. A write in any form the store checks read (`~`, `$HOME`, `$EXO_HOME` or a full path, a brace set, a
+  relative `.exo/config.json` also spelt `.exo/./config.json`, after a `cd` into the home, under `sudo`, `env`,
+  `bash -c` or `ssh`, the file tools' path keys) is now `store_write`: it always asks, only the principal answers, no
+  grant covers it, and `deny: [store_write]` denies it. A tool call that runs `exo config set` or `unset`,
+  `exo import-store` or `exo interview` (also through `python -m exo.config`) is `store_write` too and keeps its
+  `opaque_exec` reading as a part, as `exo update --pin-trust` does, so `deny: [opaque_exec]` still denies it.
+  `exo providers default` stays `credentials` with the store write as a part, so a deny on either denies it.
+  Reads stay `read`, and a project's `config.json` is unchanged. No decision is lower than on main: a call in which
+  `config.json` counted is also read as before (`Classification.ordinary`, one of `gate.readings`), and the stricter
+  decision stands, so `matrix_deny_cells` still denies
+  `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h` and `deny: [credentials]` still denies
+  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A copy or extraction into a folder that holds the file is #483.
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that

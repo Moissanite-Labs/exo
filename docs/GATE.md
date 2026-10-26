@@ -2005,16 +2005,27 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus` (the bus registry
 that signed seat answers and the relay trust, the relay database and its `-wal`, `-shm` and
 `-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435), `$EXO_HOME/update`
-(`allowed_signers`, the signed-update trust pin of D-073, #133), any `seat.toml`,
+(`allowed_signers`, the signed-update trust pin of D-073, #133), `$EXO_HOME/config.json` (D-074,
+#125: the plugins the core loads, this gate among them, as `core_plugins`, their config, the `venv`
+that runs Hermes and Exo, each provider's `base_url` and headers, and the `principal` a peer key
+with no seat file speaks for, #525), any `seat.toml`,
 `$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals` (`exo init --root`,
 `exo import-store --root`), for every id, not only the active one. When the environment moves a bus
 file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with
 the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_`
 name, and both spellings when both are set. Distinctive names match anywhere, so a relative
 `policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or
-`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins` and `.exo/update` count whatever
-`EXO_HOME` is. A project folder called `update` is ordinary. Only a file in it named
-`allowed_signers` asks. `config.json` is not on the list yet (D-074, #125).
+`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins`, `.exo/update` and
+`.exo/config.json` count whatever `EXO_HOME` is. A project folder called `update` is ordinary. Only a
+file in it named `allowed_signers` asks. `config.json` is not a distinctive name: only the home's own
+file counts, so a project's `config.json`, and `config.json.bak`, `config.json~` or `config.jsonl`
+beside the home's, keep their class (one under `plugins/` asks with that folder, #435). A relative
+`.exo/config.json` is also read with `.`, `//` and `..` collapsed (`cd ~ && echo x > .exo/./config.json`),
+and a word a command prints counts by the name in it (`cp x $(echo ~/.exo/config.json)`), as
+`$(echo ~/.exo/policies/gates.yaml)` does. Reads stay `read` (`cat`, `jq`, `read_file`); a copy out
+of it (`cp ~/.exo/config.json /tmp/`) asks, as a copy out of `policies/` does. The CLI code that
+writes the file (`exo config set`, onboarding, `exo import-store`) is unchanged: run by the
+principal in a terminal, it is not a tool call.
 
 The plugins folder (#435). The core loads each plugin it finds in `$EXO_PLUGIN_DIRS`, then in
 `$EXO_HOME/plugins` (`exo.core.plugins.default_dirs`), and runs its code inside the harness with the
@@ -2112,15 +2123,18 @@ between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`
 without a link to resolve, so only distinctive names catch a write through it. Only the store roots
 are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
 write to the outside spelling is a local write. A copy or an archive unpacked into the home folder
-itself, which makes a protected folder from its source name (`cp -r /tmp/x/update ~/.exo/`,
-`tar -C ~/.exo -xf x.tar`), is not seen either. Nor is a path held in a variable or made by a
+itself, which makes a protected folder or `config.json` from its source name
+(`cp -r /tmp/x/update ~/.exo/`, `cp /tmp/x/config.json ~/.exo/`, `cp -t ~/.exo /tmp/x/config.json`,
+`tar -C ~/.exo -xf x.tar`, `unzip -d ~/.exo x.zip`), is not seen either (#483). Nor is a path held in a variable or made by a
 command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 `cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks are case-sensitive, so a
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
 followed, and a shell tool's `cwd` or `workdir` argument is not read here (the secret-store checks read
-it, #209, #311).
+it, #209, #311). `sudo -s` or `sudo -i` (`--shell`, `--login`) with no command runs a shell on its
+stdin, and that stdin is not read: `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
+`sudo -s <<< 'rm -rf /srv/data'` are a `read`, for every store path and every command alike.
 A copy or archive of `keys/` that the gate reads only as a key read has no store write part, so a
 seat that `approvals.yaml` delegates `credentials` to may still answer it, as before #447. It asks
 every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,
@@ -2165,7 +2179,10 @@ path is one the gate cannot resolve, not that the command writes it. A body file
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
 `sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
-`exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `git -C <store>` with a
+`exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
+`unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and
+`exo interview`, which writes the principal store (also as `python -m exo.config`, `exo.cli` or
+`exo.onboard`, D-074, #125), `git -C <store>` with a
 writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
 `<( )` of a later command on that line (#465: `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`). There,
 as unwrapped, a command the gate does not read as a read (`sed -n`, `sort`, `curl`) counts as a write. A
@@ -2225,7 +2242,26 @@ reserved entry on `credentials` sees it. Its target is the name as written (`../
 `tar -C ~/.exo -czf - keys/seat`. In each case the line stays `store_write` and asks the
 principal alone when nothing denies it. `exo update --pin-trust` keeps its old
 `opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it, and naming
-`opaque_exec` at `allow` or `log` no longer lets it run without an ask.
+`opaque_exec` at `allow` or `log` no longer lets it run without an ask. So do `exo config set` and
+`unset`, `exo import-store` and `exo interview` (D-074). `exo providers default`, which also
+rewrites `config.json`, stays `credentials` (D-034) with the store write as a part, so a deny on
+either denies it and only the principal answers it.
+
+A `config.json` write keeps main's reading of the line (D-074, #125). Before D-074 the line was
+not a store write, so its own reading led it: a delete, a post, a secret, a `/dev` target, an
+`ssh` host, or the `internal` exposure of the command `ssh`, `scp` or `sftp` runs from
+`-o RemoteCommand=`. The store write now leads, so each call in which `config.json` (or an exo
+command that writes it) counted as the store is also read as before D-074, as a call of its own
+(`Classification.ordinary`, one of `gate.readings`). `decide` decides both and the stricter
+stands, with every reserved hit and violation of either, as for the `also` and `floor` readings
+(#311, #399). So `matrix_deny_cells` still denies
+`ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h`, `deny: [credentials]`
+still denies `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`, `target:/dev*` still denies
+`cp ~/.exo/config.json /dev/fd/3`, a rule on irreversible `credentials` still denies a secret beside
+`bash -c 'rm -rf /srv/data; cp /tmp/x ~/.exo/config.json'`, and a category deny a catch-all allow
+rule did not lift still denies `f() { rm -rf /srv/data; cp /tmp/x ~/.exo/config.json; }; f`. The
+checks past `decide` (`no_grant`, `call_approvers`, `binds_exact`, the hook's body files and
+required executor) read both too.
 
 ## Policy changes during a session (D-038)
 
