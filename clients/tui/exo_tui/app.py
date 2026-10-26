@@ -36,6 +36,8 @@ CLIENT_ID = "exo-tui"
 LOST = "connection_lost"  # post's code for a command whose reply never came or that never went out (D-060: not resent)
 DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
 MAX_FILE = 64 * 1024
+ROUND_LIMIT_NOTE = ("The limit counts tool rounds, not time. A turn can continue after this window closes; "
+                    "reopen its thread and use /stop to interrupt it.")
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
 PAGE = 60  # entries added per "load earlier"
 FLUSH_EVERY = 0.1  # streaming repaint interval in seconds (at most 10 a second)
@@ -511,8 +513,8 @@ class ExoApp(App):
                     self.note(out if isinstance(out, str) else "permissions: bypass")
                 except Exception as exc:
                     self.note(f"--skip-permissions: {getattr(exc, 'message', None) or exc}", "error")
-            if self.max_rounds == 0:
-                self.note("Unlimited turns can continue after this window closes; reopen the session and use /stop to interrupt.", "warn")
+            if self.max_rounds is not None:
+                self.note(ROUND_LIMIT_NOTE, "warn")
             await self.load_permissions()
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", MEMORY_WORDS.get(self.memory, ""), ok=self.memory not in MEMORY_SHORT)
@@ -1362,7 +1364,7 @@ class ExoApp(App):
                 return
             mode = "default" if self.max_rounds is None else "unlimited" if self.max_rounds == 0 else str(self.max_rounds)
             self.note(f"tool-round limit for new turns in this window: {mode}. "
-                      "Unlimited turns can continue after the window closes; use /stop to interrupt.")
+                      + ROUND_LIMIT_NOTE)
             self.refresh_status()
         elif name in ("tasks", "open", "steer"):
             await self.subagent({"tasks": "list"}.get(name, "send" if name == "steer" else name), args)

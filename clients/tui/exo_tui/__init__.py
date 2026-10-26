@@ -26,7 +26,7 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--url", help="exod TCP URL")
     p.add_argument("--token-file", help="bearer token file for --url")
     p.add_argument("--title", default="", help="title for a new session")
-    p.add_argument("--max-rounds", type=round_limit, help="tool rounds per new turn; 0 removes the limit")
+    p.add_argument("--max-rounds", type=round_limit, help="tool rounds per new turn; 0 removes the limit; this is not a time limit")
     p.add_argument("--skip-permissions", "--dangerously-skip-permissions", dest="skip_permissions",
                    action="store_true", help="permissions bypass for this run of the core: the gate stops asking, except "
                    "for changes to Exo's own records and reading secrets (D-065). Every auto-approved call is in the ledger")
