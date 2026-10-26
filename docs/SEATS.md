@@ -59,6 +59,9 @@ cwd = "~/Work/exo-live"       # where this seat's threads start; beats config.js
 
 [trace]                       # D-032: anomaly limits for this seat over config.json's [trace] (docs/TRACE.md)
 turn_wall_s = 90              # also model_call_s, model_call_routes, turn_total_wall_s, model_wait_s, subagent_s, verify_turns, verify_days
+
+[permissions]                 # D-065: read once by the exo-gate plugin when the core starts
+mode = "bypass"               # start in permissions bypass (docs/GATE.md "Bypass mode"); omit or "ask" to ask
 ```
 
 The `[models]` tables (`roles`, `providers`, `models` for prices, `fake`) merge over config.json's `models`
@@ -72,6 +75,9 @@ a provider table over the catalog (`docs/PROVIDERS.md`). The keys the seat sets 
 that sets only `read_timeout = 300` under `[models.providers.openai]` keeps the `base_url` config.json gave that
 provider, a LAN server for example, and sends no key there unless config.json named one. A seat entry that sets
 `base_url` drops config.json's `key_env` and `headers`: no key or header token follows a new URL unless the seat names it.
+
+A seat file is on the gate's store list, so the agent cannot write `[permissions]` without asking you, even in
+bypass. A required tool executor (Exo OS) ignores `mode = "bypass"`.
 
 When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.

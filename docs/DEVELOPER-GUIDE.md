@@ -331,7 +331,12 @@ like the memory hooks. After `session.undo` the core calls `on_session_switch(se
 summaries=)` with every message left in the thread and `{tree key: [ids of the summary nodes still stored]}`. Drop
 anything kept from the undone turns (D-041), including the text of each `on_compacted` node that is gone (its
 `node.session` is the tree key). exo-context drops their pins and those nodes, then writes again each handoff
-that may quote them.
+that may quote them. Hermes's CLI and TUI tell only their memory provider about `/undo`, so exo-memory passes the
+notice on with `exo.host_undo.report(session)`. exo-context drops the last undone turn's pins in
+`on_host_undo(session)`, and those of the earlier turns of `/undo N` in the next `select_context`, from its
+`conversation_messages` (#389). A memory provider used beside exo-context in exo-memory's place can do the same. A
+listener calls `exo.host_undo.turn(session)` on each turn it sees, and acts on a notice only when its last number is
+`exo.host_undo.latest(session)`, so an old engine left behind by an agent rebuild stays out of it.
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat
@@ -350,6 +355,10 @@ It writes a temporary file that `mkstemp` makes in the same folder, fsyncs it an
 is 0600 unless you pass `mode` (`None` gives what a plain open gives). A file written many times a minute, such as
 a cursor or a cache, can pass `sync=False` to skip the fsync. Do not write `<file>.tmp` and rename it, and do not
 open the final name for writing: a symlink planted at either name turns the write into a write to another file.
+To change the process umask for a while, use `with exo.core.private.umask(mask):`, not `os.umask`. It holds the
+lock the `mode=None` probe takes, so the two never undo each other (#317). Do not await or yield inside the block.
+The lock is not reentrant, so a second block on the same thread would wait forever (#563). To make a socket under
+a mask, bind it inside the block and start the server on it after the block, as `HttpServer.start_unix` does.
 
 ## 5. Add a seat
 
