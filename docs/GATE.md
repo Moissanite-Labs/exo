@@ -936,6 +936,25 @@ and `\U` with 1 to 8 hex digits, `\cX` (`\c\\` takes one backslash), and an unkn
 its backslash. A NUL ends the quoted part, so `$'--forc\0x'e` is `--force`. A `\u` or `\U` value that
 is no character is written as bash writes it: a few bytes that are not ASCII, or nothing at all from
 `\U80000000` on, so `$'--forc\UFFFFFFFFe'` is `--force` too.
+A backslash-newline inside a `$` form is joined first, as bash joins it (#584). Outside single
+quotes bash drops each `\<newline>` before it reads a word, so `"$\<newline>(cmd)"` runs cmd as
+`"$(cmd)"` does. The same holds after `${`, `${!` or `${#`, inside a `${..}` name and around its
+operator (`${PA\<newline>TH:=x}` sets PATH), between `$(` and `(`, where bash then reads the
+arithmetic `$((`, and inside a `$((..))` body. The lexer read a `$` and then a backslash as a
+literal `$`, and a `${..}` or `$((..))` as it stands, so
+`echo "$\<newline>(git push --force origin main)"` was an allowed `read` under
+`deny: [force_push]`. When the line, or a line the gate reads again from it once its word is
+decoded (`bash -c $'..'`, an `eval` or ssh argument in double quotes, a backquoted body, where `\\`
+is `\`), holds such a backslash-newline, the call is now read a second time with each one dropped,
+at every level. The line keeps both readings (`gate.readings`): the more severe one leads, so the
+approval card names it, and the other ends its `also` readings.
+`decide` keeps the stricter, and an approval binds to the exact line. The join is made in the
+text, so it also joins in single quotes, a comment or a quoted here-document, where bash keeps the
+backslash-newline. There the joined text stays quoted or unread, and the line as written still
+decides: `: # $\<newline>(git push ...)` keeps its deny, since bash runs the next line. A `${..}`
+is joined to its own `}`, past a `${..}` nested in it. Limits: only shell calls are read again
+(not `execute_code`), the folder walk of `cd` targets is not joined, and a joined form is read as
+its plain form is, so `$\<newline>[..]` is as unread as `$[..]` (#588).
 
 A command is meant to be `allow` only when every program in it is known and nothing the gate reads
 is hidden; "Known limits" below names the paths where a known program still runs a command the

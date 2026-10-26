@@ -2327,6 +2327,49 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   secret links use the existing secret-path check. No patch is applied while classifying, and no tool schema or
   executor behavior changes.
 
+  *Amendment 2026-10-26 (issue #584):* a backslash-newline inside a `$` form is joined before the form is read, as
+  bash joins it. Outside single quotes bash drops each `\<newline>` before it expands a word, so
+  `"$\<newline>(cmd)"` runs cmd, `"$\<newline>{x}"` is `"${x}"` and `"$\<newline>@"` splits as `"$@"`. The lexer
+  read a `$` and then a backslash as a literal `$`, so `echo "$\<newline>(git push --force origin main)"` was an
+  allowed `read` under `deny: [force_push]`, and `echo "$\<newline>(curl -X POST ...)"` an allowed `read` too.
+  bash also drops them inside a `${..}` name and around its operator (`${PA\<newline>TH:=x}` sets PATH) and inside a
+  `$((..))` body, which the lexer took as they stand. While `classify` reads a shell call, `classify_shell` notes
+  (`_joining`) whether a line it reads, nested ones too, holds a `\<newline>` right after a `$`, in a `${..}` up to
+  its first `}`, between `$(` and the `(` of `$((` or in a `$((..))` up to its close (`_join_dollars`). Only then
+  is the call read a second time, with budgets of its own, with each such line joined before it is read, so
+  `bash -c $'..'`, an `eval` or ssh argument in double quotes and a backquoted body (where `\\` is `\`) are joined
+  at their own level once their word is decoded. The call then keeps both readings: the more severe
+  (`_severity`) leads, so the approval card, the hook's block message and the ledger name it, and the other ends
+  its `also` readings; on a tie, the line as read before leads. `gate.readings` walks every `also` and `floor`, so
+  `decide`, `no_grant`, `call_approvers`, `body_unseen` and the hook read both and the stricter stands, and
+  `binds_exact` binds an approval for such a line to its exact text. A line where nothing changed is read once, as
+  before.
+
+  The join is made in the text of each line `classify_shell` reads, chosen over a join in `_Lexer._dollar` and its
+  twins (`_nest_end`, `_dollar_brace`) because one joined text keeps every offset the lexer and its readers share,
+  and the line as written stays read by the lexer as it was. So it also joins in single quotes, a comment or a
+  quoted here-document, where bash keeps the backslash-newline. There the joined text stays quoted or unread, and
+  the line as written still decides: `: # $\<newline>(git push ...)` keeps main's deny (bash runs the next line),
+  as does `echo "$\<newline>{x:-$(git push ...)}"`, whose joined form main reads only in part (#143). Limits: only
+  shell calls are read again (not `execute_code`); text the gate reads without `classify_shell`, such as the folder
+  walk of `cd` targets, is not joined; a joined form is read as the gate reads its plain form, so `$\<newline>[..]`
+  is as unread as `$[..]` is (#588). A `${..}` is joined to its own `}`, past a `${..}` nested in it
+  (`${a[${b}0,PA\<newline>TH=5]}`). #517 and #518 (here-document delimiters and backquoted bodies) are unchanged.
+
+  The #423 differential against main 7785ffbb, each tree in its own process, `--jobs 2`: the built-in corpus with
+  `--no-variants`, 9,355 actions under the 87 policies, lowers 0 pairs and tightens 4,646 pairs on 76 actions; an
+  aimed corpus of 1,916 actions (74 new test lines, 373 backslash-bearing literals from the gate tests and 1,504
+  generated lines: each `$` form with 0 to 3 `\<newline>`, in double quotes, unquoted, in `bash -c '..'` and
+  `bash -c $'..'`, in `eval ".."`, in backquotes and in an ssh command, around a force push, a post, a delete and
+  a read) under 99 policies (the 87 and deny, category and reserved entries on `force_push`, `web_post`, `delete`
+  and `opaque_exec`) lowers 0 pairs and tightens 11,659 pairs on 200 actions; and the built-in corpus with its
+  variants, 71,864 actions under the 87 policies, lowers 0 pairs and tightens 6,833 pairs on 112 actions,
+  mostly `read allow` to the joined line's `opaque_exec`, `force_push`, `web_post`, `store_write`, `github_post` or
+  `delete` ask, and `vcs_push log` to `force_push ask` (`git push $\<newline>'--force'`). No classify or decide
+  errors.
+  *Revisit if:* the lexer reads `\<newline>` inside every `$` form itself (#143's `${..}` rework), so one reading
+  covers both.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
