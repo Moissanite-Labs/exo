@@ -4446,6 +4446,14 @@ def _displace_with(c: Classification, **changes) -> None:
     c.parts, c.displaced = [lead if q is old else q for q in c.parts], lead
 
 
+def _write_summary(lead: Classification, write: Classification) -> str:
+    """The summary of a sudo write copy (#454): the program of the part it displaced and the written path. The write
+    is named under that program only when it is on that program's own command (`chmod, write /tmp/f`), else apart
+    from it (`gh pr view; write /tmp/f` for `sudo gh pr view 1; sudo echo hi > /tmp/f`)."""
+    sep = ", " if lead.own is not None and lead.own == write.own else "; "
+    return f"{lead.summary or lead.category}{sep}write {write.target}"[:120]
+
+
 def _raise_axes(c: Classification, exposure: str = "private", reversibility: str = "reversible") -> None:
     """Raise c's exposure and reversibility in place to at least these: a remote command runs on the host, sudo and
     the privileged wrappers make a reversible part costly. The part a sudo write copy displaced (#454) is raised with
@@ -4486,13 +4494,14 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
         # its displaced part's. A part that outranks a read leads again: an unknown program (`echo $(sudo echo hi >
         # /tmp/f) $(foo)`), or ssh running its stdin. Any other is the part the copy displaces, and the summary names
         # it, so a rule on the repo of `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line.
+        # It names the two apart when that part is on another command than the write (`gh pr view; write /tmp/f`).
         at = max(range(len(parts)), key=lambda i: (*_severity(parts[i])[:3], False) if parts[i].displaced is not None
                  else _severity(parts[i]))
         before = parts[at].displaced or parts[at]
         if _severity(before)[3]:
             c = before
         elif before is not c.displaced:
-            c.summary, c.displaced = f"{before.summary or before.category}, write {c.target}"[:120], before
+            c.summary, c.displaced = _write_summary(before, c), before
     if c.own_signals is None:
         c.own_signals = list(c.signals)
     c.signals = list(dict.fromkeys(c.signals + signals))
@@ -5219,11 +5228,12 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # part leads the line, a copy of the first sudo write with its cost leads in its place, so the line has the
     # category it has without sudo. Every other part ranks below the copy, and a part that outranks the read (an
     # unknown program) keeps the lead. The copy keeps the part it displaced, so decide() still reads the line with
-    # that part leading (a rule on a gh read's repo), and its summary names both. The parts stay as they are.
+    # that part leading (a rule on a gh read's repo), and its summary names both (_write_summary). The parts stay as
+    # they are. No read or shell part is a third party, so that axis needs no check.
     lead, writes = _most_severe(parts), ctx.get("sudo_writes")
-    if writes and lead and lead.category in ("read", "shell") and lead.exposure == "private" and not lead.third_party:
+    if writes and lead and lead.category in ("read", "shell") and lead.exposure == "private":
         top = replace(writes[0], reversibility=lead.reversibility, displaced=lead,
-                      summary=f"{lead.summary or lead.category}, write {writes[0].target}"[:120])
+                      summary=_write_summary(lead, writes[0]))
         c = combined = _combine([top, *parts], cmd)
     else:
         c = combined = _combine(parts, cmd)
@@ -7195,6 +7205,10 @@ def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
 
 UNSEEN_BODY = ("the gate cannot read the body (stdin, a file it did not read, $(..) or a variable); "
                "pass the text inline or as an absolute --body-file path")
+# A body file the caller left unread because the line does more than post (#343, ``held_body_files``): the rest of the
+# line may change the file before gh reads it, so an absolute path alone does not get it read.
+UNSEEN_ON_LINE = ("the gate did not read the body file, since the line does more than post and could change the "
+                  "file before gh reads it; run the post on a line of its own, or pass the text inline")
 
 
 def fill_body(c: Classification, text: str) -> None:
@@ -7252,7 +7266,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     posting violations (a body the gate cannot read is one) and the operator floor. A deny entry wins
     over everything, and so does a category line or rule that denies any part of a compound line. A line
     with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
-    `context` may carry `spent_today` for the daily budget.
+    `context` may carry `spent_today` for the daily budget, and `held_body_files`: the body files the caller left
+    unread because the line does more than post (#343), whose posts get UNSEEN_ON_LINE for their unseen note, and
+    UNSEEN_BODY beside it when they are also unseen another way.
 
     On a compound line, a rule keyed on `command` that would lower the line (its decision is below the matrix cell
     and category line, or it is an allow or log rule that names opaque_exec) must match the line as before and also
@@ -7406,6 +7422,7 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
 
     violations: list[str] = []
     unseen = body_unseen(eff)
+    held_files = ctx.get("held_body_files") or ()
     applies_to = posting.get("applies_to") or POSTING_DEFAULT
     # Whether the combined classification alone would run the checks (kept for the line-wide
     # unseen note below): its category is under applies_to, or it is a close or merge carrying
@@ -7413,12 +7430,12 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     line_applies = eff.category in applies_to or (eff.category in ("github_close", "vcs_merge")
                                                   and (eff.text or eff.title or unseen))
 
-    def post_unseen(p: Classification) -> bool:
+    def post_unseen(p: Classification, file: bool = True) -> bool:
         """One part's unseen body (#208): a body file nobody read into its text, or its own
         unseen_body signal. _combine gives the part it picks every part's signals, so this reads
         the ones it carried before (own_signals). A part given them some other way counts a
-        signal a part below it also carries as that part's, not its own."""
-        if p.text_file and not p.text and (p.category in OUTBOUND or p.category == "vcs_merge"):
+        signal a part below it also carries as that part's, not its own. With `file` off, only the signal counts."""
+        if file and p.text_file and not p.text and (p.category in OUTBOUND or p.category == "vcs_merge"):
             return True
         if p.own_signals is not None:
             return "unseen_body" in p.own_signals
@@ -7456,7 +7473,10 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
                            exposure=p.exposure)
         found += check_scrub(p.text, pol.get("scrub"), title=p.title, exposure=p.exposure)  # D-033
         if p_unseen:  # the checks above saw only part of this post, so they cannot pass it
-            found.append(UNSEEN_BODY)
+            # A body file left unread for the line gets its own note (#343). The plain one stays when the post is
+            # also unseen otherwise (a title from a variable, a repeated option), which the post alone still is.
+            on_line = p.text_file in held_files and not p.text
+            found += [UNSEEN_ON_LINE] * on_line + [UNSEEN_BODY] * (not on_line or post_unseen(p, file=False))
             post_unseen_seen = True
         found_on[id(p)] = found
         if p.alt_copy:
