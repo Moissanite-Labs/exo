@@ -3406,6 +3406,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   read as the section. `resume_text` folds the header to one line too, so a header value no longer reaches the
   system message as a section. An older file's path and launch lines, title, list fields and summary still reach
   it as that writer left them.
+- *Amendment 2026-10-26 (#540):* after #395 the rest of an older file still reached `resume_text` as written. A path
+  or launch line from main's writer before #395 (a handoff folder name that spans lines in the operator's config), a
+  title from before #353, a list field from before #353 or a summary from before #349 could stand a forged `## Decisions
+  made` or `## Open decisions` section in the system message next to the principal's real one, and a title could put a
+  forged `## Open decisions` section first, which `load_handoff` read. `resume_text` now demotes every `## ` heading
+  line the reader does not read as the section, so only the reader's copies stand and the forged ones reach the model
+  as `### ` data, quotes included. `load_handoff` reads no section out of a title that does not say what the header's
+  recovered topic says: the title must be the topic value's footprint, line for line, or its lines are data. In a
+  pre-#353 file whose title carried a forged Decisions copy, the real one reads again where the file read as undecided,
+  and a forged `## Open decisions` first loads none; a title edited by hand demotes nothing. A header value's `-->` is
+  written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
+  older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
+  file's path or launch line still reads, as on main, for the reader has no value to check a path line against.
 - *Amendment 2026-10-24 (#317):* two follow-ups to #296. First, a reader opened through a symlink to a closed ledger
   held an `immutable=1` connection to the target. A writer that appended and checkpointed changed the file under it, so
   the reader stayed stale and then raised `database disk image is malformed`. Such a target is now copied at open, and
