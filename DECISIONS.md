@@ -2540,6 +2540,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `_combine`. An ssh line with a sudo write and unread stdin therefore fills the host on the opaque stdin part
   that leads, as before: `ssh -p 2? prod 'sudo echo hi > /tmp/f' < x.sh` keeps `prod` as its target, so a deny on
   opaque execution at that host still denies. The two existing stdin/sudo regression rows fail without this join.
+  *Amendment 2026-10-25 (issue #454, after #492 merged):* #492 merged (0889b351) with 040702d0 and the integration
+  fix f8b5e2f7, before the answer to its last review (5640972780) was pushed. This amendment carries that answer. The
+  host reaches the displaced part only in the hop form (`ssh prod 'sudo echo hi > /srv/out'`). `ssh -o RemoteCommand=`
+  names no host in the line it runs, so no host reaches the copy or the part it displaced, and a rule that asks or
+  logs on the host does not reach `ssh -o RemoteCommand='sudo echo hi > /srv/out' prod`. Before #454 that line was
+  logged the same way, as a costly `read` with no target, and the line without sudo misses the rule too. So this is
+  parity, not a lowering, and issue #493 covers it. ssh's own part still names the host, so a rule that denies it, and
+  a deny or reserved entry for it, still reach the line (D-075). The copy's summary names the write under the
+  displaced part's program only when the write is on that part's own command.
+  `sudo gh pr view 1 -R o/r; sudo echo hi > /tmp/f` read `gh pr view, write /tmp/f`, as if gh wrote the file, and now
+  reads `gh pr view; write /tmp/f`. A nested copy whose displaced part is on another command reads the same way. When
+  the line asks with the displaced part leading, the card links to that part. A `shell` part with no link, such as
+  `chmod`, falls back to the written path as its Link. The copy no longer checks whether that part is a third party,
+  since no `read` or `shell` part is one. Against main edeb4f89 the differential lowers and tightens no pair. The
+  built-in corpus (71,740 actions x 87 policies) changes nothing else either. 459 lines of sudo writes beside another
+  sudo command, after `;`, `&&`, `||` and `|`, behind wrappers, in `bash -c`, `sh -c`, ssh hops,
+  `ssh -o RemoteCommand=`, `xargs`, `$( )`, subshells, heredocs and cd chains (1,577 actions x 111 policies, 24 of
+  them keyed on the host, the repo, the path, categories, reserved and deny entries, escalations, third party and
+  `command`) change 108 pairs in their reason only, where a deny names the new summary. A second corpus of 1,270 lines
+  (24 other sudo commands beside a sudo write, the same nests, spellings of sudo and of the redirection, and everyday
+  `git`, `make` and `pytest` lines) under 20 more policies (4,014 actions x 107) changes 786 pairs, each only in the
+  summary its reason quotes.
   *Amendment 2026-10-22 (issue #316, follow-up to #240):* ssh's stdin reached its login shell in five more ways the
   gate did not see, so the line read as plain `ssh` and was allowed, even under category denies. (1) A compound fed a
   stdin the gate cannot read: the closer's `<` from anything but a lone `/dev/null`, or a pipe in whose text is not
@@ -2903,6 +2925,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   at the newest 12, in `_observe` and in `_carry_pins`: a deferral never expires on its own, and the
   uncapped list grew the pins file and the per-turn scan over it for the life of the session. The cap is
   the one the compaction block and the handoff already applied to the merged list.
+  *Amendment 2026-10-25 (#389):* the survival sentence of the #385 amendment holds until an undo, the core's or a
+  host's, removes the turn a pin came from. The D-041 amendment of 2026-10-24 has the details.
   *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
   downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
   decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
@@ -3024,6 +3048,62 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and keeps context notes. It also reaches the context plugin: `on_session_switch(rewound=True, messages=,
   summaries=)`. exo-context then drops the undone turns' pins and the deleted nodes, and writes again each
   automatic handoff that may quote them.
+  *Amendment 2026-10-24 (#389):* a host's undo reaches exo-context too. Hermes's CLI and TUI report `/undo` only to
+  their memory providers, as `on_session_switch(session, rewound=True)`, so the undone turn's pins stayed. The
+  per-turn block put the ruling back on every turn, and every later summary block and handoff carried it. exo-memory
+  now passes the session id on through `exo.host_undo`, a registry in the installed `exo` package that both plugins
+  share, and every exo-context engine listens (`on_host_undo`). Hermes's `/undo N` removes the last N user turns and
+  sends one notice. So when the window the engine saw last is that session's, its last user message opens an undone
+  turn. A pin goes when that turn holds it and nothing left in the window does. The test is the core path's, now one
+  shared helper. A pinned block holds nothing in it, since the block is the engine's own copy of the pins. The first
+  turn after the notice reads the host's whole transcript (`conversation_messages`): a pin the window held goes when
+  that transcript no longer holds it, so `/undo N` drops the pins of every turn it took. A pin whose message a
+  compaction folded stays on both steps, since its first message lives on in the summary. The engine notes those pins
+  at each compaction, so a ruling said again in the undone turn still stands. A compression child takes over its
+  parent's window, the pending undo and the folded pins, so an undo right after the move still reads them. Then the
+  window, the handoffs and the block's link are cleaned as after the core's undo, so a handoff a host's compaction
+  wrote before the undo is no longer linked. A drop is logged as counts per kind and the session id, never text.
+  Compaction drops no pin on its own. This corrects the survival sentence of the D-040 amendment for #385: what a
+  pinned block held survives compaction by the pins until an undo, the core's or a host's, removes the turn it came
+  from. Rejected: inferring the undo at compaction from the input, as #403 first did. Hermes's `/compress here N`
+  hands `compress` only the head of the history, so a live ruling in the held-out tail looked undone. Once a summary
+  row was in the input, nothing could be inferred at all. Not covered, six cases. Hermes's messaging gateway sends no
+  notice on `/undo`: it cuts the transcript and builds a new agent, so the pins stay (#389 stays open for it). A host
+  without exo-memory as its memory provider never passes the notice on. An undo before the engine has seen a turn of
+  that session since it started finds no window. After `/undo N`, the earlier turns' pins stay until the next turn,
+  and stay for good if none comes. A summary row and a handoff file written before the drop keep the ruling as written
+  until the next compaction folds the row and writes the file again. The folded pins live in memory, so after a
+  restart a ruling a compaction folded in an earlier run goes with an undone turn that says it again.
+  *2026-10-25 note (#389, review of #539):* five changes, and a new list of what is not covered. First, only the
+  engine that saw the session's last turn acts on a notice. Hermes can build a new agent on the same session (after
+  `/reasoning` or `/fast`, say), and the old engine stays registered until it is collected, with its old window and
+  its old copy of the pins. `exo.host_undo` numbers each session's turns, and an engine acts only when its last turn
+  has the latest number. Both undo steps read the pins file again before they write it. Second, the folded pins are
+  saved in the pins file as digests, each with the digests of the summary blocks it rides, and they follow the pins
+  to a compression child and a `/branch` child. So a restart or a new agent keeps them. Third, a folded pin stays
+  only while a summary row that carries it is left. Hermes keeps its first rows before its first summary row, so
+  `/undo N` can take that row too. A row carries a pin when its block was written by the compaction that folded the
+  pin's message, or by one that folded an earlier row that carried it. The rows a compaction kept are matched to its
+  input from the start up to its summary row, and from the end after it, each text as many times as the result holds
+  it. So a ruling said twice word for word, once in a folded turn and once in the kept tail, still counts as folded.
+  On the next turn, a pin the window showed, by its message or by such a row, goes when the transcript shows it no
+  longer. When no role alternates, Hermes merges its summary into the next row. That row's own message counts as
+  kept, not folded, and an undo of its turn keeps only the summary part. Fourth, a pending undo waits for its own
+  session's next turn. A second undo before that turn keeps the window the first one left, so the rows the second
+  one took still show there. A request for another session leaves it pending. So does a request that names no
+  session and carries no user message: Hermes names no session in `select_context`, so its `incoming_message` marks
+  a turn. Fifth, the next turn drops nothing unless the transcript reaches back to where the window started. It does
+  when it holds the window's first row or its summary part, or the summary row of a compaction since the undo that
+  folded either, or nothing before the turn's own message, which is an undo of every turn. A host that sent only the
+  turn's own message would read as that. Hermes sends its whole transcript. When `/undo N` cuts at a row Hermes
+  merged its summary into, Hermes keeps only that row's summary part. Any other transcript was cut short, not
+  undone, and the skip is logged with the
+  session id. Not covered now, six cases. Hermes's messaging gateway sends no notice (#537). Neither does the CLI
+  while it has no agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. A host
+  without exo-memory as its memory provider never passes the notice on. An undo before the engine has seen a turn
+  of that session since it started finds no window. After `/undo N`, the earlier turns' pins go only when a next
+  turn comes in the same agent, and a `/compress` between the last turn and the undo can keep them too. A summary
+  row and a handoff file written before the drop keep the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
@@ -3654,6 +3734,31 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   either the old view or the merged one, never a mix. Logic is in `src/exo/turn_settle.py`, outside the counted core.
 - **Validation:** `tests/core/test_turn_settle.py`, `tests/core/loop/test_loop.py`.
 - **Docs:** `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep".
+- *Amendment 2026-10-23 (issue #244):* the wait does not bound a private thread's call. Its own view ends at its
+  last summary, so every span after it rides in the tail, pending ones included, and a slow summarizer left those
+  calls unbounded, the first ones and the ones after the first leaves land. While that tree has leaves pending,
+  `cut_pending` in `src/exo/turn_settle.py` leaves out their spans, oldest first and a whole leaf at a time, until
+  what comes before the turn fits `view_budget`. An "[earlier messages are being summarized]" marker stands in
+  each gap. When a later leaf lands first, the view shows the pending ones before it verbatim. They are the
+  oldest, so they go first, each to the marker under its heading. The turn (from its user message, found by turn
+  id) and spans that are not pending (skipped, failed, or in no leaf yet) are never cut, and a call keeps its
+  results. Tool-call arguments count in full. A whole leaf at a time keeps the cached prefix until the cut must
+  grow. The private tree's turn also waits `overflow_settle` when the cut would apply, measured in full, so a leaf
+  the call just scheduled runs first and a fast summarizer leaves nothing to cut. That wait is for the private
+  tree's own leaves only: a job of the agent tree cannot shrink the cut, so it does not stretch the wait. The check
+  finds the turn by its turn id too, and when it finds no cut, the call reuses the tail it built. `/context` finds
+  the turn by the thread's last turn id, so during a turn it matches the call. The counted core grows by no line:
+  `build` and `report` call `thread_tail`, which wraps `_thread_tail`. Validation:
+  `tests/core/test_agent_context.py`, `tests/core/test_turn_settle.py`.
+  *2026-10-25, merged with main edeb4f89, and the reviews of f80c0444 by abu-aska and exo-36:* the view cut could
+  still drop the question. When the question's leaf is pending and a later leaf of the turn lands first, the view
+  shows the question verbatim, and the cut took that leaf to the marker. The cut now stops at the leaf that holds
+  the turn's first message, read from the store by turn id. Without a turn id the turn starts at the last user
+  message that is not a note, and before the tail when the tail holds none, so no stored message of the tail is
+  then cut. Both waits of a private tree, on overflow and before a cut, are for its own jobs only, leaves and
+  merges: a merge shrinks the view the cut counts. The overflow wait no longer waits for the agent tree's jobs
+  (#529), which shrink neither. `/context` matches the call during a turn. Between turns it keeps the last turn
+  whole, which the next turn's call can cut.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
