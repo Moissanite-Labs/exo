@@ -895,3 +895,699 @@ def test_a_tagged_dict_mints_no_pin(tmp_path):
     eng = ExoContextEngine(write_handoffs=False)
     eng.select_context([{"role": "system", "content": "sys"}, *_tagged(PEER), mine(MINE)], session_id="t370")
     assert pins(tmp_path, "t370") == {"ruling": [MINE], "correction": [], "open_decision": []}
+
+
+class HermesSummary:
+    """A Hermes-shaped host compressor with no on_session_switch: Hermes reports an undo to its memory providers,
+    not to the context engine. Its summary row is flagged and carries the compacted text, as the real
+    summarizer's notes do, and the last message stays as the protected tail."""
+
+    def compress(self, messages, **kw):
+        body = "\n\n".join(hf.message_text(m) for m in messages[1:-1])
+        summary = {"role": "user", "_compressed_summary": True,
+                   "content": "[CONTEXT COMPACTION] notes\n\n" + body + "\n\n" + END_LINE}
+        return [messages[0], summary, messages[-1]]
+
+
+SYS = {"role": "system", "content": "sys"}
+
+
+def ok(text="ok"):
+    return {"role": "assistant", "content": text}
+
+
+def host_undo(sid):
+    """What Hermes does on /undo: it tells its memory providers, and exo-memory passes the notice on (#389). The
+    caller drops the undone turn from the transcript it sends next, as Hermes does."""
+    from exo import host_undo as notice
+    notice.report(sid)
+
+
+def block_of(result):
+    return hf.parse_pinned_blocks(hf.message_text(result[1]))
+
+
+@pytest.mark.parametrize("tool", ["x = 1", "x = '[CONTEXT COMPACTION] Earlier turns'"])
+def test_a_host_undo_drops_the_pin_from_the_block_and_the_handoff(tmp_path, tool):
+    """#389, the issue's sequence: pin a ruling, /undo its turn the Hermes way, then compact twice. The undone
+    ruling leaves the pin store, the summary block and the handoff, and stays out. A tool row that quotes a
+    compaction marker changes nothing: compaction no longer decides what was undone (#403 review)."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.on_session_start("u1")
+    eng.select_context([SYS, mine("start the importer"), ok(), mine(MINE)])
+    host_undo("u1")
+    assert pins(tmp_path, "u1")["ruling"] == []
+    after = eng.compress([SYS, mine("start the importer"), ok(), {"role": "tool", "content": tool},
+                          mine("after the undo")], force=True)
+    assert block_of(after)["ruling"] == [] and hf.load_handoff(eng.last_handoff).rulings == []
+    later = eng.compress(after[:2] + [mine("next step"), mine("go on")], force=True)
+    assert block_of(later)["ruling"] == [] and hf.load_handoff(eng.last_handoff).rulings == []
+    assert pins(tmp_path, "u1")["ruling"] == []
+
+
+def test_a_host_undo_drops_only_the_undone_turns_pins(tmp_path):
+    """#389: the drop is surgical. Undoing the turn that holds NOTE keeps MINE, whose turn stays, and MINE still
+    rides the compactions that follow."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.on_session_start("u2")
+    eng.select_context([SYS, mine(MINE), ok(), mine(NOTE)])
+    assert pins(tmp_path, "u2")["ruling"] == [MINE, NOTE]
+    host_undo("u2")
+    assert pins(tmp_path, "u2")["ruling"] == [MINE]
+    second = eng.compress([SYS, mine(MINE), ok(), mine("carry on")], force=True)
+    assert block_of(second)["ruling"] == [MINE] and hf.load_handoff(eng.last_handoff).rulings == [MINE]
+    third = eng.compress(second[:2] + [mine("next step"), mine("go on")], force=True)
+    assert block_of(third)["ruling"] == [MINE]  # continuity holds
+
+
+def test_a_held_out_tail_keeps_its_ruling(tmp_path):
+    """#403 review, blocking: Hermes `/compress here 2` hands compress only the head of the history and holds the
+    last exchanges out, to join them back after. A ruling in that tail is live: it stays in the pins, the summary
+    block and the handoff written at that compaction."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.on_session_start("u3")
+    rows = [SYS, mine("start the importer"), ok(), mine("now the parser"), ok("done"), mine(MINE), ok("noted"),
+            mine("carry on")]
+    eng.select_context(rows)
+    out = eng.compress(rows[:4], force=True)
+    assert block_of(out)["ruling"] == [MINE] and hf.load_handoff(eng.last_handoff).rulings == [MINE]
+    assert pins(tmp_path, "u3")["ruling"] == [MINE]
+
+
+def test_a_host_undo_after_a_compaction_drops_the_pin(tmp_path):
+    """#403 review: Hermes persists its summary row and sends it with every later turn and compaction. A ruling
+    said after the first compaction and then undone leaves the pins, the next turn's block, the next summary block
+    and its handoff, with the summary row still in the input."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.on_session_start("u4")
+    first = eng.compress([SYS, mine("start the importer"), ok(), mine("go on")], force=True)
+    assert first[1]["_compressed_summary"]
+    eng.select_context(first + [ok(), mine(MINE)])
+    host_undo("u4")
+    left = first + [ok(), mine("next step")]
+    out = eng.select_context(left)
+    assert out is None or MINE not in hf.message_text(out[0])
+    second = eng.compress(left + [ok("fine"), mine("go on again")], force=True)
+    assert block_of(second)["ruling"] == [] and hf.load_handoff(eng.last_handoff).rulings == []
+    assert pins(tmp_path, "u4")["ruling"] == []
+
+
+def test_the_per_turn_block_drops_a_host_undone_ruling(tmp_path):
+    """#389's first symptom: after a Hermes /undo, the per-turn block put the undone ruling back into the system
+    message on every later turn. It is gone from the next turn on, with no compaction between."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.on_session_start("u5")
+    eng.select_context([SYS, mine("start the importer"), ok(), mine(MINE)])
+    host_undo("u5")
+    convo = [SYS, mine("start the importer"), ok()]
+    for i in range(3):
+        convo += [mine(f"step {i}")]
+        out = eng.select_context(list(convo))
+        assert out is None or MINE not in hf.message_text(out[0])
+        convo += [ok("done")]
+
+
+def test_a_host_undo_drops_a_ruling_a_compaction_kept_in_its_tail(tmp_path):
+    """#403 review: the ruling sat in the protected tail of the first compaction, and its turn was undone after.
+    The next summary block and handoff leave it out. The first summary row keeps its block as written."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.on_session_start("u6")
+    convo = [SYS, mine("start the importer"), ok(), mine(MINE)]
+    eng.select_context(convo)
+    first = eng.compress(convo, force=True)
+    assert block_of(first)["ruling"] == [MINE]
+    host_undo("u6")
+    second = eng.compress(first[:2] + [mine("next step"), mine("go on")], force=True)
+    assert block_of(second)["ruling"] == [] and hf.load_handoff(eng.last_handoff).rulings == []
+    assert pins(tmp_path, "u6")["ruling"] == []
+
+
+@pytest.mark.parametrize("turn_in_child", [True, False])
+def test_a_host_undo_in_a_compression_child_drops_the_pin(tmp_path, turn_in_child):
+    """#403 review: with compression.in_place false, Hermes moves to a child session after a compaction, and the
+    pins follow (#391). An undo in the child drops the pin, whether the ruling was said in the child or was the
+    parent's last turn, carried in the child's tail. The parent's own pins keep it in that second case."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.on_session_start("c0")
+    convo = [SYS, mine("start the importer"), ok(), mine("go on" if turn_in_child else MINE)]
+    eng.select_context(convo)
+    first = eng.compress(convo, force=True)
+    eng.on_session_start("c1", boundary_reason="compression", old_session_id="c0")
+    if turn_in_child:
+        eng.select_context(first + [ok(), mine(MINE)])
+    host_undo("c1")
+    assert pins(tmp_path, "c1")["ruling"] == []
+    second = eng.compress(first[:2] + [ok(), mine("next step")], force=True)
+    assert block_of(second)["ruling"] == [] and hf.load_handoff(eng.last_handoff).rulings == []
+    parent = tmp_path / "exo-home" / "context-pins" / "c0.json"
+    assert (json.loads(parent.read_text())["ruling"] if parent.exists() else []) == ([] if turn_in_child else [MINE])
+
+
+@pytest.mark.parametrize("opener", ["[CONTEXT COMPACTION]", "[Context summary]", "<compaction-summary>",
+                                    "## Compaction summary", "Summary of earlier conversation:", None])
+def test_compaction_drops_no_pin_on_its_own(tmp_path, opener):
+    """#403 review: with nothing undone, a compaction keeps every pin, whatever its input. A host summary row with
+    no flag and any opener exo.capture knows folded the ruling; a transcript from another session holds none of
+    this session's turns (None). Neither is a reason to drop a pin."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.select_context([SYS, mine(MINE), mine("go on")], session_id="B")
+    if opener is None:
+        rows = [SYS, mine("unrelated work"), ok(), mine("go on")]
+    else:
+        rows = [SYS, {"role": "user", "content": opener + " earlier: the report language was set."},
+                mine("go on"), mine("next")]
+    out = eng.compress(rows, force=True)
+    assert block_of(out)["ruling"] == [MINE] and pins(tmp_path, "B")["ruling"] == [MINE]
+
+
+def test_a_host_undo_keeps_a_pin_still_quoted_in_the_window(tmp_path):
+    """The undo test's backstop: a pin stays while a principal message left in the window quotes it, even where that
+    message classifies as something longer than the pin."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.on_session_start("hq")
+    quoted = f'Earlier I wrote "{MINE}" and I still mean it for the docs.'
+    eng.select_context([SYS, mine(quoted), ok(), mine(MINE)])
+    host_undo("hq")
+    assert pins(tmp_path, "hq")["ruling"] == [quoted, MINE]
+
+
+def test_a_summary_rows_pinned_block_holds_no_pin(tmp_path):
+    """Hermes compacts at the start of a turn and sends the compacted transcript, so the summary row's block lists
+    the ruling while the ruling's own turn is still the tail. That block is the engine's copy of its pins, not their
+    source: undoing the turn drops the pin."""
+    eng = ExoContextEngine(inner=HermesSummary(), handoff_dir=tmp_path / "h")
+    eng.on_session_start("hb")
+    first = eng.compress([SYS, mine("start the importer"), ok(), mine(MINE)], force=True)
+    assert block_of(first)["ruling"] == [MINE]
+    eng.select_context(first)
+    host_undo("hb")
+    assert pins(tmp_path, "hb")["ruling"] == []
+
+
+def test_two_host_undos_drop_two_turns(tmp_path):
+    """Each /undo removes one more turn: the second notice reads the window the first one left."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.on_session_start("u10")
+    eng.select_context([SYS, mine(MINE), ok(), mine(NOTE), ok(), mine("carry on")])
+    host_undo("u10")
+    assert pins(tmp_path, "u10")["ruling"] == [MINE, NOTE]
+    host_undo("u10")
+    assert pins(tmp_path, "u10")["ruling"] == [MINE]
+
+
+def test_a_host_undo_of_another_session_drops_nothing(tmp_path):
+    """A notice names a session. An engine whose last window is another session's, or that has seen no window,
+    cannot tell what was undone and keeps every pin."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine(MINE)], session_id="x1")
+    host_undo("x2")
+    host_undo("")
+    assert pins(tmp_path, "x1")["ruling"] == [MINE]
+    idle = ExoContextEngine(write_handoffs=False)
+    idle.on_session_start("x1")
+    host_undo("x1")  # the first engine's window is x1's: only it acts
+    assert pins(tmp_path, "x1")["ruling"] == []
+
+
+def test_a_host_undo_logs_counts_and_the_session_not_text(tmp_path, caplog):
+    """A drop is logged as the number dropped per kind and the session id. No message text is logged."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.on_session_start("u11")
+    parked = "Let's park this: the deploy region is still undecided."
+    eng.select_context([SYS, mine("start"), ok(), mine(MINE + " " + parked)])
+    with caplog.at_level("INFO", logger="exo_context.engine"):
+        host_undo("u11")
+    lines = [r.getMessage() for r in caplog.records if r.name == "exo_context.engine"]
+    assert lines == ["exo-context: an undo in session u11 dropped 1 ruling, 0 correction, 1 open_decision"]
+    assert "British" not in caplog.text and "deploy" not in caplog.text
+
+
+class Paraphrase(HermesSummary):
+    """A host summary that names what it folded in its own words, as a model's summary does."""
+
+    def compress(self, messages, **kw):
+        summary = {"role": "user", "_compressed_summary": True,
+                   "content": f"[CONTEXT COMPACTION] {len(messages) - 2} earlier rows.\n\n" + END_LINE}
+        return [messages[0], summary, messages[-1]]
+
+
+class Hermes:
+    """Drives the engine as Hermes's CLI does. Each turn sends the request with the whole transcript as
+    conversation_messages, then on_turn_complete. /undo N cuts the last N user turns and sends one notice."""
+
+    def __init__(self, tmp_path, sid, inner=None):
+        self.eng = ExoContextEngine(inner=inner or Paraphrase(), handoff_dir=tmp_path / "h")
+        self.sid, self.history = sid, []
+        self.eng.on_session_start(sid)
+
+    def turn(self, text):
+        self.history.append(mine(text))
+        out = self.eng.select_context([SYS, *self.history], conversation_messages=list(self.history),
+                                      incoming_message=self.history[-1], budget_tokens=0)
+        self.history.append(ok())
+        self.eng.on_turn_complete(list(self.history), usage=None, turn_id="t", interrupted=False)
+        return out
+
+    def undo(self, n=1):
+        users = [i for i, m in enumerate(self.history) if m["role"] == "user" and not m.get("_compressed_summary")]
+        self.history = self.history[:users[-n]]
+        host_undo(self.sid)
+
+    def compress(self):
+        self.history = self.eng.compress(list(self.history), force=True)
+        return self.history
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_an_undo_of_two_turns_drops_both_turns_pins(tmp_path, compact):
+    """Hermes's /undo N takes N turns with one notice. The notice drops the last turn's pins at once, and the next
+    turn's transcript shows the earlier ones went too. A compaction between, as Hermes runs at the start of a turn,
+    changes nothing, and a ruling it folded stays."""
+    h = Hermes(tmp_path, "n2")
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    assert pins(tmp_path, "n2")["ruling"] == [NOTE, MINE]  # one notice: only the last turn is known yet
+    if compact:  # NOTE is folded: the summary names it only in its own words
+        assert NOTE not in hf.strip_pinned(hf.message_text(h.compress()[1]))
+    out = h.turn("next step")
+    assert pins(tmp_path, "n2")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+    assert block_of(h.compress())["ruling"] == [NOTE]
+
+
+@pytest.mark.parametrize("again", [MINE, f"As I said: {MINE} Now write the summary."])
+def test_an_undo_keeps_a_ruling_a_compaction_folded(tmp_path, again):
+    """A ruling said once, folded into a summary, then said again in a turn that is undone, still stands: its first
+    message is in the summary. Only a pin the undone turn added goes."""
+    h = Hermes(tmp_path, "f1")
+    for text in ("start the importer", MINE, "now the parser"):
+        h.turn(text)
+    h.compress()
+    h.turn("next step")
+    h.turn(again)
+    h.undo()
+    assert pins(tmp_path, "f1")["ruling"] == [MINE]
+    h.turn("write the summary")
+    assert pins(tmp_path, "f1")["ruling"] == [MINE] and block_of(h.compress())["ruling"] == [MINE]
+
+
+def test_the_turn_after_an_undo_drops_nothing_still_held(tmp_path):
+    """After a one-turn undo, the next turn drops nothing more: what the transcript still holds stays, and so does a
+    pin from an earlier run whose message is not in this window. The link to a handoff written since stays."""
+    (tmp_path / "exo-home" / "context-pins").mkdir(parents=True)
+    (tmp_path / "exo-home" / "context-pins" / "k1.json").write_text(json.dumps({"ruling": [PEER]}))
+    h = Hermes(tmp_path, "k1", inner=HermesSummary())
+    for text in (MINE, "now the parser", NOTE):
+        h.turn(text)
+    h.undo()
+    h.compress()
+    linked = h.eng.last_handoff
+    h.turn("next step")
+    assert pins(tmp_path, "k1")["ruling"] == [PEER, MINE] and h.eng.last_handoff == linked
+
+
+def test_an_undo_reads_the_next_turn_of_its_own_session_only(tmp_path):
+    """A pending undo is checked against its own session's next turn: a turn in a session resumed in between, or a
+    request with no transcript, drops nothing."""
+    h = Hermes(tmp_path, "a1")
+    for text in (MINE, "now the parser", "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    h.eng.bind_session_state(FakeSessionDB({}), "b1")  # /resume b1 before a1's next turn
+    h.eng.select_context([SYS, mine("hello")], conversation_messages=[mine("hello")])
+    assert pins(tmp_path, "a1")["ruling"] == [MINE]
+    g = Hermes(tmp_path, "a2")
+    for text in (MINE, "now the parser", "and the writer"):
+        g.turn(text)
+    g.undo(2)
+    g.eng.select_context([SYS, mine("hello")])  # a host that sends no transcript keeps the earlier turns' pins
+    assert pins(tmp_path, "a2")["ruling"] == [MINE]
+
+
+def test_an_undo_of_two_turns_carries_into_a_compression_child(tmp_path):
+    """With compression.in_place false, a compaction at the start of the next turn moves Hermes to a child session.
+    The pending undo and what the compaction folded move with the window, so the child drops the earlier undone
+    turn's pin and keeps the folded one."""
+    h = Hermes(tmp_path, "p0")
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    h.compress()
+    h.eng.on_session_start("p1", boundary_reason="compression", old_session_id="p0")
+    h.turn("next step")
+    assert pins(tmp_path, "p1")["ruling"] == [NOTE]
+
+
+class Head(Paraphrase):
+    """A host summary that keeps the first three rows before it, as Hermes's protect_first_n does at its first
+    compaction, so the first turns sit before the summary row."""
+
+    def compress(self, messages, **kw):
+        return messages[:2] + super().compress(messages[2:], **kw)
+
+
+def summary_block(result):
+    return hf.parse_pinned_blocks(hf.message_text(next(m for m in result if m.get("_compressed_summary"))))
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_a_host_undo_acts_only_in_the_engine_that_ran_the_last_turn(tmp_path, compact):
+    """abu-aska 5641720480, blocking: Hermes can build a new agent on the same session (after /reasoning or /fast,
+    say), and the old engine may live on. Only the engine that ran the session's last turn acts on an undo, so the
+    old one's window and stale pins never reach the pins file, before or after the next turn or a restart."""
+    old = Hermes(tmp_path, "r1")
+    old.turn(MINE)
+    new = Hermes(tmp_path, "r1")  # the rebuilt agent's engine, on the same session and transcript
+    new.history = list(old.history)
+    new.turn(NOTE)
+    if compact:
+        new.compress()
+    new.turn("next step")
+    new.undo()
+    assert pins(tmp_path, "r1")["ruling"] == [MINE, NOTE]
+    new.turn("go on")
+    assert pins(tmp_path, "r1")["ruling"] == [MINE, NOTE]
+    assert ExoContextEngine(write_handoffs=False)._load_pins("r1")["ruling"] == [MINE, NOTE]
+    assert old.eng._x_window_sid == "r1"  # the old engine is still alive, on the same session
+
+
+@pytest.mark.parametrize("when", ["notice", "next turn"])
+def test_an_undo_reads_the_pins_file_again_first(tmp_path, when):
+    """abu-aska 5641720480, blocking: another engine on the session may write the pins file between this engine's
+    turns, with a compaction say. An undo reads the file again before it writes, at the notice and on the next turn,
+    so it never writes a stale copy over the other engine's pins. PEER is pinned there by a compaction of rows this
+    transcript never held, so the undo keeps it."""
+    h = Hermes(tmp_path, "d1")
+    for text in ("start the importer", MINE, NOTE):
+        h.turn(text)
+    other = ExoContextEngine(inner=Paraphrase(), handoff_dir=tmp_path / "h")
+    other.on_session_start("d1")
+    if when == "notice":
+        other.compress([mine("start"), mine(PEER), mine("go on")], force=True)
+    h.undo(2)
+    if when == "next turn":
+        other.compress([mine("start"), mine(PEER), mine("go on")], force=True)
+    h.turn("next step")
+    assert pins(tmp_path, "d1")["ruling"] == [PEER]
+
+
+@pytest.mark.parametrize("how", ["restart", "rebuild", "branch"])
+def test_a_folded_ruling_outlives_the_engine_that_folded_it(tmp_path, how):
+    """abu-aska 5641720480 should fix, exo-36 5642154107 item 4: what a compaction folded is saved with the pins and
+    carried with them. A folded ruling said again in a turn that is undone still stands in a new engine (a restart,
+    or the agent Hermes builds after /reasoning) and in a /branch child."""
+    h = Hermes(tmp_path, "g1")
+    for text in ("start the importer", MINE, "now the parser"):
+        h.turn(text)
+    h.compress()
+    if how == "branch":
+        h.eng.bind_session_state(FakeSessionDB({"g2": "g1"}), "g2")
+        h.sid = "g2"
+    else:
+        h.eng = h.eng.clone_for_agent() if how == "rebuild" else ExoContextEngine(
+            inner=Paraphrase(), handoff_dir=tmp_path / "h")
+        h.eng.on_session_start("g1")
+    h.turn(f"As I said: {MINE} Now write the summary.")
+    h.undo()
+    assert pins(tmp_path, h.sid)["ruling"] == [MINE]
+    h.turn("write the summary")
+    assert pins(tmp_path, h.sid)["ruling"] == [MINE] and block_of(h.compress())["ruling"] == [MINE]
+
+
+@pytest.mark.parametrize("n", [2, 3])
+def test_an_undo_past_the_summary_drops_the_ruling_it_folded(tmp_path, n):
+    """exo-36 5642154107, blocking 1: Hermes keeps its first rows before its first summary row, so /undo N can reach
+    a turn there and take the summary row too (n=3 takes every turn). A ruling that row folded then goes from the
+    pins, the next turn's block and the next summary block. With the summary row kept, it stays."""
+    h = Hermes(tmp_path, "w1", inner=Head())
+    for text in ("start the importer", "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.compress()
+    assert MINE not in hf.strip_pinned(hf.message_text(h.history[3]))
+    h.turn("next step")
+    h.undo(n)
+    assert pins(tmp_path, "w1")["ruling"] == [MINE]  # one notice: only the last turn is known yet
+    out = h.turn("write the summary")
+    assert pins(tmp_path, "w1")["ruling"] == [] and (out is None or MINE not in hf.message_text(out[0]))
+    h.turn("go on")
+    assert summary_block(h.compress())["ruling"] == []
+
+
+class Carrier(Paraphrase):
+    """Hermes's summary merged into the first tail row, as Hermes does when no role alternates: the summary and its
+    end marker lead, then the row's own text. An undo of that row's turn keeps the part up to the end marker."""
+
+    def compress(self, messages, **kw):
+        summary = super().compress(messages, **kw)[1]
+        return [messages[0], {**messages[-1], "_compressed_summary": True,
+                              "content": summary["content"] + "\n\n" + hf.message_text(messages[-1])}]
+
+
+@pytest.mark.parametrize("ask", [NOTE, f"As I said: {MINE} Now write the summary."])
+def test_an_undo_of_a_turn_hermes_merged_its_summary_into(tmp_path, ask):
+    """A compaction at the start of a turn can merge the summary into that turn's message. Undoing the turn keeps
+    the summary part of the row. A ruling the message said goes, since the compaction kept that message rather than
+    folding it. A folded ruling the message says again stays, since the summary that folded it is still there."""
+    h = Hermes(tmp_path, "m1", inner=Carrier())
+    for text in ("start the importer", MINE):
+        h.turn(text)
+    h.history = h.eng.compress([*h.history, mine(ask)], force=True)  # Hermes compacts before the request
+    carrier = h.history[-1]
+    h.eng.select_context([SYS, *h.history], conversation_messages=list(h.history), incoming_message=carrier)
+    h.eng.on_turn_complete([*h.history, ok()], usage=None)
+    text = hf.message_text(carrier)
+    h.history[-1] = {**carrier, "content": text[:text.index(END_LINE) + len(END_LINE)]}
+    host_undo("m1")
+    assert pins(tmp_path, "m1")["ruling"] == [MINE]
+    h.turn("write the summary")
+    assert pins(tmp_path, "m1")["ruling"] == [MINE]
+
+
+class Quoting(Paraphrase):
+    """A summary that quotes the principal's short messages whole, as Hermes's summarizer is asked to, in the role
+    the host picked for its row. The last row stays as the tail."""
+
+    def __init__(self, role):
+        self.role = role
+
+    def compress(self, messages, **kw):
+        said = [hf.message_text(m) for m in messages[1:-1] if m.get("role") == "user"]
+        return [messages[0], {"role": self.role, "_compressed_summary": True,
+                              "content": "[CONTEXT COMPACTION] The user said:\n" + "\n".join(said) + "\n\n" + END_LINE},
+                messages[-1]]
+
+
+@pytest.mark.parametrize("role", ["user", "assistant"])
+def test_a_summary_that_quotes_the_last_message_it_folded_still_folds_it(tmp_path, role):
+    """A summary row that quotes the last message it folded is no merged row: Hermes merges into a row of that row's
+    own role. So the ruling still rides the summary row, also in an assistant row, whose text holds no pin, and an
+    undone turn that says it again does not drop it."""
+    h = Hermes(tmp_path, f"qf-{role}", inner=Quoting(role))
+    for text in ("start the importer", MINE):
+        h.turn(text)
+    h.compress()  # the tail is the last reply, so MINE's message is the last row folded
+    assert MINE in hf.message_text(h.history[1])
+    h.turn("next step")
+    h.turn(f"As I said: {MINE} Now write the summary.")
+    h.undo()
+    assert pins(tmp_path, f"qf-{role}")["ruling"] == [MINE]
+    h.turn("write the summary")
+    assert pins(tmp_path, f"qf-{role}")["ruling"] == [MINE]
+
+
+@pytest.mark.parametrize("how", ["resume", "session_id"])
+def test_an_undo_waits_for_its_own_sessions_next_turn(tmp_path, how):
+    """exo-36 5642154107, blocking 2: a turn of another session between /undo 2 and the session's own next turn
+    leaves the undo pending, so the earlier undone turn's pin still goes on that next turn. Hermes rebinds the
+    engine on /resume; the core names the session in each call."""
+    h = Hermes(tmp_path, "i1")
+    for text in ("start the importer", MINE, "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    assert pins(tmp_path, "i1")["ruling"] == [MINE]
+    hello = [mine("hello")]
+    if how == "resume":
+        h.eng.bind_session_state(FakeSessionDB({}), "i2")  # /resume i2, one turn there, then /resume i1
+        h.eng.select_context([SYS, *hello], conversation_messages=hello, incoming_message=hello[0])
+        h.eng.bind_session_state(FakeSessionDB({}), "i1")
+        out = h.turn("next step")
+    else:
+        h.eng.select_context([SYS, *hello], session_id="i2", conversation_messages=hello)
+        h.history.append(mine("next step"))
+        out = h.eng.select_context([SYS, *h.history], session_id="i1", conversation_messages=list(h.history))
+    assert pins(tmp_path, "i1")["ruling"] == [] and (out is None or MINE not in hf.message_text(out[0]))
+
+
+def test_a_transcript_cut_short_is_no_undo(tmp_path, caplog):
+    """exo-36 5642154107, item 3: a transcript that does not start where the window did was cut short, not undone.
+    The next turn keeps the pins and logs that it dropped none, with the session id and no text. The whole transcript
+    keeps them too."""
+    h = Hermes(tmp_path, "s1")
+    for text in (MINE, "now the parser", "and the writer", "one more"):
+        h.turn(text)
+    h.undo(2)
+    tail = [*h.history[-2:], mine("next step")]
+    with caplog.at_level("INFO", logger="exo_context.engine"):
+        h.eng.select_context([SYS, *tail], conversation_messages=tail, incoming_message=tail[-1])
+    assert pins(tmp_path, "s1")["ruling"] == [MINE]
+    assert [r.getMessage() for r in caplog.records if r.name == "exo_context.engine"] == [
+        "exo-context: the transcript after an undo in session s1 does not start where the window did, so no pin was "
+        "dropped"]
+    assert "British" not in caplog.text
+
+
+def test_a_transcript_cut_short_at_a_summary_row_is_no_undo(tmp_path):
+    """Only the window's first row, or the summary part Hermes keeps of it, shows that a transcript reaches back. A
+    later summary row does not, so a transcript cut short to start there drops nothing."""
+    h = Hermes(tmp_path, "s2")
+    for text in (MINE, "now the parser", "and the writer"):
+        h.turn(text)
+    h.compress()
+    h.turn("and the tests")
+    h.undo()
+    tail = [*h.history[1:], mine("next step")]
+    assert tail[0].get("_compressed_summary")
+    h.eng.select_context([SYS, *tail], conversation_messages=tail, incoming_message=tail[-1])
+    assert pins(tmp_path, "s2")["ruling"] == [MINE]
+
+
+class NoHead(Paraphrase):
+    """A later Hermes compaction, which keeps no first rows: its summary row opens the transcript."""
+
+    def compress(self, messages, **kw):
+        return super().compress(messages, **kw)[1:]
+
+
+def test_an_undo_reads_a_transcript_a_compaction_rewrote_since(tmp_path):
+    """abu-aska 5641720480, nit 2: a compaction can run between /undo N and the next turn (Hermes compacts at the
+    start of a turn, and /compress runs any time). Its summary row then opens the transcript in place of the window's
+    first row. The transcript still reaches back to where the window started, so the next turn drops the earlier
+    undone turn's pin and keeps the ruling the compaction folded."""
+    h = Hermes(tmp_path, "z1", inner=NoHead())
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    assert NOTE not in hf.strip_pinned(hf.message_text(h.compress()[0]))
+    h.turn("next step")
+    assert pins(tmp_path, "z1")["ruling"] == [NOTE]
+
+
+class Later(Carrier):
+    """A later Hermes compaction, which keeps no first rows. It merges its summary into the row of the turn it runs
+    in, which then opens the transcript, or (merge off) writes a summary row of its own before that row."""
+
+    merge = True
+
+    def compress(self, messages, **kw):
+        return (super().compress(messages, **kw) if self.merge else Paraphrase.compress(self, messages, **kw))[1:]
+
+
+@pytest.mark.parametrize("case", ["block", "no block", "compact"])
+def test_an_undo_that_cuts_at_the_row_hermes_merged_its_summary_into(tmp_path, case):
+    """The row a later compaction merged its summary into opens the transcript. /undo 3 cuts at it, and Hermes keeps
+    only its summary part, so the window's first row is gone as it was. That part still shows that the transcript
+    reaches back, with a pinned block in it or none (no pin yet when it was written), and so does the summary row of
+    a compaction before the next turn that folds it. So that turn drops the pins of every undone turn, the merged
+    row's own message included, and keeps the ruling the summary folded."""
+    tabs = "From now on, always use tabs in the Makefile."
+    folded, ask = ("now the parser", "and the writer") if case == "no block" else (MINE, NOTE)
+    h = Hermes(tmp_path, "lc", inner=Later())
+    for text in ("start the importer", folded):
+        h.turn(text)
+    h.history = h.eng.compress([*h.history, mine(ask)], force=True)  # Hermes compacts before the request
+    assert (hf.PIN_OPEN in hf.message_text(h.history[0])) == (case != "no block")
+    h.eng.select_context([SYS, *h.history], conversation_messages=list(h.history), incoming_message=h.history[-1])
+    h.eng.on_turn_complete([*h.history, ok()], usage=None)
+    h.history.append(ok())
+    for text in (tabs, "next step"):
+        h.turn(text)
+    text = hf.message_text(h.history[0])
+    h.history = [{**h.history[0], "content": text[:text.index(END_LINE) + len(END_LINE)]}]  # /undo 3
+    host_undo("lc")
+    assert pins(tmp_path, "lc")["ruling"] == ([tabs] if case == "no block" else [MINE, NOTE, tabs])
+    if case == "compact":  # Hermes compacts at the start of the next turn
+        h.eng.inner.merge = False
+        h.history = h.eng.compress([*h.history, mine("write the summary")], force=True)
+        h.eng.select_context([SYS, *h.history], conversation_messages=list(h.history), incoming_message=h.history[-1])
+    else:
+        h.turn("write the summary")
+    assert pins(tmp_path, "lc")["ruling"] == ([] if case == "no block" else [MINE])
+
+
+def test_a_ruling_said_twice_word_for_word_rides_the_summary_that_folded_one(tmp_path):
+    """A ruling said twice word for word, in a turn a compaction folds and in the turn it keeps as its tail, rides
+    the summary row: the folded copy counts as folded, though the kept one has the same text. So an undo of the kept
+    turn keeps the ruling, at the notice and on the next turn."""
+    h = Hermes(tmp_path, "tw")
+    for text in ("start the importer", MINE, "now the parser"):
+        h.turn(text)
+    h.history = h.eng.compress([*h.history, mine(MINE)], force=True)  # Hermes compacts before the request
+    assert hf.message_text(h.history[-1]) == MINE and MINE not in hf.strip_pinned(hf.message_text(h.history[1]))
+    h.eng.select_context([SYS, *h.history], conversation_messages=list(h.history), incoming_message=h.history[-1])
+    h.history.append(ok())
+    h.eng.on_turn_complete(list(h.history), usage=None)
+    h.undo()
+    assert pins(tmp_path, "tw")["ruling"] == [MINE]
+    h.turn("write the summary")
+    assert pins(tmp_path, "tw")["ruling"] == [MINE]
+
+
+class TailCarrier(Paraphrase):
+    """A later Hermes compaction that keeps the last three rows, its summary merged into the first of them."""
+
+    def compress(self, messages, **kw):
+        summary = super().compress(messages, **kw)[1]
+        tail = [dict(m) for m in messages[-3:]]
+        tail[0] = {**tail[0], "_compressed_summary": True,
+                   "content": summary["content"] + "\n\n" + hf.message_text(tail[0])}
+        return tail
+
+
+def test_the_row_hermes_merged_its_summary_into_counts_as_kept_beside_repeated_replies(tmp_path):
+    """The rows a compaction kept after its summary row are matched from the end. So with replies of the same text in
+    the part it folded, the message Hermes merged its summary into still counts as kept, not folded, and /undo 2 that
+    cuts at that row drops its ruling on the next turn."""
+    h = Hermes(tmp_path, "rr", inner=TailCarrier())
+    for text in ("start the importer", "now the parser", MINE):
+        h.turn(text)
+    h.history = h.eng.compress([*h.history, mine("next step")], force=True)  # the tail: MINE, its reply, next step
+    assert len(h.history) == 3 and hf.message_text(h.history[0]).endswith(MINE)
+    h.eng.select_context([SYS, *h.history], conversation_messages=list(h.history), incoming_message=h.history[-1])
+    h.history.append(ok())
+    h.eng.on_turn_complete(list(h.history), usage=None)
+    text = hf.message_text(h.history[0])
+    h.history = [{**h.history[0], "content": text[:text.index(END_LINE) + len(END_LINE)]}]  # /undo 2
+    host_undo("rr")
+    assert pins(tmp_path, "rr")["ruling"] == [MINE]  # one notice: only the last turn is known yet
+    h.turn("write the summary")
+    assert pins(tmp_path, "rr")["ruling"] == []
+
+
+def test_a_second_undo_before_the_next_turn_keeps_the_first_ones_window(tmp_path):
+    """Two undos before the next turn. /undo 2 reaches a turn before the summary row, so the row goes too, then
+    /undo 1 takes the first turn. The second notice leaves the next turn the window the first one saw, which still
+    shows the summary row, so that turn drops the ruling the row folded."""
+    h = Hermes(tmp_path, "uu", inner=Head())
+    for text in ("start the importer", "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.compress()
+    h.turn("next step")
+    h.undo(2)
+    h.undo(1)
+    assert pins(tmp_path, "uu")["ruling"] == [MINE]  # the notices show only the turns after the summary row
+    h.turn("write the summary")
+    assert pins(tmp_path, "uu")["ruling"] == []
+
+
+def test_a_request_that_is_no_turn_leaves_an_undo_pending(tmp_path):
+    """exo-36 5642154107, nit 5: Hermes names no session in select_context, so the engine cannot skip a request for
+    lack of one. It sends the turn's user message as incoming_message. A request with neither, here with a transcript
+    of its own, is not the session's next turn: it drops nothing, and that next turn still takes the earlier turn."""
+    h = Hermes(tmp_path, "q1")
+    for text in (MINE, "now the parser", NOTE, "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    h.eng.select_context([SYS, mine("hello")], conversation_messages=[mine("hello")])
+    assert pins(tmp_path, "q1")["ruling"] == [MINE, NOTE]
+    h.turn("next step")
+    assert pins(tmp_path, "q1")["ruling"] == [MINE]

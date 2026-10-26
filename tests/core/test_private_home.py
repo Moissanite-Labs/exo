@@ -127,6 +127,210 @@ def test_private_dir_rejects_symlink_parent(tmp_path):
     assert mode(target) == 0o755
 
 
+def test_atomic_write_mode_none_does_not_race_the_umask_probe(tmp_path, monkeypatch):
+    """Without /proc (macOS, which the README supports), `_umask()` probes by setting the mask to 077 and
+    restoring it. Unlocked, concurrent `atomic_write(..., mode=None)` calls interleaved set and restore: files
+    came out 0600 under a 022 mask, and a run could leave the whole process at 077 (#317). The probe is locked
+    now, so every file takes the mask the process started with and the mask is unchanged afterwards."""
+    import builtins
+    import sys
+    import threading
+
+    from exo.core.private import atomic_write
+
+    real_open = builtins.open
+
+    def no_proc(file, *args, **kwargs):
+        if str(file) == "/proc/self/status":
+            raise OSError("no /proc on this platform")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", no_proc)
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        def write(t):
+            for i in range(300):
+                atomic_write(tmp_path / f"f{t}-{i}", b"x", mode=None, sync=False)
+
+        threads = [threading.Thread(target=write, args=(t,)) for t in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+    finally:
+        sys.setswitchinterval(interval)
+    files = list(tmp_path.iterdir())
+    assert len(files) == 8 * 300 and all(mode(p) == 0o644 for p in files)
+    now = os.umask(0o022)
+    os.umask(now)
+    assert now == 0o022
+
+
+def _no_proc(monkeypatch):
+    """`_umask()` as it runs without /proc (macOS): by the set-and-restore probe."""
+    from exo.core import private
+
+    def no_proc(*a, **k):
+        raise FileNotFoundError("/proc/self/status")
+    monkeypatch.setattr(private, "open", no_proc, raising=False)
+    return private
+
+
+def test_a_umask_block_and_the_probe_share_one_lock(tmp_path, monkeypatch):
+    """The socket bind in server/app.py set the mask to 0177 and restored it outside the probe's lock. Beside the
+    probe, the process could be left at 0177 or 077 (#317 review). A `umask` block holds the probe's lock, so a
+    thread looping one beside 8 writers leaves every file 0644 and the mask at 022."""
+    import sys
+    import threading
+
+    private = _no_proc(monkeypatch)
+    umask, stop = private.umask, threading.Event()
+
+    def bind():
+        while not stop.is_set():
+            with umask(0o177):
+                pass
+
+    def write(t):
+        for i in range(300):
+            private.atomic_write(tmp_path / f"f{t}-{i}", b"x", mode=None, sync=False)
+
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    binder, writers = threading.Thread(target=bind), [threading.Thread(target=write, args=(t,)) for t in range(8)]
+    try:
+        binder.start()
+        for th in writers:
+            th.start()
+        for th in writers:
+            th.join()
+    finally:
+        stop.set()
+        binder.join()
+        sys.setswitchinterval(interval)
+    assert sorted({mode(p) for p in tmp_path.iterdir()}) == [0o644] and len(list(tmp_path.iterdir())) == 8 * 300
+    now = os.umask(0o022)
+    assert now == 0o022
+
+
+def test_no_umask_block_awaits():
+    """The umask lock is a plain Lock (#563). The socket bind awaited inside its `umask` block, so a second bind on
+    the loop's thread entered the reentrant lock and restored out of order. A block that awaited would hang that
+    thread now. No `with umask(...)` block in src or plugins awaits or yields."""
+    import ast
+
+    root, blocks = Path(__file__).resolve().parents[2], []
+    pause = (ast.Await, ast.AsyncFor, ast.AsyncWith, ast.Yield, ast.YieldFrom)
+    for f in sorted([*(root / "src").rglob("*.py"), *(root / "plugins").rglob("*.py")]):
+        for node in ast.walk(ast.parse(f.read_text(), str(f))):
+            if isinstance(node, ast.With) and any("umask(" in ast.unparse(i.context_expr) for i in node.items):
+                blocks.append(f"{f.relative_to(root)}:{node.lineno}")
+                assert not any(isinstance(n, pause) for n in ast.walk(node)), blocks[-1]
+    assert len(blocks) >= 2  # the socket bind in server/app.py and the probe in core/private.py
+
+
+def test_two_socket_binds_on_one_loop_restore_the_mask(monkeypatch):
+    """Two `HttpServer.start_unix` calls overlap on one event loop: the first ends while the second is still
+    starting. The bind awaited inside its `umask` block, so the second block took 0177 as the mask to restore and,
+    ending last, left the process at 0177 (#563). The bind runs with no await under the mask now. Each socket is
+    0600 from its bind on, and the mask is 022 afterwards."""
+    import asyncio
+    import shutil
+    import socket
+    import tempfile
+    import threading
+
+    from exo.core import private
+    from exo.server.app import Dispatcher, HttpServer
+    from exo.server.echo import EchoEngine
+
+    kind = threading.RLock if isinstance(private._UMASK_LOCK, type(threading.RLock())) else threading.Lock
+    monkeypatch.setattr(private, "_UMASK_LOCK", kind())  # same kind, fresh: a block that awaits hangs only this one
+    real_bind, real_start, made, starts, out = socket.socket.bind, asyncio.start_unix_server, [], [], []
+    second_in, first_done = asyncio.Event(), asyncio.Event()
+
+    def bind(self, addr):
+        real_bind(self, addr)
+        made.append(mode(Path(addr)))
+
+    async def start(*args, **kwargs):  # the first start returns once the second has its server, which then waits
+        server = await real_start(*args, **kwargs)
+        starts.append(server)
+        if len(starts) == 1:
+            await second_in.wait()
+        else:
+            second_in.set()
+            await first_done.wait()
+        return server
+
+    async def main(d):
+        a, b = HttpServer(Dispatcher(EchoEngine())), HttpServer(Dispatcher(EchoEngine()))
+
+        async def first():
+            await a.start_unix(d / "a.sock")
+            first_done.set()
+
+        try:
+            await asyncio.gather(first(), b.start_unix(d / "b.sock"))
+            out.append([mode(d / "a.sock"), mode(d / "b.sock")])
+        finally:
+            await a.close()
+            await b.close()
+
+    monkeypatch.setattr(socket.socket, "bind", bind)
+    monkeypatch.setattr(asyncio, "start_unix_server", start)
+    d = Path(tempfile.mkdtemp(prefix="exo", dir="/tmp" if os.path.isdir("/tmp") else None))
+    try:
+        t = threading.Thread(target=lambda: asyncio.run(main(d)), daemon=True)  # a block that awaited hangs here
+        t.start()
+        t.join(10)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    now = os.umask(0o022)
+    assert not t.is_alive() and now == 0o022
+    assert made == [0o600, 0o600] and out == [[0o600, 0o600]]
+
+
+def test_the_socket_bind_sets_its_umask_under_the_probes_lock(monkeypatch):
+    """`HttpServer.start_unix` binds the socket under umask 0177. A probe in another thread during the bind waits
+    for the lock and then reads the process's own mask: before, it ran at once and read 0177 (#317 review)."""
+    import asyncio
+    import shutil
+    import socket
+    import tempfile
+    import threading
+
+    from exo.server.app import Dispatcher, HttpServer
+    from exo.server.echo import EchoEngine
+
+    private = _no_proc(monkeypatch)
+    real, probes, seen, waited = socket.socket.bind, [], [], []
+
+    def bind(self, addr):
+        probes.append(threading.Thread(target=lambda: seen.append(private._umask())))
+        probes[0].start()
+        probes[0].join(0.5)
+        waited.append(probes[0].is_alive())
+        return real(self, addr)
+
+    async def start(sock):
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(sock)
+        await srv.close()
+
+    monkeypatch.setattr(socket.socket, "bind", bind)
+    d = Path(tempfile.mkdtemp(prefix="exo", dir="/tmp" if os.path.isdir("/tmp") else None))
+    try:
+        asyncio.run(start(d / "exod.sock"))
+        probes[0].join(10)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    assert waited == [True] and seen == [0o022]
+    now = os.umask(0o022)
+    assert now == 0o022
+
+
 def test_private_dir_rejects_symlink_created_during_mkdir(tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir(mode=0o755)

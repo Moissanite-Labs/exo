@@ -67,11 +67,12 @@ Envelopes:
   stdio transport: the server answers it with an error `Response` and keeps serving. Over HTTP every
   `Response` comes back with status 200, an error one too. A fault the server did not classify, in the
   decoder, the replay or the engine, is `internal`: an `events.subscribe` `since` past SQLite's 64-bit range
-  is one. Over HTTP, a request with a number the server cannot use gets status 400 and a JSON
-  `{"error": ...}` body, before any body is read or any stream opens. `Content-Length`, the `since` query
-  value of `GET /events` and `Last-Event-ID` must be ASCII digits up to 2^63 - 1, SQLite's largest integer
-  (#264). Leading zeros are allowed. A word, a sign, a decimal point or a larger value is a 400. A length over
-  8 MB, within that bound, is 413. An empty `Last-Event-ID` counts as none.
+  is one. Over HTTP, a request whose `Content-Length`, `since` query value of `GET /events` or
+  `Last-Event-ID` header the server cannot use gets status 400 and a JSON `{"error": ...}` body, before any
+  body is read or any stream opens. Each of the three must be ASCII digits up to 2^63 - 1, SQLite's largest
+  integer (#264). Leading zeros are allowed. A word, a sign, a decimal point or a larger value is a 400. A
+  length over 8 MB, within that bound, is 413. An empty `Last-Event-ID` counts as none. A number inside a
+  command body still gets a typed `Response`, as the `events.subscribe` case above does.
 - `Response`: id (the command's), ok = True, result: dict = {}, error: ErrorInfo?. Results are
   untyped JSON for now; reuse `SessionInfo` and core types inside them via `to_dict`.
 - `Event`: id (auto `e_...`), seq, session?, type, ts (ISO 8601 UTC, auto), body. JSON key order is
