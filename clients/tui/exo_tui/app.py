@@ -36,6 +36,8 @@ CLIENT_ID = "exo-tui"
 LOST = "connection_lost"  # post's code for a command whose reply never came or that never went out (D-060: not resent)
 DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
 MAX_FILE = 64 * 1024
+ROUND_LIMIT_NOTE = ("The limit counts tool rounds, not time. A turn can continue after this window closes; "
+                    "reopen its thread and use /stop to interrupt it.")
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
 PAGE = 60  # entries added per "load earlier"
 FLUSH_EVERY = 0.1  # streaming repaint interval in seconds (at most 10 a second)
@@ -55,6 +57,7 @@ COMMANDS = {
     "compact": ("session", "summarize now what is eligible in this agent's memory, then show tokens before and after"),
     "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
     "stop": ("session", "stop the running turn (what was done is kept); /stop <task> stops a running subagent"),
+    "rounds": ("session", "tool-round limit for new turns in this window: /rounds [default|off|number]"),
     "unsteer": ("session", "pull your last queued steer message back into the composer, if it has not landed yet"),
     "exit": ("session", "quit"),
     "quit": ("session", "same as /exit"),
@@ -161,9 +164,10 @@ class ExoApp(App):
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
                  seat: str | None = None, title: str = "", home: str | None = None,
                  auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False,
-                 skip_permissions: bool = False) -> None:
+                 skip_permissions: bool = False, max_rounds: int | None = None) -> None:
         super().__init__()
         self.skip_permissions = skip_permissions  # exo --skip-permissions: ask the core for bypass at boot (D-065)
+        self.max_rounds = max_rounds
         self.perm: dict[str, Any] = {}  # the core's /permissions json; {} when it has no gate
         self.motion = not th.reduced_motion()
         self.boot_anim = boot_anim and self.motion  # only the real entry point asks; never under reduced motion
@@ -371,7 +375,8 @@ class ExoApp(App):
         bug = f" · {self.findings} findings" if self.findings else ""
         cache = "" if self.cache_share is None else f" · cache {round(100 * self.cache_share)}%"
         perm = f"permissions: bypass ({self.perm.get('auto_approved', 0)} auto-approved) · " if self.bypass else ""
-        return f"{perm}{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
+        rounds = "" if self.max_rounds is None else f"rounds: {'unlimited' if self.max_rounds == 0 else self.max_rounds} · "
+        return f"{perm}{rounds}{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
 
     def cost_label(self) -> str:
         """The D-032 rule, formatted by the same `money` /trace uses: "-" before any call, "unknown" when no call is
@@ -384,7 +389,7 @@ class ExoApp(App):
         self.strip.set(model=self.model, requested=self.requested, ctx=self.ctx_tokens,
                                         window=self.window, cache=self.cache_share, cost=self.cost_label(),
                                         findings=self.findings, bypass=self.bypass,
-                                        auto=int(self.perm.get("auto_approved") or 0))
+                                        auto=int(self.perm.get("auto_approved") or 0), rounds=self.max_rounds)
         self.brand.set(self.seat or "main", self.thread_label, self.busy)
         self.prompt.set_state(self.busy, bool(self.question))
         self.composer.placeholder = BUSY_HINT if self.busy else self.tip_line() or IDLE_HINT
@@ -508,6 +513,8 @@ class ExoApp(App):
                     self.note(out if isinstance(out, str) else "permissions: bypass")
                 except Exception as exc:
                     self.note(f"--skip-permissions: {getattr(exc, 'message', None) or exc}", "error")
+            if self.max_rounds is not None:
+                self.note(ROUND_LIMIT_NOTE, "warn")
             await self.load_permissions()
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", MEMORY_WORDS.get(self.memory, ""), ok=self.memory not in MEMORY_SHORT)
@@ -1216,7 +1223,8 @@ class ExoApp(App):
         self.sending_messages[block] = received
         try:
             resp = await self.post(s.TurnSend(session=session, text=send, parts=self.file_parts(text),
-                                              mode="steer" if steering else "send"))
+                                              mode="steer" if steering else "send",
+                                              max_rounds=None if steering else self.max_rounds))
         finally:
             self.sending_messages.pop(block, None)
         if self.session != session:
@@ -1343,6 +1351,21 @@ class ExoApp(App):
             await self.subagent("stop", args)
         elif name == "stop":
             self.stop_turn()
+        elif name == "rounds":
+            value = args.strip().lower()
+            if value == "default":
+                self.max_rounds = None
+            elif value == "off":
+                self.max_rounds = 0
+            elif value.isascii() and value.isdigit():
+                self.max_rounds = int(value)
+            elif value:
+                self.note("usage: /rounds [default|off|nonnegative number]", "warn")
+                return
+            mode = "default" if self.max_rounds is None else "unlimited" if self.max_rounds == 0 else str(self.max_rounds)
+            self.note(f"tool-round limit for new turns in this window: {mode}. "
+                      + ROUND_LIMIT_NOTE)
+            self.refresh_status()
         elif name in ("tasks", "open", "steer"):
             await self.subagent({"tasks": "list"}.get(name, "send" if name == "steer" else name), args)
         elif name == "unsteer":

@@ -483,6 +483,10 @@ class StatusStrip(Widget):
             if w >= 80:
                 t.append(f" {d['auto']} auto-approved", style=rich_style("accent2"))
             sep()
+        if d.get("rounds") is not None:
+            value = "unlimited" if d["rounds"] == 0 else str(d["rounds"])
+            t.append(f"rounds: {value}", style=rich_style("accent2", "bold"))
+            sep()
         label("MODEL")
         fell = bool(d["requested"] and d["model"] and d["requested"] != d["model"])
         t.append(d["model"] or "-", style=rich_style("accent" if fell else "fg2", "bold" if fell else ""))
