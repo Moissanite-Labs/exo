@@ -1043,6 +1043,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   above holds for `sudo -RDIR gh ..` too, and #544 tracks both forms. Another limit, also on main: the gate does
   not see a command inside a parameter word (#143). So `NO_COLOR=${X:-$(cp /w/notes.md /w/clean.md)} gh ...` reads
   the file and runs. The open PR #158 would fix that.
+  *A NUL in a body-file path (2026-10-26, review of PR #545).* `os.path.realpath` and `lstat` raise `ValueError` on an
+  embedded NUL, and `_body_path` caught only `OSError`. A post whose `--body-file` path held a NUL sent the hook into
+  its error card, which drops "once", so the core offered "always" and stored `plugin_rule:exo-gate:error:terminal`. A
+  lone post did this on main, and #545 reached the path for every post on a held line. `_body_path` now takes such a
+  path as unreadable, so the post stays unseen and asks once. gh never opens such a path, and the core's shell tool
+  refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows

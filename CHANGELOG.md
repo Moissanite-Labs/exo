@@ -29,7 +29,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   counts, and a store read from the tool's own folder (#311) is a part too. The card says the file was not read and
   why, for each post on the line, and asks for the post on a line of its own, in place of the hint to pass an
   absolute path. A post also unseen another way, such as a title from a variable, keeps that hint beside it. The
-  card no longer names a word the unread file holds.
+  card no longer names a word the unread file holds. A NUL in a body-file path no longer sends the hook to its
+  error card, which offered "always": the post stays unseen and asks once.
 - `hash -p` is opaque, so a rebound program name no longer runs another file under a read's cover
   (#330). `hash -p PATH NAME` makes the shell run PATH for every later NAME, and the gate filed the
   line under NAME's own program, so `hash -p /tmp/x ls; ls` read as a plain `ls`. The call now
