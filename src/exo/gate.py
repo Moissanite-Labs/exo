@@ -6725,20 +6725,18 @@ NAME_HINTS: list[tuple[set[str], set[str] | None, str]] = [
 
 
 def _name_tokens(name: str) -> list[str]:
-    """One word per separator part, as main read it; and when a part is camelCase, that part's words beside it: a
-    hump is a word edge, so `deleteFile` deletes and `readFile` reads as `delete_file` and `read_file` do (#515).
-    The name's own word is kept first, beside the words, so a name main already read the compact spelling of keeps
-    its reading (`apiKey` is the credential word, `checkOut` pays, `signUp` opens an account. Main asked a camel
-    name as `unknown`; where a policy asks `unknown` and allows the name's new category, the call passes where
-    main asked — the amendment names those categories)."""
-    whole = [p.lower() for p in re.split(r"[_\-.:/]+", name)]
+    """Read separator parts and camel words together; the call also retains its unsplit reading (#515)."""
+    whole = [p.lower() for p in re.split(r"[_\-.:/]+", name) if p]
     if _CAMEL.search(name):
-        whole += re.split(r"[_\-.:/]+", _CAMEL.sub("_", name).lower())
+        whole += [p for p in re.split(r"[_\-.:/]+", _CAMEL.sub("_", name).lower()) if p]
     return list(dict.fromkeys(whole))
 
 
 def classify_by_name(tool: str) -> str:
-    toks = _name_tokens(tool)
+    return _classify_name_tokens(_name_tokens(tool))
+
+
+def _classify_name_tokens(toks: list[str]) -> str:
     is_mcp = bool(toks) and toks[0] == "mcp"
     words = toks[1:] if is_mcp else toks
     joined = "_".join(words)
@@ -6935,6 +6933,7 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
     reading and the line as read before leads, and the other ends its ``also`` readings, so decide keeps the
     stricter. When the Exo home's config.json counted as the store, or an exo command that writes it ran (D-074),
     the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
+    A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515).
     ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
     (_in_tool_folder sets it)."""
     call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
@@ -7012,7 +7011,7 @@ def _classify_call(action: Any) -> Classification:
     return c
 
 
-def _classify_call(action: Any) -> Classification:
+def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
     tool, args = _args_of(action)
     if _runs_shell(tool, args):
         c = _shell_call(str(args.get("command") or args.get("cmd") or ""))
@@ -7056,7 +7055,8 @@ def _classify_call(action: Any) -> Classification:
             c = _opaque(f"cronjob_manage mutation: {action}", operation)
             c.tool = tool
     else:
-        cat = own = TOOLS.get(tool) or classify_by_name(tool)
+        old_tokens = [p for p in re.split(r"[_\-.:/]+", tool.lower()) if p]
+        cat = own = TOOLS.get(tool) or (_classify_name_tokens(old_tokens) if legacy_name else classify_by_name(tool))
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
         if secret:
             cat = "credentials"
@@ -7106,6 +7106,10 @@ def _classify_call(action: Any) -> Classification:
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
         if secret:      # #447: each store path beside a secret is a part, so only the principal answers
             c.parts += [_store_part(p, f"{tool} {p}") for p in stores]
+        # Keep the complete unsplit reading, including argument checks and outbound metadata. New name words
+        # must not lower an old secret/store floor, category policy or posting rule (#515).
+        if not legacy_name and tool not in TOOLS and _CAMEL.search(tool):
+            c.floor = _classify_call(action, legacy_name=True)
     for r in readings(c):
         r.tool = tool
         _local_post(r)
