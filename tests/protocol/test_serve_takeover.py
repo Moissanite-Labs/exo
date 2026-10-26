@@ -84,6 +84,91 @@ def test_start_unix_still_replaces_a_stale_socket_file(home):
     _run(main())
 
 
+def test_a_start_that_fails_after_the_bind_closes_its_socket(home, monkeypatch):
+    """start_unix binds its own socket under the umask and then starts the server on it (#563). A start that fails
+    there closes that socket and lets go of the lock, and the next start replaces the file it left."""
+    path, real, socks = home / "exod.sock", asyncio.start_unix_server, []
+
+    async def fail_once(*args, **kwargs):
+        socks.append(kwargs["sock"])
+        if len(socks) == 1:
+            raise OSError("listen failed")
+        return await real(*args, **kwargs)
+
+    async def main():
+        with pytest.raises(OSError, match="listen failed"):
+            await HttpServer(Dispatcher(EchoEngine())).start_unix(path)
+        assert socks[0].fileno() == -1 and ensure.probe(path) == "stale"
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(path)
+        try:
+            async with Client(socket=str(path)) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    monkeypatch.setattr(asyncio, "start_unix_server", fail_once)
+    _run(main())
+
+
+def test_a_start_cancelled_after_listen_takes_its_socket_off_the_loop(home, monkeypatch):
+    """A cancel in start_unix_server's last pass finds the socket listening and on the loop. start_unix takes it off
+    the loop before it closes it. Left on, its number went to the next socket on that loop, which then never woke for
+    a client (#563 review)."""
+    real, fds = asyncio.start_unix_server, []
+
+    async def cancelled(*args, **kwargs):
+        fds.append(kwargs["sock"].fileno())
+        await real(*args, **kwargs)  # listening and on the loop, as a cancel in its last pass finds it
+        raise asyncio.CancelledError
+
+    async def main():
+        monkeypatch.setattr(asyncio, "start_unix_server", cancelled)
+        with pytest.raises(asyncio.CancelledError):
+            await HttpServer(Dispatcher(EchoEngine())).start_unix(home / "a.sock")
+        monkeypatch.setattr(asyncio, "start_unix_server", real)
+        assert fds[0] not in asyncio.get_running_loop()._selector.get_map()
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(home / "b.sock")  # its socket takes the number the first one let go
+        try:
+            async with Client(socket=str(home / "b.sock")) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    _run(main())
+
+
+def test_a_start_whose_chmod_fails_leaves_no_server(home, monkeypatch):
+    """start_unix sets the socket file's mode before the server starts on it. A chmod that fails leaves no server
+    behind, so close still works (`PeerService.stop` closes a server whose start failed), and the next start replaces
+    the file (#563 review)."""
+    path, real = home / "exod.sock", os.chmod
+
+    def chmod(p, *args, **kwargs):
+        if Path(p) == path:
+            raise PermissionError("chmod failed")
+        return real(p, *args, **kwargs)
+
+    async def main():
+        first = HttpServer(Dispatcher(EchoEngine()))
+        monkeypatch.setattr(os, "chmod", chmod)
+        with pytest.raises(PermissionError, match="chmod failed"):
+            await first.start_unix(path)
+        monkeypatch.setattr(os, "chmod", real)
+        assert ensure.probe(path) == "stale"
+        await first.close()
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(path)
+        try:
+            async with Client(socket=str(path)) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    _run(main())
+
+
 # ---------------------------------------------------------------- cmd_serve
 
 

@@ -31,6 +31,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   or a login to another host (`ssh a 'ssh b; hash -p /x ls'`) beside the rebind keeps the store
   check in either order, so
   `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'` is a store write.
+- Two Unix socket binds (`HttpServer.start_unix`) that overlapped on one event loop could leave the process umask
+  at 0177 (#563, a follow-up to #317). The bind awaited inside its `umask` block, so the second block restored 0177
+  after the first had restored the mask from before. Under 0177 a folder made later with a plain `mkdir` comes out
+  0600, which its owner cannot enter. The socket is now bound inside the block, and the server starts on it after
+  the block. A start that fails takes that socket off the event loop and closes it. The umask lock is a plain lock,
+  not reentrant.
 - Two follow-ups to #296 (#317). A ledger opened read-only through a symlink to a closed target held an
   `immutable=1` connection to the target itself: a writer that appended and checkpointed replaced the file
   under it, so the reader stayed stale and reading raised `database disk image is malformed`. The target is
