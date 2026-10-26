@@ -514,8 +514,8 @@ for `keys`, so with the gate's working folder at `$EXO_HOME`, `ls keys` asks and
 not. A `cd`, `tar -C` or `git -C` into `$EXO_HOME` on the line is followed, though: a relative
 name is then read as the path it names from there (#269, "The working folder" below), so
 `tar -C ~/.exo -czf - run`, `tar -C ~/.exo -czf - ru?`, `cd ~/.exo && ls run` and, from `run/jobs`,
-`cat ../exod*`, `grep -r . ..`, `grep -r . .?`, `grep -r . ./.?`, `grep -r x ../..` and `cd .. && ls` ask,
-while `cat 1.log` there stays `read`. Brace sets are
+`cat ../exod*`, `grep -r . ..`, `grep -r . .?`, `grep -r . ./.?`, `grep -r x ../..` and `cd .. &&
+ls` ask, while `cat 1.log` there stays `read`. Brace sets are
 expanded first (#184), so `run/{*,}`, `{$EXO_HOME/run,x}/*`,
 `$EXO_HOME/{run,x}/*` and `$EXO_HOME/r{u,}n/*` ask, and `run/jobs/{1,2}.log` stays `read`. A
 wildcard is matched with `.` and `..` resolved, for every secret store, so `cat ./.env*` asks like
@@ -537,11 +537,12 @@ and `cat ../exod*` do (see "The working folder" below).
 
 Limits. No environment variable carries the credential, and `tool_env` drops `EXOD_*`,
 `EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
-by its full path (`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`, though a relative name asks:
-`cd ~/.exo/run/jobs && grep -r secret ../..`); a wildcard in a folder name above a file
-(`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
-characters, the same as for `~/.ss?`, while `~/.exo/r*` asks, and so does `ru?` relative to a `cd` on the line:
-`cd ~/.exo && grep -r . ru?`); an upper-case spelling on a
+by its full path (`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`, though a relative name
+asks: `cd ~/.exo/run/jobs && grep -r secret ../..`); a wildcard in a folder name above a file
+(`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for the folder itself (`grep -r .
+~/.exo/ru?`, `ru[n]`: the last part needs three literal characters, the same as for `~/.ss?`, while
+`~/.exo/r*` asks, and so does `ru?` relative to a `cd` on the line: `cd ~/.exo && grep -r . ru?`);
+an upper-case spelling on a
 case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); a wildcard that spells part of an agent's name that is not sampled
 (`run/agent-scout*` when `scout` is neither `$EXO_SEAT` nor among the 64 sampled seats); the
 built-in `glob` with the folder in `pattern` rather than `path` (it lists names; the same for
@@ -1701,32 +1702,34 @@ whole line in one pass:
   (`mkdir -p .kube && cd .kube && ls` keeps its class), a `git` subcommand, a jq filter (`jq .`;
   not one read from a file with `-f`), other heredoc text or a word with a space in it (a commit
   message, an `echo`, `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
-- A word or target with an expansion in it is also read in the forms "Expansions inside a name" gives (#225),
-  so `cd ~/.kube && cat c$(:)onfig`, `cd ~/.kube && cat $(ls)`, `cd ~/.k$(:)ube && cat config`,
-  `cd ~/$(printf .k)ube && cat config`, `cd ${x:-~/.kube} && cat config`, `env -C ~/.k$(:)ube cat config` and
-  `tar -C ~/.k$(:)ube -czf - .` ask. Failing closed, so does a word that is a substitution alone on a line that
-  enters a store folder, since its output may be any name there (`cd ~/.kube && echo $(date)`,
-  `cd ~/.kube && kubectl get pods -n $(cat ns.txt)`, `cd ~/.config/gh && gh pr list --limit $((n+1))`), while a
-  word with text of its own that no store name fits keeps its class (`cd ~/.kube && cat $(date +%F).log`). A
-  target made whole by a command (`cd $(git rev-parse --show-toplevel)`) enters no dot folder. The order of
-  the line is not followed here, as for any name on the line, so a substitution before the `cd` counts too (main
-  reads `echo *; cd ~/.exo/policies` as `credentials`), and so does a value set by one, which may be used after
-  it: `echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies`, `V=$(sed -n 1p VERSION); cd ~/.exo && ls`,
-  `cd ~/.exo/policies && echo $(ls)` and `cd ~/.exo && echo "$(ssh prod 'ls /srv')"` are `credentials`, where
-  #465 alone reads them as `read`. The commands in such a substitution keep the folder they run in (#465), so
-  none of them is a store write. The line is read first with its words as written, as before, and that name
-  decides the line and builds the parts it did (the key read beside a store write, #464, #468). These forms and
-  the readings of "In `$EXO_HOME`" below are read after it, and a name they find that is another target is a
-  `credentials` part of its own beside it, so a rule on the name read as written still matches: in
-  `cd ~/.exo/state && echo $(cat ../keys/seat; rm -rf x)` the key read targets `../keys/seat`, with the `*` of
-  the `$( )` beside it, and `cd ~/.exo/state && grep -r x .. ../run` targets `../run`, with `..` beside it. On a
-  line that these forms make a secret line (`cd ~/.exo/state && cat ${x-.env} ../keys/seat`), the name read as
-  written is such a part too, so a rule on `target: '*keys*'` denies these lines as before, and so is the secret
-  the line's own words name where a nested line already reads as a secret (main's target for
-  `ssh host 'cd ~/.exo/run/jo$(:)bs && grep -r x .?/..'`, the remote text). An ssh remote line these forms make a
-  secret or store line also keeps the part that decided it before, with the host as its target
-  (`ssh host 'cat ~/.exo/$(printf ledger.sqlite)'` is still a read of `host` beside the secret), so a reserved or
-  rule entry on it lists it as before.
+- A word or target with an expansion in it is also read in the forms "Expansions inside a name"
+  gives (#225), so `cd ~/.kube && cat c$(:)onfig`, `cd ~/.kube && cat $(ls)`, `cd ~/.k$(:)ube && cat
+  config`, `cd ~/$(printf .k)ube && cat config`, `cd ${x:-~/.kube} && cat config`, `env -C
+  ~/.k$(:)ube cat config` and `tar -C ~/.k$(:)ube -czf - .` ask. Failing closed, so does a word that
+  is a substitution alone on a line that enters a store folder, since its output may be any name
+  there (`cd ~/.kube && echo $(date)`, `cd ~/.kube && kubectl get pods -n $(cat ns.txt)`, `cd
+  ~/.config/gh && gh pr list --limit $((n+1))`), while a word with text of its own that no store
+  name fits keeps its class (`cd ~/.kube && cat $(date +%F).log`). A target made whole by a command
+  (`cd $(git rev-parse --show-toplevel)`) enters no dot folder. The order of the line is not
+  followed here, as for any name on the line, so a substitution before the `cd` counts too (main
+  reads `echo *; cd ~/.exo/policies` as `credentials`), and so does a value set by one, which may be
+  used after it: `echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies`, `V=$(sed -n 1p VERSION); cd
+  ~/.exo && ls`, `cd ~/.exo/policies && echo $(ls)` and `cd ~/.exo && echo "$(ssh prod 'ls /srv')"`
+  are `credentials`, where #465 alone reads them as `read`. The commands in such a substitution keep
+  the folder they run in (#465), so none of them is a store write. The line is read first with its
+  words as written, as before, and that name decides the line and builds the parts it did (the key
+  read beside a store write, #464, #468). These forms and the readings of "In `$EXO_HOME`" below are
+  read after it, and a name they find that is another target is a `credentials` part of its own
+  beside it, so a rule on the name read as written still matches: in `cd ~/.exo/state && echo $(cat
+  ../keys/seat; rm -rf x)` the key read targets `../keys/seat`, with the `*` of the `$( )` beside
+  it, and `cd ~/.exo/state && grep -r x .. ../run` targets `../run`, with `..` beside it. On a line
+  that these forms make a secret line (`cd ~/.exo/state && cat ${x-.env} ../keys/seat`), the name
+  read as written is such a part too, so a rule on `target: '*keys*'` denies these lines as before,
+  and so is the secret the line's own words name where a nested line already reads as a secret
+  (main's target for `ssh host 'cd ~/.exo/run/jo$(:)bs && grep -r x .?/..'`, the remote text). An
+  ssh remote line these forms make a secret or store line also keeps the part that decided it
+  before, with the host as its target (`ssh host 'cat ~/.exo/$(printf ledger.sqlite)'` is still a
+  read of `host` beside the secret), so a reserved or rule entry on it lists it as before.
 
 In `$EXO_HOME` (#269). The run folder is not a store folder by its name, since job output in `run/jobs`
 stays readable, so the checks above do not reach it through `..`. On a line that reaches a folder in
@@ -1747,28 +1750,30 @@ parts for the whole tool call, which every `$( )` shares (each is classified aga
 the work stays linear in the line however deep the names are. Past the budget, or on a line that reaches
 more than 64 such folders, the line asks (fails closed, no grant). The budget counts the parts of
 each full path, so a deep home folder spends it sooner: a long line of expansion forms in a store
-folder that reads under `/home/me` can ask under a home folder six levels deep. A line that names no store folder
-makes no join. A target spelt with a glob or an expansion (read as a glob, `r$(printf u)n` as `r*n`) is
-read as the folders in the store it could be: its parts up to the store's own folder (or a `.exo` one) as
-that folder, and the parts below it along each tail of a principal's `principals/<name>/run/jobs` path
-they fit, a glob part as the part it could be and, past that tail, as `..` when it could be one. So
-`cd ~/.e*o/run/jobs`, `cd ~/$(printf .e)xo/run/jobs`, `cd ~/.exo/r?n/jobs`, `cd ~/.exo/run/j?bs`,
-`cd ~/.exo/r$(printf u)n/jobs`, `cd ~/.exo/principals/m?/run/jobs`, `cd ~/.exo/run/jobs/.?`,
-`cd ~/.exo && cd r?n/jobs` and `cd ~/.exo/principals && cd m?/r?n/jobs` reach `run/jobs` or the run
-folder. A target whose parts fit no such path is left out (`cd ~/.exo/p?licies`). A `cd` target or a
-name's leading part that could be `..` is `..` too (`.?`, `.[.]`, `.$(:).`, `$(echo .).`, also after a `./`
-or `.//`: `./.?`, `.//.?`), and a target or name that `..` would shorten is read both ways (`.?/..` is `.` and
-`../..`, so from `run/jobs` `cd .?/.. && grep -r x .`, `cd $PWD/.?/.. && grep -r x .` and
-`grep -r x .?/..` ask; `$PWD/`, `${PWD}/` and `~+/` there are `./`). A name also
-counts when, joined, it could be the run folder by a glob (`tar -C ~/.exo -czf - ru?`, `r$(:)un`) or a folder
-that holds one: `$EXO_HOME` or a `.exo` folder, its `principals` folder or a principal's store, as `.` in
-`$EXO_HOME` already did (`cd ~/.exo/run/jobs && grep -r x ../..`, `cd ~/.exo && grep -r x principals/me`,
-`cd ~/.exo/principals/me && grep -r x .`, `tar -C ~/.exo/principals/me -czf - .`). The cost, failing closed:
-`cd ~/.exo && ls principals`, `cd ~/.exo/principals/me && ls .` and, in `run/jobs`, `ls ../..`,
-`tail -f $(ls -t | head -1)` and `cat $(ls)` ask (`cat $(date +%F).log` does not). Known limits: a walk
-over the store or a principal's store by its full path (`grep -r x ~/.exo/principals/me`, as for `~/.exo`
-above), a target or name in a variable (`d=~/.exo/run/jobs; cd $d`), and a part that could be `..` after a
-literal part (`grep -r x ~/.exo/run/jobs/.?`, `cd ~/.exo/run/jobs/.?/..`, `cd ~/.exo && grep -r x run/jobs/.?`).
+folder that reads under `/home/me` can ask under a home folder six levels deep. A line that names no
+store folder makes no join. A target spelt with a glob or an expansion (read as a glob, `r$(printf
+u)n` as `r*n`) is read as the folders in the store it could be: its parts up to the store's own
+folder (or a `.exo` one) as that folder, and the parts below it along each tail of a principal's
+`principals/<name>/run/jobs` path they fit, a glob part as the part it could be and, past that tail,
+as `..` when it could be one. So `cd ~/.e*o/run/jobs`, `cd ~/$(printf .e)xo/run/jobs`, `cd
+~/.exo/r?n/jobs`, `cd ~/.exo/run/j?bs`, `cd ~/.exo/r$(printf u)n/jobs`, `cd
+~/.exo/principals/m?/run/jobs`, `cd ~/.exo/run/jobs/.?`, `cd ~/.exo && cd r?n/jobs` and `cd
+~/.exo/principals && cd m?/r?n/jobs` reach `run/jobs` or the run folder. A target whose parts fit no
+such path is left out (`cd ~/.exo/p?licies`). A `cd` target or a name's leading part that could be
+`..` is `..` too (`.?`, `.[.]`, `.$(:).`, `$(echo .).`, also after a `./` or `.//`: `./.?`,
+`.//.?`), and a target or name that `..` would shorten is read both ways (`.?/..` is `.` and
+`../..`, so from `run/jobs` `cd .?/.. && grep -r x .`, `cd $PWD/.?/.. && grep -r x .` and `grep -r x
+.?/..` ask; `$PWD/`, `${PWD}/` and `~+/` there are `./`). A name also counts when, joined, it could
+be the run folder by a glob (`tar -C ~/.exo -czf - ru?`, `r$(:)un`) or a folder that holds one:
+`$EXO_HOME` or a `.exo` folder, its `principals` folder or a principal's store, as `.` in
+`$EXO_HOME` already did (`cd ~/.exo/run/jobs && grep -r x ../..`, `cd ~/.exo && grep -r x
+principals/me`, `cd ~/.exo/principals/me && grep -r x .`, `tar -C ~/.exo/principals/me -czf - .`).
+The cost, failing closed: `cd ~/.exo && ls principals`, `cd ~/.exo/principals/me && ls .` and, in
+`run/jobs`, `ls ../..`, `tail -f $(ls -t | head -1)` and `cat $(ls)` ask (`cat $(date +%F).log` does
+not). Known limits: a walk over the store or a principal's store by its full path (`grep -r x
+~/.exo/principals/me`, as for `~/.exo` above), a target or name in a variable (`d=~/.exo/run/jobs;
+cd $d`), and a part that could be `..` after a literal part (`grep -r x ~/.exo/run/jobs/.?`, `cd
+~/.exo/run/jobs/.?/..`, `cd ~/.exo && grep -r x run/jobs/.?`).
 
 A line that enters no store folder, and names none, is classified as before. The work is linear
 in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
@@ -1780,9 +1785,9 @@ store file asks even when it is elsewhere or is not a file
 `cd ~/.config/fish && cat config`, `cd ~/.config/nvim && ls *`,
 `cd ~/.config/nvim && npm config get prefix`), and `.` asks in a store folder even for a listing
 (`cd ~/.config && find . -name '*.toml'`). A line that is already `store_write` stays
-`store_write` (the principal's alone). Known limits: a target in a variable or made whole by a command
-(`X=~/.kube; cd $X`, `cd $(...)`); a name in a variable, made whole by a command or with a space in it
-(`cat $f`, `"$(pwd -P)/config"`); a dot store folder named last in an operand
+`store_write` (the principal's alone). Known limits: a target in a variable or made whole by a
+command (`X=~/.kube; cd $X`, `cd $(...)`); a name in a variable, made whole by a command or with a
+space in it (`cat $f`, `"$(pwd -P)/config"`); a dot store folder named last in an operand
 (`cd ~/.config && tar czf x ../.kube`, as for `tar czf x ~/.kube`); a relative target taken from
 another relative one (`cd ~/.config && cd nvim && cd ../gcloud`); a glob in the parent of a
 plain store folder (`cd /sr?/exo-home && cd keys`); a relative path that reaches a plain store
@@ -1889,8 +1894,11 @@ when that command decides the line: `cat ${x-.netrc}; echo $(git push --force or
 `~/.exo/keys` as `cwd` is denied under `force_push: deny` and an allow rule on `.*`. The copy
 keeps its body, read or unseen, so a post on such a line meets each posting check as often as
 when it decides the line, and it is the line's first part, so on a line of more posts than the
-card lists (20) its entry is listed before the others, as the line's own is. A word that is a substitution alone is `*` there, so `echo x $(cat f) w`
-with `~/.kube` as `cwd` asks, as after `cd ~/.kube`. Limits:
+card lists (20) its entry is listed before the others, as the line's own is. Its entries take none
+of those 20 places, so posts with no numbered target, whose entries all share them
+(`gh pr comment --body hi`, `gh issue create`, `gh pr review --comment`), list at least as many
+entries as on main. A word that is a substitution alone is `*` there, so `echo x $(cat f) w` with
+`~/.kube` as `cwd` asks, as after `cd ~/.kube`. Limits:
 
 - The session's own folder (the `cwd` the core passes with every call, #209) is not a target. A
   session started inside a store folder reads it by relative names as before.
@@ -2213,9 +2221,9 @@ is the dominant part, and a costly copy of each reversible part the wrapper runs
 (#320), so a rule on `shell` or `local_write` with `reversibility: costly`, or a matrix that denies
 that cell, still denies `sudo ssh host 'scp ~/.exo/plugins/foo/x host:/tmp/'` and `sudo ssh host
 'cp evil.py ~/.exo/plugins/foo/__init__.py'`. `deny: [store_write]` is the reliable way to refuse
-every write into the folder. A `target:` entry matches the path only as the call spells it: `target:~/.exo/plugins/*`
-denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the absolute path and
-`~/.exo/../.exo/plugins/...` still only ask.
+every write into the folder. A `target:` entry matches the path only as the call spells it:
+`target:~/.exo/plugins/*` denies `cp x ~/.exo/plugins/foo/y`, but `$HOME/.exo/plugins/...`, the
+absolute path and `~/.exo/../.exo/plugins/...` still only ask.
 
 Known friction (fails closed, no grant). A command that names a path in the folder and is not a
 read command asks the principal, as for the rest of the store. That covers a writing command that
@@ -2258,38 +2266,41 @@ word and every word it expands to are checked, and a hit on any counts, so
 checks have their own budget of 4,096 expanded words per tool call, so they never use up the secret-store
 checks' budget, and each spelling is expanded once per line, however many commands use it.
 
-An expansion inside a word is read as for secret-store paths (#309, "Expansions inside a name" above): a word
-with one, a redirection target too, is also checked in each form, as a path and, with a `*` in it, as a glob
-matched one part at a time against the protected folders and names. So `cp x ~/.exo/polic$(:)ies/gates.yaml`,
-the same with an empty backtick pair, `mv x ~/.exo/polic${u}ies/gates.yaml`, `tee ~/.exo/polic$(:)ies/gates.yaml < x`,
-`cp x ~/.exo/$(printf policies)/default.yaml`, `cp x ${x:-$HOME/.exo}/policies/a`,
-`cd ~/.e$(:)xo && cp x policies/a` and `git -C ~/.e$(:)xo/policies checkout .` are `store_write`. They were
-`shell` writes, and `echo x > ~/.exo/polic$(:)ies/gates.yaml` and `rm -rf ~/.exo/pol$(:)icies` asked as
-`opaque_exec` and `delete`, which a policy may allow. A write to `keys/` that the empty reading names is
-`credentials`, as unsplit (`cp x ~/.exo/ke$(:)ys/a`). One that only the `*` reading reaches is `store_write`
-(`cp x ~/.exo/$(printf keys)/a`). Both ask. The protected names are the ones `_STORE_NAMES` matches, from the
-same list, so the bus store and the update signers file count too (`cp x ~/.exo/bu$(printf s)/x`,
-`cp x ~/.exo/b$(printf u)s/registry.json`, and `cp x ~/x/update/allowed_$(printf s)igners`, which matches in
-any folder as the unsplit name does), and so does the plugins folder (#435) in each form `policies/` is read in
-(`cp x ~/.exo/plug$(:)ins/foo/__init__.py`, `cp x ${x:-$HOME/.exo}/plugins/foo/x.py`,
-`cd ~/.e$(:)xo && cp x plugins/foo/x.py`, `tar -C ~/.exo/plug$(:)ins -xf evil.tar`). As for a glob read, a
-match needs a part with three characters of its own before its extension, and a store file's name needs them itself.
-So `cp x out/$(date +%F).json` (which could
-print `seat`) stays a `shell` write, as do `cp x ~/report-$(date +%F).txt` and `mv x "$dest/"`, and a store
-file's folder alone does not make the name that file: `cp x state/$(date +%F).json`, `cp x src/state/$(basename
-$f)`, `cp x lib/state/$1.json` and `sed -i s/a/b/ src/state/$(git ls-files | head -1)` keep their class, as
-`cp x state/*.json` does. Below the store's own folder the folder counts (`cp x ~/.exo/state/$(date +%F).json`).
-A matrix cell or a `target:` entry that denies a part still denies the line (#464): under
-`deny: [target:/dev*]`, `cd /dev && cp x ~/.exo/polic$(date)ies/a` is denied by its descriptor-folder part,
-as `cd /dev && cp x out/$(date +%F).json` is. The cost, failing closed: a name whose own text fits a store
-file, split by output, is a store write on any line (`cp x data/schedule$(date +%F).sqlite`,
-`cp x policies/gates$(date +%F).yaml`, `cp x out/seat$(date +%F).json`), and a split spelling that bash never
-makes a store path is one too (`cp x ~/.exo/polic$(date)ies/a`, `cp x ~/.e$[0]xo/policies/a`). Known limits: a
-store file's name made whole by output (`cp x state/$(printf approval-grants).json`, as on main), output with a
-`/` in it, which fills one part (`cp x ~/$(printf .exo/policies)/x`),
-an expansion that ends a word names no part of its own (`cp x ~/.exo/$name`, as `cp x ~/.exo/p*`), and a
-literal glob in a write target is matched as written, not as the names it could be
-(`cp x ~/.exo/polic?es/gates.yaml`, `cp x ~/.e*o/policies/a`).
+An expansion inside a word is read as for secret-store paths (#309, "Expansions inside a name"
+above): a word with one, a redirection target too, is also checked in each form, as a path and, with
+a `*` in it, as a glob matched one part at a time against the protected folders and names. So `cp x
+~/.exo/polic$(:)ies/gates.yaml`, the same with an empty backtick pair, `mv x
+~/.exo/polic${u}ies/gates.yaml`, `tee ~/.exo/polic$(:)ies/gates.yaml < x`, `cp x ~/.exo/$(printf
+policies)/default.yaml`, `cp x ${x:-$HOME/.exo}/policies/a`, `cd ~/.e$(:)xo && cp x policies/a` and
+`git -C ~/.e$(:)xo/policies checkout .` are `store_write`. They were `shell` writes, and `echo x >
+~/.exo/polic$(:)ies/gates.yaml` and `rm -rf ~/.exo/pol$(:)icies` asked as `opaque_exec` and
+`delete`, which a policy may allow. A write to `keys/` that the empty reading names is
+`credentials`, as unsplit (`cp x ~/.exo/ke$(:)ys/a`). One that only the `*` reading reaches is
+`store_write` (`cp x ~/.exo/$(printf keys)/a`). Both ask. The protected names are the ones
+`_STORE_NAMES` matches, from the same list, so the bus store and the update signers file count too
+(`cp x ~/.exo/bu$(printf s)/x`, `cp x ~/.exo/b$(printf u)s/registry.json`, and `cp x
+~/x/update/allowed_$(printf s)igners`, which matches in any folder as the unsplit name does), and so
+does the plugins folder (#435) in each form `policies/` is read in (`cp x
+~/.exo/plug$(:)ins/foo/__init__.py`, `cp x ${x:-$HOME/.exo}/plugins/foo/x.py`, `cd ~/.e$(:)xo && cp
+x plugins/foo/x.py`, `tar -C ~/.exo/plug$(:)ins -xf evil.tar`). As for a glob read, a match needs a
+part with three characters of its own before its extension, and a store file's name needs them
+itself. So `cp x out/$(date +%F).json` (which could print `seat`) stays a `shell` write, as do `cp x
+~/report-$(date +%F).txt` and `mv x "$dest/"`, and a store file's folder alone does not make the
+name that file: `cp x state/$(date +%F).json`, `cp x src/state/$(basename $f)`, `cp x
+lib/state/$1.json` and `sed -i s/a/b/ src/state/$(git ls-files | head -1)` keep their class, as `cp
+x state/*.json` does. Below the store's own folder the folder counts (`cp x ~/.exo/state/$(date
++%F).json`). A matrix cell or a `target:` entry that denies a part still denies the line (#464):
+under `deny: [target:/dev*]`, `cd /dev && cp x ~/.exo/polic$(date)ies/a` is denied by its
+descriptor-folder part, as `cd /dev && cp x out/$(date +%F).json` is. The cost, failing closed: a
+name whose own text fits a store file, split by output, is a store write on any line (`cp x
+data/schedule$(date +%F).sqlite`, `cp x policies/gates$(date +%F).yaml`, `cp x out/seat$(date
++%F).json`), and a split spelling that bash never makes a store path is one too (`cp x
+~/.exo/polic$(date)ies/a`, `cp x ~/.e$[0]xo/policies/a`). Known limits: a store file's name made
+whole by output (`cp x state/$(printf approval-grants).json`, as on main), output with a `/` in it,
+which fills one part (`cp x ~/$(printf .exo/policies)/x`), an expansion that ends a word names no
+part of its own (`cp x ~/.exo/$name`, as `cp x ~/.exo/p*`), and a literal glob in a write target is
+matched as written, not as the names it could be (`cp x ~/.exo/polic?es/gates.yaml`, `cp x
+~/.e*o/policies/a`).
 
 Patch move destinations (#528). Codex `apply_patch` writes the path in `*** Move to:` after an
 `*** Update File:` header. The gate checks both paths, as it checks `*** Add File:`, `*** Delete File:`
@@ -2368,9 +2379,9 @@ non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, 
 writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
 `<( )` of a later command on that line (#465: `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`). There,
 as unwrapped, a command the gate does not read as a read (`sed -n`, `sort`, `curl`) counts as a write. A
-substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own folder (a
-word that is a substitution alone is still a name in the store folder, wherever it stands, so such a line can be
-`credentials`: see "Shell commands: an allowlist", #225). Its
+substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own
+folder (a word that is a substitution alone is still a name in the store folder, wherever it stands,
+so such a line can be `credentials`: see "Shell commands: an allowlist", #225). Its
 place in the line decides, not its text, and one in a here-doc body counts as after every command on its line.
 One in the redirections of a compound that holds the `cd` (`done < <(sort list)`) runs before it. A subshell
 `cd`, a later `cd` out and a `cd` in a function body fail closed. A loop that enters the store is not followed
@@ -2399,10 +2410,11 @@ and keep the delegation (see "Known limits" above). A file tool's write, move, c
 (`write_file` or `delete_file` on `~/.exo/keys/seat.key`) is `credentials` with a store write part
 as well, so it is the principal's alone too. A read alone (`cat ~/.exo/keys/seat.key`, `read_file`
 on it) has none, so such a seat may answer it. A delete of job output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name
-(`rm ~/.exo/run/exod.sock`) stays `store_write`. A secret read by another command on a store-write line makes the line
-`credentials` too, the store write a part of it (`cd ~/.exo/policies && cat ~/.ssh/id_rsa; cp /tmp/evil
-gates.yaml`), and so does a name that "Expansions inside a name" reads as a secret (`cd ~/.exo/state &&
-cat ${x-.netrc}; echo $(rm -rf x)`, #225), and that part keeps it the principal's alone as well.
+(`rm ~/.exo/run/exod.sock`) stays `store_write`. A secret read by another command on a store-write
+line makes the line `credentials` too, the store write a part of it (`cd ~/.exo/policies && cat
+~/.ssh/id_rsa; cp /tmp/evil gates.yaml`), and so does a name that "Expansions inside a name" reads
+as a secret (`cd ~/.exo/state && cat ${x-.netrc}; echo $(rm -rf x)`, #225), and that part keeps it
+the principal's alone as well.
 
 What the floor does to a policy's denies. A shell write to the store keeps its own reading
 (`local_write`, `shell`, `delete`) as a part beside the store part, so a deny on that category

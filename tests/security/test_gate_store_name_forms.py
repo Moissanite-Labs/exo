@@ -713,19 +713,29 @@ def test_a_post_beside_the_folders_read_keeps_each_check(cmd, folder, tool, key)
     assert sum(x.endswith(gate.UNSEEN_BODY) for x in gate.decide(c, POSTING).violations) >= 2, c
 
 
-@pytest.mark.parametrize("cmd", ["cat ${x-.netrc}; gh pr comment 1 --body hi",
-                                 "cat id_ed$((25519)); gh pr comment 1 --body hi",
-                                 "cat ${x-.env} config; gh pr comment 1 --body hi"])
+@pytest.mark.parametrize("form", ["cat ${x-.netrc}", "cat id_ed$((25519))", "cat ${x-.env} config"])
+@pytest.mark.parametrize("post,n,folder,listed", [
+    ("gh pr comment {i} --body hi", 25, "~/.exo/keys", 21),
+    # posts with no numbered target have no copies on other targets (#399), so all share the room of 20
+    *[(post, n, folder, 21 if folder == "~/.exo/keys" else 20)
+      for post in ("gh pr comment --body hi{i}", "gh issue create --title t{i} --body hi{i}",
+                   "gh pr review --comment --body hi{i}")
+      for n in (20, 25) for folder in ("~/.exo/keys", "~/.ssh")],
+])
 @pytest.mark.parametrize("tool,key", [("bash", "cwd"), ("terminal", "workdir")])
-def test_a_line_of_many_posts_in_a_store_folder_lists_as_many_entries(cmd, tool, key):
-    """Past the cap of listed entries (20), main edeb4f89 lists the first post's violation in `~/.exo/keys` bare,
-    beside 20 named ones and `and 5 more`. The copy of the post beside the folder's part comes first, so its entry
-    is listed before the cap, and as many are listed (a551a14f listed one fewer, and counted it in `and 6 more`)."""
-    line = "; ".join([cmd, *(f"gh pr comment {i} --body hi" for i in range(2, 26))])
-    d = gate.decide(gate.classify({"tool": tool, "args": {"command": line, key: "~/.exo/keys"}}),
+def test_a_line_of_many_posts_in_a_store_folder_lists_as_many_entries(form, post, n, folder, listed, tool, key):
+    """Past the cap of listed entries (20), main (edeb4f89, 358c3a39) lists the first post's violation bare, beside the
+    named ones, and leaves out the rest: 21 entries and `and 5 more` for 25 posts in `~/.exo/keys`, 20 in `~/.ssh`. The
+    copy of the post beside the folder's part is listed outside the cap, as the line's own is, so at least as many are
+    listed and no more are left out (a551a14f, and d6104e80 for posts with no numbered target, left one more out, so
+    `and 1 more` for 20 posts)."""
+    line = "; ".join([form, *(post.format(i=i) for i in range(1, n + 1))])
+    d = gate.decide(gate.classify({"tool": tool, "args": {"command": line, key: folder}}),
                     {"posting": {"footer": "-- sent by an agent"}})
-    assert sum(v.endswith("missing footer: -- sent by an agent") for v in d.violations) == 21, d.violations
-    assert d.violations[-1] == "and 5 more on other posts", d.violations
+    count = sum(v.endswith("missing footer: -- sent by an agent") for v in d.violations)
+    assert listed <= count <= listed + 1, d.violations           # + 1: the copy, listed again as main lists its own
+    more = [v for v in d.violations if v.endswith(" more on other posts")]
+    assert more == ([f"and {n - 20} more on other posts"] if n > 20 else []), d.violations
 
 
 @pytest.mark.parametrize("cwd", [None, "/tmp", "~/.exo"])

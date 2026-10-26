@@ -137,6 +137,9 @@ class Classification:
     # True on the copy of a gh action on one of its alt_targets among the parts (#399): an ssh or mosh hop gives an
     # empty one the host, and `fill_body` gives each the body a caller read from the post's body file.
     alt_copy: bool = field(default=False, repr=False, compare=False)
+    # True on the copy of a secret line's heaviest other command that _shell_call adds beside the folder's read (#320):
+    # on main that command is the line, whose own violations are listed outside the cap, so the copy's are too.
+    line_copy: bool = field(default=False, repr=False, compare=False)
     # The source text of the one simple command this part stands for, with its redirections (#394): a rule that
     # would lower a compound line must match it too (_line_own_test). None where no such text exists (a part the
     # gate made up, an unread nest, a string literal in code), and then no such rule matches.
@@ -163,6 +166,7 @@ class Classification:
         d.pop("displaced")
         d.pop("floor")
         d.pop("alt_copy")
+        d.pop("line_copy")
         d.pop("_command_views")
         d.pop("own")
         d.pop("setters")
@@ -6656,11 +6660,12 @@ def _shell_call(cmd: str) -> Classification:
     # #320: a secret line by its own words keeps the folder's read beside it when that is another target, as a cd
     # form's does (`cat ${x-.netrc}; git push -f` in ~/.exo/keys), and a copy of its heaviest other command with no
     # own text, so no rule on `command` lifts that command's deny, as on main where it decides the line (#394). The
-    # copy keeps its body, so a post main checks as the line's own and as its part is checked twice here too.
+    # copy keeps its body, so a post main checks as the line's own and as its part is checked twice here too. Its
+    # entries are listed outside the cap, as main lists the line's own (``line_copy``).
     new = [f for f in found if f[1] not in {p.target for p in _each_part(c) if p.category == "credentials"}]
     top = _most_severe(p for p in _each_part(c) if p.category != "credentials") if c.category == "credentials" else None
-    if new and top is not None:                 # first, so a line of many posts lists its entries before the cap
-        c.parts = [replace(top, parts=[], own=None), *c.parts]
+    if new and top is not None:                 # first, as main reads the line before its parts
+        c.parts = [replace(top, parts=[], own=None, line_copy=True), *c.parts]
     for summary, target in new:
         part = _make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
                      signals=["secret store"])
@@ -7487,8 +7492,12 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     # _LISTED_WITH_COPIES, beside the room the other posts' entries have, as on main. Each list
     # keeps the line's order, so every entry main lists is listed while the posts with copies list
     # no more than that (#439 round 11). The count stays bounded, the ledger row by count only (#485).
+    # The copy of a secret line's heaviest other command (#320, line_copy) stands for the line main
+    # reads, so its entries are all listed, named after it, and take none of the room the other
+    # posts' entries have.
     checked, post_unseen_seen = False, False
     named: list[str] = []
+    copied_line: list[str] = []
     held: list[bool] = []       # per named entry: of a post with copies or of a copy
     found_on: dict[int, list[str]] = {}
     post_of = {id(k): id(q) for q in _each_part(eff) for k in q.parts if k.alt_copy}
@@ -7514,6 +7523,8 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
             listed += found
         if p is eff:
             violations += found
+        elif p.line_copy:
+            copied_line += [f"{redact_userinfo(p.summary or p.category)}: {v}" for v in found]
         else:
             named += [f"{redact_userinfo(p.summary or p.category)}: {v}" for v in found]
             held += [p.alt_copy or id(p) in copied] * len(found)
@@ -7525,7 +7536,7 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
         (listed if seen[h] < (_LISTED_WITH_COPIES if h else room) else hidden).append(v)
         seen[h] += 1
     left = len(hidden)
-    violations += listed + ([f"and {left} more on other posts"] if left else [])
+    violations += copied_line + listed + ([f"and {left} more on other posts"] if left else [])
     if violations:
         bump("ask", "posting rules: " + "; ".join(violations), "posting")
 

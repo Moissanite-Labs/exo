@@ -2013,7 +2013,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   footer violation twice, each named after the post, where the merge listed it once. The copy is the line's first
   part, so on a line of more than 20 posts (`_LISTED_VIOLATIONS`) its entry is listed before the cap, where main lists
   the line's own bare: with 25 posts in `~/.exo/keys`, 21 entries and `and 5 more` on both, where the merge listed 20
-  and `and 6 more`. A here-doc body on the line reaches the most severe post below a secret read and a store write,
+  and `and 6 more`. Its entries take none of the 20 places (`line_copy`), so posts with no numbered target, which have
+  no #399 copies and share those places (`gh pr comment --body hi`, `gh issue create`, `gh pr review --comment`), list
+  at least as many entries as main and leave as many out, where d6104e80 left one more out. A here-doc body on the line
+  reaches the most severe post below a secret read and a store write,
   as below a store write (#435), so a line these forms make a secret line keeps the posting checks main makes on its
   post (`cat ${x-.netrc}; mail -s s a@b.c <<EOF`, in any folder, where the merge checked none). The literal line
   (`cat .netrc; mail -s s a@b.c <<EOF`) now has them too, where main checks none. #452's nested-line row is stricter,
@@ -2045,17 +2048,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   6 folders, as bash, terminal and exec_command calls): 14,514,318 pairs, none lowered, 1,138,879 pairs tightened on
   41,216 actions, and 193,080 pairs reworded, each a post's violation on a line these forms make `credentials`,
   named after its post as above. On a later review's 16,632 posting calls (lines of up to 25 posts and here-doc
-  mail beside these forms, in store folders and `/tmp`) under the 87 built-in policies: 1,446,984 pairs, none lowered, 34,232 pairs tightened on 6,424 actions,
-  and 163,980 pairs reworded as above. Before the
+  mail beside these forms, in store folders and `/tmp`) under the 87 built-in policies: 1,446,984 pairs, none lowered,
+  34,232 pairs tightened on 6,424 actions, and 163,980 pairs reworded as above. Before the
   #452 fix above, the merge with edeb4f89 lowered 8 pairs of the test lines and 26,717 pairs on 2,975 of those
   calls; before the copy kept its body, 1,480 posting pairs on 148 of the gh-post calls (a violation main lists
   twice in a folder that is itself a store, listed once); and before the here-doc and listing fixes above, the
   review's posting calls lowered 3,438 posting pairs on 846 actions (2,250 a here-doc mail beside these forms,
-  1,188 a line of more than 20 posts in a store folder); against main d79639f1 the earlier runs lowered none. Before the fixes of this paragraph, round 6's aimed run on
-  the merge with main 5a9dc394 lowered 128 outcome pairs under the target rules, and with the first of them alone the
-  11,845 actions still lowered 9 pairs (the `${x-.env}` key-read line above under a rule on costly `credentials` and
-  under a lifted category line, and the reserved groups). Now no run lowers a pair, and neither the 32-pair nor the
-  52-pair reserved group remains.
+  1,188 a line of more than 20 posts in a store folder); against main d79639f1 the earlier runs lowered none. Before the
+  fixes of this paragraph, round 6's aimed run on the merge with main 5a9dc394 lowered 128 outcome pairs under the
+  target rules, and with the first of them alone the 11,845 actions still lowered 9 pairs (the `${x-.env}` key-read line
+  above under a rule on costly `credentials` and under a lifted category line, and the reserved groups). Now no run
+  lowers a pair, and neither the 32-pair nor the 52-pair reserved group remains.
   *Known limits.* The default word is not read behind an indirect name or a subscript with an expansion in braces
   (`${!x:-~/.kube}`, `${!x[0]:-.env}`, `${x[${i}]:-$HOME/.exo}`), and a part that could be `..` after a literal part
   is not read as `..` (`grep -r x ~/.exo/run/jobs/.?`). A secret read beside a store write makes the line
@@ -2584,10 +2587,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   command, a `bash -c` line). Where a `>( )` or a `$( )` in that line now reads an ssh as fed, the new part decides
   that line, so a rule that denies `costly` `shell` or `read` parts asks instead: `sudo ssh jump 'tee >(ssh host)'`,
   as main decides `sudo ssh jump 'ssh host < f'`. With #320 (2026-10-22 amendment above) a costly copy of each part
-  the wrapper runs sits beside it, so that rule denies both lines. (c) The flag before a word that may expand: `ssh -n "$h" uptime <
-  hosts.txt` took the #240 reading (`opaque_exec`, ask) and now takes its own (`read`, allow), since ssh never reads
-  its stdin then. That `opaque_exec` part is gone, so `deny: [opaque_exec]` no longer denies such a line, a reserved
-  entry loses its hit on that part, and after a `cd` into the store the line is no longer a store write
+  the wrapper runs sits beside it, so that rule denies both lines. (c) The flag before a word that may expand: `ssh -n
+  "$h" uptime < hosts.txt` took the #240 reading (`opaque_exec`, ask) and now takes its own (`read`, allow), since ssh
+  never reads its stdin then. That `opaque_exec` part is gone, so `deny: [opaque_exec]` no longer denies such a line,
+  a reserved entry loses its hit on that part, and after a `cd` into the store the line is no longer a store write
   (`cd ~/.exo/state && ssh -n "$h" uptime < hosts.txt`). Each such line decides as main decides it with a plain host
   in place of the word (`ssh -n host uptime < hosts.txt`). In (a) and (b), `deny` entries, `reserved` entries and
   category lines that deny a category still see every part. The #423 differential against main 5a9dc394, each tree
