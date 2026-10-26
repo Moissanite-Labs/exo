@@ -19,9 +19,10 @@ import pytest
 
 from exo import cli_chat
 from exo import ensure_core as ensure
+from exo import principal as pr
 from exo.protocol import schema as s
 from exo.protocol.client import Client
-from exo.server.app import Dispatcher, HttpServer
+from exo.server.app import Dispatcher, HttpServer, SocketBusy
 from exo.server.echo import EchoEngine
 
 
@@ -73,6 +74,134 @@ def test_start_unix_still_replaces_a_stale_socket_file(home):
     assert ensure.probe(path) == "stale"
 
     async def main():
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(path)
+        try:
+            async with Client(socket=str(path)) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    _run(main())
+
+
+def test_start_unix_replaces_a_dangling_link_as_a_stale_file(home):
+    """The stale-file removal before the bind is unlink(missing_ok=True). A link at the socket path whose target is
+    gone is replaced as a stale file is. path.exists() follows the link, so on main the bind then failed."""
+    path = home / "exod.sock"
+    path.symlink_to(home / "gone.sock")
+
+    async def main():
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(path)
+        try:
+            assert not path.is_symlink() and (home / "gone.sock").exists() is False
+            async with Client(socket=str(path)) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    _run(main())
+
+
+def test_a_second_start_on_a_live_server_keeps_its_lock_and_record(home):
+    """A second start_unix on a server that already started is refused before it takes anything. With the lock taken
+    inside the try, its SocketBusy went through the except clause, which revoked the live start's principal record and
+    let go of its start lock (#590 review)."""
+    path = home / "exod.sock"
+
+    async def main():
+        srv = HttpServer(Dispatcher(EchoEngine()), principal=True)
+        await srv.start_unix(path)
+        try:
+            lock, record = srv._lock_fd, pr.token_path(path).read_text()
+            with pytest.raises(SocketBusy, match="already holds"):
+                await srv.start_unix(path)
+            assert srv._lock_fd == lock and srv._principal_token and pr.token_path(path).read_text() == record
+            with pytest.raises(SocketBusy, match="another exo core"):  # the lock still refuses a new instance
+                await HttpServer(Dispatcher(EchoEngine())).start_unix(path)
+            async with Client(socket=str(path)) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    _run(main())
+
+
+def test_a_start_that_fails_after_the_bind_closes_its_socket(home, monkeypatch):
+    """start_unix binds its own socket under the umask and then starts the server on it (#563). A start that fails
+    there closes that socket and lets go of the lock, and the next start replaces the file it left."""
+    path, real, socks = home / "exod.sock", asyncio.start_unix_server, []
+
+    async def fail_once(*args, **kwargs):
+        socks.append(kwargs["sock"])
+        if len(socks) == 1:
+            raise OSError("listen failed")
+        return await real(*args, **kwargs)
+
+    async def main():
+        with pytest.raises(OSError, match="listen failed"):
+            await HttpServer(Dispatcher(EchoEngine())).start_unix(path)
+        assert socks[0].fileno() == -1 and ensure.probe(path) == "stale"
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(path)
+        try:
+            async with Client(socket=str(path)) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    monkeypatch.setattr(asyncio, "start_unix_server", fail_once)
+    _run(main())
+
+
+def test_a_start_cancelled_after_listen_takes_its_socket_off_the_loop(home, monkeypatch):
+    """A cancel in start_unix_server's last pass finds the socket listening and on the loop. start_unix takes it off
+    the loop before it closes it. Left on, its number went to the next socket on that loop, which then never woke for
+    a client (#563 review)."""
+    real, fds = asyncio.start_unix_server, []
+
+    async def cancelled(*args, **kwargs):
+        fds.append(kwargs["sock"].fileno())
+        await real(*args, **kwargs)  # listening and on the loop, as a cancel in its last pass finds it
+        raise asyncio.CancelledError
+
+    async def main():
+        monkeypatch.setattr(asyncio, "start_unix_server", cancelled)
+        with pytest.raises(asyncio.CancelledError):
+            await HttpServer(Dispatcher(EchoEngine())).start_unix(home / "a.sock")
+        monkeypatch.setattr(asyncio, "start_unix_server", real)
+        assert fds[0] not in asyncio.get_running_loop()._selector.get_map()
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(home / "b.sock")  # its socket takes the number the first one let go
+        try:
+            async with Client(socket=str(home / "b.sock")) as c:
+                assert (await c.call(s.SessionCreate(title="t")))["session"]["id"]
+        finally:
+            await srv.close()
+
+    _run(main())
+
+
+def test_a_start_whose_chmod_fails_leaves_no_server(home, monkeypatch):
+    """start_unix sets the socket file's mode before the server starts on it. A chmod that fails leaves no server
+    behind, so close still works (`PeerService.stop` closes a server whose start failed), and the next start replaces
+    the file (#563 review)."""
+    path, real = home / "exod.sock", os.chmod
+
+    def chmod(p, *args, **kwargs):
+        if Path(p) == path:
+            raise PermissionError("chmod failed")
+        return real(p, *args, **kwargs)
+
+    async def main():
+        first = HttpServer(Dispatcher(EchoEngine()))
+        monkeypatch.setattr(os, "chmod", chmod)
+        with pytest.raises(PermissionError, match="chmod failed"):
+            await first.start_unix(path)
+        monkeypatch.setattr(os, "chmod", real)
+        assert ensure.probe(path) == "stale"
+        await first.close()
         srv = HttpServer(Dispatcher(EchoEngine()))
         await srv.start_unix(path)
         try:
