@@ -19,6 +19,18 @@ asked]`. A store named as `path` is read, after the gate asks (#241, `docs/GATE.
 read"). In a repo's own `.claude` folder only `worktrees`, `commands`, `agents` and `skills` are searched. A
 search of the whole file system (`/`, or a path that resolves to it) is refused; name a folder below it.
 
+Each registered `grep` or `glob` call runs its walk and pattern matching in an owned Python process, with a
+30-second wall-clock limit (D-057 stage 0.5). A pattern that backtracks cannot stop the core's event loop.
+At the limit the result says `Search stopped after 30 s; narrow the pattern`. Stopping the turn kills and
+reaps the worker too. File limits, skipped-store notes, result ordering and the registry's output cap stay the same.
+The worker gets only the paths needed to recognize configured secret stores, without provider keys or Python
+startup hooks. The gate and selected executor run first: an executor may perform the search itself, and only
+its explicit trusted-local callback starts this worker. A missing required executor never starts it.
+
+The process is a time bound, not a filesystem sandbox or a memory limit. Large trees still use memory for
+the matching file list. Process startup adds overhead to small searches. `src/exo/search_worker.py` owns the
+process, while `core/tools/builtin/search.py` keeps the synchronous search implementation and tool schemas.
+
 ## Edit matching
 
 `edit_file` finds `old_string`, and `apply_patch` finds each hunk's context and `-` lines, with the fuzzy matcher
