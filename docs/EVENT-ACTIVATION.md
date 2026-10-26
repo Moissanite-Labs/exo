@@ -1,11 +1,17 @@
 # Event-driven activation: triggers, connectors, runs and root causes (D-057)
 
-Status: **Proposed** (2026-10-13), revised 2026-10-18 after the reviews of PR #107. Nothing here is built. D-057 in
+Status: **Proposed** (2026-10-13), revised 2026-10-18 after the reviews of PR #107. Triggers are not built. D-057 in
 `DECISIONS.md`. Builds on D-022 (scheduled jobs, `docs/SCHEDULE.md`), D-026 (one ingress path), D-040 (authors), the
 gate (`docs/GATE.md`), the trace and findings (`docs/TRACE.md`, D-025) and D-050 (local first). It amends D-052 in one
 place (section 0.1). Present tense in this page describes the proposal. "Today" and "on main" describe what exists,
 checked at `6551eed` (main on 2026-10-18). This decision stands apart from the egg decisions (D-048, D-058, D-059):
 each can be ruled on alone.
+
+**Stage 0 update (2026-10-25):** sections 0.1 and 0.2 are implemented independently of the trigger proposal.
+Schedule mutations require the live principal in `handle_schedule_edit`, reached through `Scheduler.edit`
+(the engine forwards its live caller context). Each scheduled tool call is checked against the run's
+initial available-tool list. `docs/SCHEDULE.md` describes the behavior. The "Today" paragraphs below remain
+the historical evidence at `6551eed`, not a claim that these two gaps remain in the implementation.
 
 ## The decision, in plain words
 
@@ -83,7 +89,7 @@ change the same two tools and can share a pull request. The first trigger waits 
 
 ### 0.1 Only the principal changes jobs
 
-- **Today.** `CoreEngine._schedule_edit` (`src/exo/core/engine.py`) has no principal check, while `feedback.send`,
+- **Baseline at `6551eed`.** `CoreEngine._schedule_edit` (`src/exo/core/engine.py`) has no principal check, while `feedback.send`,
   `ui.respond`, `models.set` and `config.set` have one. Nor does `handle_schedule_edit` (`src/exo/scheduler.py`), which
   it reaches through `Scheduler.edit`. In a throwaway engine, `add`, `pause`, `resume`, `run_now` and `remove` all
   succeeded for the callers `local`, `unknown` and `seat:helper`, and `config.set` was refused for them. D-052 lists
@@ -91,10 +97,11 @@ change the same two tools and can share a pull request. The first trigger waits 
 - **Amends D-052.** D-052 says local automation may still drive turns, and it leaves jobs off its principal-only list.
   So a local script can edit jobs today. This section puts job edits on the list. Local automation can still send turns
   as `local`. It can no longer add, pause, resume, run or remove a job.
-- **Change.** `_schedule_edit` requires a live principal caller for every action except `list`. It is the only path to
-  `handle_schedule_edit` in the product code, so the one check covers both. This is the one thing that makes "only the
-  principal adds a trigger" true. Blocking the `cronjob_manage` tool would not: it is not an Exo tool, and
-  `schedule.edit` is a protocol command that no tool block reaches.
+- **Implemented (2026-10-25).** `handle_schedule_edit`, reached through `Scheduler.edit`, requires a live principal
+  caller for every action except `list`. `_schedule_edit` forwards its live caller context. The check stays outside
+  the counted core and also covers direct command-handler calls. A future trigger will use this same boundary.
+  Blocking the `cronjob_manage` tool would not cover it: that is not an Exo tool, and `schedule.edit` is a protocol
+  command that no tool block reaches.
 - **Who notices.** The terminal client, the web client and `exo chat` send the principal credential and keep working.
   A script or channel link that edits jobs over the socket stops. An agent's `bash` call to the socket comes from a
   process that descends from the core, which `exo.principal.stamp` marks `local`, so it is refused too. The new
@@ -104,13 +111,14 @@ change the same two tools and can share a pull request. The first trigger waits 
 
 ### 0.2 A run can call only the tools it was given
 
-- **Today.** `Scheduler.run` (`src/exo/scheduler.py`) removes the names in `BLOCKED_TOOLS` from the tool list it shows
+- **Baseline at `6551eed`.** `Scheduler.run` (`src/exo/scheduler.py`) removes the names in `BLOCKED_TOOLS` from the tool list it shows
   the model, and runs calls through `engine.run_tool`, which runs any registered tool by name. With the template gate
   policies attached to a throwaway engine, a stand-in tool named `peers` (a blocked name the gate classes as `read`)
   was not offered, was called anyway by a scripted model, and ran. Subagents are stricter: `Delegator._loop` wraps the
   runner and refuses names outside the brief's list.
-- **Change.** A scheduled run's runner gets the same wrapper, and so does a trigger run's. The statement in
-  `docs/SCHEDULE.md` that those tools are blocked then holds for the runner and not only for the list.
+- **Implemented (2026-10-25).** A scheduled run's runner checks every call against the available, non-blocked tool
+  names captured before the run starts. A later registration or availability change cannot widen that set.
+  `docs/SCHEDULE.md`'s blocked list now holds at execution. Future trigger runs must enforce their assigned lists too.
 - **Risk.** Small. A call outside the list returns an error result to the model.
 - **Test.** A scripted model that calls a name outside the list gets an error result and nothing runs.
 

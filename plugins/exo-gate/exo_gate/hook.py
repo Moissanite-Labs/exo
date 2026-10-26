@@ -48,8 +48,10 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
 from exo.core.private import atomic_write
-from exo.principal import require_principal
+from exo.principal import current_caller, require_principal
 from exo.store import principal_root
+
+from . import permissions as perm
 
 logger = logging.getLogger("exo_gate")
 
@@ -66,6 +68,33 @@ _MAX_BODY_FILE = 256 * 1024
 # Tools that cannot change anything; on an internal error these still run.
 _SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
 _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
+
+
+def _every_part(c: gate.Classification) -> list:
+    """Each reading of the line (``gate.readings``) and every part it was built from, nested ones included, once."""
+    seen: set[int] = set()
+    out, todo = [], list(gate.readings(c))
+    while todo:
+        p = todo.pop(0)
+        if id(p) not in seen:
+            seen.add(id(p))
+            out.append(p)
+            todo += p.parts
+    return out
+
+
+def _body_path(f: str) -> Optional[Path]:
+    """``f`` when the hook may read it as a body file: an absolute path to a regular file of at most 256 KiB. /dev and
+    /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here they give exod's own,
+    not what gh will read, so they stay unseen (#208)."""
+    try:
+        p = Path(f)
+        if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
+               for y in (p, Path(os.path.realpath(p)))):
+            return None
+        return p if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE else None
+    except (OSError, ValueError):                       # ValueError: a NUL in the path, which gh never opens
+        return None
 
 
 @dataclass
@@ -284,17 +313,73 @@ class Gate:
         self._policies: Optional[dict] = None      # pinned: the policy in force for this session
         self._policy_stamp: tuple = ()
         self._policy_error = ""
+        self._floor: Optional[dict] = None         # #557: the defaults, decided beside a repaired escalate
         self._changed: Optional[dict] = None       # D-038: files changed since; waits for /gate accept
         self._changed_stamp: tuple = ()
         self._changed_error = ""
+        self._changed_floor: Optional[dict] = None
         self._pending: Dict[str, PendingApproval] = {}
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
         self.grants = GrantStore(settings.grants_path)
+        self.permissions = perm.Permissions()  # D-065: ask (default) or bypass, for this run of the core only
 
     @property
     def executor_required(self) -> bool:
         return self._required_at_load or bool(self.required_getter and self.required_getter())
+
+    # --- permission mode (D-065) ---------------------------------------------------------
+
+    @property
+    def bypass_on(self) -> bool:
+        """Bypass is in force: switched on and not under a required executor, whatever the order they came in."""
+        return self.permissions.mode == perm.BYPASS and not self.executor_required
+
+    def set_permissions(self, mode: str, via: str = "/permissions") -> None:
+        """Switch the mode. Bypass needs a live principal connection and no required executor; going back to
+        ask is allowed to anyone, since it only tightens. The ledger row is written before the switch."""
+        if mode not in (perm.ASK, perm.BYPASS):
+            raise ValueError(mode)
+        if mode == perm.BYPASS:
+            by = require_principal("turn on permissions bypass")
+            if self.executor_required:
+                from exo.server.engine import CommandFailed
+                raise CommandFailed("forbidden", perm.REQUIRED_REFUSAL)
+        else:
+            by = current_caller()
+        if mode == self.permissions.mode:
+            return
+        self._append({"gate": PLUGIN_ID, "phase": "permissions", "mode": mode, "previous": self.permissions.mode,
+                      "by": by, "via": via, "auto_approved": self.permissions.auto_approved})
+        self.permissions.set(mode, by, via, time.time())
+
+    def start_from_seat(self) -> None:
+        """The seat file's ``[permissions] mode = "bypass"``, applied once when the gate loads."""
+        if self.executor_required:
+            logger.warning("exo-gate: the seat asks for permissions bypass; %s", perm.REQUIRED_REFUSAL)
+            return
+        try:
+            self._append({"gate": PLUGIN_ID, "phase": "permissions", "mode": perm.BYPASS, "previous": perm.ASK,
+                          "by": "seat file", "via": "seat default"})
+        except Exception:
+            logger.warning("exo-gate: could not record the seat's bypass default; staying in ask", exc_info=True)
+            return
+        self.permissions.set(perm.BYPASS, "seat file", "seat default", time.time())
+
+    def permissions_snapshot(self) -> dict:
+        snap = self.permissions.snapshot(available=not self.executor_required)
+        if not self.bypass_on:
+            snap["mode"] = perm.ASK
+        return snap
+
+    def _bypass(self, c: gate.Classification, d: gate.Decision) -> Optional[str]:
+        """What bypass does with an ask: ``allow``, ``hold`` (a post that breaks the posting rules goes back to
+        the agent with the fixes) or ``floor`` (store writes and secrets still ask). None when bypass is off."""
+        if d.outcome != "ask" or not self.bypass_on:
+            return None
+        if c.category in perm.FLOOR:
+            return "floor"
+        return "hold" if d.violations else "allow"
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -321,20 +406,28 @@ class Gate:
         paths = gate.scrub_sources(self.settings.principal_store)
         return tuple((str(p), p.stat().st_mtime_ns if p.exists() else 0) for p in paths)
 
-    def _load(self) -> tuple[dict, str]:
+    def _load(self) -> tuple[dict, Optional[dict], str]:
+        """The policy, the defaults to decide beside it (or None) and the policy error."""
+        errors: list[str] = []
         try:
-            return gate.load_policies(self.settings.principal_store), ""
+            pol = gate.load_policies(self.settings.principal_store, errors)
         except (gate.PolicyError, OSError) as exc:
             # Fall back to the defaults, which ask on anything irreversible or public.
             logger.warning("exo-gate: policy error, using defaults: %s", exc)
-            return gate.normalize_policies({}), str(exc)
+            return gate.normalize_policies({}), None, str(exc)
+        if not errors:
+            return pol, None, ""
+        # #557: a malformed escalate keeps the principal's other sections; the stricter of them and the defaults applies
+        logger.warning("exo-gate: policy error, the stricter of the policy and the defaults applies: %s",
+                       "; ".join(errors))
+        return pol, gate.normalize_policies({}), "; ".join(errors)
 
     def policies(self) -> dict:
         """The pinned policy: what was on disk when this gate first looked (D-038). A file changed later is
         loaded by ``changed_policies`` and can only make a decision stricter until the principal accepts it."""
         if self._policies is None:
             self._policy_stamp = self._stamp() + self._scrub_stamp()
-            self._policies, self._policy_error = self._load()
+            self._policies, self._floor, self._policy_error = self._load()
         return self._policies
 
     def changed_policies(self) -> Optional[dict]:
@@ -343,10 +436,10 @@ class Gate:
         self.policies()
         stamp = self._stamp() + self._scrub_stamp()
         if stamp == self._policy_stamp:
-            self._changed, self._changed_stamp = None, ()
+            self._changed, self._changed_floor, self._changed_stamp = None, None, ()
             return None
         if stamp != self._changed_stamp:
-            self._changed, self._changed_error = self._load()
+            self._changed, self._changed_floor, self._changed_error = self._load()
             self._changed_stamp = stamp
             self._append({"gate": PLUGIN_ID, "phase": "policy_change", "files": self._file_hashes(),
                               "error": self._changed_error or None})
@@ -368,40 +461,49 @@ class Gate:
         candidate = self.changed_policies()
         if candidate is None:
             return "policy unchanged since the session started"
-        stamp, error = self._changed_stamp, self._changed_error
+        stamp, floor, error = self._changed_stamp, self._changed_floor, self._changed_error
         self._append({"gate": PLUGIN_ID, "phase": "policy_accept", "files": self._file_hashes(), "by": by,
                       "policy_sha256": hashlib.sha256(json.dumps(candidate, sort_keys=True).encode()).hexdigest()})
-        self._policies, self._policy_error = candidate, error
-        self._policy_stamp, self._changed, self._changed_stamp = stamp, None, ()
+        self._policies, self._floor, self._policy_error = candidate, floor, error
+        self._policy_stamp, self._changed, self._changed_floor, self._changed_stamp = stamp, None, None, ()
         return "accepted the changed policy files"
 
     # --- hooks ------------------------------------------------------------------------
 
-    def _load_body_file(self, c: gate.Classification) -> None:
+    def _load_body_file(self, c: gate.Classification) -> list[str]:
         """Read a post's body file into its text when the hook can be sure it reads the file the command will:
-        an absolute path to a regular file of at most 256 KiB. A relative or `~` path names a file in the
-        command's folder or home, which the hook does not know. Anything not read stays unseen, so the post
-        asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
-        symlinks included, are never read before the worker, and `_rules` refuses the call. The copies of the post
-        on its other targets get the text too (`gate.fill_body`), and each other reading of the line
-        (`gate.readings`: as read before #399 or #311) has its own body file read the same way, as the hook read it
-        before."""
-        for x in gate.readings(c):
-            if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
+        an absolute path to a regular file of at most 256 KiB, on a line where the gate finds no other part. A
+        relative or `~` path names a file in the command's folder or home, which the hook does not know. Anything not
+        read stays unseen, so the post asks and gets no standing grant (#208). A required executor reads none:
+        tool-selected host paths, symlinks included, are never read before the worker, and `_rules` refuses the call.
+        The copies of the post on its other targets get the text too (`gate.fill_body`), and each other reading of the
+        line (`gate.readings`: as read before #399 or #311) has its own body file read the same way, as the hook read
+        it before.
+
+        Another part in any reading (a command, a redirection to a file, an assignment that changes what runs, a
+        wrapper the gate does not see through, an ssh hop, the code around a call) may change the file after this
+        read and before gh reads it, or give gh another file by that path. So on such a line the file stays unread
+        and the post asks once (#343). Any part counts, a store read from the tool's folder (#311) and a sudo write
+        that displaced a part (#454) among them. A copy of the post on another target is the post itself, not another
+        part. Returns the files left unread for that reason alone, of every post on the line, so the card can say why
+        (`gate.UNSEEN_ON_LINE`): alone on its line, each would be read."""
+        if not self.settings.read_body_files or self.executor_required:
+            return []
+        alone = all(p.alt_copy for x in gate.readings(c) for p in x.parts)
+        held: list[str] = []
+        for x in gate.readings(c) if alone else _every_part(c):
+            if not x.text_file or x.text or (p := _body_path(x.text_file)) is None:
+                continue
+            if not alone:
+                held.append(x.text_file)
                 continue
             try:
-                p = Path(x.text_file)
-                # /dev and /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read
-                # here they give exod's own, not what gh will read, so they stay unseen (#208).
-                if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
-                       for y in (p, Path(os.path.realpath(p)))):
-                    continue
-                if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
-                    gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
-                    if not x.link:
-                        x.link = str(p)
+                gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
             except OSError:
-                pass
+                continue
+            if not x.link:
+                x.link = str(p)
+        return list(dict.fromkeys(held))
 
     def _rule_key(self, tool: str, args: Mapping, c: gate.Classification, d: gate.Decision) -> str:
         # An "always" answer must not cover a different public or irreversible act, or different code the
@@ -509,21 +611,35 @@ class Gate:
                 card.update(approvers=["principal"], once=True)
             return card
 
-    def _rules(self, tool: str, args: dict, risk: str, cwd: str = "") -> tuple[gate.Classification, gate.Decision]:
-        """Classification and the rule outcome (policies, then the registry risk floor)."""
-        action = {"tool": tool, "args": args}
-        c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
-        self._load_body_file(c)
+    def _rules(self, tool: str, args: dict, risk: str, cwd: str = "", c: Optional[gate.Classification] = None,
+               floors: bool = True) -> tuple[gate.Classification, gate.Decision]:
+        """Classification and the rule outcome (policies, then the registry risk floor). With ``floors`` off, the
+        outcome as before #557: the defaults alone in place of a policy with a malformed escalate. A given ``c`` is a
+        line already read here: its body files are not read again, and none counts as held (#343), since a held file
+        leaves its post unseen and such a line never gets that far (``_pre_tool_call``)."""
+        held: list[str] = []
+        if c is None:
+            action = {"tool": tool, "args": args}
+            c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
+            held = self._load_body_file(c)
         today = _dt.date.today().isoformat()
-        ctx = {"spent_today": self._spent.get(today, 0.0)}
-        d = gate.decide(c, self.policies(), ctx)
-        if self._policy_error:
+        ctx = {"spent_today": self._spent.get(today, 0.0), "held_body_files": held}
+        pol, changed = self.policies(), self.changed_policies()
+        floor, changed_floor = self._floor, self._changed_floor
+        if not floors:
+            pol, floor = pol if floor is None else floor, None
+            changed, changed_floor = changed if changed_floor is None else changed_floor, None
+        d = _decide(c, pol, floor, ctx)
+        if floor is not None:
+            d.reason += f" (policy error, stricter of your policy and the defaults applies: {self._policy_error[:120]})"
+        elif self._policy_error:
             d.reason += f" (policy error, defaults used: {self._policy_error[:120]})"
-        changed = self.changed_policies()
         if changed is not None:
             # D-038: a policy changed mid-session only tightens. Loosening waits for /gate accept.
-            d2 = gate.decide(c, changed, ctx)
-            if _RANK[d2.outcome] > _RANK[d.outcome]:
+            d2 = _decide(c, changed, changed_floor, ctx)
+            if floor is not None or changed_floor is not None:
+                d = _merge(d, d2)   # #557: either may already be a merge; the other's violations stand at a tie
+            elif _RANK[d2.outcome] > _RANK[d.outcome]:
                 d = d2
             # A part reserved under either policy keeps its ask from a standing grant (D-075), and so does a sudo write
             # line whose displaced part asks under either (#454).
@@ -559,9 +675,28 @@ class Gate:
         # Each reading counts (gate.readings: as read before #311 or #399).
         once = gate.no_grant(c) or gate.body_unseen(c)
         grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" and not once else None
+        if grant and (self._floor is not None or self._changed_floor is not None):
+            # #557: while a policy error stands, a grant applies only where the decision as before (the defaults in
+            # place of the policy with the error, then the model's verdict) asks and finds a grant too, so it never
+            # takes the call below that decision: an allow where it logs, or where it asks and no grant covers it.
+            m = self._rules(tool, args, risk, cwd, c=c, floors=False)[1]
+            if m.outcome != "deny":
+                self._tighten(m, verdict)
+            m_out = gate.binds_exact(c, m)
+            m_grant = (self._grant_for(c, m, gate.approval_binding(c, args) if m_out else "", m_out)
+                       if m.outcome == "ask" else None)
+            if m_grant is None:
+                grant = None
         if grant:
             d.outcome, d.rule = "allow", "grant"
             d.reason += f"; standing grant {grant['id']} (until {_iso(grant['expires'])})"
+        bypass = self._bypass(c, d)
+        if bypass == "allow":
+            asked = {"would": "ask", "rule": d.rule, "reason": d.reason}
+            d.outcome, d.rule = "allow", "bypass"
+            d.reason += "; auto-approved: permissions bypass"
+        elif bypass == "hold":
+            d.outcome, d.rule = "deny", "bypass_hold"
         default = str(pol["gates"].get("ask_default") or "skip")
         body = {
             "gate": PLUGIN_ID, "phase": "decision", "tool": tool, "outcome": d.outcome,
@@ -575,9 +710,20 @@ class Gate:
             body["grant"] = grant["id"]
         if binding:
             body["binding"] = binding
+        if bypass in ("allow", "hold"):  # D-065: the exact call, so the audit can be read without the session
+            body["decided_by"] = "bypass"
+            body["call"] = perm.recorded_call(tool, args)
+            if bypass == "allow":
+                body["bypass"] = asked
+        elif bypass == "floor":
+            body["bypass"] = {"floor": c.category}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}
+            if bypass == "hold":
+                result["message"] = (f"exo-gate held {c.summary or tool}: it breaks the posting rules. Fix: "
+                                     + "; ".join(d.violations) + ". Permissions bypass does not ask about this; "
+                                     "change the text and call again.")
         elif d.outcome == "ask":
             msg = gate.summarize(c, d, default)
             if d.violations:
@@ -589,6 +735,10 @@ class Gate:
             # Only who may answer each reading of the line (#399) and each NO_GRANT part (#447, gate.call_approvers).
             approvers = gate.call_approvers(c, pol.get("approvals"),
                                             changed.get("approvals") if changed is not None else None)
+            for floor in (self._floor, self._changed_floor):   # #557: no wider than the defaults' (the principal)
+                if floor is not None:
+                    allowed = gate.call_approvers(c, floor.get("approvals"))
+                    approvers = [a for a in approvers if a in allowed]
             for x in gate.readings(c):
                 if x.displaced is not None and (x is not c or x.displaced.target or d.displaced_asks):
                     # #454: a sudo write line is also about the repo or host its displaced part names, or asks with
@@ -618,6 +768,10 @@ class Gate:
             with self._lock:
                 self._spent[today] = self._spent.get(today, 0.0) + float(c.cost)
         eid = self._append(body, session=session_id)
+        if bypass:
+            with self._lock:
+                key = {"allow": "auto_approved", "hold": "held", "floor": "floor_asks"}[bypass]
+                setattr(self.permissions, key, getattr(self.permissions, key) + 1)
         if result and result["action"] == "approve":
             with self._lock:
                 scope = {"rule": c.category, "target": c.target or tool, "binding": binding, "outward": outward,
@@ -682,6 +836,9 @@ class Gate:
         changed = self.changed_policies()
         if changed is not None:
             days = min(days, float((changed.get("approvals") or {}).get(key) or 0))
+        for floor in (self._floor, self._changed_floor):    # #557: no longer than the defaults' either
+            if floor is not None:
+                days = min(days, float((floor.get("approvals") or {}).get(key) or 0))
         return days
 
     def _add_grant(self, scope: Mapping, by: str, session: Optional[str], ref: Optional[str]) -> None:
@@ -719,6 +876,21 @@ class Gate:
         self._append(body, session=session, refs=(ref,) if ref else ())
 
 
+def _decide(c: gate.Classification, pol: dict, floor: Optional[dict], ctx: dict) -> gate.Decision:
+    """The decision under ``pol``, or with ``floor`` (the defaults beside a repaired escalate, #557) the stricter of
+    the two, merged as a line's readings merge: the widest exposure (so an approval binds as either would bind it),
+    every violation and every reserved part. At an equal outcome and exposure the decision with a violation the other
+    lacks stands, so its reason names it."""
+    d = gate.decide(c, pol, ctx)
+    return d if floor is None else _merge(d, gate.decide(c, floor, ctx))
+
+
+def _merge(d: gate.Decision, d2: gate.Decision) -> gate.Decision:
+    """The stricter of two decisions of one line (#557); at an equal outcome and exposure ``d2`` stands only when it
+    has a violation ``d`` lacks."""
+    return gate.stricter([d2, d] if set(d2.violations) - set(d.violations) else [d, d2])
+
+
 def grants_command(g: "Gate", args: str = "") -> str:
     """``/grants`` lists live standing grants; ``/grants revoke <id>`` removes one (ledger row ``revoke``)."""
     words = (args or "").split()
@@ -752,9 +924,29 @@ def gate_command(g: "Gate", args: str = "") -> str:
         return g.accept_policies()
     if words and words[0] != "status":
         return "usage: gate [status] | gate accept"
-    if g.changed_policies() is None:
-        return "policy as loaded at session start"
-    return "policy files changed this session; the stricter of old and new applies. Run /gate accept to adopt them."
+    changed = g.changed_policies()
+    text = ("policy as loaded at session start" if changed is None else "policy files changed this session; the "
+            "stricter of old and new applies. Run /gate accept to adopt them.")
+    for where, error, floor in (("", g._policy_error, g._floor),     # #557: a standing policy error shows here too
+                                (" in the changed files", changed is not None and g._changed_error, g._changed_floor)):
+        if error:
+            used = "the stricter of your policy and the defaults applies" if floor is not None else "the defaults apply"
+            text += f"\npolicy error{where} ({used}): {error}"
+    return text
+
+
+def permissions_command(g: "Gate", args: str = "") -> Any:
+    """``/permissions`` shows the mode and its counts; ``bypass`` and ``ask`` switch it; ``json`` is for clients."""
+    words = (args or "").split()
+    if words[:1] == ["json"]:
+        return g.permissions_snapshot()
+    if words[:1] in (["bypass"], ["ask"]):
+        if len(words) > 2 or words[1:] not in ([], ["launch"]):
+            return "usage: permissions [status] | bypass | ask"
+        g.set_permissions(words[0], "launch flag" if words[1:] == ["launch"] else "/permissions")
+    elif words and words[0] != "status":
+        return "usage: permissions [status] | bypass | ask"
+    return perm.status_text(g.permissions, on=g.bypass_on, available=not g.executor_required)
 
 
 def _iso(ts: float) -> str:
@@ -791,6 +983,8 @@ def register(ctx) -> Gate:
     g = Gate(resolve_settings(get_config=get_config), risk_lookup=_risk_lookup_for(ctx),
              router_getter=lambda: getattr(ctx, "router", None),
              required_getter=lambda: bool(getattr(getattr(ctx, "manager", None), "executor_required", False)))
+    if perm.seat_default() == perm.BYPASS:  # read once, at start; a seat file is a store path (D-065)
+        g.start_from_seat()
     ctx.register_hook("pre_tool_call", g.apre_tool_call)
     ctx.register_hook("post_approval_response", g.post_approval_response)
     reg_cmd = getattr(ctx, "register_command", None)
@@ -800,6 +994,8 @@ def register(ctx) -> Gate:
                     "[list] | revoke <id>")
             reg_cmd("gate", lambda args="": gate_command(g, args), "Show or accept policy files changed this session",
                     "[status] | accept")
+            reg_cmd("permissions", lambda args="": permissions_command(g, args),
+                    "Ask before risky calls, or bypass: " + perm.SUMMARY, "[status] | bypass | ask")
         except Exception:
             logger.warning("exo-gate: could not register /grants or /gate", exc_info=True)
     return g
