@@ -146,7 +146,8 @@ The technical reference, with arguments and where each command is implemented, i
 | `/trace [N]` | Show timing, route and estimated cost for the last N turns (default 10). |
 | `/findings` | Show what the harness found wrong with itself. |
 | `/grants` | List standing approvals. `/grants revoke <id>` removes one. |
-| `/gate` | Show whether policy files changed this session. `/gate accept` adopts the change. |
+| `/gate` | Show whether policy files changed this session, and any error in them. `/gate accept` adopts the change. |
+| `/permissions` | Show whether the gate asks or is in bypass, and how many calls bypass approved. `/permissions bypass` stops the asking (except Exo's own records and secrets); `/permissions ask` turns it back on. |
 | `/peers` | List other live sessions you can message. |
 | `/send <peer> <text>` | Message another session yourself. |
 | `/handoff [path]` | The agent writes a handoff note for the next session. |
@@ -163,10 +164,10 @@ The technical reference, with arguments and where each command is implemented, i
 
 Plugins add commands. They show in `/help` under `other`. `/exo` (the dispatcher) and `/orchestra` are examples when
 those plugins load. The core answers `/context`, `/compact`, `/trace` and `/findings` itself. `/grants` comes from
-the `exo-gate` plugin. The web client runs `/context`, `/findings`, `/trace`, `/new`, `/rename` and `/layout` from
-its composer, and `/model` and `/default` (with a reference, or bare for a picker; `/default` only on a page opened at
-127.0.0.1 or localhost). A command it does not run, such as `/grants` or `/help`, stays in the box with a note; a line
-like `/tmp is full` is sent as a message.
+the `exo-gate` plugin, and so does `/permissions` (D-065). The web client runs `/context`, `/findings`, `/trace`,
+`/new`, `/rename`, `/permissions` and `/layout` from its composer, and `/model` and `/default` (with a reference, or
+bare for a picker; `/default` only on a page opened at 127.0.0.1 or localhost). A command it does not run, such as
+`/grants` or `/help`, stays in the box with a note; a line like `/tmp is full` is sent as a message.
 
 ### Typing help
 
@@ -277,7 +278,9 @@ appears on the Tasks page) and remove it. Jobs are kept in `$EXO_HOME/schedule.s
 starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
 
 There is no terminal command for jobs, and the agent has no tool to create them. The web page and the protocol
-command `schedule.edit` are the entry points. Details: `docs/SCHEDULE.md`.
+command `schedule.edit` are the entry points. Only your authenticated Exo client can create, pause, resume,
+run or remove a job. Local scripts and channels can list jobs, but changes return `forbidden`.
+An unattended run cannot call a tool outside the list it received. Details: `docs/SCHEDULE.md`.
 
 ## 6. Approvals
 
@@ -304,6 +307,9 @@ even when the composer is empty. Typing in an editable field cannot authorize. P
 press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
+
+File searches with the agent's `grep` and `glob` tools stop after 30 seconds and ask it to narrow the pattern.
+Other sessions and approval cards remain responsive while a search runs. Stopping the turn also stops its search.
 
 What the gate asks about, and why:
 
@@ -379,7 +385,13 @@ What the gate asks about, and why:
   `EXO_PLUGIN_DIRS` at your copy instead. Only you can answer such a write, whatever `approvals.yaml` says, also
   when the same command or file tool names a secret that a seat may approve (#447). Reading your policies or plugins
   with `cat`, `grep` or a read tool does not ask. Some other commands that only read, such as `sed -n` or `sort`, do
-  ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves symbolic
+  ask. So does a write to your Exo home's `config.json` (D-074, #125), which names the plugins Exo loads, your
+  models, your provider settings and your principal, and so does an agent running `exo config set` or `unset`,
+  `exo import-store`, `exo providers default` or `exo interview`. Reading `config.json` with `cat`, `grep` or a read
+  tool does not ask, `exo config set` typed in your own
+  terminal is not a tool call and does not ask, and a project's own `config.json` is not affected. A copy that drops
+  a `config.json` into your Exo home without naming it (`cp /tmp/x/config.json ~/.exo/`) is not seen yet (#483). The
+  gate resolves symbolic
   links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some writes are not
   seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working folder is
   `policies/`, a glob spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md`
@@ -406,6 +418,28 @@ that never runs the page's script never uses its code, so then nothing warns (`d
 
 "Always" answers become standing grants. They expire (7 days for outward acts, 30 days for others) and an outward
 grant covers one exact text. `/grants` lists them. `/grants revoke <id>` removes one.
+
+### Bypass: let the agent work without asking (D-065)
+
+If you want the agent to get on with it, like Claude Code with `--dangerously-skip-permissions`, start Exo with
+
+    exo --skip-permissions
+
+or type `/permissions bypass` in a running window or the web page. The gate then approves on its own everything it
+would have asked you about: comments, deletes, network posts, scripts. Bypass auto-approves everything except
+changes to Exo's own records and reading secrets. Those two still ask you, every time: a write to your policies,
+ledger, keys, grants, seat files or the core's socket, and reading a key or token. Your `deny` rules still block. A
+public post that breaks your posting rules (an internal name, a home path) is sent back to the agent with the fixes
+instead of to you.
+
+You always know it is on. The terminal status line starts with `permissions: bypass` and a count, and every web page
+shows a banner with an "Ask again" button. Every call it approved is in your ledger, marked `decided_by: bypass`,
+with the exact command. `/permissions` shows the counts. `/permissions ask` turns asking back on.
+
+Only you can turn it on, from your own window or page. The agent, a tool it runs, a peer or a bus message cannot. It
+lasts until the core stops; the next start asks again unless you give the flag again. To make it the default for a
+seat, put `[permissions] mode = "bypass"` in the seat file (`docs/SEATS.md`); changing a seat file always asks you.
+On an Exo OS installation (a required tool executor) bypass is not available.
 
 Details: `docs/GATE.md`.
 

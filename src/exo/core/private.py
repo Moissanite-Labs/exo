@@ -8,7 +8,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-_UMASK_LOCK = threading.RLock()  # reentrant: a task may probe while another on its thread awaits in a `umask` block
+_UMASK_LOCK = threading.Lock()  # a `umask` block must not await (#563): a second one on the loop's thread would hang it
 
 
 def private_dir(path: str | os.PathLike) -> Path:

@@ -74,8 +74,9 @@ The trust level comes from this home too:
   unseated daemon and a Hermes profile on this home are such keys. Such a key counts as the principal `config.json`
   names, read from the file when the receiver starts, never from `EXO_PRINCIPAL`. It reaches a daemon as that
   principal only when the daemon runs as that principal, or as none, and has no seat file that names a principal. A
-  seat whose seat file names its principal holds it as `other`: `config.json` is not a store file, and a tool call
-  may change it without asking. To have such a key delivered at once, give it a seat file here that names its
+  seat whose seat file names its principal holds it as `other`: `config.json` is not a seat file the receiver can
+  tie to the key, and a program running as you outside the gate may change it (a tool call that writes it asks the
+  principal since D-074, #125). To have such a key delivered at once, give it a seat file here that names its
   principal (`seats/<name>.toml` with `principal = "<id>"`).
 - The principal a presence file names never raises trust, but it can lower it. When it is not the principal this
   home records for the sender, the message is `other`, as before #132. A presence file that names none stands for
@@ -208,9 +209,11 @@ and the seat files, and then speak as that seat. And any client of a daemon's so
 to `peers send` (D-039). That message arrives as `same-principal` automation, never as you typing: that is by
 design.
 
-A tool call may change `config.json` without asking. Once a daemon restarts, that can change which principal a key
-with no seat file counts as toward it. The key's presence file lowers that only when it names another principal,
-and a tool call may write a presence file too. None of this reaches a seat whose seat file names its principal.
+`config.json` names the principal a key with no seat file counts as toward a daemon whose seat file names none, and
+that daemon reads it when it starts. A tool call that writes `config.json` asks the principal since D-074 (#125),
+but a program running as you outside the gate can still change it. The key's presence file lowers that only when it
+names another principal, and a tool call may write a presence file too. None of this reaches a seat whose seat file
+names its principal.
 
 A presence file still says where a daemon listens, and a program that goes through the gate may write one. A
 forged one under a peer's name can receive the messages sent to that name. It can also answer each send with a
