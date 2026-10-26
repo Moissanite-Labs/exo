@@ -375,18 +375,19 @@ def test_a_required_executor_still_asks_on_an_inline_body(store, work):
     assert r["action"] == "approve" and "forbidden word: Zork" in r["message"]
 
 
-@pytest.mark.parametrize("line, note", [
-    (f"gh pr comment 6 {R} --body-file {{work}}/a\0b", gate.UNSEEN_BODY),
-    (P + f" && gh pr comment 6 {R} --body-file {{work}}/a\0b", gate.UNSEEN_ON_LINE),
-    (f"gh pr comment 6 {R} --body-file {{work}}/a\0b; rm -rf {{work}}/x", gate.UNSEEN_BODY),   # no file to hold
-    (f"rm -rf {{work}}/x; gh pr comment 6 {R} --body-file {{work}}/a\0b", gate.UNSEEN_BODY),
+@pytest.mark.parametrize("line, notes", [
+    (f"gh pr comment 6 {R} --body-file {{work}}/a\0b", [gate.UNSEEN_BODY]),
+    # the held clean file's post gets UNSEEN_ON_LINE; the NUL path is never held, so its post keeps UNSEEN_BODY (#593)
+    (P + f" && gh pr comment 6 {R} --body-file {{work}}/a\0b", [gate.UNSEEN_ON_LINE, gate.UNSEEN_BODY]),
+    (f"gh pr comment 6 {R} --body-file {{work}}/a\0b; rm -rf {{work}}/x", [gate.UNSEEN_BODY]),   # no file to hold
+    (f"rm -rf {{work}}/x; gh pr comment 6 {R} --body-file {{work}}/a\0b", [gate.UNSEEN_BODY]),
 ])
-def test_a_nul_in_a_path_leaves_the_body_unseen_and_keeps_once(store, work, line, note):
+def test_a_nul_in_a_path_leaves_the_body_unseen_and_keeps_once(store, work, line, notes):
     # realpath and lstat raise ValueError on an embedded NUL. The hook used to fall into its error card there, which
     # dropped "once" and offered "always" on plugin_rule:exo-gate:error:terminal (abu-aska, #545).
     _, ctx = make_gate(store)
     r = call(ctx, line.format(work=work))
-    assert r["action"] == "approve" and r.get("once") is True and note in r["message"], r
+    assert r["action"] == "approve" and r.get("once") is True and all(n in r["message"] for n in notes), r
     assert "could not classify" not in r["message"], r
 
 
