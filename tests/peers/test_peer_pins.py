@@ -113,13 +113,16 @@ def test_a_daemon_name_that_is_a_path_or_a_fifo_never_blocks_delivery(run_dir):
 
 
 async def sent_to_alpha(run_dir, node, presence_key):
-    """Send one message from the victim node to a seat alpha whose presence file holds ``presence_key``."""
+    """Send one message from the victim node to a seat alpha whose presence file holds ``presence_key``. The
+    daemon there signs its first reply with that key, as every daemon answers since #523."""
     announce(run_dir, "alpha", "alpha-7777", presence_key, "ada")
 
     async def rpc(path, body):  # alpha's daemon: lists one session, holds the message
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
-        return {"msg_id": msg_id(body.envelope), "state": "held", "detail": "held for the principal"}
+        return crypto.sign_doc({"v": 1, "msg_id": msg_id(body.envelope), "state": "held",
+                                "detail": "held for the principal", "by": "alpha", "daemon": "alpha-7777",
+                                "ts": crypto.now_ts()}, presence_key.key)
     node.rpc = rpc
     return (await node.send("alpha", "please rebase", session="s_me"))["msg_id"]
 
@@ -139,7 +142,8 @@ async def test_a_receipt_is_bound_to_the_seat_the_message_went_to(run_dir, by):
     node.emit_out = lambda session, body: published.append(body)
     real, attacker = crypto.Signer("alpha", crypto.keygen()), crypto.Signer("alpha", crypto.keygen())
     pin_peer(home, "alpha", real.pub)
-    mid = await sent_to_alpha(run_dir, node, attacker)  # the presence file holds the attacker's key
+    mid = await sent_to_alpha(run_dir, node, real)  # an honest presence file: #523 refuses a pinned name whose
+    # file holds another key, so the attacker's receipt here is refused by the pin alone
     published.clear()
     by = str(run_dir / "x") if by == "abs" else by
     assert await node.receipt(receipt_doc(attacker, mid, by)) == {"ok": False}
