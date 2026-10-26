@@ -1414,17 +1414,24 @@ gate does not read:
   sudo runs, so the write happens either way. When the command's own costly `read` or `shell` part
   would lead the line, the first sudo write leads in its place, with that cost. The line is then a
   costly `local_write`, and its target is the written path, as without sudo. Its summary names the
-  program and the path (`chmod, write /tmp/f`). The line is also decided with the displaced part
-  leading, as before, and the stricter outcome stands. So a `categories:` line, a rule or an
+  program and the path (`chmod, write /tmp/f`). When the write is on another command of the line,
+  the summary names the two apart: `gh pr view; write /tmp/f` for
+  `sudo gh pr view 1 -R o/r; sudo echo hi > /tmp/f`. The line is also decided with the displaced
+  part leading, as before, and the stricter outcome stands. So a `categories:` line, a rule or an
   escalation on `local_write` or on the path now reaches the line, and one that reached the
   displaced part still does: `{read: ask}`, or a rule on the repo of
   `sudo gh pr view 1 -R o/r > /tmp/f`. An ssh hop gives its host to the displaced part, as it did
   when that part led, so a rule or reserved entry on the host still reaches
-  `ssh prod 'sudo echo hi > /srv/out'`. Before, the costly `read` outranked the write, and only a
-  deny or reserved entry reached the write. Otherwise the parts stay as they were. A part that
-  outranks that `read` still leads, also one that would tie with a costly write, such as an unknown
-  program: `sudo echo hi > /tmp/f; foo` asks as `opaque_exec`. A store path stays `store_write`,
-  and `/dev/null` adds no write, as without sudo.
+  `ssh prod 'sudo echo hi > /srv/out'`. `ssh -o RemoteCommand=` gives its host to neither part, so
+  a rule that asks or logs on the host does not reach
+  `ssh -o RemoteCommand='sudo echo hi > /srv/out' prod`. Such a rule missed that line before #454
+  too, and it misses the same line without sudo (#493). ssh's own part still names the host, so a
+  rule that denies it, and a deny or reserved entry for it, still reach the line. Before, the
+  costly `read` outranked the write, and only a deny or reserved entry reached the write.
+  Otherwise the parts stay as they were. A part that outranks that `read` still leads, also one
+  that would tie with a costly write, such as an unknown program: `sudo echo hi > /tmp/f; foo` asks
+  as `opaque_exec`. A store path stays `store_write`, and `/dev/null` adds no write, as without
+  sudo.
   A copy made on a nested line (a `$( )`, backticks, `<( )` or an ssh hop) is a part of the line
   around it. There the parts are ranked as before, each copy as a `read` with its own axes. A part
   that outranks a `read` still leads: an unknown program (`echo $(sudo echo hi > /tmp/f) $(foo)`
@@ -1433,9 +1440,10 @@ gate does not read:
   `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line. An ssh
   `-o RemoteCommand=` raises the displaced part to `internal` too, as the hop does.
   When both readings give the same outcome, the decision keeps both reasons and the higher
-  exposure. The card links to the displaced part (a gh read's issue) when its reading asks. A
-  required executor refuses the displaced part's body file too
-  (`sudo gh pr view 1 -R o/r -F /tmp/b > /tmp/f`). The ledger never gets the displaced part.
+  exposure. The card links to the displaced part (a gh read's issue) when its reading asks. A part
+  with no link, such as `chmod`, leaves the written path as the link. A required executor refuses
+  the displaced part's body file too (`sudo gh pr view 1 -R o/r -F /tmp/b > /tmp/f`). The ledger
+  never gets the displaced part.
   A redirection on a compound around a sudo command (`{ sudo echo hi; } > /tmp/f`) or on another
   command of the line (`sudo echo hi | cat > /tmp/f`) is not on the sudo command. There the
   dominant part decides, as on any line (D-075). Where only the write asks, as under
