@@ -901,11 +901,14 @@ _WORD_NESTS = [
 @pytest.mark.parametrize("make", _WORD_NESTS, ids=["arith", "cmd-word", "word-nest", "dq", "span", "procsub", "group",
                                                    "word-arith", "word-backquote", "part-backquote", "funsub"])
 def test_a_nest_only_bash_reads_costs_what_a_short_nest_costs(make):
-    """The reading before reads no nest that a part only bash's reading opens holds, and costs next to nothing on
-    one; bash's reading reads _WORD_NEST + 1 levels of it and no deeper, so 32 levels cost what 8 do, with the text
-    four times as long."""
+    """The reading before reads no nest that a part only bash's reading opens holds; bash's reading reads
+    _WORD_NEST + 1 levels of it and no deeper, so what it adds to the reading before costs at 32 levels what it
+    costs at 8, with the text four times as long. (The reading before is main's, whose own cost grows with the text:
+    #320 reads each $(( in a word to its end, counting its parentheses, six times the steps on the group form.)"""
+    def added(k: int) -> int:
+        return _steps(lambda: _c(make(k))) - _steps(lambda: _before(make(k)))
     assert _parses(make(32)) == _parses(make(8))
-    assert _steps(lambda: _c(make(32))) < 3 * _steps(lambda: _c(make(8)))
+    assert added(32) < 3 * added(8)
 
 
 def _before(line: str) -> gate.Classification:
