@@ -2980,6 +2980,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   errors.
   *Revisit if:* the lexer reads `\<newline>` inside every `$` form itself (#143's `${..}` rework), so one reading
   covers both.
+  *Amendment 2026-10-26 (issue #515, revised after review):* The name parser adds camelCase words beside each separator part. The complete unsplit call is also
+  read as a policy floor: its secret and store checks, target, posting text and category rules still apply.
+  This prevents a new read hint from bypassing a store-source ask, an outbound hint from bypassing a
+  credential ask, and a draft hint from weakening an existing send reading. A policy that asks or denies
+  `unknown` still applies to a camelCase call previously read as unknown. `deleteFile` on `~/.exo`
+  now asks through its new store-write reading; `readFile` on a store file still asks through the old
+  store-source reading. Compact names such as `apiKey`, `checkOut` and `signUp` retain their old
+  reading. Empty separator parts are dropped, preserving the MCP remote-write flag for leading separators.
+  Earlier built-in differential counts covered the pre-review implementation only and do not validate
+  these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
+  rules, explicit unknown-category policies, and leading-separator MCP names.
+  *Revisit if:* acronym boundaries need separate recognition (`HTTPDelete`, `getHTTPResponse`),
+  or fully camel MCP prefixes need alignment (`mcpCreateFile`). The unsplit policy floor still applies.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
