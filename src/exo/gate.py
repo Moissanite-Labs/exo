@@ -5433,10 +5433,12 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # #513 review: main's target stays a part, where the target is a spelling only #446 reads: the line's first store,
     # or a part's, such as a `$( )` the line takes its target from (`cat ~/.kube/config $(cat /pro?/self/environ)`),
     # also a name the shell reads from a text main did not read, which the line does not spell as the target is spelt
-    # (`cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)`, whose target is `~/.kube/config`)
+    # (`cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)`, whose target is `~/.kube/config`). It weighs as main's line did:
+    # a heavier command deeper in the line is a part with that weight beside it (`ssh prod 'rm -rf /'`, #468)
     if hit and c.category == "credentials" and not (_plain_secret([hit]) and _plain_secret([c.target])
                                                      and c.target in _expand_text(cmd)):
-        _plain_part(c, _shell_credential_hit(cmd, segs, raws, plain=True), "shell touching", cmd)
+        if part := _plain_part(c, _shell_credential_hit(cmd, segs, raws, plain=True), "shell touching", cmd):
+            _weigh(part, combined, cmd)
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
@@ -6160,7 +6162,7 @@ def _plain_secret(words: list[str]) -> bool:
     return _sensitive_words(words, lexical=False) or _glob_words(words, plain=True)
 
 
-def _plain_part(c: Classification, target: str, summary: str, cmd: str = "") -> None:
+def _plain_part(c: Classification, target: str, summary: str, cmd: str = "") -> Classification | None:
     """#513 review: give ``c``, a credentials line or call, a credentials part with ``target``, main's target, when it
     is another path. A line's target is the first store it names, and since #446 that may be a spelling main did not
     read (`~/.kube//config`, `/pro?/self/environ`, a word with more than 16 links), or a later word than main's (a
@@ -6168,10 +6170,13 @@ def _plain_part(c: Classification, target: str, summary: str, cmd: str = "") -> 
     came first). Main's target was then another store on the line (`~/.ssh/id_rsa` in
     `cat ~/.kube//config ~/.ssh/id_rsa`), and a `target:` entry, in `deny:` or `reserved:`, or a deny rule keyed on
     `target`, that named it no longer matched. The part has no own text, as a part _weigh makes, so it only raises:
-    such an entry or rule still matches the line, as on main (D-075, #191)."""
-    if target and target != c.target and ("/" in target or "." in target):
-        c.parts = [*c.parts, _make("credentials", summary=f"{summary} {target}"[:120], target=target, command=cmd,
-                                   reversibility=c.reversibility, own=None, signals=["secret store"])]
+    such an entry or rule still matches the line, as on main (D-075, #191). The part made, or None."""
+    if not (target and target != c.target and ("/" in target or "." in target)):
+        return None
+    part = _make("credentials", summary=f"{summary} {target}"[:120], target=target, command=cmd,
+                 reversibility=c.reversibility, own=None, signals=["secret store"])
+    c.parts = [*c.parts, part]
+    return part
 
 
 _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")

@@ -1083,3 +1083,26 @@ def test_a_nested_store_main_read_keeps_the_line_s_first_store_as_a_part():
     # Main read the nested line's store too and took it as the target. Since #320 the store the line's own words name
     # is a part beside it, so an entry for the first store denies, as on main
     assert full("cat ~/.kube/config $(cat ~/.ssh/id_rsa)", {"gates": {"deny": ["target:*/.kube/config"]}})[1] == "deny"
+
+
+# Main's line on its target took the weight of a heavier command deeper in it as a part beside it (#468), so a rule on
+# that target and `irreversible` denied it. Main's target stays a part with that weight (#513 checker)
+SSH_IRREVERSIBLE = {"gates": {"rules": [{"match": {"target": "*/.ssh/*", "reversibility": "irreversible"},
+                                         "decision": "deny", "reason": "r"}]}}
+
+
+@pytest.mark.parametrize("line", [
+    "cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'",
+    "cat /pro?/self/environ; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'",
+    "cat ~/.docker/./config.json ~/.ssh/id_rsa; echo $(ssh prod 'rm -rf /')",
+    "cat ~/.kube//config ~/.ssh/id_rsa; bash -c 'rm -rf /'",
+])
+def test_main_s_target_keeps_the_weight_of_a_heavier_command_deeper_in_the_line(line):
+    assert full(line, SSH_IRREVERSIBLE)[:2] == ("credentials", "deny")
+
+
+@pytest.mark.parametrize("line", ["cat ~/.kube/config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'",
+                                  "cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod ls"])
+def test_main_s_target_gets_no_weight_main_did_not_give_it(line):
+    # main's target is the kube config on the plain line, and `ssh prod ls` is no heavier command: both ask, as on main
+    assert full(line, SSH_IRREVERSIBLE)[1] == "ask"
