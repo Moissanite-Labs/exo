@@ -3494,6 +3494,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Limits:** same-user processes still need an OS sandbox. Earlier misattributed messages are not rewritten.
 - **Docs:** `docs/GATE.md`, `docs/MEMORY-MODEL.md`, `docs/COMMANDS.md`.
 
+### Amendment (2026-10-25): only the principal changes scheduled jobs (#552)
+- **Decision:** `handle_schedule_edit`, reached through `Scheduler.edit`, requires the live transport principal
+  for every action except `list`, implementing D-057 section 0.1 independently of triggers. Local, channel, seat, unstamped and
+  expired callers are refused before job mutation or launch. The authenticated clients keep working.
+- **Why:** a local caller could create unattended work or alter the principal's existing jobs. Listing
+  jobs is read-only and remains available. The timer and the internal `add`, `pause`, `remove` and `launch`
+  methods keep their role.
+  The check lives outside the counted core, also guarding direct command-handler calls, rather than adding
+  product logic to `CoreEngine._schedule_edit`. The core keeps forwarding the live caller context.
+- **Rejected:** only blocking a scheduling tool, since the protocol command reaches the scheduler directly.
+- **Revisit if:** an explicit scoped delegation mechanism is introduced for schedule management.
+- **Docs and tests:** `docs/SCHEDULE.md`, `docs/GATE.md`, `docs/EVENT-ACTIVATION.md`, both guides, and
+  `tests/core/scheduler/test_scheduler.py` cover refusals, no side effects, caller expiry and every principal action.
+
 ## D-053 (2026-10-12) Verification isolates terminal preferences and documents current behavior
 - **Why:** the baseline root suite failed four TUI checks solely because the invoking terminal exported
   `NO_COLOR`. Removing that variable made all four pass. Changing `TERM` did not. Product behavior was correct,
@@ -3590,6 +3604,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   recommended), default limits, who may add a trigger (only the principal, recommended).
 - **Depends on:** stage 0 (nothing in it exists on main), and for the ingress door a `Target` and a `trigger` branch in
   `frame()` in `src/exo/core/ingress.py`.
+
+### Amendment (2026-10-25): scheduled-run boundaries, stage 0.1 and 0.2
+- **Decision:** the D-052 amendment above implements stage 0.1. Stage 0.2 freezes each scheduled run's
+  initially available tool names after removing `BLOCKED_TOOLS`. Its runner returns an error for any
+  other name before calling `engine.run_tool`. Tools registered after the run starts do not widen it.
+- **Why:** hiding a tool's schema does not stop a model from calling it by name. Execution must check the
+  same boundary. Allowed names still pass through the engine's ordinary gate and executor.
+- **Rejected:** relying on the model to follow the displayed list, or making an allowlist refusal depend
+  on gate policy. Neither enforces the run's assigned tools when an allowed gate decision says to proceed.
+- **Limits:** scheduled runs still have shell and file tools. This is a tool-name boundary, not read-only
+  execution or an OS sandbox. Triggers, read roots and the remaining proposed stages are not enabled here.
+- **Revisit if:** scheduled runs gain reviewed changes to their tool sets while running.
+- **Evidence:** scripted models call every blocked name under an allowing gate, and a tool registered
+  mid-run. None executes or reaches the gate. An offered tool reaches both the gate and executor normally.
+  `tests/core/scheduler/test_scheduler.py` records matching call IDs and error results.
+- **Docs:** `docs/SCHEDULE.md`, `docs/EVENT-ACTIVATION.md`, `docs/GATE.md` and both guides. The proposal
+  above retains its original baseline description. These two stage-0 gaps are now closed in code.
 
 ## D-058 (2026-10-13) Exopet: the community egg, x0, grows from repository activity
 - **Status:** Proposed 2026-10-13, revised the same day (instant and validated XP, the name x0, meditation) and
