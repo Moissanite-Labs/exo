@@ -28,7 +28,9 @@ from exo.core.private import private_file
 from exo.core.models.router import TIERS
 from exo.core.seats import list_seats
 from exo.core.sessions import new_id
+from exo.core.types import ToolCall, ToolResult
 from exo.protocol import schema as s
+from exo.principal import require_principal
 
 COLS = ("id", "title", "when", "prompt", "seat", "tier", "deliver", "paused", "last_run", "next_run", "last_status")
 EVERY = re.compile(r"^every\s+(\d+)\s*([mhd])$", re.I)
@@ -204,12 +206,18 @@ class Scheduler:
         self._emit(job, task_id, "queued", f"Scheduled job {job['title']!r} is waiting to start.")
         try:
             provider, model = e.agents.route(job["tier"])
-            names = sorted(n for n in e.registry.names() if n not in BLOCKED_TOOLS)
+            names = frozenset(t.name for t in e.registry.specs() if t.name not in BLOCKED_TOOLS)
+
+            async def run_tool(call: ToolCall, lctx: dict[str, Any]) -> ToolResult:
+                if call.name not in names:
+                    return ToolResult.of_text(call.id, f"Tool {call.name!r} is not available to this scheduled run", True)
+                return await e.run_tool(call, lctx)
+
             # same turn path as every other turn (audit 2026-10-12): the engine's context tree and memory,
             # its soul refresh and system extras, and the turn hooks (through ``e.run_turn``). Only the model,
             # the narrowed toolset, unattended-job prompt and finite round limit differ.
             loop = Loop(e.store, provider, bus=e.loop.bus, context=e.loop.context, memory=e.loop.memory,
-                        tool_specs=lambda: e.registry.specs(names=names), run_tool=e.run_tool,
+                        tool_specs=lambda: e.registry.specs(names=sorted(names)), run_tool=run_tool,
                         system_prompt="\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p), model=model,
                         max_iterations=JOB_MAX_ROUNDS, max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
             loop.approval_ms, loop.on_turn_end = e.loop.approval_ms, e.observe_turn
@@ -336,6 +344,8 @@ async def handle_schedule_edit(sch: Scheduler, body: Any) -> dict[str, Any]:
     """schedule.edit: list, add, remove, pause, resume, run_now (``Scheduler.edit``)."""
     b = asdict(body) if is_dataclass(body) and not isinstance(body, type) else dict(body)
     act = b.get("action")
+    if act != "list":
+        require_principal("change scheduled jobs")
     try:
         if act == "list":
             return {"jobs": sch.list()}

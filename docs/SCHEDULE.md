@@ -7,6 +7,9 @@ or to a channel. Code: `src/exo/scheduler.py` (outside the core since D-067; `ex
 ## Make and manage jobs
 
 The protocol command is `schedule.edit`. Its `action` is `list`, `add`, `remove`, `pause`, `resume` or `run_now`.
+Every action except `list` requires the live principal caller from the transport (D-052). Local scripts,
+channels, signed seats and unstamped or expired callers receive `forbidden` before a job changes or starts.
+The Schedule page already carries principal authority. Local automation may still list jobs and send turns.
 
 | Field | Meaning |
 |---|---|
@@ -26,7 +29,11 @@ sleeps at most a minute, so a job that another seat's core adds or resumes start
 
 - The run is told it is unattended and must end with a short plain-English result.
 - It cannot use tools that need a person: `delegate`, `clarify`, `ask`, `memory`, `send_message`, `bus_post`,
-  `cronjob_manage` and `ui` are blocked (`BLOCKED_TOOLS` in `core/agents/delegate.py`).
+  `cronjob_manage` and `ui` are blocked, along with peer, job and self-observation tools (`BLOCKED_TOOLS` in
+  `core/agents/delegate.py`). The run snapshots the available, non-blocked tool names before its first turn.
+  Its runner rejects any other name with an error result, even if the model asks for it or the registry adds it
+  later. Allowed calls still use the engine's gate and executor. This limits tool names, not what an allowed
+  shell or file tool can do. Scheduled runs are not a read-only sandbox.
 - It goes through the same gate as any turn. An ask waits for an approval, so an unattended run can stall on one.
 - It is an ordinary turn of the agent (D-041): it uses the engine's context tree and memory provider, the soul
   refresh and system extras, and fires the `on_turn_start` and `on_turn_end` hooks. Only the model (the job's tier),

@@ -965,10 +965,15 @@ holds it as `engine.scheduler`. An engine built without composition has none, an
   `resume` or `run_now`, with `when` (cron or `every 30m`), `prompt`, `title`, `seat`, `tier` and `deliver`. The web
   Schedule page calls it through `POST /api/schedule` (`plugins/exo-command/exo_command/api.py`). There is no TUI
   command and no agent tool for it. The name `cronjob_manage` is only in the gate's category table and the
-  subagent blocked list.
+  subagent blocked list. Every action except `list` requires a live principal caller at
+  `handle_schedule_edit` (called by `Scheduler.edit`). In-process client tests pass `caller="principal:tui"`
+  to `Dispatcher`. A local, channel or seat caller cannot mutate jobs. Direct `Scheduler.add`, `pause`,
+  `remove` and `launch` methods are trusted internal APIs, used by the timer and unit tests, not transport entry points.
 - **Run.** Each run is an ordinary turn (D-041) in a fresh session of kind `scheduled`: the same context tree, memory
   provider, soul refresh and hooks, with the job's model tier, a narrowed toolset and an unattended-job prompt. It
-  reports through `task.updated` and a `notice`. The gate still applies, so an approval can stall a run.
+  reports through `task.updated` and a `notice`. The run freezes its available, non-blocked tool names before
+  starting and checks each call against that set before `engine.run_tool`. Tools added later are unavailable
+  to that run. The gate and executor still apply to allowed names, so an approval can stall a run.
 - Jobs live in `$EXO_HOME/schedule.sqlite`. A one-shot engine, such as a test, does not run the timer, so drive
   `Scheduler` directly in tests. Set `schedule` to `false` in `config.json` to turn it off.
 
