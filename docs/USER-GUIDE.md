@@ -196,7 +196,9 @@ Different seats are different agents. They share your store and talk through pee
   thread's recent messages.
 - Your rulings and corrections are kept verbatim in summaries and are copied to your principal store, so a
   summary cannot blur an instruction. `/context` says how many of your messages are not yet captured.
-- A private thread (`/new private`) is logged but never shared.
+- A private thread (`/new private`) is logged but never shared. It keeps summaries of its own. While they are
+  being written, a long private thread's call can leave out the older messages they cover. A line saying
+  `[earlier messages are being summarized]` marks the gap. Your current turn is never cut.
 - Only what you type counts as you. Messages from peers, bus seats, job notices and the agent's own notes are kept,
   but never saved as your rulings or corrections, and never teach the agent your taste.
 - What Exo keeps about you lives in your principal store. An install that skipped the interview has none yet. The

@@ -122,6 +122,25 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
   start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
   subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
+- A long private thread's calls stay bounded while its own summaries are pending (#244). A private thread keeps
+  a summary tree of its own. Its view ends at its last summary, so every span after it rode in the tail, pending
+  ones included. The turn waits up to `overflow_settle` for the leaves, so a fast summarizer bounds the call. A
+  slow one did not: with 300 stored messages of 1.5k characters, the first call carried about 115k tokens, and the
+  call after the first 8 of 36 leaves landed about 91k. A very long thread could exceed the model's window and
+  fail the turn. While that tree has leaves pending, the call now leaves out their spans, oldest first and a whole
+  leaf at a time, until what comes before the turn fits `view_budget`. A marker stands in each gap:
+  `[earlier messages are being summarized]`. Both calls above are now under 5k tokens. So is a call made after a
+  later leaf landed first, when the private view showed the pending leaves before it verbatim. The turn is never
+  cut: its question and all after it, tool rounds and context notes included, also when the question is in such a
+  leaf. Nor is a span that is not pending, such as one skipped for good, and a tool call keeps its results.
+  Tool-call arguments count in full. The cut moves a whole leaf at a time, so calls between moves share their
+  cached prefix. The private tree's turn now also waits up to `overflow_settle` when the cut would apply, where it
+  did not wait before, so a leaf the call just scheduled can land first. It waits for that tree's own jobs only,
+  not for the agent tree's. So does its wait when the private view overflows, which also waited for the agent
+  tree's jobs before (#529). `/context` finds the turn as the call does, by its turn id, so during a turn it shows
+  the question kept after a steer. Between turns it keeps the last turn whole, which the next turn's call can cut.
+  It now gives the first stored message of the tail as `from_seq`, not the unstored private view or marker (D-068
+  amendment).
 - A shell call's own folder argument is read for secret stores (#311). The bash tool runs a command in
   its `cwd`, and Hermes' `terminal` and Codex's `exec_command` in their `workdir`. The gate read only
   the command text and the session's folder, so `cat config` with `~/.kube` as `cwd` was a plain read
@@ -183,6 +202,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   all: text that asks as a comment post logged. A reopen now reads its comment as a close does
   (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
   text, an unread body file included. A reopen or merge carrying no text is unchanged.
+- A ruling a Hermes `/undo` removed in the CLI or TUI no longer comes back (#389). Hermes reports an undo to
+  its memory providers, not to its context engine, so exo-context kept the undone turn's pins. The per-turn
+  block put the ruling back on every turn, and since #384 every later summary block and handoff carried it
+  too. exo-memory now passes the notice on through `exo.host_undo`. exo-context drops each pin that only the
+  undone turns held: the last turn's at once, from the last window it saw for that session, and those of the
+  earlier turns of an `/undo N` on the next turn of that session, from the host's whole transcript. Only the
+  engine that saw the session's last turn acts, so an old engine left behind when Hermes builds a new agent
+  never writes its stale pins. A ruling a compaction folded stays while a summary row that carries it is left,
+  even when the undone turn says it again, also after a restart, in a new agent and in a `/branch` child. An
+  undo that also takes that summary row drops the ruling. A transcript that does not reach back to where the
+  window started drops nothing. The ruling leaves the pins, the next turn's block and every later summary
+  block and handoff, after any number of compactions. Compaction drops no pin on its own, so a ruling in the
+  tail that `/compress here N` holds out stays pinned. A drop is logged as counts per kind and the session id.
+  This also corrects the #385 entry below and the D-040 amendment: what a pinned block held survives
+  compaction by the pins until an undo removes its turn. exo-context hears a Hermes undo only through
+  exo-memory. The messaging gateway's `/undo` tells no one, and neither does the CLI from a command such as
+  `/reasoning`, `/fast` or `/personality` to the next turn, so neither is covered yet. A summary row or
+  handoff file written before the drop keeps the ruling until the next compaction (D-041 amendment).
 - A handoff header field that spans lines can no longer add a section to the file (#395). The topic,
   session and principal, the path line and the path in the launch line are now folded to one line when
   written, so a value holding a forged `## Decisions made` heading stays inside the header or its list
@@ -378,18 +415,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the calling user before sudo runs, so the write happens either way. Where that `read` would lead the line, the first
   sudo write now leads in its place, with its cost. The line is a costly `local_write` with the written path as
   target, so an ask or log line, a rule or an escalation on `local_write` or on that path reaches it. Its summary
-  names the program and the path. The line is also decided with the displaced `read` leading, as before, and the
-  stricter outcome stands, so `{read: ask}` and a rule on a gh read's repo or on an `ssh` host still reach it. A part
-  that outranks the `read`, such as an unknown program or ssh running its stdin, still leads, also beside a sudo write
-  in a `$( )` or an ssh hop (`echo $(sudo echo hi > /tmp/f) $(foo)` asks), and a store path stays `store_write`. This
-  also ends the #436 lowering of `for x do sudo echo hi > /tmp/f; done`. An `ssh -o RemoteCommand=` raises the
-  displaced part with the copy, so `sudo ls; ssh -o RemoteCommand='sudo gh pr view 9 -R a/b > /tmp/f' h` still asks
-  under a rule on `a/b`. Where only the write asks, a standing grant and the approvers follow the new category and
-  target. Where the displaced part names a repo or a host, or the line asks with that part leading, the approval is
-  bound to the exact command, and only those who may answer both categories may answer it, so a grant or a seat for
-  the written path does not answer a rule on that repo or host, or an ask on that part's category. A reserved hit on
-  the write keeps the principal's ask from a grant, as before. The displaced part keeps #399's other targets, and the
-  line as #399 read it before keeps that reading's approvers.
+  names the program and the path, the two apart when the write is on another command (`gh pr view; write /tmp/f`).
+  The line is also decided with the displaced `read` leading, as before, and the stricter outcome stands, so
+  `{read: ask}` and a rule on a gh read's repo or on the host of an `ssh` hop still reach it. `ssh -o RemoteCommand=`
+  gives its host to neither part, so a rule that asks or logs on the host does not reach that form, as before #454
+  (#493). A deny on the host still reaches it through ssh's own part. A part that outranks the `read`, such as an
+  unknown program or ssh running its stdin, still leads, also beside a sudo write in a `$( )` or an ssh hop
+  (`echo $(sudo echo hi > /tmp/f) $(foo)` asks), and a store path stays `store_write`. This also ends the #436
+  lowering of `for x do sudo echo hi > /tmp/f; done`. An `ssh -o RemoteCommand=` raises the displaced part with the
+  copy, so `sudo ls; ssh -o RemoteCommand='sudo gh pr view 9 -R a/b > /tmp/f' h` still asks under a rule on `a/b`.
+  Where only the write asks, a standing grant and the approvers follow the new category and target. Where the
+  displaced part names a repo or a host, or the line asks with that part leading, the approval is bound to the exact
+  command, and only those who may answer both categories may answer it, so a grant or a seat for the written path does
+  not answer a rule on that repo or host, or an ask on that part's category. A reserved hit on the write keeps the
+  principal's ask from a grant, as before. The displaced part keeps #399's other targets, and the line as #399 read it
+  before keeps that reading's approvers.
 - Gate (#435, D-038 amendment): a write into `$EXO_HOME/plugins` asks the principal. The core loads each plugin it
   finds there and runs its code with the harness's rights, so a write there installs or changes code the next session
   runs. Most writes there were allowed: only a `cd` or `git -C` into the Exo home made one a store write, and a delete
@@ -1199,8 +1239,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   to summarize stay whole. Plugin hooks never see that tree, and no other thread, agent summary or search sees it
   either. A fork made after an undo copies only the summaries that still match its renumbered messages. A long
   private thread from before this fix gets its leaves on its next turn, and that turn waits up to
-  `overflow_settle` for them, as the agent tree's turns do. With a slow summarizer its first calls can still carry
-  most of the thread.
+  `overflow_settle` for them, as the agent tree's turns do. With a slow summarizer its first calls could still carry
+  most of the thread, until #244.
 - exo-context no longer pins peer, bus or job text as the principal's words (D-040). `select_context` now gets each
   message's author, and handoff extraction skips every user message that is not the principal's. A peer message or
   a job notice that said "From now on ..." was put back into the system message as a principal ruling once it left

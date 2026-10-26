@@ -591,6 +591,19 @@ def test_the_line_as_read_before_399_keeps_the_approvers_of_its_displaced_part(t
     assert r["action"] == "approve" and r["approvers"] == ["principal"], r
 
 
+def test_an_ask_from_a_displaced_part_outlives_a_stricter_399_reading(tmp_path):
+    # #454 with #399, review 5640972780: as read now, the line is a sudo write line whose displaced chmod names no
+    # target, and {shell: ask} asks on chmod. As read before #399 (floor), gh api's first -X is DELETE, public, so that
+    # reading is stricter and stands. The ask from chmod's reading must outlive the merge (_strictest): a seat that may
+    # answer the write and the floor's category, but not shell, does not answer, as before #454, where chmod led.
+    _, _, ctx = _store454(tmp_path, "st454h", "categories: {shell: ask}\n",
+                          "approvers: {local_write: ['seat:h'], delete: ['seat:h']}\n")
+    r = call(ctx, "terminal", {"command": "sudo chmod u+s /tmp/x > /tmp/f; gh api -X DELETE -X GET repos/o/r"})
+    assert r["action"] == "approve" and r["approvers"] == ["principal"], r
+    r = call(ctx, "terminal", {"command": "sudo echo hi > /tmp/f; gh api -X DELETE -X GET repos/o/r"})
+    assert r["action"] == "approve" and r["approvers"] == ["principal", "seat:h"], r
+
+
 def test_a_grant_on_the_written_path_does_not_answer_a_rule_on_the_host_or_repo(tmp_path):
     # #454: a sudo write line is also decided with the sudo command's own part leading, so a rule on the repo or host
     # that part names asks. A grant keyed on the written path does not answer that ask, and a seat that may answer
