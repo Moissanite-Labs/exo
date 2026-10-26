@@ -2610,7 +2610,13 @@ part (#447), and so is a folder holding the store that it moves, renames or dele
 `store_write` deny or `reserved:` entry, or a `target:` entry on any of those files, applies:
 `move_file` from `~/.ssh/id_rsa` to `~/.exo/policies/gates.yaml` is denied under
 `deny: [store_write]`, and `copy_file` from `~/.exo/keys/seat.key` to `~/.exo/policies/gates.yaml`
-under `deny: ["target:*/.exo/policies/*"]`, where they asked before.
+under `deny: ["target:*/.exo/policies/*"]`, where they asked before. With no secret beside it the
+same (#514): each store path a shell line or file tool writes is a `store_write` part, with that
+path as its target, not only the first one the scan meets, which is still the call's own target.
+So `cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from
+`a.yaml` to `gates.yaml` and `delete_file` on both paths are denied under
+`deny: ["target:*/gates.yaml"]`, where they asked before; `rm` of both was denied already, as its
+`delete` part names the last path.
 After `cd /dev` or `cd /proc/self/fd`, a line naming a store path (`printf x > update/allowed_signers`)
 has that path as its target, and the descriptor folder is a second store-write part (#464), so a
 `target:/dev*` or `target:/proc*` deny still denies it. On a store-write line, a relative key read after `tar -C` into
