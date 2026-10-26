@@ -308,6 +308,9 @@ press Ctrl+F from the composer, then the answer keys, with no click. Your draft 
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
+File searches with the agent's `grep` and `glob` tools stop after 30 seconds and ask it to narrow the pattern.
+Other sessions and approval cards remain responsive while a search runs. Stopping the turn also stops its search.
+
 What the gate asks about, and why:
 
 - **Credentials always ask.** Anything the gate sees reading or filling a password, token or key asks every time.
@@ -380,7 +383,13 @@ What the gate asks about, and why:
   `EXO_PLUGIN_DIRS` at your copy instead. Only you can answer such a write, whatever `approvals.yaml` says, also
   when the same command or file tool names a secret that a seat may approve (#447). Reading your policies or plugins
   with `cat`, `grep` or a read tool does not ask. Some other commands that only read, such as `sed -n` or `sort`, do
-  ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it. The gate resolves symbolic
+  ask. So does a write to your Exo home's `config.json` (D-074, #125), which names the plugins Exo loads, your
+  models, your provider settings and your principal, and so does an agent running `exo config set` or `unset`,
+  `exo import-store`, `exo providers default` or `exo interview`. Reading `config.json` with `cat`, `grep` or a read
+  tool does not ask, `exo config set` typed in your own
+  terminal is not a tool call and does not ask, and a project's own `config.json` is not affected. A copy that drops
+  a `config.json` into your Exo home without naming it (`cp /tmp/x/config.json ~/.exo/`) is not seen yet (#483). The
+  gate resolves symbolic
   links in an absolute path (#130), but otherwise goes by the path as the command spells it, so some writes are not
   seen as store writes yet: a relative name such as `gates.yaml` written by a tool whose working folder is
   `policies/`, a glob spelling, and a hard link. A brace spelling (`polic{i..i}es`) is seen (#224). `docs/GATE.md`

@@ -75,6 +75,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the process mask to 077 and restored it with no lock: concurrent writes with `mode=None` interleaved set and
   restore, so files came out 0600 under a 022 mask and a run could leave the process at 077. The probe runs under
   a lock now, and so does the server's socket bind, which sets 0177 (`exo.core.private.umask`).
+- `grep` and `glob` run in an owned process with a 30-second limit, so expensive regex and glob patterns no
+  longer freeze the core. Timeout and turn cancellation kill and reap the worker. Secret-store skips and
+  gate/executor dispatch remain in force (D-057 stage 0.5).
 - Scheduled job changes require a live principal caller (#552), while listing stays available to local
   callers. A scheduled run rejects tool names outside its initial available-tool list before the gate or
   executor runs them, including blocked tools and tools registered after the run starts (D-057 stage 0.1–0.2).
@@ -421,6 +424,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   line read again from it once decoded (`bash -c $'..'`, `eval "..."`, ssh, backquotes), and also as written, as
   before. `decide` keeps the stricter (`gate.readings`), the more severe reading leads the approval card, and an
   approval for such a line binds to its exact text. A line the join leaves as it is is read once, as before.
+- Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
+  (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
+  #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under
+  `deny: [store_write]`: `cp /tmp/evil ~/.exo/config.json`, `mv`, `install`, `tee` and `ln -sf` were an allowed
+  `shell`, a redirection an allowed `local_write`, and `write_file`, `edit_file` or `apply_patch` there an allowed
+  `local_write`. A write in any form the store checks read (`~`, `$HOME`, `$EXO_HOME` or a full path, a brace set, a
+  relative `.exo/config.json` also spelt `.exo/./config.json`, after a `cd` into the home, under `sudo`, `env`,
+  `bash -c` or `ssh`, the file tools' path keys) is now `store_write`: it always asks, only the principal answers, no
+  grant covers it, and `deny: [store_write]` denies it. A tool call that runs `exo config set` or `unset`,
+  `exo import-store` or `exo interview` (also through `python -m exo.config`) is `store_write` too and keeps its
+  `opaque_exec` reading as a part, as `exo update --pin-trust` does, so `deny: [opaque_exec]` still denies it.
+  `exo providers default` stays `credentials` with the store write as a part, so a deny on either denies it.
+  Reads stay `read`, and a project's `config.json` is unchanged. No decision is lower than on main: a call in which
+  `config.json` counted is also read as before (`Classification.ordinary`, one of `gate.readings`), and the stricter
+  decision stands, so `matrix_deny_cells` still denies
+  `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h` and `deny: [credentials]` still denies
+  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A copy or extraction into a folder that holds the file is #483.
 - Gate (#225, #269, #309, #341, D-038): store names an expansion hides, and relative names that reach the run
   folder, now ask. #307 read an expansion inside a secret-store name as empty and, between literal text, as `*`.
   That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,
