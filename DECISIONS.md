@@ -2781,7 +2781,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   read. A live read fails where SQLite cannot make the `-wal` and `-shm` files (read-only media, or a folder the reader
   cannot write), and the ledger then read as empty. A target with no `-wal` file is now read with `immutable=1` there,
   as before. The lock does not order two `umask` blocks on one thread: two socket binds that overlap on one event loop
-  can still restore out of order and leave the process at 0177, as they could before.
+  can still restore out of order and leave the process at 0177, as they could before. *2026-10-26 (#563):* that limit
+  is closed. `start_unix` makes the socket, binds it inside the block with no await there, and sets its mode. The
+  server starts on that socket after the block. A start that fails takes the socket off the event loop and closes it:
+  left on the loop, its number went to the next socket there, which then never woke. No `umask` block awaits now, so
+  the lock is a plain `Lock`, not reentrant. A block that awaited would now hang its thread instead of restoring out
+  of order, and a test fails on any `with umask(...)` block in `src` or `plugins` that awaits or yields.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
