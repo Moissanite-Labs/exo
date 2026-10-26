@@ -218,6 +218,10 @@ never puts it in a command line.
 the gate tests. Decide whether a subagent may use it: the blocked list is `BLOCKED_TOOLS` in
 `src/exo/core/agents/delegate.py`.
 
+The registered `grep` and `glob` handlers use `exo.search_worker.run_search`, which owns a child process and
+enforces timeout and cancellation after the gate and executor. Their synchronous functions are worker
+implementation details. Call tools through the registry so those bounds and the executor policy apply.
+
 A plugin registers a tool with `ctx.register_tool(name, toolset, schema, handler, risk=...)`.
 
 Exo OS can require an installed execution broker after approvals and validation.

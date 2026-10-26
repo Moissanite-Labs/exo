@@ -1,6 +1,7 @@
 # Event-driven activation: triggers, connectors, runs and root causes (D-057)
 
-Status: **Proposed** (2026-10-13), revised 2026-10-18 after the reviews of PR #107. Nothing here is built. D-057 in
+Status: **Proposed** (2026-10-13), revised 2026-10-18 after the reviews of PR #107. Triggers remain unbuilt.
+Independent prerequisites have implementation notes in section 0. D-057 in
 `DECISIONS.md`. Builds on D-022 (scheduled jobs, `docs/SCHEDULE.md`), D-026 (one ingress path), D-040 (authors), the
 gate (`docs/GATE.md`), the trace and findings (`docs/TRACE.md`, D-025) and D-050 (local first). It amends D-052 in one
 place (section 0.1). Present tense in this page describes the proposal. "Today" and "on main" describe what exists,
@@ -135,6 +136,9 @@ change the same two tools and can share a pull request. The first trigger waits 
 
 ### 0.4 Search does not walk into secret stores
 
+**Already implemented in #241.** The observations below record the earlier defect. The current search tools
+use `StoreSkip`, including configured store paths and symbolic links. `docs/TOOLS.md` describes the rules.
+
 - **Today.** The gate classes `grep` and `glob` as `read` by name and checks only the path a call names. Both tools
   then walk every folder below it, skipping `.git`, `node_modules` and caches (`SKIP_DIRS` in `builtin/search.py`) and
   nothing else. Result redaction cuts only provider key values the process already knows. Probed at `6551eed` with fake
@@ -163,6 +167,14 @@ change the same two tools and can share a pull request. The first trigger waits 
   searches it, because the gate has already asked. `read_file` of one still asks.
 
 ### 0.5 One search cannot freeze the core
+
+**In progress: bounded-search worker change (2026-10-25).** Registered `grep` and `glob` calls run
+their existing search implementation in an owned process. The parent enforces a 30-second wall-clock limit
+and kills and reaps the child on timeout or cancellation, including cancellation during process startup.
+The worker retains section 0.4's existing `StoreSkip` rules and configured store paths. It receives no provider
+credentials or interpreter hooks. The registry's gate and executor still decide whether the local handler runs.
+This implements the independent stage-0 prerequisite only. It adds no trigger source. `docs/TOOLS.md` records
+the behavior and limits. The observations below describe the defect before this change.
 
 - **Today.** `Registry._run` runs `grep` and `glob` in a worker thread with no time limit. Python's `re` holds the
   interpreter lock for the whole match, so the event loop stops until the match ends. The pattern is the model's, and
