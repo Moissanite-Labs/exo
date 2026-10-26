@@ -348,7 +348,12 @@ stands for an empty target, as for any command run there, and for an empty other
 copy among the parts gets the host as well. So `ssh buildhost gh repo view --web myorg/app` still
 meets a rule on `buildhost`, and a rule on reads on `buildhost` still denies
 `gh pr merge 9 -R myorg/app && ssh buildhost gh repo view --web myorg/app`, where the merge
-outranks the read.
+outranks the read. A hop whose remote command names a target of its own
+(`ssh prod 'echo hi > /etc/hosts'` is a write of `/etc/hosts`) keeps the host among the other
+targets too (#493), so a `target:` rule on it reaches the line as a deny or reserved entry
+reaches the hop's part. A scope on a local path and a standing grant for one stop there: the
+host's reading keeps the exposure the hop gives the line, so `/etc/*` on another host is not read
+private, and no grant for a local write to `/etc/hosts` runs the hop.
 
 A line with other targets binds its approval to the exact command, as an outward act does. Its
 rule key is the text hash, so a "session" answer covers that line only. A standing grant on one of
