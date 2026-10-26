@@ -328,7 +328,9 @@ is 0600 unless you pass `mode` (`None` gives what a plain open gives). A file wr
 a cursor or a cache, can pass `sync=False` to skip the fsync. Do not write `<file>.tmp` and rename it, and do not
 open the final name for writing: a symlink planted at either name turns the write into a write to another file.
 To change the process umask for a while, use `with exo.core.private.umask(mask):`, not `os.umask`. It holds the
-lock the `mode=None` probe takes, so the two never undo each other (#317).
+lock the `mode=None` probe takes, so the two never undo each other (#317). Do not await or yield inside the block.
+The lock is not reentrant, so a second block on the same thread would wait forever (#563). To make a socket under
+a mask, bind it inside the block and start the server on it after the block, as `HttpServer.start_unix` does.
 
 ## 5. Add a seat
 
