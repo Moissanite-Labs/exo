@@ -361,6 +361,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#491, D-038 amendment): `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no command
+  start the target user's shell, which runs its stdin, but the gate read the line as `read` and allowed it, even under
+  `deny: [delete]`: `echo 'rm -rf /srv/data' | sudo -s`, `sudo -i <<< 'rm -rf /srv/data'`, and
+  `sudo -s <<< 'cp /tmp/x ~/.exo/policies/x'`, a store write with no ask. The gate now reads such a shell as it reads
+  `bash` with no operand: an `opaque_exec` part that runs its stdin, and the commands of each text the line feeds it
+  (a pipe, a here-string, a heredoc), so those lines are `delete` or `store_write` and a deny on them denies. A stdin
+  the gate cannot read (`sudo -s < /tmp/script.sh`, a variable) asks, and so does a bare `sudo -s`, as `bash` alone
+  does. sudo's options are read as getopt reads them (`-Es`, `-iu root`, `--user=root`, `--user root`, `--`), behind
+  `env`, `nice`, `timeout`, `command` or another sudo too. With a command, sudo runs `$SHELL -c` on its words joined
+  with the shell's metacharacters escaped, and that text is read too where it may differ from the words (a `$`, a
+  newline, an empty word, an option the prefix reader misread: `sudo -iu root rm -rf /srv/data` is `delete`), and such
+  a line still asks as code the gate cannot fully see, as it did as an unknown program; a word the gate cannot read
+  asks. The line's own parts stay beside the new ones, and the call is also read as before (`gate.readings`) and
+  decided on each reading, so no decision is lower than before.
+  `su` and `sudo su` with a stdin still ask as an unknown program without reading the text.
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that

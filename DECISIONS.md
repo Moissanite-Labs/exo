@@ -2473,6 +2473,41 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   secret links use the existing secret-path check. No patch is applied while classifying, and no tool schema or
   executor behavior changes.
 
+  *Amendment 2026-10-26 (issue #491):* `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` with no
+  command start the target user's shell, and that shell runs its stdin. The prefix reader left no program, so the
+  line was a bare assignment, `read`, and `echo 'rm -rf /srv/data' | sudo -s` or
+  `sudo -s <<< 'cp /tmp/x ~/.exo/policies/x'` ran with no ask, under `deny: [delete]` too, while `sudo bash` with the
+  same stdin was read. The gate now reads such a shell as `bash` with no operand (as #240 reads `ssh host`): an
+  `opaque_exec` part that runs its stdin (`_runs_stdin`), and the parts of each text the line feeds it, read once per
+  line under the same key as a fed `bash`. A stdin it cannot read asks, and so does a bare `sudo -s`, since a command
+  around the line may feed it. sudo's and doas's options are read as getopt reads them (`_sudo_shells`): clusters,
+  values attached or not, unique prefixes of sudo's long options, `--`, then sudo's `NAME=VALUE` words, for each
+  sudo or doas the prefix reader passes (`env`, `nice`, `timeout`, `command`, another sudo). With a command, sudo
+  runs `$SHELL -c` on its words joined with spaces, each character but a letter, a digit, `_`, `-` and `$` escaped
+  with a backslash. Where that text may not be the words the line's own reading took (a `$`, a newline the shell
+  drops as a line continuation, an empty word, or `-iu root` and `--user root`, which the prefix reader takes for a
+  program), the gate also reads it, beside an `opaque_exec` part, so the line asks as it did when it read an unknown
+  program there and its approval binds to the exact command. A word of the command the gate cannot read asks too.
+  Chosen over rewriting the prefix reader: every part main made stays (the line's first part keeps sudo's raise and
+  signal, and #454's sudo write still leads where main's `read` would), and the new parts only add. Added parts can
+  still lower a line where they take the lead and a policy allows their category (`ssh host 'sudo -s < f'` was a
+  costly internal `read` that logs, and `{opaque_exec: allow}` allowed the new lead), so the call is also read as
+  before #491 (a mark in the call memo, then `_sudo_shell_off`), as the last of its floors: `readings` follows the
+  chain of floors, and decide, `no_grant`, `call_approvers` and the hook take the strictest reading, so a decision
+  is at least main's. The bare forms tighten: `sudo -s`, `sudo -i` and `sudo -s > /tmp/f` ask as `opaque_exec`
+  where main allowed them as `read` or (#454) a costly `local_write`. An `always` on a fed line binds to the exact
+  line, as for `echo 'rm -rf x' | bash`. Known limits, not filed here: `su` with no `-c` and `sudo su` with a stdin
+  ask as an unknown program and the fed text is not read, so a deny on what it carries asks rather than denies; the
+  files a login shell reads first and a `SHELL` that names another program are not read; an ambiguous long option
+  is taken for a shell option when it may be one. The differential against main 54525f73 (scripts/gate_diff.py,
+  `--jobs 2`) lowers no pair: the built-in corpus without variants (9,741 actions x 87 policies) tightens 4,264
+  pairs on 67 actions; with its variants (73,777 actions) it tightens 29,439 pairs on 530 actions and changes 6
+  actions in their classification only (an `ssh host 'sudo -s < f'` hop inside a line that already asked); and
+  an aimed corpus of 2,326 lines (the new tests' lines and each shell spelling, feed, payload and wrapper) under
+  the 87 built-in policies and 37 more deny, category and reserved policies on `delete`, `force_push`,
+  `web_post`, `store_write`, `credentials`, `opaque_exec` and `github_post` tightens 148,465 pairs on 1,699
+  actions.
+
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
