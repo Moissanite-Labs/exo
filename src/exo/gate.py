@@ -5556,7 +5556,8 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # a heavier command deeper in the line is a part with that weight beside it (`ssh prod 'rm -rf /'`, #468)
     if hit and c.category == "credentials" and not (_plain_secret([hit]) and _plain_secret([c.target])
                                                      and c.target in _expand_text(cmd)):
-        if part := _plain_part(c, _shell_credential_hit(cmd, segs, raws, plain=True), "shell touching", cmd):
+        mine = _shell_credential_hit(cmd, segs, raws, plain=True)   # main's target: a path, as ``named`` is above
+        if part := _plain_part(c, mine if "/" in mine or "." in mine else "", "shell touching", cmd):
             _weigh(part, combined, cmd)
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
@@ -6289,8 +6290,10 @@ def _plain_part(c: Classification, target: str, summary: str, cmd: str = "") -> 
     came first). Main's target was then another store on the line (`~/.ssh/id_rsa` in
     `cat ~/.kube//config ~/.ssh/id_rsa`), and a `target:` entry, in `deny:` or `reserved:`, or a deny rule keyed on
     `target`, that named it no longer matched. The part has no own text, as a part _weigh makes, so it only raises:
-    such an entry or rule still matches the line, as on main (D-075, #191). The part made, or None."""
-    if not (target and target != c.target and ("/" in target or "." in target)):
+    such an entry or rule still matches the line, as on main (D-075, #191). A file tool's target is the path as given,
+    also a bare name read from the session folder (`id_rsa` in `~/.ssh`), so the caller passes only a target main
+    gave the line or call. The part made, or None."""
+    if not (target and target != c.target):
         return None
     part = _make("credentials", summary=f"{summary} {target}"[:120], target=target, command=cmd,
                  reversibility=c.reversibility, own=None, signals=["secret store"])
