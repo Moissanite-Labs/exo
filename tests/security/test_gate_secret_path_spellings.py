@@ -818,6 +818,33 @@ def test_main_s_target_gets_no_write_part_main_did_not_give_it(args, policy):
     assert (category, outcome, "local_write" in hits) == ("credentials", "ask", False)
 
 
+# A file tool's target is the path as given, also a bare name that names a store from the session folder (`id_rsa` in
+# `~/.ssh`, `keys` in `~/.exo`). Main's target was then that name, so it stays a part beside a store only #446 reads,
+# and an entry for it still matches, as on main (#513 sixth round, with #608's `from` and `to` keys).
+def bare_policy(kind, pattern):
+    if kind == "rules":
+        return {"gates": {"rules": [{"match": {"target": pattern}, "decision": "deny", "reason": "bare"}]}}
+    return {"gates": {kind: [f"target:{pattern}"]}}
+
+
+@pytest.mark.parametrize("kind", ["deny", "reserved", "rules"])
+@pytest.mark.parametrize("folder,name", [(".ssh", "id_rsa"), (".exo", "keys")])
+@pytest.mark.parametrize("key,odd,key2", [
+    ("paths", "~/.kube//config", None),
+    ("from", "/pro?/self/environ", "to"),
+    ("source", "~/.kube/./config", "dest"),
+])
+@pytest.mark.parametrize("tool", ["write_file", "read_file", "move_file", "delete_file", "download_file"])
+def test_main_s_bare_name_target_from_the_session_folder_stays_a_part(env, tool, key, odd, key2, folder, name, kind):
+    (env / folder / "keys").mkdir(parents=True)
+    (env / folder / "id_rsa").write_text("k")
+    args = {key: odd, key2: name} if key2 else {key: [odd, name]}
+    c = gate.classify({"tool": tool, "args": args}, cwd=str(env / folder))
+    d = gate.decide(c, gate.normalize_policies(bare_policy(kind, f"*{name}*")))
+    assert (c.category, d.outcome) == ("credentials", "ask" if kind == "reserved" else "deny")
+    assert ("credentials" in [r[0] for r in d.reserved]) == (kind == "reserved")
+
+
 @pytest.mark.parametrize("policy", SECOND)
 @pytest.mark.parametrize("line", ["cat /dev/fd/../env* ~/.ssh/id_rsa", "cat /proc/thread-self/../../env*; cat ~/.ssh/id_rsa"])
 @pytest.mark.skipif(not (os.path.islink("/proc/thread-self") and os.path.islink("/dev/fd")),
