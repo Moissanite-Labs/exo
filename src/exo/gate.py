@@ -7045,6 +7045,10 @@ def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
 
 UNSEEN_BODY = ("the gate cannot read the body (stdin, a file it did not read, $(..) or a variable); "
                "pass the text inline or as an absolute --body-file path")
+# A body file the caller left unread because the line does more than post (#343, ``held_body_files``): the rest of the
+# line may change the file before gh reads it, so an absolute path alone does not get it read.
+UNSEEN_ON_LINE = ("the gate did not read the body file, since the line does more than post and could change the "
+                  "file before gh reads it; run the post on a line of its own, or pass the text inline")
 
 
 def fill_body(c: Classification, text: str) -> None:
@@ -7104,7 +7108,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands. So is a line with a part read
     behind a quoted prefix assignment, also decided with the part on top that the gate read there before #471, and
     the call read as before #471 (Classification.before) is decided too, and the two merge as #399's readings do
-    (_strictest). `context` may carry `spent_today` for the daily budget.
+    (_strictest). `context` may carry `spent_today` for the daily budget, and `held_body_files`: the body files the
+    caller left unread because the line does more than post (#343), whose posts get UNSEEN_ON_LINE for their unseen
+    note, and UNSEEN_BODY beside it when they are also unseen another way.
 
     On a compound line, a rule keyed on `command` that would lower the line (its decision is below the matrix cell
     and category line, or it is an allow or log rule that names opaque_exec) must match the line as before and also
@@ -7265,6 +7271,7 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
 
     violations: list[str] = []
     unseen = body_unseen(eff)
+    held_files = ctx.get("held_body_files") or ()
     applies_to = posting.get("applies_to") or POSTING_DEFAULT
     # Whether the combined classification alone would run the checks (kept for the line-wide
     # unseen note below): its category is under applies_to, or it is a close or merge carrying
@@ -7272,12 +7279,12 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     line_applies = eff.category in applies_to or (eff.category in ("github_close", "vcs_merge")
                                                   and (eff.text or eff.title or unseen))
 
-    def post_unseen(p: Classification) -> bool:
+    def post_unseen(p: Classification, file: bool = True) -> bool:
         """One part's unseen body (#208): a body file nobody read into its text, or its own
         unseen_body signal. _combine gives the part it picks every part's signals, so this reads
         the ones it carried before (own_signals). A part given them some other way counts a
-        signal a part below it also carries as that part's, not its own."""
-        if p.text_file and not p.text and (p.category in OUTBOUND or p.category == "vcs_merge"):
+        signal a part below it also carries as that part's, not its own. With `file` off, only the signal counts."""
+        if file and p.text_file and not p.text and (p.category in OUTBOUND or p.category == "vcs_merge"):
             return True
         if p.own_signals is not None:
             return "unseen_body" in p.own_signals
@@ -7315,7 +7322,10 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
                            exposure=p.exposure)
         found += check_scrub(p.text, pol.get("scrub"), title=p.title, exposure=p.exposure)  # D-033
         if p_unseen:  # the checks above saw only part of this post, so they cannot pass it
-            found.append(UNSEEN_BODY)
+            # A body file left unread for the line gets its own note (#343). The plain one stays when the post is
+            # also unseen otherwise (a title from a variable, a repeated option), which the post alone still is.
+            on_line = p.text_file in held_files and not p.text
+            found += [UNSEEN_ON_LINE] * on_line + [UNSEEN_BODY] * (not on_line or post_unseen(p, file=False))
             post_unseen_seen = True
         found_on[id(p)] = found
         if p.alt_copy:

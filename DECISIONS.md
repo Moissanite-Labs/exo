@@ -996,6 +996,53 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   repository, so the posting rules and the scrub see them when a merge carries them, as they have
   seen a close's comment since #326. A merge carrying neither is unchanged. A reopen's comment is
   posted text the same way: gh posts it on the thread.
+- **Amendment 2026-10-24 (issue #343):** the exo-gate hook read a post's absolute body file before the line ran
+  and checked that text, but another part of the line could change the file before gh read it. So
+  `cp /w/notes.md /w/clean.md && gh pr comment 5 -R myorg/app --body-file /w/clean.md` ran under `forbid_words` with
+  the forbidden word in the text gh posted. A writer later in a pipe or in the background, a redirection onto the
+  file, and an ssh hop (where the path names a file on the other host) did the same. Now the hook reads the file
+  only on a line where the gate finds no other part, in either reading (#399): no other command, redirection to a
+  file, assignment that changes what runs (`GH_EDITOR=x`, `LD_PRELOAD=..`) or stands on its own (`X=1; gh ..`),
+  wrapper it does not see through, shell, ssh hop, `{ }` group, or code around the call in `execute_code` or
+  `python -c`. A variable that changes nothing that runs (`NO_COLOR=1 gh ..`) adds no part. A copy of the post on
+  another target is the post itself, not another part. On any other line the file stays unread, so the post is
+  unseen: it asks once and no grant matches it, as a stdin body does. The hook passes the files it left unread for
+  this reason to `decide` (`held_body_files`): every post's absolute, readable file on the line, a second post's
+  too, since alone on its line each would be read. Their post's note then says the file was not read and why
+  (`UNSEEN_ON_LINE`), in place of the hint to pass an absolute path, which the post already did. A post also unseen
+  another way (a title from a variable, a repeated option) keeps the plain note beside it, since alone on its line
+  it would still be unseen. The note says so because the card no longer shows what the file holds: on a line of
+  two posts it no longer names a forbidden word in the first post's file, which main read. Rejected: skipping the
+  read only when a known writer is on the line. Listing every writer (`cp`, `mv`, `tee`, `dd`, `sed -i`, a
+  redirection, an interpreter, a remote host) is error-prone, a missed one posts text nobody checked, and the
+  asking path already exists. Also rejected: reading the file anyway to list its violations on the card, since they
+  describe a text gh may not post. Limits: the hook reads the file before the command runs, so a process an earlier
+  tool call started can still change it between the read and gh. Closing that would need the post to run on a
+  snapshot of the text the hook read. The gate reads `sudo --chroot=DIR gh ..` as `sudo gh ..`, so there the hook
+  reads the file by its path while gh reads the one under DIR, as on main. The decision rules are unchanged, since
+  no call main's `scripts/gate_diff.py` runs sets `held_body_files`. Run on d79639f1 against this head, it finds
+  nothing lowered or changed in 5,586,792 pairs on its own corpus, in 431,433 on a #343 corpus of 432 calls, and in
+  199,491 on a second one of 344. Through the hook, the first corpus's 426 lines lower nothing under 2 policies:
+  446 of the 852 pairs ask once where main ran or offered "always". Limits: `docs/GATE.md` "What an approval
+  covers".
+  *With main's newer readings (2026-10-25).* Main reads a call more ways now. `gate.readings` lists the call, the
+  call as read before #311 (`also`), its `floor` and the floor's `also` (#452). A store read from the tool's own
+  folder is a part (#311). A sudo write that takes the lead from a read keeps that read as `displaced`, and both are
+  parts (#454). An ssh fed a line the gate can read runs that line on the host (#316). The hook walks every reading:
+  it reads a body file only when no part of any reading is anything but a copy of the post, and on any other line
+  it names every post's file in `held_body_files`. So the file stays unread and the post asks once in
+  `cp config /w/clean.md && gh pr comment 5 -R myorg/app --body-file /w/clean.md` with `~/.kube` as the tool's
+  folder, in `echo $(sudo cat /w/notes.md > /w/clean.md) && gh ...` and in
+  `echo 'gh ... --body-file /w/clean.md' | ssh prod-db`. Main read the file in each, and ran the second.
+  `gate_diff` sets `held_body_files` only through a `CONTEXTS` entry. With the key set, it reports the swap of
+  `UNSEEN_BODY` for `UNSEEN_ON_LINE` as violations lost, and nothing else: outcome 0, reserved 0. Run from main
+  edeb4f89 against this head without the key, it finds nothing lowered or changed in 6,241,206 pairs on its own
+  corpus, and in 508,326 on a #343 corpus of 952 calls across the readings above. With the key, that corpus loses
+  violations in 15,880 pairs, each the swap, and lowers no outcome or reserved entry. Through the hook, its 952
+  calls lower nothing under 2 policies, widen no approvers and read no file main left unread. The chroot limit
+  above holds for `sudo -RDIR gh ..` too, and #544 tracks both forms. Another limit, also on main: the gate does
+  not see a command inside a parameter word (#143). So `NO_COLOR=${X:-$(cp /w/notes.md /w/clean.md)} gh ...` reads
+  the file and runs. The open PR #158 would fix that.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
