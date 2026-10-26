@@ -976,6 +976,16 @@ def test_the_second_folder_pass_reads_with_the_word_main_read_from_the_folder(en
     assert full(call, {"gates": {"reserved": ["target:*/work/link/x"]}})[2] == ["credentials"]
 
 
+@pytest.mark.parametrize("line", ["bash -c 'cat ~/.kube//config'; ssh-keygen -t ed25519",
+                                  "bash -c 'cat ~/.kube//config'; aws configure get aws_secret_access_key"])
+def test_the_second_folder_pass_reads_with_a_secret_command_main_read(env, line):
+    # Main read the secret command, not the store in `bash -c`, and its read in the call's folder (#311) has the folder
+    # as its target. The odd store comes first here, so the pass that reads the folders as main did takes the command
+    (env / "work").mkdir()
+    call = {"tool": "bash", "args": {"command": line, "cwd": str(env / "work")}}
+    assert full(call, {"gates": {"deny": ["target:*/work"]}})[1] == "deny"
+
+
 def test_such_a_line_keeps_its_target_and_the_folder_is_a_part(env):
     c = gate.classify({"tool": "bash", "args": {"command": "cat ~/.kube//config", "cwd": "~/.ssh"}})
     assert (c.category, c.target) == ("credentials", f"{env}/.kube//config")
