@@ -6367,11 +6367,12 @@ def _config_on() -> bool:
     return True
 
 
-def is_store_path(path: str, ancestors: bool = False) -> bool:
+def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) -> bool:
     """True when ``path`` is (or, with ``ancestors``, contains) a protected part of the Exo store. A brace set
-    counts when the path or any word bash expands it to is in the store, or when it expands past the cap (#224)."""
+    counts when the path or any word bash expands it to is in the store, or when it expands past the cap (#224).
+    With ``from_cwd``, a relative name is read from the session folder too, as a file tool's write is (#494)."""
     words = _brace_words(str(path or ""), pool=1)
-    return words is None or any(_store_word(w, ancestors) for w in words)
+    return words is None or any(_store_word(w, ancestors, from_cwd) for w in words)
 
 
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
@@ -6430,18 +6431,24 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
     return False
 
 
-def _store_word(path: str, ancestors: bool = False) -> bool:
+def _store_word(path: str, ancestors: bool = False, from_cwd: bool = False) -> bool:
     """is_store_path for one word whose braces are already expanded."""
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
     if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
         return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
-    if not p.startswith("/"):            # relative: names only; the tool's working folder is not known here
-        return bool(_CONFIG_NAME.search(os.path.normpath(p))) and _config_on()      # `.exo/./config.json` (D-074)
-    # Resolve the original spelling: normpath first would erase symlink/.. traversal.
-    # Keep the lexical candidate too, including protected paths that link out of the store.
-    candidates = _path_forms(p)
+    if not p.startswith("/"):            # relative: a name the store knows, or, for a file tool's write (#494),
+        return bool(_CONFIG_NAME.search(os.path.normpath(p))) and _config_on() or \
+            from_cwd and _store_from_cwd(p, ancestors)      # one read from the session folder
+    return _store_forms(_path_forms(p), ancestors)
+
+
+def _store_forms(candidates: set[str], ancestors: bool) -> bool:
+    """_store_word's check on a path's spellings: the names _STORE_NAMES matches anywhere, the config file by name
+    (D-074), and each against the store roots' and the bus folders' forms. The spellings come from the original
+    text, normpath first would erase symlink/.. traversal, and the lexical candidate counts beside the real one,
+    including protected paths that link out of the store."""
     if any(_STORE_NAMES.search(c) for c in candidates):
         return True
     if any(_CONFIG_NAME.search(c) for c in candidates) and _config_on():
@@ -6462,6 +6469,20 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
                     return True
                 if _protected_rel(parts[2:], _STORE_PROTECTED):
                     return True
+    return False
+
+
+def _store_from_cwd(p: str, ancestors: bool) -> bool:
+    """A relative write target read from the session's working folder (#494), as _sensitive_words reads a relative
+    secret name: joined to each folder the core passed, then read as an absolute path. The gate's own folder is
+    not one of them — a bare `run` word from it is not the run folder (#D-039) — and with no session folder
+    known, only the name rules above count."""
+    scope = _scope.get()
+    if scope is None or not scope.cwds:
+        return False
+    for base in scope.cwds:
+        if _store_forms(_path_forms(os.path.join(base, p)), ancestors):
+            return True
     return False
 
 
@@ -6495,12 +6516,15 @@ def _patch_paths(text: str) -> list[str]:
     return list(dict.fromkeys(found))
 
 
-_PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
-                  "src", "dest", "destination")
+_PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "new_path", "paths", "files", "directory", "dir", "root",
+                  "source", "src", "from", "old_path", "dest", "dst", "destination", "to", "target")
 # Name words of a file tool that moves or renames what it names, as `mv` does, or deletes it, as `rm` does (#447).
 # They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` keeps as one word.
 _WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
                          "revoke", "trash"))
+# Name words of a tool whose name reads as a read but that writes what it took where its path arguments say
+# (`download_file`, `export_csv`): the store scan reads those arguments as a write's (#494).
+_FETCH_WRITE_WORDS = frozenset(("download", "export"))
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
@@ -7014,7 +7038,7 @@ def _classify_call(action: Any) -> Classification:
         path = next((p for p in paths if is_sensitive_path(p)), "") or args_sensitive(args)
         cat = "credentials"
         if not path:
-            path = next((p for p in paths if is_store_path(p)), "")
+            path = next((p for p in paths if is_store_path(p, from_cwd=True)), "")
             cat = "store_write" if path else "local_write"
         path = path or (paths[0] if paths else "")
         c = _make(cat, summary=f"write {path}", target=path, link=path)
@@ -7026,7 +7050,7 @@ def _classify_call(action: Any) -> Classification:
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
         if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
-            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p)]
+            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p, from_cwd=True)]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -7051,15 +7075,18 @@ def _classify_call(action: Any) -> Classification:
         if secret:
             cat = "credentials"
         stores: list[str] = []
-        if own not in ("read", "web_read"):
-            # A delete reaches the store through a folder that holds it, as `rm` does. Beside a secret, so does a
-            # move or rename, as `mv` does, and a tool whose camelCase name says so (#447). A move of such a folder
-            # with no secret is #494.
-            wide = own == "delete" or bool(secret) and not _WIDE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+        # A tool named with a read verb that writes what it took where its path arguments say (`download_file`)
+        # reads the store as a write's too (#494); a plain read of the store stays a read.
+        fetch = own in ("read", "web_read") and not _FETCH_WRITE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+        if own not in ("read", "web_read") or fetch:
+            # A delete reaches the store through a folder that holds it, as `rm` does, and so does a move or
+            # rename, as `mv` does, with or without a secret beside it (#494). A tool whose camelCase name says so
+            # counts too (#447).
+            wide = own == "delete" or not _WIDE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
             named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
                      else [args.get(k)]) if isinstance(v, str)]
-            stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide)))
-            if stores and not secret and cat in ("local_write", "delete"):
+            stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide, from_cwd=True)))
+            if stores and not secret and (cat in ("local_write", "delete") or fetch):
                 cat = "store_write"
         store = stores[0] if stores and not secret else ""
         target = _first(args, _TARGET_KEYS)
