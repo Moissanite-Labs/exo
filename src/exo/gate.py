@@ -7291,7 +7291,8 @@ def _norm_outcome(v: Any, where: str) -> str:
 
 def normalize_policies(raw: Mapping | None, errors: list[str] | None = None) -> dict:
     """Fill defaults and check types. Raises PolicyError on a bad value. Given ``errors``, a malformed
-    ``gates.escalate`` is recorded there instead and only that section is repaired (#557)."""
+    ``gates.escalate`` is recorded there instead and only that section is repaired (#557). A pattern a
+    decision runs that does not compile is refused either way (#466, check_patterns)."""
     raw = dict(raw or {})
     pol = json.loads(json.dumps(DEFAULT_POLICIES))
     gates = dict(raw.get("gates") or {})
@@ -7367,6 +7368,7 @@ def normalize_policies(raw: Mapping | None, errors: list[str] | None = None) -> 
     pol["scrub"] = normalize_scrub(pol["posting"].get("scrub"), raw.get("internal_names") or ())  # D-033
     if raw.get("interruptions"):
         pol["interruptions"] = raw["interruptions"]
+    check_patterns(raw)      # a pattern that does not compile refuses the policy here (#466)
     pol["_normalized"] = True
     return pol
 
@@ -7381,6 +7383,56 @@ def _as_list(v: Any) -> list:
 
 
 _MATCH_KEYS = ("category", "tool", "target", "command", "exposure", "reversibility", "third_party")
+
+
+def _check_pattern(pat: str, where: str, flags: int = 0) -> None:
+    try:
+        re.compile(pat, flags)
+    except re.error as e:
+        raise PolicyError(f"{where}: bad pattern {pat!r}: {e}") from None
+
+
+def _check_match_patterns(match: Mapping, where: str) -> None:
+    for p in _as_list(match.get("command", [])):
+        _check_pattern(str(p), f"{where}.command")
+
+
+def check_patterns(raw: Mapping | None) -> None:
+    """Compile every pattern a decision runs, when the policy loads (#466): a rule's ``match.command``, a
+    ``reserved`` or ``deny`` entry's ``command`` (a ``command:<regex>`` string or a mapping like a rule's
+    match) and a ``posting.forbid`` pattern. Raises PolicyError naming the entry. One that does not
+    compile used to raise re.PatternError at decide, where the hook's fallback runs a read call with no
+    ask and its card offers "always"; refused here, the hook loads the defaults on the PolicyError."""
+    gates = (raw or {}).get("gates") or {}
+    rules = gates.get("rules")
+    if isinstance(rules, list):
+        for i, r in enumerate(rules):
+            if not isinstance(r, Mapping):
+                continue
+            match = r.get("match") or {k: v for k, v in r.items() if k not in ("decision", "reason", "name")}
+            if isinstance(match, Mapping):
+                _check_match_patterns(match, f"gates.rules[{i}]")
+    for k in ("reserved", "deny"):
+        entries = gates.get(k)
+        if not isinstance(entries, list):
+            continue
+        for i, e in enumerate(entries):
+            if isinstance(e, Mapping):
+                m = e["match"] if isinstance(e.get("match"), Mapping) else e
+                if isinstance(m, Mapping):
+                    _check_match_patterns({x: v for x, v in m.items() if x in _MATCH_KEYS}, f"gates.{k}[{i}]")
+                continue
+            kind, _, val = str(e).strip().partition(":")
+            if kind == "command" and val.strip():
+                _check_pattern(val.strip(), f"gates.{k}[{i}]")
+    posting = (raw or {}).get("posting")
+    forbid = posting.get("forbid") if isinstance(posting, Mapping) else None
+    if isinstance(forbid, list):
+        for i, f in enumerate(forbid):
+            if isinstance(f, Mapping):
+                pat = str(f.get("pattern", ""))
+                if pat:
+                    _check_pattern(pat, f"posting.forbid[{i}]", bool(f.get("ignore_case")) and re.I)
 
 
 def _policy_command_view(command: str) -> str:
@@ -8345,7 +8397,8 @@ def policy_files(root: str | Path) -> list[Path]:
 def load_policies(root: str | Path | None, errors: list[str] | None = None) -> dict:
     """Read `<root>/policies/` and `<root>/agents/` into normalized policies. A missing root or
     missing files fall back to the defaults (which ask on anything irreversible or public).
-    ``errors`` is passed to normalize_policies."""
+    ``errors`` is passed to normalize_policies. A pattern that does not compile refuses the file's
+    policy with the file named (#466, check_patterns)."""
     if not root:
         return normalize_policies({"internal_names": internal_names(None)})
     root = Path(root)
@@ -8356,16 +8409,24 @@ def load_policies(root: str | Path | None, errors: list[str] | None = None) -> d
         if p.is_file():
             try:
                 raw[key] = parse_yaml(p.read_text(encoding="utf-8")) or {}
+                check_patterns({key: raw[key]})     # a pattern that does not compile refuses here, named with the file (#466)
             except PolicyError as e:
                 raise PolicyError(f"{p}: {e}") from None
     posting: dict = {}
     if (pdir / "posting.md").is_file():
         try:
             posting.update(parse_posting_md((pdir / "posting.md").read_text(encoding="utf-8")))
+            check_patterns({"posting": posting})
         except PolicyError as e:
             raise PolicyError(f"{pdir / 'posting.md'}: {e}") from None
     if (pdir / "posting.yaml").is_file():
-        posting.update(parse_yaml((pdir / "posting.yaml").read_text(encoding="utf-8")) or {})
+        p = pdir / "posting.yaml"
+        val = parse_yaml(p.read_text(encoding="utf-8")) or {}
+        try:
+            check_patterns({"posting": val})
+        except PolicyError as e:
+            raise PolicyError(f"{p}: {e}") from None
+        posting.update(val)
     raw["posting"] = posting
     if posting.get("forbid_agent_names"):
         raw["agents"] = _agent_names(root / "agents")
