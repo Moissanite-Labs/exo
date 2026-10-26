@@ -1,11 +1,9 @@
 """The Engine interface exod calls, and the Hub that orders and fans out events.
 
-The server owns transport, auth, ``hello`` and ``events.subscribe``. Every other
-command goes to an Engine. The engine publishes events through the Hub, which
-gives each one the next ``seq``, writes it to the event log first, then hands
-it to live subscribers. One Hub per server, so ``seq`` is strictly increasing
-across the whole stream and events of one session keep their order.
-"""
+The server owns transport, auth, ``hello`` and ``events.subscribe``. Every other command goes to an Engine. The engine
+publishes events through the Hub, which gives each one the next ``seq``, writes it to the event log first, then hands it
+to live subscribers. One Hub per server, so ``seq`` is strictly increasing across the whole stream and events of one
+session keep their order."""
 
 from __future__ import annotations
 
@@ -30,12 +28,9 @@ class CommandFailed(Exception):
 class Engine(Protocol):
     """What the server needs from the core loop.
 
-    ``handle`` runs one command and returns its ``Response.result``. Long work
-    (a turn) should start in the background, return quickly (for example
-    ``{"turn_id": ...}``) and report progress with ``hub.publish``. Raise
-    ``CommandFailed`` for expected failures; use code ``unsupported`` for
-    commands the engine does not implement yet.
-    """
+    ``handle`` runs one command and returns its ``Response.result``. Long work (a turn) should start in the background,
+    return quickly (for example ``{"turn_id": ...}``) and report progress with ``hub.publish``. Raise ``CommandFailed``
+    for expected failures; use code ``unsupported`` for commands the engine does not implement yet."""
 
     async def handle(self, command: Command, hub: Hub) -> dict[str, Any]: ...
 
