@@ -88,8 +88,8 @@ exo stop
 
 Launch Exo again. With the `skills` capability enabled, it selects relevant descriptions within
 that character budget. You can still request any enabled skill by name. Selection makes no model
-or network calls. Set `skill_discovery.enabled` to `false` and restart to restore the full catalog.
-Details and limits: [Skill discovery](SKILL-DISCOVERY.md).
+or network calls, and metadata reads are capped per turn. Set `skill_discovery.enabled` to `false`
+and restart to restore the full catalog. Details and limits: [Skill discovery](SKILL-DISCOVERY.md).
 
 ## 2. The two clients
 
