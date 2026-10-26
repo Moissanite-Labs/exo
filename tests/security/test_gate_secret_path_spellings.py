@@ -1038,10 +1038,11 @@ def test_main_s_read_of_the_folder_a_bare_word_reads_from_stays_a_part(tool, key
     assert (outcome, "credentials" in hits) == ("ask" if reserved else "deny", reserved)
 
 
-@pytest.mark.parametrize("line", ["cat ~/.kube/config keys", "cat ~/.kube//config ./keys"])
+@pytest.mark.parametrize("line", ["cat ~/.kube/config keys", "cat ~/.kube//config ./keys",
+                                  "cat ~/.kube//config keys $(cat ~/.ssh/id_rsa)"])
 def test_no_folder_part_where_main_s_read_named_its_own_path(line):
-    # main's line had a target here (the kube config, or `./keys`), so its read of the folder was not the folder
-    # itself, and an entry for `~/.exo` alone asks, here and on main
+    # main's line had a target here (the kube config, `./keys`, or the key its `$( )` reads), so its read of the
+    # folder was not the folder itself, and an entry for `~/.exo` alone asks, here and on main
     assert full({"tool": "bash", "args": {"command": line, "cwd": "~/.exo"}}, EXO_FOLDER_ENTRIES[0])[1] == "ask"
 
 
