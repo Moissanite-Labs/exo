@@ -1068,6 +1068,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   composer typing it adds to the copied page were inline scripts, which the policy refuses, so regenerated shots
   came out in the inverse layout with an empty composer. They are now a file in the copied static folder, loaded
   by `src`.
+- Permissions bypass (D-065): `exo --skip-permissions` or `/permissions bypass` stops approval asks for this run of
+  the core, except writes to Exo's own records and reading secrets. Principal only, refused under a required
+  executor, a banner in both clients, every auto-approved call in the ledger as `decided_by: bypass`.
 
 ### Changed
 - `exo` imports a command's module only when that command runs (#260, D-035 amendment). Before, every call loaded
