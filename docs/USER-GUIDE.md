@@ -278,7 +278,9 @@ appears on the Tasks page) and remove it. Jobs are kept in `$EXO_HOME/schedule.s
 starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
 
 There is no terminal command for jobs, and the agent has no tool to create them. The web page and the protocol
-command `schedule.edit` are the entry points. Details: `docs/SCHEDULE.md`.
+command `schedule.edit` are the entry points. Only your authenticated Exo client can create, pause, resume,
+run or remove a job. Local scripts and channels can list jobs, but changes return `forbidden`.
+An unattended run cannot call a tool outside the list it received. Details: `docs/SCHEDULE.md`.
 
 ## 6. Approvals
 
