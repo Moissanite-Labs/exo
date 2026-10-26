@@ -7,6 +7,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 - A glob in a secret store's folder asks (#594). `cat ~/.ss?/*`, `cat ~/.aw?/*` and `cat ~/.exo/key?/*` read as ordinary reads because `_glob_word` gave up whenever the folder part held a glob; the globbed folder is now tested against each sample's folder, with the same three-literal discipline the file side keeps and bash's rule that only a literal dot matches a leading dot, so `cat ~/*/*` stays a read.
+- An ssh or mosh hop keeps its host among the line's other targets when the remote command names a target of its
+  own (#493). The hop gave the host as the line's target only when the remote command's dominant part had none, so
+  `ssh prod 'echo hi > /etc/hosts'` was a `local_write` of `/etc/hosts` alone: a `target: prod` rule allowed it,
+  `scopes: {private: [/etc/*]}` read a path on another host as the principal's own, and a standing grant for a
+  local write to `/etc/hosts` covered the same write on any host. A deny or `reserved:` entry on the host still
+  reached the hop's part (D-075). Now the host and the destination stay among the other targets (#399) whenever
+  the line's target is not one of them, so the line is decided on the host too and the strictest stands: the rule
+  reaches the line as a deny reaches the hop's part, a scope on a local path stops at the host's reading, which
+  keeps the exposure the hop gives the line, and the other targets bind the call to the exact command, so no grant
+  for a local write runs the hop. The written path stays the line's target, so a rule on it still matches as
+  before, and a rule on the bare host reaches a `user@host` destination too.
 - A gh download or clone into the Exo store is a store write, as `curl -o` and `git clone` already are (#461).
   gh release download, gh run download and gh attestation download write what they fetch into `-O`/`--output`
   or `-D`/`--dir`, and gh repo clone and gh gist clone into their directory word, but they read as reads on
