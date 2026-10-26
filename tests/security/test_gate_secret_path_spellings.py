@@ -829,8 +829,8 @@ def bare_policy(kind, pattern):
 
 @pytest.mark.parametrize("kind", ["deny", "reserved", "rules"])
 @pytest.mark.parametrize("folder,name", [(".ssh", "id_rsa"), (".exo", "keys")])
-@pytest.mark.parametrize("key,odd,key2", [
-    ("paths", "~/.kube//config", None),
+@pytest.mark.parametrize("key,odd,key2", [   # "", not None: gate_diff's harvest reads a None key as `**`
+    ("paths", "~/.kube//config", ""),
     ("from", "/pro?/self/environ", "to"),
     ("source", "~/.kube/./config", "dest"),
 ])
