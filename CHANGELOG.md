@@ -59,6 +59,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   patterns compile decides identically; only the broken one changes. Tests: `tests/security/
   test_gate_policy_patterns.py`, `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
   **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
+- A decision number `docs/FIX-SWEEP.md` lists as free can no longer already be one `DECISIONS.md` uses
+  (#600). The sweep's list read D-078 and D-082 as free while PR #235 itself added the D-082 entry, and the
+  docs tests passed on that head; an earlier collision with D-081 from #214 was caught only by hand.
+  `tests/docs/test_docs_fix_sweep.py` reads the list the way the file words it ("D-078 and D-082 are free")
+  and the `## D-` headings DECISIONS.md keeps, and fails naming the collision, so a stale list or a taken
+  number cannot slip past review.
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
   `reserved:` entry on a later path missed and an approver could have waved the write through:
