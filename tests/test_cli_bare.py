@@ -12,7 +12,8 @@ def tui(monkeypatch):
 
 
 @pytest.mark.parametrize("argv", [[], ["--resume"], ["--seat", "builder"], ["--no-intro"],
-                                  ["--resume", "--session", "s1", "--seat", "x"]])
+                                  ["--resume", "--session", "s1", "--seat", "x"], ["--skip-permissions"],
+                                  ["--dangerously-skip-permissions", "--resume"]])
 def test_bare_and_flags_open_the_tui_with_flags(tui, argv):
     assert cli.main(argv) == 0
     assert tui == [argv]

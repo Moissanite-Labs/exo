@@ -7,6 +7,7 @@ import * as tasks from "./tasks.js";
 import * as schedule from "./schedule.js";
 import * as command from "./command.js";
 import * as providers from "./providers.js";
+import * as permissions from "./permissions.js";
 
 const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers]];
 
@@ -106,7 +107,8 @@ function boot(checks) {
   return done;
 }
 
-app.replaceChildren(nav, main);
+const permBanner = permissions.banner();   // D-065: on every page while the core's gate is in bypass
+app.replaceChildren(nav, permBanner, main);
 if (token()) boot([
   ["core", async () => ((await api("GET", "/api/health")).connected ? "connected" : null)],
   ["agent", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return s.length ? (s[0].agent || s[0].seat || "exo") + " · " + s.length + " thread" + (s.length > 1 ? "s" : "") : null; }],
@@ -114,10 +116,12 @@ if (token()) boot([
   ["model route", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return (s[0] && s[0].model) || null; }],
 ]);
 if (token()) await bus.start();   // loads open panels, then follows the event stream
+if (token()) permissions.start();
 show((location.hash || "").slice(1));
 window.addEventListener("hashchange", async () => {
   const fresh = takeToken() || await takeCode();
   if (fresh) await bus.restart();
+  if (fresh) permissions.start();
   const id = (location.hash || "").slice(1);
   if (fresh || launchRefused || id !== current) show(id);
 });

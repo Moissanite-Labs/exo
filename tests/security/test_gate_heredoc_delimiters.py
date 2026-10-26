@@ -85,7 +85,7 @@ def test_delimiter_quoting_forms(opener, terminator):
     assert ["git", "push", "--force", "origin", "main"] in cmds, (line, cmds)
 
 
-# bash does NOT expand $'..' or $".." the way dash does, so the body ends on different lines in the two
+# bash expands dollar-quoted delimiters differently from dash, so the body can end on different lines in the two
 # shells. The gate cannot be sure, so it reads the body as commands too: a force push there is caught.
 DOLLAR_FORMS = ["<<$'EOF'", '<<$"EOF"']
 
@@ -146,11 +146,15 @@ def test_named_descriptor_heredoc_is_not_stdin(line):
     assert decide(c, POST).outcome == "ask", (line, decide(c, POST))
 
 
-def test_brace_word_before_heredoc_is_still_stdin():
+@pytest.mark.parametrize("brace", ["{a,b}", "{1..2}"])
+def test_brace_word_before_heredoc_is_still_stdin(brace):
     # `{a,b}` is a brace expansion word, not an fd name, so the heredoc is stdin as before.
-    line = f"gh pr comment 5 {R} --body-file - <<'EOF'\nA note.\nF\nEOF"
-    c = classify(sh(line))
-    assert not body_unseen(c) and decide(c, POST).outcome == "log", (line, c)
+    from exo.gate import _Lexer
+
+    tokens = _Lexer(f"bash {brace}<<'EOF'\nA note.\nEOF").run()
+    assert any(kind == "w" and value.text == brace for kind, value in tokens)
+    assert [value.fd for kind, value in tokens if kind == "hd"] == [""]
+
 
 
 def test_indented_terminator_for_dash_heredoc():
@@ -159,3 +163,55 @@ def test_indented_terminator_for_dash_heredoc():
     c = classify(sh(seen))
     assert c.category == "force_push", c.category
     assert decide(c, DENY).outcome == "deny", decide(c, DENY)
+
+
+@pytest.mark.parametrize("opener,decoy,real", [
+    ("<<'EOF '", "EOF", "EOF "),
+    ("<<EOF", "EOF ", "EOF"),
+    ("<<EOF", "\tEOF", "EOF"),
+    ("<<-EOF", "\t EOF", "EOF"),
+    ("<<''", " ", ""),
+    ("<<EOF\r", "EOF", "EOF\r"),
+    ("<<EOF", "EOF)", "EOF"),
+])
+@pytest.mark.parametrize("wrapper", ["{}", "(\n{}\n)", 'echo "$({})"'])
+def test_decoy_terminator_cannot_hide_following_command(opener, decoy, real, wrapper):
+    # A quote after the decoy used to swallow bash's real terminator and the push.
+    # EOF) is a terminator in a command substitution, so that row applies outside it only.
+    if decoy == "EOF)" and "$" in wrapper:
+        pytest.skip("EOF) closes a command substitution")
+    line = wrapper.format(f"cat {opener}\n{decoy}\necho '\n{real}\n{PUSH} # '\n")
+    c = classify(sh(line))
+    assert c.category == "force_push", (line, c)
+    assert decide(c, DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("line", [
+    "true {PATH}>/dev/null; ls",
+    "true {HOME}>/dev/null; git log",
+    ": {CDPATH}>/dev/null; cd memory",
+    "true {PATH}<<EOF\nhi\nEOF\nls",
+    "true {PATH}<<<hi; ls",
+])
+def test_named_descriptor_assignments_keep_hidden_variable_scan(line):
+    c = classify(sh(line))
+    assert c.category == "opaque_exec", c
+    assert decide(c, DEFAULT).outcome == "ask"
+
+
+def test_plain_heredoc_tab_indented_delimiter_is_body():
+    c = classify(sh(f"cat <<'EOF'\n\tEOF\n{PUSH}\nEOF"))
+    # The near match makes the body ambiguous, so it is also checked as commands.
+    assert c.category == "force_push", c
+
+
+@pytest.mark.parametrize("opener,decoy,real", [
+    ("<<'EOF '", "EOF", "EOF "),
+    ("<<EOF\r", "EOF", "EOF\r"),
+])
+def test_capped_nest_reader_retains_delimiter_and_full_body(opener, decoy, real):
+    from exo.gate import _nest_end
+
+    text = f"cat {opener}\n{decoy}\necho '\n{real}\n{PUSH} # '\n)after"
+    end, _ = _nest_end(text, 0, [])
+    assert text[end:] == "after"

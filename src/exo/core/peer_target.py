@@ -104,9 +104,9 @@ class EngineTarget(Target):
     async def on_held(self, held: Held) -> None:
         ing = held.ing
         sid = self.pick_session(ing)
-        text = ing.body.strip().replace("\n", " ")
+        text, note = ing.body.strip().replace("\n", " "), ing.meta.get("note")  # note: "key not pinned" (#132)
         label = "Bus message from seat" if ing.source == "bus" else "Peer message from"
-        summary = (f"{label} {ing.sender} ({ing.trust}) is held for you. It says: \"{text[:400]}"
+        summary = (f"{label} {ing.sender} ({ing.trust}{f', {note}' if note else ''}) is held for you. It says: \"{text[:400]}"
                    f"{'...' if len(text) > 400 else ''}\". Allow delivers it to the session; deny drops it. "
                    "It is not delivered unless you allow it, and it expires on its own.")
         opened: list[str] = []

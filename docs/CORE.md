@@ -69,7 +69,8 @@ event's `prev`. `verify()` recomputes every id, link, chain hash and signature. 
 
 Each event carries the key that signed it, so a chain checked only against its own keys proves nothing about who
 wrote it: a fresh key can sign anything. `$EXO_HOME/keys/registry.json` (0600, `exo.keyring.KeyRegistry`) lists the
-keys this home trusts, the bus seats it has seen, and the ledger author ids that are the principal.
+keys this home trusts, the bus seats it has seen, the peer seats of other homes it pinned, and the ledger author ids
+that are the principal.
 
 - A key Exo makes in `$EXO_HOME/keys` is pinned when it is made (`crypto.save_key`). A name that already has a
   different pinned key is not changed: `exo keys pin NAME PUB --replace` does that by hand.
@@ -79,6 +80,9 @@ keys this home trusts, the bus seats it has seen, and the ledger author ids that
   or when its author has its own pinned key and the event is signed by another one. The principal's words may be
   signed by any pinned key, because the agent's seat records them.
 - `exo keys` lists the registry; `exo keys pin` and `exo keys principal` change it.
+- `peers` holds peer seats of other homes, pinned with `exo keys pin --peer SEAT PUB` (#132). Their keys check that
+  seat's peer messages and receipts only. `owners` and `allows` read `keys` alone, so a peer pin never signs a
+  ledger event (`docs/PEERS.md` "Peer keys").
 
 ### Head anchor (D-040)
 
@@ -104,12 +108,23 @@ back, and the shorter chain still links. So each append also writes the head (se
   ledger file swapped for a symlink to a truncated copy still meets that anchor. A ledger file that is a symlink
   fails `verify()`, and `append()` and `anchor()` refuse it. A `Ledger` without an authority opens such a file
   read-only (#277), and only when it is a regular file, so opening it writes nothing through the link: no WAL
-  switch, no tables, no file made at a dangling target. SQLite's `immutable` flag keeps it from making `-wal` and
-  `-shm` files beside a target in WAL mode. The one exception is a target that already has a `-wal` file (another
-  process has it open, or one crashed): SQLite reads it and may add or rewrite a `-shm` file. A target that is
-  missing, is not a regular file (a FIFO would block the open) or holds no ledger reads as empty. An authority-mode
-  ledger trusts its signed checkpoints: its appends skip the symlink refusal and write the projection through the
-  link.
+  switch, no tables, no file made at a dangling target. A target with no `-wal` file beside it is copied at open
+  (#317), and reads come from the copy. They show the target as it stood at open. A fresh open shows later
+  appends. The copy reads the target with SQLite's `immutable` flag, which makes no `-wal` or `-shm` file beside
+  it but takes no lock. So the open checks the target's inode, size and mtime, and that no `-wal` file is there,
+  before and after the copy. A copy taken while any of them changed is taken again. The copy goes into SQLite's
+  private temporary database. About 2 MB of it stays in memory. The rest is an owner-only temporary file in
+  SQLite's temporary folder, unlinked at once and gone at close. So an open reader holds disk space the size of the
+  ledger, not memory: a 99 MB ledger adds 99 MB there and about 6 MB of memory. The copy is read-only. A target
+  that has a `-wal` file is read live (another process has it open, or one crashed): SQLite reads the `-wal` file
+  and may add or rewrite a `-shm` file. A target that changed during three copies in a row is read live too, and so
+  is one whose copy fails while it stays the same (a full temporary folder). SQLite then makes `-wal` and `-shm`
+  files beside it. They stay after the reader closes, until a writer closes the ledger while no reader has it open.
+  Until then, later opens read the target live. Where SQLite cannot make them (read-only media, or a folder the
+  reader cannot write), a target with no `-wal` file is read with the `immutable` flag instead, which makes no file.
+  A target that is missing, is not a regular file (a FIFO would block the open) or holds no ledger reads as empty.
+  An authority-mode ledger trusts its signed checkpoints: its appends skip the symlink refusal and write the
+  projection through the link.
 - An anchor is read only as a regular file: a symlink in its place is unreadable. Anchors are written through a
   fresh temporary file (`mkstemp`, with `O_EXCL` and `O_NOFOLLOW`), so a symlink planted in the anchor's folder
   cannot redirect the write.
@@ -176,9 +191,10 @@ length, how many nodes hold each word, and the average length. Later calls token
 and the default ranker of `assemble` call `find`, so they share the tables.
 
 The tables belong to the node set they were built from. `reload()` makes a new set, and so does a `refresh()` that
-sees a node file added, edited or removed. The next `find` then builds the tables again. So `find` always ranks the
-nodes that `nodes` returns. Like `nodes`, it does not see a file written after the last read until a `refresh()` or
-a `reload()`. Callers treat the node dicts as read-only and change a node by writing its file.
+sees a node file added, edited or removed. The reload drops the old tables at once, and the next `find` builds new
+ones. So `find` always ranks the nodes that `nodes` returns. Like `nodes`, it does not see a file written after the
+last read until a `refresh()` or a `reload()`. Callers treat the node dicts as read-only and change a node by
+writing its file.
 
 ## Store checks
 

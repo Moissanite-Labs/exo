@@ -7,7 +7,7 @@ nothing is executed and no file is read.
 """
 import pytest
 
-from exo.gate import UNSEEN_BODY, body_unseen, classify, decide, normalize_policies
+from exo.gate import UNSEEN_BODY, UNSEEN_ON_LINE, body_unseen, classify, decide, normalize_policies
 
 POLICY = normalize_policies({"gates": {"scopes": {"internal": ["myorg/*"]}},
                              "posting": {"footer": "F", "forbid_words": ["Zork"]}})
@@ -235,3 +235,44 @@ def test_gh_placeholders_are_not_brace_expansions():
     # `{owner}` has no comma or `..`, so bash keeps it; gh fills it in. The body stays readable.
     c = classify(sh("gh api repos/{owner}/{repo}/issues/5/comments -f body='A note.\nF'"))
     assert c.category == "github_post" and not body_unseen(c) and c.text == "A note.\nF"
+
+
+# #343: the exo-gate hook leaves a body file unread on a line that does more than post, since the rest of the line may
+# change the file before gh reads it, and names it in `held_body_files`. The note then says so and asks for the post
+# alone on its line, in place of the hint to pass an absolute path. Each reading of a gh line gets it (#399).
+HELD = [
+    f"cp /tmp/notes.md /tmp/clean.md && gh pr comment 5 {R} --body-file /tmp/clean.md",
+    "gh pr comment 5 -R github.com/myorg/app --body-file /tmp/clean.md | tail -1",      # a copy on another target
+    "true && gh pr -R myorg/app comment 5 --body-file /tmp/clean.md",                   # the line as read before
+    "gh pr -R myorg/app view 5 && gh pr comment 5 -R myorg/app --body-file /tmp/clean.md",
+]
+
+
+@pytest.mark.parametrize("line", HELD)
+def test_a_body_file_left_unread_for_the_line_says_why(line):
+    c = classify(sh(line))
+    assert body_unseen(c), c
+    d = decide(c, POLICY, {"held_body_files": ["/tmp/clean.md"]})
+    assert d.outcome == "ask" and d.violations.count(UNSEEN_ON_LINE) == 1, d
+    assert UNSEEN_BODY not in d.violations and UNSEEN_ON_LINE in d.reason, d
+    # Without the caller's word, or for another file, the note is the plain one, as before.
+    for ctx in (None, {"held_body_files": ["/tmp/other.md"]}):
+        d = decide(c, POLICY, ctx)
+        assert d.outcome == "ask" and UNSEEN_BODY in d.violations and UNSEEN_ON_LINE not in d.violations, d
+
+
+def test_only_the_post_whose_file_was_left_unread_gets_the_line_note():
+    c = classify(sh(f"gh pr comment 5 {R} --body-file /tmp/clean.md && gh pr comment 6 {R} --body-file - < x.md"))
+    d = decide(c, POLICY, {"held_body_files": ["/tmp/clean.md"]})
+    assert UNSEEN_ON_LINE in d.violations and f"GitHub PR comment on myorg/app#6: {UNSEEN_BODY}" in d.violations, d
+
+
+def test_a_post_also_unseen_otherwise_keeps_the_plain_note():
+    # A title from a variable leaves the post unseen on a line of its own too, so the plain note stays beside the
+    # line's, and the card does not ask for the post alone and only then for the text inline.
+    c = classify(sh(f"cd /tmp && gh pr create {R} --title \"$T\" --body-file /tmp/clean.md"))
+    d = decide(c, POLICY, {"held_body_files": ["/tmp/clean.md"]})
+    assert d.outcome == "ask" and UNSEEN_ON_LINE in d.violations and UNSEEN_BODY in d.violations, d
+    c = classify(sh(f"cd /tmp && gh pr create {R} --title t --body-file /tmp/clean.md"))
+    d = decide(c, POLICY, {"held_body_files": ["/tmp/clean.md"]})
+    assert UNSEEN_ON_LINE in d.violations and UNSEEN_BODY not in d.violations, d
