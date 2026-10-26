@@ -1603,6 +1603,39 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `cd ~/.exo/policies && echo $(echo $(gh pr comment 3 --body hi))` the post's bare violation is now named after the
   post, since the store write sets the card. Both trees list it, and the #460 script counts it as reworded. 685,477
   pairs are stricter, nearly all the store-write ask on the forms above.
+  *Amendment 2026-10-26 (issue #459):* the other folders Exo loads code from join the protected list, as the
+  plugins folder did (above, #435): the venv, Hermes' plugin home, the source copy and the folders
+  `$EXO_PLUGIN_DIRS` names. Each is code the next session or this one loads and runs: the venv holds the `exo`
+  package and this gate itself, so a changed `gate.py` decides every later call and a `.pth` file in its
+  site-packages runs on every interpreter start (a changed gate could rule its own change and any later write
+  through); with `--with-hermes` the core loads exo-gate from Hermes' plugin home; the installer clones a git
+  URL into `$EXO_HOME/src/exo` and `exo update` copies plugins from the copy, and `exo web` reads plugins from
+  `<package>/../../plugins` of the installed copy; `default_dirs` searches `$EXO_PLUGIN_DIRS` first and keeps
+  the first plugin found of a name, so a plugin named `exo-gate` in a folder there takes the real one's place.
+  Each is read as the environment the gate sees spells it, as EXO_HOME is: the venv `EXO_VENV` names, else the
+  home's own `venv`; Hermes' plugin home under `EXO_HERMES_HOME`, else the home's own `hermes-home/plugins`;
+  the home's `src`; every non-empty, absolute dir in `EXO_PLUGIN_DIRS` split on `os.pathsep`. A Hermes home
+  only config.json or a later `set_cfg` names is not read: the gate reads no config.json content (D-074), so
+  write the locations into the environment. And, by name, `.exo/venv`, `.exo/src` and
+  `.exo/hermes-home/plugins` match anywhere in a path, as `.exo/plugins` does — the two names stay out of the
+  default spellings: a relative `EXO_VENV` or dir is a constant of the tool's working folder, which the gate
+  cannot see, and a `.venv` name is not Exo's (no install script makes one, EXO_VENV is the only override),
+  as `hermes-home`'s own other contents are not (the launch scripts the installer writes live in
+  `$EXO_HOME/bin`, and Hermes' own state — its database, its registry — is not code). `cd` into a code folder
+  also counts, like a `cd` into the store (#203's reading): a relative write after it asks. Now `cp evil.py
+  ~/.exo/venv/lib/python3.13/site-packages/exo/gate.py` (an allowed `shell`), a `write_file` there (an allowed
+  `local_write`), `pip install --target ~/.exo/venv/lib/python3.13/site-packages`, `tar -C ~/.exo/src`, `git
+  clone ... ~/.exo/venv/evil` and a `.pth` beside `exo` ask. Reads stay reads. A delete or move counts like a
+  `delete` of a store folder: `rm -rf ~/.exo/venv` and `mv ~/.exo/src x` ask, and so does `rm -rf ~/.exo`,
+  since a code folder sits below the home it covers. A file tool keeps a `local_write` part and a line keeps
+  its own command and parts, exactly as #435's amendment keeps them. Not protected, each for the reasons the
+  #435 amendment gave first, now for the folders themselves: a developer's checkout named in
+  `$EXO_PLUGIN_DIRS` (protected since this change, the cost accepted: the principal is asked for every edit in
+  a checkout the session points the variable at, which everyday work avoids by leaving the variable unset), a
+  `pip install` into the live venv (the gate is in it, so an installed wheel now asks; everyday work installs
+  into a project or scratch venv), and `exo update`, `exo` venv inspections, which are reads and stay reads.
+  The gate differential against main dcab371a (#423) ran the built-in corpus and the #435 review corpora,
+  then the new writes of this change as rows, and lowered nothing.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
