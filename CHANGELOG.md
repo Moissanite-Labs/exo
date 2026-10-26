@@ -377,6 +377,96 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#225, #269, #309, #341, D-038): store names an expansion hides, and relative names that reach the run
+  folder, now ask. #307 read an expansion inside a secret-store name as empty and, between literal text, as `*`.
+  That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,
+  `cd ~/.kube && cat $(ls)`), `$(( ))` and `$[ ]` as substitutions (`cat id_ed$((25519))`, `cat id_ed$[25519]`),
+  one that starts a name as `.*` (`cat $(printf .e)nv`), and the default word of an unknown variable as its value
+  (`cat ${x-.env}`, `cat ${x:-~/.kube}/config`, `cat ${x[0]:-.env}`, `cat ${x:-$HOME/.exo}/keys/seat`). These were
+  allowed reads. The same reading reaches working-folder targets (`cd ~/.k$(:)ube && cat config`,
+  `tar -C ~/.k$(:)ube -czf - .`, `cd ~/.k${u}ube && cat config`) and the Exo-store write checks (#309), so
+  `cp x ~/.exo/polic$(:)ies/gates.yaml`, `mv x ~/.exo/polic${u}ies/gates.yaml`,
+  `tee ~/.exo/polic$(:)ies/gates.yaml < x`, `cp x ~/.exo/$(printf policies)/default.yaml`,
+  `cp x ${x:-$HOME/.exo}/policies/a`, `cp x ~/.exo/bu$(printf s)/x` and `cp x ~/x/update/allowed_$(printf s)igners`
+  are `store_write`. They were allowed `shell` writes. #305's resolution of names from a folder in `$EXO_HOME` now
+  reads a target spelt with a glob or an expansion, in the store's own folder or below it
+  (`cd ~/.e*o/run/jobs && grep -r x ..`, `cd ~/.exo/r?n/jobs && grep -r x ..`, `cd ~/.exo/r$(printf u)n/jobs && ls
+  ..`, `cd ~/.exo && cd r$(:)un/jobs`, `cd ~/.exo/principals/m?/run/jobs && ls ..`), a part that could be `..`
+  (`cd .? && grep -r .`, `cd .?/.. && grep -r x .`, `cd $PWD/.?/.. && grep -r x .`, `grep -r . .$(:).`,
+  `grep -r . ./.?`, `grep -r . .//.?`, `grep -r . .?/..`), a glob that could be the run folder (`tar -C ~/.exo -czf -
+  ru?`), and a folder that holds a run folder (`cd ~/.exo/run/jobs && grep -r x ../..`, `cd ~/.exo && grep -r x
+  principals/me`, `tar -C ~/.exo/principals/me -czf - .`). Each spelling is read once per tool call, so the work stays
+  linear. A matrix cell or a `target:/dev*` entry that denied such a line on main still denies it (#464): the `*`
+  reading makes some lines `store_write`, and the line's other parts keep their own cells and targets. A rule that
+  denies a costly `read`, `shell` or `local_write` part still denies such a line run over ssh by `sudo` or `doas`, or
+  by a privileged wrapper over ssh or through a shell: a costly copy of each reversible part the wrapper runs, nested
+  ones too, is added beside it (`sudo ssh host 'cat ${x}rc'` and `doas ssh host 'cp x ~/.exo/polic$(date)ies/a'` under
+  gate_diff's `rule_costly_part_deny`), and so does the unsplit line (`sudo ssh host 'cat ~/.kube/config'`), which
+  asked on main. The parts stay as written, so a rule or entry keyed on `reversibility` reaches them as on main
+  (`sudo ssh host 'ls; cat x'` still denies under a rule that denies a reversible `read`, and under `read: deny`
+  lifted by a rule that allows a costly `read`). gate_diff against main edeb4f89, under its 87 built-in policies, 57
+  policies keyed on `reversibility` (rules, lifted category lines, matrix rows, deny and reserved entries) and 38
+  keyed on targets (`*keys*`, `*run*`, `*plugins*` and other store names as rules, deny and reserved entries, and
+  #468's four), lowers no pair (outcome, reserved hit or posting violation). Each form reaches the plugins folder
+  (#435) as it reaches `policies/` (`cp x ~/.exo/plug$(:)ins/foo/__init__.py`, `cd ~/.e$(:)xo && cp x
+  plugins/foo/x.py`). Words that cannot spell a store name keep their class (`cat notes$(date +%F).txt`, `cat $f`,
+  `cat ${OUT:-/tmp/out}/report.txt`, `cp x out/$(date +%F).json`), and so does a write whose file name only its folder
+  ties to the store
+  (`cp x state/$(date +%F).json`, `cp x src/state/$(basename $f)`, `sed -i s/a/b/ src/state/$(git ls-files | head
+  -1)`). A line is read first with its words as written, as main reads it, and that name decides the line and builds
+  its parts as on main, #468's key read beside a store write among them; these forms and readings come after it, and a
+  name they find that is another target is a `credentials` part beside it. So under a rule on `target: '*keys*'`,
+  `cd ~/.exo/state && echo $(cat ../keys/seat; rm -rf x)`, `cd ~/.exo && cat $(ls) keys/seat` and
+  `cd ~/.exo/state && cat ${x-.env} ../keys/seat` deny as on main edeb4f89, and under one on `*run*` so does
+  `cd ~/.exo/state && grep -r x .. ../run`. A shell call's own folder argument (#311) is read in the same order,
+  so `echo $(cat config)` with `~/.kube` as `cwd` keeps its part on `~/.kube/config`, with one on `~/.kube/*`
+  beside it, and a rule or `target:` entry on `*config*` still denies it. The folder's read is a part beside a line
+  that reads a secret itself when it names another target, as beside the `cd` form: `cat id_rsa` with `~/.ssh` as
+  `cwd` is denied by `deny: [target:*/.ssh]` as `cd ~/.ssh && cat id_rsa` is (main asks), and a line these forms
+  make a secret line keeps the folder's part (`cat ${x-.netrc}; echo $(git push --force origin main)` with
+  `~/.exo/keys` as `cwd` under `deny: [target:*/.exo/*]`), with a copy of the push that has no own text, so an
+  allow rule on `command` does not lift a `force_push: deny` there, as on main. The copy keeps its body, so
+  `cat ${x-.env} config; gh pr comment 3 --body hi` with `~/.exo/keys` as `cwd` lists its footer violation twice, as
+  main does (once as the line's own, once named after the post), each named after the post here. The copy is the
+  line's first part, so on a line of more than 20 posts its entry is listed before the card's cap, as main lists the
+  line's own, and its entries take none of the cap's 20 places, so posts with no numbered target
+  (`gh pr comment --body hi`, `gh issue create`) list at least as many entries as on main too. A here-doc body on
+  the line reaches the most severe post below a secret read, as it reaches one below
+  a store write (#435), so `cat ${x-.netrc}; mail -s s a@b.c <<EOF` keeps the mail's footer, forbidden-word and scrub
+  checks, as on main, where the mail decides the line; `cat .netrc; mail -s s a@b.c <<EOF` now has them too, which
+  main skips.
+  This fails closed on a few lines. A word that is a substitution alone after a `cd` into a store folder asks
+  (`cd ~/.kube && echo $(date)`, `kubectl get pods -n $(cat ns.txt)`, `cd ~/.exo/policies && echo $(ls)`), and so
+  does one in a shell call whose own folder argument is a store folder (`echo x $(cat f) w` with `~/.kube` as
+  `cwd`, an allowed read on main), also one
+  before the `cd` or a value set by one, as main reads `echo *; cd ~/.exo/policies`
+  (`echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies`, `V=$(sed -n 1p VERSION); cd ~/.exo && ls`): these are
+  `credentials` where #468 reads them as `read`, and no command in the substitution is a store write. These ask
+  too: `cd ~/.exo && ls principals`, in `run/jobs` `ls ../..`, `cat $(ls)` and `tail -f $(ls -t | head -1)`, a
+  variable that starts a name (`cat ${x}rc`, read as `.*rc`), a read of a folder that holds a store by a name made
+  by output (`cat /tmp/$(cat last)`,
+  `ls /tmp/$(whoami)`, `ls ~/.config/$(whoami)`, `cat ~/.config/$(ls ~/.config | head -1)`, as `cat /tmp/*` asks),
+  and `cat ${x:-'~/.kube'}/config`. A name whose own text fits a store file, split by output, is `store_write`
+  (`cp x data/schedule$(date +%F).sqlite`, `cp x out/seat$(date +%F).json`), and so is a split spelling bash never
+  makes a store path (`cp x ~/.exo/polic$(date)ies/a`). A write to `keys/` only the `*` reading reaches
+  (`cp x ~/.exo/$(printf keys)/a`) is `store_write`, not `credentials`. Both ask. A key read from a split `tar -C`
+  store folder (`tar -C ~/.exo/poli$(:)cies -czf - ../keys/seat`, `credentials` on main) is now `store_write` with a
+  `credentials` part, so a policy that denies `credentials` still denies it. A long write line full of expansions
+  costs 2 to 3 times the CPU time it did (2,000 `cp` words with a `$(:)` in each: about 2.4 times), and the work
+  stays linear. Not covered: a name left with fewer than three characters of its own
+  (`cat .$(printf env)`), a pattern-matched name split by output (`cat server.k$(printf e)y`), output with a `/` in
+  it (`cp x ~/$(printf .exo/policies)/x`), an expansion that ends a store write's word (`cp x ~/.exo/$name`), a store
+  file's name made whole by output (`cp x state/$(printf approval-grants).json`), a literal glob in a store write
+  (`cp x ~/.exo/polic?es/gates.yaml`), a default word with a `}` in it (`${x:-${HOME}/.kube}`), behind an indirect
+  name (`${!x:-~/.kube}`, `${!x[0]:-.env}`) or a subscript with an expansion in braces (`${x[${i}]:-$HOME/.exo}`),
+  a part that could be `..` after a literal part (`grep -r x ~/.exo/run/jobs/.?`), and a folder by its full path
+  (`tar czf - ${x:-$HOME/.kube}`, as `tar czf - ~/.kube`, and `grep -r x ~/.exo/principals/me`). A line these forms
+  make a secret line beside a store write is `credentials`, as a literal secret makes it on main
+  (`cd ~/.exo/state && cat ${x-.netrc}; echo $(rm -rf x)`), and its store write part keeps the answer with the
+  principal alone (#447). Any line these forms make `credentials` is answered by those who may answer
+  `credentials`, as the literal line is on main (`cat ${x-.netrc}; echo $(git push --force origin main)`, a force
+  push on main). Nested defaults and the field-split form `cat ${x:-a .env}` stay reads, on main
+  edeb4f89 as here (#341).
 - Gate (#447, D-038 amendment): a store write keeps the answer with the principal when a secret read leads the
   line. A secret read outranks a store write, so `env; echo x > ~/.exo/policies/gates.yaml` and
   `cat ~/.kube/config; cp evil.yaml ~/.exo/policies/default.yaml` were `credentials`, and a seat that
