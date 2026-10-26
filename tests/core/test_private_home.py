@@ -214,31 +214,90 @@ def test_a_umask_block_and_the_probe_share_one_lock(tmp_path, monkeypatch):
     assert now == 0o022
 
 
-def test_a_probe_inside_a_umask_block_does_not_deadlock(monkeypatch):
-    """The socket bind awaits inside its `umask` block, so another task on the same thread may probe meanwhile. The
-    lock is reentrant: the probe reads the block's mask and the block restores the old one afterwards."""
+def test_no_umask_block_awaits():
+    """The umask lock is a plain Lock (#563). The socket bind awaited inside its `umask` block, so a second bind on
+    the loop's thread entered the reentrant lock and restored out of order. A block that awaited would hang that
+    thread now. No `with umask(...)` block in src or plugins awaits or yields."""
+    import ast
+
+    root, blocks = Path(__file__).resolve().parents[2], []
+    pause = (ast.Await, ast.AsyncFor, ast.AsyncWith, ast.Yield, ast.YieldFrom)
+    for f in sorted([*(root / "src").rglob("*.py"), *(root / "plugins").rglob("*.py")]):
+        for node in ast.walk(ast.parse(f.read_text(), str(f))):
+            if isinstance(node, ast.With) and any("umask(" in ast.unparse(i.context_expr) for i in node.items):
+                blocks.append(f"{f.relative_to(root)}:{node.lineno}")
+                assert not any(isinstance(n, pause) for n in ast.walk(node)), blocks[-1]
+    assert len(blocks) >= 2  # the socket bind in server/app.py and the probe in core/private.py
+
+
+def test_two_socket_binds_on_one_loop_restore_the_mask(monkeypatch):
+    """Two `HttpServer.start_unix` calls overlap on one event loop: the first ends while the second is still
+    starting. The bind awaited inside its `umask` block, so the second block took 0177 as the mask to restore and,
+    ending last, left the process at 0177 (#563). The bind runs with no await under the mask now. Each socket is
+    0600 from its bind on, and the mask is 022 afterwards."""
+    import asyncio
+    import shutil
+    import socket
+    import tempfile
     import threading
 
-    private = _no_proc(monkeypatch)
-    got = []
+    from exo.core import private
+    from exo.server.app import Dispatcher, HttpServer
+    from exo.server.echo import EchoEngine
 
-    def probe_inside():
-        with private.umask(0o177):
-            got.append(private._umask())
+    kind = threading.RLock if isinstance(private._UMASK_LOCK, type(threading.RLock())) else threading.Lock
+    monkeypatch.setattr(private, "_UMASK_LOCK", kind())  # same kind, fresh: a block that awaits hangs only this one
+    real_bind, real_start, made, starts, out = socket.socket.bind, asyncio.start_unix_server, [], [], []
+    second_in, first_done = asyncio.Event(), asyncio.Event()
 
-    t = threading.Thread(target=probe_inside, daemon=True)
-    t.start()
-    t.join(10)
-    assert not t.is_alive() and got == [0o177]
+    def bind(self, addr):
+        real_bind(self, addr)
+        made.append(mode(Path(addr)))
+
+    async def start(*args, **kwargs):  # the first start returns once the second has its server, which then waits
+        server = await real_start(*args, **kwargs)
+        starts.append(server)
+        if len(starts) == 1:
+            await second_in.wait()
+        else:
+            second_in.set()
+            await first_done.wait()
+        return server
+
+    async def main(d):
+        a, b = HttpServer(Dispatcher(EchoEngine())), HttpServer(Dispatcher(EchoEngine()))
+
+        async def first():
+            await a.start_unix(d / "a.sock")
+            first_done.set()
+
+        try:
+            await asyncio.gather(first(), b.start_unix(d / "b.sock"))
+            out.append([mode(d / "a.sock"), mode(d / "b.sock")])
+        finally:
+            await a.close()
+            await b.close()
+
+    monkeypatch.setattr(socket.socket, "bind", bind)
+    monkeypatch.setattr(asyncio, "start_unix_server", start)
+    d = Path(tempfile.mkdtemp(prefix="exo", dir="/tmp" if os.path.isdir("/tmp") else None))
+    try:
+        t = threading.Thread(target=lambda: asyncio.run(main(d)), daemon=True)  # a block that awaited hangs here
+        t.start()
+        t.join(10)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
     now = os.umask(0o022)
-    assert now == 0o022
+    assert not t.is_alive() and now == 0o022
+    assert made == [0o600, 0o600] and out == [[0o600, 0o600]]
 
 
 def test_the_socket_bind_sets_its_umask_under_the_probes_lock(monkeypatch):
-    """`HttpServer.start_unix` makes the socket under umask 0177. A probe in another thread during the bind waits
+    """`HttpServer.start_unix` binds the socket under umask 0177. A probe in another thread during the bind waits
     for the lock and then reads the process's own mask: before, it ran at once and read 0177 (#317 review)."""
     import asyncio
     import shutil
+    import socket
     import tempfile
     import threading
 
@@ -246,21 +305,21 @@ def test_the_socket_bind_sets_its_umask_under_the_probes_lock(monkeypatch):
     from exo.server.echo import EchoEngine
 
     private = _no_proc(monkeypatch)
-    real, probes, seen, waited = asyncio.start_unix_server, [], [], []
+    real, probes, seen, waited = socket.socket.bind, [], [], []
 
-    async def bind(*args, **kwargs):
+    def bind(self, addr):
         probes.append(threading.Thread(target=lambda: seen.append(private._umask())))
         probes[0].start()
         probes[0].join(0.5)
         waited.append(probes[0].is_alive())
-        return await real(*args, **kwargs)
+        return real(self, addr)
 
     async def start(sock):
         srv = HttpServer(Dispatcher(EchoEngine()))
         await srv.start_unix(sock)
         await srv.close()
 
-    monkeypatch.setattr(asyncio, "start_unix_server", bind)
+    monkeypatch.setattr(socket.socket, "bind", bind)
     d = Path(tempfile.mkdtemp(prefix="exo", dir="/tmp" if os.path.isdir("/tmp") else None))
     try:
         asyncio.run(start(d / "exod.sock"))

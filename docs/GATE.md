@@ -22,7 +22,50 @@ The policy loader raises `PolicyError` for a list, scalar or null in place of th
 a string. Omitted settings and an empty mapping retain the defaults. `categories: []` disables category
 escalation, while independent floors, reserved entries, denies and other escalation checks still apply.
 Valid mappings keep their existing behavior.
-The plugin's existing policy-error path logs the error, records it with the decision and uses defaults.
+
+### A malformed escalate keeps the other sections (#557)
+
+The exo-gate plugin does not drop the whole policy for one of these mistakes. It loads the policy with an error
+list (`gate.load_policies(root, errors)`), which records the message and repairs only the escalation: the default
+escalation plus the category names the value gives. `escalate: [payment]` reads as the default categories plus
+`payment`, and a string, as `escalate` itself (`escalate: read`) or as its `categories`, adds each category name it
+contains. A null, false, number or empty list keeps the default escalation, and a mapping keeps its other keys.
+Deny, reserved, categories, rules, matrix, budget, posting, approvals and the internal-names scrub list stay in
+force. A caller without the list still gets `PolicyError`: the loader still rejects a bare list (#542), and only
+the plugin's repair honours its names, which can only add escalation.
+
+The plugin decides each call under that repaired policy and under the defaults, and the stricter outcome stands,
+merged as the gate merges a line's readings (#399): the widest exposure, so an approval binds to the exact line
+where either decision binds it; a third party if either has one; every violation, so the defaults' posting and
+scrub findings stay on the card with their fix; and every reserved part, which keeps its ask from a grant. So a
+deny, reserved entry, category line, rule or matrix cell that tightens the defaults still holds, and a section
+looser than the defaults (a permissive matrix, narrower posting rules, the scrub turned off) does not lower them.
+The reason says `policy error, stricter of your policy and the defaults applies: <message>`, and the plugin logs
+the message. An ask's approvers are those both the policy and the defaults allow (the principal alone), and an
+"always" answer lasts the shorter of the two `always` values. The no-reply default in the card is the policy's
+`ask_default`. A changed policy file with this error is decided the same way beside the defaults, also before
+`/gate accept`, and its `policy_change` row keeps the message in `error`. `/gate` shows a standing policy error for
+the pinned file and for a changed one.
+
+While the pinned or the changed file has this error, a standing grant applies only where the decision as before
+#557 (the defaults in place of the file with the error, then the decision model's verdict) also asks and finds a
+grant, so that decision allows the call too. Otherwise the merged decision stands and the call asks. So an unbound grant does not run a call that
+the defaults log but a restored `reserved` entry makes ask (`git push origin main` beside `reserved: [vcs_push]`),
+and a grant bound to the exact line does not run a call that the defaults ask for without that binding (a sudo
+write line, which an honoured `read` name or a restored `categories: {read: ask}` binds). Answering "always" there
+still writes a grant. It covers the line once `/gate accept` (or a new session) adopts a fixed file that still asks
+for the line and binds it the same way; a fixed file that waits for `/gate accept` leaves the error's rule in place.
+
+The decision is never lower than with the defaults alone (main after #542), the decision model and standing grants
+included, and a valid policy decides as before. It can be lower than main before #542 (1d2f32ac) in two known
+cases: a shape that crashed the classifier there (`escalate: {categories: 7}` asked on every call by accident);
+and, equal to the defaults alone, a grant bound to the exact line on a repo the policy's `scopes` narrow, which
+applies because the defaults read the repo as public and ask with that binding: `gh pr close 5 -R acme-org/app`
+beside `scopes: {internal: [acme-org/*]}`, which 1d2f32ac logged, or beside a private scope and a matrix ask,
+which 1d2f32ac asked for without a binding.
+
+Any other policy error (a YAML error, a bad matrix value, rules or deny that are not lists, an unreadable file)
+still falls back to the defaults alone: `policy error, defaults used: <message>`.
 
 ## Required executor audit
 
@@ -1044,6 +1087,25 @@ and `\U` with 1 to 8 hex digits, `\cX` (`\c\\` takes one backslash), and an unkn
 its backslash. A NUL ends the quoted part, so `$'--forc\0x'e` is `--force`. A `\u` or `\U` value that
 is no character is written as bash writes it: a few bytes that are not ASCII, or nothing at all from
 `\U80000000` on, so `$'--forc\UFFFFFFFFe'` is `--force` too.
+A backslash-newline inside a `$` form is joined first, as bash joins it (#584). Outside single
+quotes bash drops each `\<newline>` before it reads a word, so `"$\<newline>(cmd)"` runs cmd as
+`"$(cmd)"` does. The same holds after `${`, `${!` or `${#`, inside a `${..}` name and around its
+operator (`${PA\<newline>TH:=x}` sets PATH), between `$(` and `(`, where bash then reads the
+arithmetic `$((`, and inside a `$((..))` body. The lexer read a `$` and then a backslash as a
+literal `$`, and a `${..}` or `$((..))` as it stands, so
+`echo "$\<newline>(git push --force origin main)"` was an allowed `read` under
+`deny: [force_push]`. When the line, or a line the gate reads again from it once its word is
+decoded (`bash -c $'..'`, an `eval` or ssh argument in double quotes, a backquoted body, where `\\`
+is `\`), holds such a backslash-newline, the call is now read a second time with each one dropped,
+at every level. The line keeps both readings (`gate.readings`): the more severe one leads, so the
+approval card names it, and the other ends its `also` readings.
+`decide` keeps the stricter, and an approval binds to the exact line. The join is made in the
+text, so it also joins in single quotes, a comment or a quoted here-document, where bash keeps the
+backslash-newline. There the joined text stays quoted or unread, and the line as written still
+decides: `: # $\<newline>(git push ...)` keeps its deny, since bash runs the next line. A `${..}`
+is joined to its own `}`, past a `${..}` nested in it. Limits: only shell calls are read again
+(not `execute_code`), the folder walk of `cd` targets is not joined, and a joined form is read as
+its plain form is, so `$\<newline>[..]` is as unread as `$[..]` (#588).
 
 A command is meant to be `allow` only when every program in it is known and nothing the gate reads
 is hidden; "Known limits" below names the paths where a known program still runs a command the
@@ -2277,16 +2339,27 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus` (the bus registry
 that signed seat answers and the relay trust, the relay database and its `-wal`, `-shm` and
 `-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435), `$EXO_HOME/update`
-(`allowed_signers`, the signed-update trust pin of D-073, #133), any `seat.toml`,
+(`allowed_signers`, the signed-update trust pin of D-073, #133), `$EXO_HOME/config.json` (D-074,
+#125: the plugins the core loads, this gate among them, as `core_plugins`, their config, the `venv`
+that runs Hermes and Exo, each provider's `base_url` and headers, and the `principal` a peer key
+with no seat file speaks for, #525), any `seat.toml`,
 `$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals` (`exo init --root`,
 `exo import-store --root`), for every id, not only the active one. When the environment moves a bus
 file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with
 the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_`
 name, and both spellings when both are set. Distinctive names match anywhere, so a relative
 `policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or
-`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins` and `.exo/update` count whatever
-`EXO_HOME` is. A project folder called `update` is ordinary. Only a file in it named
-`allowed_signers` asks. `config.json` is not on the list yet (D-074, #125).
+`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins`, `.exo/update` and
+`.exo/config.json` count whatever `EXO_HOME` is. A project folder called `update` is ordinary. Only a
+file in it named `allowed_signers` asks. `config.json` is not a distinctive name: only the home's own
+file counts, so a project's `config.json`, and `config.json.bak`, `config.json~` or `config.jsonl`
+beside the home's, keep their class (one under `plugins/` asks with that folder, #435). A relative
+`.exo/config.json` is also read with `.`, `//` and `..` collapsed (`cd ~ && echo x > .exo/./config.json`),
+and a word a command prints counts by the name in it (`cp x $(echo ~/.exo/config.json)`), as
+`$(echo ~/.exo/policies/gates.yaml)` does. Reads stay `read` (`cat`, `jq`, `read_file`); a copy out
+of it (`cp ~/.exo/config.json /tmp/`) asks, as a copy out of `policies/` does. The CLI code that
+writes the file (`exo config set`, onboarding, `exo import-store`) is unchanged: run by the
+principal in a terminal, it is not a tool call.
 
 The plugins folder (#435). The core loads each plugin it finds in `$EXO_PLUGIN_DIRS`, then in
 `$EXO_HOME/plugins` (`exo.core.plugins.default_dirs`), and runs its code inside the harness with the
@@ -2406,6 +2479,13 @@ Patch move destinations (#528). Codex `apply_patch` writes the path in `*** Move
 and Exo's `*** Move File: source -> destination` headers. A destination in a protected store is
 `store_write`. A secret destination is `credentials`. Both ask.
 
+A header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) does not hide the header after
+it (#548 follow-up). Each header's path is read on its own line, as a patch tool reads it (a `\r` before the
+newline is trimmed), and also as before, across a line, so a path either reading finds counts. A local write of
+more than one file keeps each file as a `local_write` part, so `deny: [target:notes.txt]` or a reserved
+`target:` entry reaches every file the patch writes. The call's own target is the first path read as before: after
+a bare header, the card shows the swallowed header text.
+
 Their `local_write` parts keep
 the source and destination's deny and reserved entries. A content line beginning with `+` or a
 space is not a patch header. The checks use the existing path rules, including absolute links,
@@ -2421,15 +2501,18 @@ between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`
 without a link to resolve, so only distinctive names catch a write through it. Only the store roots
 are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
 write to the outside spelling is a local write. A copy or an archive unpacked into the home folder
-itself, which makes a protected folder from its source name (`cp -r /tmp/x/update ~/.exo/`,
-`tar -C ~/.exo -xf x.tar`), is not seen either. Nor is a path held in a variable or made by a
+itself, which makes a protected folder or `config.json` from its source name
+(`cp -r /tmp/x/update ~/.exo/`, `cp /tmp/x/config.json ~/.exo/`, `cp -t ~/.exo /tmp/x/config.json`,
+`tar -C ~/.exo -xf x.tar`, `unzip -d ~/.exo x.zip`), is not seen either (#483). Nor is a path held in a variable or made by a
 command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 `cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks are case-sensitive, so a
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
 followed, and a shell tool's `cwd` or `workdir` argument is not read here (the secret-store checks read
-it, #209, #311).
+it, #209, #311). `sudo -s` or `sudo -i` (`--shell`, `--login`) with no command runs a shell on its
+stdin, and that stdin is not read: `sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` and
+`sudo -s <<< 'rm -rf /srv/data'` are a `read`, for every store path and every command alike.
 A copy or archive of `keys/` that the gate reads only as a key read has no store write part, so a
 seat that `approvals.yaml` delegates `credentials` to may still answer it, as before #447. It asks
 every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,
@@ -2474,7 +2557,10 @@ path is one the gate cannot resolve, not that the command writes it. A body file
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
 `sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
-`exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `git -C <store>` with a
+`exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
+`unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and
+`exo interview`, which writes the principal store (also as `python -m exo.config`, `exo.cli` or
+`exo.onboard`, D-074, #125), `git -C <store>` with a
 writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
 `<( )` of a later command on that line (#465: `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`). There,
 as unwrapped, a command the gate does not read as a read (`sed -n`, `sort`, `curl`) counts as a write. A
@@ -2540,7 +2626,26 @@ reserved entry on `credentials` sees it. Its target is the name as written (`../
 `tar -C ~/.exo -czf - keys/seat`. In each case the line stays `store_write` and asks the
 principal alone when nothing denies it. `exo update --pin-trust` keeps its old
 `opaque_exec` reading as a part, so a deny on `opaque_exec` still denies it, and naming
-`opaque_exec` at `allow` or `log` no longer lets it run without an ask.
+`opaque_exec` at `allow` or `log` no longer lets it run without an ask. So do `exo config set` and
+`unset`, `exo import-store` and `exo interview` (D-074). `exo providers default`, which also
+rewrites `config.json`, stays `credentials` (D-034) with the store write as a part, so a deny on
+either denies it and only the principal answers it.
+
+A `config.json` write keeps main's reading of the line (D-074, #125). Before D-074 the line was
+not a store write, so its own reading led it: a delete, a post, a secret, a `/dev` target, an
+`ssh` host, or the `internal` exposure of the command `ssh`, `scp` or `sftp` runs from
+`-o RemoteCommand=`. The store write now leads, so each call in which `config.json` (or an exo
+command that writes it) counted as the store is also read as before D-074, as a call of its own
+(`Classification.ordinary`, one of `gate.readings`). `decide` decides both and the stricter
+stands, with every reserved hit and violation of either, as for the `also` and `floor` readings
+(#311, #399). So `matrix_deny_cells` still denies
+`ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h`, `deny: [credentials]`
+still denies `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`, `target:/dev*` still denies
+`cp ~/.exo/config.json /dev/fd/3`, a rule on irreversible `credentials` still denies a secret beside
+`bash -c 'rm -rf /srv/data; cp /tmp/x ~/.exo/config.json'`, and a category deny a catch-all allow
+rule did not lift still denies `f() { rm -rf /srv/data; cp /tmp/x ~/.exo/config.json; }; f`. The
+checks past `decide` (`no_grant`, `call_approvers`, `binds_exact`, the hook's body files and
+required executor) read both too.
 
 ## Policy changes during a session (D-038)
 
@@ -2555,9 +2660,14 @@ the pinned order (`gate.strictest_approvers`, an ordered intersection; the princ
 both, so the list is never empty), and an "always" answer lasts the shorter of the pinned and
 changed `always` values, so a 0 in either writes no grant. A seat the principal removes cannot
 answer the next ask; a seat they add waits for `/gate accept`. A changed file that does not load
-counts as the defaults: the principal alone, 30 and 7 days. Limits: an ask already open keeps the
-approvers it was sent with, and grants written before the change still match until they expire or
-`/grants revoke` removes them.
+counts as the defaults: the principal alone, 30 and 7 days. A changed `gates.yaml` whose only
+error is a malformed `escalate` keeps its other sections and is decided beside the defaults, with
+approvers no wider than theirs (#557). When the pinned or the changed file has that error, the
+old and new decisions merge as the readings of a line merge, so at an equal outcome the other's
+violations stay on the card, and a standing grant applies only where the decision with the defaults
+in place of that file also asks and finds it. Limits: an ask already
+open keeps the approvers it was sent with, and grants written before the change still match until
+they expire or `/grants revoke` removes them.
 
 ## Principal authority for policy and settings changes
 
@@ -2570,6 +2680,80 @@ records the authenticated caller, including its client label. `/gate status` sta
 403 when the core refuses authority. It does not rewrite config through its offline fallback.
 TCP and stdio callers remain local even when they possess a transport bearer token.
 
+`schedule.edit` requires a live principal caller for every action except `list`. The check is at the
+`Scheduler.edit` command handler, before a job can be added, paused, resumed, run or removed. Scheduled runs also
+check each tool call against the tool names they received. A refused name returns an error without reaching
+the gate or executor. Allowed names still pass through both (`docs/SCHEDULE.md`).
+
 Two other body fields cannot claim the principal. `peers send` with `via="human"` from a non-principal caller
 goes out as `via="agent"`, so the receiving daemon gives it `same-principal` trust, not `principal`. `unsteer`
 from a non-principal caller can pull back only steers that the principal did not write.
+
+## Bypass mode (D-065)
+
+Bypass is Exo's permissionless mode, like Claude Code's `--dangerously-skip-permissions`. While it is on, the gate
+auto-approves every call it would otherwise ask about, so the agent never stops to wait for you. Bypass
+auto-approves everything except changes to Exo's own records and reading secrets.
+
+**Turning it on.** Type `/permissions bypass` in the terminal client or the web page, or start the terminal client
+with `exo --skip-permissions` (`--dangerously-skip-permissions` is accepted too). The flag only makes the window
+send `/permissions bypass` once it has connected, so it works the same whether the window runs the core or joins
+one. `/permissions ask` turns asking back on, and so does the web banner's "Ask again" button. `/permissions` shows
+the mode and the counts.
+
+**Who can turn it on.** Only a principal connection (D-039, D-052): the terminal window, the web page, or a socket
+client holding the principal credential that is not a child of the core. A tool subprocess (even one holding the
+stolen credential), a channel, a peer, a bus message, a TCP or stdio client, and the agent itself are local callers
+and get `forbidden`. A message that says "/permissions bypass" is only text. Work the principal's command started
+(the agent's turn and its tools) does not keep the principal's standing once that command returns. Anyone may turn
+it off, because that only tightens. Every switch writes a ledger row (`phase: permissions`, with `mode`, `by` and
+`via`: `/permissions`, `launch flag` or `seat default`).
+
+**How long it lasts.** For this run of the core only. The state is in the gate's memory, never on disk. Every
+client of that core sees it. A restarted core starts in ask unless the flag is given again. A per-seat default
+exists: `[permissions] mode = "bypass"` in the seat file, read once when the core starts. A seat file is a store
+path, so writing one is `store_write` and asks you every time, even in bypass. Bypass can never make itself the
+default, and no policy file turns it on.
+
+**What still happens in bypass:**
+
+| Call | Without bypass | In bypass |
+|---|---|---|
+| Anything the policies say asks (a GitHub comment, `rm`, a network post, an unknown program, opaque code) | asks | runs; ledger row `decided_by: bypass` |
+| `store_write`: the policies, the ledger, `keys/`, the grants, seat files, the core sockets | asks the principal | asks the principal |
+| `credentials`: reading or filling a key, token or password | asks | asks |
+| A `deny` rule, or a decision-model deny | blocks | blocks |
+| A public post that breaks the posting rules (an internal name, a home path, a missing footer) | asks, with the fixes | held: the call fails with the fixes, so the agent rewrites the text and calls again |
+| A standing grant, `allow` or `log` | runs | runs |
+
+**Why that floor.** It is not about permission. It protects the record of what the agent did. If the agent could
+rewrite its own ledger, policies or grants while nobody is asked, the audit of a bypass session would be worthless,
+and it could make bypass permanent. Secrets stay asked because a key, once read, cannot be un-read, and the record
+cannot undo it. Deny rules are the principal's hard limits; Claude Code keeps deny rules in bypass too. Use a
+`deny` rule for anything that must never run, even in bypass. A post that breaks the posting rules is held rather
+than asked because nobody is there to answer, and a leaked internal name in a public repo cannot be taken back; the
+agent gets the list of fixes and goes on.
+
+**It is never silent.**
+
+- A banner: `permissions: bypass` with the auto-approved count, first in the terminal status line (a narrow window
+  cuts the other instruments, never this), and under the navigation on every web page. Both clients read
+  `/permissions json` every few seconds and after each turn.
+- Every auto-approved call has a ledger row: `outcome: allow`, `decision.rule: bypass`, `decided_by: bypass`,
+  `bypass: {would: ask, rule, reason}` (what the gate would have asked and why) and `call: {tool, args}`. The
+  arguments are recorded with obvious secrets redacted (`redacted` counts them) and cut at 8000 characters
+  (`truncated` gives the length); `args_sha256` still identifies the exact call. Held posts have `decided_by:
+  bypass` and `decision.rule: bypass_hold`. Floor calls that still asked carry `bypass: {floor: <category>}`.
+- `/permissions` gives the counts for this run: auto-approved, held, and still asked.
+
+**Exo OS.** With a required tool executor (D-020, #70) bypass is refused: `/permissions bypass` fails with
+`forbidden` and a seat default is ignored with a log line. Every call there must be decided and committed to the
+ledger before the broker runs it, and the installation exists to keep a person in that loop. If required mode
+starts after bypass was switched on, bypass is inert.
+
+**Not covered.** An internal gate error still falls back to asking (the gate could not classify the call, so it
+cannot know the call is off the floor). Bypass changes what the gate asks; it is not a sandbox, and the D-039 limit
+on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` and `Gate._bypass` in
+`plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
+`tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
+`plugins/exo-command/tests/test_permissions_web.py`.

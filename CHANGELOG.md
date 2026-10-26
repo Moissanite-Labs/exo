@@ -6,6 +6,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
+  after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
+  that path and its write was never read. A patch tool skips the bare line and applies the next header, so after
+  #548 a bare `*** Move to:` let `*** Add File: .ssh/config` through with no ask. Each header's path is now also
+  read on its own line (a `\r` before the newline is trimmed), and the paths read as before still count. A local
+  write of more than one file keeps each file as a part, so an exact `target:` deny or reserved entry reaches a path
+  only the reading on one line found, and any later file of a patch. The call's own target and summary stay as
+  main reads them: after a bare header that is still the swallowed header text.
 - A post's `--body-file` is read only on a line where the gate finds no other part (#343). The exo-gate hook read
   an absolute body file before the line ran, but another part of the line could change the file before `gh` read
   it: a copy, a move, a redirect, a link or `tee` before the post, a writer after it in a pipe or in the
@@ -21,7 +29,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   counts, and a store read from the tool's own folder (#311) is a part too. The card says the file was not read and
   why, for each post on the line, and asks for the post on a line of its own, in place of the hint to pass an
   absolute path. A post also unseen another way, such as a title from a variable, keeps that hint beside it. The
-  card no longer names a word the unread file holds.
+  card no longer names a word the unread file holds. A NUL in a body-file path no longer sends the hook to its
+  error card, which offered "always": the post takes the route a missing file takes, so it stays unseen and asks
+  once wherever posting rules apply to it.
 - `hash -p` is opaque, so a rebound program name no longer runs another file under a read's cover
   (#330). `hash -p PATH NAME` makes the shell run PATH for every later NAME, and the gate filed the
   line under NAME's own program, so `hash -p /tmp/x ls; ls` read as a plain `ls`. The call now
@@ -47,6 +57,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   or a login to another host (`ssh a 'ssh b; hash -p /x ls'`) beside the rebind keeps the store
   check in either order, so
   `ssh -E ~/.exo/state/log host 'hash -p /x ls; sort x'` is a store write.
+- Two Unix socket binds (`HttpServer.start_unix`) that overlapped on one event loop could leave the process umask
+  at 0177 (#563, a follow-up to #317). The bind awaited inside its `umask` block, so the second block restored 0177
+  after the first had restored the mask from before. Under 0177 a folder made later with a plain `mkdir` comes out
+  0600, which its owner cannot enter. The socket is now bound inside the block, and the server starts on it after
+  the block. A start that fails takes that socket off the event loop and closes it. The umask lock is a plain lock,
+  not reentrant. A second start on a server that already started is refused before it takes anything, so it keeps
+  the live start's lock and principal record. A dangling link at the socket path is replaced as a stale file is.
 - Two follow-ups to #296 (#317). A ledger opened read-only through a symlink to a closed target held an
   `immutable=1` connection to the target itself: a writer that appended and checkpointed replaced the file
   under it, so the reader stayed stale and reading raised `database disk image is malformed`. The target is
@@ -58,9 +75,30 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the process mask to 077 and restored it with no lock: concurrent writes with `mode=None` interleaved set and
   restore, so files came out 0600 under a 022 mask and a run could leave the process at 077. The probe runs under
   a lock now, and so does the server's socket bind, which sets 0177 (`exo.core.private.umask`).
+- `grep` and `glob` run in an owned process with a 30-second limit, so expensive regex and glob patterns no
+  longer freeze the core. Timeout and turn cancellation kill and reap the worker. Secret-store skips and
+  gate/executor dispatch remain in force (D-057 stage 0.5).
+- Scheduled job changes require a live principal caller (#552), while listing stays available to local
+  callers. A scheduled run rejects tool names outside its initial available-tool list before the gate or
+  executor runs them, including blocked tools and tools registered after the run starts (D-057 stage 0.1–0.2).
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
+- A malformed `gates.escalate` no longer throws away the rest of the principal's policy in the exo-gate plugin
+  (#557, after #549 for #542). The plugin used the defaults for the whole policy, so a `deny`, `reserved`,
+  category, rule or matrix tightening beside `escalate: [payment]`, a null or bare `escalate:` (the template's block
+  with its lines commented out) or `categories: payment` decided lower than before #549, and the internal-names
+  scrub was dropped. The policy now keeps its other sections with the escalation repaired (the default escalation
+  plus the names given), each call is decided under it and under the defaults, and the stricter outcome stands
+  with the wider exposure and the violations and reserved parts of both.
+  The reason says `policy error, stricter of your policy and the defaults applies`. When the pinned or a changed
+  policy file has this error, the old and new decisions merge the same way until `/gate accept`, so the other's
+  violations stand at an equal outcome. While the error stands, a standing grant applies only where the decision
+  with the defaults in place of the broken file (and the decision model's verdict) also asks and finds it, so a
+  grant never allows a call they log, or ask for without that grant. The names a list or a string gives
+  (`escalate: [read]`, `escalate: read`) only add escalation, and `/gate` shows a standing policy error. Other
+  policy errors still use the defaults alone. `normalize_policies` and `load_policies` take an optional error
+  list; without it they raise as before.
 - The gate reads Codex `apply_patch` move destinations (`*** Move to:`) as file-write paths (#528).
   A move into a protected store or secret folder now asks, as an Add or Update header on that path does.
   Absolute links, home and environment spellings, distinctive relative names and braces use the existing checks.
@@ -406,6 +444,32 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still asks the principal alone, and its decision now names the rule `opaque` where it named `floor`. Main's
   `scripts/gate_diff.py` lowers nothing on its built-in corpus or on aimed lines behind a quoted assignment (runs and
   counts in #546).
+- Gate (#584, D-038 amendment): a backslash-newline right after a `$` no longer hides a command substitution, a
+  parameter expansion or a `$@` split. Bash drops each `\<newline>` outside single quotes before it reads a word,
+  so `echo "$\<newline>(git push --force origin main)"` runs the push, but the gate read the `$` as text and
+  allowed the line under `deny: [force_push]`; `echo "$\<newline>(curl -X POST ...)"` was an allowed read too, and
+  `echo "${PA\<newline>TH:=/tmp}"; ls` hid a PATH change. A shell line is now also read with each `\<newline>`
+  dropped after a `$`, in a `${..}`, between `$(` and the `(` of `$((` and in a `$((..))`, on the line and on each
+  line read again from it once decoded (`bash -c $'..'`, `eval "..."`, ssh, backquotes), and also as written, as
+  before. `decide` keeps the stricter (`gate.readings`), the more severe reading leads the approval card, and an
+  approval for such a line binds to its exact text. A line the join leaves as it is is read once, as before.
+- Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
+  (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
+  #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under
+  `deny: [store_write]`: `cp /tmp/evil ~/.exo/config.json`, `mv`, `install`, `tee` and `ln -sf` were an allowed
+  `shell`, a redirection an allowed `local_write`, and `write_file`, `edit_file` or `apply_patch` there an allowed
+  `local_write`. A write in any form the store checks read (`~`, `$HOME`, `$EXO_HOME` or a full path, a brace set, a
+  relative `.exo/config.json` also spelt `.exo/./config.json`, after a `cd` into the home, under `sudo`, `env`,
+  `bash -c` or `ssh`, the file tools' path keys) is now `store_write`: it always asks, only the principal answers, no
+  grant covers it, and `deny: [store_write]` denies it. A tool call that runs `exo config set` or `unset`,
+  `exo import-store` or `exo interview` (also through `python -m exo.config`) is `store_write` too and keeps its
+  `opaque_exec` reading as a part, as `exo update --pin-trust` does, so `deny: [opaque_exec]` still denies it.
+  `exo providers default` stays `credentials` with the store write as a part, so a deny on either denies it.
+  Reads stay `read`, and a project's `config.json` is unchanged. No decision is lower than on main: a call in which
+  `config.json` counted is also read as before (`Classification.ordinary`, one of `gate.readings`), and the stricter
+  decision stands, so `matrix_deny_cells` still denies
+  `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h` and `deny: [credentials]` still denies
+  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A copy or extraction into a folder that holds the file is #483.
 - Gate (#225, #269, #309, #341, D-038): store names an expansion hides, and relative names that reach the run
   folder, now ask. #307 read an expansion inside a secret-store name as empty and, between literal text, as `*`.
   That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,
@@ -1081,6 +1145,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   composer typing it adds to the copied page were inline scripts, which the policy refuses, so regenerated shots
   came out in the inverse layout with an empty composer. They are now a file in the copied static folder, loaded
   by `src`.
+- Permissions bypass (D-065): `exo --skip-permissions` or `/permissions bypass` stops approval asks for this run of
+  the core, except writes to Exo's own records and reading secrets. Principal only, refused under a required
+  executor, a banner in both clients, every auto-approved call in the ledger as `decided_by: bypass`.
 
 ### Changed
 - `exo` imports a command's module only when that command runs (#260, D-035 amendment). Before, every call loaded
