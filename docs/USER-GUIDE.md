@@ -146,7 +146,8 @@ The technical reference, with arguments and where each command is implemented, i
 | `/trace [N]` | Show timing, route and estimated cost for the last N turns (default 10). |
 | `/findings` | Show what the harness found wrong with itself. |
 | `/grants` | List standing approvals. `/grants revoke <id>` removes one. |
-| `/gate` | Show whether policy files changed this session. `/gate accept` adopts the change. |
+| `/gate` | Show whether policy files changed this session, and any error in them. `/gate accept` adopts the change. |
+| `/permissions` | Show whether the gate asks or is in bypass, and how many calls bypass approved. `/permissions bypass` stops the asking (except Exo's own records and secrets); `/permissions ask` turns it back on. |
 | `/peers` | List other live sessions you can message. |
 | `/send <peer> <text>` | Message another session yourself. |
 | `/handoff [path]` | The agent writes a handoff note for the next session. |
@@ -163,10 +164,10 @@ The technical reference, with arguments and where each command is implemented, i
 
 Plugins add commands. They show in `/help` under `other`. `/exo` (the dispatcher) and `/orchestra` are examples when
 those plugins load. The core answers `/context`, `/compact`, `/trace` and `/findings` itself. `/grants` comes from
-the `exo-gate` plugin. The web client runs `/context`, `/findings`, `/trace`, `/new`, `/rename` and `/layout` from
-its composer, and `/model` and `/default` (with a reference, or bare for a picker; `/default` only on a page opened at
-127.0.0.1 or localhost). A command it does not run, such as `/grants` or `/help`, stays in the box with a note; a line
-like `/tmp is full` is sent as a message.
+the `exo-gate` plugin, and so does `/permissions` (D-065). The web client runs `/context`, `/findings`, `/trace`,
+`/new`, `/rename`, `/permissions` and `/layout` from its composer, and `/model` and `/default` (with a reference, or
+bare for a picker; `/default` only on a page opened at 127.0.0.1 or localhost). A command it does not run, such as
+`/grants` or `/help`, stays in the box with a note; a line like `/tmp is full` is sent as a message.
 
 ### Typing help
 
@@ -277,7 +278,9 @@ appears on the Tasks page) and remove it. Jobs are kept in `$EXO_HOME/schedule.s
 starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
 
 There is no terminal command for jobs, and the agent has no tool to create them. The web page and the protocol
-command `schedule.edit` are the entry points. Details: `docs/SCHEDULE.md`.
+command `schedule.edit` are the entry points. Only your authenticated Exo client can create, pause, resume,
+run or remove a job. Local scripts and channels can list jobs, but changes return `forbidden`.
+An unattended run cannot call a tool outside the list it received. Details: `docs/SCHEDULE.md`.
 
 ## 6. Approvals
 
@@ -321,9 +324,12 @@ What the gate asks about, and why:
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another. A post whose text the gate cannot
   read (piped in, a file given by a relative path, `$( )` or a variable) asks, and offers no "always". The gate
-  reads a body file given by its full path. When the gate cannot tell which repo a `gh` command acts on, it reads
-  the command on each one, and the question names the others ("It may land on pub/repo#7 instead."). A deny in
-  your policy for any of them holds. An "always" on such a command covers that exact command only (#399).
+  reads a body file given by its full path when the post is alone on its line. On a line that does more
+  (`cd /tmp && gh ...`, a copy, a redirect to a file, `GH_EDITOR=x gh ...`), the rest of the line could change the
+  file first, so the gate leaves it unread: the post asks once and says why (#343). When the gate cannot tell which
+  repo a `gh` command acts on, it reads the command on each one, and the question names the others ("It may land on
+  pub/repo#7 instead."). A deny in your policy for any of them holds. An "always" on such a command covers that
+  exact command only (#399).
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
   the post and lists what it found. The sweep and the exact-text check see only text the gate can read, so a body
   it cannot read asks instead (#208, above).
@@ -401,6 +407,28 @@ that never runs the page's script never uses its code, so then nothing warns (`d
 
 "Always" answers become standing grants. They expire (7 days for outward acts, 30 days for others) and an outward
 grant covers one exact text. `/grants` lists them. `/grants revoke <id>` removes one.
+
+### Bypass: let the agent work without asking (D-065)
+
+If you want the agent to get on with it, like Claude Code with `--dangerously-skip-permissions`, start Exo with
+
+    exo --skip-permissions
+
+or type `/permissions bypass` in a running window or the web page. The gate then approves on its own everything it
+would have asked you about: comments, deletes, network posts, scripts. Bypass auto-approves everything except
+changes to Exo's own records and reading secrets. Those two still ask you, every time: a write to your policies,
+ledger, keys, grants, seat files or the core's socket, and reading a key or token. Your `deny` rules still block. A
+public post that breaks your posting rules (an internal name, a home path) is sent back to the agent with the fixes
+instead of to you.
+
+You always know it is on. The terminal status line starts with `permissions: bypass` and a count, and every web page
+shows a banner with an "Ask again" button. Every call it approved is in your ledger, marked `decided_by: bypass`,
+with the exact command. `/permissions` shows the counts. `/permissions ask` turns asking back on.
+
+Only you can turn it on, from your own window or page. The agent, a tool it runs, a peer or a bus message cannot. It
+lasts until the core stops; the next start asks again unless you give the flag again. To make it the default for a
+seat, put `[permissions] mode = "bypass"` in the seat file (`docs/SEATS.md`); changing a seat file always asks you.
+On an Exo OS installation (a required tool executor) bypass is not available.
 
 Details: `docs/GATE.md`.
 
