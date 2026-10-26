@@ -26,8 +26,10 @@ RM = "rm -rf /srv/data"
 
 # Each spelling bash reads as the assignment X=... before the command.
 # A line continuation inside the name is no quoting: bash drops it first, so `X\\<newline>=` is X=.
+# bash reads a subscript prefix (`X[0]=`, `X['k']=`) as an assignment too: it warns that the name is not a valid
+# identifier and still runs the command after it.
 STYLES = ["X='a b'", 'X="a b"', "X=a\\ b", "X=$'a b'", 'X="$Y"', "X=a'b c'd", "X+='a b'", "X='a b' Y=\"c d\"",
-          "X\\\n='a b'"]
+          "X\\\n='a b'", "X[0]='a b'", "X['k']='a b'", 'X=$"a b"', "X=''"]
 
 
 def sh(command):
