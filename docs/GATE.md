@@ -755,26 +755,18 @@ Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults
 
 ### A camelCase tool name reads its words beside the name's one word (#515)
 
-`_name_tokens` lowered a tool's name before it split it at camelCase humps, so the humps were gone and a
-camelCase name stayed one word: `classify_by_name` gave `deleteFile`, `moveFile`, `writeFile`, `readFile` and
-`sendMessage` `unknown`, where `delete_file`, `move_file`, `write_file`, `read_file` and `send_message` read as
-`delete`, `local_write`, `read` and `message_send`. A camelCase name whose call names a secret still asked (the
-secret path did), and one naming a store file asked through the unnamed call's store-source reading (#435); but
-a delete of the folder that holds the store ran under the default policy: `deleteFile {"path": "~/.exo"}` was
-`unknown` and allowed, where `delete_file` asks the principal.
+The name parser adds camelCase words beside each separator part. The complete unsplit call is also
+read as a policy floor: its secret and store checks, target, posting text and category rules still apply.
+This prevents a new read hint from bypassing a store-source ask, an outbound hint from bypassing a
+credential ask, and a draft hint from weakening an existing send reading. A policy that asks or denies
+`unknown` still applies to a camelCase call previously read as unknown. `deleteFile` on `~/.exo`
+now asks through its new store-write reading; `readFile` on a store file still asks through the old
+store-source reading. Compact names such as `apiKey`, `checkOut` and `signUp` retain their old
+reading. Empty separator parts are dropped, preserving the MCP remote-write flag for leading separators.
+Earlier built-in differential counts covered the pre-review implementation only and do not validate
+these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
+rules, explicit unknown-category policies, and leading-separator MCP names.
 
-The words are read beside the name's own word now (#515): a camelCase call reads what its snake_case spelling
-reads, and the name's own word is kept. Main asked a camelCase name as `unknown`; where a policy asks `unknown`
-and allows the name's new category, the call passes where main asked. The categories the words introduce beside
-what main asked are `read`, `local_write`, `delete` and `message_send`; `store_write` and `credentials` keep the
-principal-only floor, so no policy passes them. `deleteFile` on a folder that
-holds the store (`deleteFile {"path": "~/.exo"}`) is the same `store_write` ask `delete_file` is; the
-#447 check on a secret reads the folder beside one, as it did. `readFile` on a store file is a `read`, where main
-asked the unnamed call's store-source reading; a camelCase read beside a secret is `credentials` as `read_file`'s
-is. A compact word main already read keeps its reading beside the words the humps add (`apiKey` is a credential
-word, `checkOut` pays, `signUp` opens an account). The gate differential against main
-(`scripts/gate_diff.py`, #423) over the built-in corpus, 10,823 actions × 87 policies, finds 0 lowered pairs,
-297 pairs on 31 actions tightened (the camelCase names' raised readings) and 186 same-outcome detail changes.
 Tests: `tests/security/test_gate_store_top_parts.py`, `plugins/exo-gate/tests/test_store_floor_any_part.py`.
 
 ### A thread's environment file (#313)

@@ -283,3 +283,48 @@ def test_a_file_tool_on_a_plain_path_has_no_part():
 def test_the_ledger_view_leaves_the_parts_out():
     c = classify({"tool": "delete_file", "args": {"path": "~/.exo/state/x"}})
     assert "parts" not in c.as_dict(), c.as_dict()
+
+
+@pytest.mark.parametrize('tool,args,old_category', [
+    ('mergeGithub', {'path': '~/.ssh/id_rsa'}, 'credentials'),
+    ('mcp__github__mergePullRequest', {'path': '~/.ssh/id_rsa'}, 'credentials'),
+    ('mcp__slack__postMessage', {'file': '~/.aws/credentials'}, 'credentials'),
+    ('mcp__gmail__sendEmail', {'path': '~/.ssh/id_rsa'}, 'credentials'),
+    ('downloadFile', {'dest': '~/.exo/policies/gates.yaml'}, 'store_write'),
+    ('mcp__fs__searchReplace', {'path': '~/.exo/policies/gates.yaml'}, 'store_write'),
+    ('readFile', {'path': '~/.exo/config.json'}, 'store_write'),
+    ('findAndReplace', {'path': '~/.exo/policies/gates.yaml'}, 'store_write'),
+    ('getOrCreateFile', {'path': '~/.exo/policies/gates.yaml'}, 'store_write'),
+    ('fetchAndSave', {'path': '~/.exo/policies/gates.yaml'}, 'store_write'),
+    ('readAndDeleteFile', {'path': '~/.exo/policies/gates.yaml'}, 'store_write'),
+    ('mcp__notify__createDraft', {'target': '#general', 'text': 'Zork'}, 'message_send'),
+    ('send_messageDraft', {'target': '#general', 'message': 'Zork'}, 'message_send'),
+    ('mcp__tweet__draftTweet', {'target': '#general', 'text': 'Zork'}, 'social_post'),
+    ('mcp__invite__deleteUser', {'target': '#general'}, 'message_send'),
+])
+def test_camel_words_keep_the_complete_unsplit_policy_floor(tool, args, old_category):
+    c = classify({'tool': tool, 'args': args})
+    assert c.floor is not None and c.floor.category == old_category
+    assert decide(c).outcome == 'ask'
+    assert decide(c, pol(categories={old_category: 'deny'})).outcome == 'deny'
+    if old_category in gate.NO_GRANT:
+        assert gate.no_grant(c)
+    if old_category in gate.OUTBOUND:
+        assert gate.is_outward(c, decide(c))
+        assert c.floor.target == '#general'
+        if 'Zork' in args.values():
+            d = decide(c, normalize_policies({'posting': {'forbid_words': ['Zork']}}))
+            assert any('forbidden word: Zork' in v for v in d.violations)
+
+
+@pytest.mark.parametrize('tool', ['_mcp_upload_file', '-mcp-create-file', '/mcp/create_file'])
+def test_leading_separator_keeps_remote_write_policy(tool):
+    c = classify({'tool': tool, 'args': {'path': 'notes.md'}})
+    assert c.category == 'remote_write'
+    assert decide(c, pol(categories={'remote_write': 'deny'})).outcome == 'deny'
+
+
+@pytest.mark.parametrize('tool', ['readFile', 'writeFile', 'deleteFile', 'sendMessage'])
+def test_unknown_category_policy_still_applies_after_camel_split(tool):
+    c = classify({'tool': tool, 'args': {'path': 'notes.md'}})
+    assert decide(c, pol(categories={'unknown': 'deny'})).outcome == 'deny'

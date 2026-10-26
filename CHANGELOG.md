@@ -424,24 +424,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   line read again from it once decoded (`bash -c $'..'`, `eval "..."`, ssh, backquotes), and also as written, as
   before. `decide` keeps the stricter (`gate.readings`), the more severe reading leads the approval card, and an
   approval for such a line binds to its exact text. A line the join leaves as it is is read once, as before.
-- Gate (#515, D-038 amendment): a camelCase tool name is read as its words beside the name's one word, what its
-  snake_case spelling reads. `_name_tokens` lowered a tool's name before it split it at the humps, so the humps
-  were gone and the name stayed one word: `deleteFile`, `moveFile`, `writeFile`, `readFile` and `sendMessage`
-  were `unknown`, where `delete_file`, `move_file`, `write_file`, `read_file` and `send_message` read as
-  `delete`, `local_write`, `read` and `message_send`. Under the default policy a delete of the folder that holds
-  the store ran with no ask: `deleteFile {"path": "~/.exo"}` was `unknown` with no store part and allowed,
-  where `delete_file` on `~/.exo` is `store_write` and asks the principal alone. The name's own word is kept,
-  so nothing main allowed is read lighter: a compact word main already read keeps its reading (`apiKey` is a
-  credential word, `checkOut` pays, `signUp` opens an account). Where the #447 amendment read a camelCase name
-  as one word and split it in the wide check alone, the words now count everywhere the name does, so
-  `deleteFile {"path": "~/.exo"}` asks for the reason `delete_file` does, and a camelCase read of a store file
-  (`readFile ~/.exo/policies/gates.yaml`) is a `read`, where main asked the unnamed call's store-source
-  reading, as `read_file` always was. Two readings read lighter than main where a policy sets the category,
-  which the gate differential's built-ins do not: a policy that asks the `unknown` category and allows
-  `local_write` lets a camelCase `writeFile` or `moveFile` pass where main asked it, and a policy that asks
-  `unknown` and allows `read` lets camelCase reads of store files pass. `scripts/gate_diff.py` over the
-  built-in corpus (10,823 actions × 87 policies) reports 0 lowered pairs against main a8a4ffbd, 297 pairs on 31
-  actions tightened and 186 same-outcome detail changes.
+- Gate (#515, D-038 amendment): The name parser adds camelCase words beside each separator part. The complete unsplit call is also
+  read as a policy floor: its secret and store checks, target, posting text and category rules still apply.
+  This prevents a new read hint from bypassing a store-source ask, an outbound hint from bypassing a
+  credential ask, and a draft hint from weakening an existing send reading. A policy that asks or denies
+  `unknown` still applies to a camelCase call previously read as unknown. `deleteFile` on `~/.exo`
+  now asks through its new store-write reading; `readFile` on a store file still asks through the old
+  store-source reading. Compact names such as `apiKey`, `checkOut` and `signUp` retain their old
+  reading. Empty separator parts are dropped, preserving the MCP remote-write flag for leading separators.
+  Earlier built-in differential counts covered the pre-review implementation only and do not validate
+  these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
+  rules, explicit unknown-category policies, and leading-separator MCP names.
 - Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
   (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
   #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under
