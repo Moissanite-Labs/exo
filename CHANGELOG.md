@@ -415,6 +415,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#584, D-038 amendment): a backslash-newline right after a `$` no longer hides a command substitution, a
+  parameter expansion or a `$@` split. Bash drops each `\<newline>` outside single quotes before it reads a word,
+  so `echo "$\<newline>(git push --force origin main)"` runs the push, but the gate read the `$` as text and
+  allowed the line under `deny: [force_push]`; `echo "$\<newline>(curl -X POST ...)"` was an allowed read too, and
+  `echo "${PA\<newline>TH:=/tmp}"; ls` hid a PATH change. A shell line is now also read with each `\<newline>`
+  dropped after a `$`, in a `${..}`, between `$(` and the `(` of `$((` and in a `$((..))`, on the line and on each
+  line read again from it once decoded (`bash -c $'..'`, `eval "..."`, ssh, backquotes), and also as written, as
+  before. `decide` keeps the stricter (`gate.readings`), the more severe reading leads the approval card, and an
+  approval for such a line binds to its exact text. A line the join leaves as it is is read once, as before.
 - Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
   (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
   #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under
