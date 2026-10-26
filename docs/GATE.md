@@ -22,7 +22,50 @@ The policy loader raises `PolicyError` for a list, scalar or null in place of th
 a string. Omitted settings and an empty mapping retain the defaults. `categories: []` disables category
 escalation, while independent floors, reserved entries, denies and other escalation checks still apply.
 Valid mappings keep their existing behavior.
-The plugin's existing policy-error path logs the error, records it with the decision and uses defaults.
+
+### A malformed escalate keeps the other sections (#557)
+
+The exo-gate plugin does not drop the whole policy for one of these mistakes. It loads the policy with an error
+list (`gate.load_policies(root, errors)`), which records the message and repairs only the escalation: the default
+escalation plus the category names the value gives. `escalate: [payment]` reads as the default categories plus
+`payment`, and a string, as `escalate` itself (`escalate: read`) or as its `categories`, adds each category name it
+contains. A null, false, number or empty list keeps the default escalation, and a mapping keeps its other keys.
+Deny, reserved, categories, rules, matrix, budget, posting, approvals and the internal-names scrub list stay in
+force. A caller without the list still gets `PolicyError`: the loader still rejects a bare list (#542), and only
+the plugin's repair honours its names, which can only add escalation.
+
+The plugin decides each call under that repaired policy and under the defaults, and the stricter outcome stands,
+merged as the gate merges a line's readings (#399): the widest exposure, so an approval binds to the exact line
+where either decision binds it; a third party if either has one; every violation, so the defaults' posting and
+scrub findings stay on the card with their fix; and every reserved part, which keeps its ask from a grant. So a
+deny, reserved entry, category line, rule or matrix cell that tightens the defaults still holds, and a section
+looser than the defaults (a permissive matrix, narrower posting rules, the scrub turned off) does not lower them.
+The reason says `policy error, stricter of your policy and the defaults applies: <message>`, and the plugin logs
+the message. An ask's approvers are those both the policy and the defaults allow (the principal alone), and an
+"always" answer lasts the shorter of the two `always` values. The no-reply default in the card is the policy's
+`ask_default`. A changed policy file with this error is decided the same way beside the defaults, also before
+`/gate accept`, and its `policy_change` row keeps the message in `error`. `/gate` shows a standing policy error for
+the pinned file and for a changed one.
+
+While the pinned or the changed file has this error, a standing grant applies only where the decision as before
+#557 (the defaults in place of the file with the error, then the decision model's verdict) also asks and finds a
+grant, so that decision allows the call too. Otherwise the merged decision stands and the call asks. So an unbound grant does not run a call that
+the defaults log but a restored `reserved` entry makes ask (`git push origin main` beside `reserved: [vcs_push]`),
+and a grant bound to the exact line does not run a call that the defaults ask for without that binding (a sudo
+write line, which an honoured `read` name or a restored `categories: {read: ask}` binds). Answering "always" there
+still writes a grant. It covers the line once `/gate accept` (or a new session) adopts a fixed file that still asks
+for the line and binds it the same way; a fixed file that waits for `/gate accept` leaves the error's rule in place.
+
+The decision is never lower than with the defaults alone (main after #542), the decision model and standing grants
+included, and a valid policy decides as before. It can be lower than main before #542 (1d2f32ac) in two known
+cases: a shape that crashed the classifier there (`escalate: {categories: 7}` asked on every call by accident);
+and, equal to the defaults alone, a grant bound to the exact line on a repo the policy's `scopes` narrow, which
+applies because the defaults read the repo as public and ask with that binding: `gh pr close 5 -R acme-org/app`
+beside `scopes: {internal: [acme-org/*]}`, which 1d2f32ac logged, or beside a private scope and a matrix ask,
+which 1d2f32ac asked for without a binding.
+
+Any other policy error (a YAML error, a bad matrix value, rules or deny that are not lists, an unreadable file)
+still falls back to the defaults alone: `policy error, defaults used: <message>`.
 
 ## Required executor audit
 
@@ -2501,9 +2544,14 @@ the pinned order (`gate.strictest_approvers`, an ordered intersection; the princ
 both, so the list is never empty), and an "always" answer lasts the shorter of the pinned and
 changed `always` values, so a 0 in either writes no grant. A seat the principal removes cannot
 answer the next ask; a seat they add waits for `/gate accept`. A changed file that does not load
-counts as the defaults: the principal alone, 30 and 7 days. Limits: an ask already open keeps the
-approvers it was sent with, and grants written before the change still match until they expire or
-`/grants revoke` removes them.
+counts as the defaults: the principal alone, 30 and 7 days. A changed `gates.yaml` whose only
+error is a malformed `escalate` keeps its other sections and is decided beside the defaults, with
+approvers no wider than theirs (#557). When the pinned or the changed file has that error, the
+old and new decisions merge as the readings of a line merge, so at an equal outcome the other's
+violations stay on the card, and a standing grant applies only where the decision with the defaults
+in place of that file also asks and finds it. Limits: an ask already
+open keeps the approvers it was sent with, and grants written before the change still match until
+they expire or `/grants revoke` removes them.
 
 ## Principal authority for policy and settings changes
 

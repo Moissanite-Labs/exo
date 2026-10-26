@@ -1215,6 +1215,33 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   mapping and valid mappings keep their existing behavior. An empty category list disables only category
   escalation. Chosen over interpreting a bare list as shorthand: rejecting it makes the existing schema explicit
   and catches scalar and null mistakes through the same path. No classification or valid-policy decision changes.
+- *Amendment 2026-10-25 (issue #557):* with #542 alone, the exo-gate plugin met a malformed `escalate` with its
+  policy-error fallback, the defaults, and so dropped every other section of the principal's policy (deny,
+  reserved, categories, rules, matrix, budget, posting, the internal-names scrub) for the session. A deny then
+  asked, a category deny allowed and a reserved push logged where main before #542 kept them. Now a malformed
+  `escalate` or `escalate.categories` keeps the principal's other sections: `load_policies(root, errors)` records
+  the message and repairs only that section (the default escalation plus the category names the value gives), and
+  the plugin decides each call under the repaired policy and the defaults and keeps the stricter, merged as a
+  line's readings merge (#399: the widest exposure, every violation and reserved part). The reason says
+  `policy error, stricter of your policy and the defaults applies`. Approvers and the "always" length are no wider
+  than the defaults'. A changed file with this error is decided the same way, and when the pinned or the changed
+  file has it, the old and new decisions merge the same way too, so the other's violations are kept at an equal
+  outcome. While the pinned or the changed file has this error, a standing grant applies only where the decision
+  as after #542 (the defaults in place of the file with the error, then the decision model's verdict) also asks
+  and finds a grant; otherwise the merged decision stands and the call asks. Every other policy error still
+  falls back to the defaults alone, and a caller without the list still gets `PolicyError`: the loader still
+  rejects a bare list as #542 ruled, and only the plugin's repair honours the names a list or string gives (tighten
+  only), so `escalate: [read]` and `escalate: read` make reads ask. `/gate` shows a standing policy error for the
+  pinned and the changed file. Under a malformed `escalate` no decision is lower than main after #542, the
+  decision model and standing grants included, and a valid policy decides as before, grants included. Limits:
+  lower than main before #542 (1d2f32ac) where a shape crashed the classifier there (`escalate: {categories: 7}`
+  asked on every call by accident), and where a grant bound to the exact line applies because the defaults ask
+  with that binding, equal to main after #542 (`gh pr close` on a repo the policy's `scopes` make internal, which
+  1d2f32ac logged, or private beside a matrix ask, which it asked for without a binding). Ruled in review 5644671413:
+  repair plus the stricter of the policy and the defaults, chosen over the defaults alone (lower than before #542 for
+  every tightening) and over the other sections alone (lower than after #542 for a section looser than the defaults);
+  a malformed list's names count, tighten only; merging the old and new decisions of two valid files is a separate
+  issue.
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
   `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
   grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on

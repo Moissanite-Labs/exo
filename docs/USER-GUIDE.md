@@ -146,7 +146,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/trace [N]` | Show timing, route and estimated cost for the last N turns (default 10). |
 | `/findings` | Show what the harness found wrong with itself. |
 | `/grants` | List standing approvals. `/grants revoke <id>` removes one. |
-| `/gate` | Show whether policy files changed this session. `/gate accept` adopts the change. |
+| `/gate` | Show whether policy files changed this session, and any error in them. `/gate accept` adopts the change. |
 | `/permissions` | Show whether the gate asks or is in bypass, and how many calls bypass approved. `/permissions bypass` stops the asking (except Exo's own records and secrets); `/permissions ask` turns it back on. |
 | `/peers` | List other live sessions you can message. |
 | `/send <peer> <text>` | Message another session yourself. |
