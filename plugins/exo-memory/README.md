@@ -11,10 +11,15 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 | `on_turn_start`, `sync_turn` | `utterance` events in the ledger. User turns are authored by the principal, assistant turns by the agent id. The turn also goes to the episodic log. |
 | `on_memory_write` | A `note` event of type `memory_write`. |
 | `on_delegation` | An `action` event of type `delegation`, and a `work` line in the episodic log. |
+
 | `sync_turn` (capture) | The core has no pre-compress call, so each turn also runs `exo.capture` over a short window of recent turns and writes `ruling`, `verdict` and `question` events (config `capture_turns`). |
 | `on_pre_compress` | Finds rulings, corrections and open decisions with `exo.capture`. Writes `ruling`, `verdict` and `question` events, then returns a short block for the compressor to keep verbatim. Checkpoint API v2. |
 | `on_session_end` | A `note` event of type `consolidate_pending`. |
 | `on_session_switch` | A `note` event of type `session_switch`. After a host's undo (`rewound=True`), it first passes the notice on through `exo.host_undo`, so exo-context drops the pins the undone turns held (#389). It does so with memory off too. |
+
+When the host supplies a session id and supports session-aware search, the recent-entry exclusion applies to that
+session. Relevant recent entries from other non-private sessions can still be recalled. Older hosts keep the global
+recent-entry exclusion. Recall is keyword-based and budgeted; it does not guarantee a complete or optimal context.
 
 Tools: `exo_recall(query, budget)`, `exo_get(id, body_only)` (a whole belief node, same store and access as recall; D-032), `exo_note(text, kind)`, `exo_should_have_been(target, wanted, reason)`,
 `exo_zoom(id, n)`, `exo_date(id)`.
