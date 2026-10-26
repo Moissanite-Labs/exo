@@ -2733,6 +2733,35 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   read as the section. `resume_text` folds the header to one line too, so a header value no longer reaches the
   system message as a section. An older file's path and launch lines, title, list fields and summary still reach
   it as that writer left them.
+- *Amendment 2026-10-24 (#317):* two follow-ups to #296. First, a reader opened through a symlink to a closed ledger
+  held an `immutable=1` connection to the target. A writer that appended and checkpointed changed the file under it, so
+  the reader stayed stale and then raised `database disk image is malformed`. Such a target is now copied at open, and
+  reads come from the copy: a snapshot of the target as it stood at open. A fresh open sees later appends. A target with
+  a `-wal` file beside it is still read live. `immutable=1` takes no lock, so a writer during the copy could tear it,
+  and every read of a torn copy can fail for the reader's life. The open checks the target's inode, size and mtime, and
+  that no `-wal` file is beside it, before and after the copy. It takes the copy again when any of them changed. After
+  three changed copies it reads the target live. It does so at once when a copy fails while the target stays the same (a
+  full temporary folder), since a second copy would fill the folder again. SQLite then makes `-wal` and `-shm` files
+  beside the target. They stay after the reader closes, until a writer closes the ledger while no reader has it open.
+  Until then, later opens read the target live. Every write moves the mtime, but many appends keep the size. So the
+  check misses a write that keeps the size and lands in the same tick of the file system's clock as the write before it.
+  The copy goes into SQLite's private temporary database, not into memory. Held in memory, the copy of a 99 MB ledger
+  added 111 MB to the reader's resident memory. This one adds about 6 MB, and an owner-only temporary file the size of
+  the ledger, unlinked at once and gone at close. The copy is read-only (`query_only`), as the target was. Second, where
+  there is no `/proc` (macOS), `atomic_write(mode=None)` learns the umask by setting 077 and back. Unlocked, two threads
+  interleaved: files came out 0600 under a 022 mask, and the process could be left at 077. The probe now runs in
+  `exo.core.private.umask`, which sets the mask for a block under one lock. The socket bind in `server/app.py` sets its
+  0177 through it too, so neither undoes the other. The bind awaits inside its block, so the lock is reentrant: another
+  task on that thread probes and reads 0177 instead of waiting on itself. *2026-10-25 (#536 review):* the same-tick miss
+  is likeliest where the tick is long: 1 s on HFS+ and ext3, 2 s on FAT, and as coarse on some NFS mounts. There, a
+  write that keeps the size within a second or two of the write before it can leave a torn copy that the check accepts.
+  A check of the copy after it is taken would narrow the gap. It has to be `integrity_check`. In a probe, a one-event
+  append tore copies of a 2,000-event ledger. Of 7 copies that `integrity_check` failed, `quick_check` passed 3, and so
+  did a count through the table against one through each index. It can ride #535, which moves the copy to the first
+  read. A live read fails where SQLite cannot make the `-wal` and `-shm` files (read-only media, or a folder the reader
+  cannot write), and the ledger then read as empty. A target with no `-wal` file is now read with `immutable=1` there,
+  as before. The lock does not order two `umask` blocks on one thread: two socket binds that overlap on one event loop
+  can still restore out of order and leave the process at 0177, as they could before.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
