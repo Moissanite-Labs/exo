@@ -1047,8 +1047,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   embedded NUL, and `_body_path` caught only `OSError`. A post whose `--body-file` path held a NUL sent the hook into
   its error card, which drops "once", so the core offered "always" and stored `plugin_rule:exo-gate:error:terminal`. A
   lone post did this on main, and #545 reached the path for every post on a held line. `_body_path` now takes such a
-  path as unreadable, so the post stays unseen and asks once. gh never opens such a path, and the core's shell tool
-  refuses a NUL in argv, so the line could not run anyway.
+  path as unreadable, so the post takes the route a missing file takes: it stays unseen, and asks once wherever
+  posting rules apply to it. A policy that allows the post and exempts it from posting rules now allows it, as it
+  allows the same post with a missing or readable file. Main asked there only because the hook crashed. gh never
+  opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
@@ -2614,7 +2616,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `command`) change 108 pairs in their reason only, where a deny names the new summary. A second corpus of 1,270 lines
   (24 other sudo commands beside a sudo write, the same nests, spellings of sudo and of the redirection, and everyday
   `git`, `make` and `pytest` lines) under 20 more policies (4,014 actions x 107) changes 786 pairs, each only in the
-  summary its reason quotes.
+  summary its reason quotes. A third corpus of 488 lines, written for the last review (14 other sudo or doas reads
+  beside 8 kinds of write, the same command twice, two writes, 36 stdin, code-string and nest forms, 14 spellings of
+  sudo and doas, 12 wrappers and 28 everyday lines), under 26 more policies (2,557 actions x 113) changes 96 pairs,
+  each only in that summary, and lowers none. The PR's review re-ran an aimed corpus against main 358c3a39 after #409,
+  which also lowered none.
   *Amendment 2026-10-22 (issue #316, follow-up to #240):* ssh's stdin reached its login shell in five more ways the
   gate did not see, so the line read as plain `ssh` and was allowed, even under category denies. (1) A compound fed a
   stdin the gate cannot read: the closer's `<` from anything but a lone `/dev/null`, or a pipe in whose text is not
