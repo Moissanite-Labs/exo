@@ -496,6 +496,8 @@ class PeerNode:
         row = self.resolve(to, rows)
         if row["where"] == "bus":
             return await self._send_bus(row, text, session)
+        if row["where"] == "machine":
+            self._check_presence_key(row)  # the text never ships to a socket a forged presence file names (#523)
         env = make_envelope(self.signer, to=row["name"], text=text, session=session, daemon=self.daemon,
                             to_session=row["session"], via=via)
         mid = msg_id(env)
@@ -509,9 +511,46 @@ class PeerNode:
                 receipt = await self.rpc(row["socket"], s.Peers(action="deliver", envelope=env))
         except Exception as exc:
             receipt = {"msg_id": mid, "state": "denied", "detail": f"{row['name']} could not be reached ({type(exc).__name__}: {exc})"}
+        else:
+            self._check_reply(receipt, mid, row)  # raises: a reply that fails is not published (#523)
         out = {**receipt, "to": row["name"]}
         await self._publish_out(session, out)
         return out
+
+    def _check_presence_key(self, row: dict[str, Any]) -> None:
+        """The sender's half of #132's key rule (#523): the text ships only when the presence file the row came
+        from holds a key this home pins for that seat. Any same-user process can write a presence file for a
+        pinned name, with a socket of its own, and it would then receive the messages sent to that name. For a
+        name this home holds no key for, the receipt-side trust ladder decides what the receiver makes of the
+        message, as it did before."""
+        here, peer = self._pins(str(row["seat"]))
+        if not here and not peer:
+            return
+        p = self.directory.get(str(row["daemon"]))
+        if p is None or p.seat != row["seat"] or p.pub not in here + peer:
+            raise ValueError(f"{row['name']}'s presence file does not hold a key pinned for {row['seat']} here; "
+                             "not sent")
+
+    def _check_reply(self, receipt: dict[str, Any], mid: str, row: dict[str, Any]) -> None:
+        """The first reply to a deliver is signed like a later receipt (#523, with #132's primitives): the
+        receiving seat signs it (``deliver``), and here it must name the message, state, seat and daemon the
+        text went to and verify against a key this home pins for that seat, as ``receipt`` has since #132. A
+        reply that fails raises: nothing is published and the send fails. For a name no key here for, the reply
+        is not checked and the receiving side's own ladder decides what arrived, as before."""
+        here, peer = self._pins(str(row["seat"]))
+        if not here and not peer:
+            return
+        by = str(receipt.get("by") or "")
+        if receipt.get("msg_id") != mid:
+            why = "the reply does not name the message"
+        elif not ID_RE.fullmatch(by) or by != row["seat"] or receipt.get("daemon") != row["daemon"] \
+                or receipt.get("state") not in ("delivered", "held", "denied"):
+            why = "the reply does not name the seat the message went to"
+        elif not any(crypto.verify_doc(receipt, p) for p in here + peer):
+            why = "the reply does not verify against a key pinned for the seat here"
+        else:
+            return
+        raise ValueError(f"{row['name']} answered with a first reply that does not verify ({why}); not published")
 
     async def _send_bus(self, row: dict[str, Any], text: str, session: str | None) -> dict[str, Any]:
         try:
@@ -533,7 +572,8 @@ class PeerNode:
     # ---------------------------------------------------------------- inbound
 
     async def deliver(self, env: dict[str, Any]) -> dict[str, Any]:
-        """A signed envelope from another daemon (or from this one). Returns the first receipt."""
+        """A signed envelope from another daemon (or from this one). Returns the first receipt, signed with this
+        seat's key so the sending side can verify it (#523), the way a later receipt is signed (#132)."""
         meta = peer_meta(env)
         sender = self.directory.get(str(meta.get("daemon") or ""))
         if sender is None and meta.get("daemon") == self.daemon:  # a message between two sessions of this daemon
@@ -549,7 +589,11 @@ class PeerNode:
                                             "verify": why, "pinned": bool(pin),
                                             "note": "" if pin or why else "key not pinned"})
         receipt = await self.path.submit(ing)
-        return receipt.to_dict()
+        # The first reply is signed like the later receipts are (#523, #132): the receiving seat answers only
+        # through a doc its own key verifies a send against, so a forged presence cannot publish an outcome.
+        return crypto.sign_doc({"v": 1, "msg_id": receipt.msg_id, "state": receipt.state, "detail": receipt.detail,
+                                "mode": receipt.mode, "session": receipt.session, "by": self.seat,
+                                "daemon": self.daemon, "ts": crypto.now_ts()}, self.signer.key)
 
     async def notify_sender(self, ing: Ingress, r: Receipt) -> None:
         """Tell the sender a held message's outcome (released, denied, expired). Signed with this seat's key."""

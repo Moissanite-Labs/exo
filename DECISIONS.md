@@ -470,13 +470,27 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   pins the old one (`exo keys pin --replace`), a seat file naming a key outside `keys/` (pin it), a profile name that
   is not a seat id, and a key with no principal of its own toward a seat that names one (a seat file). Not changed:
   under D-039 any same-uid socket client can ask a daemon to `peers send`, which arrives as `same-principal`
-  automation, by design. A process outside the gate can still read seat keys or write `keys/`. A forged presence
-  file still says where its name listens: it can receive the messages sent to that name and answer a send with the
-  first receipt, which is not signed (a follow-up). A tool call may change `config.json`, which after a restart can
-  change the principal a key with no seat file counts as toward a daemon with no seat principal. Rejected: holding
+  automation, by design. A process outside the gate can still read seat keys or write `keys/`. A tool call may
+  change `config.json`, which after a restart can change the principal a key with no seat file counts as toward a
+  daemon with no seat principal. Rejected: holding
   a same-name seat with a different key as `other` without a pin, which would let any presence file under a pinned
   name reach the card. Rejected: giving a key with no seat file the receiver's `EXO_PRINCIPAL`, which a seated exod
   sets to its own seat's principal, so every such key reached that seat as its principal (#525 review).
+  *Amendment 2026-10-26 (#523, forged presence cannot take a send or answer for its name):* the #132 amendment left
+  the named gap above: a forged presence file under a name whose key this home pins named the attacker's own socket
+  and `send` shipped the text there, and its unsigned first receipt was published to the sending model (later
+  receipts were checked already). Both halves close with the same primitives. Before the text ships, `send` checks
+  the presence file the row came from against the keys pinned for that name here: a file that holds no such key, or
+  one that names another seat, is refused and nothing is sent. The receiver signs the first answer to a `deliver`
+  with its seat key (`msg_id`, `state`, `detail`, `by`, `daemon`, `ts`, the same doc shape a later receipt uses,
+  plus `mode` and `session`), and the sender verifies it against the keys pinned here for the seat the message went
+  to, as `receipt` does since #132; a reply that does not verify is not published and the send fails. A name this
+  home holds no key for is unchanged: no ship check, no reply check, the receive side's trust ladder decides what
+  arrived, and such a peer is still held as `other`. Stricter than before for one honest setup: a daemon that
+  answers with an unsigned first receipt (an older `exo`) cannot be sent to while a key is pinned for its seat;
+  update it, or leave its seat unpinned, and the trust ladder applies. Rejected: requiring a pinned key for every
+  name, which breaks messaging an unpinned peer of another home until `exo keys pin --peer`, a step the receive
+  side does not ask for either.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
