@@ -446,14 +446,14 @@ A file tool that names a secret and a store file is `credentials` too: `apply_pa
 `~/.exo/policies/gates.yaml`. Each store file such a tool writes, moves, copies or deletes is a
 `store_write` part, so the call is the principal's alone as well. A move, rename or delete of a
 folder that holds the store counts too, as `mv` and `rm` do (`move_file` from `~/.exo` to
-`~/.ssh/x`). So does a tool with a camelCase name (`moveFile`, `deleteFile`). Its category is
-`unknown`, because the gate reads its name as one word, but this check splits the name. A file tool
+`~/.ssh/x`). So does a tool whose camelCase name's words are a move, rename or delete
+(`moveFile`, `deleteFile`), which the name reads beside the name's own word (#515). A file tool
 that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` from `~/.exo` to
 `~/.ssh/x`, as `cp -r` does), or writes a secret outside the store (`write_file ~/.ssh/config`),
 has no such part and keeps the delegation. With no secret, a file tool's move of a folder that
-holds the store is not read as a store write yet (#494). Nor is a delete of one by a tool with a
-camelCase name (`deleteFile` on `~/.exo`). Its category is `unknown`, so it runs under the default
-policy unless its registry risk is high, where `delete_file` asks the principal. The hook's error
+holds the store is not read as a store write yet (#494), and a delete of one asks the principal as
+`delete_file`'s does, the camelCase name included ("Secret-store paths", "A camelCase tool name
+reads its words beside the name's one word (#515)"). The hook's error
 fallback reads the parts too (see "The store is credentials").
 
 ## Who answered: the connection, not the body (D-039)
@@ -752,6 +752,27 @@ subscript with an expansion in braces (`cat ${!x:-~/.kube}/config`, `cat ${!x[0]
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
 `test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
+
+### A camelCase tool name reads its words beside the name's one word (#515)
+
+`_name_tokens` lowered a tool's name before it split it at camelCase humps, so the humps were gone and a
+camelCase name stayed one word: `classify_by_name` gave `deleteFile`, `moveFile`, `writeFile`, `readFile` and
+`sendMessage` `unknown`, where `delete_file`, `move_file`, `write_file`, `read_file` and `send_message` read as
+`delete`, `local_write`, `read` and `message_send`. A camelCase name whose call names a secret still asked (the
+secret path did), and one naming a store file asked through the unnamed call's store-source reading (#435); but
+a delete of the folder that holds the store ran under the default policy: `deleteFile {"path": "~/.exo"}` was
+`unknown` and allowed, where `delete_file` asks the principal.
+
+The words are read beside the name's own word now (#515): a camelCase call reads what its snake_case spelling
+reads, and the name's own word is kept, so nothing main allowed is read lighter. `deleteFile` on a folder that
+holds the store (`deleteFile {"path": "~/.exo"}`) is the same `store_write` ask `delete_file` is; the
+#447 check on a secret reads the folder beside one, as it did. `readFile` on a store file is a `read`, where main
+asked the unnamed call's store-source reading; a camelCase read beside a secret is `credentials` as `read_file`'s
+is. A compact word main already read keeps its reading beside the words the humps add (`apiKey` is a credential
+word, `checkOut` pays, `signUp` opens an account). The gate differential against main
+(`scripts/gate_diff.py`, #423) over the built-in corpus, 10,823 actions × 87 policies, finds 0 lowered pairs,
+297 pairs on 31 actions tightened (the camelCase names' raised readings) and 186 same-outcome detail changes.
+Tests: `tests/security/test_gate_store_top_parts.py`, `plugins/exo-gate/tests/test_store_floor_any_part.py`.
 
 ### A thread's environment file (#313)
 

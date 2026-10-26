@@ -2836,6 +2836,25 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   errors.
   *Revisit if:* the lexer reads `\<newline>` inside every `$` form itself (#143's `${..}` rework), so one reading
   covers both.
+  *Amendment 2026-10-26 (issue #515, after #587 merged):* `_name_tokens` lowered a tool's name before it split
+  it at camelCase humps, so the humps were gone and a camelCase name stayed one word: `classify_by_name` gave
+  `deleteFile`, `moveFile`, `writeFile`, `readFile` and `sendMessage` `unknown`, where the snake spellings read
+  `delete`, `local_write`, `read` and `message_send`. Under the default policy a camelCase delete of the folder
+  that holds the store ran with no ask (`deleteFile {"path": "~/.exo"}` was `unknown` where `delete_file`
+  asks), because the wide reading needs the tool's own `delete`. The name's words are read beside the name's own
+  word now (#515): a camelCase call reads what its snake_case spelling reads, and the name's own word is kept,
+  so nothing main allowed is read lighter. A compact word main already read keeps its reading beside the words
+  the humps add (`apiKey` is a credential word, `checkOut` pays, `signUp` opens an account). Where the #447
+  amendment read a camelCase name as one word and split it in the wide check alone, the words now count
+  everywhere the name does, so `deleteFile {"path": "~/.exo"}` is `store_write` and asks for the reason
+  `delete_file` does. Two readings read lighter than main where a policy sets the category, which the gate
+  differential's built-ins do not: a policy that asks the `unknown` category and allows `local_write` lets a
+  camelCase `writeFile` or `moveFile` pass where main asked it, and a camelCase read of a store file is a `read`
+  where main asked the unnamed call's store-source reading, as `read_file` always was. `scripts/gate_diff.py`
+  over the built-in corpus (10,823 actions × 87 policies) reports 0 lowered pairs against main a8a4ffbd, 297
+  pairs on 31 actions tightened and 186 same-outcome detail changes.
+  *Revisit if:* a camelCase name whose humped words split a word main read whole into two lighter words other
+  than a read, or tools that name themselves with acronyms (`getHTTPResponse` keeps one word).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
