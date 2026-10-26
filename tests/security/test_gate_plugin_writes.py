@@ -177,15 +177,14 @@ def test_other_plugin_like_paths_keep_their_class(make, category, exo_home):
     assert gate.classify(make()).category == category
 
 
-def test_a_developer_plugin_folder_keeps_its_class(exo_home, tmp_path, monkeypatch):
-    """$EXO_PLUGIN_DIRS is left out: the developer guide points it at a checkout's plugins/, where the principal
-    would be asked for every edit. Protecting it is a separate change."""
+def test_a_developer_plugin_folder_is_a_store_write_now(exo_home, tmp_path, monkeypatch):
+    """#459 closes the gap #435 left open: the folders $EXO_PLUGIN_DIRS names are the store. The developer guide
+    points the variable at a checkout, so the principal is asked for every edit there; that cost is accepted."""
     dev = tmp_path / "checkout" / "plugins"
     (dev / "foo").mkdir(parents=True)
     monkeypatch.setenv("EXO_PLUGIN_DIRS", str(dev))
-    assert gate.classify(_sh(f"cp x {dev}/foo/y")).category == "shell"
-    assert gate.classify({"tool": "write_file", "args": {"path": f"{dev}/foo/__init__.py", "content": "x"}}
-                         ).category == "local_write"
+    _assert_store_write(_sh(f"cp x {dev}/foo/y"))
+    _assert_store_write({"tool": "write_file", "args": {"path": f"{dev}/foo/__init__.py", "content": "x"}})
 
 
 # A call that sends a store file out (an attachment, an upload, `curl -T`) is a store write, and keeps the call as a
