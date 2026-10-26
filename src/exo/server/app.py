@@ -15,8 +15,7 @@ and Events (have ``seq``). ``events.subscribe`` starts the event feed.
 Every command runs with a caller the transport stamps (D-039, ``exo.principal``): ``principal`` only for an
 in-process client or a Unix socket request that carries the per-launch credential in ``X-Exo-Principal`` from a
 process that is not a descendant of the core; ``channel`` for the channels exod runs (``ChannelLink``, in process);
-``local`` for everything else, including stdio and TCP.
-"""
+``local`` for everything else, including stdio and TCP."""
 
 from __future__ import annotations
 
@@ -24,11 +23,13 @@ import asyncio
 import hmac
 import json
 import os
+import socket as _socket
 import sys
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs, urlsplit
 
+from exo.core.private import umask
 from exo.core.types import to_dict
 from exo.protocol import schema as s
 from exo import principal as pr
@@ -180,35 +181,32 @@ class HttpServer:
         """Bind the Unix socket as its one owner: probe, unlink and bind run under an exclusive ``flock`` on
         ``<path>.lock``, which this server keeps until ``close``. ``claimed`` runs once the lock is held and the
         socket is not another server's, before the socket is replaced (the pid file is written there)."""
+        if self._lock_fd is not None: raise SocketBusy(f"this server already holds {self._unix_path}")  # noqa: E701
         path = Path(path)
-        if len(os.fsencode(str(path))) >= 104:  # macOS limit is 104 bytes, Linux 108; stay under both
-            raise ValueError(f"socket path too long ({len(os.fsencode(str(path)))} bytes, max 103): {path}. "
-                             "Use a shorter EXO_HOME.")
+        if (n := len(os.fsencode(str(path)))) >= 104:  # macOS limit is 104 bytes, Linux 108; stay under both
+            raise ValueError(f"socket path too long ({n} bytes, max 103): {path}. Use a shorter EXO_HOME.")
         from exo.ensure_core import probe  # never take a live server's socket; only a stale file is replaced
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._lock_fd = _take_start_lock(path)
-        self._unix_path = path
+        sock = _socket.socket(_socket.AF_UNIX)
         try:
+            self._lock_fd, self._unix_path = _take_start_lock(path), path
             if probe(path) == "alive":
                 raise SocketBusy(f"another server is listening on {path}; stop it, or give this one its own --socket")
             if claimed is not None:
                 claimed()
-            if path.exists():
-                path.unlink()
+            path.unlink(missing_ok=True)
             if self.principal:  # before the socket accepts: no client may read a missing or a crashed core's record
                 self._principal_token = pr.issue(path, self.dispatcher.hub.instance)
-            old = os.umask(0o177)
-            try:
-                self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
-            except BaseException:
-                if self._principal_token:
-                    pr.revoke(path, self._principal_token)
-                    self._principal_token = None
-                raise
-            finally:
-                os.umask(old)
+            with umask(0o177):  # bind only: an await in here let two starts on one loop leave the mask at 0177 (#563)
+                sock.bind(str(path))
             os.chmod(path, 0o600)
+            self._server = await asyncio.start_unix_server(self._accept_client, sock=sock)
         except BaseException:
+            asyncio.get_running_loop().remove_reader(sock)  # a cancel in the start's last pass finds it on the loop
+            sock.close()
+            if self._principal_token:
+                pr.revoke(path, self._principal_token)
+                self._principal_token = None
             self._release_start_lock(unlink_socket=False)
             raise
 

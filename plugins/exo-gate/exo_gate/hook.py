@@ -48,8 +48,10 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
 from exo.core.private import atomic_write
-from exo.principal import require_principal
+from exo.principal import current_caller, require_principal
 from exo.store import principal_root
+
+from . import permissions as perm
 
 logger = logging.getLogger("exo_gate")
 
@@ -66,6 +68,33 @@ _MAX_BODY_FILE = 256 * 1024
 # Tools that cannot change anything; on an internal error these still run.
 _SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
 _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
+
+
+def _every_part(c: gate.Classification) -> list:
+    """Each reading of the line (``gate.readings``) and every part it was built from, nested ones included, once."""
+    seen: set[int] = set()
+    out, todo = [], list(gate.readings(c))
+    while todo:
+        p = todo.pop(0)
+        if id(p) not in seen:
+            seen.add(id(p))
+            out.append(p)
+            todo += p.parts
+    return out
+
+
+def _body_path(f: str) -> Optional[Path]:
+    """``f`` when the hook may read it as a body file: an absolute path to a regular file of at most 256 KiB. /dev and
+    /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here they give exod's own,
+    not what gh will read, so they stay unseen (#208)."""
+    try:
+        p = Path(f)
+        if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
+               for y in (p, Path(os.path.realpath(p)))):
+            return None
+        return p if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE else None
+    except (OSError, ValueError):                       # ValueError: a NUL in the path, which gh never opens
+        return None
 
 
 @dataclass
@@ -291,10 +320,64 @@ class Gate:
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
         self.grants = GrantStore(settings.grants_path)
+        self.permissions = perm.Permissions()  # D-065: ask (default) or bypass, for this run of the core only
 
     @property
     def executor_required(self) -> bool:
         return self._required_at_load or bool(self.required_getter and self.required_getter())
+
+    # --- permission mode (D-065) ---------------------------------------------------------
+
+    @property
+    def bypass_on(self) -> bool:
+        """Bypass is in force: switched on and not under a required executor, whatever the order they came in."""
+        return self.permissions.mode == perm.BYPASS and not self.executor_required
+
+    def set_permissions(self, mode: str, via: str = "/permissions") -> None:
+        """Switch the mode. Bypass needs a live principal connection and no required executor; going back to
+        ask is allowed to anyone, since it only tightens. The ledger row is written before the switch."""
+        if mode not in (perm.ASK, perm.BYPASS):
+            raise ValueError(mode)
+        if mode == perm.BYPASS:
+            by = require_principal("turn on permissions bypass")
+            if self.executor_required:
+                from exo.server.engine import CommandFailed
+                raise CommandFailed("forbidden", perm.REQUIRED_REFUSAL)
+        else:
+            by = current_caller()
+        if mode == self.permissions.mode:
+            return
+        self._append({"gate": PLUGIN_ID, "phase": "permissions", "mode": mode, "previous": self.permissions.mode,
+                      "by": by, "via": via, "auto_approved": self.permissions.auto_approved})
+        self.permissions.set(mode, by, via, time.time())
+
+    def start_from_seat(self) -> None:
+        """The seat file's ``[permissions] mode = "bypass"``, applied once when the gate loads."""
+        if self.executor_required:
+            logger.warning("exo-gate: the seat asks for permissions bypass; %s", perm.REQUIRED_REFUSAL)
+            return
+        try:
+            self._append({"gate": PLUGIN_ID, "phase": "permissions", "mode": perm.BYPASS, "previous": perm.ASK,
+                          "by": "seat file", "via": "seat default"})
+        except Exception:
+            logger.warning("exo-gate: could not record the seat's bypass default; staying in ask", exc_info=True)
+            return
+        self.permissions.set(perm.BYPASS, "seat file", "seat default", time.time())
+
+    def permissions_snapshot(self) -> dict:
+        snap = self.permissions.snapshot(available=not self.executor_required)
+        if not self.bypass_on:
+            snap["mode"] = perm.ASK
+        return snap
+
+    def _bypass(self, c: gate.Classification, d: gate.Decision) -> Optional[str]:
+        """What bypass does with an ask: ``allow``, ``hold`` (a post that breaks the posting rules goes back to
+        the agent with the fixes) or ``floor`` (store writes and secrets still ask). None when bypass is off."""
+        if d.outcome != "ask" or not self.bypass_on:
+            return None
+        if c.category in perm.FLOOR:
+            return "floor"
+        return "hold" if d.violations else "allow"
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -377,31 +460,40 @@ class Gate:
 
     # --- hooks ------------------------------------------------------------------------
 
-    def _load_body_file(self, c: gate.Classification) -> None:
+    def _load_body_file(self, c: gate.Classification) -> list[str]:
         """Read a post's body file into its text when the hook can be sure it reads the file the command will:
-        an absolute path to a regular file of at most 256 KiB. A relative or `~` path names a file in the
-        command's folder or home, which the hook does not know. Anything not read stays unseen, so the post
-        asks and gets no standing grant (#208). A required executor reads none: tool-selected host paths,
-        symlinks included, are never read before the worker, and `_rules` refuses the call. The copies of the post
-        on its other targets get the text too (`gate.fill_body`), and each other reading of the line
-        (`gate.readings`: as read before #399 or #311) has its own body file read the same way, as the hook read it
-        before."""
-        for x in gate.readings(c):
-            if not x.text_file or x.text or not self.settings.read_body_files or self.executor_required:
+        an absolute path to a regular file of at most 256 KiB, on a line where the gate finds no other part. A
+        relative or `~` path names a file in the command's folder or home, which the hook does not know. Anything not
+        read stays unseen, so the post asks and gets no standing grant (#208). A required executor reads none:
+        tool-selected host paths, symlinks included, are never read before the worker, and `_rules` refuses the call.
+        The copies of the post on its other targets get the text too (`gate.fill_body`), and each other reading of the
+        line (`gate.readings`: as read before #399 or #311) has its own body file read the same way, as the hook read
+        it before.
+
+        Another part in any reading (a command, a redirection to a file, an assignment that changes what runs, a
+        wrapper the gate does not see through, an ssh hop, the code around a call) may change the file after this
+        read and before gh reads it, or give gh another file by that path. So on such a line the file stays unread
+        and the post asks once (#343). Any part counts, a store read from the tool's folder (#311) and a sudo write
+        that displaced a part (#454) among them. A copy of the post on another target is the post itself, not another
+        part. Returns the files left unread for that reason alone, of every post on the line, so the card can say why
+        (`gate.UNSEEN_ON_LINE`): alone on its line, each would be read."""
+        if not self.settings.read_body_files or self.executor_required:
+            return []
+        alone = all(p.alt_copy for x in gate.readings(c) for p in x.parts)
+        held: list[str] = []
+        for x in gate.readings(c) if alone else _every_part(c):
+            if not x.text_file or x.text or (p := _body_path(x.text_file)) is None:
+                continue
+            if not alone:
+                held.append(x.text_file)
                 continue
             try:
-                p = Path(x.text_file)
-                # /dev and /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read
-                # here they give exod's own, not what gh will read, so they stay unseen (#208).
-                if any(str(y).startswith(("/dev/", "/proc/")) or str(y) in ("/dev", "/proc")
-                       for y in (p, Path(os.path.realpath(p)))):
-                    continue
-                if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
-                    gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
-                    if not x.link:
-                        x.link = str(p)
+                gate.fill_body(x, p.read_text(encoding="utf-8", errors="replace"))
             except OSError:
-                pass
+                continue
+            if not x.link:
+                x.link = str(p)
+        return list(dict.fromkeys(held))
 
     def _rule_key(self, tool: str, args: Mapping, c: gate.Classification, d: gate.Decision) -> str:
         # An "always" answer must not cover a different public or irreversible act, or different code the
@@ -513,9 +605,9 @@ class Gate:
         """Classification and the rule outcome (policies, then the registry risk floor)."""
         action = {"tool": tool, "args": args}
         c = gate.classify(action, cwd=cwd) if cwd else gate.classify(action)
-        self._load_body_file(c)
+        held = self._load_body_file(c)
         today = _dt.date.today().isoformat()
-        ctx = {"spent_today": self._spent.get(today, 0.0)}
+        ctx = {"spent_today": self._spent.get(today, 0.0), "held_body_files": held}
         d = gate.decide(c, self.policies(), ctx)
         if self._policy_error:
             d.reason += f" (policy error, defaults used: {self._policy_error[:120]})"
@@ -562,6 +654,13 @@ class Gate:
         if grant:
             d.outcome, d.rule = "allow", "grant"
             d.reason += f"; standing grant {grant['id']} (until {_iso(grant['expires'])})"
+        bypass = self._bypass(c, d)
+        if bypass == "allow":
+            asked = {"would": "ask", "rule": d.rule, "reason": d.reason}
+            d.outcome, d.rule = "allow", "bypass"
+            d.reason += "; auto-approved: permissions bypass"
+        elif bypass == "hold":
+            d.outcome, d.rule = "deny", "bypass_hold"
         default = str(pol["gates"].get("ask_default") or "skip")
         body = {
             "gate": PLUGIN_ID, "phase": "decision", "tool": tool, "outcome": d.outcome,
@@ -575,9 +674,20 @@ class Gate:
             body["grant"] = grant["id"]
         if binding:
             body["binding"] = binding
+        if bypass in ("allow", "hold"):  # D-065: the exact call, so the audit can be read without the session
+            body["decided_by"] = "bypass"
+            body["call"] = perm.recorded_call(tool, args)
+            if bypass == "allow":
+                body["bypass"] = asked
+        elif bypass == "floor":
+            body["bypass"] = {"floor": c.category}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}
+            if bypass == "hold":
+                result["message"] = (f"exo-gate held {c.summary or tool}: it breaks the posting rules. Fix: "
+                                     + "; ".join(d.violations) + ". Permissions bypass does not ask about this; "
+                                     "change the text and call again.")
         elif d.outcome == "ask":
             msg = gate.summarize(c, d, default)
             if d.violations:
@@ -618,6 +728,10 @@ class Gate:
             with self._lock:
                 self._spent[today] = self._spent.get(today, 0.0) + float(c.cost)
         eid = self._append(body, session=session_id)
+        if bypass:
+            with self._lock:
+                key = {"allow": "auto_approved", "hold": "held", "floor": "floor_asks"}[bypass]
+                setattr(self.permissions, key, getattr(self.permissions, key) + 1)
         if result and result["action"] == "approve":
             with self._lock:
                 scope = {"rule": c.category, "target": c.target or tool, "binding": binding, "outward": outward,
@@ -757,6 +871,20 @@ def gate_command(g: "Gate", args: str = "") -> str:
     return "policy files changed this session; the stricter of old and new applies. Run /gate accept to adopt them."
 
 
+def permissions_command(g: "Gate", args: str = "") -> Any:
+    """``/permissions`` shows the mode and its counts; ``bypass`` and ``ask`` switch it; ``json`` is for clients."""
+    words = (args or "").split()
+    if words[:1] == ["json"]:
+        return g.permissions_snapshot()
+    if words[:1] in (["bypass"], ["ask"]):
+        if len(words) > 2 or words[1:] not in ([], ["launch"]):
+            return "usage: permissions [status] | bypass | ask"
+        g.set_permissions(words[0], "launch flag" if words[1:] == ["launch"] else "/permissions")
+    elif words and words[0] != "status":
+        return "usage: permissions [status] | bypass | ask"
+    return perm.status_text(g.permissions, on=g.bypass_on, available=not g.executor_required)
+
+
 def _iso(ts: float) -> str:
     return _dt.datetime.fromtimestamp(float(ts), _dt.timezone.utc).isoformat(timespec="seconds")
 
@@ -791,6 +919,8 @@ def register(ctx) -> Gate:
     g = Gate(resolve_settings(get_config=get_config), risk_lookup=_risk_lookup_for(ctx),
              router_getter=lambda: getattr(ctx, "router", None),
              required_getter=lambda: bool(getattr(getattr(ctx, "manager", None), "executor_required", False)))
+    if perm.seat_default() == perm.BYPASS:  # read once, at start; a seat file is a store path (D-065)
+        g.start_from_seat()
     ctx.register_hook("pre_tool_call", g.apre_tool_call)
     ctx.register_hook("post_approval_response", g.post_approval_response)
     reg_cmd = getattr(ctx, "register_command", None)
@@ -800,6 +930,8 @@ def register(ctx) -> Gate:
                     "[list] | revoke <id>")
             reg_cmd("gate", lambda args="": gate_command(g, args), "Show or accept policy files changed this session",
                     "[status] | accept")
+            reg_cmd("permissions", lambda args="": permissions_command(g, args),
+                    "Ask before risky calls, or bypass: " + perm.SUMMARY, "[status] | bypass | ask")
         except Exception:
             logger.warning("exo-gate: could not register /grants or /gate", exc_info=True)
     return g
