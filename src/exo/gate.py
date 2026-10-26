@@ -132,7 +132,8 @@ class Classification:
     alt_targets: list[str] = field(default_factory=list, repr=False)
     # The line read with the third word of each gh command for its subcommand, as the gate read it before #399, when
     # gh finds a subcommand past the options before it (_gh_verb_order) or reads gh api's method otherwise
-    # (_gh_api_method). `decide` keeps the stricter of the two.
+    # (_gh_api_method). `decide` keeps the stricter of the two. The call as read before #491, when the gate reads
+    # what a sudo -s or -i shell runs, ends the chain of floors (readings).
     floor: "Classification | None" = field(default=None, repr=False, compare=False)
     # True on the copy of a gh action on one of its alt_targets among the parts (#399): an ssh or mosh hop gives an
     # empty one the host, and `fill_body` gives each the body a caller read from the post's body file.
@@ -2787,9 +2788,10 @@ def _http_kind(argv: list[str], cmd: str) -> Classification:
     return _make("web_post", summary=f"{method} to {host}", **kw)
 
 
-def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
+def _strip_prefix_words(words: list, sudos: list | None = None) -> tuple[list, bool, str | None]:
     """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text).
-    env and sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too."""
+    env and sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too.
+    ``sudos`` gets (program, the words after it) for each sudo or doas met (#491, _sudo_shells)."""
     sudo = own_argv = False
     while words:
         t = words[0].text
@@ -2801,6 +2803,8 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
             break
         if base == "command" and words[1:2] and words[1].text in ("-v", "-V"):
             break
+        if sudos is not None and base in ("sudo", "doas"):
+            sudos.append((base, words[1:]))
         sudo = sudo or base in ("sudo", "doas")
         own_argv = base in ("env", "sudo")
         takes, words = _PREFIXES[base], words[1:]
@@ -2815,6 +2819,84 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
         if base == "timeout" and words and re.fullmatch(r"[\d.]+[smhd]?", words[0].text):
             words = words[1:]
     return words, sudo, None
+
+
+# sudo's and doas's own options (sudo 1.9 `sudo -h` and parse_args.c, OpenBSD doas.c): the short ones that take a
+# value, and sudo's long ones, those that take a value marked with `=` (--preserve-env takes one only after `=`).
+_SUDO_VALUES = {"sudo": "aCcDgpRrTtUu", "doas": "aCu"}
+_SUDO_LONG = ("askpass", "auth-type=", "background", "bell", "close-from=", "login-class=", "chdir=", "preserve-env",
+              "edit", "group=", "set-home", "help", "host=", "login", "remove-timestamp", "reset-timestamp", "list",
+              "non-interactive", "no-update", "preserve-groups", "prompt=", "chroot=", "role=", "stdin", "shell",
+              "type=", "command-timeout=", "other-user=", "user=", "version", "validate")
+
+
+_sudo_shell_off: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_sudo_shell_off", default=False)
+_SUDO_READ = ("sudo", "shell read")          # the mark in _call_memo that classify reads the call as before #491 too
+
+
+def _sudo_shells(sudos: list) -> list[tuple[str, list]]:
+    """For each sudo or doas in ``sudos`` (_strip_prefix_words) that starts the target user's shell (sudo -s, -i,
+    --shell, --login, doas -s: #491), the option that does and the words of its command, read as getopt reads the
+    options: clustered (`-Es`, `-iu root`), `--user=root` or `--user root`, a unique prefix of a long one, up to
+    `--` or the first operand, and the NAME=VALUE words sudo takes for the environment after them. sudo's -h takes
+    the next word as its host when that is no option. An ambiguous long option counts as a shell option if it may
+    be one (getopt then stops sudo)."""
+    out = []
+    for prog, words in sudos:
+        shell, i = "", 0
+        while i < len(words) and words[i].text.startswith("-") and words[i].text != "-":
+            f, i = words[i].text, i + 1
+            if f == "--":
+                break
+            if f.startswith("--"):
+                name, eq, _ = f[2:].partition("=")
+                hits = ([o for o in _SUDO_LONG if o.rstrip("=") == name] or
+                        [o for o in _SUDO_LONG if o.startswith(name)]) if prog == "sudo" else []
+                shell = shell or next((f for o in hits if o in ("shell", "login")), "")
+                i += len(hits) == 1 and hits[0].endswith("=") and not eq and i < len(words)
+                continue
+            for j, ch in enumerate(f[1:], 2):
+                shell = shell or (f if ch == "s" or ch == "i" and prog == "sudo" else "")
+                if ch in _SUDO_VALUES[prog] or ch == "h" and prog == "sudo":
+                    i += j == len(f) and i < len(words) and not (ch == "h" and words[i].text.startswith("-"))
+                    break
+        while prog == "sudo" and i < len(words) and _ASSIGN.fullmatch(words[i].text):
+            i += 1
+        if shell:
+            out.append((f"{prog} {shell}", words[i:]))
+    return out
+
+
+def _sudo_shell_parts(sudos: list, words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
+                      piped: str | None) -> list[Classification]:
+    """#491: the parts of what the shell a sudo -s or -i starts runs, beside the line's own reading. With no command,
+    that shell runs its stdin, read as `bash` with no operand reads it: an opaque part that runs it (_runs_stdin),
+    and the parts of each text the line feeds it (a pipe, a here-string, a heredoc). A stdin the gate cannot read (a
+    file, a variable, a process substitution) leaves that ask. With a command, sudo runs `$SHELL -c` on its words
+    joined with spaces, each character but a letter, a digit, `_`, `-` and `$` escaped with a backslash (sudo(8)),
+    so the shell expands a `$` again and drops a newline, as a line continuation. That text is read where it may
+    not be the words the line's own reading took (``words``): a `$`, a newline, an empty word, or an option of
+    sudo's that _strip_prefix_words reads otherwise (`-iu root`). An opaque part beside it keeps the ask the line
+    had when its own reading was an unknown program. A word the gate cannot read asks."""
+    parts: list[Classification] = []
+    for what, rest in _sudo_shells(sudos):
+        if not rest:
+            parts.append(_runs_stdin(_opaque(f"{what} starts a shell, which runs its stdin"[:120], cmd), k))
+            if depth < _DEPTH:
+                parts += _once(ctx, (classify_shell, depth + 1), k, piped, lambda t: [classify_shell(t, depth + 1)])
+            continue
+        if any(w.dynamic for w in rest):
+            parts.append(_opaque(f"{what} passes its shell a word the gate cannot read, which it expands again"[:120],
+                                 cmd))
+        text = " ".join(re.sub(r"([^A-Za-z0-9_$-])", r"\\\1", w.text) for w in rest)
+        ws = [w for c in _parse(text)[0] for w in c.words]
+        tail = rest[len(rest) - len(words):] if 0 < len(words) <= len(rest) else []
+        if tail and [w.text for w in words] == [w.text for w in tail] and \
+                [(w.text, w.dynamic) for w in ws] == [(w.text, False) for w in rest]:
+            continue
+        parts.append(_opaque(f"{what} runs its command through a shell, which reads other words"[:120], cmd))
+        parts += _classify_simple(_wrapped(k, ws), cmd, depth + 1, ctx, piped) if depth < _DEPTH else [_too_deep(cmd)]
+    return parts
 
 
 def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) -> tuple[int, list]:
@@ -3367,7 +3449,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
         words = []                                   # a for header lists words, not programs
     before = words
-    words, sudo, split = _strip_prefix_words(words)
+    sudos: list = []                            # each sudo or doas on the way (#491)
+    words, sudo, split = _strip_prefix_words(words, sudos)
     parts: list[Classification] = []
     if split is not None:
         parts.append(_opaque("env -S runs a command line", cmd))
@@ -3392,6 +3475,10 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     if sudo:
         parts[0].signals.append("sudo")
         _raise_axes(parts[0], reversibility="costly")
+        shell = [] if _sudo_shell_off.get() else _sudo_shell_parts(sudos, words, k, cmd, depth, ctx, piped)
+        if shell and (memo := _call_memo.get()) is not None:
+            memo[_SUDO_READ] = True               # classify reads the call as before #491 too
+        parts += shell
     if k.heredocs:
         # dash and ash may end the body early and run the rest: read it as commands too. Once per line, under
         # _once's key for a shell reading it: a compound's heredoc reaches every command inside it.
@@ -6486,8 +6573,27 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args. When a gh command in it has
     its subcommand past an option (_gh_verb_order), or a gh api method gh reads otherwise (_gh_api_method), the call
     is also read as before #399, with each gh command's third word for its subcommand, and that reading is its
-    ``floor``. ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from
-    there too (_in_tool_folder sets it)."""
+    ``floor``. When the gate reads what a sudo -s or -i shell runs (#491), the call is also read as before, and that
+    reading ends the chain of floors (readings), so decide never goes below it. ``cwd`` is the folder the tool runs
+    in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
+    memo = _call_memo.get()
+    if memo is not None:
+        memo.pop(_SUDO_READ, None)
+    c = _read_call(action)
+    if memo is not None and memo.pop(_SUDO_READ, False) and not _sudo_shell_off.get():
+        off = _sudo_shell_off.set(True)
+        try:
+            last = c
+            while last.floor is not None:
+                last = last.floor
+            last.floor = _read_call(action)
+        finally:
+            _sudo_shell_off.reset(off)
+    return c
+
+
+def _read_call(action: Any) -> Classification:
+    """The call, with the floor #399 gives it when a gh command in it reads otherwise (classify)."""
     memo = _call_memo.get()
     if memo is not None:
         memo.pop(_GH_MOVED, None)
@@ -7715,8 +7821,10 @@ def readings(c: Classification) -> list[Classification]:
     folder argument made it credentials as a whole, #209), as it read it before #399 (``floor``: each gh command's
     third word for its subcommand, gh api's first `-X` word), and the floor as read before #311. `decide` keeps the
     strictest of them, and so does each check past it: no_grant, call_approvers, body_unseen and the exo-gate hook's
-    body files and required executor."""
-    return [r for x in (c, c.floor) if x is not None for r in (x, x.also) if r is not None]
+    body files and required executor. A floor may have a floor of its own: the call as read before #491 ends the
+    chain (classify), with its own readings."""
+    out = [r for r in (c, c.also) if r is not None]
+    return out + readings(c.floor) if c.floor is not None else out
 
 
 def no_grant(c: Classification) -> bool:

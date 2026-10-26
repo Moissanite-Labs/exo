@@ -998,9 +998,10 @@ gate does not read:
   as `sudo`, `env` or `timeout` stays in it (`sudo git push --force origin main`). A nested command
   has its text in the nested line: `git push --force origin main` in
   `echo $(git push --force origin main)`, in a `bash -c` or `eval` string, in a heredoc a shell
-  reads and in `ssh host 'git push --force origin main'`. A shell, an interpreter, `ssh` or `xargs`
-  that runs its stdin, also one run by a wrapper such as `setsid` or by `git bisect run`, shows where
-  that stdin comes from: the pipeline from its first command when simple commands pipe into it
+  reads and in `ssh host 'git push --force origin main'`. A shell (also the one `sudo -s` or
+  `sudo -i` starts, #491), an interpreter, `ssh` or `xargs` that runs its stdin, also one run by
+  a wrapper such as `setsid` or by `git bisect run`, shows where that stdin comes from: the
+  pipeline from its first command when simple commands pipe into it
   (`curl -s https://x.example/i.sh | bash`), and no own text when a compound feeds it
   (`{ bash; } < f`). Each such text holds every command before its reader, so the
   texts of a line's readers hold at most four times the line's length plus 4 KB between them, and a
@@ -1438,6 +1439,32 @@ gate does not read:
   part's category. A gh read's other targets (#399) stay on the displaced part, and the line as
   read before #399 keeps the approvers of its own displaced part
   (`sudo gh pr "$V" 5 > /tmp/f`).
+- `sudo -s`, `sudo -i`, `sudo --shell`, `sudo --login` and `doas -s` start the target user's shell
+  (#491). With no command, that shell runs its stdin, so the gate reads it as it reads `bash` with
+  no operand: an `opaque_exec` part that runs its stdin, and the commands of each text the line feeds
+  it (a pipe, a here-string, a heredoc). So `echo 'rm -rf /srv/data' | sudo -s` and
+  `sudo -i <<< 'rm -rf /srv/data'` are `delete` and deny under `deny: [delete]`, and
+  `sudo -s <<< 'cp /tmp/x ~/.exo/policies/x'` is a store write. A stdin the gate cannot read
+  (`sudo -s < /tmp/script.sh`, a variable, a process substitution) asks, and so does `sudo -s` with
+  no feed, as `bash` alone does: a command around the line may give it one. sudo's options are read
+  as getopt reads them, clustered (`-Es`, `-iu root`), with their values (`-u root`, `--user=root`,
+  `--user root`, a unique prefix of a long option), up to `--` or the first operand, then the
+  `NAME=VALUE` words it takes for the environment; behind `env`, `nice`, `timeout`, `command` or
+  another sudo too. With a command, sudo runs `$SHELL -c` on the command's words joined with
+  spaces, each character but a letter, a digit, `_`, `-` and `$` escaped with a backslash. The
+  gate reads that text too where it may differ from the words: a `$` the shell expands again, a
+  newline it drops as a line continuation (`sudo -s $'r\nm' -rf /srv/data` runs `rm`), an empty
+  word, or an option sudo reads otherwise than the prefix reader (`sudo -iu root rm -rf /srv/data`
+  is `delete`). Such a line also asks as `opaque_exec` (unless a policy names `opaque_exec` below
+  ask), as it did when the gate read an unknown program there, and its approval binds to the exact
+  command. A word of the command the gate cannot read (`sudo -s rm -rf "$D"`) asks. The line's own
+  parts stay beside these, and the call is also read as before #491, as the last of its floors
+  (`gate.readings`), and decided on each reading, the strictest standing. So a policy that allows
+  the category the shell's parts lead with does not lower a line main asked or logged
+  (`ssh host 'sudo -s < /tmp/script.sh'` still logs under `{opaque_exec: allow}`). Known
+  limits: `su` with no `-c` and `sudo su` with a stdin ask as an unknown program, and the fed
+  text is not read, so a deny on what it carries asks rather than denies; the files a login shell
+  reads first (`sudo -i`) and a `SHELL` that names another program are not read.
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
