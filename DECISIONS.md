@@ -2740,7 +2740,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** holding delegated work for confirmation picks; substituting a channel on send
   failure; posting externally without release; skipping the read-back after a fix.
 - **Origin:** local canary notes appended to DECISIONS.md in the live install on 2026-10-17
-  (numbered D-074 and D-075 locally). Those numbers were taken upstream by unrelated gate PRs
-  (#125, #126), so the notes are recorded here under a new number, recovered during the
+  (numbered D-074 and D-075 locally). Those numbers were claimed by unrelated gate PRs
+  (#125, #126); #125 closed without merging, while #126 landed as D-075. The notes are recorded
+  here under a new number, recovered during the
   2026-10-18 exo-live update. Team operating record, not product behaviour.
 - **Docs:** this entry.
