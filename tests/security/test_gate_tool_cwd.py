@@ -517,15 +517,42 @@ def test_a_rule_on_the_bare_name_reaches_only_the_cd_form(cmd, tool, key):
 
 @pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir"), ("exec_command", "workdir")])
 @pytest.mark.parametrize("folder", ["~/.ssh", "~/.exo/keys"])
-def test_a_rule_that_names_a_line_of_one_command_lifts_its_parts_deny(folder, tool, key, _home):
-    """A limit in GATE.md: the call's text has no `cd`, so an allow rule keyed on `command` that names a line of one
-    command lifts the matrix deny on its parts, as on any such line (#394). The call still asks. Its cd form is
-    denied, since the rule does not name the `cd`. On a line of two commands the deny stands."""
+def test_a_rule_on_the_line_does_not_lift_the_folders_part_deny(folder, tool, key, _home):
+    """#516: the part the folder read adds keeps no own text, as a `cd` form's parts have, and carries the
+    `cd <folder>` stand-in among its setters, so the line is not one text for _one_text. A rule keyed on `command`
+    that names only the line is passed over, and its matrix deny stands, as on the cd form, whose parts the `cd`'s
+    own text makes two texts of. The cd form, the two-command line, a `cd` that goes elsewhere and a policy with no
+    rule deny as before; with no matrix deny the call still asks the principal."""
     _held(_home)
     c = _bash_in(FORCE, folder, tool=tool, key=key)
-    assert _store_parts(c) and gate.decide(c, _pol(LIFT)).outcome == "ask"
+    assert [p.setters for p in _store_parts(c)] == [[f"cd {folder}"], []]   # the stand-in, and the weight (#468)
+    assert gate._one_text(c) is False
+    assert gate.decide(c, _pol(LIFT)).outcome == "deny"
     assert gate.decide(_bash(f"cd {folder} && {FORCE}"), _pol(LIFT)).outcome == "deny"
     assert gate.decide(_bash_in(f"cat *; {FORCE}", folder, tool=tool, key=key), _pol(LIFT)).outcome == "deny"
+    assert gate.decide(_bash_in(f"cd /tmp && {FORCE}", folder, tool=tool, key=key), _pol(LIFT)).outcome == "deny"
+    assert gate.decide(c, _pol({"gates": {"matrix": {"irreversible": {"private": "deny"}}}})).outcome == "deny"
+    assert gate.decide(c).outcome == "ask"
+
+
+NAMED = {"gates": {"matrix": {"costly": {"private": "deny"}},
+                   "rules": [{"match": {"command": "cat config|cd ~/.kube"}, "decision": "allow"}]}}
+UNNAMED = {"gates": {"matrix": {"costly": {"private": "deny"}},
+                     "rules": [{"match": {"command": "cat config"}, "decision": "allow"}]}}
+EVERYTHING = {"gates": {"categories": {"credentials": "deny"},
+                        "rules": [{"match": {"command": ".*"}, "decision": "allow"}]}}
+
+
+def test_a_rule_that_names_the_folder_decides_as_the_cd_form_does():
+    """A rule keyed on `command` that names the `cd <folder>` the part stands for lowers the line no further than
+    the cd form's, whose credentials line has no own text: the part's matrix deny stands either way (#516). So does
+    one that names only the line's command, and one that names everything lifts nothing, as before."""
+    c = _bash_in("cat config", "~/.kube")
+    cd = _bash("cd ~/.kube && cat config")
+    assert gate.decide(c, _pol(NAMED)).outcome == gate.decide(cd, _pol(NAMED)).outcome == "deny"
+    assert gate.decide(c, _pol(UNNAMED)).outcome == gate.decide(cd, _pol(UNNAMED)).outcome == "deny"
+    assert gate.decide(c, _pol(EVERYTHING)).outcome == "deny"
+    assert gate.decide(c).outcome == gate.decide(cd).outcome == "ask"
 
 
 EVERYDAY = ["ls *", "ls config", "wc -l *", "grep -r foo *", "du -sh *", "rg -n config src", "file *"]

@@ -106,6 +106,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   part with that path as its target, as beside a secret (#447), so the entry matches whichever path it names. The
   first path still leads the line, `rm` of both paths was denied already (its `delete` part names the last path),
   reads keep their class, and the first path alone decides as before.
+- A shell call's own folder read is no longer lifted by an allow rule that names only the line's text (#516). The
+  `credentials` part the folder argument adds (`cwd`, or `workdir` for Hermes' terminal and Codex's exec_command)
+  had no own text, so a line of one command beside it was one text for the #394 own-text test and a rule keyed on
+  `command` decided the line as before, over the part's matrix cell: `git push --force origin main` with `~/.ssh`
+  or `~/.exo/keys` as `cwd` asked under `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
+  where its `cd` form was denied, since the rule does not name the `cd`. The part keeps no own text, as a `cd`
+  form's parts have, and now carries a `cd <folder>` stand-in among its setters, the folder as the call spells it,
+  so the line is not one text and a rule that names only the line is passed over, as for any part it does not name.
+  A rule that names everything lifts nothing, as before, the weight a heavier command adds beside the part (#468)
+  is never lifted by a command rule, and a line of two commands, a policy with no rule and no matrix deny decide as
+  before. Nothing is lowered.
 - A glob in a secret store's folder asks (#594). `cat ~/.ss?/*`, `cat ~/.aw?/*` and `cat ~/.exo/key?/*` read as ordinary reads because `_glob_word` gave up whenever the folder part held a glob; the globbed folder is now tested against each sample's folder, with the same three-literal discipline the file side keeps and bash's rule that only a literal dot matches a leading dot, so `cat ~/*/*` stays a read.
 - An ssh or mosh hop keeps its host among the line's other targets when the remote command names a target of its
   own (#493). The hop gave the host as the line's target only when the remote command's dominant part had none, so
