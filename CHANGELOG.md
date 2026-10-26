@@ -14,6 +14,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   write of more than one file keeps each file as a part, so an exact `target:` deny or reserved entry reaches a path
   only the reading on one line found, and any later file of a patch. The call's own target and summary stay as
   main reads them: after a bare header that is still the swallowed header text.
+- Two follow-ups to #296 (#317). A ledger opened read-only through a symlink to a closed target held an
+  `immutable=1` connection to the target itself: a writer that appended and checkpointed replaced the file
+  under it, so the reader stayed stale and reading raised `database disk image is malformed`. The target is
+  copied at open now, so reads are a snapshot of the target as it stood at open. A writer during the copy tears
+  it, so the open checks the target before and after and copies it again when it changed. The copy is read-only.
+  It goes into SQLite's private temporary database: a large ledger costs the reader disk space in the temporary
+  folder, not memory. After three changed copies, or one that fails on an unchanged target (a full temporary
+  folder), the target is read live. And where there is no `/proc` (macOS), the umask probe in `atomic_write` set
+  the process mask to 077 and restored it with no lock: concurrent writes with `mode=None` interleaved set and
+  restore, so files came out 0600 under a 022 mask and a run could leave the process at 077. The probe runs under
+  a lock now, and so does the server's socket bind, which sets 0177 (`exo.core.private.umask`).
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
@@ -155,6 +166,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   all: text that asks as a comment post logged. A reopen now reads its comment as a close does
   (#326), a merge's subject is read as its title, and the posting rules see a merge carrying
   text, an unread body file included. A reopen or merge carrying no text is unchanged.
+- A handoff header field that spans lines can no longer add a section to the file (#395). The topic,
+  session and principal, the path line and the path in the launch line are now folded to one line when
+  written, so a value holding a forged `## Decisions made` heading stays inside the header or its list
+  item instead of standing as a section next to the principal's real words. On the read side, the
+  header parse respects quoted values, so a `-->` inside a value no longer ends the comment early.
+  Sections count only after the header, and the values read back are folded too, so `/exo resume` gets
+  the topic on one line. `/exo resume` also puts the header on one line, so an older file's header
+  values no longer reach the model as a section. Decisions is read from its one exact heading. A header
+  value that spanned lines no longer counts at all, so it loads no forged ruling, whatever it holds, a
+  forged `## State` or a heading with two spaces included. Where the reader cannot tell which copy the
+  writer put there, the file reads no rulings or corrections at all. That covers a forged copy in a
+  path line, or in a title written before #353 (it repeated the topic unfolded), where the reader used
+  to load the forged ruling. It also covers a copy in an open decision written before #353, or a copy
+  next to a forged `## State` in a summary written before #349 or a list field written before #353,
+  where it used to load the principal's. A file with the usual single Decisions section loads as before.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens
