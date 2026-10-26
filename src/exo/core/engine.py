@@ -625,6 +625,8 @@ class CoreRuntime:
             if not self.loop.state(b.session).accepting_steers:  # starting or finishing: no round can take it
                 raise CommandFailed("conflict", "the subagent is starting or finishing and takes no message now")
             b.mode = "steer"
+        if b.mode == "steer" and b.max_rounds is not None:
+            raise CommandFailed("bad_request", "a steer cannot change a running turn's round limit; omit max_rounds")
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).unlimited:
             require_principal("steer an unlimited turn")

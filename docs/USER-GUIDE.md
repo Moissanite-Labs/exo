@@ -72,6 +72,7 @@ with messages (each launch opens a thread, so it skips the empty ones), `--sessi
 picks the seat, `--title TEXT` names a new thread.
 
 `--max-rounds 0` removes the tool-round cap for new turns sent from this window; a positive number sets a limit.
+This counts tool rounds rather than elapsed time: a large finite limit can also allow a long-running turn.
 `/rounds` changes the setting for later turns without changing a turn already running. Only a principal connection
 may request an override. A turn with no limit can keep running after its window closes; reopen its thread and use
 `/stop` to interrupt it. Scheduled runs, wakes and delegated children keep their existing limits.
