@@ -2877,6 +2877,34 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   reading of the call (#311). Each of the 1,435 decides as main decides the plain spelling, and each held at 0b35021a
   too. Both sets with 0b35021a, merged with main 358c3a39, as the base lowered no pair. No run had a classify or
   decide error.
+  *2026-10-26 (#513, sixth round, the merge of main 66c4ec6d):* (q) Main merged #320 (#309, #341), which reads a
+  shell call's folders and the names after a `cd` beside every secret line too, and makes each read with another
+  target a credentials part. So the checks of (o) for those two reads give way to main's: the folder in
+  `cat ~/.kube//config` with `cwd: ~/.ssh`, and `hosts.yml` in `cd ~/.config/gh && cat /pro?/self/environ hosts.yml`,
+  are parts as main makes them. The folder pass of (m) keeps its second reading of the folders, as main read them
+  before #446, beside main's list. #320 reads the names after a `cd` in its expansion forms (`cd ~/.k$(:)ube`,
+  `${x-hosts.yml}`) only on a line that is no secret line. A line that is credentials only through a store named in a
+  spelling main did not read was none on main, so main read those forms there, and their name was the target:
+  `cd ~/.k$(:)ube && cat config; cat ~/.docker//config.json` asked under `deny: [target:config]`, where main denies it.
+  Such a line now reads the forms too, and their name is a part. A line on which main read a store, the environment or
+  a secret command does not, as on main. Three tests pinned main 2923f8b9's result for a secret line beside a folder,
+  after a `cd` and beside a nested secret. They now pin main 66c4ec6d's, which denies under an entry for that target.
+  The check also found that the part of (k), main's target beside a target main did not read, took the line's own
+  weight. Main's line took the weight of a heavier command deeper in it as a part beside it (#468), so
+  `cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'` asked under a deny rule on `*/.ssh/*` and
+  `irreversible`, where main denies it. It held at 0b35021a too. The part now weighs as main's line did.
+  *2026-10-26 (#513, sixth round, the merges of main df4195ab and 5a5a535d):* (r) The check found two more shapes of
+  (k) on file tools. A write tool (`write_file`, `edit_file`, `patch`, `apply_patch`) has a `local_write` part for each
+  file it writes (#448). Where no `path`, `file_path` or patch header names the files (`paths`, `files`, `source` and
+  `destination`), main's write part was on main's target, and here it was only on the odd spelling. So `write_file`
+  with `paths: [~/.kube//config, ~/.ssh/id_rsa]` asked under a deny entry for a `local_write` on `*/.ssh/*`, where main
+  denies it, and a `reserved:` entry like it lost its hit. Main's target now keeps its write part there. A file tool's
+  target is also the path as given, so main's target can be a bare name that names a store from the session folder
+  (#209): `id_rsa` with `cwd: ~/.ssh`, or `keys` with `cwd: ~/.exo`. The part of (k) was made only for a target with a
+  `/` or a `.`, as main's target on a shell line is. So `read_file` with `paths: [~/.kube//config, id_rsa]` in
+  `~/.ssh` asked under `deny: [target:*id_rsa*]`, where main denies it. A file tool's part now takes any target main
+  gave the call. Both held at 0b35021a, merged with each main. Group 2 again holds only the `dd` operand, which #568
+  tracks.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

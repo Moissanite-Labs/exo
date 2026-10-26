@@ -462,15 +462,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   rule keyed on `target` also match the target's lexical form, so `cat ~/.kube//config` is denied under
   `deny: [target:*/.kube/config]`, as its plain spelling is. Where a line's or a file tool's target is a spelling main
   did not read, main's target, another store on the line, stays a credentials part, so a `target:` entry that named it
-  still matches: `cat /pro?/self/environ ~/.ssh/id_rsa` is denied under `deny: [target:*/.ssh/*]`, as on main. A shell
-  call's own folders work the same way: with `cwd: ~/.config//gcloud` and `workdir: ~/.ssh`, the folder main read
-  first, `~/.ssh`, stays a part, so `deny: [target:*/.ssh*]` denies the call, as on main. The same holds for the
-  folder of a call whose line names a store only in such a spelling (`cat ~/.kube//config` with `cwd: ~/.ssh`), for
-  the name such a line reads after a `cd` (`cd ~/.config/gh && cat /pro?/self/environ hosts.yml` under
-  `deny: [target:*hosts.yml]`), and for the first store beside a `$( )` that reads a store through a redirection with
-  a backslash (`cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)` under `deny: [target:*/.ssh/*]`). Such a line now takes
-  the store's class, so a deny that only its own class drew (a rule on a costly `read`, or a `delete: deny` line
-  beside a store folder) becomes the store's ask, as for the plain spelling. The D-038 amendment lists the groups.
+  still matches: `cat /pro?/self/environ ~/.ssh/id_rsa` is denied under `deny: [target:*/.ssh/*]`, as on main. The
+  same holds where main's target on a file tool is a bare name read from the session folder (`id_rsa` with
+  `cwd: ~/.ssh`). A write tool that names its files under another key than `path` (`write_file` with `paths`) keeps
+  main's write part on that store too, so an entry for a `local_write` there still matches. A shell call's own folders
+  work the same way: with `cwd: ~/.config//gcloud` and `workdir: ~/.ssh`, the folder main read first, `~/.ssh`, stays a
+  part, so `deny: [target:*/.ssh*]` denies the call, as on main. The same holds for the folder of a call whose line
+  names a store only in such a spelling (`cat ~/.kube//config` with `cwd: ~/.ssh`), for the name such a line reads after
+  a `cd` (`cd ~/.config/gh && cat /pro?/self/environ hosts.yml` under `deny: [target:*hosts.yml]`, and
+  `cd ~/.k$(:)ube && cat config; cat ~/.docker//config.json`, whose name #320's expansion forms read, under
+  `deny: [target:config]`), and for the first store beside a `$( )` that reads a store through a redirection with a
+  backslash (`cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)` under `deny: [target:*/.ssh/*]`). Main's target weighs as
+  main's line did, so a rule on it and `irreversible` still denies
+  `cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'`. Such a line now takes the store's class, and a few
+  lines decide as main decides the plain spelling, lower than before. The D-038 amendment lists the groups.
 - Gate (#584, D-038 amendment): a backslash-newline right after a `$` no longer hides a command substitution, a
   parameter expansion or a `$@` split. Bash drops each `\<newline>` outside single quotes before it reads a word,
   so `echo "$\<newline>(git push --force origin main)"` runs the push, but the gate read the `$` as text and
