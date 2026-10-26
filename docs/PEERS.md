@@ -60,8 +60,11 @@ trusts the key or the principal a presence file names. It checks each message ag
   this home has a seat file here, or its key file in `keys/`. A registry entry decides for its name: a key you
   replaced with `exo keys pin NAME PUB --replace` is refused, even while its old `.pub` is still in `keys/`.
 - **A peer pin.** `exo keys pin --peer SEAT PUB` pins a seat of another home. That key checks the seat's messages
-  and receipts. It never signs a ledger (D-040). A key for a name that is no seat of this home counts as a peer pin
-  too: one pinned with a plain `exo keys pin NAME PUB`, or a `.pub` copied into `keys/`.
+  and receipts, and a send to it: the text leaves only when the peer's presence file holds a key pinned for that
+  name, and the first answer, signed by the receiving seat like a later receipt, is verified against it before
+  anything is published (#523, the sender's half of this rule). It never signs a ledger (D-040). A key for a name
+  that is no seat of this home counts as a peer pin too: one pinned with a plain `exo keys pin NAME PUB`, or a
+  `.pub` copied into `keys/`.
 - **No key for the name.** The presence file's key shows only that the signature is consistent. The message is held
   as `other`, and its approval card says `key not pinned`.
 
@@ -216,6 +219,11 @@ names another principal, and a tool call may write a presence file too. None of 
 names its principal.
 
 A presence file still says where a daemon listens, and a program that goes through the gate may write one. A
-forged one under a peer's name can receive the messages sent to that name. It can also answer each send with a
-first receipt, which is not signed, so the sending model may read a false outcome and its detail. Later receipts
-are checked as above.
+forged one under a peer's name no longer receives the messages sent to that name: before the text ships, `send`
+checks the file's key against the keys this home pins for the name (the sender's half of the "Peer keys" rule),
+and sends nothing when it does not hold one. The first answer to a send is a receipt signed by the receiving
+seat, like a later receipt is; if it does not verify against the keys pinned for that seat here, nothing is
+published and the send fails. Between two pinned daemons this is invisible; a daemon that answers with an
+unsigned first receipt, as an older `exo` does, cannot be sent to while its seat's key is pinned here—and a name
+no key is pinned for still follows the receive side's trust ladder, message and reply alike (D-026 amendments:
+#132, then #523).

@@ -1599,6 +1599,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
+- A forged presence file could take a send and answer for another seat's name (#523, on #132). `PeerNode.send`
+  shipped the message text to whatever socket the peer's presence file named, for any name, including one whose
+  key this home pins: a same-user process wrote a presence file for that name with a socket of its own, and read
+  every message sent to it. And a send's first answer was published to the sending model unsigned, so that socket
+  could report any outcome and detail; later receipts were already checked. Now the text ships only when the
+  presence file holds a key this home pins for that seat: a file that holds another key, or names another seat,
+  gets nothing, and nothing of its answer runs. The receiving seat signs the first answer like a later receipt
+  (`msg_id`, `state`, `detail`, `by`, `daemon`, `ts`), and the sender verifies it against the keys pinned here for
+  the seat the message went to, as `receipt` does. A reply that does not verify is not published, and the send
+  fails. For a seat no key is pinned for, both checks step aside and the receive side's trust ladder decides what
+  arrived, as before (an unpinned sender is held as `other`). Stricter than before for one honest setup: a daemon
+  that answers a send with an unsigned first receipt, as an older `exo` does, cannot be reached for a pinned seat
+  (D-026 amendment; `docs/PEERS.md` "Limits").
 - `exo chat` approvals no longer fail open. A reply that only starts with a or y (`abort`, `yeah no`) used to
   approve. Now a reply is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else
   denies.
