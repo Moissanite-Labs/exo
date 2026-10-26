@@ -22,6 +22,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   why, for each post on the line, and asks for the post on a line of its own, in place of the hint to pass an
   absolute path. A post also unseen another way, such as a title from a variable, keeps that hint beside it. The
   card no longer names a word the unread file holds.
+- Two follow-ups to #296 (#317). A ledger opened read-only through a symlink to a closed target held an
+  `immutable=1` connection to the target itself: a writer that appended and checkpointed replaced the file
+  under it, so the reader stayed stale and reading raised `database disk image is malformed`. The target is
+  copied at open now, so reads are a snapshot of the target as it stood at open. A writer during the copy tears
+  it, so the open checks the target before and after and copies it again when it changed. The copy is read-only.
+  It goes into SQLite's private temporary database: a large ledger costs the reader disk space in the temporary
+  folder, not memory. After three changed copies, or one that fails on an unchanged target (a full temporary
+  folder), the target is read live. And where there is no `/proc` (macOS), the umask probe in `atomic_write` set
+  the process mask to 077 and restored it with no lock: concurrent writes with `mode=None` interleaved set and
+  restore, so files came out 0600 under a 022 mask and a run could leave the process at 077. The probe runs under
+  a lock now, and so does the server's socket bind, which sets 0177 (`exo.core.private.umask`).
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
