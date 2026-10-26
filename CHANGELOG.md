@@ -84,9 +84,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the process mask to 077 and restored it with no lock: concurrent writes with `mode=None` interleaved set and
   restore, so files came out 0600 under a 022 mask and a run could leave the process at 077. The probe runs under
   a lock now, and so does the server's socket bind, which sets 0177 (`exo.core.private.umask`).
+- Scheduled job changes require a live principal caller (#552), while listing stays available to local
+  callers. A scheduled run rejects tool names outside its initial available-tool list before the gate or
+  executor runs them, including blocked tools and tools registered after the run starts (D-057 stage 0.1–0.2).
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
+- A malformed `gates.escalate` no longer throws away the rest of the principal's policy in the exo-gate plugin
+  (#557, after #549 for #542). The plugin used the defaults for the whole policy, so a `deny`, `reserved`,
+  category, rule or matrix tightening beside `escalate: [payment]`, a null or bare `escalate:` (the template's block
+  with its lines commented out) or `categories: payment` decided lower than before #549, and the internal-names
+  scrub was dropped. The policy now keeps its other sections with the escalation repaired (the default escalation
+  plus the names given), each call is decided under it and under the defaults, and the stricter outcome stands
+  with the wider exposure and the violations and reserved parts of both.
+  The reason says `policy error, stricter of your policy and the defaults applies`. When the pinned or a changed
+  policy file has this error, the old and new decisions merge the same way until `/gate accept`, so the other's
+  violations stand at an equal outcome. While the error stands, a standing grant applies only where the decision
+  with the defaults in place of the broken file (and the decision model's verdict) also asks and finds it, so a
+  grant never allows a call they log, or ask for without that grant. The names a list or a string gives
+  (`escalate: [read]`, `escalate: read`) only add escalation, and `/gate` shows a standing policy error. Other
+  policy errors still use the defaults alone. `normalize_policies` and `load_policies` take an optional error
+  list; without it they raise as before.
 - The gate reads Codex `apply_patch` move destinations (`*** Move to:`) as file-write paths (#528).
   A move into a protected store or secret folder now asks, as an Add or Update header on that path does.
   Absolute links, home and environment spellings, distinctive relative names and braces use the existing checks.
@@ -403,6 +421,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
+  (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
+  #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under
+  `deny: [store_write]`: `cp /tmp/evil ~/.exo/config.json`, `mv`, `install`, `tee` and `ln -sf` were an allowed
+  `shell`, a redirection an allowed `local_write`, and `write_file`, `edit_file` or `apply_patch` there an allowed
+  `local_write`. A write in any form the store checks read (`~`, `$HOME`, `$EXO_HOME` or a full path, a brace set, a
+  relative `.exo/config.json` also spelt `.exo/./config.json`, after a `cd` into the home, under `sudo`, `env`,
+  `bash -c` or `ssh`, the file tools' path keys) is now `store_write`: it always asks, only the principal answers, no
+  grant covers it, and `deny: [store_write]` denies it. A tool call that runs `exo config set` or `unset`,
+  `exo import-store` or `exo interview` (also through `python -m exo.config`) is `store_write` too and keeps its
+  `opaque_exec` reading as a part, as `exo update --pin-trust` does, so `deny: [opaque_exec]` still denies it.
+  `exo providers default` stays `credentials` with the store write as a part, so a deny on either denies it.
+  Reads stay `read`, and a project's `config.json` is unchanged. No decision is lower than on main: a call in which
+  `config.json` counted is also read as before (`Classification.ordinary`, one of `gate.readings`), and the stricter
+  decision stands, so `matrix_deny_cells` still denies
+  `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h` and `deny: [credentials]` still denies
+  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A copy or extraction into a folder that holds the file is #483.
 - Gate (#225, #269, #309, #341, D-038): store names an expansion hides, and relative names that reach the run
   folder, now ask. #307 read an expansion inside a secret-store name as empty and, between literal text, as `*`.
   That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,

@@ -485,7 +485,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `config.json` names, read from the file when the receiver starts. It reaches a daemon as that principal only when
   the daemon runs as that principal or as none and has no seat file naming one. A seat whose seat file names its
   principal holds such a key as `other`, since `config.json` is not a store file and a tool call may change it without
-  asking. Giving the key a seat file that names its principal delivers it at once. The principal a presence file
+  asking (until D-074, #125; a program outside the gate still may). Giving the key a seat file that names its
+  principal delivers it at once. The principal a presence file
   names never raises trust but can lower it: when it is not the one this home records for the sender (none stands
   for `config.json`'s), the message is `other`, as before #132. So a daemon or Hermes profile run as another
   principal is held even by a daemon with no seat principal, and so is a daemon under the receiver's own seat name
@@ -1250,6 +1251,33 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   mapping and valid mappings keep their existing behavior. An empty category list disables only category
   escalation. Chosen over interpreting a bare list as shorthand: rejecting it makes the existing schema explicit
   and catches scalar and null mistakes through the same path. No classification or valid-policy decision changes.
+- *Amendment 2026-10-25 (issue #557):* with #542 alone, the exo-gate plugin met a malformed `escalate` with its
+  policy-error fallback, the defaults, and so dropped every other section of the principal's policy (deny,
+  reserved, categories, rules, matrix, budget, posting, the internal-names scrub) for the session. A deny then
+  asked, a category deny allowed and a reserved push logged where main before #542 kept them. Now a malformed
+  `escalate` or `escalate.categories` keeps the principal's other sections: `load_policies(root, errors)` records
+  the message and repairs only that section (the default escalation plus the category names the value gives), and
+  the plugin decides each call under the repaired policy and the defaults and keeps the stricter, merged as a
+  line's readings merge (#399: the widest exposure, every violation and reserved part). The reason says
+  `policy error, stricter of your policy and the defaults applies`. Approvers and the "always" length are no wider
+  than the defaults'. A changed file with this error is decided the same way, and when the pinned or the changed
+  file has it, the old and new decisions merge the same way too, so the other's violations are kept at an equal
+  outcome. While the pinned or the changed file has this error, a standing grant applies only where the decision
+  as after #542 (the defaults in place of the file with the error, then the decision model's verdict) also asks
+  and finds a grant; otherwise the merged decision stands and the call asks. Every other policy error still
+  falls back to the defaults alone, and a caller without the list still gets `PolicyError`: the loader still
+  rejects a bare list as #542 ruled, and only the plugin's repair honours the names a list or string gives (tighten
+  only), so `escalate: [read]` and `escalate: read` make reads ask. `/gate` shows a standing policy error for the
+  pinned and the changed file. Under a malformed `escalate` no decision is lower than main after #542, the
+  decision model and standing grants included, and a valid policy decides as before, grants included. Limits:
+  lower than main before #542 (1d2f32ac) where a shape crashed the classifier there (`escalate: {categories: 7}`
+  asked on every call by accident), and where a grant bound to the exact line applies because the defaults ask
+  with that binding, equal to main after #542 (`gh pr close` on a repo the policy's `scopes` make internal, which
+  1d2f32ac logged, or private beside a matrix ask, which it asked for without a binding). Ruled in review 5644671413:
+  repair plus the stricter of the policy and the defaults, chosen over the defaults alone (lower than before #542 for
+  every tightening) and over the other sections alone (lower than after #542 for a section looser than the defaults);
+  a malformed list's names count, tighten only; merging the old and new decisions of two valid files is a separate
+  issue.
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
   `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
   grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on
@@ -3529,6 +3557,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Limits:** same-user processes still need an OS sandbox. Earlier misattributed messages are not rewritten.
 - **Docs:** `docs/GATE.md`, `docs/MEMORY-MODEL.md`, `docs/COMMANDS.md`.
 
+### Amendment (2026-10-25): only the principal changes scheduled jobs (#552)
+- **Decision:** `handle_schedule_edit`, reached through `Scheduler.edit`, requires the live transport principal
+  for every action except `list`, implementing D-057 section 0.1 independently of triggers. Local, channel, seat, unstamped and
+  expired callers are refused before job mutation or launch. The authenticated clients keep working.
+- **Why:** a local caller could create unattended work or alter the principal's existing jobs. Listing
+  jobs is read-only and remains available. The timer and the internal `add`, `pause`, `remove` and `launch`
+  methods keep their role.
+  The check lives outside the counted core, also guarding direct command-handler calls, rather than adding
+  product logic to `CoreEngine._schedule_edit`. The core keeps forwarding the live caller context.
+- **Rejected:** only blocking a scheduling tool, since the protocol command reaches the scheduler directly.
+- **Revisit if:** an explicit scoped delegation mechanism is introduced for schedule management.
+- **Docs and tests:** `docs/SCHEDULE.md`, `docs/GATE.md`, `docs/EVENT-ACTIVATION.md`, both guides, and
+  `tests/core/scheduler/test_scheduler.py` cover refusals, no side effects, caller expiry and every principal action.
+
 ## D-053 (2026-10-12) Verification isolates terminal preferences and documents current behavior
 - **Why:** the baseline root suite failed four TUI checks solely because the invoking terminal exported
   `NO_COLOR`. Removing that variable made all four pass. Changing `TERM` did not. Product behavior was correct,
@@ -3625,6 +3667,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   recommended), default limits, who may add a trigger (only the principal, recommended).
 - **Depends on:** stage 0 (nothing in it exists on main), and for the ingress door a `Target` and a `trigger` branch in
   `frame()` in `src/exo/core/ingress.py`.
+
+### Amendment (2026-10-25): scheduled-run boundaries, stage 0.1 and 0.2
+- **Decision:** the D-052 amendment above implements stage 0.1. Stage 0.2 freezes each scheduled run's
+  initially available tool names after removing `BLOCKED_TOOLS`. Its runner returns an error for any
+  other name before calling `engine.run_tool`. Tools registered after the run starts do not widen it.
+- **Why:** hiding a tool's schema does not stop a model from calling it by name. Execution must check the
+  same boundary. Allowed names still pass through the engine's ordinary gate and executor.
+- **Rejected:** relying on the model to follow the displayed list, or making an allowlist refusal depend
+  on gate policy. Neither enforces the run's assigned tools when an allowed gate decision says to proceed.
+- **Limits:** scheduled runs still have shell and file tools. This is a tool-name boundary, not read-only
+  execution or an OS sandbox. Triggers, read roots and the remaining proposed stages are not enabled here.
+- **Revisit if:** scheduled runs gain reviewed changes to their tool sets while running.
+- **Evidence:** scripted models call every blocked name under an allowing gate, and a tool registered
+  mid-run. None executes or reaches the gate. An offered tool reaches both the gate and executor normally.
+  `tests/core/scheduler/test_scheduler.py` records matching call IDs and error results.
+- **Docs:** `docs/SCHEDULE.md`, `docs/EVENT-ACTIVATION.md`, `docs/GATE.md` and both guides. The proposal
+  above retains its original baseline description. These two stage-0 gaps are now closed in code.
 
 ## D-058 (2026-10-13) Exopet: the community egg, x0, grows from repository activity
 - **Status:** Proposed 2026-10-13, revised the same day (instant and validated XP, the name x0, meditation) and
@@ -3975,6 +4034,68 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   every time, and only the principal can answer. `config.json` is still an ordinary local write. D-074 (#125) adds
   it.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
+
+## D-074 (2026-10-13) The Exo home's `config.json` is a store path (issue #125)
+- **Why:** `$EXO_HOME/config.json` names the plugins the core loads (`core_plugins`, this gate among them), their
+  config, the `venv` that runs Hermes and Exo, the models, and each provider's `base_url` and headers. A tool that
+  rewrites it chooses which gate runs and where prompts and keys go. On main edeb4f89 it was an ordinary file:
+  `cp /tmp/evil ~/.exo/config.json`, `mv`, `install`, `tee` and `ln -sf` on it were an allowed `shell`, a
+  redirection (`>`, `>>`, `>|`) an allowed `local_write`, and `write_file`, `edit_file` or `apply_patch` on it an
+  allowed `local_write`, under the default policy and under `deny: [store_write]`. The signed-update pin, the other
+  half of the original issue, is a store path since #133 (#443).
+- **Decision:** `config.json` joins `$EXO_HOME`'s protected names (`_HOME_PROTECTED`, beside `update` and `plugins`),
+  and `.exo/config.json` counts by name whatever `EXO_HOME` is (`_CONFIG_NAME`), as `.exo/update` does. So every write
+  form the store checks read for `policies/` and `update/` is `store_write` (it always asks, only the principal
+  answers, no grant covers it, and `deny: [store_write]` denies it): a redirection, `cp`, `mv`, `install`, `tee`,
+  `sed -i`, `ln`, `dd of=`, `truncate`, `touch`, `chmod`, `rm`, a brace set, `~`, `$HOME` and `$EXO_HOME` spellings,
+  a writing command after a `cd` into the home, `sudo`, `env`, `bash -c` and `ssh` text, and the file tools' path
+  keys. A relative `.exo/config.json` is read with `.`, `//` and `..` collapsed, and a word a command prints counts by
+  the name in it. Only the home's own file: a project's `config.json`, `config.json.bak` and the like keep their
+  class. Reads stay reads. A tool call that runs `exo config set` or `unset` (also `exo config -- set`) or
+  `exo import-store`, which write the file, or `exo interview`, which writes the principal store (also through
+  `python -m exo.config`, `exo.cli` or `exo.onboard`), is `store_write`, as `exo update --pin-trust` is since #133,
+  and keeps its old `opaque_exec` reading as a part, so `deny: [opaque_exec]` still denies it and naming
+  `opaque_exec` at `allow` or `log` now asks. `exo providers default`, which also rewrites the file, stays
+  `credentials` (D-034) with the store write as a part, so a deny on either denies it. The CLI code that writes the file is unchanged: the principal running
+  it in a terminal is not a tool call.
+- **Never lower than main:** before D-074 a `config.json` line was not a store write, so its own reading led it: a
+  delete, a post, a secret, a `/dev` target, an `ssh` host, or the `internal` exposure of an `ssh`, `scp` or `sftp`
+  `-o RemoteCommand=`. Rather than carry each of those through the store write one by one (the first #125 heads did,
+  and each verify round found another), classify reads a call in which `config.json` or an exo command that writes it
+  counted as the store a second time with D-074 off (`_config_off`, marked by `_config_on`), as a call of its own with
+  its own budgets and memos, and keeps that reading as `Classification.ordinary`. It is one of `gate.readings`, so
+  `decide` decides both and the stricter stands, with every reserved hit and violation of either (`_strictest`), and
+  `no_grant`, `call_approvers`, `binds_exact` and the hook's body files and required executor read both. Main's
+  decision of the line is therefore always one of the two, and the store write only adds. The cost is a second
+  classify for such calls alone.
+- **Stricter, by design:** a copy out of the home's `config.json` (`cp ~/.exo/config.json /tmp/`) asks, as one out of
+  `policies/` does, because the store checks read every word of a write. `rm ~/.exo/config.json`, which asked as
+  `delete`, asks the principal alone.
+- **Limits:** as for the other store files: a glob in the file's own name (`~/.exo/config.js?`), a path in a variable
+  or one a command builds from pieces (`F=~/.exo/config.json; cp x "$F"`), a write through a hard link made earlier,
+  the bash tool's `cwd` argument and `python -mexo.config` written as one word, which keep main's `opaque_exec`
+  ask. A copy or extraction whose destination is a folder that
+  holds the file (`cp -t ~/.exo`, `cp /tmp/x/config.json ~/.exo/`, `tar -C ~/.exo -xf`, `unzip -d ~/.exo`) is #483.
+  Found while testing, not changed here: `sudo -s` and `sudo -i` with no command run a shell on their stdin, which the
+  gate does not read (`sudo -s <<< 'cp /tmp/x ~/.exo/config.json'` is a `read`, as is the same line with `rm -rf`).
+- **Amended 2026-10-25 (#525, rebuilt on main edeb4f89):** since #525, `config.json`'s `principal` also names the
+  principal of a key with no seat file, toward a receiving daemon whose seat file names no principal (`docs/PEERS.md`
+  "Limits", the D-026 #525 amendment). One unasked write could change whose messages such a daemon delivers as its
+  principal's own after a restart; a tool's write to the file now asks the principal. The first #125 heads were
+  closed for this rebuild (fdn-0's review 5641582965): on them `cd ~/.ex{o,} && cp /tmp/x config.json` read lower than
+  main, and the exo commands lost their `opaque_exec` part. This version keeps #443's reading of those commands and
+  reads every line as main did too. The landing rule of the first heads is #483.
+- **Evidence:** `tests/security/test_gate_config_store.py` (its 286 new rows fail on edeb4f89, its 247 guard rows
+  pass there). The gate differential (#423) against edeb4f89, `--jobs 2`, nothing lowered in each run: the built-in
+  corpus without variants (9,407 actions, 87 policies); an aimed corpus of 3,012 actions, every line of this test
+  file and of the first heads' test file plus generated `config.json` writes (each writer, home spelling and
+  wrapper, the file tools, the exo commands, and each beside a delete, a force push, a post, a key read, a publish,
+  a `policies/` write and a `/dev` target), under the 87 built-in policies and 51 more (deny, reserved and category
+  entries on `store_write`, `local_write`, `opaque_exec`, `credentials`, `read`, `shell` and `delete`, matrix cells,
+  `opaque_exec` at `internal` and at a host, irreversible `credentials`, costly rules and `/dev` targets); and the
+  built-in corpus with its variants (72,618 actions, 87 policies).
+- **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `docs/PEERS.md` "Limits", `docs/USER-GUIDE.md` §6,
+  `CHANGELOG.md`.
 
 ## D-075 (2026-10-13) A deny or reserved entry matches any simple command on a line
 - **Why:** the 2026-10-13 review. `classify_shell` reduces a compound line to its most severe part, and `decide`
