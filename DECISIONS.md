@@ -1276,6 +1276,39 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   every tightening) and over the other sections alone (lower than after #542 for a section looser than the defaults);
   a malformed list's names count, tighten only; merging the old and new decisions of two valid files is a separate
   issue.
+- *Amendment 2026-10-26 (issue #494):* a file tool's store path is read under every key it names a path by, and a
+  move of a folder that holds the store is a store write with no secret beside it, as `mv` is. The generic
+  file-tool branch read a store path only under `path` and the other `_PATH_ARG_KEYS` names, and passed
+  `ancestors=` only for a delete, so `move_file ~/.exo -> /tmp/x` was a `local_write` that ran with no ask where
+  `mv ~/.exo /tmp/x` asked, `mcp__filesystem__move_file` with the same args was a `remote_write` that only logged,
+  and a store path under `to`, `target`, `new_path`, `old_path`, `from` or `dst`
+  (`rename_file {"path": "~/.ssh/id_rsa", "new_path": "~/.exo/policies/gates.yaml"}`,
+  `move_file {"source": "/tmp/a", "to": "~/.exo/policies/gates.yaml"}`) was missed: beside a secret it got no store
+  write part, so a seat delegated `credentials` could answer it, and with no secret it was no store write at all.
+  Now the scan reads those keys too, a tool whose name says move or rename (`_WIDE_WORDS`, a camelCase name split)
+  passes `ancestors=` as `mv` does, with or without a secret, so a camelCase delete of the home
+  (`deleteFile ~/.exo`) asks as `rm -rf ~/.exo` does, and a read-verb tool that writes what it took where its path
+  arguments say (`download_file`, `export_report`; `_FETCH_WRITE_WORDS`) runs the store scan, so a download into
+  the policy files asks while a plain read of the store stays a read. A relative destination is read from the
+  session's folder the core passes (#209), as `_sensitive_words` reads a relative secret name:
+  `move_file` to `policies/default.yaml` from a session folder in `~/.exo` is a store write, and beside a secret it
+  is a part, so only the principal answers. The resolution is the file tools' own: a shell line still reads its
+  store writes from its own words, so `echo x > gates.yaml` with `~/.exo/policies` as `cwd` stays a `local_write`
+  (#453), and the gate's own folder is not one of the bases, where a bare `run` word is not the run folder
+  (#D-039). A copy of the store keeps its reading (`copy_file ~/.exo -> /tmp/x` is no store write, as `cp -r`
+  reads it), and a read tool without a write word (`fetch_log`) is not scanned. Chosen over scanning every string
+  argument for the store, which would read a write's `content:` that quotes a store path, and over resolving
+  relative names in the shell's per-word scan, which cannot tell a write's operand from a read's
+  (`cat *` beside the folder's read part in `~/.exo/run` would have made the line a store write where the
+  #452 tests keep it a force push beside a part). D-074's config file is reached under the new keys and from the
+  session folder as under `path` (`move_file {"source": "/tmp/a", "to": "~/.exo/config.json"}`,
+  `write_file "config.json"` from a session folder in the home), read as before D-074 in the ordinary reading as
+  every other way of reaching it is. The gate differential against the main checkout dcab371a (`scripts/
+  gate_diff.py --no-variants --jobs 4`, base main, head this branch) finds 0 lowered pairs: 11,114 actions x 87
+  policies, 5,988 pairs tightened on 102 actions (unknown, read, local_write and remote_write allow to
+  `store_write` ask, and to `credentials` ask where the new keys name a secret), 409 pairs reworded in detail.
+  Tests beside the #489 rows (`plugins/exo-gate/tests/test_store_floor_any_part.py`) and in the D-074 file
+  (`tests/security/test_gate_config_store.py`).
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
   `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
   grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on
