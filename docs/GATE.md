@@ -99,7 +99,8 @@ nobody read:
   `--config`, or an expansion outside `--header` and the login options. httpie: `k=@f`, `k:=@f`,
   `k@f`, a pipe or `<` into it, or an expansion outside `-a`.
 - The exo-gate hook reads a body file only by an absolute path, up to 256 KiB, with
-  `read_body_files` on. A relative or `~` path names a file in the command's folder or home, which
+  `read_body_files` on, and only on a line where the gate finds no other part (#343, below). A
+  relative or `~` path names a file in the command's folder or home, which
   the hook cannot pin down: it gets the session's folder (#209), but a `cd` or `pushd` on the line,
   or the call's `cwd` argument, moves it (`cd docs && gh ... --body-file notes.md` read `notes.md`
   from exod's own folder before). A path under `/dev` or `/proc`, as written or resolved
@@ -108,10 +109,39 @@ nobody read:
   gate reads more than one way ("Where a gh command lands") gets the text in each reading: the
   copy on each other target, and the line as read before #399, whose own body file is read the
   same way.
+- Another part of the line can change the body file after the hook reads it and before `gh`
+  does (#343). A copy, a move, a redirect, a link or `tee` can run before the post. A writer can
+  run beside it, later in a pipe or in the background, and a redirection can truncate the file
+  itself. An ssh hop runs `gh` on a host where the path names another file. So the hook leaves
+  the file unread when the gate finds any other part on the line, in any reading of it
+  (`gate.readings`): another command, a redirection to a file, an assignment that changes what
+  runs (`GH_EDITOR=x gh ...`, `LD_PRELOAD=...`) or one on its own (`X=1; gh ...`), a wrapper the
+  gate does not see through (`setsid`, `taskset`, `xargs`), a shell (`bash -c`), an ssh hop, a
+  `{ ...; }` group, a store read from the tool's own folder (#311), or the code around the call
+  in `execute_code` or `python -c`. It does not ask whether that part writes the file. The post
+  then counts as unseen: it asks once, and its violation says why
+  ("the gate did not read the body file, since the line does more than post ..."). Every post's
+  body file on such a line gets that note, so a second post's says so too. Wrappers the gate
+  sees through add no part, so the file is still read under `nice`, `exec`, `sudo`, `env`,
+  `timeout`, `command` and `nohup`, after a variable that changes nothing that runs
+  (`NO_COLOR=1 gh ...`), in a `( )` subshell, with a trailing `&`, and with a redirection to
+  `/dev/null`. A copy of the post on another target is the post itself, not another part. Since
+  the file is not read, the card names nothing its text holds now: on a line of two posts it no
+  longer names a forbidden word in the first post's file.
+- The hook reads the file before the command runs, so a process started by an earlier tool call
+  can still change the file between the read and `gh`. Closing that gap would need the post to
+  run on a snapshot of the text the hook read. The gate also reads `sudo --chroot=DIR gh ...` and
+  `sudo -RDIR gh ...` as `sudo gh ...`, so the hook reads the file by its path while `gh` reads
+  the one under `DIR` (#544).
 
 Under the posting rules (`posting.applies_to`) an unseen body adds the violation "the gate cannot
-read the body ..." and asks. In any category it offers no "always" (`once`) and no standing grant
-matches it, since its binding hashes only the line. A post the line spells out is checked as before.
+read the body ..." and asks. A body file the hook left unread because the line does more than post
+gets "the gate did not read the body file ..." in its place (`gate.UNSEEN_ON_LINE`): the hook names
+those files to `decide` in `held_body_files`. A post also unseen another way (a title from a
+variable, a repeated option) keeps the plain note beside it, since alone on its line it would still
+be unseen. In any category it offers no "always" (`once`) and no
+standing grant matches it, since its binding hashes only the line. A post the line spells out is
+checked as before.
 
 - An answer covers that hash only. If the agent edits one character, the next call has a new
   hash and is asked again. This is the same rule as a review verdict that a new head sha voids.
@@ -1402,17 +1432,24 @@ gate does not read:
   sudo runs, so the write happens either way. When the command's own costly `read` or `shell` part
   would lead the line, the first sudo write leads in its place, with that cost. The line is then a
   costly `local_write`, and its target is the written path, as without sudo. Its summary names the
-  program and the path (`chmod, write /tmp/f`). The line is also decided with the displaced part
-  leading, as before, and the stricter outcome stands. So a `categories:` line, a rule or an
+  program and the path (`chmod, write /tmp/f`). When the write is on another command of the line,
+  the summary names the two apart: `gh pr view; write /tmp/f` for
+  `sudo gh pr view 1 -R o/r; sudo echo hi > /tmp/f`. The line is also decided with the displaced
+  part leading, as before, and the stricter outcome stands. So a `categories:` line, a rule or an
   escalation on `local_write` or on the path now reaches the line, and one that reached the
   displaced part still does: `{read: ask}`, or a rule on the repo of
   `sudo gh pr view 1 -R o/r > /tmp/f`. An ssh hop gives its host to the displaced part, as it did
   when that part led, so a rule or reserved entry on the host still reaches
-  `ssh prod 'sudo echo hi > /srv/out'`. Before, the costly `read` outranked the write, and only a
-  deny or reserved entry reached the write. Otherwise the parts stay as they were. A part that
-  outranks that `read` still leads, also one that would tie with a costly write, such as an unknown
-  program: `sudo echo hi > /tmp/f; foo` asks as `opaque_exec`. A store path stays `store_write`,
-  and `/dev/null` adds no write, as without sudo.
+  `ssh prod 'sudo echo hi > /srv/out'`. `ssh -o RemoteCommand=` gives its host to neither part, so
+  a rule that asks or logs on the host does not reach
+  `ssh -o RemoteCommand='sudo echo hi > /srv/out' prod`. Such a rule missed that line before #454
+  too, and it misses the same line without sudo (#493). ssh's own part still names the host, so a
+  rule that denies it, and a deny or reserved entry for it, still reach the line. Before, the
+  costly `read` outranked the write, and only a deny or reserved entry reached the write.
+  Otherwise the parts stay as they were. A part that outranks that `read` still leads, also one
+  that would tie with a costly write, such as an unknown program: `sudo echo hi > /tmp/f; foo` asks
+  as `opaque_exec`. A store path stays `store_write`, and `/dev/null` adds no write, as without
+  sudo.
   A copy made on a nested line (a `$( )`, backticks, `<( )` or an ssh hop) is a part of the line
   around it. There the parts are ranked as before, each copy as a `read` with its own axes. A part
   that outranks a `read` still leads: an unknown program (`echo $(sudo echo hi > /tmp/f) $(foo)`
@@ -1421,9 +1458,10 @@ gate does not read:
   `sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)` still reaches the line. An ssh
   `-o RemoteCommand=` raises the displaced part to `internal` too, as the hop does.
   When both readings give the same outcome, the decision keeps both reasons and the higher
-  exposure. The card links to the displaced part (a gh read's issue) when its reading asks. A
-  required executor refuses the displaced part's body file too
-  (`sudo gh pr view 1 -R o/r -F /tmp/b > /tmp/f`). The ledger never gets the displaced part.
+  exposure. The card links to the displaced part (a gh read's issue) when its reading asks. A part
+  with no link, such as `chmod`, leaves the written path as the link. A required executor refuses
+  the displaced part's body file too (`sudo gh pr view 1 -R o/r -F /tmp/b > /tmp/f`). The ledger
+  never gets the displaced part.
   A redirection on a compound around a sudo command (`{ sudo echo hi; } > /tmp/f`) or on another
   command of the line (`sudo echo hi | cat > /tmp/f`) is not on the sudo command. There the
   dominant part decides, as on any line (D-075). Where only the write asks, as under

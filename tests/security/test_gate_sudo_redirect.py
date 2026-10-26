@@ -6,7 +6,7 @@ Bash opens the file of `sudo echo hi > /tmp/f` as the calling user, before sudo 
 reached the write part (#191). Now, where that read leads the line, the first sudo write takes its cost and leads
 instead, so the line is a costly `local_write`. A part that outranks the read, such as an unknown program, still
 leads. The line is also decided with the displaced part leading, as on main, and the stricter outcome stands, so a
-rule on a gh read's repo or on an ssh host still reaches it.
+rule on a gh read's repo or on the host of an ssh hop still reaches it.
 
 Classification and decision only; nothing is executed.
 """
@@ -372,20 +372,64 @@ def test_a_copy_ranks_by_its_own_axes():
     assert (c.category, c.displaced.target) == ("local_write", "a/b#9"), c
 
 
-@pytest.mark.parametrize("line,link", [
-    ("sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)", "https://github.com/a/b/issues/9"),
-    ("sudo gh pr view 9 -R a/b > /tmp/f", "https://github.com/a/b/issues/9"),
-    ("x=$(sudo gh pr view 9 -R a/b) y=$(sudo echo hi > /tmp/f)", "https://github.com/a/b/issues/9"),
+@pytest.mark.parametrize("line,summary", [
+    ("sudo gh pr view 9 -R a/b; x=$(sudo echo hi > /tmp/f)", "gh pr view; write /tmp/f"),
+    ("sudo gh pr view 9 -R a/b > /tmp/f", "gh pr view, write /tmp/f"),
+    ("x=$(sudo gh pr view 9 -R a/b) y=$(sudo echo hi > /tmp/f)", "gh pr view; write /tmp/f"),
 ])
-def test_the_card_names_the_part_whose_rule_asked(line, link):
+def test_the_card_names_the_part_whose_rule_asked(line, summary):
     # The summary names the part the copy displaces, also one a nested copy took the place of, and the card links to
-    # it when its reading asks, as main's card did.
+    # it when its reading asks, as main's card did. The write is named under that part's program only on its command.
     c = sh(line)
     d = decide(c, pol(rules=[{"match": {"target": "a/b*"}, "decision": "ask", "reason": "repo rule"}]))
     card = summarize(c, d)
-    assert d.outcome == "ask" and card.startswith("gh pr view, write /tmp/f (") and f"Link: {link}." in card, card
-    assert c.as_dict()["summary"] == "gh pr view, write /tmp/f"
+    assert d.outcome == "ask" and card.startswith(f"{summary} (") and "Link: https://github.com/a/b/issues/9." in card
+    assert c.as_dict()["summary"] == summary
     assert "Link: /tmp/f." in summarize(c, decide(c, pol(categories={"local_write": "ask"})))
+
+
+@pytest.mark.parametrize("line,summary", [
+    ("sudo gh pr view 1 -R o/r; sudo echo hi > /tmp/f", "gh pr view; write /tmp/f"),
+    ("sudo gh pr view 1 -R o/r && doas echo hi >> /tmp/f", "gh pr view; write /tmp/f"),
+    ("sudo gh pr view 1 -R o/r | sudo tee /x > /tmp/f", "gh pr view; write /tmp/f"),
+    ("sudo chmod 777 /x; sudo echo hi > /tmp/f", "chmod; write /tmp/f"),
+    ("sudo echo hi > /tmp/f; sudo chmod 777 /x", "echo, write /tmp/f"),
+    ("(sudo gh pr view 1 -R o/r > /tmp/f)", "gh pr view, write /tmp/f"),
+    ("env sudo chmod 777 /x > /tmp/f", "chmod, write /tmp/f"),
+])
+def test_the_summary_names_the_write_under_a_program_only_on_its_own_command(line, summary):
+    # Review 5640972780: for a sudo read and, after a separator, a separate sudo write, the summary read
+    # `gh pr view, write /tmp/f`, as if gh wrote the file. It names the two apart now. The card links to the gh read
+    # when its reading asks, and a part with no link, such as chmod, leaves the written path as the link.
+    c = sh(line)
+    assert (c.category, c.target, c.summary) == ("local_write", "/tmp/f", summary), (line, c)
+    d = decide(c, pol(categories={"read": "ask", "shell": "ask"}))
+    card = summarize(c, d)
+    assert d.displaced_asks and card.startswith(f"{summary} ("), card
+    assert ("Link: https://github.com/o/r/issues/1." if "gh " in line else "Link: /tmp/f.") in card, card
+
+
+@pytest.mark.parametrize("line", ["ssh -o RemoteCommand='sudo echo hi > /srv/out' prod",
+                                  "ssh -oRemoteCommand='sudo echo hi > /srv/out' prod",
+                                  "ssh -o 'RemoteCommand=sudo -u root echo hi > /srv/out' prod",
+                                  "ssh -o RemoteCommand='doas echo hi >> /srv/out' prod"])
+def test_a_remote_command_gives_no_host_to_the_copy_or_its_displaced_part(line):
+    # Review 5640972780: the hop form gives its host to the displaced part, but ssh -o RemoteCommand= gives it to
+    # neither part, so a rule that asks on the host does not reach the line. Before #454 it was logged the same way, as
+    # a costly read with no target, and the line without sudo misses the rule there too (#493). ssh's own part still
+    # names the host, so a rule that denies it, and a deny or reserved entry for it, still reach the line (D-075).
+    c = sh(line)
+    assert (c.category, c.target, c.displaced.target) == ("local_write", "/srv/out", ""), (line, c)
+    host = pol(rules=[{"match": {"target": "prod"}, "decision": "ask", "reason": "host"}])
+    d = decide(c, host)
+    assert (d.outcome, d.rule, d.displaced_asks) == ("log", "matrix", False), (line, d)
+    plain = sh(line.replace("sudo -u root ", "").replace("sudo ", "").replace("doas ", ""))
+    assert (plain.target, decide(plain, host).rule) == ("/srv/out", "matrix"), plain
+    hop = sh("ssh prod 'sudo echo hi > /srv/out'")
+    assert decide(hop, host).outcome == "ask"
+    deny = pol(rules=[{"match": {"target": "prod"}, "decision": "deny", "reason": "host"}])
+    assert decide(c, deny).outcome == decide(c, pol(deny=["target:prod"])).outcome == "deny", line
+    assert ("shell", "prod") in decide(c, pol(reserved=["target:prod"])).reserved, line
 
 
 @pytest.mark.parametrize("line", [
