@@ -45,6 +45,22 @@ def restart_command(session: str | None, env: dict[str, str] | None = None,
     return [*base, "--session", session] if session else [*base, "--resume"]
 
 
+def new_command(cwd: str, env: dict[str, str] | None = None, argv: list[str] | None = None) -> list[str]:
+    """Open a fresh session in cwd without inheriting a resume or bypass flag."""
+    base = restart_command(None, env, argv)[:-1]
+    out, skip = [], False
+    for arg in base:
+        if skip:
+            skip = False
+        elif arg == "--cwd":
+            skip = True
+        elif arg.startswith("--cwd=") or arg in ("--skip-permissions", "--dangerously-skip-permissions"):
+            continue
+        else:
+            out.append(arg)
+    return [*out, "--cwd", cwd]
+
+
 def _applescript_quote(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 

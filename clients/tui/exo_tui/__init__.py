@@ -5,6 +5,14 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
+
+
+def directory(value: str) -> str:
+    path = Path(value).expanduser().resolve()
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError("working directory must be an existing directory")
+    return str(path)
 
 
 def parse(argv: list[str] | None) -> argparse.Namespace:
@@ -16,6 +24,7 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--url", help="exod TCP URL")
     p.add_argument("--token-file", help="bearer token file for --url")
     p.add_argument("--title", default="", help="title for a new session")
+    p.add_argument("--cwd", type=directory, help="working directory for new sessions (existing sessions keep their own directory)")
     p.add_argument("--skip-permissions", "--dangerously-skip-permissions", dest="skip_permissions",
                    action="store_true", help="permissions bypass for this run of the core: the gate stops asking, except "
                    "for changes to Exo's own records and reading secrets (D-065). Every auto-approved call is in the ledger")
@@ -41,6 +50,6 @@ def main(argv: list[str] | None = None) -> int:
     if a.no_intro and not onb.onboarded:
         onb.mark_onboarded("skipped")
     intro = not a.no_intro and not os.environ.get("EXO_NO_INTRO")  # the env var skips without writing anything
-    ExoApp(client, session=a.session, resume=a.resume, seat=a.seat, title=a.title, auto_intro=intro, boot_anim=True,
+    ExoApp(client, session=a.session, resume=a.resume, seat=a.seat, title=a.title, cwd=a.cwd, auto_intro=intro, boot_anim=True,
            provider_check=True, skip_permissions=a.skip_permissions).run()
     return 0

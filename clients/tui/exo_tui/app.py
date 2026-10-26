@@ -44,6 +44,7 @@ AT_RE = re.compile(r"(?<!\S)@(\S+)")
 # name -> (group, description). /help is generated from this table, so every command shows up there.
 COMMANDS = {
     "new": ("session", "start a new thread: a fresh focus, same memory; /new private is not remembered"),
+    "tab": ("session", "open a new conversation in another terminal window: /tab [directory]"),
     "sessions": ("session", "pick one of this agent's threads to switch to"),
     "resume": ("session", "same as /sessions"),
     "fork": ("session", "fork this session"),
@@ -161,7 +162,7 @@ class ExoApp(App):
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
                  seat: str | None = None, title: str = "", home: str | None = None,
                  auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False,
-                 skip_permissions: bool = False) -> None:
+                 skip_permissions: bool = False, cwd: str | None = None) -> None:
         super().__init__()
         self.skip_permissions = skip_permissions  # exo --skip-permissions: ask the core for bypass at boot (D-065)
         self.perm: dict[str, Any] = {}  # the core's /permissions json; {} when it has no gate
@@ -194,6 +195,8 @@ class ExoApp(App):
         self.resume = resume
         self.seat = seat
         self.title_arg = title
+        self.new_cwd = str(Path(cwd).expanduser().resolve()) if cwd else None
+        self.session_cwd = os.getcwd()
         self.model = ""
         self.memory = ""  # the memory plugin's state (a MEMORY_WORDS key; "" unknown), read once at boot
         self.clipboard_verified = False
@@ -892,12 +895,17 @@ class ExoApp(App):
         name = info.get("title") or str(info.get("id", ""))[-8:]
         return f"thread {name}" + (" (private)" if info.get("kind") == "private" else "")
 
+    def set_session_cwd(self, cwd: str | None) -> None:
+        self.session_cwd = cwd or os.getcwd()
+        self.files = cm.FileIndex(self.session_cwd, executor_required=self.files.executor_required)
+
     async def load_session(self, sid: str, resume: bool = True) -> None:
         got = await self.client.call(s.SessionResume(session=sid) if resume else s.SessionGet(session=sid))
         if sid != self.session:
             await self.leave_thread(sid)
         self.session = sid
         info = got["session"]
+        self.set_session_cwd(info.get("cwd"))
         self.busy = info.get("status") == "live"  # a turn already running there: LIVE, steer, ctrl+c stops it
         self.seat = self.seat or info.get("seat")
         self.model = info.get("model") or self.model
@@ -924,9 +932,10 @@ class ExoApp(App):
 
     async def new_session(self, kind: str = "", announce: bool = True) -> None:
         """A new thread of the same agent: a fresh focus with the same memory (D-028)."""
-        got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind))
+        got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind, cwd=self.new_cwd))
         await self.leave_thread()
         self.session = got["session"]["id"]
+        self.set_session_cwd(got["session"].get("cwd"))
         self.model = got["session"].get("model") or self.model
         self.window = self.capacities.get(self.model, 0)
         self.thread_label = self.label_of(got["session"])
@@ -1174,7 +1183,7 @@ class ExoApp(App):
             rel = m.group(1).rstrip(".,;:)")
             p = Path(rel).expanduser()
             if not p.is_absolute():
-                p = Path(os.getcwd()) / p
+                p = Path(self.session_cwd) / p
             if rel in seen or not p.is_file():
                 continue
             seen.add(rel)
@@ -1390,6 +1399,18 @@ class ExoApp(App):
                 return
             await self.new_session("private" if args.strip() == "private" else "")
             self.hint("new_thread")
+        elif name == "tab":
+            from exo_tui import restart as rs
+            path = Path(args.strip()).expanduser() if args.strip() else Path(self.session_cwd)
+            if not path.is_absolute():
+                path = Path(self.session_cwd) / path
+            path = path.resolve()
+            if not path.is_dir():
+                self.note("working directory must be an existing directory", "warn")
+                return
+            cmd = rs.new_command(str(path))
+            result = rs.open_tab(cmd)
+            self.note("opened a new conversation window" if result == "opened" else "open a new window and run: " + result)
         elif name == "intro":
             await self.intro("manual")
         elif name == "handoff":
