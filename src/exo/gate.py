@@ -6936,8 +6936,9 @@ def _norm_outcome(v: Any, where: str) -> str:
     return out
 
 
-def normalize_policies(raw: Mapping | None) -> dict:
-    """Fill defaults and check types. Raises PolicyError on a bad value."""
+def normalize_policies(raw: Mapping | None, errors: list[str] | None = None) -> dict:
+    """Fill defaults and check types. Raises PolicyError on a bad value. Given ``errors``, a malformed
+    ``gates.escalate`` is recorded there instead and only that section is repaired (#557)."""
     raw = dict(raw or {})
     pol = json.loads(json.dumps(DEFAULT_POLICIES))
     gates = dict(raw.get("gates") or {})
@@ -6974,11 +6975,21 @@ def normalize_policies(raw: Mapping | None) -> dict:
             raise PolicyError(f"gates.{k} must be a list")
         pol["gates"][k] = v
     if "escalate" in gates:
-        esc = gates["escalate"]
+        esc, bad = gates["escalate"], ""
         if not isinstance(esc, Mapping):
-            raise PolicyError("gates.escalate must be a mapping")
-        if "categories" in esc and not isinstance(esc["categories"], list):
-            raise PolicyError("gates.escalate.categories must be a list")
+            esc, bad = {"categories": esc if isinstance(esc, (list, str)) else []}, "gates.escalate must be a mapping"
+        elif "categories" in esc and not isinstance(esc["categories"], list):
+            bad = "gates.escalate.categories must be a list"
+        if bad:
+            if errors is None:
+                raise PolicyError(bad)
+            # #557: the default escalation plus each category the value names (as a string named them before #542)
+            errors.append(bad)
+            v = esc.get("categories")
+            names = (v if isinstance(v, list) else list(v) if isinstance(v, Mapping)
+                     else [c for c in CATEGORIES if c in v] if isinstance(v, str) else [])
+            esc = {**esc, "categories": list(dict.fromkeys(pol["gates"]["escalate"]["categories"]
+                                                            + [str(n) for n in names]))}
         pol["gates"]["escalate"].update(esc)
     if gates.get("ask_default"):
         pol["gates"]["ask_default"] = str(gates["ask_default"])
@@ -7646,6 +7657,11 @@ def _strictest(ds: list[Decision], why: list[str]) -> Decision:
                    displaced_asks=any(d.displaced_asks for d in ds))
 
 
+def stricter(ds: list[Decision]) -> Decision:
+    """The strictest of one line's decisions under several policies, merged as its readings merge (#557)."""
+    return _strictest(ds, [""] * len(ds))
+
+
 def _target_names(targets: Iterable[str]) -> str:
     """Targets as the principal reads them: `a`, `a or b`, `a, b or c`. An empty one is the repo gh picks with no
     `-R`, the current one."""
@@ -7971,9 +7987,10 @@ def policy_files(root: str | Path) -> list[Path]:
                                "approvals.yaml")]
 
 
-def load_policies(root: str | Path | None) -> dict:
+def load_policies(root: str | Path | None, errors: list[str] | None = None) -> dict:
     """Read `<root>/policies/` and `<root>/agents/` into normalized policies. A missing root or
-    missing files fall back to the defaults (which ask on anything irreversible or public)."""
+    missing files fall back to the defaults (which ask on anything irreversible or public).
+    ``errors`` is passed to normalize_policies."""
     if not root:
         return normalize_policies({"internal_names": internal_names(None)})
     root = Path(root)
@@ -7999,7 +8016,7 @@ def load_policies(root: str | Path | None) -> dict:
         raw["agents"] = _agent_names(root / "agents")
     raw["approvals"] = load_approvals(root)  # D-033
     raw["internal_names"] = internal_names(root)
-    return normalize_policies(raw)
+    return normalize_policies(raw, errors)
 
 
 # --- approval binding, authority and standing grants (D-033) ---------------------------------

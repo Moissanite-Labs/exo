@@ -78,6 +78,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Gate policy loading rejects a non-mapping `gates.escalate` or a non-list `escalate.categories` with
   `PolicyError` (#542). Bare lists no longer silently retain defaults, and strings no longer act as category
   lists by substring membership. Omitted settings and valid mappings keep their behavior.
+- A malformed `gates.escalate` no longer throws away the rest of the principal's policy in the exo-gate plugin
+  (#557, after #549 for #542). The plugin used the defaults for the whole policy, so a `deny`, `reserved`,
+  category, rule or matrix tightening beside `escalate: [payment]`, a null or bare `escalate:` (the template's block
+  with its lines commented out) or `categories: payment` decided lower than before #549, and the internal-names
+  scrub was dropped. The policy now keeps its other sections with the escalation repaired (the default escalation
+  plus the names given), each call is decided under it and under the defaults, and the stricter outcome stands
+  with the wider exposure and the violations and reserved parts of both.
+  The reason says `policy error, stricter of your policy and the defaults applies`. When the pinned or a changed
+  policy file has this error, the old and new decisions merge the same way until `/gate accept`, so the other's
+  violations stand at an equal outcome. While the error stands, a standing grant applies only where the decision
+  with the defaults in place of the broken file (and the decision model's verdict) also asks and finds it, so a
+  grant never allows a call they log, or ask for without that grant. The names a list or a string gives
+  (`escalate: [read]`, `escalate: read`) only add escalation, and `/gate` shows a standing policy error. Other
+  policy errors still use the defaults alone. `normalize_policies` and `load_policies` take an optional error
+  list; without it they raise as before.
 - The gate reads Codex `apply_patch` move destinations (`*** Move to:`) as file-write paths (#528).
   A move into a protected store or secret folder now asks, as an Add or Update header on that path does.
   Absolute links, home and environment spellings, distinctive relative names and braces use the existing checks.
