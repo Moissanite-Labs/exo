@@ -4176,6 +4176,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   auto-approving the floor like Claude Code's protected paths (the ledger is the audit of the bypass session
   itself); per-thread scope (plugin commands get no session, and two windows on one core would disagree about
   what the gate does).
+- **Amendment 2026-10-26 (#598):** lowering reaches only a turn the principal started. The core passes the turn's
+  author (D-040) into every tool hook; the gate lowers an ask only when that author is the principal, so a turn a
+  local caller, a peer, a bus wake or a job notice started in the same core keeps its card. A non-principal steer
+  stops the lowering for the rest of the turn. The bypass ledger row names the turn author.
 - **Numbering:** D-057 to D-061 are on main or open PRs, D-062 and D-063 on local exosphere branches, and one more
   is held by `fix/update-and-rounds`, so this is D-065.
 - **Docs:** `docs/GATE.md` "Bypass mode (D-065)", `docs/USER-GUIDE.md` §3 and §6, `docs/COMMANDS.md`,
@@ -4635,6 +4639,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-19 (reduction, #332):** a no-behavior-change reduction (dead code, merged duplicates, shorter equivalent forms) took the counted core from 15,870 on main to 15,776 (94 lines; it was 15,800 before #314). `CORE_FLOOR` stays 14,813: the count was already above the floor, and the floor never goes up, so setting it to the new count would have lifted the ceiling by about 960 lines. `CORE_HEADROOM` is back at 1,000 after #314's temporary raise to 1,058, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 37.
 - *2026-10-20 (#346, follow-up to #321):* CORE_HEADROOM raised by 29 to 1,029 for the job notice fixes (key redaction and event loop robustness). The lead schedules a reduction this week.
 - **Amendment 2026-10-20 (reduction, #373):** a no-behaviour-change reduction (dead overrides, merged duplicates, an exception clause the following handler could never reach, shorter equivalent forms) took the counted core from 15,841 on main to 15,801 (40 lines). `CORE_FLOOR` stays 14,813: the count is above the floor, and the floor never goes up. `CORE_HEADROOM` is back at 1,000 after #346's temporary raise to 1,029, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 12.
+- *2026-10-26 (#598):* CORE_HEADROOM raised by 11 to 1,011 for the turn-author plumbing into hooks, a security fix: the gate can now tell who started a turn and lowers bypass only for the principal's.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
 

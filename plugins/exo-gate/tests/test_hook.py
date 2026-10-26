@@ -46,6 +46,7 @@ def events(store):
 
 def call(ctx, tool, args, **kw):
     [cb] = ctx.hooks["pre_tool_call"]  # an async hook: the core awaits it
+    kw.setdefault("author", "principal:tui")  # the core sends who started the turn (#598); pass author="" for none
     return asyncio.run(cb(tool_name=tool, args=args, session_id="s1", tool_call_id="c1", turn_id="t1",
                           task_id="", **kw))
 

@@ -449,7 +449,8 @@ with the exact command. `/permissions` shows the counts. `/permissions ask` turn
 Only you can turn it on, from your own window or page. The agent, a tool it runs, a peer or a bus message cannot. It
 lasts until the core stops; the next start asks again unless you give the flag again. To make it the default for a
 seat, put `[permissions] mode = "bypass"` in the seat file (`docs/SEATS.md`); changing a seat file always asks you.
-On an Exo OS installation (a required tool executor) bypass is not available.
+On an Exo OS installation (a required tool executor) bypass is not available. It is your consent, and it covers only
+your own turns: a turn a peer, a bus wake, a job notice or a local caller started asks as if bypass were off.
 
 Details: `docs/GATE.md`.
 

@@ -65,6 +65,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tests/docs/test_docs_fix_sweep.py` reads the list the way the file words it ("D-078 and D-082 are free")
   and the `## D-` headings DECISIONS.md keeps, and fails naming the collision, so a stale list or a taken
   number cannot slip past review.
+- Permissions bypass lowered asks in turns the principal did not start (#598). The gate read the mode by session
+  alone, and no hook could tell who started a turn: the loop metadata carries the author (D-040) but stopped at
+  the user message. Now the loop passes the turn author into every `ToolContext` and tool hook kwarg (`author`,
+  beside `turn_id`), and the gate lowers an ask only when that author is the principal, so a turn a local caller,
+  a peer, a bus wake or a job notice started in the same core asks as if bypass were off. A non-principal steer
+  stops the lowering for the rest of the turn. The bypass ledger row names the turn author, and hooks that do not
+  take the new kwarg are unchanged.
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
   `reserved:` entry on a later path missed and an approver could have waved the write through:
