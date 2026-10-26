@@ -198,9 +198,11 @@ def test_a_reserved_entry_still_names_the_lines_target():
     assert not _store_parts(c)
 
 
-def test_a_line_that_already_reads_a_store_is_left_as_it_is():
+def test_a_line_that_already_reads_a_store_keeps_its_reading_beside_the_folders(_home):
+    # #320: the line keeps its reading, and the folder's read is a part beside it, as beside a cd form's secret line
     c = _bash_in("cd ~/.kube && cat config", "~/.ssh")
-    assert c.category == "credentials" and not _store_parts(c)
+    assert (c.category, c.target) == ("credentials", "config")
+    assert [p.target for p in _store_parts(c)] == [str(_home / ".ssh")]
 
 
 # --- the folder never takes the line's place (exo-36's review of #452) -----------------------------------------
@@ -400,14 +402,14 @@ def test_a_target_entry_on_the_folder_denies_a_store_write_there(tool, key):
 @pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir")])
 @pytest.mark.parametrize("cmd", ["cat id_rsa", "cat ./id_rsa"])
 def test_a_line_that_reads_a_secret_itself_keeps_its_own_target(cmd, tool, key):
-    """A limit in GATE.md: the line's own secret read wins, and the folder adds no part to it, so a target entry
-    on the folder only asks where the cd form denies. That is no lower than main. `deny: [credentials]` denies
-    both."""
+    """The line's own secret read keeps its target, and since #320 the folder's read is a part beside it, as beside
+    the cd form's secret line, so a target entry on the folder denies both forms (main asked for the folder form).
+    `deny: [credentials]` denies both."""
     c = _bash_in(cmd, "~/.ssh", tool=tool, key=key)
     cd = _bash(f"cd ~/.ssh && {cmd}")
     folder = _pol({"gates": {"deny": ["target:*/.ssh"]}})
-    assert c.category == "credentials"
-    assert (gate.decide(c, folder).outcome, gate.decide(cd, folder).outcome) == ("ask", "deny")
+    assert c.category == "credentials" and c.target == {"cat id_rsa": "", "cat ./id_rsa": "./id_rsa"}[cmd]
+    assert (gate.decide(c, folder).outcome, gate.decide(cd, folder).outcome) == ("deny", "deny")
     assert gate.decide(c, _pol({"gates": {"deny": ["credentials"]}})).outcome == "deny"
 
 
@@ -723,7 +725,9 @@ def test_a_nested_line_is_checked_once_for_the_tool_folder(folder, _home):
             c = gate.classify({"tool": "bash", "args": args})
             runs.append(time.process_time() - start)
         took.append(min(runs))
-        assert not _store_parts(c) and "too many to resolve" not in c.summary
+        # #320 reads the word that is a `$( )` alone as `*` in the folder, as after `cd` into it: one store read
+        assert len(_store_parts(c)) == ("cwd" in args)
+        assert not any("too many to resolve" in p.summary for p in gate._each_part(c))
     assert took[0] < 2 * took[1] + 0.05, took
 
 

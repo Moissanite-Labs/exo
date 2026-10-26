@@ -10,6 +10,8 @@
   exo web [--port N ...]                   the command centre web client (starts the shared core if none is running)
   exo   (no command)                       the terminal client in this directory, same as `exo tui`;
                                            flags pass through: exo --resume, exo --seat NAME, exo --no-intro
+  exo --skip-permissions                   the terminal client with permissions bypass for this run of the
+                                           core: no approval asks except Exo's own records and secrets (D-065)
   exo resume [flags]                       reopen the last session; same as `exo --resume`
   exo tui [--resume] [--session ID] ...     the terminal client (pip install 'exo[tui]')
   exo update [--dry-run]                   upgrade Exo in place, print old -> new, quick self-check

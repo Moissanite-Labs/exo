@@ -508,10 +508,11 @@ def test_a_hop_keeps_the_reserved_hits_of_its_own_part(command, hits):
 ])
 def test_a_line_lowered_on_purpose_under_a_rule_on_costly_parts(command, direct):
     """D-038 amendment for #316, (b): sudo or a privileged wrapper makes costly only the deciding part of a nested
-    line it runs. A >( ) or $( ) in that line now reads the ssh as fed, so the new part decides it and the line asks,
-    as main decides the same line with a direct `<`. A category line that denies shell still sees the ssh part."""
+    line it runs. A >( ) or $( ) in that line now reads the ssh as fed, so the new part decides it, as main decides
+    the same line with a direct `<`. #320 adds a costly copy of each part the wrapper runs beside it, so the rule
+    denies both lines. A category line that denies shell still sees the ssh part."""
     c, d = gate.classify_shell(command), gate.classify_shell(direct)
-    assert gate.decide(c, COSTLY_DENY).outcome == gate.decide(d, COSTLY_DENY).outcome == "ask", (c, d)
+    assert gate.decide(c, COSTLY_DENY).outcome == gate.decide(d, COSTLY_DENY).outcome == "deny", (c, d)
     assert gate.decide(c, {"gates": {"categories": {"shell": "deny"}}}).outcome == "deny"
 
 
