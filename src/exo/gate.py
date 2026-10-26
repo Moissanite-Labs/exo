@@ -3764,8 +3764,12 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c.target = dest if "unread hops" in c.signals else (c.target or dest)
         # #399: the host stands for an empty other target too, as for an empty target, so a rule on it sees each.
         # The copy of the action on it among the parts gets the host as well: a deny, reserved or rule entry on the
-        # host's category sees it also when another part of the line outranks this one.
-        c.alt_targets = [t for t in dict.fromkeys(t or dest for t in c.alt_targets) if t != c.target]
+        # host's category sees it also when another part of the line outranks this one. Where the remote command's
+        # own part takes the target (#493), the hop's host stays among the other targets, so a rule on the host
+        # reaches the line as a deny or reserved entry reaches the hop's part (D-075), and a scope or a standing
+        # grant keyed on a local path cannot cover the hop through the remote path alone.
+        c.alt_targets = [t for t in dict.fromkeys([t or dest for t in c.alt_targets] + [host, dest])
+                         if t != c.target]
         c.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in c.parts]
         if c.displaced is not None:           # #454: the part a sudo write displaced gets the host, as it did
             q = c.displaced                   # and so do its other targets and their copies (#399)
