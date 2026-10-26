@@ -4154,6 +4154,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `plugins/exo-gate/tests/test_unseen_body.py` shows the hook reading the `ordinary` reading (a body file beside a
   `config.json` write stays unread, the post asks once, a required executor refuses it); and the differential,
   `--jobs 2`, lowers nothing on the built-in corpus (9,911 actions, 87 policies) or the aimed one (3,012, 138).
+- **Amended 2026-10-26 (after #587 merged as a8a4ffbd):** #320 matches a store name an expansion hides with
+  `_store_glob`, which takes the home's names from `_HOME_PROTECTED`. #587's merge put `config.json` there, and
+  `_store_glob` counted it without `_config_on`, so the call was not marked and kept no reading as before D-074, or that
+  reading counted the file too. Such a line lost main's reading: under `matrix_deny_cells`,
+  `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/con$(:)fig.json' h` asked where main 3e5620b3 denied it,
+  and so did a delete beside such a name under `delete: deny` with a rule allowing `^rm`, and an `echo x >` to it over
+  ssh under an entry on `opaque_exec` at `internal` exposure (gate_diff from ad26a9d8 to a8a4ffbd: 269 pairs lowered
+  on 141 actions). `_store_glob` now counts the home's `config.json` only while it counts (`_counts`), so the call is
+  marked and its reading as before is main's. The store write itself is unchanged: such a name, an unknown name in the
+  home itself (`~/.exo/$(date).json`), and a principal store's `config.json` named through an expansion
+  (`~/.exo/principals/a/con$(:)fig.json`, though its literal name keeps its class) still ask.
 - **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `docs/PEERS.md` "Limits", `docs/USER-GUIDE.md` §6,
   `CHANGELOG.md`.
 
