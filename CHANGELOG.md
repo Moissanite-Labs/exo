@@ -122,6 +122,25 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   float in any of them got no reply at all, and so did a negative length. A negative `since` replayed from the
   start, and a `since` past SQLite's range opened the event stream, then failed in the replay and left a
   subscription behind. Each is now a 400. A length over 8 MB is still 413, and one past 2^63 - 1 is a 400.
+- A long private thread's calls stay bounded while its own summaries are pending (#244). A private thread keeps
+  a summary tree of its own. Its view ends at its last summary, so every span after it rode in the tail, pending
+  ones included. The turn waits up to `overflow_settle` for the leaves, so a fast summarizer bounds the call. A
+  slow one did not: with 300 stored messages of 1.5k characters, the first call carried about 115k tokens, and the
+  call after the first 8 of 36 leaves landed about 91k. A very long thread could exceed the model's window and
+  fail the turn. While that tree has leaves pending, the call now leaves out their spans, oldest first and a whole
+  leaf at a time, until what comes before the turn fits `view_budget`. A marker stands in each gap:
+  `[earlier messages are being summarized]`. Both calls above are now under 5k tokens. So is a call made after a
+  later leaf landed first, when the private view showed the pending leaves before it verbatim. The turn is never
+  cut: its question and all after it, tool rounds and context notes included, also when the question is in such a
+  leaf. Nor is a span that is not pending, such as one skipped for good, and a tool call keeps its results.
+  Tool-call arguments count in full. The cut moves a whole leaf at a time, so calls between moves share their
+  cached prefix. The private tree's turn now also waits up to `overflow_settle` when the cut would apply, where it
+  did not wait before, so a leaf the call just scheduled can land first. It waits for that tree's own jobs only,
+  not for the agent tree's. So does its wait when the private view overflows, which also waited for the agent
+  tree's jobs before (#529). `/context` finds the turn as the call does, by its turn id, so during a turn it shows
+  the question kept after a steer. Between turns it keeps the last turn whole, which the next turn's call can cut.
+  It now gives the first stored message of the tail as `from_seq`, not the unstored private view or marker (D-068
+  amendment).
 - A shell call's own folder argument is read for secret stores (#311). The bash tool runs a command in
   its `cwd`, and Hermes' `terminal` and Codex's `exec_command` in their `workdir`. The gate read only
   the command text and the session's folder, so `cat config` with `~/.kube` as `cwd` was a plain read
@@ -1188,8 +1207,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   to summarize stay whole. Plugin hooks never see that tree, and no other thread, agent summary or search sees it
   either. A fork made after an undo copies only the summaries that still match its renumbered messages. A long
   private thread from before this fix gets its leaves on its next turn, and that turn waits up to
-  `overflow_settle` for them, as the agent tree's turns do. With a slow summarizer its first calls can still carry
-  most of the thread.
+  `overflow_settle` for them, as the agent tree's turns do. With a slow summarizer its first calls could still carry
+  most of the thread, until #244.
 - exo-context no longer pins peer, bus or job text as the principal's words (D-040). `select_context` now gets each
   message's author, and handoff extraction skips every user message that is not the principal's. A peer message or
   a job notice that said "From now on ..." was put back into the system message as a principal ruling once it left
