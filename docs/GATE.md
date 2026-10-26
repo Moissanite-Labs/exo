@@ -1807,8 +1807,8 @@ whole line in one pass:
   message, an `echo`, `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
 
 The check runs on a line that is not `credentials` already, and the name it reads is the line's
-target. A line can be `credentials` only through a store named in a spelling main did not read
-(#446). Main read the name on such a line, so the name stays a credentials part (#513 review):
+target. Since #446 a line can be `credentials` through nothing but a store named in a spelling main
+did not read. Main read the name on such a line, so the name stays a credentials part (#513 review):
 under `deny: [target:*hosts.yml]`, `cd ~/.config/gh && cat /pro?/self/environ hosts.yml` is
 denied, as on main.
 
