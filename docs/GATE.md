@@ -2283,7 +2283,9 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of `$EXO_HOME`,
 `$EXO_HOME/run` (the core and agent sockets), `$EXO_HOME/seats`, `$EXO_HOME/bus` (the bus registry
 that signed seat answers and the relay trust, the relay database and its `-wal`, `-shm` and
-`-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435), `$EXO_HOME/update`
+`-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435) and the other folders Exo loads
+code from (#459, below: the venv, Hermes' plugin home, the source copy and the folders
+`$EXO_PLUGIN_DIRS` name), `$EXO_HOME/update`
 (`allowed_signers`, the signed-update trust pin of D-073, #133), `$EXO_HOME/config.json` (D-074,
 #125: the plugins the core loads, this gate among them, as `core_plugins`, their config, the `venv`
 that runs Hermes and Exo, each provider's `base_url` and headers, and the `principal` a peer key
@@ -2294,8 +2296,9 @@ file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and `EXO_B
 the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_`
 name, and both spellings when both are set. Distinctive names match anywhere, so a relative
 `policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or
-`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins`, `.exo/update` and
-`.exo/config.json` count whatever `EXO_HOME` is. A project folder called `update` is ordinary. Only a
+`update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins`, `.exo/venv`, `.exo/src`,
+`.exo/hermes-home/plugins`, `.exo/update` and `.exo/config.json` count whatever `EXO_HOME` is. A project
+folder called `update` is ordinary. Only a
 file in it named `allowed_signers` asks. `config.json` is not a distinctive name: only the home's own
 file counts, so a project's `config.json`, and `config.json.bak`, `config.json~` or `config.jsonl`
 beside the home's, keep their class (one under `plugins/` asks with that folder, #435). A relative
@@ -2316,6 +2319,30 @@ it, with the folder spelt with `~`, `$HOME` or `$EXO_HOME`, as its resolved path
 it, or as a relative `.exo/plugins/...`. That covers a plugin's own files too, such as its
 `config.json`. A read with a read command stays a read: `cat`, `ls`, `grep -r`, `find`, `diff`,
 `git -C <folder> log`, and the read tools (`read_file`, `list_dir`, `grep`, `glob`).
+
+The other code folders (#459). Exo loads code from four more, and a write into any of them is a
+`store_write` in the same ways the plugins paragraph names, with the same reads left alone. They are
+read as the environment the gate sees spells them, as EXO_HOME is. The venv, `${EXO_VENV:-$EXO_HOME/venv}`
+(scripts/install.sh), whose `site-packages` holds the `exo` package and this gate: a changed `gate.py`
+decides every later call, and a `.pth` file in `site-packages` runs on every interpreter start, so `cp
+evil.py ~/.exo/venv/lib/python3.13/site-packages/exo/gate.py` or `cp x
+~/.exo/venv/lib/python3.13/site-packages/evil.pth`, `pip
+install --target` or `--prefix` or `--root` into it and `git clone` into the venv ask. Hermes' plugin
+home, `${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}/plugins`, which the core loads exo-gate from with
+`--with-hermes`. The source copy, `$EXO_HOME/src`, which the installer clones a git URL into and `exo
+update` refreshes, and whose copy `exo web` reads plugins under `<package>/../../plugins` of.
+And the folders `$EXO_PLUGIN_DIRS` names (`default_dirs` searches them first and keeps the first plugin
+found of a name, so a plugin of a core name there takes the real one's place). Each absolute spelling is
+checked against the folder's own, so a link into or out of it counts both ways, and a `cd` into one, or a
+`git -C` on it, makes the relative names after it count. Not code, and not protected: a `.venv` folder
+under the home (no install script makes one, EXO_VENV is the only override), the rest of
+`hermes-home` (Hermes' own state, its database and registry, not the code), a relative `EXO_VENV` or
+`EXO_PLUGIN_DIRS` value (a constant of the tool's working folder, which the gate cannot see), and a
+Hermes home that only config.json names (D-074: the gate reads no config.json content). The cost: a `pip
+install` into the venv Exo itself runs from now asks; everyday work installs into a project or scratch
+venv, not into `$EXO_HOME/venv`, so the ask is rare. Editing a checkout named in `$EXO_PLUGIN_DIRS`
+now asks on every write, so leave the variable unset while the principal edits, or point it at the
+checkout only for sessions that must load it.
 
 What a policy can still do there. As for every protected folder, the call keeps its own reading as a
 part. A shell line keeps its own command. A file tool keeps a `local_write` part for each file it
@@ -2350,10 +2377,8 @@ only read but that the gate reads as `shell` or `opaque_exec`: `sed -n 1,10p`, `
 goes to a file elsewhere. The installer puts every core plugin in the folder, so read plugin code
 with `cat`, `grep` or a read tool. Main reads `policies/` and `state/` the same way. Running a
 plugin's own script by its path (`~/.exo/plugins/foo/tool.sh`) asks the principal alone too, where
-before a seat could answer its `opaque_exec` ask. Not covered here: the folders in
-`$EXO_PLUGIN_DIRS`. Section 4 of the developer guide points that variable at a checkout's `plugins/`,
-so a principal-only floor there would ask on every edit, and protecting it is a separate change. The
-installer and `exo update`, which copy Exo's plugins into the folder, stay `opaque_exec`. A copy that
+before a seat could answer its `opaque_exec` ask. The installer and `exo update`, which copy Exo's
+plugins into the folder, stay `opaque_exec`. A copy that
 lands on the folder by a source's name (`cp -r /tmp/x/plugins ~/.exo/`) or an archive unpacked into
 the home (`tar -xf x.tar -C ~/.exo`) is not seen as a write to it, as for every protected folder. Nor
 is a relative path written by a tool whose working folder is in the plugins folder or in `$EXO_HOME`
@@ -2397,7 +2422,8 @@ policies)/default.yaml`, `cp x ${x:-$HOME/.exo}/policies/a`, `cd ~/.e$(:)xo && c
 `_STORE_NAMES` matches, from the same list, so the bus store and the update signers file count too
 (`cp x ~/.exo/bu$(printf s)/x`, `cp x ~/.exo/b$(printf u)s/registry.json`, and `cp x
 ~/x/update/allowed_$(printf s)igners`, which matches in any folder as the unsplit name does), and so
-does the plugins folder (#435) in each form `policies/` is read in (`cp x
+does the plugins folder (#435) and the other code folders (#459, `venv`, `src`, `hermes-home/plugins`) in
+each form `policies/` is read in (`cp x
 ~/.exo/plug$(:)ins/foo/__init__.py`, `cp x ${x:-$HOME/.exo}/plugins/foo/x.py`, `cd ~/.e$(:)xo && cp
 x plugins/foo/x.py`, `tar -C ~/.exo/plug$(:)ins -xf evil.tar`). As for a glob read, a match needs a
 part with three characters of its own before its extension, and a store file's name needs them
