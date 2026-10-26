@@ -385,6 +385,59 @@ def test_each_store_path_of_a_file_tool_is_a_part(monkeypatch):
         assert (d.outcome, d.rule) == ("deny", "deny"), (src, d)
 
 
+# #514: the scan took the first store path a write names for the target and stopped there, so a target entry on a
+# later one missed: the write asked, and an approver could have waved it through. Each store path the call writes is
+# a store write part now, with that path as its target, as beside a secret (#447), so the entry matches whichever
+# path it names. The first path still leads, as before.
+MULTI_STORE_TARGETS = [
+    ({"tool": "terminal", "args": {"command": "cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml"}},
+     "~/.exo/policies/gates.yaml"),
+    ({"tool": "copy_file", "args": {"source": "~/.exo/policies/a.yaml",
+                                    "destination": "~/.exo/policies/gates.yaml"}},
+     "~/.exo/policies/gates.yaml"),
+    ({"tool": "move_file", "args": {"source": "~/.exo/policies/a.yaml",
+                                    "destination": "~/.exo/policies/gates.yaml"}},
+     "~/.exo/policies/gates.yaml"),
+    ({"tool": "delete_file", "args": {"paths": ["~/.exo/policies/a.yaml", "~/.exo/policies/gates.yaml"]}},
+     "~/.exo/policies/gates.yaml"),
+]
+
+
+@pytest.mark.parametrize("action,store", MULTI_STORE_TARGETS)
+def test_a_target_entry_on_a_later_store_path_matches(monkeypatch, action, store):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    c = gate.classify(action)
+    assert store in [p.target for p in gate._each_part(c) if p.category == "store_write"], (action, c)
+    assert c.target != store, (action, c)           # the first path leads, as before
+    assert gate.decide(c).outcome == "ask", action
+    d = gate.decide(c, gate.normalize_policies({"gates": {"deny": ["target:*/gates.yaml"]}}))
+    assert (d.outcome, d.rule) == ("deny", "deny"), (action, d)
+
+
+def test_a_later_store_path_changes_no_call_that_named_one_path(monkeypatch):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    pol = gate.normalize_policies({"gates": {"deny": ["target:*/gates.yaml"]}})
+    # the first path alone: no entry on it, so the floor asks as before
+    for action in ({"tool": "terminal", "args": {"command": "cp ~/.exo/policies/a.yaml ~/.exo/policies/b.yaml"}},
+                   {"tool": "copy_file", "args": {"source": "~/.exo/policies/a.yaml",
+                                                  "destination": "~/.exo/policies/b.yaml"}},
+                   {"tool": "delete_file", "args": {"paths": ["~/.exo/policies/a.yaml"]}}):
+        c = gate.classify(action)
+        assert gate.decide(c, pol).outcome == gate.decide(c).outcome == "ask", (action, c)
+    # `rm` of both paths was denied already: its delete part names the last path
+    rm = gate.classify({"tool": "terminal",
+                        "args": {"command": "rm ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml"}})
+    assert gate.decide(rm, pol).outcome == "deny", rm
+    # a read of the store stays a read, with no store write part
+    c = gate.classify({"tool": "read_file", "args": {"path": "~/.exo/policies/gates.yaml"}})
+    assert c.category == "read" and gate.decide(c).outcome == "allow", c
+    # beside a secret the store paths were parts already (#447): the principal answers alone, as before
+    c = gate.classify({"tool": "copy_file", "args": {"source": "~/.ssh/id_rsa",
+                                                     "destination": "~/.exo/policies/gates.yaml"}})
+    approvals = gate.normalize_approvals({"approvers": {"credentials": ["principal", SEAT]}})
+    assert gate.call_approvers(c, approvals) == ["principal"] and gate.no_grant(c), c
+
+
 # #494: with no secret beside it, a move or rename of a folder that holds the store is a store write, as `mv` is,
 # under any of the keys a file tool names a path by. A read-verb tool that writes what it took where its path
 # arguments say (`download_file`, `export_report`) reads the store as a write's too. A copy only reads the store,

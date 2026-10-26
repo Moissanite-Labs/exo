@@ -1230,6 +1230,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-26 (issue #514):* a store write names every store path it writes a target, not only the
+  first one the scan meets. The scan returned at the first store path and made one `store_write` part of it, so a
+  `target:` deny or `reserved:` entry on a later path missed: `cp ~/.exo/policies/a.yaml
+  ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from `a.yaml` to `gates.yaml` and `delete_file` on
+  both paths asked under `deny: ["target:*/gates.yaml"]`, where an approver could have waved the write through.
+  The scan now keeps each store path a shell line or file tool writes, in the order it meets them, and each is a
+  `store_write` part with that path as its target, as beside a secret (#447). The first path still leads the line,
+  `rm` of both paths was denied already (its `delete` part names the last path), reads keep their class, and the
+  first path alone decides as before. Each new part only adds a match, so no decision is lower; gate_diff ran
+  main 5a5a535d against this change and found 0 lowered.
 - *Amendment 2026-10-26 (issue #461):* a gh download or clone writes the store the way `curl -o` and
   `git clone` do. gh's download and clone subcommands read on GitHub, so the store check took a line whose
   every part reads as a read for a read and never looked at their output paths: `gh release download -O
