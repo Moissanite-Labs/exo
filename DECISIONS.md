@@ -517,14 +517,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   sender whose key the receiver does not hold, or holds an old copy of, with an unsigned `denied` it must refuse,
   so it would learn nothing of why. Two review nits ride along: the presence signature is checked over the entry's
   JSON as written, so a newer `exo` that signs a field this one does not know still verifies, and a first reply
-  that is not a mapping fails the send as a refused reply. Not changed, and named in `docs/PEERS.md` "Limits": the
-  presence signature binds the socket path an entry names, not the process listening there. A program running as
-  you can rename a live daemon's socket aside, listen at the old path and relay each connection: the entry
-  verifies, the send succeeds, and the relay reads the text; a program that takes over the path, or writes a
-  stopped daemon's saved entry back, reads it too before the send fails. So the #523 claim that a forged file no
-  longer receives the messages holds for the file, not for a listener at the path a genuine file names. Candidate
-  fixes are tracked in #637: compare the connection's peer credentials (`SO_PEERCRED`, `LOCAL_PEERPID`) with the
-  signed pid, or encrypt the body to the pinned key. A signed challenge would not help: a relay passes it through.
+  that is not a mapping fails the send as a refused reply.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).

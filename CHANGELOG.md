@@ -1736,9 +1736,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   a send to a #523 build still completes. A send that fails on its first reply has already delivered the text; the
   user guide now says to check with the peer before sending again. Also: a presence entry's signature is checked over
   its JSON as written, so a newer `exo` that signs an extra field still verifies, and a first reply that is not a
-  mapping fails the send with a plain error. Not fixed, now named in `docs/PEERS.md` "Limits": the signature binds the
-  socket path, not the listener, so a program running as you that relays a renamed or taken-over socket path still reads
-  the message text (D-026 amendment).
+  mapping fails the send with a plain error (D-026 amendment).
 - `exo chat` approvals no longer fail open. A reply that only starts with a or y (`abort`, `yeah no`) used to
   approve. Now a reply is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else
   denies.

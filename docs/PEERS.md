@@ -244,15 +244,3 @@ fields under its signature, which no receipt has: `receipt` refuses it, and the 
 to a #523 build still completes. That matters because the first reply is checked after the text has gone: when a send
 fails on its reply, the peer may already have the message, and only the outcome is refused (D-026 amendment, #603
 review).
-
-The signature binds the socket path an entry names, not the process listening there. A program running as you
-can rename a live daemon's socket aside (its listener keeps serving the new name), listen at the old path itself
-and pass each connection through: the entry still verifies, the send succeeds and the outcome is published, and
-that program has read the message text. Without a relay the text leaks the same way, and only then does the
-send fail on the unsigned answer: a program that takes over a live daemon's socket path, or that writes a
-stopped daemon's saved signed entry back and listens at its path. So a forged file no longer receives the
-messages, but a listener at the path a genuine entry names still does. This is not new with #523. A
-fix needs the listener itself checked, by comparing the peer credentials of the connection (`SO_PEERCRED`,
-`LOCAL_PEERPID`) with the pid the signed entry names, or the body encrypted to the pinned key; a signed challenge
-does not help, since a relay passes it through to the real daemon. Until then, a program outside the gate that
-runs as you can read peer message text (#637).
