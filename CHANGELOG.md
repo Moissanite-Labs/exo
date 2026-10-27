@@ -25,6 +25,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
+
 - `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last
   segment of a dotted key. Both now mask a secret at any level of the key path (a secret-shaped name, a container
   under one, and a literal under `env` or `headers`), and `config set` refuses the same shapes. `${VAR}` references
