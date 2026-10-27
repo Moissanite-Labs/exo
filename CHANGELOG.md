@@ -628,7 +628,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   a backtick command) was read as no glob at all. Each logged as a plain read. The samples now hold
   `.env.local`, a glob in another folder is judged by its last component against the store names,
   and an expansion that ends a word after literal text reads as `*` to the glob check. An expansion
-  in the middle of a word (`build-$(date +%s).log`) still reads.
+  in the middle of a word (`build-$(date +%s).log`) still reads. Repair 2026-10-27, after the
+  2026-10-21/22/25 reviews: the last-component rule now also instantiates the component's wildcards,
+  so `.env.prod*`, `.env.???`, `.env.[pd]rod` and `.env.{a,b}*` ask; it runs whenever the head match
+  gives nothing, so `~/*/.env.*` asks; and a trailing expansion reads as `*` even behind an earlier
+  expansion (`$APP_DIR/.env.$STAGE`, `.env.$A$B`).
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block

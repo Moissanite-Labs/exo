@@ -45,3 +45,42 @@ def test_an_env_suffix_read_asks(line):
 ])
 def test_ordinary_words_keep_their_class(line):
     assert outcome(line) == ("read", "allow")
+
+
+@pytest.mark.parametrize("line", [
+    "cat .env.prod*",                           # a suffix glob spells a store name once instantiated
+    "cat .env.p*",
+    "cat proj/.env.prod*",
+    "cat .env.???",
+    "cat .env.[pd]rod",
+    "cat .env.{a,b}*",                          # brace-expanded before the glob check
+])
+def test_a_suffix_glob_asks(line):
+    assert outcome(line) == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("line", [
+    "cat $DIR/.env.$STAGE",                     # an earlier expansion no longer disables the trailing reading
+    'cat "${PROJECT_DIR}/.env.${STAGE}"',
+    "cat $PWD/.env.$STAGE",
+    "cat .env.$A$B",                            # a run of trailing expansions collapses into one `*`
+    'cat "$APP_DIR/.env.$STAGE"',
+    "cat $dir/.env.$X",
+    'cat "$PWD/.env.$STAGE"',
+    "cat .env.$STAGE$REGION",
+    "cat .env.$X$(hostname)",
+    "cat ~/*/.env.*",                           # the last-component rule runs when the head match gives nothing
+    "cat $HOME/*/.env.*",
+    "cat ~/*/server.*",
+])
+def test_a_trailing_expansion_after_an_earlier_one_asks(line):
+    assert outcome(line) == ("credentials", "ask")
+
+
+@pytest.mark.parametrize("line", [
+    "ssh server.$DOMAIN",                       # fail closed, as its bare-glob twin already is on main
+    "curl https://auth.$DOMAIN",
+    "ping server.*",
+])
+def test_a_trailing_expansion_on_a_non_file_word_asks_like_its_glob_twin(line):
+    assert outcome(line) == ("credentials", "ask")
