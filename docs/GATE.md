@@ -2417,7 +2417,13 @@ reads the call that way too, with budgets of its own, and adds that reading at t
 call's `also` readings (`gate.readings`); `decide` keeps the stricter decision, with both readings'
 reserved parts and violations. Each of the two readings keeps its own reading joined at a
 backslash-newline in a `$` form (#584) and its own reading as before D-074 (`ordinary`), each with
-budgets of its own, and `gate.readings` lists every one. A part bash's reading adds can lead the
+budgets of its own, and `gate.readings` lists every one. The gate's other readings hold for a
+command bash runs from a word as for the command alone: an ssh host stays a target beside the
+remote command's path (#493), each store path a write names is a target (#514), a write into a
+folder Exo loads code from (#459), a gh download into the store (#461) and a glob in a secret
+store's folder (#594) ask, and a here-document body in the line ends only on its exact delimiter
+line (#328), so `cat <<EOF`, a line `${v:-$(git push --force origin main)}` and a line `EOF` is
+denied under a push deny. A part bash's reading adds can lead the
 line and turn a category line or the opaque floor (a push a word hid outranks a visible delete
 beside it; `deny: [delete]` still denies the line, as a deny matches any part, D-075). The second
 reading keeps such a line at its decision before, and it reads the words dash (the `/bin/sh`
