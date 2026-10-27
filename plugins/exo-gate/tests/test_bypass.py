@@ -269,5 +269,5 @@ def test_permissions_command_is_registered():
     ctx = Ctx()
     hook.register(ctx)
     handler, desc, hint = ctx.commands["permissions"]
-    assert "except changes to Exo's own records and reading secrets" in desc and hint == "[status] | bypass | ask"
+    assert "except changes to Exo's own records and reading secrets" in desc and hint == "[status] | full <session-id|all> | bypass | ask"
     assert handler("json")["mode"] == "ask"

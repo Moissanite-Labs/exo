@@ -24,7 +24,7 @@ centre's source. A core that does not handle a command yet answers 501.
                                            commands.list
   GET  /api/complete/files?q=&session=     files under the session's folder for @ (D-037); the server guards it
   GET  /api/permissions                    command.run permissions json: the mode and its counts (D-065)
-  POST /api/permissions                    command.run permissions {mode: bypass|ask}; the core checks the caller
+  POST /api/permissions                    command.run permissions {mode: bypass|ask|full, session?}; the core checks the caller
   GET  /api/tasks                          tasks.list
   GET  /api/tasks/<task>                   command.run subagent open   the child's task row and session tail (#97)
   POST /api/tasks/<task>/steer             command.run subagent send   {text}; the core allows the principal only
@@ -48,7 +48,7 @@ MAX_TEXT = 50_000
 MODES = ("send", "queue", "steer")
 VERDICTS = ("accept", "edit", "reject", "should_have_been")
 READ_COMMANDS = ("context", "findings", "trace")   # read-only reports the core answers itself
-PERMISSION_MODES = ("bypass", "ask")
+PERMISSION_MODES = ("bypass", "ask", "full")
 PANEL_ACTIONS = ("opened", "dismissed", "acted", "ignored")
 SCHEDULE_ACTIONS = ("list", "add", "remove", "pause", "resume", "run_now")
 TIERS = ("fast", "standard", "deep")
@@ -250,8 +250,25 @@ async def _permissions(c, p, q, body):
 async def _permissions_set(c, p, q, body):
     """Switch the mode. Only the principal may turn bypass on; the core decides that from the connection."""
     mode = _choice(body, "mode", PERMISSION_MODES)
+    sid = None
+    if mode == "full":
+        sid = _str(body, "session", required=True, limit=120)
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", sid):
+            raise BadRequest("Choose an existing session")
+        status = await _permissions(c, p, q, {})
+        if status.get("supports_full") is not True:
+            raise SourceError("unsupported", "This core does not support session-scoped full permissions")
+        if status.get("full_available") is False:
+            raise SourceError("unsupported", "Full permissions are unavailable with the required tool executor")
+        if sid == "all":
+            if status.get("supports_full_all") is not True:
+                raise SourceError("unsupported", "This core does not support full permissions for all sessions")
+        else:
+            snapshot = await c.source.call(s.SessionGet(session=sid))
+            if (snapshot.get("session") or {}).get("id") != sid:
+                raise BadRequest("Choose an existing session")
     try:
-        res = await c.source.call(s.CommandRun(name="permissions", args=mode))
+        res = await c.source.call(s.CommandRun(name="permissions", args=("full " + sid) if sid else mode, session=None if sid == "all" else sid))
     except SourceError as exc:
         if exc.code == "forbidden":
             raise Forbidden(exc.message) from None
@@ -311,8 +328,7 @@ WEB_COMMANDS = {"rounds": "tool-round limit for new turns in this window: defaul
                 "default": "pick or set the default model for new threads",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
                 "new": "start a new thread", "rename": "give this thread a new title",
-                "permissions": "ask before risky calls, or bypass: auto-approve everything except changes to "
-                               "Exo's own records and reading secrets",
+                "permissions": "ask, floor-preserving bypass, full for this thread, or explicit full all for every session",
                 "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
 # The names of the shared table that core plugins serve through commands.list, not the terminal client: credited to
 # the core when listed, and unknown (so sent, as in the TUI) when their plugin is not loaded.

@@ -702,10 +702,10 @@ export function mount(root) {
     }
     if (command && command.name === "new") { input.value = ""; help.sent(text); create(command.args); return; }
     if (command && command.name === "permissions") {   // D-065: the mode lives in the core; the banner follows it
-      input.value = ""; help.sent(text);
-      const mode = command.args === "status" ? "" : command.args;
+      const mode = command.args === "status" ? "" : command.args === "full all" ? "full" : command.args;
       try {
-        const out = mode ? await permissions.set(mode) : permissions.describe(await permissions.refresh());
+        const out = mode ? await permissions.set(mode, command.args === "full all" ? "all" : current) : permissions.describe(await permissions.refresh());
+        if (input.value === text) { input.value = ""; help.sent(text); }
         push({ kind: "report", id: "rep" + Date.now(), title: "permissions", text: typeof out === "string" ? out : permissions.describe(permissions.current()) });
       } catch (e) { fail(e); }
       return;
