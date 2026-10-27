@@ -724,15 +724,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   does. sudo's options are read as getopt reads them (`-Es`, `-iu root`, `--user=root`, `--user root`, `--`), behind
   `env`, `nice`, `timeout`, `command` or another sudo too. A word the gate cannot read that may come to `-s` counts as
   a shell option: an option word with an expansion or an unquoted glob (`sudo -"$X"`, `sudo -?`; not `sudo -u"$U"`,
-  whose expansion is the value), an option's value that may split into several words (`sudo -u $U`, and a brace set,
-  expanded: `sudo -u {root,-s}` is `sudo -u root -s`), and an operand that may expand to an option (`sudo "$X"`,
-  `sudo ?s`); when the line feeds such a command a stdin, it is read as the shell's too, since the word may take the
-  next one as its value (`sudo -$X root` may be `sudo -iu root`). With a command, sudo runs `$SHELL -c` on its words
-  joined with the shell's metacharacters escaped, and that text is read too where it may differ from the words (a `$`, a
-  newline, an empty word, an option the prefix reader misread: `sudo -iu root rm -rf /srv/data` is `delete`), and such
-  a line still asks as code the gate cannot fully see, as it did as an unknown program; a word the gate cannot read
-  asks. The line's own parts stay beside the new ones, and the call is also read as before (`gate.readings`) and
-  decided on each reading, so no decision is lower than before.
+  whose expansion is the value), an option's value that may split into several words (`sudo -u $U`, a bracket glob
+  such as `sudo -u [!a]s`, and a brace set, expanded with a word it makes twice kept: `sudo -u {root,-s}` is
+  `sudo -u root -s`, `sudo -p {-s,-s}` is `sudo -p -s -s`), and an operand that may expand to an option (`sudo "$X"`,
+  `sudo ?s`, `sudo ~-`); when the line feeds such a command a stdin, it is read as the shell's too, since the word may
+  take the next one as its value (`sudo -$X root` may be `sudo -iu root`). The options are then also read from the
+  word after the next one, and a brace value that ends them elsewhere has its command read as sudo runs it, so
+  `sudo -u {root,-p} echo rm -rf /srv/data` (prompt `echo`, then `rm`; allowed before, on main too) is `delete`, and
+  so is `sudo -E{,p} echo sudo -E{,p} echo rm -rf /srv/data`, whose moved words are read as bash expanded them too;
+  such readings add only what their command is known to do (`sudo -u $U cat /etc/hosts` stays a read), and a nest of
+  them past the depth cap asks. `sudo -u $U` alone, `sudo -u $U -l` and `sudo -u $U -v` now ask. A long chain of sudos
+  is read in linear time. With a command, sudo runs `$SHELL -c` on its words joined with the shell's metacharacters
+  escaped, and that text is read too where it may differ from the words (a `$`, a newline, an empty word, an option
+  the prefix reader misread: `sudo -iu root rm -rf /srv/data` is `delete`), and such a line still asks as code the
+  gate cannot fully see, as it did as an unknown program; a word the gate cannot read asks. A later sudo's brace value,
+  which that text holds as a literal, is read as bash expanded it (`sudo -s sudo -u "$U" -u {root,-p} echo rm -rf
+  /srv/data` is `delete`). The line's own parts stay beside the new ones, and the call is also read as before
+  (`gate.readings`) and decided on each reading, so no decision is lower than before.
   `su` and `sudo su` with a stdin still ask as an unknown program without reading the text.
 - Gate (#328, D-038): a quoted heredoc delimiter with a space hid the commands after the heredoc. The lexer ended a
   body at the first line that equalled the delimiter once its surrounding whitespace was stripped, so a delimiter such

@@ -1,6 +1,6 @@
 """#491: `sudo -s` and `sudo -i` (--shell, --login) start the target user's shell, which runs its stdin.
 
-With no command, the shell sudo starts reads its commands from stdin. On main 15e60ddb the gate read such a line as
+With no command, the shell sudo starts reads its commands from stdin. On main 58503282 the gate read such a line as
 `read` (sudo's options left no program, a bare assignment) and allowed it, even under `deny: [delete]`, while `sudo
 bash` with the same stdin was read. The gate now reads a sudo shell with no command as it reads `bash` with no
 operand: an opaque part that runs its stdin, and the parts of each text the line feeds it (a pipe, a here-string, a
@@ -101,6 +101,15 @@ def test_an_option_word_the_gate_cannot_read_may_start_the_shell(line):
     f'doas "$X" <<< {RM}',
     # an option word the gate cannot read may take the next word as its value (`-$X root` may be `-iu root`)
     f"sudo -$X root <<< {RM}", f'sudo -"$X" ls <<< {RM}',
+    # bash keeps a word a brace set makes twice: `-p {-s,-s}` is `-p -s -s`, and the second -s starts the shell
+    f"sudo -p {{-s,-s}} <<< {RM}", f"sudo -p {{,}}-s <<< {RM}", f"sudo -p -s{{,}} <<< {RM}",
+    f"sudo -p {{-i,-i}} <<< {RM}", f"echo {RM} | sudo -p {{-s,-s}}",
+    # a bracket glob at the start of a value may make several words too (`[!a]s` may be `bs -s`)
+    f"sudo -u [!a]s <<< {RM}", f"sudo -u [ab] <<< {RM}", f"sudo -u [r]oot <<< {RM}",
+    # `~-` and `~+` are $OLDPWD and $PWD, one word the line may have set to -s
+    f"OLDPWD=-s; sudo ~- <<< {RM}", f"sudo ~+ <<< {RM}", f"sudo ~-1 <<< {RM}",
+    # bash expands braces before tildes: `~-{,}` is `~- ~-`
+    f"OLDPWD=-s; sudo ~-{{,}} <<< {RM}", f"sudo ~+{{,}} <<< {RM}", f"sudo ~-{{1,}} <<< {RM}",
 ])
 def test_a_value_or_operand_the_gate_cannot_read_may_start_the_shell(line):
     c = sh(line)
@@ -110,10 +119,68 @@ def test_a_value_or_operand_the_gate_cannot_read_may_start_the_shell(line):
     assert decide(c, DENY_DELETE).outcome == "deny", line
 
 
-def test_a_store_write_behind_a_value_that_may_start_the_shell_is_denied():
-    c = sh("sudo -u {root,-s} <<< 'cp /tmp/x ~/.exo/policies/x'")
+@pytest.mark.parametrize("line", ["sudo -u {root,-s} <<< 'cp /tmp/x ~/.exo/policies/x'",
+                                  "sudo -u root -p {-s,-s} <<< 'cp /tmp/x ~/.exo/policies/x'"])
+def test_a_store_write_behind_a_value_that_may_start_the_shell_is_denied(line):
+    c = sh(line)
     assert c.category == "store_write", c
     assert decide(c, DENY_STORE).outcome == "deny" and gate.no_grant(c)
+
+
+@pytest.mark.parametrize("line,category", [
+    # a brace value's words end the options elsewhere: `-u {root,-p} echo rm` is `-u root -p echo rm`, so `echo` is
+    # the prompt and rm runs as root
+    ("sudo -u {root,-p} echo rm -rf /srv/data", "delete"),
+    ("sudo -u {root,-p} echo git push --force origin main", "force_push"),
+    # a word the gate cannot read, or a value that may split, may take the next word as its value
+    ("sudo -E{,p} echo rm -rf /srv/data", "delete"), ('sudo -"$X" echo rm -rf /srv/data', "delete"),
+    ("sudo -u $U echo -s rm -rf /srv/data", "delete"), ("sudo -$X root rm -rf /srv/data", "delete"),
+    ('sudo "$X" root rm -rf /srv/data', "delete"), ('sudo -"$X" echo rm -rf "$D"', "delete"),
+    # the words such a reading moves to are read as sudo runs them too, as bash expanded them: a sudo there with a
+    # brace or glob value is read in turn (`-E{,p}` is `-E -Ep`, so each prompt takes `echo`)
+    ("sudo -E{,p} echo sudo -E{,p} echo rm -rf /srv/data", "delete"),
+    ("sudo -u $U echo sudo -E{,p} echo rm -rf /srv/data", "delete"),
+    ('sudo -"$X" echo sudo -E{,p} echo rm -rf /srv/data', "delete"),
+    ("sudo -u [!a]s echo sudo -u [!a]s echo rm -rf /srv/data", "delete"),
+    ("sudo -E{,p} echo sudo -E{,p} echo git push --force origin main", "force_push"),
+    # a sudo shell's command read again holds a later sudo's brace value as a literal: that sudo's moved reading,
+    # of the words bash expanded, is read too
+    ('sudo -s sudo -u "$U" -u {root,-p} echo rm -rf /srv/data', "delete"),
+    ("sudo -s sudo -C $N -u {root,-p} echo rm -rf /srv/data", "delete"),
+    ("sudo -s sudo -u '' -u {root,-p} echo rm -rf /srv/data", "delete"),
+    ('sudo -s sudo -u "$U" -u {root,-sp} echo rm -rf /srv/data', "delete"),
+    ('sudo -s sudo -u "$U" -u {root,-p} echo git push --force origin main', "force_push"),
+])
+def test_a_word_that_may_take_the_next_as_its_value_moves_the_command(line, category):
+    c = sh(line)
+    assert c.category == category, (line, c)
+    assert decide(c, DEFAULT).outcome == "ask"
+    assert decide(c, normalize_policies({"gates": {"deny": [category]}})).outcome == "deny", line
+
+
+@pytest.mark.parametrize("head", ["sudo -u {root,-p} echo ", "sudo -E{,p} echo ", "sudo -u $U echo "])
+@pytest.mark.parametrize("n", [5, 6, 12])
+def test_a_reading_cut_short_by_the_depth_cap_asks(head, n):
+    # Each such reading is read one level deeper. Past the cap the deepest command is not read, and the cap's ask
+    # stays: it is not dropped as a command the reading cannot read.
+    c = sh(head * n + "rm -rf /srv/data")
+    assert any(p.category == "opaque_exec" and "too deep" in p.summary for p in gate._each_part(c)), (head, n)
+    assert decide(c, DEFAULT).outcome == "ask"
+    assert decide(c, DENY_DELETE).outcome in ("ask", "deny"), (head, n)
+    assert decide(c, normalize_policies({"gates": {"deny": ["force_push"]}})).outcome == "ask"
+    # up to the cap, the deepest command is read
+    assert decide(sh(head * 4 + "rm -rf /srv/data"), DENY_DELETE).outcome == "deny", head
+
+
+@pytest.mark.parametrize("head", ["sudo -u {root,-s} ", "sudo -s ", "sudo -u $U ", "sudo -p {-s,-s} ", "sudo -$X ",
+                                  "sudo -u {alice,bob} ", "sudo -E{,p} echo ", "sudo -u {root,-p} echo "])
+def test_a_long_sudo_chain_is_read_in_linear_time(head):
+    # Each sudo's command holds the rest of the chain: parsing it again for each sudo took minutes on 28 KB.
+    line = head * 1000 + f"ls <<< {RM}"
+    t = time.perf_counter()
+    c = sh(line)
+    assert time.perf_counter() - t < 10, head
+    assert decide(c, DENY_DELETE).outcome in ("allow", "ask", "deny")
 
 
 @pytest.mark.parametrize("tail", ["echo '$x'", 'echo "$x"', "echo 'a\nb'", "rm -rf '$x'"])
@@ -225,6 +292,13 @@ def test_the_controls_are_unchanged(line):
     ("sudo -u $U ls", "read", "allow"), ("sudo -u {alice,bob} ls", "read", "allow"),
     ('sudo -u"$U" -l', "read", "allow"), ('sudo -u"$U" -v', "read", "allow"), ('sudo --user="$U" -v', "read", "allow"),
     ('sudo -D"$D"', "read", "allow"), ("sudo -u\"$U\" echo '$HOME'", "read", "allow"),
+    # a word that may take the next as its value adds only what the command it may move to is known to do
+    ("sudo -u [r]oot ls", "read", "allow"), (f"sudo -u '[r]oot' <<< {RM}", "read", "allow"),
+    ("sudo -u $U cat /etc/hosts", "read", "allow"), ("sudo -u $USER git status", "read", "allow"),
+    ('sudo -"$X" echo hi', "read", "allow"), ('sudo -"$X" ls -l', "read", "allow"),
+    ("sudo -E{,p} echo sudo -E{,p} echo hi", "read", "allow"), ("sudo -u $U echo sudo -u {alice,bob} ls", "read", "allow"),
+    # a quoted brace does not expand, and a tilde word with another prefix is no $OLDPWD
+    (f"sudo ~-'{{,}}' <<< {RM}", "opaque_exec", "ask"), (f"sudo ~-{{a,b}} <<< {RM}", "opaque_exec", "ask"),
 ])
 def test_lines_with_no_shell_stdin_are_unchanged(line, category, outcome):
     c = sh(line)
