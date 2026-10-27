@@ -372,3 +372,22 @@ def test_an_older_core_without_commands_list_is_asked_once():
             assert len(src.of("commands.list")) == 1
     finally:
         srv.close()
+
+
+@needs_chrome
+def test_rounds_is_local_to_window_and_applies_only_to_new_turns(page):
+    src, b = page
+    enter(b, '/rounds off')
+    b.wait("document.querySelector('.xc-strip').textContent.includes('window: unlimited')")
+    assert src.sent() == []
+    enter(b, 'with override')
+    end = time.monotonic() + 5
+    while not src.of('turn.send') and time.monotonic() < end:
+        time.sleep(.02)
+    assert src.of('turn.send')[-1].max_rounds == 0
+    # A fresh page has its own setting, even while connected to the same server/session.
+    b.eval('location.reload()')
+    b.wait("document.querySelectorAll('.xc-msg').length > 0")
+    enter(b, '/rounds')
+    b.wait("document.querySelector('.xc-strip').textContent.includes('window: default')")
+    assert len(src.of('turn.send')) == 1
