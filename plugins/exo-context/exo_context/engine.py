@@ -395,8 +395,10 @@ class ExoContextEngine(ContextEngine):
         A pin the target session undid stays undone: its digest sits in its file, and the parent's copy is
         skipped, so a rebind of a `/branch` or compression child puts no undone ruling back (#592)."""
         try:
-            # The target's file is read again, not a cache another engine may have left stale, as on an undo
-            old, new = self._load_pins(old_sid), self._load_pins(new_sid, fresh=True)
+            # Both sessions' files are read again, not a cache another engine may have left stale, as on an undo:
+            # the source's, so a pin the source (parent) undid does not resurrect in the child (#645), and the
+            # target's, so a pin the child undid stays undone (#592).
+            old, new = self._load_pins(old_sid, fresh=True), self._load_pins(new_sid, fresh=True)
             gone = self._x_dropped.get(new_sid, set())
             merged = {}
             for kind in ('ruling', 'correction', 'open_decision'):
