@@ -3165,6 +3165,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `--no-variants`, 11,470 actions under the 88 policies, lowers 0 pairs and tightens 2,016 pairs on 28 actions,
   mostly `read allow` to the arithmetic's `opaque_exec ask`. No classify or decide errors.
   *Revisit if:* the card for an element set in arithmetic names the array (`BASH_CMDS`), not the element's key.
+  *Amendment 2026-10-26 (issue #553):* a `$((` bash reads as a command substitution is read as one. bash closes the
+  `$( ` at the first `)` outside quotes, backquotes, `$( )` bodies and comments, and reads the span as arithmetic
+  only when the text between the parens, quoted spans skipped, holds balanced parens (its chk_arithsub); else it
+  re-reads the span as `$( ( )`, a subshell, and the commands in it run. The gate matched `$((` against `))` without
+  counting quotes, so a `((` in a quoted word made it read the whole span as arithmetic text and it never read the
+  commands: `echo $((echo '((' ; git push --force origin main) )` was an allowed `read` under `deny: [force_push]`,
+  where the same line written `echo $( (echo '((' ; git push --force origin main) )` denied, and so were the
+  double-quoted and `$'..'` forms, a hidden `git push origin :main` or `rm -rf x` in the same shape (both deny under
+  `deny: [delete]`), and `echo $(( 1 + '(' )); git push --force origin main`, where a quoted paren made the span run
+  to the end of the line, so the push after `;` was never read — bash discards the rest of its line after that
+  arithmetic error, but runs it on the next line, in a script, and other shells may run it on the same line. The
+  gate now finds the `))` with quotes and nesting counted, applies the paren balance to what is between the parens,
+  reads a span that fails either as the `$( ( )` it runs as, and reads the arithmetic span only as far as bash
+  extracts it, so what follows is read when bash's line would end. An unclosed `$((` bash cannot parse and runs
+  nothing, and the span stays arithmetic text to the end of the line, as before, so the deep-nest readings stay
+  linear. Plain arithmetic decides as it did (`$((1+2))`, `$((PATH=5))`, `$[PATH=5]`, a ternary, a `$( )` or a
+  backquote inside the body, a `$((echo hi) )` subshell), and `_nest_end` ends a cut at the same span.
+  The #553 differential against main fa5dfcd8, each tree in its own process, `--jobs 4`: the built-in corpus with
+  `--no-variants`, 11,855 actions under the 88 policies, lowers 0 pairs and tightens 1,290 pairs on 18 actions,
+  mostly `read allow` to the hidden commands' asks and denies (932 to `force_push ask`, 258 to `delete ask`, 42 to
+  `force_push deny`, 18 to `delete deny`). Of the corpus's 69 `$((` rows, 3 decide differently: the issue's own two
+  shapes and `echo $((echo hi) ; git push --force origin main )`. No classify or decide errors.
+  Tests: `tests/security/test_gate_dollar_paren_cmdsub.py`.
+  *Revisit if:* a `${x:-$((cmd))}` should read the commands in its default word — a `$((` inside a `${..}` body is
+  still read as the brace's visible text, as the same line with a plain `$( )` there is (both were `allow` on main
+  and stay so), which is the `${..}` default word's own gap, not this one.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
