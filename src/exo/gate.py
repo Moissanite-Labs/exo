@@ -3876,6 +3876,19 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if top is not None and not top.target:
                 c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
+            elif top is not None and _fold_made(top.target) and \
+                    (old := _most_severe([p for p in c.parts
+                                          if p.category not in ("credentials", "store_write")])) is not None and \
+                    old.target != dest:
+                # #601: the fold made the part that took the line's category, so the decision on the alt target
+                # (#399) — the copy of the action on the host — no longer carries it: the line read as an ordinary
+                # delete there before (`ssh host 'rm -rf ~/.EXO/policies'` listed (delete, host) among its reserved
+                # parts, review of #635). The host keeps the line's own action beside the folded store path, as it
+                # kept it while the path read as an ordinary one, and the plain-spelling rows keep every part they
+                # had: a name an expansion made a store of reads the same in either spelling (_fold_made). A copy
+                # with no parts and no post, as #320's.
+                c.parts = [*c.parts, replace(old, target=dest, parts=[], text="", title="", text_file="", own_signals=[
+                    s for s in (old.signals if old.own_signals is None else old.own_signals) if s != "unseen_body"])]
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
         # An ssh that passes a stdin on gives its remote command that stdin, and an ssh there that runs it runs it
@@ -4932,7 +4945,9 @@ def _store_hints() -> tuple[set, dict, set]:
             elif parts[k]:
                 pairs[parts[k - 1], parts[k]] = "/".join(parts[:k + 1])
         names.add(name)
-    return singles, pairs, (names | set(_run_secrets())) - {""}
+    # names fold case (#601); the sample paths stay as the environment spells them
+    return ({_fold(s) for s in singles}, {(_fold(a), _fold(b)): path for (a, b), path in pairs.items()},
+            {_fold(n) for n in (names | set(_run_secrets())) - {""}})
 
 
 def _brace_glob(text: str) -> str:
@@ -5025,19 +5040,25 @@ def _fn_glob(glob: str) -> str | None:
 
 
 def _glob_names(glob: str, names) -> list:
-    """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything."""
+    """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything. Names fold
+    case (#601); the names themselves come back as given."""
     pat = _fn_glob(glob)
-    return list(names) if pat is None else fnmatch.filter(names, pat)
+    if pat is None:
+        return list(names)
+    f = _fold_glob(pat)
+    return [n for n in names if fnmatch.fnmatchcase(_fold(n), f)]
 
 
 def _could_name(glob: str, hints: set) -> bool:
-    """A glob that could match one of ``hints``: its literal parts are tried as substrings first, which is cheap."""
+    """A glob that could match one of ``hints``: its literal parts are tried as substrings first, which is cheap.
+    Hints fold case (#601); the glob's own wildcards as written (_fold_glob)."""
     pat = _fn_glob(glob)
     if pat is None:
         return True
-    lits, blob = [x for x in re.split(r"[*?]|\[!?\]?[^\]]*\]", pat) if x], "/".join(hints)
-    return all(t in blob for t in lits) and any(all(t in h for t in lits) for h in hints) \
-        and bool(fnmatch.filter(hints, pat))
+    pat, lits = _fold_glob(pat), [x for x in re.split(r"[*?]|\[!?\]?[^\]]*\]", _fold_glob(pat)) if x]
+    blob = "/".join(_fold(h) for h in hints)
+    return all(t in blob for t in lits) and any(all(t in _fold(h) for t in lits) for h in hints) \
+        and bool([h for h in hints if fnmatch.fnmatchcase(_fold(h), pat)])
 
 
 def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
@@ -5141,11 +5162,11 @@ _ANY = object()                                     # any path, in _cd_store_rea
 
 def _could_be(s: str, name: str) -> bool:
     """Could the path part ``s`` be ``name`` (`..`, `run`, `.exo`) as bash matches it: the same text, or a glob
-    (`.?`, `ru[n]`, `.*xo`) that spells a leading dot the same way."""
-    if s == name or not _GLOBBY.search(s) or (s[:1] == ".") != (name[:1] == "."):
-        return s == name
+    (`.?`, `ru[n]`, `.*xo`) that spells a leading dot the same way. Both fold case (#601)."""
+    if _fold(s) == _fold(name) or not _GLOBBY.search(s) or (s[:1] == ".") != (name[:1] == "."):
+        return _fold(s) == _fold(name)
     pat = _fn_glob(s)
-    return pat is None or fnmatch.fnmatchcase(name, pat)
+    return pat is None or fnmatch.fnmatchcase(_fold(name), _fold_glob(pat))
 
 
 def _dotdot(q: str) -> str:
@@ -5213,7 +5234,7 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
             t = os.path.expanduser(t)
         p = _expand_text(t)
         p = os.path.normpath(p) if p else p         # bash's logical cd: /tmp/../proc is /proc, ./gh is gh
-        p = "~" if p == home else "~/" + p[len(root):] if p.startswith(root) else p
+        p = "~" if _fold(p) == _fold(home) else "~/" + p[len(root):] if _fold(p).startswith(_fold(root)) else p
         parts = _brace_glob(p).split("/")
         parts[0] = "~" if parts[0].startswith("~") else parts[0]        # ~user/.kube: its folders
         return p, [s for j, s in enumerate(parts) if s not in ("", ".") or j == 0 and s == ""] or ["."]
@@ -5224,10 +5245,11 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         has a character of its own, and a plain store folder only below its parent."""
         own = bool(re.sub(r"[*?]|\[[^\]]*\]?", "", s))
         return {x for x in singles if (x[:1] == ".") == (s[:1] == ".") and (x[:1] == "." or own)} | \
-            {b for a, b in pairs if a == prev and (b[:1] == ".") == (s[:1] == ".")}
+            {b for a, b in pairs if _fold(a) == _fold(prev) and (b[:1] == ".") == (s[:1] == ".")}
 
     def last_store_folder(parts: list) -> int:
-        return max((k for k, s in enumerate(parts) if s in singles or k and (parts[k - 1], s) in pairs or
+        return max((k for k, s in enumerate(parts) if _fold(s) in singles or
+                    k and (_fold(parts[k - 1]), _fold(s)) in pairs or
                     _GLOBBY.search(s) and _could_name(s, could_be(s, parts[k - 1] if k else None))), default=-1)
 
     # A plain store folder's parent above each target: name -> {levels up: its paths}. A target below home also
@@ -5242,9 +5264,10 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         up = [(hp[m], "/".join(hp[:m + 1])) for m in range(len(hp) - 1)] if parts[0] == "~" else []
         chain = up + [(s, "/".join(parts[:j + 1]) if j < deep else None) for j, s in enumerate(parts) if s != ".."]
         for n, (name, path) in enumerate(reversed(chain)):
-            if name in parents:
-                anc.setdefault(name, {}).setdefault(n, set()).add(path)
-                for key in ((name, path), (name, _ANY)):
+            if _fold(name) in parents:
+                path = _fold(path) if path else path
+                anc.setdefault(_fold(name), {}).setdefault(n, set()).add(path)
+                for key in ((_fold(name), path), (_fold(name), _ANY)):
                     top[key] = max(top.get(key, -1), n)
                 if name == "":
                     lo[""] = min(lo.get("", n), n)
@@ -5269,12 +5292,12 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
     def reach(n: int, a: str, need) -> bool:
         """A folder named ``a`` (at path ``need`` for a plain parent) n levels above a target, or above a `cd ..`
         after one. `..` stops at /."""
-        levels = anc.get(a, {})
+        levels = anc.get(_fold(a), {})
         if a == "" and lo.get("", n + max(ups) + 1) <= n + max(ups):
             return True
         if len(ups) > 64:                           # any number of levels up: is it there n or more levels up?
-            return top.get((a, _ANY if need is None else need), -1) >= n
-        return any(m in levels and (need is None or need in levels[m]) for m in (n + u for u in ups))
+            return top.get((_fold(a), _ANY if need is None else _fold(need)), -1) >= n
+        return any(m in levels and (need is None or _fold(need) in levels[m]) for m in (n + u for u in ups))
 
     matched: dict = {}                              # a glob -> the plain store folder names it could match
 
@@ -5288,7 +5311,7 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         first = parts[n]
         if globs and _GLOBBY.search(first) and first not in matched:
             matched[first] = _glob_names(first, kin) if _could_name(first, set(kin)) else []
-        hits = matched[first] if globs and _GLOBBY.search(first) else [first] if first in kin else []
+        hits = matched[first] if globs and _GLOBBY.search(first) else [b for b in kin if _fold(b) == _fold(first)]
         return [(path, parts[n + 1:]) for b in hits for a, path in kin[b]
                 if reach(n, a, None if a in singles else path.rpartition("/")[0])]
 
@@ -5317,7 +5340,7 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
             for o in opts:
                 count = min(count * len(o), 65)
             paths = ["/".join(x) for x in itertools.product(*opts)] if count <= 64 else []
-            stored[folder] = count > 64 or any(_SENSITIVE_PATH.search(x) or is_sensitive_path(x) for x in paths)
+            stored[folder] = count > 64 or any(_sensitive_re().search(_fold(x)) or is_sensitive_path(x) for x in paths)
         return stored[folder]
 
     def candidates():
@@ -5344,13 +5367,13 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         for q, parts, globbed in candidates():
             for path, rest in into(parts, globbed) if parts else []:
                 fp = f"{path}/{'/'.join(rest)}".rstrip("/").split("/")
-                if parts[-1] in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
+                if _fold(parts[-1]) in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
                     return q
         return _exo_relative(split, max(ups), candidates, forms)
     nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
     # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
     roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
-    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered) or any(map(is_store, roots))
+    every = any(_sensitive_re().search(_fold(p)) for p, _, _ in entered) or any(map(is_store, roots))
     hints = names | singles | nxt
     held = any(k == len(parts) - 1 for _, parts, k in entered)     # a target is itself a store folder (~/.kube)
     for q, parts, globbed in candidates():
@@ -5359,8 +5382,9 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         if not parts:
             continue
         inner = parts[:-1]              # a store folder counts when the name goes into it (`mkdir .kube` reads none)
-        if parts[-1] in names or not singles.isdisjoint(inner) or into(parts, globbed) or \
-                not pairs.keys().isdisjoint(zip(inner, inner[1:])) or globbed and any(
+        fi = [_fold(s) for s in inner]
+        if _fold(parts[-1]) in names or not singles.isdisjoint(fi) or into(parts, globbed) or \
+                not pairs.keys().isdisjoint(zip(fi, fi[1:])) or globbed and any(
                     _could_name(s, hints) for s in parts if _GLOBBY.search(s)):
             return q
     return _exo_relative(split, max(ups), candidates, forms)
@@ -5406,11 +5430,12 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
         return _TOO_MANY
 
     def inside(b: str, real: bool = False) -> bool:
-        return any(re.search(r"(^|/)\.exo(/|$)", f) or any(f == r or f.startswith(r.rstrip("/") + "/") for r in roots)
+        return any(re.search(r"(^|/)\.exo(/|$)", _fold(f)) or
+                   any(_fold(f) == _fold(r) or _fold(f).startswith(_fold(r).rstrip("/") + "/") for r in roots)
                    for f in (_path_forms(b) if real else {os.path.normpath(b)}))
 
     def near(q: str) -> bool:                       # a relative path that can lead into the store from above it
-        return not marks.isdisjoint(q.split("/"))
+        return not marks.isdisjoint(map(_fold, q.split("/")))
 
     def charge(path: str) -> None:                  # one join or level up, by the path parts it builds
         left[0] -= path.count("/") + 1
@@ -5866,10 +5891,66 @@ TOOLS: dict[str, str] = {
     "close_terminal": "shell",
 }
 
+# One reading for every store and secret name below (#601): on a case-insensitive file system
+# `.exO/config.json` IS `.exo/config.json`, but the checks read the spelling as written, so a case
+# variant walked past on main a8a4ffbd (`cp x ~/.exO/config.json`, `echo x > ~/.KUBE/config`). Names
+# match in any case: the name regexes are searched on the folded text (_fold), and the list itself is
+# compiled twice (_SENSITIVE_PATH_F) because `Netlify` in it is mixed-case, which a lowered text would
+# not meet. A glob's own wildcards fold only in their literal text (_fold_glob): bash matches a class
+# and a literal after a wildcard case-sensitively, so `[HOME=x]*` and `*/KEYS` stay out where `.EXO/*`
+# reads on. `EXO_GATE_CASE_SENSITIVE=1` reads main d800f33c's case-sensitive names, for a file system
+# whose `.exO` is a different folder (tests pin both readings with it).
+
+
+# Held while a check reads one spelling as main's own (#601): the ssh hop probes a case-variant store path as
+# written, to keep the host beside the line's own action where only the fold made the store part (review #635).
+_case_off: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_case_off", default=False)
+
+
+def _fold(p: str) -> str:
+    """``p`` as the plain name compares match it: lower-cased (#601), or as written under
+    EXO_GATE_CASE_SENSITIVE=1 or while _case_off is set. The name regexes fold by their own re.IGNORECASE."""
+    return p.lower() if p and not _case_off.get() and os.environ.get("EXO_GATE_CASE_SENSITIVE", "") != "1" else p
+
+
+def _fold_glob(g: str) -> str:
+    """A glob part as bash matches it (#601): a part with no wildcard names a folder the file system opens,
+    folded; one with a wildcard is fnmatch against the entries, as written — its literals too (`ID_RSA*`,
+    `[HOME=x]*`)."""
+    return _fold(g) if not _GLOBBY.search(g) else g
+
+
+def _fold_glob_path(p: str) -> str:
+    """A glob path part by part (_fold_glob): the parts the file system opens fold, the wildcard parts do not."""
+    return "/".join(_fold_glob(x) for x in p.split("/"))
+
+
+def _fold_made(t: str) -> bool:
+    """Whether the store or secret name ``t`` reads as one only by its letter case (#601): main's spellings, the
+    checks on the text itself with the fold held off (_case_off), pass on the folded spelling and not on the one
+    as written. The ssh hop keeps the host beside the line's own action then (review of #635): the fold-made part
+    took the line's category, and the alt target's decision — the copy of the action on the host — with it. A name
+    an expansion form made a store of folds the same way in either spelling, so this is False there and the hop
+    keeps the reading both spellings share."""
+    if not t:
+        return False
+    f = _fold(t)
+    if f == t:
+        return False
+    token = _case_off.set(True)
+    try:
+        plain = _store_word(t, ancestors=True) or bool(_SENSITIVE_PATH.search(t))
+        folded = _store_word(f, ancestors=True) or bool(_SENSITIVE_PATH.search(f))
+    finally:
+        _case_off.reset(token)
+    return not plain and folded
+
 # One list of secret stores, used by the path tools (read/write/patch) and by shell parsing.
 # Segment patterns match at any depth; EXO_HOME and EXO_KEYS_FILE overrides are added by
 # is_sensitive_path() because they can sit anywhere.
-_SENSITIVE_PATH = re.compile(
+# The list twice (#601): as main spells it, and lower-cased for the folded reading — `Netlify` in it is
+# mixed-case, which a lowered text would not meet.
+_SENSITIVE_PATH_TXT = (
     r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.config/muse|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
     r"\.?credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
     r"\.claude(/[^/]*)*|"
@@ -5878,6 +5959,13 @@ _SENSITIVE_PATH = re.compile(
     r"\.config/gh/hosts\.yml|\.git-credentials|\.docker/config\.json|\.kube/config|"
     r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
     r"proc/[^/]+/(task/[^/]+/)?environ)(/|$)")
+_SENSITIVE_PATH = re.compile(_SENSITIVE_PATH_TXT)
+_SENSITIVE_PATH_F = re.compile(_SENSITIVE_PATH_TXT.lower())
+
+
+def _sensitive_re() -> re.Pattern:
+    """The secret-name list, folded (#601) or as main spells it (EXO_GATE_CASE_SENSITIVE=1)."""
+    return _SENSITIVE_PATH_F if os.environ.get("EXO_GATE_CASE_SENSITIVE", "") != "1" else _SENSITIVE_PATH
 
 # D-039: a run folder holds the principal credential and the TCP token beside each socket, so the folder itself
 # is a secret store; what is below it keeps its own class (job output in run/jobs/ stays readable). A relative
@@ -5980,16 +6068,17 @@ def _is_run_dir(path: str, real: str = "") -> bool:
     absolute path is also resolved as written, links before `..` (``real``, when the caller has resolved it)."""
     raw = path.replace("\\", "/")
     path = os.path.normpath(raw)
-    if _RUN_DIR.search(path):
+    if _RUN_DIR.search(_fold(path)):
         return True
     if not path.startswith("/"):
         return False
     try:
-        cands = {c for c in (path, real or os.path.realpath(raw)) if c.endswith("/run")}
+        cands = {c for c in (path, real or os.path.realpath(raw)) if _fold(c).endswith("/run")}
         homes = {os.path.normpath(_exo_home()), os.path.realpath(_exo_home())} if cands else set()
     except (OSError, ValueError):
         return False
-    return any(re.fullmatch(re.escape(h) + r"(/principals/[^/]+)?/run", c) for c in cands for h in homes)
+    return any(re.fullmatch(re.escape(_fold(h)) + r"(/principals/[^/]+)?/run", _fold(c))
+               for c in cands for h in homes)
 
 
 def _run_secrets() -> list[str]:
@@ -6289,7 +6378,7 @@ def _sensitive_words(words: list[str]) -> bool:
     below the folder it was read from, only the part below it, so a folder like a repo's `.claude` does not count).
     A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads."""
     words = [w for w in (w.strip() for w in _expand_words(words)) if w]
-    if any(_SENSITIVE_PATH.search(w.replace("\\", "/")) for w in words if not w.endswith(".pub")):
+    if any(_sensitive_re().search(_fold(w.replace("\\", "/"))) for w in words if not _fold(w).endswith(".pub")):
         return True
     scope = _scope.get() or _Scope()
     if scope.roots is None:
@@ -6308,10 +6397,11 @@ def _sensitive_words(words: list[str]) -> bool:
                 cands = {a, real}
             except (OSError, ValueError):
                 real, cands = "", {p}
-            cands = {c for c in cands if not c.endswith(".pub")}
-            if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots) or _is_run_dir(p, real):
+            cands = {c for c in cands if not _fold(c).endswith(".pub")}
+            if any(_fold(c) == _fold(r) or _fold(c).startswith(_fold(r) + os.sep) for c in cands for r in roots) \
+                    or _is_run_dir(p, real):
                 return True
-            if real in cands and real != a and _SENSITIVE_PATH.search(_below(real, base or scope.here, w, memo)):
+            if real in cands and real != a and _sensitive_re().search(_fold(_below(real, base or scope.here, w, memo))):
                 return True
     return False
 
@@ -6351,17 +6441,18 @@ class StoreSkip:
         # A named store counts only when the folder walked is one: `~/.ssh/..` or a link `x.key` to HOME is not.
         self.whole = bool(named) and all(map(is_sensitive_path, (named, self.abs, self.real)))
         self.roots = {r for x in _dynamic_secret_paths() for r in (os.path.abspath(x), os.path.realpath(x))}
-        self.below = tuple(r + os.sep for r in self.roots)
+        self.froots = frozenset(map(_fold, self.roots))
+        self.below = tuple(_fold(r) + os.sep for r in self.roots)
         self.skipped = 0
         self._repo = {os.path.abspath(_home()): False, os.path.realpath(_home()): False}   # folder -> holds .git
 
     def _hit(self, path: str) -> bool:
-        p = path.replace("\\", "/")
-        m = _SENSITIVE_PATH.search(p)
+        p, f = path.replace("\\", "/"), _fold(path)
+        m = _sensitive_re().search(_fold(p))
         if m and m.group(2).startswith(".claude") and self._project_claude(p):
-            m = self._NO_CLAUDE.search(p)
-        return not path.endswith(".pub") and (   # public keys are meant to be shared, as in is_sensitive_path
-            bool(m) or path in self.roots or path.startswith(self.below))
+            m = self._NO_CLAUDE.search(_fold(p))
+        return not f.endswith(".pub") and (   # public keys are meant to be shared, as in is_sensitive_path
+            bool(m) or f in self.froots or f.startswith(self.below))
 
     def _project_claude(self, p: str) -> bool:
         """Every `.claude` in ``p`` is a repo's, and ``p`` is that folder or in one of its _CLAUDE_OK subfolders."""
@@ -6431,7 +6522,9 @@ _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
 def _glob_part(g: str, s: str) -> bool:
     """Could bash glob part g name s? fnmatch as bash reads it (_fn_glob), except a leading dot in s
     must be spelt with a literal dot in g: bash's *, ? and [ never match a leading dot (#594, verified
-    against bash 5.2: `[.]ssh` and `[!a]ssh` do not expand to `.ssh`, while `.*` and `.s*` do)."""
+    against bash 5.2: `[.]ssh` and `[!a]ssh` do not expand to `.ssh`, while `.*` and `.s*` do). The
+    sample folds case (#601); the glob's own wildcards as written (_fold_glob)."""
+    g, s = _fold_glob(g), _fold(s)
     if s.startswith(".") and not g.startswith("."):
         return False
     pat = _fn_glob(g)
@@ -6470,7 +6563,7 @@ def _glob_folder_hit(d: str, home: str, folders: list[str]) -> tuple[bool, bool]
                 lits = sum(len(re.sub(r"[*?\[\]]", "", g)) for g in gp)
                 if not any(g.startswith(".") for g in gp) and lits < 3:
                     continue
-                return True, bool(_SENSITIVE_PATH.search(ff.replace("\\", "/")))
+                return True, bool(_sensitive_re().search(_fold(ff.replace("\\", "/"))))
     return False, False
 
 
@@ -6486,11 +6579,12 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     linked = bool(d_abs) and _is_run_dir(raw if raw.startswith("/") else os.path.join(home, raw))
     if linked:                                           # also when normpath lost it: ~/<link to run/jobs>/..
         runs = runs + [d_abs]
-    keys = "agent-" in tok or ".principal" in tok
+    keys = "agent-" in _fold(tok) or ".principal" in _fold(tok)
     if "/" in tok:   # an agent key only when the glob spells its key part, names a run folder, or has a literal
         # folder part around its wildcards (`~/.exo/*/`); not for `*/*default*` or `~/*test*`, which bash cannot
         # expand into a run folder but fnmatch's `*` would match across `/`
-        reach = keys or linked or (d_abs in [os.path.normpath(os.path.join(home, r)) for r in runs] if d_abs else any(
+        reach = keys or linked or (_fold(d_abs) in {_fold(os.path.normpath(os.path.join(home, r))) for r in runs}
+                                   if d_abs else any(
             q and not re.fullmatch(r"[*?]+|\.{1,2}", q) for q in d.split("/")))
         samples = samples + [os.path.join(r, x) for r in runs for x in secrets if reach or x.startswith("exod.")]
     # #594: a glob in the folder part used to give up here, because d_abs is set only for a literal
@@ -6508,21 +6602,25 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     folder_samples = [x for x in all_samples if any(y != x and y.startswith(x + "/") for y in all_samples)]
     folders = [os.path.dirname(x) for x in all_samples] + folder_samples
     folder_hit, secret_folder = _glob_folder_hit(d, home, folders)
-    in_store_dir = linked or folder_hit or bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
-    if secret_folder and re.search(r"[*?\[]", base) and not base.endswith(".pub"):
+    in_store_dir = linked or folder_hit or bool(d_abs) and _fold(d_abs) != _fold(home) and any(
+        _fold(x).startswith(_fold(d_abs) + "/") for x in samples)
+    if secret_folder and re.search(r"[*?\[]", base) and not _fold(base).endswith(".pub"):
         return True
     if len(stem) < 3 and not in_store_dir:
         return False
-    if "/" not in tok:   # a bare name: a run secret by its own name, an agent key only by its `agent-` or key part
-        if any(_glob_rx(tok).match(x) for x in secrets if keys or x.startswith("exod.")):
+    i = re.search(r"[*?\[]", tok)
+    ftok = _fold_glob_path(tok)
+    fhead = ftok[:i.start()] if i else ftok      # the folded prefix; a wildcard part's own literal as bash reads it
+    if "/" not in ftok:  # a bare name: a run secret by its own name, an agent key only by its `agent-` or key part
+        if any(_glob_rx(ftok).match(_fold(x)) for x in secrets if keys or x.startswith("exod.")):
             return True
-    head, tail = re.split(r"[*?\[]", tok, maxsplit=1)[0], re.split(r"[*?\[\]]", tok)[-1]   # literal: narrow first
+    tail = re.split(r"[*?\[\]]", ftok)[-1]   # literal: narrow first; a wildcard part's own tail as bash reads it
     xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
-          if x.endswith(tail) and (x.startswith(head) if tok.startswith("/") else head in x)]
+          if _fold(x).endswith(tail) and (_fold(x).startswith(fhead) if fhead.startswith("/") else fhead in _fold(x))]
     if not xs:
         return False
-    rx = _glob_rx(tok)
-    return any(rx.match(x) for x in xs)
+    rx = _glob_rx(ftok)
+    return any(rx.match(_fold(x)) for x in xs)
 
 
 @functools.lru_cache(maxsize=4096)
@@ -6536,7 +6634,7 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files,
 # the core sockets, the bus folder (the seat registry signed answers trust and the relay database, #210), the
 # plugins folder and the other folders Exo loads code from (_code_paths, #459) steer the gate itself, so a
-# write to them always asks the principal. Names that are distinctive match anywhere (a relative
+# write to them always asks the principal. Names that are distinctive match anywhere, in any case too (#601; a relative
 # `policies/gates.yaml` may sit in the tool's working folder), and so, by their name whatever EXO_HOME is, do
 # `.exo/venv`, `.exo/src` and `.exo/hermes-home/plugins`, as `.exo/plugins` does; the rest of hermes-home (the
 # launch script's target folder, a live Hermes's state) is not the code. Absolute paths are also checked
@@ -6659,7 +6757,8 @@ def _fd_path(p: str) -> bool:
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
-    return bool(parts) and (parts[0] in names or parts[0].startswith(("ledger.sqlite", "schedule.sqlite")))
+    p = _fold(parts[0]) if parts else ""
+    return bool(parts) and (p in names or p.startswith(("ledger.sqlite", "schedule.sqlite")))
 
 
 def _path_forms(p: str) -> set[str]:
@@ -6711,7 +6810,7 @@ _STORE_GLOB_FILES = tuple(f.split("/") for f in _EXO_STORE_FILES)
 
 def _counts(sample: list) -> bool:
     """Does a store name _store_glob matched count: every one, but the home's config.json only while it does."""
-    return sample[-1] != "config.json" or _config_on()
+    return _fold(sample[-1]) != "config.json" or _config_on()
 
 
 def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> bool:
@@ -6727,7 +6826,9 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
     def could(g: str, s: str) -> bool:
         """Can glob part g be the sample part s? A NUL in s is any text, which g's own text does not fill: it must
         spell three characters of the text around it (`agent-*` can be an agent socket; `*peers*`, which prose
-        quoted as two empty backtick pairs around `peers` gives, cannot)."""
+        quoted as two empty backtick pairs around `peers` gives, cannot). The sample folds case (#601), the
+        glob's own wildcards as written (_fold_glob)."""
+        g, s = _fold_glob(g), _fold(s)
         if "\0" not in s:
             return fnmatch.fnmatchcase(s, g)
         a, b = s.split("\0")
@@ -6772,10 +6873,10 @@ def _store_word(path: str, ancestors: bool = False, from_cwd: bool = False) -> b
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
-    if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
+    if _STORE_NAMES.search(_fold(p)) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
         return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
     if not p.startswith("/"):            # relative: a name the store knows, or, for a file tool's write (#494),
-        return bool(_CONFIG_NAME.search(os.path.normpath(p))) and _config_on() or \
+        return bool(_CONFIG_NAME.search(_fold(os.path.normpath(p)))) and _config_on() or \
             from_cwd and _store_from_cwd(p, ancestors)      # one read from the session folder
     return _store_forms(_path_forms(p), ancestors)
 
@@ -6785,19 +6886,21 @@ def _store_forms(candidates: set[str], ancestors: bool) -> bool:
     (D-074), and each against the store roots' and the bus folders' forms. The spellings come from the original
     text, normpath first would erase symlink/.. traversal, and the lexical candidate counts beside the real one,
     including protected paths that link out of the store."""
-    if any(_STORE_NAMES.search(c) for c in candidates):
+    if any(_STORE_NAMES.search(_fold(c)) for c in candidates):
         return True
-    if any(_CONFIG_NAME.search(c) for c in candidates) and _config_on():
+    if any(_CONFIG_NAME.search(_fold(c)) for c in candidates) and _config_on():
         return True
     roots = [(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)]
     roots += [(r, names, False) for root, names in _bus_paths() for r in _path_forms(root)]
+    roots = [(_fold(r), names, principals) for r, names, principals in roots]
     for candidate in candidates:
+        c = _fold(candidate)
         for r, names, principals in roots:
-            if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
+            if ancestors and (r == c or r.startswith(c.rstrip("/") + "/")):
                 return True
-            if not candidate.startswith(r.rstrip("/") + "/"):
+            if not c.startswith(r.rstrip("/") + "/"):
                 continue
-            parts = candidate[len(r.rstrip("/")) + 1:].split("/")
+            parts = c[len(r.rstrip("/")) + 1:].split("/")
             if _protected_rel(parts, names) and (parts[0] != "config.json" or _config_on()):
                 return True
             if principals and parts[0] == "principals":
@@ -6808,8 +6911,8 @@ def _store_forms(candidates: set[str], ancestors: bool) -> bool:
         # #459: a write inside a folder Exo loads code from; with ``ancestors`` (a delete), also a remove or move of
         # the folder itself or of a folder above it that holds it (`rm -rf ~/.exo`, `mv ~/.exo/venv x`).
         code = _code_forms()
-        if any(candidate == c or candidate.startswith(c.rstrip("/") + "/") for c in code) or \
-                ancestors and any(c.startswith(candidate.rstrip("/") + "/") for c in code):
+        if any(c == _fold(x) or c.startswith(_fold(x).rstrip("/") + "/") for x in code) or \
+                ancestors and any(_fold(x).startswith(c.rstrip("/") + "/") for x in code):
             return True
     return False
 
@@ -6835,9 +6938,10 @@ def _in_store_dir(path: str) -> bool:
     if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")):
         return True
     if not p.startswith("/"):
-        return bool(re.search(r"(^|/)\.exo(/|$)", p))
-    roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
-    return any(c == r or c.startswith(r.rstrip("/") + "/") for c in _path_forms(p) for r in roots + _code_forms())
+        return bool(re.search(r"(^|/)\.exo(/|$)", _fold(p)))
+    roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)] + _code_forms()
+    return any(c == r or c.startswith(r.rstrip("/") + "/")
+               for c in (_fold(f) for f in _path_forms(p)) for r in map(_fold, roots))
 
 
 _PATCH_PATHS = re.compile(
@@ -7303,7 +7407,7 @@ def _repo_claude(folder: str) -> bool:
         return False
     n = len(parts) - parts[::-1].index(".claude") + 1       # the first part below .claude/<worktrees...>
     singles, pairs, _ = _store_hints()
-    return not any(s in singles or (a, s) in pairs for a, s in zip(parts[n - 1:], parts[n:]))
+    return not any(_fold(s) in singles or (_fold(a), _fold(s)) in pairs for a, s in zip(parts[n - 1:], parts[n:]))
 
 
 def _store_part(path: str, summary: str) -> Classification:
