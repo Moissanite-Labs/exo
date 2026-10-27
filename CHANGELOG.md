@@ -145,6 +145,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
   older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
   file's path or launch line still reads as on main, for the reader has no value to check a path line against.
+- A store or secret name matches in any case (#601, D-082). On a case-insensitive file system (default APFS)
+  `.exO/config.json` IS `.exo/config.json`, but every store and secret name check read the spelling as written, so
+  a case variant walked past: `cp /tmp/x ~/.exO/config.json` and `cp /tmp/x $HOME/.EXO/config.json` were
+  `shell`/allow where the plain spelling is a `store_write` ask, `echo x > ~/.KUBE/config` a `local_write`/allow
+  where `~/.kube/config` is `credentials`, and `cat ~/.SSH/config` a read where `~/.ssh/config` asks
+  (`cat ~/.SSH/id_rsa` asked already, by the `id_rsa` name). The name checks now fold case: `~/.EXO/keys/seat`,
+  `~/.exo/POLICIES/gates.yaml`, `tar -C ~/.EXO keys`, `cd ~/.EXO && ls principals` and `ls ~/.EXO/*` ask wherever
+  the file system would land them on the store file. On a case-sensitive file system that also asks for a
+  distinct `.exO` folder, the fail-closed side as for a glob that could name one. In a glob a part with no
+  wildcard folds (a folder the file system opens: `~/.EXO/*`, `~/*/RUN/x`), and a part that holds a wildcard
+  stays as written, as bash matches it against the entries (`[HOME=x]*`, `~/.e*O/*` stay ordinary).
+  `EXO_GATE_CASE_SENSITIVE=1` reads main d800f33c's case-sensitive names. An ssh hop whose remote command names a
+  case-variant store path keeps the host beside the line's own action in its reserved parts (`ssh host
+  'rm -rf ~/.EXO/policies'` lists `(delete, host)` beside `(delete, ~/.EXO/policies)`, as main did), and the
+  plain-spelling rows keep every part they had.
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
   `reserved:` entry on a later path missed and an approver could have waved the write through:
