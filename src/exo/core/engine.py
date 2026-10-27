@@ -14,13 +14,14 @@ Adapters kept here so the parts stay independent of each other:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import inspect
 import os
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator
 
 from exo import diagnostics, provenance
 from exo.core import trace, workspace
@@ -275,11 +276,12 @@ class CoreRuntime:
 
     async def start(self) -> None:
         """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
-        if getattr(self, "_closing", False):
-            raise RuntimeError("the engine is closing")
         if self._started is None:
-            if self.peers is not None and self.peers.autostart:
+            if self.peers is not None and self.peers.autostart and not getattr(self, "_closing", False):
                 await self.peers.start()
+            if getattr(self, "_closing", False):  # also after that await: a close() meanwhile missed what it opened
+                await self._stop_peers()
+                raise RuntimeError("the engine is closing")
             if self._writer is not None:  # only the one writer may call a running job lost
                 await self.jobs.recover()
             self._started = asyncio.ensure_future(self._start_runtime())
@@ -342,24 +344,23 @@ class CoreRuntime:
             self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
-        from exo.runtime_shutdown import quiesce
-        await quiesce(self)  # a live sync tool keeps its resources and writer claim until close can be retried
-        self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
+        from exo.runtime_shutdown import drain, stop_admission
+        owned = stop_admission(self)  # no new turn, tool or job wake from here; owned turns are cancelled
         await self.stop_channels()
         errors: list[BaseException] = []  # every step runs; the first error is raised at the end
         for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
             try:
-                await step()  # jobs end with exod
+                await step()  # jobs end with exod, also when a sync tool outlives the drain below
             except BaseException as exc:  # noqa: BLE001 - re-raised below
                 errors.append(exc)
-        self.plugins.close()  # resources owned by plugins, after transports stop and before the store closes
-        agentlog.release_writer(self._writer)
+        await drain(self, owned)  # ShutdownTimeout keeps plugin resources, the store and the writer claim for a retry
+        for final in (self.plugins.close, lambda: trace.remove_sink(self._on_harness_error),
+                      lambda: agentlog.release_writer(self._writer), self.store.close):  # the store last
+            try:
+                final()  # the sink goes after jobs.close, so a notice that failed there is recorded
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                errors.append(exc)
         self._writer = None
-        trace.remove_sink(self._on_harness_error)  # after the steps: a notice that fails in jobs.close is recorded
-        try:
-            self.store.close()  # last: the hub is closed before this (serve), so nothing writes events after it
-        except BaseException as exc:  # noqa: BLE001
-            errors.append(exc)
         if errors:
             raise errors[0]
 
@@ -520,14 +521,20 @@ class CoreRuntime:
                           emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "author": lctx.get("author", ""),
                                            "jobs": self.jobs, "env_allow": self.env_allow,
                                            "env_deny": self.env_deny})
+        with self._owned():
+            return await self.registry.call(call, ctx)
+
+    @contextlib.contextmanager
+    def _owned(self) -> Iterator[None]:
+        """The running task joins ``_tasks`` while it runs, so close() drains direct callers as it drains turns."""
         task = asyncio.current_task()
-        owned = task not in self._tasks
-        if task is not None:
+        owned = task is not None and task not in self._tasks
+        if owned:
             self._tasks.add(task)
         try:
-            return await self.registry.call(call, ctx)
+            yield
         finally:
-            if task is not None and owned:
+            if owned:
                 self._tasks.discard(task)
 
     def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:
@@ -676,20 +683,12 @@ class CoreRuntime:
         if not meta.get("author"):
             meta["author"] = provenance.SYSTEM  # internal wakeups need an explicit source to speak for anyone
         hooks = self.plugins.hooks
-        task = asyncio.current_task()
-        owned = task not in self._tasks
-        if task is not None:
-            self._tasks.add(task)  # public direct callers need the same shutdown ownership as dispatched turns
-        try:
-            await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
-            return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
-                                                 meta=meta)
-        finally:
+        with self._owned():  # public direct callers need the same shutdown ownership as dispatched turns
             try:
-                await hooks.afire("on_turn_end", session_id=b.session)
+                await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
+                return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode, meta=meta)
             finally:
-                if task is not None and owned:
-                    self._tasks.discard(task)
+                await hooks.afire("on_turn_end", session_id=b.session)
 
     # ------------------------------------------------------------ peers (D-026)
 

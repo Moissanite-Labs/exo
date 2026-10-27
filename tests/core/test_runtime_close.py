@@ -514,15 +514,16 @@ def test_shutdown_timeout_retains_resources_and_writer_until_retry(tmp_path, mon
         session = await engine.loop.create_session()
         engine.start_turn(session.id, "hold resource")
         assert await asyncio.to_thread(started.wait, 1)
+        from exo.core.engine import CoreRuntime
         try:
-            with pytest.raises(RuntimeError, match="tool workers; resources retained"):
-                await engine.close()
+            with pytest.raises(shutdown.ShutdownTimeout, match="tool workers; jobs and transports are stopped"):
+                await CoreRuntime.close(engine)  # one bounded attempt; CoreEngine.close retries it
             assert engine._writer is writer and engine.store._conn is not None
             assert "cleanup" not in order and engine.registry.workers
         finally:
             release.set()
         await asyncio.gather(*list(engine.registry.workers))
-        await engine.close()
+        await CoreRuntime.close(engine)
         assert engine._writer is None and engine.store._conn is None
         assert order.count("cleanup") == 1
 
@@ -680,7 +681,7 @@ def test_direct_tool_dispatch_drains_and_late_tools_or_start_cannot_reopen_resou
         await asyncio.wait_for(started.wait(), 1)
         await engine.close()
         assert task.cancelled() and exited.is_set() and order == ["cleanup"]
-        late = await engine.run_tool(call, {})
+        late = await asyncio.wait_for(engine.run_tool(call, {}), 2)  # a lost closing guard fails, never hangs
         assert late.is_error and "closing" in late.text()
         with pytest.raises(RuntimeError, match="closing"):
             await engine.start()

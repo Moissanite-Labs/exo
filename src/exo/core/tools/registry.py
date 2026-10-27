@@ -335,8 +335,7 @@ class Registry:
                 worker = asyncio.create_task(asyncio.to_thread(tool.handler, args, ctx))
                 self.workers[worker] = ctx
                 worker.add_done_callback(self._worker_done)
-                out = await asyncio.shield(worker)
-                out = await maybe_await(out)
+                out = await maybe_await(await asyncio.shield(worker))
         except asyncio.CancelledError:
             ctx.cancel.set()
             raise

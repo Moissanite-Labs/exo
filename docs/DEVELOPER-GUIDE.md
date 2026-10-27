@@ -308,8 +308,13 @@ The loader orders selected dependencies first and blocks missing, failed or cycl
 importing the consumer. It never widens an explicit allowlist. Entry-point dependency metadata is
 available only after import and is checked before registration. Pair resources created in `register`
 with `ctx.register_cleanup(sync_callback)`: failed registration or final shutdown calls each once in
-reverse order. Cleanup failures do not skip remaining callbacks. This is final resource cleanup,
-not live unloading. It does not remove gate registrations. See [HARNESS.md](HARNESS.md).
+reverse order. Cleanup failures do not skip remaining callbacks, and neither does Ctrl-C or
+`SystemExit`, which is raised after them. This is final resource cleanup, not live unloading.
+It does not remove gate registrations. Plugin tool handlers get no cancellation signal, so bound
+their blocking work. `CoreRuntime.close()` stops jobs and transports, then waits five seconds for
+tool workers. If one is still running it raises `ShutdownTimeout` and keeps plugin resources,
+the store and the writer claim. `exo.application.CoreEngine.close()` retries until the worker
+returns. Embedders that need one bounded attempt call `CoreRuntime.close`. See [HARNESS.md](HARNESS.md).
 
 Workspace prompt providers use the per-session `Loop.workspace_extra(session, cwd)` callback.
 Delegated loops inherit the callable and resolve their own cwd. The bounded Markdown provider is

@@ -102,6 +102,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   private-state reads (`PRIVATE_STATE_MAX`). The floor and both counts keep their rule, they only ratchet
   down. Docs updated together: `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md`,
   `docs/CORE.md`, `docs/OPTIMIZATION.md`, `docs/DOCS-MAP.md`, `docs/WHITEPAPER.md` sections 11 and 27.
+- Engine shutdown is ordered and bounded (D-082, `docs/HARNESS.md`). `close()` refuses new turns, tools, background
+  jobs and job wakes. It stops channels, peers, background jobs, the scheduler and MCP. Then it waits up to five
+  seconds for turns, synchronous tool workers and learning reviews, and only then runs plugin cleanups. A sync tool
+  that outlives the wait keeps plugin resources, the store and the writer claim in place, and `close()` raises
+  `ShutdownTimeout`. exod and the terminal close again until the tool returns. Call `close()` from the engine's
+  owner, not from inside a turn or tool.
+- A failed startup releases what it opened: the writer lock, the stores, the job worker pool, the scheduler, the
+  learner and plugin resources.
 
 ### Fixed
 - The gate reads `${...}` words and `$((` as bash's parser reads them (#143, #553, #554, PR #158). The lexer ended a

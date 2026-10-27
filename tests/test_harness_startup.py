@@ -146,3 +146,25 @@ def test_null_legacy_learning_setting_keeps_startup_usable(tmp_path, monkeypatch
     engine = compose.create()
     assert engine.harness_plan.profile == "legacy"
     asyncio.run(engine.close())
+
+
+def test_startup_rollback_goes_on_past_a_failing_step(tmp_path, monkeypatch):
+    from exo.scheduler import Scheduler
+    home, marker = setup(tmp_path, monkeypatch)
+    engines = track_engines(monkeypatch)
+    monkeypatch.setattr(compose, "fitting_peers_dir", fail)
+    real_close = Scheduler.close
+
+    def broken(self):
+        real_close(self)
+        raise RuntimeError("scheduler close failed")
+
+    monkeypatch.setattr(Scheduler, "close", broken)
+    with pytest.raises(ValueError, match="startup failed"):
+        compose.create()
+    engine = engines[0]
+    # The steps after the failing scheduler close still ran: plugins, the writer claim and the store.
+    assert marker.read_text() == "closed\n"
+    assert engine._writer is None and engine.store._conn is None
+    writer = agentlog.claim_writer(home, engine.agent)
+    agentlog.release_writer(writer)

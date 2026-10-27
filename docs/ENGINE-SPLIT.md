@@ -80,6 +80,13 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
     read `loop._state`, `store._q` or tree `_view`/`_agent_key`. Inward imports left in the engine: `exo.principal`,
     `exo.config`, `exo.provenance`, `exo.diagnostics` and lazy `exo.learn` and `exo.models_cmd` (the `exo.gate`
     approver checks moved with the desk to `exo.core.approvals`).
+  - **Added by D-082 (2026-10-23, reviewed 2026-10-26), also open for #46 and #498.** `exo.core.plugins` imports
+    `exo.plugin_lifecycle` at module level (`Resources`, `dependency_error`), and its `load_all` and
+    `load_entry_points` call into it. `CoreRuntime.close` imports `exo.runtime_shutdown` lazily. Those uncounted
+    modules read core private state: `stop_admission` and `drain` read `engine._tasks`, `engine._started`,
+    `loop._state` and `scheduler._main` (and the application's `engine._learn`), and `CoreEngine.abort_startup`
+    reads `loop._state`. The counted lines they moved out are real, but the coupling is not gone. #498 replaces
+    these reads with public lifecycle queries.
 - 2026-10-15, budget policy (D-077): the hard 15,000-line ceiling became a ratchet with headroom (see "Budget
   policy"). No code changed. Counted core lines: 14,999 before and after, against the floor of 14,813 and a ceiling
   of 15,813 (that ceiling is off since 2026-10-27, D-083).

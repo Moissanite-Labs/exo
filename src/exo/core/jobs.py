@@ -196,6 +196,8 @@ class JobManager:
                                 "foreground")
         wall = min(float(timeout or self.cfg.max_wall_s), float(self.cfg.max_wall_s))
         with self._lock:
+            if self.target.closed:  # close() takes what is live under this lock, so nothing starts after it
+                raise ToolError("exod is shutting down; background jobs cannot start now")
             if len(self.live) >= self.cfg.max_concurrent:
                 raise ToolError(f"{len(self.live)} jobs are already running (limit {self.cfg.max_concurrent}). Wait for "
                                 "one to finish or stop one with job_kill; `jobs` lists them.")

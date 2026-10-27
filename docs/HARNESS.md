@@ -142,26 +142,45 @@ def register(ctx):
 ```
 
 Callbacks run once, in reverse acquisition order, on failed registration or final manager
-shutdown. A failing callback is logged and does not prevent the rest. Async callbacks
-are rejected. Runtime async channel shutdown continues through the existing channel API.
+shutdown. A failing callback is logged and does not prevent the rest. Ctrl-C or
+`SystemExit` in a callback also lets the rest run, and is raised after them. The manager
+owns a plugin's cleanups before `register` runs, so an interrupted `register` still has
+them released at shutdown. Async callbacks are rejected. Runtime async channel shutdown
+continues through the existing channel API.
 Manager shutdown is final and idempotent. It preserves registration records and security
 hooks. It is not a live plugin unload/reload API. Do not close a manager owned by a live
 engine. The engine owns shutdown ordering and startup rollback.
 
-Engine shutdown first stops new turns, interrupts/drains active work and waits for actual
-synchronous tool workers before releasing plugin resources. Python cannot forcibly stop
-a worker thread. If that work does not finish within five seconds, `close()` raises and
-retains the plugin resources, session store and writer claim. The owner can retry after
-the handler finishes. No detached cleanup watcher is created. Plugin authors should
-make blocking work bounded and cancellation-aware.
+Engine shutdown runs in this order:
+
+1. It refuses new turns, tools and background jobs. A job that ends from here on is
+   recorded for its thread and never starts a turn. Active turns are cancelled.
+2. It stops channels, peers, background jobs (their process groups), the scheduler and MCP.
+3. It waits up to five seconds for turns, synchronous tool workers and learning reviews.
+   Then it closes the learner.
+4. It closes plugin resources, removes the trace sink, releases the writer claim and
+   closes the session store last.
+
+Python cannot stop a worker thread. If a synchronous tool is still running at step 3,
+`CoreRuntime.close()` raises `ShutdownTimeout`. By then jobs and transports are stopped.
+It keeps only what that tool can still touch: plugin resources, the session store and
+the writer claim. A later `close()` finishes the job once the tool returns. The engine
+that `exo serve` and the terminal build (`exo.application.CoreEngine`) logs a warning and
+closes again until it does. Its plugin cleanups then run once and exod exits normally.
+No detached cleanup watcher is created.
+
+Plugin tool handlers are called as `fn(args, session_id=, task_id=, tool_call_id=)`. They
+get no cancellation signal, so keep blocking work bounded, for example with a timeout on
+each network call. Shutdown waits for a handler to return.
 Call `close()` from the engine owner, outside its running turn/tool callbacks. Reentrant
-shutdown from owned work is rejected before resources are released.
+shutdown from owned work is rejected before anything is stopped.
 
 ## Architecture and evidence
 
 `exo.harness` resolves a plan without runtime side effects. `exo.compose` applies it.
-`exo.harness_runtime` supplies inert optional services. The runtime accepts injected job
-and delegation factories and a skills switch. Workspace prompt injection is per session
+`exo.harness_runtime` supplies inert optional services. `exo.runtime_shutdown` holds the
+shutdown steps around the core's transport and job steps (`stop_admission` and `drain`).
+The runtime accepts injected job and delegation factories and a skills switch. Workspace prompt injection is per session
 and reused by child loops. Plugin graph/resource ownership lives in
 `exo.plugin_lifecycle`. Its registration interfaces remain in `exo.core.plugins`.
 No wire command or event was added.

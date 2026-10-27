@@ -227,7 +227,6 @@ class PluginContext:
         self._resources.add(callback)
 
     def rollback(self) -> None:
-        self._resources.close()
         for undo in reversed(self._undo):
             try:
                 undo()
@@ -235,6 +234,7 @@ class PluginContext:
                 logger.warning("plugin %s: rollback step failed", self.plugin, exc_info=True)
         self._undo.clear()
         self.registered.clear()
+        self._resources.close()  # last: an interrupted cleanup leaves no registration behind
 
     # ---- config
 
@@ -372,11 +372,11 @@ class PluginManager:
             self.plugins[manifest.name] = rec
             return rec
         ctx = PluginContext(self, manifest)
+        self._resources.add(ctx._resources.close)  # before register runs: an interrupt there still reaches cleanup
         try:
             if not callable(register):
                 raise PluginError("no register(ctx) function")
             register(ctx)
-            self._resources.add(ctx._resources.close)
         except Exception as e:
             ctx.rollback()
             rec.error = f"{type(e).__name__}: {e}"

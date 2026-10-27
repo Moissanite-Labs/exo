@@ -6300,3 +6300,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   catalog and proposes eleven optional additions, with pinned sources and acceptance criteria. Reuse
   existing context, ingestion, questions, memory, operations views and spend accounting. Add capability
   packs and observer contracts through the existing roadmap. This amendment changes no runtime behavior.
+- **Amendment 2026-10-26 (review round on #500):** reviews 5634123763, 5634152980, 5654964041 and 5659059900.
+  - *Shutdown.* `close()` first refuses new turns, tools and background jobs, and job wakes. It then stops
+    channels, peers, background jobs, the scheduler and MCP. Only then does it wait, up to five seconds, for
+    turns, synchronous tool workers and learning reviews. A sync tool that outlives the wait no longer leaves
+    jobs running: `ShutdownTimeout` is raised with jobs and transports already stopped. Plugin resources, the
+    store and the writer claim stay until the tool returns. `exo.application.CoreEngine.close`, which exod and
+    the terminal use, closes again until then, so cleanups run once and exod exits normally. A job that ends
+    during close no longer files a false bug finding. Ctrl-C or `SystemExit` in `register` or in a cleanup no
+    longer loses cleanups. A close during `start()`'s peer start stops that service. Close now ends learning
+    reviews and closes the learner, as startup rollback did.
+  - *Plugin tools.* Plugin tool handlers get no cancellation signal, so the docs now ask for bounded blocking
+    work instead of cancellation-aware work.
+  - *Deferred.* Calling the memory provider's `shutdown()` at close is a follow-up. Main never called it, and it
+    changes exo-memory's shared runtime lifetime.

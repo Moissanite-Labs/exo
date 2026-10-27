@@ -35,6 +35,21 @@ class CoreEngine(CoreRuntime):
             plugins.close()
             raise
 
+    async def close(self) -> None:
+        """Close for the owner (exod, the terminal's in-process core), retried until it completes.
+
+        ``CoreRuntime.close`` is bounded. When a synchronous tool outlives the bound, it has already stopped jobs,
+        channels, peers, the scheduler and MCP, and it keeps plugin resources, the store and the writer claim.
+        Python cannot stop that thread, and the process waits for it at exit anyway, so this logs and closes
+        again until the tool returns. Then plugin cleanups run once and the writer claim is released.
+        """
+        from exo.runtime_shutdown import ShutdownTimeout
+        while True:
+            try:
+                return await super().close()
+            except ShutdownTimeout as exc:
+                logging.getLogger(__name__).warning("%s; closing again", exc)
+
     def abort_startup(self) -> None:
         """Release an incompletely composed, unstarted runtime synchronously.
 

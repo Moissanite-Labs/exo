@@ -35,10 +35,13 @@ class Resources:
         self._callbacks.append(callback)
 
     def close(self) -> None:
+        """Run every callback once, newest first. A failure is logged. Ctrl-C or SystemExit in one callback
+        still lets the rest run, and the first of those is raised at the end."""
         if self.closed:
             return
         self.closed = True
         callbacks, self._callbacks = self._callbacks, []
+        interrupted: BaseException | None = None
         for callback in reversed(callbacks):
             try:
                 result = callback()
@@ -48,6 +51,11 @@ class Resources:
                     raise TypeError("plugin cleanup returned an awaitable; use synchronous cleanup")
             except Exception:
                 logger.warning("plugin %s: cleanup failed", self.owner, exc_info=True)
+            except BaseException as exc:  # noqa: BLE001 - raised after the remaining callbacks
+                logger.warning("plugin %s: cleanup interrupted", self.owner, exc_info=True)
+                interrupted = interrupted or exc
+        if interrupted is not None:
+            raise interrupted
 
 
 def requirements(manifest: Manifest) -> tuple[str, ...]:
