@@ -832,10 +832,10 @@ An allow rule and a scope still read the target as written, so a lexical form on
 a `..` may lead elsewhere, and then the entry matches when it need not (fails closed).
 The target is the first word that names the store. So `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` names its `of=`
 word, and `dd if=~/.exo/./state/x.json of=/tmp/a` its `if=` word, as `dd` with the plain path does on main.
-`deny: [target:~/.exo/*]` asks there, as for the plain path, since the lexical form keeps the `if=` or `of=`, and
-a `reserved:` entry like it counts no hit. That
-holds for a read of the seat key too: `dd if=~/.exo//keys/seat.key of=/tmp/a` asks under that entry, where main
-denied it, as main asks for `dd if=~/.exo/keys/seat.key of=/tmp/a`. #568 tracks this.
+The lexical form keeps the `if=` or `of=`, but since #514 each store path a write names is also a part with the path
+alone. So `deny: [target:~/.exo/*]` denies both lines, here and on main, and a `reserved:` entry like it counts a
+hit. The same holds for a read of the seat key, `dd if=~/.exo//keys/seat.key of=/tmp/a`, as on main for its plain
+path.
 A backslash that the shell drops keeps the target main gives. The gate reads `\` as `/` in the line's text, so the
 text `~/.kube/\config` names the store only in its lexical form. Such a text is the target only when nothing else
 on the line names a store, not even a brace set. So the target of `cat ~/.kube/\config` is the word as the shell
