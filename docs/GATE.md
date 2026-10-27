@@ -657,7 +657,7 @@ the process-tree check are the guard.
 A path names a secret store (`credentials`, always asks) when it matches the store list in `exo.gate`
 (`~/.ssh`, `~/.aws`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `.env`, `*.key`,
 token files, Exo's `keys/`...), or when it is a glob that could match one of the sample store paths. The
-names match in any case (#601, D-082): on a case-insensitive filesystem `~/.SSH/config` and `~/.KUBE/config`
+names match in any case (#601, D-087): on a case-insensitive filesystem `~/.SSH/config` and `~/.KUBE/config`
 are `~/.ssh/config` and `~/.kube/config`, and they ask as the plain spellings do. The descriptor folders
 are the exception, matched as written: `printf x > /DEV/FD/3` writes an ordinary file where `> /dev/fd/3`
 writes one the gate cannot resolve, and only the lower-case spelling asks. The process folders do fold:
@@ -953,7 +953,7 @@ cannot leave Exo's stores out, so it refuses a folder that is or holds a known s
 `~/.config`, `/`). With these, the D-038 guarantee that a store read asks holds for `read_file`, the shell and the
 search tools alike. The cost is one `lstat` and one match per entry, plus a few cached existence checks per `.claude`
 folder: about 0.2 to 0.5 s of CPU on a 20,000-file tree (calling `is_sensitive_path` per entry would take about 3.5 s). Known limits: a hard link to a store file is not seen. A store
-spelt in another case asks now (#601, D-082), as the other path checks read it. A store
+spelt in another case asks now (#601, D-087), as the other path checks read it. A store
 folder that is itself a link to an ordinary folder (`~/.aws` pointing into a dotfiles repo) is a store as named but
 not as resolved, so a search naming it asks and then returns nothing (fail closed); read its files by name
 (`read_file ~/.aws/credentials`, which asks). The reverse is not seen: with `~/.kube` pointing to `~/dotfiles/kube`,
@@ -2690,7 +2690,7 @@ itself, which makes a protected folder or `config.json` from its source name
 `tar -C ~/.exo -xf x.tar`, `unzip -d ~/.exo x.zip`), is not seen either (#483). Nor is a path held in a variable or made by a
 command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 `cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks match in any case (#601,
-D-082): on a case-insensitive filesystem (APFS) `STATE/` for `state/`, `CONFIG.JSON` for the home's
+D-087): on a case-insensitive filesystem (APFS) `STATE/` for `state/`, `CONFIG.JSON` for the home's
 `config.json` and a distinct `.exO` folder all ask, as the plain spellings do; `EXO_GATE_CASE_SENSITIVE=1`
 reads main d800f33c's case-sensitive names. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted

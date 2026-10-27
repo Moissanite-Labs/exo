@@ -4658,7 +4658,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   or one a command builds from pieces (`F=~/.exo/config.json; cp x "$F"`), a write through a hard link made earlier,
   the bash tool's `cwd` argument and `python -mexo.config` written as one word, which keep main's `opaque_exec`
   ask. Names matched case-sensitively here — on a case-insensitive filesystem `~/.exo/CONFIG.JSON` kept its
-  class, as `~/.exo/POLICIES/gates.yaml` did — until #601 (D-082) made the names match in any case, so these
+  class, as `~/.exo/POLICIES/gates.yaml` did — until #601 (D-087) made the names match in any case, so these
   ask now. A symlink is not a limit: one made earlier is resolved (`_path_forms`), and
   one made on the same line (`ln -s ~/.exo/config.json /tmp/l && cp x /tmp/l`) names the file in its `ln`, which is
   the store write, as for `policies/gates.yaml` on main. A copy or extraction whose destination is a folder that
@@ -5069,7 +5069,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   2026-10-18 exo-live update. Team operating record, not product behaviour.
 - **Docs:** this entry.
 
-## D-082 (2026-10-26) A store or secret name matches in any case (issue #601)
+## D-087 (2026-10-26) A store or secret name matches in any case (issue #601)
 - **Status:** Accepted 2026-10-26 (gate security; strictness only grows). It amends the case-sensitive note in
   D-074's limits and the same limits in `docs/GATE.md`.
 - **Why:** on a case-insensitive file system (default APFS) `.exO/config.json` IS `.exo/config.json`, but every
