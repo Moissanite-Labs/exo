@@ -7,6 +7,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- `/tab` tells the user when the new window loses a permission flag (#669). The new window is a fresh
+  session, so it asks for each action even when this one runs with `--skip-permissions` or
+  `--dangerously-skip-permissions`; `restart.dropped_permission_flags` reads the same command source
+  `new_command` starts from (`EXO_RESTART_CMD`, else the current arguments), follows argparse's
+  abbreviated long flags, and the client posts one warning naming the flags it dropped. Warning only:
+  the flags are still dropped, which stays the safe default.
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.
