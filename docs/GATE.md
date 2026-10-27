@@ -732,6 +732,14 @@ system or bash will.
   folders' absolute and resolved forms are also compared with Exo's key stores and run folders, so a relative `run`
   read in a session whose folder is `$EXO_HOME` is the run folder. A `.pub` name exempts a path only when the
   resolved path ends in `.pub` too: `key.pub` pointing at `~/.ssh/id_rsa` asks.
+  A write by `write_file`, `edit_file` or `apply_patch` through a linked folder keeps the path as spelt for its
+  target, and adds a `local_write` part for the place it lands (exo-desktop #52). That place is the folders
+  resolved as the kernel resolves them, with the last name kept, since the tools refuse a link there. The question
+  names it in full: `write cfg/authorized_keys (a link leads it to <home>/.ssh/authorized_keys)`. So a `target:` entry
+  on the place applies: `deny: ["target:*/shared/*"]` denies `write_file o/plain.txt` with `o` a link to that
+  folder, as it denies the absolute path. Before, the link was the one spelling no entry on the place could reach,
+  and the question named only the link. A relative path is read from the session's folder as resolved, so a link
+  to that folder itself adds nothing. The call's own target, which its grants are keyed on, stays as spelt.
 - **Defaults (#202).** `${VAR:-word}` and the other operators are read for `HOME`, `EXO_HOME`,
   `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE`. The path is checked with the variable's value (as `$EXO_HOME`
   reads: Exo's folder, set or not) and with the variable unset (the default word, spelt out in turn, quotes
