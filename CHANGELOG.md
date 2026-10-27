@@ -6,6 +6,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A leading assignment quoted whole in an `env -S` text no longer hides the command after it (#591). GNU env splits
+  the `-S` text into words and reads them as its own argv, so a word quoted whole with the form `NAME=value` is an
+  assignment there — `env -S "'X=a b' printenv X"` prints `a b` — but the gate read the text as one shell line
+  (`classify_shell` of the split), whose first word was an unknown program, so the command behind it was never
+  read: `env -S "'X=a b' rm -rf /srv/data"`, `sudo env -S "'X=a b' rm -rf /srv/data"` and
+  `env -S '"X=a b" rm -rf /srv/data'` were `opaque_exec` and asked under `deny: [delete]`, where the spelling
+  without `-S` is `delete` and denies, and under `categories: {opaque_exec: allow}` the first was allowed, so a
+  policy that denies the hidden command or allows the shell around it failed open. The gate now reads the leading
+  words of the split text as env's own argv, as env's own arguments already are: the first word that is neither an
+  env option (`-i`, `--null`, `-u NAME`, `--chdir DIR`...) nor an assignment starts the command, for `-S`,
+  `--split-string` and behind `sudo` and `doas`, and the text from that word on is classified beside the shell
+  line's reading, so the hidden command's category reaches the decision the way the spelling without `-S` does
+  (`git push origin feature && env -S "'X=a b' git push --force origin main"` now asks under the allow line, not
+  logs). After `--` a quoted `NAME=value` word is the command, a word a shell operator would separate stays with
+  the line's own reading (a word of argv to env), and a split inside the split is not followed — each reads as
+  before, so nothing lowers; an unknown program first is still the command and its arguments run nothing. The
+  differential against main 3bf26afc (11438 actions, 88 policies) found nothing lowered. Tests:
+  `tests/security/test_gate_category_deny_parts.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
 - A policy pattern that does not compile is refused when the policy loads (#466). `normalize_policies` checked
   types and outcome names but compiled nothing, so a rule's `match.command`, a `command:` entry or a mapping's
   `command` in `deny:` and `reserved:`, and a `posting.forbid` pattern with a typo raised `re.PatternError` only
