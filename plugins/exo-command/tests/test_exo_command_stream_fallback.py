@@ -1,5 +1,4 @@
 """Command view stream recovery, run offline in node (mirrors the bus view's D-045 behaviour)."""
-import json
 import shutil
 import subprocess
 
@@ -106,3 +105,35 @@ console.log(JSON.stringify({ok:true,loads}));
     scenario = "const streams=[];\n" + scenario
     out = _run(tmp_path, scenario)
     assert '"ok":true' in out
+
+
+def test_quiet_stream_open_refreshes_without_message_and_ignores_stale_or_disposed_handles(tmp_path):
+    scenario = r'''
+const streams=[], timers=new Map(); let nextTimer=0;
+globalThis.setTimeout=(fn,ms)=>{const id=++nextTimer;timers.set(id,{fn,ms});return id;};
+globalThis.clearTimeout=id=>timers.delete(id);
+const tick=async ms=>{for(const [id,t] of [...timers])if(t.ms===ms){timers.delete(id);t.fn();}await new Promise(setImmediate);};
+globalThis.EventSource=class {constructor(){this.readyState=1;streams.push(this);}close(){this.readyState=2;}};
+let loads=0;
+globalThis.fetch=async(path,opts)=>{
+  assert.equal(opts.method,"GET","recovery must remain read-only");
+  assert.ok(path.startsWith("/api/snapshot")); loads++;
+  return {ok:true,status:200,json:async()=>(''' + SNAP + r''')};
+};
+const root=new El("div");const {mount}=await import("./command.mjs");const unmount=mount(root);
+await new Promise(setImmediate);assert.equal(loads,1);
+const first=streams[0];first.onopen();await tick(150);
+assert.equal(loads,2,"opening a quiet stream must reconcile the snapshot");
+first.readyState=2;first.onerror();await tick(1000);
+assert.equal(streams.length,2);
+const second=streams[1];first.onopen();await tick(150);
+assert.equal(loads,2,"a superseded open must not fetch");
+second.onopen();second.onopen();await tick(150);
+assert.equal(loads,3,"quiet reopen must refresh without a data event, coalescing opens");
+second.onopen();unmount();await tick(150);
+assert.equal(loads,3,"unmount must cancel the queued open refresh");
+second.onopen();first.onopen();await tick(150);
+assert.equal(loads,3,"disposed handles must not fetch");
+console.log("ok");
+'''
+    assert _run(tmp_path, scenario) == 'ok'

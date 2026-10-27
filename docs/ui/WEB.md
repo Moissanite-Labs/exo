@@ -308,7 +308,8 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   Allow always is a standing grant, so as on the Chat card it waits for a separate Confirm always click. Cancel,
   another section, Refresh or the request closing elsewhere drops the confirm. Allow and deny answer at once.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
-  Empty sections say what will appear and how.
+  Empty sections say what will appear and how. When the event stream opens, Command refreshes its snapshot
+  after the same short debounce used for events, including when the reopened stream stays quiet.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
   and roles as labelled values, with the key field and buttons under them. The default model has its own panel.
 - **Focus and motion.** Every control keeps the orange focus ring (inset on tabs and gauges). The page head reveals
