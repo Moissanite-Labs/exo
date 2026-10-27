@@ -777,7 +777,7 @@ system or bash will.
   up a run folder in the lexical form of what follows, once per classify call, so a `..` there is read as text for
   that lookup: `cat /proc/*/root/<link>/../exod*`, where `<link>` leads to `run/jobs`, reads as on main, while
   `cat <link>/../exod*` asks. A 100 KB word with 16 links costs about twice what it costs on main, and a line of
-  500 or 2,000 short words with 16 links each about two to four times, by the load on the machine. The cost
+  500 or 2,000 short words with 16 links each about two to five times, by the load on the machine. The cost
   grows with the line's length, as on main. Another link whose target the gate does not know, such as a folder's
   descriptor in `/proc/<pid>/fd`, is read as text.
 - **Doubled slashes, `.` and `..` (#446).** The shell and the kernel read `a//b` and `a/./b` as `a/b`, and
