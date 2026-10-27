@@ -163,6 +163,10 @@ class Classification:
     # that file or an exo command that writes it counted as the store. decide takes both readings and the stricter
     # outcome stands, so a line main denied or asked about never decides lower.
     ordinary: "Classification | None" = field(default=None, repr=False, compare=False)
+    # The same call with each `env -S` text read as before (#591 follow-up to #634): a shell line only, as before #634,
+    # where the call's first reading also read the line env runs (_env_split_lines); and with #634's reading of its
+    # leading words (_env_split_argv), where that found a command. decide takes every reading and the strictest stands.
+    split_readings: list["Classification"] = field(default_factory=list, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
@@ -170,6 +174,7 @@ class Classification:
         d.pop("parts", None)
         d.pop("displaced")
         d.pop("ordinary")
+        d.pop("split_readings")
         d.pop("floor")
         d.pop("alt_copy")
         d.pop("line_copy")
@@ -3059,8 +3064,10 @@ def _env_split_argv(split: str) -> str | None:
     text into words and reads them itself, so a word quoted whole with the form NAME=value is an assignment, and
     the first word that is neither an option nor an assignment starts the command. Returns the text from that word
     on, or None when the shell line over the text already reads it: no leading word consumed, no command at all, a
-    split inside the split (env reads it again, the gate does not follow), or a shell operator before the command
-    (a word to env, but the line's own reading covers what follows it)."""
+    split inside the split, or a shell operator before the command. Kept as #634 read the text, in a reading of its
+    own (classify, mode 1), so nothing it found is lost. It splits the text as a shell line does and takes the word
+    after `--` for the command; env does neither (it still reads `NAME=value` after `--`, and `;` is a character of
+    a word to it), and the first reading reads the text as env splits it (_env_split_lines)."""
     toks = _Lexer(split or "", scan=False).run()
     words = [t for k, t in toks if k == "w"]
     n, i = -1, 0
@@ -3076,7 +3083,7 @@ def _env_split_argv(split: str) -> str | None:
         if f in ("-S", "--split-string") or f.startswith(("--split-string=", "-S")):
             return None
         if f == "--":
-            n = i                         # the options end: the next word is the command, assignments included
+            n = i                         # #634 took the next word for the command (see the docstring)
             break
         if f in _PREFIXES["env"] and i < len(words):
             i += 1                        # a value of its own (`-u NAME`, `--chdir DIR`)
@@ -3092,6 +3099,249 @@ def _env_split_argv(split: str) -> str | None:
             break
         seen += 1
     return " ".join(w.raw for w in words[n:])
+
+
+# #591 follow-up: how a reading of the call reads an `env -S` text beside the text as a shell line, and a mark of what
+# it read there. classify sets it: 2 the line env runs (_env_split_lines), its first reading; 0 nothing more, as before
+# #634; 1 #634's leading words (_env_split_argv); 3 as 0. In 2 and 3 every spelling of -S reads as `-S TEXT` does
+# (_env_s_text): its text a shell line with the opaque part, and no environment dump. Unset (a classify_shell call
+# outside classify): 2, each spelling as main read it.
+_env_split_mode: contextvars.ContextVar[tuple[int, list[int]] | None] = contextvars.ContextVar(
+    "exo_gate_env_split_mode", default=None)
+
+
+_ENV_S_WORD = re.compile(r"-([^-uCS][^uCS]*)?S(.*)", re.S)     # -S in a word of short options (`-iS`, `-i0vS..`)
+
+
+def _env_s_text(f: str) -> bool:
+    """Whether this reading of the call reads the env option word ``f`` as `-S TEXT` (_env_split_mode 2 or 3, set by
+    classify): -S in a word of short options, or a prefix of --split-string. It then marks the call for the reading
+    as before (mode 0), which keeps what main read there (an environment dump for an option word alone)."""
+    name, ms = f.partition("=")[0], _env_split_mode.get()
+    if ms is None or ms[0] not in (2, 3) or not (_ENV_S_WORD.fullmatch(f) or len(name) > 2 and
+                                                 "--split-string".startswith(name)):
+        return False
+    ms[1][0] |= 1
+    return True
+
+
+def _env_split_lines(words: list, raw: bool = False) -> list[str]:
+    """#591: the simple command GNU env runs for an `env -S TEXT` among the prefixes of ``words``, in each spelling
+    env 9.4 takes: `-S TEXT`, `-STEXT` (the text whole: only `--split-string=` splits at its `=`), `--split-string=TEXT`
+    or `--split-string TEXT` and each unambiguous prefix of it (`--split`), and -S in a word of short options
+    (`-iS`, `-i0vS`). It is the words before it, TEXT split as env splits it (_env_split) and the words after it, as
+    a line of quoted words. env reads the split words as its own argv, so that line reads as the same command
+    without -S does: an assignment quoted whole or after `--`, or with `;` in it, is an assignment (`env 'X=a b;x'
+    rm`). A text with a shell expansion in it gives the words env closes before the first one (_shell_cut), the rest
+    of the shell word as one word; and a second line when the rest splits otherwise with each expansion one piece of
+    the word it sits in (_shell_parts: `$BR --force` is two words to env). No line without one, when env would
+    refuse the text, or when no word of it closes before an expansion (`env -S "$CMD"`). With ``raw``, the text as
+    main reads -S's (an attached one alone, else the words from it on, joined) and the option word (_env_s_text)."""
+    i, own_argv = 0, False
+    while i < len(words):
+        w = words[i]
+        if (own_argv or not w.quoted) and _ASSIGN.fullmatch(w.text):
+            i += 1
+            continue
+        base = w.text.rsplit("/", 1)[-1]
+        if w.dynamic or base not in _PREFIXES or base == "command" and words[i + 1:i + 2] and \
+                words[i + 1].text in ("-v", "-V"):
+            return []
+        own_argv, takes, i = base in ("env", "sudo"), _PREFIXES[base], i + 1
+        while i < len(words) and words[i].text.startswith("-") and words[i].text != "-":
+            f, i = words[i].text, i + 1
+            if base == "env" and f == "--":
+                break
+            name, eq, val = f.partition("=")
+            # -S in a word of short options; one that takes a value (-u, -C) before it takes the rest
+            m = _ENV_S_WORD.fullmatch(f) if base == "env" else None
+            if base == "env" and len(name) > 2 and "--split-string".startswith(name):
+                text: str | None = val if eq else None
+            elif m:
+                text = m[2] or None
+            else:
+                i += bool(i < len(words) and (f in takes or base == "env" and (re.fullmatch(r"-[^-uCS]*[uC]", f) or (
+                    not eq and len(name) > 2 and any(t.startswith(name) for t in ("--unset", "--chdir"))))))
+                continue
+            at, tail = i - 1, ""
+            if text is None:
+                if i >= len(words):
+                    return []
+                text, i = words[i].text, i + 1
+                if raw:
+                    return [" ".join(x.text for x in words[i - 1:]), f]
+            if raw:
+                return [text, f]
+            if words[i - 1].dynamic:
+                # A shell expansion in the text: the words env closes before it are read, and the rest of the shell
+                # word stands for the rest of the text (_shell_cut), as one word that may hold an expansion.
+                cut, lead = _shell_cut(words[i - 1]), len(words[i - 1].text) - len(text)   # lead: the option
+                if cut is None or len(cut[0]) < lead:
+                    return []
+                text, tail = cut[0][lead:], cut[1]
+            split = _env_split(text, tail)
+            if split is None:
+                return []
+            head = [x.raw or shlex.quote(x.text) for x in words[:at]] + (["-" + m[1]] if m and m[1] else [])
+            rest = [x.raw or shlex.quote(x.text) for x in words[i:]]
+            # The rest split by env's rules, each expansion a piece of the word it sits in. The value may hold a
+            # quote that joins what follows, so the one-word reading above stays beside it.
+            parts = _shell_parts(tail) if tail and "\0" not in text else None
+            more = None if parts is None or any("\0" in s for exp, s in parts if not exp) else \
+                _env_split(text + "".join("\0" if exp else s for exp, s in parts), exps=[s for exp, s in parts if exp])
+            line, other = " ".join(head + split + rest), " ".join(head + (more or []) + rest)
+            return [line] + [other] * bool(more and other != line)
+        if base == "timeout" and i < len(words) and re.fullmatch(r"[\d.]+[smhd]?", words[i].text):
+            i += 1
+    return []
+
+
+def _shell_cut(w: _Word) -> tuple[str, str] | None:
+    """A word with a shell expansion in it (#591): its text before the first expansion, and the rest of its source as
+    a shell word of its own (a double quote open there opened again). None when the lexer reads that start otherwise."""
+    raw, dq, i = w.raw, False, 0
+    while i < len(raw) and not (raw[i] in "$`" or i == 0 and raw[i] in "<>"):
+        if raw[i] == "\\":
+            i += 1
+        elif raw[i] == "'" and not dq:
+            j = raw.find("'", i + 1)
+            i = len(raw) if j < 0 else j
+        elif raw[i] == '"':
+            dq = not dq
+        i += 1
+    toks = [t[1] for t in _Lexer(raw[:i], scan=False).run() if t[0] == "w"]
+    head = toks[0].text if toks else ""
+    if i >= len(raw) or len(toks) > 1 or not w.text.startswith(head):
+        return None
+    return head, '"' * dq + raw[i:]
+
+
+def _shell_parts(src: str) -> list[tuple[bool, str]] | None:
+    """The pieces of a shell word's source (#591, the rest _shell_cut gives): (False, the text the shell gives) and
+    (True, an expansion's source, in the double quotes it sat in). None when a piece reads otherwise."""
+    out: list[tuple[bool, str]] = []
+    dq, i = False, 0
+    while True:
+        a, was = i, dq
+        while i < len(src) and src[i] not in "$`":     # as _shell_cut scans
+            if src[i] == "\\":
+                i += 1
+            elif src[i] == "'" and not dq:
+                j = src.find("'", i + 1)
+                i = len(src) if j < 0 else j
+            elif src[i] == '"':
+                dq = not dq
+            i += 1
+        toks = [t[1] for t in _Lexer('"' * was + src[a:i] + '"' * dq, scan=False).run() if t[0] == "w"]
+        if len(toks) > 1 or toks and toks[0].dynamic:
+            return None
+        if toks and toks[0].text:
+            out.append((False, toks[0].text))
+        if i >= len(src):
+            return out
+        lx, w = _Lexer(src, scan=False), _Word()
+        lx.i = i
+        if src[i] == "`":
+            lx._backtick(w, dq)
+        else:
+            lx._dollar(w, dq)
+        out.append((True, '"' * dq + src[i:lx.i] + '"' * dq) if w.dynamic else (False, w.text))
+        i = lx.i
+
+
+_ENV_ESCAPES = {'"': '"', "#": "#", "$": "$", "'": "'", "\\": "\\", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
+                "v": "\v"}
+_ENV_VAR = re.compile(r"\{([A-Za-z_]\w*)\}", re.A)
+
+
+def _env_split(text: str, tail: str = "", exps: tuple | list = ()) -> list[str] | None:
+    """The words GNU env's -S splits ``text`` into (build_argv in coreutils' env.c), each quoted for a shell line:
+    quotes, the backslash escapes, `\\_` between words, `#` at a word's start and `\\c` end the text; `;`, `&`, `|`
+    and `>` are characters of a word. A ${NAME} env fills from its environment stays "${NAME}", and a word of
+    ${NAME}s only stays unquoted, as it may give no word (env gives none for an unset NAME but an empty word for a
+    set, empty one; in the command's place either is a program from a variable, which is opaque). None where env
+    refuses the text and runs nothing (an unclosed quote, an unknown escape, a `$` not in ${NAME}), and where a `#`
+    follows ${NAME}s only (a comment when they are empty). With ``tail``, ``text`` is the -S text only up to a shell
+    expansion and ``tail`` the shell source from there (_shell_cut): the words closed before the end stand, as later
+    text cannot change them, and the word open there (or a new one) ends with ``tail``. None then also when no word
+    closes before the end, as the program may come from the expansion. With ``exps``, each NUL in ``text`` stands
+    for the value of the shell expansion ``exps`` holds at its turn (_shell_parts), a piece of the word it sits in
+    that may be empty, as a ${NAME} is; None then also where an escape goes on in it. Each word's text is joined
+    once (_env_word), so the split takes time linear in the text."""
+    words: list[list[list]] = []        # each word's pieces: [False, its text's parts], [True, [a NAME]] or
+    sq = dq = bare = ended = False      # ["sh", [an expansion's source]]; bare: the open word holds those only
+    sep, i, k = True, 0, 0
+
+    def put(s: str, var: bool | str = False) -> None:
+        nonlocal sep, bare
+        if sep:
+            words.append([])
+            sep, bare = False, True
+        bare = bare and bool(var)
+        if words[-1] and not var and not words[-1][-1][0]:
+            words[-1][-1][1].append(s)
+        else:
+            words[-1].append([var, [s]])
+
+    while i < len(text):
+        ch, i = text[i], i + 1
+        if ch == "\0" and k < len(exps):
+            put(exps[k], "sh")
+            k += 1
+        elif ch == "\\" and text[i:i + 1] == "\0" and k < len(exps):     # the escape goes on in the value
+            return None
+        elif ch == "'" and not dq or ch == '"' and not sq:
+            sq, dq = (not sq, dq) if ch == "'" else (sq, not dq)
+            put("")
+        elif ch in " \t\n\v\f\r" and not (sq or dq):
+            sep = True
+        elif ch == "#" and (sep or bare):
+            if not sep:
+                return None
+            ended = True
+            break
+        elif ch == "\\" and not (sq and text[i:i + 1] not in ("\\", "'")):
+            if tail and i == len(text):     # the escape goes on in the expansion
+                break
+            nxt, i = text[i:i + 1], i + 1
+            if nxt == "_" and not dq:
+                sep = True
+            elif nxt == "c" and not dq:
+                ended = True
+                break
+            elif nxt == "_" or nxt in _ENV_ESCAPES:
+                put(" " if nxt == "_" else _ENV_ESCAPES[nxt])
+            else:
+                return None
+        elif ch == "$" and not sq:
+            m = _ENV_VAR.match(text, i)
+            if not m:
+                if tail and re.fullmatch(r"(\{([A-Za-z_]\w*)?)?", text[i:], re.A):  # ${NAME} goes on in it
+                    break
+                return None
+            put(m[1], True)
+            i = m.end()
+        else:
+            put(ch)
+    else:
+        if (sq or dq) and not tail:
+            return None
+    out = [_env_word(w) for w in words]
+    if not tail or ended:
+        return out
+    if len(words) - (not sep) < 1:
+        return None
+    return out + [tail] if sep else out[:-1] + [out[-1] + tail]
+
+
+def _env_word(pieces: list[list]) -> str:
+    """One word of _env_split, quoted for a shell line: a ${NAME} in double quotes, a word of ${NAME}s only bare, a
+    shell expansion as its source spells it."""
+    joined = [(var, "".join(s)) for var, s in pieces]
+    if all(var is True for var, _ in joined):
+        return "".join(f"${{{s}}}" for _, s in joined)
+    return "".join(s if var == "sh" else f'"${{{s}}}"' if var else shlex.quote(s) if s else ""
+                   for var, s in joined) or "''"
 
 
 def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) -> tuple[int, list]:
@@ -3671,12 +3921,24 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         # a prompt transformation expands the value as a prompt string, its command substitutions included (#579)
         what = "the positional parameters" if n in ("@", "*") or n[:2] in ("@:", "*:") else n
         parts.append(_opaque(f"runs the prompt expansion of {what}, a value the gate does not see", cmd))
-    if split is not None:
+    # #591: env reads the words of an `env -S` text as its own argv. The first reading of the call reads the line env
+    # runs (_env_split_lines), in every spelling of -S; the others read #634's leading words, or nothing more, as
+    # before (_env_split_mode), and the mark tells classify which of them the call needs. In the first reading and
+    # mode 3 a spelling main missed (`--split`, `-i0vS`) reads as `-S TEXT` does, its opaque part included; the
+    # reading as before (mode 0) keeps what main read there.
+    ms = _env_split_mode.get()
+    mode, mark = ms or (2, [0])
+    more = depth < _DEPTH and mode in (1, 2)
+    old = _env_split_argv(split) if split is not None and more else None
+    lines = (_env_split_lines(before) if mode == 2 else [old] if old else []) if more else []
+    raw = _env_split_lines(before, True) if split is None and ms and mode in (2, 3) else []
+    if raw and _env_s_text(raw[1]):
+        split = raw[0]
+    mark[0] |= 9 * bool(lines or raw) | 2 * bool(old)
+    if split is not None or lines:
         parts.append(_opaque("env -S runs a command line", cmd))
         if depth < _DEPTH:
-            parts.append(classify_shell(split, depth + 1))
-            if rest := _env_split_argv(split):   # #591: the leading words are env's own argv, not a shell line
-                parts.append(classify_shell(rest, depth + 1))
+            parts += [classify_shell(x, depth + 1) for x in ([split] if split is not None else []) + lines]
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
@@ -7231,8 +7493,9 @@ def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
             rest, takes = argv[1:], _PREFIXES[base]
             while rest and rest[0].startswith("-") and rest[0] != "-":
                 f, rest = rest[0], rest[1:]
-                if base == "env" and f.startswith(("-S", "--split-string")):
-                    return argv, False                   # env -S text is classified on its own
+                if base == "env" and (f.startswith(("-S", "--split-string")) or _env_s_text(f)):
+                    # env -S text is classified on its own; no dump in the readings that read it as `-S TEXT` (#591)
+                    return [] if _env_s_text(f) else argv, False
                 if f in takes and rest:
                     rest = rest[1:]
             if base == "timeout" and rest and re.fullmatch(r"[\d.]+[smhd]?", rest[0]):
@@ -7495,10 +7758,37 @@ def _joined_call(action: Any) -> tuple[str, dict] | None:
     return tool, {**args, key: _join_dollars(line)}
 
 
+def classify(action: Any, cwd: str | None = None) -> Classification:
+    """Classify one tool call from its name and arguments (_classify_reading). Pure; never raises on odd args. Its
+    first reading reads each `env -S` text, beside the text as a shell line, as the line env runs (#591 follow-up to
+    #634, _env_split_lines), and a spelling main missed (`--split`, `-i0vS`) as `-S TEXT` (_env_s_text). Where it
+    read a line or such a spelling, the call is read again with each text a shell line only: as before #634 (mode
+    0), and with every spelling read as `-S TEXT` (mode 3); and where #634's reading of the text's leading words
+    (_env_split_argv) found a command, once more with that reading, as main read it (mode 1). Each is a call of its
+    own, in ``split_readings``, so a part that leads one reading or takes an ssh hop's host there keeps it (review
+    of #634), and decide keeps the strictest."""
+    if _env_split_mode.get() is not None:      # a reading inside a reading (D-074's ordinary): the same mode
+        return _classify_reading(action, cwd)
+    mark: list[int] = [0]
+    token = _env_split_mode.set((2, mark))
+    try:
+        c = _classify_reading(action, cwd)
+    finally:
+        _env_split_mode.reset(token)
+    for mode in (0, 1, 3):
+        if mark[0] & (1 << mode):
+            token = _env_split_mode.set((mode, [0]))
+            try:
+                c.split_readings.append(_classify_reading(action, cwd))
+            finally:
+                _env_split_mode.reset(token)
+    return c
+
+
 @_brace_budget
 @_in_tool_folder
-def classify(action: Any, cwd: str | None = None) -> Classification:
-    """Classify one tool call from its name and arguments. Pure; never raises on odd args. When a gh command in it has
+def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
+    """Classify one tool call in one reading of its `env -S` texts (classify). When a gh command in it has
     its subcommand past an option (_gh_verb_order), or a gh api method gh reads otherwise (_gh_api_method), the call
     is also read as before #399, with each gh command's third word for its subcommand, and that reading is its
     ``floor``. A shell line with a `$` form split by a backslash-newline, there or in a line read again from it, is
@@ -8186,8 +8476,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     A line the gate reads more than one way is decided on each reading first (readings): the shell call as read
     before #311 (``also``), the gh line as read before gh's subcommand search (``floor``, #399) and that line's own
-    reading before #311, the call as read before D-074 (``ordinary``, #125), then the line on each other target it may
-    land on (``alt_targets``). Each reading goes
+    reading before #311, the call as read before D-074 (``ordinary``, #125), the call with each `env -S` text read as
+    before (``split_readings``, #591), then the line on each other target it may land on (``alt_targets``). Each
+    reading goes
     through all of the above, the own text pass and its fallback too, and the strictest stands on each axis
     (_strictest), so a reading only raises the line.
     """
@@ -8196,9 +8487,11 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     rs = readings(c)
     if len(rs) > 1:
         # #311: the call as read before (a shell call's folder made it credentials as a whole, #209), and #399: the
-        # line as the gate read it before gh's subcommand search, and D-074: the call with the Exo home's config.json
-        # an ordinary file, are decided too, so none decides lower.
-        return _strictest([decide(replace(r, also=None, floor=None, ordinary=None), pol, ctx) for r in rs],
+        # line as the gate read it before gh's subcommand search, D-074: the call with the Exo home's config.json
+        # an ordinary file, and #591: the call with each env -S text read as before, are decided too, so none
+        # decides lower.
+        return _strictest([decide(replace(r, also=None, floor=None, ordinary=None, split_readings=[]), pol, ctx)
+                           for r in rs],
                           [""] + [f" (for {redact_userinfo(r.summary or r.category)})" for r in rs[1:]])
     if c.alt_targets:
         # #399: decided on each target the gate cannot rule out.
@@ -8877,11 +9170,12 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     cover (``no_grant``, a part of it too, #447), and a line the gate reads more than one way (#399): a gh command
     that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
     with a ``floor``, whose stricter reading may be another act, with ``also`` readings (#311, #584) or an
-    ``ordinary`` reading (D-074). A sudo write also binds when its displaced part names a target or asks with that
-    part leading (#454)."""
+    ``ordinary`` reading (D-074) or ``split_readings`` (#591). A sudo write also binds when its displaced part names
+    a target or asks with that part leading (#454)."""
     q = c.displaced
     return (is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
             or bool(c.alt_targets) or c.floor is not None or c.also is not None or c.ordinary is not None
+            or bool(c.split_readings)
             or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
 
 
@@ -8889,7 +9183,9 @@ def readings(c: Classification) -> list[Classification]:
     """Each way the gate reads the call, the call first: as it read it before #311 (``also``: a shell call's own
     folder argument made it credentials as a whole, #209), as it read it before #399 (``floor``: each gh command's
     third word for its subcommand, gh api's first `-X` word), and the floor as read before #311; then each reading of
-    the call as read before D-074 (``ordinary``: the Exo home's config.json an ordinary file, #125). `decide` keeps the
+    the call as read before D-074 (``ordinary``: the Exo home's config.json an ordinary file, #125), and each reading
+    of the call with its `env -S` texts read as before (``split_readings``, #591: a shell line only, and #634's
+    leading words). `decide` keeps the
     strictest of them, and so does each check past it: no_grant, call_approvers, body_unseen and the exo-gate hook's
     body files and required executor. A line with a `$` form split by a backslash-newline (#584) is read joined and
     as written: the more severe of the two leads (on a tie, the line as written) and the other ends its ``also``
@@ -8901,8 +9197,9 @@ def readings(c: Classification) -> list[Classification]:
         if x is not None and not any(x is r for r in out):
             out.append(x)
             todo += [x.floor, x.also]
-    if c.ordinary is not None and not any(c.ordinary is r for r in out):
-        out += [r for r in readings(c.ordinary) if not any(r is e for e in out)]
+    for other in (c.ordinary, *c.split_readings):
+        if other is not None and not any(other is r for r in out):
+            out += [r for r in readings(other) if not any(r is e for e in out)]
     return out
 
 

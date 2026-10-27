@@ -3133,11 +3133,70 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   allowed. The gate now reads the leading words of the split text as env's own argv, as env's own arguments
   already are: the first word that is neither an env option nor an assignment starts the command, and the text
   from it on is classified beside the shell line's reading, so the hidden command's category reaches the decision
-  the way the spelling without `-S` does. After `--` a quoted `NAME=value` word is the command, a word an operator
-  would separate stays with the line's own reading (a word of argv to env), and a split inside the split is not
-  followed — each reads as before, so nothing lowers; an unknown program first is still the command and its
-  arguments run nothing. The differential against main 3bf26afc (11438 actions, 88 policies) found nothing
-  lowered. Tests: `tests/security/test_gate_category_deny_parts.py`.
+  the way the spelling without `-S` does. This reading took a quoted `NAME=value` word after `--` for the command
+  (corrected below: env still reads it as an assignment, `env -- prog= true` runs `true`), left a word with a
+  shell operator in it to the line's own reading, and does not follow a split inside the split; an unknown
+  program first is still the command and its arguments run nothing. The differential against main 3bf26afc
+  (11438 actions, 88 policies) found nothing lowered, but it held no ssh-wrapped `-S` line: behind a hop the new
+  part took the host from the `opaque_exec` part, which lowered (review 5665626829; the follow-up below fixes
+  it). Tests: `tests/security/test_gate_category_deny_parts.py`.
+- *Amendment 2026-10-27 (issue #591, follow-up to #634, review 5665626829):* an `env -S` text keeps the ssh hop's
+  host and is split as env splits it. #634 added its parts to the call's one reading, and behind an ssh hop the
+  host goes to the remote line's leading part, or on a secret or store line to #320's copy of its first targetless
+  credentials or store part: the new delete, push, post or secret part took it, and the `opaque_exec` part the
+  line had before was left with no target. Under `rules: [{match: {category: opaque_exec, target: host},
+  decision: deny}]`, `ssh host 'env -S "'"'"'X=a b'"'"' cat ~/.ssh/id_rsa"'` went deny -> ask (below its plain
+  `-S` spelling, which denies), so did the `rm -rf` form and `echo '...' | ssh host`, and `reserved:
+  [tool:terminal]` lost `(opaque_exec, me@host)` on `ssh -p 22 me@host 'env -S ...'`. Now the call is read as a
+  call of its own with each text a shell line only, as before #634, and, where #634's reading of the leading words
+  (`_env_split_argv`, unchanged) finds a command, with that reading, as main read it
+  (`Classification.split_readings`; `_env_split_mode` tells each reading which). `readings` lists them, so
+  `decide` keeps the strictest with every reserved hit and violation, and `no_grant`, `call_approvers`,
+  `body_unseen`, the hook's body files and `binds_exact` read them too. Chosen over moving the host onto each
+  targetless part (that would add targets main never gave, which an allow rule on the host could match) and over
+  keeping the new parts out of the lead and the copy (a category line keyed on the old leading part still loses
+  it): a reading of its own is the old reading exactly, with its own budgets. The call's first reading reads the
+  line env runs (`_env_split_lines`, from the #591 branch): the words before the `-S` option, the text split by
+  env's own rules (`_env_split`: quotes, backslash escapes, `\_`, `#` at a word's start, `\c`, `${NAME}`; `;`,
+  `&`, `|` and `>` are characters of a word, so `'X=a b';x` is one assignment and `rm` runs) and the words after
+  it, each quoted, read as `env NAME=VALUE cmd` is: after `--` a `NAME=value` word is still an assignment
+  (coreutils: `env -- prog= true` runs `true`), so `env -S "-- 'X=a b' rm -rf /srv/data"` is a delete, which
+  corrects the #591 amendment above. Every spelling GNU env 9.4 takes is found: `-S TEXT`, `-STEXT` read whole
+  (`_strip_prefix_words` still cuts it at its first `=`, a reading kept beside: only `--split-string=` splits
+  there), `--split-string=TEXT`, `--split-string TEXT` and each unambiguous prefix (`--split`, `--s`), and `-S`
+  in a word of short options (`-iS`, `-vS`, `-i0vS`; one that takes a value, `-u` or `-C`, takes the rest). A
+  shell expansion in the text keeps the words env closes before it, and the rest of the shell word stands for the
+  rest, also split with each expansion a piece of its word (`$BR --force`). A text env would refuse adds no line,
+  and a program from a variable stays opaque. A spelling main missed reads in the first reading as `-S TEXT`
+  does (`_env_s_text`): its text a shell line beside the line env runs, with the `opaque_exec` part `-S`
+  carries, and no environment dump read in its option word (main read `env --split-s="..."` as a dump). One more
+  reading (mode 3) is the reading as before with every spelling so read, so the opaque part leads it as it leads
+  the `-S` spelling's reading as before, and an ssh hop's host lands on it: under `categories: {opaque_exec:
+  deny}` and the host rule, `env --split-s="..."` and `env -i0vS"..."`, bare and behind a hop, decide as `env -S
+  "..."` does (they asked; review of this PR). The reading as before (mode 0) keeps main's dump and program
+  parts. The exo-gate hook's bypass floor reads the category of the call and of each of these readings, as a
+  line main read as credentials first (`env -S "'X=a b' gh auth token \d"`, `env -- -S "'X=a b' muse login"`)
+  may lead with `opaque_exec` in the first reading now, and in bypass it went ask -> allow (review of this PR).
+  The split is linear in the text, and a call with an `env -S` text costs up to four readings; nesting stops at
+  `_DEPTH` as before. A spelling main missed is not read with #634's leading words (mode 1 is main's reading
+  exactly), so where env refuses its text (`env --split "'X=a b' gh auth token \d"`) it can ask where the `-S`
+  spelling denies; env runs nothing then, and main asked or allowed it too.
+  Measured on main e0968a2b, under `deny: [delete]` each of `env --split`, `--split-str`, `-iS`, `-vS`, `-i0vS`
+  with `"'X=a b' rm -rf /srv/data"`, `env -S'"X=a b" rm -rf /srv/data'`, `env -iS "rm -rf /srv/data"`, the `--`
+  row and `env -S "'X=a b';x rm -rf /srv/data"` asked and now denies; under `categories: {opaque_exec: allow}`
+  the `--split`, `-iS`, `-vS` and glued `;x` rows were allowed and now ask; under `categories: {opaque_exec:
+  deny}` the `-i0vS"..."`, `--split=` and `--split-s=` rows asked and now deny. Nothing lowers: gate_diff (main's
+  script, `--jobs 2`) against main e0968a2b lowers 0 of 1,064,360 pairs on the built-in corpus without variants
+  (12,095 actions x 88 policies, 345 tightened) and 0 of 3,197,250 on an aimed corpus of 18,270 `env -S` lines
+  (28 spellings, 12 assignment prefixes, 10 payloads among them an unknown escape and an unclosed quote, both
+  quotings, bare and behind sudo, doas, nice and timeout, and 16 spellings behind six ssh, mosh and stdin-fed ssh
+  forms) under 175 policies (the built-in ones and 87 more: deny and allow rules on the host and `me@host`,
+  category lines, deny and reserved entries on ten categories and on the host, `forbid_words`; 61,328 pairs
+  tightened on 11,114 actions). Known limits, as without `-S` (review nits, not touched): a NAME env takes that
+  is not an identifier (`a.b=1`), a lone `-`, and the value of an option word that takes one (`env -iu HOME`)
+  read as the program, an unknown program that `categories: {opaque_exec: allow}` allows. Tests:
+  `tests/security/test_gate_env_split_string.py`, `tests/security/test_gate_category_deny_parts.py`,
+  `plugins/exo-gate/tests/test_bypass.py`.
 - *Amendment 2026-10-26 (issue #585):* the lexer reads the `$` form after a `\<newline>` itself now, as bash reads
   it. #584 read such a line joined beside itself, but the line as written still read a `$` and then a backslash as
   a literal `$`, so its words were plain text and the decision leaned on the joined reading alone.

@@ -83,6 +83,12 @@ def _every_part(c: gate.Classification) -> list:
     return out
 
 
+def _floor(c: gate.Classification) -> str:
+    """The floor category (store write, secret) that keeps an ask in bypass, or ''. The call's category, or that of
+    a reading of its `env -S` texts as before (``split_readings``, #591): main read some lines that way first."""
+    return next((r.category for r in (c, *c.split_readings) if r.category in perm.FLOOR), "")
+
+
 def _body_path(f: str) -> Optional[Path]:
     """``f`` when the hook may read it as a body file: an absolute path to a regular file of at most 256 KiB. /dev and
     /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here they give exod's own,
@@ -379,7 +385,7 @@ class Gate:
         local caller keeps its card, as when bypass was off."""
         if d.outcome != "ask" or not self.bypass_on or not is_principal(author):
             return None
-        if c.category in perm.FLOOR:
+        if _floor(c):
             return "floor"
         return "hold" if d.violations else "allow"
 
@@ -743,7 +749,7 @@ class Gate:
             if bypass == "allow":
                 body["bypass"] = asked
         elif bypass == "floor":
-            body["bypass"] = {"floor": c.category}
+            body["bypass"] = {"floor": _floor(c)}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}
