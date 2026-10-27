@@ -633,6 +633,24 @@ def test_where_acls_cannot_be_read_group_write_is_never_eased(tmp_path, monkeypa
     assert "REPO GUIDANCE" in text and "WORK GUIDANCE" not in text
 
 
+@pytest.mark.parametrize("code,loads", [("ENODATA", True), ("ENOTSUP", True), ("EACCES", False), ("EIO", False)])
+def test_only_a_missing_acl_or_no_acl_support_lets_the_private_group_write(tmp_path, monkeypatch, code, loads):
+    """No ACL, or a file system without ACLs, eases private group write. Any other failure to read the ACL does
+    not: Exo cannot tell then who else may write."""
+    import errno
+    repo, work = _repo(tmp_path)
+    (work / "AGENTS.md").chmod(0o664)
+    _as(monkeypatch, ME)
+    _private_group(monkeypatch, (work / "AGENTS.md").stat().st_gid)
+
+    def getxattr(at, name, *, follow_symlinks=True):
+        raise OSError(getattr(errno, code), os.strerror(getattr(errno, code)))
+
+    monkeypatch.setattr(os, "getxattr", getxattr, raising=False)
+    text = WorkspaceInstructions({"enabled": True}).render(work)
+    assert "REPO GUIDANCE" in text and ("WORK GUIDANCE" in text) is loads
+
+
 def test_a_real_acl_that_lets_another_user_write_is_refused(tmp_path, monkeypatch):
     """The ACL itself, written as the kernel stores it: version 2, then (tag, permissions, id) entries."""
     import errno
