@@ -7,6 +7,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Explicit GitHub host mode respects the scrubbed tool environment and `env_deny`, rather than restoring core-process credentials or overwriting approved supplied values (aska-digital/exo-desktop#50).
+
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).

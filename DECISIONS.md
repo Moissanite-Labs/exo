@@ -3207,6 +3207,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and stay so), which is the `${..}` default word's own gap, not this one.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
+- **Amendment 2026-10-27 (aska-digital/exo-desktop#50):** explicit GitHub host mode respects the supplied, commonly
+  scrubbed child environment. It does not restore core-process tokens or `GH_CONFIG_DIR`, overwrite approved
+  supplied values, or retain variables matching `env_deny`. Stored host gh configuration remains available.
+  Token bindings, disabled bindings and their Git helpers keep their existing behavior.
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
   approvals with `allow_always`. (b) `exo web` re-exposed the whole protocol and the event stream with no token;
