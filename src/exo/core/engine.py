@@ -216,6 +216,9 @@ class CoreRuntime:
                          context=context_factory(tree) if context_factory is not None else tree, memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
+        from exo.core.reasoning import ReasoningSettings
+        self.reasoning_settings = ReasoningSettings(self.home, self.agent, self.router)
+        self.loop.reasoning_settings = self.reasoning_settings
         self.loop.on_turn_end = self.observe_turn
         self.loop.before_turn = self._refresh_soul
         self.loop.system_extra = self._system_extra
@@ -798,6 +801,8 @@ class CoreRuntime:
         if b.name == 'credentials':
             from .credentials import command
             return {"output": await command(self.home, self.agent, b.args, self.env_deny)}
+        if b.name == "reasoning":
+            return {"output": self.reasoning_settings.command(self, b.args)}
         out = await diagnostics.builtin_command(self, b)
         if out is not diagnostics.MISSING:
             return {"output": out}
