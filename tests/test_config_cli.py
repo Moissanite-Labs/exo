@@ -106,3 +106,17 @@ def test_config_set_refuses_a_literal_beneath_a_secret_name(tmp_path, monkeypatc
     assert "hunter2" not in (tmp_path / "config.json").read_text()
     assert main(["config", "set", "token", '{"a": "${TOK}"}']) == 0
     assert _cli(capsys, "get", "token.a") == "${TOK}\n"
+
+
+def test_config_masks_a_key_shaped_value_beside_a_var_reference(tmp_path, monkeypatch, capsys):
+    """`set` refused a key-shaped value that also held a `${VAR}`, but `show`, `get` and `config.get` printed one
+    written by hand (PR #674)."""
+    leak = "${TOK}:sk-" + "A" * 24
+    _home(tmp_path, monkeypatch,
+          {"version": 1, "theme": leak, "token": leak, "plugin_config": {"x": {"headers": {"X-A": leak}}}})
+    assert main(["config", "set", "theme", leak]) == 1
+    assert "refusing to store a secret" in capsys.readouterr().err
+    assert "AAAA" not in _cli(capsys, "show")
+    for key in ["theme", "token", "plugin_config.x", "plugin_config.x.headers.X-A"]:
+        assert _cli(capsys, "get", key).strip() in ("***", json.dumps({"headers": {"X-A": "***"}})), key
+        assert "AAAA" not in json.dumps(_api(tmp_path, key)), key
