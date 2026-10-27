@@ -199,6 +199,33 @@ def test_close_cancels_the_scheduler_loop_it_took_over(tmp_path):
     asyncio.run(run())
 
 
+def test_a_job_that_comes_due_while_close_stops_transports_is_left_for_the_next_start(tmp_path):
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={}, attach_scheduler=Scheduler)
+    scheduler, now, launched = engine.scheduler, [1_000_000.0], []
+    scheduler.clock = lambda: now[0]
+    job = scheduler.add("every 1h", "report")
+    scheduler.launch = lambda due: launched.append(due["id"])
+    stop_channels = engine.stop_channels
+
+    async def due_while_channels_stop():
+        now[0] = job["next_run"] + 1  # stop_admission has run: the scheduler's loop must not claim this slot
+        scheduler._wake.set()
+        await asyncio.sleep(0.05)
+        claimed = scheduler.get(job["id"])["next_run"] != job["next_run"]
+        await stop_channels()
+        assert not claimed
+
+    engine.stop_channels = due_while_channels_stop
+
+    async def run():
+        scheduler.start()
+        await asyncio.sleep(0)
+        await engine.close()
+        assert launched == []
+
+    asyncio.run(run())
+
+
 def test_close_during_start_stops_the_peer_service_start_was_opening(tmp_path):
     engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})
 
@@ -425,6 +452,30 @@ def test_an_owned_tool_that_ignores_cancellation_keeps_resources_until_retry(tmp
         await asyncio.gather(direct, return_exceptions=True)
         await CoreRuntime.close(engine)
         assert order == ["cleanup"] and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_a_worker_whose_caller_close_does_not_own_still_gets_the_cancel_signal(tmp_path):
+    from exo.core.tools.registry import ToolContext
+    from exo.core.types import ToolCall, ToolSpec
+    started = threading.Event()
+
+    def cooperative(args, ctx):
+        started.set()
+        return "stopped" if ctx.cancel.wait(10) else "never signalled"
+
+    engine, order = _engine(tmp_path, lambda args, **kw: "unused")
+    engine.registry.register(ToolSpec(name="cooperative", description="test"), cooperative)
+
+    async def run():
+        call = ToolCall("direct", "cooperative", {})  # straight to the registry: no turn and no run_tool owns it
+        caller = asyncio.create_task(engine.registry.call(call, ToolContext(cwd=str(tmp_path))))
+        assert await asyncio.to_thread(started.wait, 5)
+        before = time.monotonic()
+        await CoreRuntime.close(engine)
+        assert time.monotonic() - before < shutdown.SHUTDOWN_TIMEOUT and order == ["cleanup"]
+        assert "stopped" in (await caller).text()
 
     asyncio.run(run())
 

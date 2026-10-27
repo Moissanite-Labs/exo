@@ -41,15 +41,15 @@ def stop_admission(engine: Any) -> set[asyncio.Future]:
     engine.jobs.target.closed = True  # a job that ends from here on is recorded for its thread and never wakes it
     scheduler = engine.scheduler
     scheduled = []
-    if scheduler is not None:
+    if scheduler is not None:  # its loop must not claim a slot that comes due while transports stop
         scheduled = [task for task in [scheduler._main, *scheduler.running.values()] if task is not None]
     for loop in _loops(engine):
         loop.closing = True
         for session in tuple(loop._state):
             loop.interrupt(session)
     for context in engine.registry.workers.values():
-        context.cancel.set()  # a cooperative handler gets the signal while transports stop; none starts after this
-    tasks ={task for task in [*engine._tasks, *scheduled] if task is not current and not task.done()}
+        context.cancel.set()  # also a worker whose caller close does not own; none starts after this
+    tasks = {task for task in [*engine._tasks, *scheduled] if task is not current and not task.done()}
     if engine._started is not None and not engine._started.done():
         tasks.add(engine._started)
     for task in tasks:
