@@ -7,6 +7,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Added
 
+- Full-access audits redact raw command strings before JSON encoding and preserve entries whose masked keys collide. Grant changes record the previous session. Terminal restarts do not reapply `--full-access`.
 - Principal-only `/permissions full <session-id>` authorizes all tool calls in one selected session, including background turns, with a required redacted audit before each allow. Other sessions remain gated unless the principal explicitly selects `full all`. Ask revokes full (#623).
 
 ### Fixed

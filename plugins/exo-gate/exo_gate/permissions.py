@@ -128,13 +128,21 @@ def full_recorded_call(tool: str, args: Mapping) -> tuple[dict, str]:
         nonlocal masked
         clean = redact_secrets(value, values=known)
         masked += int(clean != value)
+        clean, count = redact(clean)
+        masked += count
         return clean
     def scrub(value):
         nonlocal masked
         if isinstance(value, dict):
             out = {}
+            reserved = set(value)
             for key, item in value.items():
                 clean_key = scrub_text(key)
+                base = clean_key
+                suffix = 2
+                while clean_key in out or (clean_key != key and clean_key in reserved):
+                    clean_key = f"{base} [{suffix}]"
+                    suffix += 1
                 if is_secret_name(key) or key.lower() in {"authorization", "cookie"}:
                     out[clean_key] = "[redacted]"
                     masked += 1

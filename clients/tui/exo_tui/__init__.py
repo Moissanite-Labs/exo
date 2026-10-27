@@ -40,7 +40,7 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     permissions.add_argument("--skip-permissions", "--dangerously-skip-permissions", dest="skip_permissions",
                    action="store_true", help="permissions bypass for this run of the core: the gate stops asking, except "
                    "for changes to Exo's own records and reading secrets (D-065). Every auto-approved call is in the ledger")
-    permissions.add_argument("--full-access", action="store_true", help="explicitly skip all gate checks for all tool calls in the selected/resumed thread only, including background messages; other threads still ask; restart clears the grant")
+    permissions.add_argument("--full-access", action="store_true", help="explicitly skip all gate checks for all tool calls in the selected/resumed thread only, including peer, bus and job messages delivered there. Unaddressed peers prefer a running thread, then the most recent eligible thread. Other threads still ask. Restart clears the grant")
     p.add_argument("--no-intro", action="store_true",
                    help="skip the first-run orientation (and do not offer it again on this EXO_HOME)")
     a = p.parse_args(argv)

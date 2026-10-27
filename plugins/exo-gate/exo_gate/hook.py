@@ -358,6 +358,8 @@ class Gate:
                 return
             row = {"gate": PLUGIN_ID, "phase": "permissions", "mode": mode, "previous": previous,
                    "by": by, "via": via, "auto_approved": self.permissions.auto_approved}
+            if previous == perm.FULL:
+                row["previous_session"] = self.permissions.full_session
             if mode == perm.FULL:
                 row.update(full_session=session, scope="core-all-sessions" if session == "*" else "session-all-turns")
             if mode == perm.ASK and previous == perm.FULL:
