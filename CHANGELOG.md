@@ -19,6 +19,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
+
 - Bound GitHub token and disabled modes prevent ordinary gh host-keyring fallback after a command removes token environment variables. Only a public invalid fallback is written to private gh configuration.
 
 - Explicit GitHub host mode respects the scrubbed tool environment and `env_deny`, rather than restoring core-process credentials or overwriting approved supplied values (aska-digital/exo-desktop#50).
