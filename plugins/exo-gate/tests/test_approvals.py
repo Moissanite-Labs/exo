@@ -466,26 +466,37 @@ def test_a_pending_reserved_entry_holds_off_a_grant_on_the_line_read_as_before_4
 # Guard rows (review 5659099075): with main's joined reading (#584) and its reading as before D-074 (the home's
 # config.json), the line read as before #471 keeps both, and so does the new reading. A config.json store write in
 # any of them stays the principal's, once, and an "always" on a push read joined behind the quoted word covers that
-# exact line only, as on main.
-@pytest.mark.parametrize("line", ["X='a b' cp /tmp/x ~/.exo/con$\\\nfig.json",
-                                  "X='a b' cp /tmp/x \"$\\\n{HOME}/.exo/config.json\"",
-                                  "git push origin feature && X=\"$Y\" cp /tmp/x ~/.exo/config.json"])
-def test_a_config_store_write_behind_a_quoted_assignment_keeps_the_principal_once(tmp_path, monkeypatch, line):
+# exact line only, as on main. With main 58503282 (review 5661669883): a store name split by quotes or a
+# backslash-newline, or in another letter case (#601), behind a quoted prefix, also as the folder of a `cd` there; a
+# camelCase tool that writes the home's config.json (#515, its floor); and a `$((` bash reads as a command
+# substitution (#553).
+@pytest.mark.parametrize("tool, line", [
+    ("terminal", "X='a b' cp /tmp/x ~/.exo/con$\\\nfig.json"),
+    ("terminal", "X='a b' cp /tmp/x \"$\\\n{HOME}/.exo/config.json\""),
+    ("terminal", "git push origin feature && X=\"$Y\" cp /tmp/x ~/.exo/config.json"),
+    ("terminal", "X='a b' cp /tmp/x ~/.E''XO/con\\\nfig.json"),
+    ("terminal", "X='a b' cd ~/.e\\\nxo && cp /tmp/x config.json"),
+    ("terminal", "git push origin feature && X=\"$Y\" cd ~/'.exo' && cp /tmp/x config.json"),
+    ("writeFile", "X='a b' rm -rf /srv/data")])
+def test_a_config_store_write_behind_a_quoted_assignment_keeps_the_principal_once(tmp_path, monkeypatch, tool, line):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("EXO_HOME", str(tmp_path / "home" / ".exo"))
     store, key = _seat_gate(tmp_path, "st471c")
     (store / "policies" / "approvals.yaml").write_text(DELEGATED)
     g, ctx = make_gate(store, key)
-    r = call(ctx, "terminal", {"command": line})
+    args = {"command": line} if tool == "terminal" else {"path": "~/.exo/config.json", "content": line}
+    r = call(ctx, tool, args)
     assert r and r["action"] == "approve" and r.get("once") is True and r["approvers"] == ["principal"], r
     answer(ctx, r, "always")
     assert g.grants.list() == []
 
 
-def test_an_always_on_a_joined_push_behind_a_quoted_assignment_covers_that_line_only(tmp_path):
+@pytest.mark.parametrize("line", ["X='a b' echo \"$\\\n(git push --force origin main)\"",
+                                  "X='a b' echo $((echo '((' ; git push --force origin main) )",
+                                  "git push origin feature && X=a\\ b echo $((echo '((' ; git push -f origin main) )"])
+def test_an_always_on_a_joined_push_behind_a_quoted_assignment_covers_that_line_only(tmp_path, line):
     store, key = _seat_gate(tmp_path, "st471j")
     _, ctx = make_gate(store, key)
-    line = "X='a b' echo \"$\\\n(git push --force origin main)\""
     r = call(ctx, "terminal", {"command": line})
     assert r and r["action"] == "approve" and r["approvers"] == ["principal"], r
     answer(ctx, r, "always")

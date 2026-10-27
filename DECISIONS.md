@@ -2849,8 +2849,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   alone, and an unknown program (the quoted word read as before) asks beside a push that logged.
   The everyday cost is a script that calls a local tool the gate does not know after a
   push or a post (`git push origin feature && notify-send done`): it asks where it logged. The text of `env -S` or
-  `--split-string` is read as a shell line and, since #591 on main, as env's argv too, so a leading assignment
-  quoted whole there (`env -S "'X=a b' rm -rf /srv/data"`) no longer hides the command either.
+  `--split-string` is read as a shell line and, since main took #634 (#591), as env's argv too, so a leading
+  assignment quoted whole there (`env -S "'X=a b' rm -rf /srv/data"`) no longer hides the command either. The
+  spellings #634 does not read yet decide as on main: `env -iS` asks as an unknown program, and `--split-s=` is
+  read as an env listing (`credentials`), so it asks unless a policy denies `credentials`. The follow-up #707 is
+  open.
   On main 2cc0c32f (2026-10-25), which took #311, #447, #454 and #316, `gate.readings` lists the line read as
   before, with its own floor and its reading from before #311, after the line's own readings. So `no_grant`,
   `call_approvers` and `body_unseen` read its parts as `decide` does, and so do the hook's body files, its required
@@ -2892,14 +2895,34 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   reading binds (review 5659099075 of #546). The command behind a quoted word now gets main's later readings too: an
   ssh host behind `X='a b'` is a target of the line, so a rule on it denies `X='a b' ssh buildhost gh pr view 5`,
   which main read as an unknown program and asked.
-  On main fa5dfcd8 (2026-10-27), which took #591 (the text of `env -S` read as env's own argv too), #585 (the lexer
-  reads a `$` form after a backslash-newline), #588 (`$[..]` read as `$((..))`), #612, #516, #579 and #586 (the
-  hook's two policy files merged as one stricter reading), the merge changes none of this amendment's code. Each of
-  those readings is made inside a reading of the call, so the line read as before #471 makes it too, and the `env
-  -S` argv reading sits beside the quoted prefix readings: `X='a b' env -S "'Y=c d' rm -rf /srv/data"` is a delete
-  that `deny: [delete]` denies, also after a push or behind `sudo`, where main reads the quoted word as the program
-  and asks, or logs beside the push. The hook's grant check for the line read as before reads its reserved hits
-  under the pinned and the changed file both, also on each side #586 asks alone, so it only keeps an ask.
+  On main fa5dfcd8 (2026-10-27), which took #634 (#591: the text of `env -S` read as env's own argv too), #585
+  (the lexer reads a `$` form after a backslash-newline), #588 (`$[..]` read as `$((..))`), #612, #516, #579 and
+  #586 (the hook's two policy files merged as one stricter reading), the merge changes none of this amendment's
+  code. Each of those readings is made inside a reading of the call, so the line read as before #471 makes it too,
+  and the `env -S` argv reading sits beside the quoted prefix readings: `X='a b' env -S "'Y=c d' rm -rf
+  /srv/data"` is a delete that `deny: [delete]` denies, also after a push or behind `sudo`, where main reads the
+  quoted word as the program and asks, or logs beside the push. The hook's grant check for the line read as before
+  reads its reserved hits under the pinned and the changed file both, also on each side #586 asks alone, so it
+  only keeps an ask.
+  On main 58503282 (2026-10-27), which took #635 (#601: store and secret names in any letter case), #652 (#553: a
+  `$((` bash reads as a command substitution) and #659 (#651: a tool that replaces text writes the store file it
+  names), the merge changes none of this amendment's code either (review 5661669883 of #546). The reading as
+  before #471 is a call of its own (`classify` makes it with `_classify_reading`), so every reading main makes of a
+  shell line is made in it too: the joined reading (#584), the reading as before D-074 (`ordinary`), the folded
+  store names (#601, #635), a glob in a secret store's folder (#594, #609), the store paths each write names (#514,
+  #611), an ssh host for an empty target (#493, #610), the `env -S` argv reading (#634), `$\<newline>` (#585, #643)
+  and `$((` (#553, #652). `gate.readings` lists each of them after the line's own, `binds_exact` binds the line
+  when any of them would, `as_dict` leaves `before` out, and the hook's grant check reads that reading's reserved
+  hits under each policy file (#586, #640). A camelCase tool's floor (#515, #602), a file tool's store keys (#494,
+  #608) and a replace tool's write (#651, #659) are made only for a call the gate reads by its name and arguments,
+  never a shell line, so no such call has a reading as before; it keeps main's readings as they are. A store name
+  split by quotes, a backslash or a backslash-newline, or in another letter case, behind a quoted prefix is a store
+  write on every reading, and so is a write by a relative name after a `cd` into such a folder there (`X='a b' cd
+  ~/.E''XO && cp /tmp/x config.json`): main read the quoted word as the program, never moved the folder and read
+  the line as `credentials`, so `deny: [store_write]` asked. A line with a quoted prefix assignment is read again
+  as before #471, and with the home's `config.json` its reading as before D-074 has its own reading as before #471
+  too: `X='a b' cp /tmp/x ~/.exo/config.json` takes 5 call readings where main takes 2, and 10 where main takes 4
+  with the name split by `$\<newline>`. The count does not grow with nesting. A line without one costs what it did.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
