@@ -664,7 +664,8 @@ class Gate:
         # Any reading counts: a camelCase MCP tool leads with its hump word and is `unknown` in its floor (#602).
         unknown = any(r.category == "unknown" for r in gate.readings(c))
         if risk == "high" and unknown and _RANK[d.outcome] < _RANK["ask"]:
-            d.reason += f" (registry risk is high and {tool} is not a known tool)"
+            known = "is not a known tool" if c.category == "unknown" else "is known only by its hump words"
+            d.reason += f" (registry risk is high and {tool} {known})"
             d.outcome = "ask"
         # #454: a sudo write line carries the body file of the part it displaced there (`sudo gh ... -F /tmp/b > f`)
         if self.executor_required and d.outcome != "deny" and any(
