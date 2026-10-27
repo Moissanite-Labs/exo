@@ -4,6 +4,8 @@
 // cleared at once (also on error), and it is never logged, stored, put in a URL, or shown again.
 import { h, api, errorBox, pageHead, readout, pill, emptyState } from "./dom.js";
 
+import { createModelPicker } from "./model_picker.js";
+
 const STORE_TEXT = {
   keychain: "the macOS Keychain",
   "secret-service": "the system keyring (Secret Service)",
@@ -35,15 +37,18 @@ export function mount(root) {
   }
 
   const results = {};   // provider name -> {text, cls}; kept across redraws, never holds a key
-  let data = null, models = null, err = "", picked = "";
+  let data = null, models = null, err = "", picked = "", modelsError = "", savingDefault = false, loadGeneration = 0;
 
   async function load() {
+    const generation = ++loadGeneration;
     try {
-      data = await api("GET", "/api/providers");
-      models = await api("GET", "/api/providers/models").catch(() => ({ models: [], available: [] }));
-      err = "";
-    } catch (e) { err = e.message; }
-    if (alive) draw();
+      const next = await api("GET", "/api/providers");
+      let nextModels = null, nextError = "";
+      try { nextModels = await api("GET", "/api/providers/models"); } catch (e) { nextError = e.message || "Models could not be loaded."; }
+      if (!alive || generation !== loadGeneration) return;
+      data = next; models = nextModels; modelsError = nextError; err = "";
+    } catch (e) { if (generation === loadGeneration) err = e.message; }
+    if (alive && generation === loadGeneration) draw();
   }
 
   function show(name, text, cls) { results[name] = { text, cls }; if (alive) draw(); }
@@ -107,29 +112,28 @@ export function mount(root) {
     return h("div", { class: "xc-prow" + (r.default ? " def" : ""), role: "listitem" }, kids);
   }
 
-  async function saveDefault() {
+  async function saveDefault(ref) {
+    if (!alive || savingDefault) return;
+    savingDefault = true;
     try {
-      const d = await api("POST", "/api/providers/default", { ref: picked, role: "main" });
-      show("_default", "Default set to " + picked + (d.applied ? "." : ". Saved; the core will use it on next start."), "ok");
-    } catch (e) { show("_default", e.message, "bad"); }
-    if (alive) load();
+      const d = await api("POST", "/api/providers/default", { ref, role: "main" });
+      if (!alive) return;
+      picked = ref;
+      results._default = { text: "Default set to " + ref + ((d.applied === true || d.applied === "now") ? "." : ". Saved; the core will use it on next start."), cls: "ok" };
+    } catch (e) { if (alive) throw e; }
+    finally { savingDefault = false; }
+    // Let the picker finish and restore focus before a background refresh.
+    setTimeout(() => { if (alive) load(); }, 0);
+    return results._default && results._default.text;
   }
 
   function picker() {
-    const routes = [];
-    for (const m of (models && models.models) || []) if (m.route && !routes.includes(m.route)) routes.push(m.route);
-    const more = [];
-    for (const m of (models && models.available) || []) if (m.route && !routes.includes(m.route) && !more.includes(m.route)) more.push(m.route);
-    if (!routes.length && !more.length) return null;
-    if (!picked) picked = routes[0] || more[0];
-    const opt = (v) => h("option", { value: v, selected: v === picked }, v);
-    const sel = h("select", { class: "xc-field", "aria-label": "Default model", onchange: (e) => { picked = e.target.value; } },
-      routes.length ? h("optgroup", { label: "configured" }, routes.map(opt)) : null,
-      more.length ? h("optgroup", { label: "available" }, more.map(opt)) : null);
+    const rows = [...((models && models.models) || []), ...((models && models.available) || [])];
+    const chosen = createModelPicker({ label: "Default model", rows: modelsError ? [] : rows, selected: picked,
+      applyLabel: "Save default", note: "The route the main role calls first.", onApply: saveDefault });
+    if (modelsError) chosen.setError(modelsError + " Reopen Providers to retry.");
     const res = results._default;
-    return h("section", { class: "xc-prov-def", "aria-label": "Default model" },
-      h("div", { class: "xc-prov-def-k" }, h("p", { class: "xc-k" }, "Default model"), h("p", { class: "xc-prov-def-note" }, "The route the main role calls first.")),
-      h("div", { class: "xc-prov-def-act" }, sel, h("button", { class: "xc-btn xc-primary", type: "button", onclick: saveDefault }, "Save default")),
+    return h("section", { class: "xc-prov-def", "aria-label": "Default model" }, chosen.element,
       res ? h("div", { class: "xc-prov-res " + (res.cls || ""), role: "status" }, res.text) : null);
   }
 
@@ -138,7 +142,7 @@ export function mount(root) {
     if (!data) { body.replaceChildren(h("div", { class: "xc-loading" }, "Loading providers...")); return; }
     const rows = data.providers || [];
     const active = document.activeElement;
-    const keep = active && active.tagName === "INPUT" && active.type === "password" && active.value ? active : null;
+    const keep = active && active.tagName === "INPUT" && ((active.type === "password" && active.value) || active.classList.contains("xc-model-search")) ? active : null;
     if (keep) return;   // never redraw while a key is being typed
     const ready = rows.filter((r) => r.verified || r.ready).length;
     const def = rows.find((r) => r.default);
