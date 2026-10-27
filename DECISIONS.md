@@ -1701,8 +1701,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   delegated `credentials` could answer it. `classify` now adds a `store_write` part for each store file such a tool
   writes, moves, copies or deletes, beside the tool's own part (#448). A folder holding the store that it moves,
   renames or deletes gets one too, as with `mv` and `rm` (`move_file` from `~/.exo` to `~/.ssh/x`). So does a tool
-  with a camelCase name (`moveFile`, `deleteFile`): its category stays `unknown`, because the gate reads its name as
-  one word, but this check splits the name. With no secret, a file tool's move of such a folder is not a store write
+  with a camelCase name (`moveFile`, `deleteFile`): this check splits the name. (When this was written the call's
+  category stayed `unknown`, because the gate read the name as one word; since #515 the call leads with its hump
+  words' category, `local_write` or `delete` as `move_file` and `delete_file` do, and `unknown` is its `floor`
+  reading.) With no secret, a file tool's move of such a folder is not a store write
   yet (#494). A file tool's write or delete in `keys/` or the run folder gets a part as well, as its shell spelling
   does. The call's category, target and card do not change. The hook's error fallback (#464) reads the parts as
   well. Chosen over ranking store_write first in `_combine`, which would change the line's category, reason and
@@ -3229,6 +3231,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   rules, explicit unknown-category policies, and leading-separator MCP names.
   *Revisit if:* acronym boundaries need separate recognition (`HTTPDelete`, `getHTTPResponse`),
   or fully camel MCP prefixes need alignment (`mcpCreateFile`). The unsplit policy floor still applies.
+  *Amended 2026-10-27 (review 5662071801, after #602 merged):* two exo-gate hook checks past `decide` still read
+  the lead category alone, so the floor did not hold there on main e0968a2b: bypass ran a camelCase call whose
+  `store_write` or `credentials` was in its floor reading (D-065 amendment of the same date), and the registry's
+  high-risk ask (`risk: high`, `tool_risks`) skipped a camelCase MCP tool whose `unknown` was in its floor reading
+  (`mcp__fs__writeFile`, `mcp__fs__readFile`, `mcp__fs__uploadFile`, `mcp__fs__moveFile`, `mcp__gh__listIssues`).
+  That ask now fires when any reading (`gate.readings`) is `unknown`. In bypass it is lifted as any ask is, with a
+  `decided_by: bypass` ledger row. Also recorded: a call with a `floor` binds an `always` answer and a standing
+  grant to its exact arguments (`gate.binds_exact`), so every camelCase call (`getApiKey`, `execCommand`,
+  `mcp__github__getIssue`, `mcpCreateFile`) does since #515, and a grant on `unknown` from before #515 no longer
+  matches it. That only tightens.
 - *Amendment 2026-10-26 (issue #591):* a leading assignment quoted whole in an `env -S` text no longer hides the
   command after it. GNU env splits the `-S` text into words and reads them as its own argv, so a word quoted whole
   with the form `NAME=value` is an assignment there too — `env -S "'X=a b' printenv X"` prints `a b` — but the
@@ -4452,6 +4464,24 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   author (D-040) into every tool hook; the gate lowers an ask only when that author is the principal, so a turn a
   local caller, a peer, a bus wake or a job notice started in the same core keeps its card. A non-principal steer
   stops the lowering for the rest of the turn. The bypass ledger row names the turn author.
+- **Amendment 2026-10-27 (review 5662071801 of #602):** the floor reads every reading of a call and every part
+  (`gate.no_grant`), not only the category it leads with. #515 (#602) reads a camelCase tool name by its hump words,
+  so `readFile` leads with `read` and `mcp__slack__postMessage` with `message_send`, and a store write or secret
+  read is in the call's `floor` reading only. `decide` and `no_grant` read it, but bypass checked the lead
+  category. On main fa5dfcd8 that let bypass run `mcp__fs__searchReplace` and `findAndReplace` on
+  `~/.exo/seats/principal.toml` (bypass could make itself the seat default, which this decision rules out); #659
+  (#651) has since made those replace calls lead with `store_write`. On main e0968a2b bypass still ran `readFile`
+  and `getOrCreateFile` on `~/.exo/policies/gates.yaml`, `readFile` on the seat file, `mcp__fs__readFile` on
+  `~/.exo/config.json`, `mergeGithub` and `mcp__github__mergePullRequest` naming `~/.ssh/id_rsa`, and
+  `mcp__slack__postMessage` naming `~/.aws/credentials`, each of which asked before #602. They ask again, in
+  enforce and observe mode, and the ledger row's `bypass.floor` names the floor category. A call that leads with a
+  floor category asks as before. A post that breaks the posting rules and has its floor only in another reading is
+  still held, as on main: checked before the floor, so the decision never drops from that hold to an ask, and the
+  rewritten post asks. A hook probe (`register()`, temp store and HOME, decision model off) over the review's lines
+  and their controls, under the default policies and four aimed `gates.yaml` files, in enforce and observe mode,
+  with and without bypass, at no, high and low registry risk, gives 1360 lines on main e0968a2b and here: 164 change,
+  each to an ask or to a bypass row that records the ask, and none runs here that main asks about or blocks.
+  `gate_diff` sees neither check (both are past `decide`).
 - **Numbering:** D-057 to D-061 are on main or open PRs, D-062 and D-063 on local exosphere branches, and one more
   is held by `fix/update-and-rounds`, so this is D-065.
 - **Docs:** `docs/GATE.md` "Bypass mode (D-065)", `docs/USER-GUIDE.md` §3 and §6, `docs/COMMANDS.md`,
@@ -5072,6 +5102,54 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   issue's five rows added to the corpus as tightened pairs.
 - **Docs:** `docs/GATE.md` "Store-path checks", "Secret-store paths", "Search tools", "Change limits",
   `CHANGELOG.md`.
+- **Plugin binding follow-up (2026-10-23, #498):** `exo.plugin_lifecycle.PluginToolBridge` now owns the
+  Hermes-compatible tool/slot adapters and lifecycle-verdict translation previously inside `CoreRuntime`.
+  `PluginManager.bind_tools` takes explicit collaborators, including the existing approval desk and a
+  live required-mode callback. Core helper shims preserve compatibility. This is a behavior-preserving
+  extraction: no approval policy, binding, private-thread rule or protocol contract changed. It restores
+  the standard core allowance (D-077 amendment above); broader private-state query cleanup remains open.
+  User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
+
+## D-086: Optional session working notes
+
+- **Date:** 2026-10-23
+- **Status:** In progress. Implemented for review in [#506](https://github.com/aska-digital/exo/issues/506).
+- **Problem:** A long task's current goal, constraints, blockers and next action can become scattered
+  across the transcript. Existing handoffs extract signals, while delegated tasks describe execution.
+  Neither is an explicit, revisioned working document for the current conversation.
+- **Decision:** Add an optional `work_notes` tool and principal-only `/work` read command. Save
+  complete revisions in the existing session database, with transactional revision comparison.
+  Composition is controlled by `work_notes.enabled`, false by default in every harness profile.
+- **Continuity:** Resume the same session with a bounded deterministic snapshot. Feed it into the
+  existing handoff facts. Forks start empty. Child and scheduled sessions cannot use the notebook.
+  Undo makes notes stale when their transcript anchor is hidden or removed. Stale bodies remain
+  explicitly readable, but prompts and handoffs suppress them until revised.
+- **Evidence and authority:** Validate message and completed-tool references against visible records
+  in that session. Record presence is not claim verification. Notes always have agent authorship,
+  are scoped to the engine agent and recorded principal, and cannot grant permission or execute steps.
+  Tool calls and command reads use the existing gate and executor. No new approval or ledger path.
+- **Gate classification:** Valid `read` and `history` actions are `read`. Valid `update` is `local_write`.
+  These classifications require the action's supported top-level keys. Calls without a valid action or
+  with unsupported keys keep generic classification, including secret and store path checks.
+  Main's comparison script at `5a9dc394` checked notebook code at `042c896e`: 152 calls across all 87
+  policies, or 13,224 pairs. All 35 previously lowered notebook calls are included. The 32 calls
+  responsible for 2,167 missing-action lowerings now have none. Another 108 cases pair supported actions
+  with unsupported keys, with no lowerings. Nine intentional read/history differences remain for
+  policies targeting `unknown`. Update tightens four pairs. No reserved protections or posting
+  violations are lost, and neither tree has classification or decision errors. The registry and handler
+  validate field values beyond the classifier's action and key checks. The corpus and results are in
+  `docs/evidence/work-notebook-gate-2026-10-23.json`. This focused comparison does not cover other tools.
+- **Limits:** Strict nested fields, document byte limits, bounded snapshots and history listings.
+  A per-session revision ceiling refuses further writes without deleting history. The feature owns
+  no separate database, workers, model calls or automatic retention job.
+- **Rejected:** Autonomous task goals, a second task scheduler, promotion of agent notes to principal
+  memory, automatic cross-session inheritance, silent conflict merges and durable question continuations
+  in this change. Runtime question continuation needs its own state and delivery contract.
+- **Validation:** Real composed fake-provider turns through the real gate, gate and required-executor
+  denial, restart, concurrent connections, principal/private/session isolation, undo, forks, evidence
+  checks, disabled composition, workspace instructions and handoff snapshots.
+- **Docs:** `docs/WORK-NOTEBOOK.md`, user guide §1, developer guide §1, command reference, docs map and
+  changelog. Whitepaper coverage is deferred to the next batch.
 
 ## D-083 (2026-10-26, amended 2026-10-27) The core budget prices coupling, not only lines, and has no ceiling
 - **Status:** Accepted 2026-10-26 by the lead (reversible), amended 2026-10-27 by the principal's ruling "we're

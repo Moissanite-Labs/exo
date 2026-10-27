@@ -31,6 +31,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 
 | Feature | Technical doc | User guide | Developer guide | Whitepaper |
 |---|---|---|---|---|
+| D-086 Optional session working notes (In progress) | `docs/WORK-NOTEBOOK.md`, `docs/evidence/work-notebook-gate-2026-10-23.json` | §1 "Saved working notes" | §1 "Session working notes" | MISSING (next batch) |
 | D-001 Work lives in this repo, phases leave handoffs | `DECISIONS.md` D-001 (process) | n/a | §8 | n/a |
 | D-002 Research as parallel subagents | `DECISIONS.md` D-002 (process) | n/a | n/a | n/a |
 | D-003 hafiz is an input | `docs/STORE-V2.md` "Facts checked on disk" | n/a | n/a | WP §3, §4 (idea, no D number) |
@@ -267,3 +268,4 @@ for users by user guide §11 "Review what Exo learned". Still open:
    descriptions. `docs/CORE-V2-INTERFACES.md` still says 25 commands and 21 events, which is the wave 2 shape.
 5. **D-027.** Reserved in D-026 and never written. If it is written, add its row here.
 | D-065 Permissions bypass: `/permissions bypass`, `exo --skip-permissions`, a banner in both clients, every auto-approval in the ledger; store writes and secrets still ask | `docs/GATE.md` "Bypass mode (D-065)", `docs/COMMANDS.md` `/permissions` and `exo` flags | §3 `/permissions`, §6 "Bypass" | n/a (a plugin command; `docs/COMMANDS.md` covers it) | Batched |
+| D-065 amendment (review 5662071801 of #602, 2026-10-27) The bypass floor reads every reading and part of a call (`gate.no_grant`), so a camelCase tool whose store write or secret read is only in its unsplit `floor` reading (#515: `readFile` on a policy file, `mcp__fs__readFile` on `~/.exo/config.json`, `mcp__slack__postMessage` naming `~/.aws/credentials`) asks in bypass again; a post held for its posting fixes stays held. The registry's high-risk ask fires when any reading is `unknown` (`mcp__fs__writeFile` with risk `high`). A camelCase call binds `always` answers and grants to its exact arguments (D-038 #515 amendment) | `docs/GATE.md` "Bypass mode (D-065)", "A camelCase tool name reads its words beside the name's one word (#515)", `DECISIONS.md` D-065 and the D-038 #515 and #448 amendments, `CHANGELOG.md`, `plugins/exo-gate/exo_gate/hook.py`, `plugins/exo-gate/tests/test_camel_floor_hook.py` | n/a (§6 "Bypass" already states this floor) | §3 "Add a tool" (any `unknown` reading counts for a high-risk tool) | n/a |
