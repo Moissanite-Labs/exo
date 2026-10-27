@@ -3017,8 +3017,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a path only the reading on one line found (`deny: [target:notes.txt]` after a bare `*** Move to:`), and any later
   file of a well-formed patch. The call keeps main's target, the first path read as before, so an entry that matched
   it still does; after a bare header that target is the swallowed header text, and the card shows it. The reading
-  across a line stays because dropping it would lower a line under an entry that matches what it reads. Main's
-  `scripts/gate_diff.py` reports nothing lowered against edeb4f89, 2cc0c32f and f10a7489 (counts in the PR).
+  across a line stays because dropping it would lower a line under an entry that matches what it reads. Against
+  main 2923f8b9, `scripts/gate_diff.py` reports nothing lowered (counts in the PR). Against edeb4f89, 2cc0c32f
+  and f10a7489 it counts 58 lowered pairs on 55 actions, and main 2923f8b9 counts the same 58 pairs, with the
+  same split, against each of those bases. Every lowered example in those runs is a `hash -p` line, from the
+  reading #409 added after those bases. No patch action is lowered in any of them.
   *Revisit if:* the gate parses patches with the patch tool's own header grammar.
 
   Relative aliases into non-secret stores still need #340's resolution. Relative
