@@ -64,8 +64,15 @@ file (#353). Decisions reads from its one exact heading: the only one after the 
 path or title that spanned lines) or after it (a summary written before #349 quoted it, or a list field written
 before #353 flattened it). When two copies leave the real one unclear, the file reads as no rulings and no
 corrections rather than the forged ones (#395). A heading with an extra space or tab after `##` is never read as
-the section. `resume_text` puts the header on one line too, so its values reach the model as data. An older
-file's path and launch lines, title, list fields and summary still reach it as that writer left them.
+the section. `resume_text` puts the header on one line too, so its values reach the model as data, and it demotes
+every `## ` heading line the reader does not read as the section (#540): an older file's path and launch lines,
+title, list fields and summary reach the model as `### ` data, quoted words included, and only the reader's copies
+stand. The reader also reads no section out of a title that does not say what the header's recovered topic says:
+the title must be the topic value's footprint, line for line, or its lines are data. In a file whose pre-#353
+title carried a forged Decisions copy, the real one reads again where the file read as undecided, and a forged
+`## Open decisions` first loads none; a title edited by hand demotes nothing. A header value's `-->` is written
+`--\>`, so a markdown viewer's comment keeps the header whole. Not covered: a forged `## Open decisions` first
+through an older file's path or launch line still reads, as on main.
 
 After `/undo`, exo-context drops the pins of the undone turns and the summaries the undo deleted, then writes again
 each automatic handoff that may quote them, another thread's included (`docs/MEMORY-MODEL.md`, "Undo and failed

@@ -97,6 +97,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   main allowed it — and `${x:-$[PATH=5]}` reads the body through the expansion word it is in. A `$[..]` in a
   write's target keeps main's `local_write` of the path as written beside the dynamic reading, so a deny on the
   write still reaches the line, and `echo $[1+2]` stays a read.
+- An older handoff file's raw lines no longer stand a forged section in the resumed system message (#540). After
+  #395 the header reached the model on one line and `load_handoff` read no forged ruling, but `resume_text` still
+  carried the rest of the file as written: the path line and the `{path}` launch line of main's writer before #395
+  (a handoff folder name that spans lines in the operator's config), a title from before #353, a list field from
+  before #353 and a summary from before #349 could put a forged `## Decisions made (principal's words, verbatim)`
+  section in the system message beside the principal's real one, and a pre-#353 title could put a forged
+  `## Open decisions` section first, which `load_handoff` read. `resume_text` now demotes every `## ` heading line
+  `load_handoff` does not read as the section, so the reader's copies stand and the forged ones reach the model as
+  `### ` data, quoted words included. `load_handoff` reads no section out of a title that does not say what the
+  header's recovered topic says: the title must be the topic value's footprint, line for line. A pre-#353 file whose
+  title carried a forged Decisions copy therefore reads the principal's ruling again where it read as undecided, and
+  a forged Open decisions first loads none; a title edited by hand demotes nothing. The demotion takes the heading
+  spellings a markdown reader takes: up to three leading spaces, and after the `##` a space, a tab or the line's
+  end, while a fourth leading space stays an indented code block and the line stands as written. A header value's
+  `-->` is now
+  written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
+  older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
+  file's path or launch line still reads as on main, for the reader has no value to check a path line against.
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
   `reserved:` entry on a later path missed and an approver could have waved the write through:
