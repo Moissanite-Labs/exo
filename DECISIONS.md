@@ -3207,6 +3207,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and stay so), which is the `${..}` default word's own gap, not this one.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
+- **Amendment 2026-10-27 (bound GitHub fallback):** token and disabled modes seed their private gh configuration
+  with a public invalid token. Removing token environment variables while retaining that directory fails authentication
+  instead of consulting the machine's gh keyring. Actual credentials are not written there. Deliberate configuration
+  replacement or secure-storage lookup remains a trusted-shell override.
 - **Amendment 2026-10-27 (aska-digital/exo-desktop#50):** explicit GitHub host mode respects the supplied, commonly
   scrubbed child environment. It does not restore core-process tokens or `GH_CONFIG_DIR`, overwrite approved
   supplied values, or retain variables matching `env_deny`. Stored host gh configuration remains available.

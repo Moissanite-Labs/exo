@@ -12,6 +12,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Bound GitHub token and disabled modes prevent ordinary gh host-keyring fallback after a command removes token environment variables. Only a public invalid fallback is written to private gh configuration.
+
 - Explicit GitHub host mode respects the scrubbed tool environment and `env_deny`, rather than restoring core-process credentials or overwriting approved supplied values (aska-digital/exo-desktop#50).
 - Chat identifies pending approval waits for the current thread or global requests, preserving last-known connection qualifiers (aska-digital/exo-desktop#37, partial).
 - Switching back to a running web thread restores its working indicators and Stop button. Background turn updates keep keyboard focus on the same thread.

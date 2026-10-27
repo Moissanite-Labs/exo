@@ -178,7 +178,8 @@ def test_malformed_metadata_is_quiet_and_token_mode_excludes_old_login(tmp_path)
     auth.configure(tmp_path, 'alice', 'token', token=TOKEN, store='file')
     env = auth.child_env({}, tmp_path, 'alice')
     assert Path(env['GH_CONFIG_DIR']) == ghdir / 'token'
-    assert not (Path(env['GH_CONFIG_DIR']) / 'hosts.yml').exists()
+    assert auth.DISABLED_TOKEN in (Path(env['GH_CONFIG_DIR']) / 'hosts.yml').read_text()
+    assert TOKEN not in (Path(env['GH_CONFIG_DIR']) / 'hosts.yml').read_text()
     for host in (None, 42, [], 'bad/host'):
         path.write_text(json.dumps({'mode': 'token', 'store': 'file', 'host': host}))
         with pytest.raises(auth.AuthError):

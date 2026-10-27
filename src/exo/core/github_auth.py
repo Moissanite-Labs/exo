@@ -194,7 +194,18 @@ def child_env(env: dict[str, str], home: str | Path, seat: str,
     _, ghdir = paths(home, seat)
     if meta['mode'] in ('token', 'disabled'):
         ghdir = ghdir / ('disabled' if disabled else 'token')  # no prior gh-login accounts in token-mode config
-    private_dir(ghdir)
+    try:
+        private_dir(ghdir)
+        if meta['mode'] in ('token', 'disabled'):
+            config = ghdir / 'hosts.yml'
+            if ghdir.stat().st_mode & 0o077 or config.is_symlink():
+                raise OSError('Unsafe private GitHub configuration')
+            # gh consults the global OS keyring if both environment and config
+            # lack a token. A public invalid fallback prevents identity changes
+            # when a command removes the selected token variables.
+            atomic_write(config, f"{meta['host']}:\n    oauth_token: {DISABLED_TOKEN}\n")
+    except OSError:
+        raise AuthError('Private GitHub authentication configuration is unavailable') from None
     out.update(GH_CONFIG_DIR=str(ghdir), GH_HOST=meta['host'], GH_PROMPT_DISABLED='1')
     if disabled:
         if any(fnmatch.fnmatchcase('GH_ENTERPRISE_TOKEN', pattern) for pattern in deny):
