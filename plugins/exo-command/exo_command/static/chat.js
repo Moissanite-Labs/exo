@@ -16,6 +16,7 @@ export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
+  let coreUsable = true, activityFresh = true, coreState = "connected", webUsable = true;
   let statusVersion = 0;
   const statusUpdates = new Map();
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
@@ -383,7 +384,12 @@ export function mount(root) {
 
   function drawStatus() {
     const cell = (label, ...v) => h("span", null, h("span", { class: "xc-i" }, label), h("span", { class: "xc-v" }, ...v));
-    const out = [h("span", { class: "xc-state" + (busy ? " on" : "") }, h("span", { class: "xc-dot" + (busy ? " on" : "") }), busy ? "working" : "idle")];
+    const confirmedBusy = busy && coreUsable && activityFresh;
+    const activity = busy ? "working" : "idle";
+    const stateText = !coreUsable ? (!webUsable ? "web reconnecting" : coreState === "connecting" ? "connecting to core" : "core unavailable") + " · last known " + activity
+      : !activityFresh ? (loading ? "checking activity" : "activity unavailable") + " · last known " + activity : activity;
+    const out = [h("span", { class: "xc-state" + (confirmedBusy ? " on" : "") }, h("span", { class: "xc-dot" + (confirmedBusy ? " on" : "") }), stateText)];
+    if (coreUsable && !activityFresh) out.push(h("button", { class: "xc-btn", disabled: loading, onclick: () => { if (!loading) recover(); } }, "Retry activity"));
     if (model) {
       const fell = requested && requested !== model;
       const m = cell("model", model);
@@ -400,14 +406,16 @@ export function mount(root) {
     if (cacheShare != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "cache"), h("span", { class: "xc-v" }, Math.round(cacheShare * 100) + "%")));
     if (findings != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "findings"), h("span", { class: "xc-v" + (findings ? " xc-via" : "") }, String(findings))));
     if (cost != null || costSeen) out.push(cell("cost", cost != null ? money(cost) : "unknown"));
-    out.push(busy ? h("span", { class: "xc-wire", "aria-hidden": "true" }) : h("span", { class: "xc-spacer" }));
+    out.push(confirmedBusy ? h("span", { class: "xc-wire", "aria-hidden": "true" }) : h("span", { class: "xc-spacer" }));
     if (notice) out.push(h("span", { class: "xc-flash" }, notice));
     statusEl.replaceChildren(...out);
-    stopBtn.disabled = !busy;
-    promptEl.textContent = busy ? "steer \u203A" : "\u203A";
-    composer.classList.toggle("xc-steer", busy);
+    stopBtn.disabled = !busy || !current || coreState === "unavailable";
+    stopBtn.textContent = busy && !confirmedBusy ? "Try stop" : "Stop";
+    sendBtn.disabled = !coreUsable || !activityFresh;
+    promptEl.textContent = confirmedBusy ? "steer \u203A" : "\u203A";
+    composer.classList.toggle("xc-steer", confirmedBusy);
     const live = document.getElementById("xc-live");
-    if (live) live.classList.toggle("on", busy);
+    if (live) live.classList.toggle("on", confirmedBusy);
   }
   function money(v) { return "$" + v.toFixed(v < 1 ? 3 : 2); }
   function fmtTok(n) { return n >= 10000 ? Math.round(n / 1000) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n); }
@@ -497,6 +505,7 @@ export function mount(root) {
       const live = sessions.find(s => s.id === id);
       setBusy(snapshotBusy(d.session, live));
       if (d.session) rememberStatus(id, d.session.status);
+      activityFresh = coreUsable;
       model = (d.session && d.session.model) || "";
     } catch (e) {
       if (current === id && generation === snapshotGeneration) fail(e);
@@ -513,7 +522,7 @@ export function mount(root) {
 
   async function recover() {
     const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq(), had = Object.keys(steers);
-    loading = true;
+    loading = true; drawStatus();
     try {
       const freshSessions = (await api("GET", "/api/chat/sessions")).sessions || [];
       const d = id ? await api("GET", "/api/chat/sessions/" + encodeURIComponent(id)) : null;
@@ -526,8 +535,10 @@ export function mount(root) {
         const live = sessions.find(s => s.id === id);
         setBusy(snapshotBusy(d.session, live));
         if (d.session) rememberStatus(id, d.session.status);
+        activityFresh = coreUsable;
         model = (d.session && d.session.model) || model;
       }
+      if (!id) activityFresh = coreUsable;
       panelsOpen = bus.openPanels();
     } catch (e) { if (id === current && generation === snapshotGeneration) fail(e); }
     finally {
@@ -618,6 +629,7 @@ export function mount(root) {
   }
 
   async function send() {
+    if (!coreUsable || !activityFresh) { flash("Core connection is not ready. Your draft is kept."); return; }
     const text = input.value.trim();
     if (!text) return;
     if (changingModel) { flash("changing the model; send again when it is done"); return; }
@@ -758,7 +770,16 @@ export function mount(root) {
   const offBus = bus.on(handle);
   let synced = bus.lastSeq() ? -1 : 0;
   const offState = bus.onState((st) => {
-    if (st.synced !== synced) { synced = st.synced; recover(); }
+    const wasUsable = coreUsable;
+    if (typeof st.connected === "boolean") {
+      coreUsable = st.connected;
+      webUsable = st.transport_connected !== false;
+      coreState = st.core_state || (coreUsable ? "connected" : "unavailable");
+      if (!coreUsable || !wasUsable) activityFresh = false;
+      drawStatus();
+    }
+    const restored = coreUsable && !wasUsable && st.synced > 0;
+    if (st.synced !== synced || restored) { synced = st.synced; recover(); }
   });
   const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
