@@ -154,6 +154,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   part with that path as its target, as beside a secret (#447), so the entry matches whichever path it names. The
   first path still leads the line, `rm` of both paths was denied already (its `delete` part names the last path),
   reads keep their class, and the first path alone decides as before.
+- A later command that repeats a braced store path keeps its own store write part (#611 follow-up, review
+  5662072103). The store check marked each brace spelling checked for the whole line, and once #514 scanned every
+  word, the first command marked each spelling it met, so a later command writing the same spelling got no part
+  and its write carried the first command's text: under `categories: {store_write: deny}` and an allow rule on
+  `^cp `, `cp ~/.exo/policies/a.yaml ~/.exo/policies/{g,h}.yaml; printf x > ~/.exo/policies/{g,h}.yaml` was
+  denied before #514 and asked after it, and so did a matrix deny, a `log` or `ask` rule, and `tee`, `sudo tee`,
+  `truncate` or `scp`. With `cp /var/tmp/a` first, the line asked before #514 too. Each check's hits on a spelling
+  are kept with it now, and each command that repeats the spelling gets them for its own part, so the braced line
+  decides as the unbraced one. `apply_patch` and `write_file` that write two store files make the second a
+  `store_write` part too, as `copy_file` does, so a `{category: store_write, target}` deny or reserved entry on it
+  matches. Tests: `plugins/exo-gate/tests/test_store_floor_any_part.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md`
+  (D-038).
 - A shell call's own folder read is no longer lifted by an allow rule that names only the line's text (#516). The
   `credentials` part the folder argument adds (`cwd`, or `workdir` for Hermes' terminal and Codex's exec_command)
   had no own text, so a line of one command beside it was one text for the #394 own-text test and a rule keyed on
