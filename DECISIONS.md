@@ -3084,19 +3084,41 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (`sudo -u"$U" -l` stays a read; an empty `$U` there makes `-u` take the next word, which starts no shell); an
   option's value that may split into several words (`sudo -u $U`, `sudo -u $(id -un)`; round 2 of the review:
   `sudo -u {root,-s} <<< 'rm -rf x'` was allowed under `deny: [delete]`), whose brace set is expanded with
-  `_brace_words` and read as option words; and an operand that may expand to an option (`sudo "$X"`, `sudo ?s`,
-  `sudo {-s,}`), which main read as an unknown program that asks, so a deny on the fed text only asked. Such a word
-  may take the next word as its value (`sudo -$X root` may be `sudo -iu root`), so when the line feeds the command a
-  stdin, the shell is also read with no command. This tightens a few lines that start no shell when the words
-  expand otherwise (`sudo -u $U` alone asks as `bash` alone does, `echo hi | sudo -u $U tee /tmp/x` asks), and
-  never lowers one: each such reading only adds parts. With a command, sudo
-  runs `$SHELL -c` on its words joined with spaces, each character but a letter, a digit, `_`, `-` and `$` escaped
-  with a backslash. Where that text may not be the words the line's own reading took (a `$`, a newline the shell
-  drops as a line continuation, an empty word, or `-iu root` and `--user root`, which the prefix reader takes for a
-  program), the gate also reads it, beside an `opaque_exec` part, so the line asks as it did when it read an unknown
-  program there and its approval binds to the exact command. Only the first such text is read at each level: it
-  holds the sudos after it, which its own reading reads in turn (reading each of them again at each level made a
-  40-deep `sudo -s ... echo '$x'` take minutes). A word of the command the gate cannot read asks too.
+  `_brace_words` and read as option words, keeping a word the set makes twice as bash does (round 3:
+  `sudo -p {-s,-s}` is `sudo -p -s -s`, and the deduplicated expansion hid the second `-s`), and a bracket glob at
+  the start of a value (`sudo -u [!a]s`), which the lexer does not mark as a glob; and an operand that may expand to
+  an option (`sudo "$X"`, `sudo ?s`, `sudo {-s,}`, `sudo ~-`, which is `$OLDPWD`), which main read as an unknown
+  program that asks, so a deny on the fed text only asked. Such a word may take the next word as its value
+  (`sudo -$X root` may be `sudo -iu root`), so when the line feeds the command a stdin, the shell is also read with
+  no command, and the options are also read again from the word after the next one (`_sudo_read`). A brace value
+  whose words end the options elsewhere has its command read as sudo runs it, with no shell (round 3, on main too:
+  `sudo -u {root,-p} echo rm -rf x` is `sudo -u root -p echo rm -rf x`, whose prompt is `echo`, and was allowed
+  under `deny: [delete]`; so were `sudo -"$X" echo rm -rf x` and `sudo -u $U echo -s rm -rf x`). A may reading
+  reads its command both as the shell would and as sudo runs the words bash expanded (round 4: read only as escaped
+  shell text, a sudo there with a brace value was lost, so `sudo -E{,p} echo sudo -E{,p} echo rm -rf x` was allowed
+  under `deny: [delete]`). Those readings may not be bash's, so they add only the parts their command is known to
+  do, not `read` or `opaque_exec`: `sudo -u $U cat /etc/hosts`, `sudo -"$X" echo hi` and `sudo -u {alice,bob} ls`
+  stay reads. A part that stands for a cap stays, though (`_a_cap`: a nest past the depth cap, the budget below):
+  round 4 found five chained `sudo -u {root,-p} echo` read and allowed, the cap's ask dropped as a command the
+  reading could not read; such a nest now asks. A call reads at most 16 of them, a moved reading with a shell
+  option counted too (shared through the call memo); past that, it asks. This tightens a few lines that start no
+  shell when the words expand otherwise (`sudo -u $U` alone asks as `bash` alone does, `echo hi | sudo -u $U tee
+  /tmp/x` asks, and so do `sudo -u $U -l`, `sudo -l -U $U` and `sudo -u $U -v`, since the gate does not read sudo's
+  list and validate modes, in which no shell starts), and never lowers one: each such reading only adds parts. With
+  a command, sudo runs `$SHELL -c` on its words joined with spaces, each character but a letter, a digit, `_`, `-`
+  and `$` escaped with a backslash. Where that text may not be the words the line's own reading took (a `$`, a
+  newline the shell drops as a line continuation, an empty word, or `-iu root` and `--user root`, which the prefix
+  reader takes for a program), the gate also reads it, beside an `opaque_exec` part, so the line asks as it did
+  when it read an unknown program there and its approval binds to the exact command. Only the first such text is
+  read at each level: it holds the sudos after it, which its own reading reads in turn as written (reading each of
+  them again at each level made a 40-deep `sudo -s ... echo '$x'` take minutes). Their moved and may readings are
+  still read: that text holds a brace value as a literal (round 4: `sudo -s sudo -u "$U" -u {root,-p} echo rm -rf
+  x` only asked under `deny: [delete]` and was allowed under `{opaque_exec: allow}`). A text a parse read back as
+  its words is not parsed again for a later sudo as written, whose command is a part of it, and the prefix reader
+  walks the words by index (round 3: parsing the rest once per sudo made a 28 KB chain of `sudo -u {root,-s}` take
+  167 s; a 1,000-deep chain of each shape now takes 0.2 to 4 s, against 0.1 to 0.3 s on main 58503282). A word of
+  the command the gate cannot read asks too. An operand's tilde is read after brace expansion, as bash reads it
+  (round 4: `sudo ~-{,}` is `sudo ~- ~-`).
   Chosen over rewriting the prefix reader: every part main made stays (the line's first part keeps sudo's raise and
   signal, and #454's sudo write still leads where main's `read` would), and the new parts only add. Added parts can
   still lower a line where they take the lead and a policy allows their category (`ssh host 'sudo -s < f'` was a
@@ -3108,13 +3130,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line, as for `echo 'rm -rf x' | bash`. Known limits, not filed here: `su` with no `-c` and `sudo su` with a stdin
   ask as an unknown program and the fed text is not read, so a deny on what it carries asks rather than denies; the
   files a login shell reads first and a `SHELL` that names another program are not read; an ambiguous long option
-  is taken for a shell option when it may be one. The differential against main 15e60ddb (scripts/gate_diff.py,
-  `--jobs 2`) lowers no pair: the built-in corpus without variants (11,728 actions x 88 policies) tightens 9,041
-  pairs on 144 actions, and an aimed corpus of 5,332 lines (the new tests' lines, each shell spelling, feed, payload
-  and wrapper, option words with an expansion or a glob, option values that may split, brace sets in values,
-  operands that may expand to an option, and nested sudo shells) under the 88 built-in policies and 37 more deny,
-  category and reserved policies on `delete`, `force_push`, `web_post`, `store_write`, `credentials`,
-  `opaque_exec` and `github_post` tightens 272,081 pairs on 3,406 actions.
+  is taken for a shell option when it may be one; `env -S 'sudo -s'` with a stdin asks as `env -S bash` does on
+  main, and the fed text is not read; a reading where a word may take the next one as its value adds no ask for a
+  program the gate cannot read there. The differential against main 58503282 (scripts/gate_diff.py,
+  `--jobs 2`) lowers no pair: the built-in corpus without variants (12,258 actions x 88 policies) tightens 13,061
+  pairs on 211 actions, and an aimed corpus of 8,316 lines (the new tests' lines, each shell spelling, feed, payload
+  and wrapper, option words with an expansion or a glob, option values that may split, brace sets in values with
+  repeated words, bracket-glob values, operands that may expand to an option, `~-` and `~+` with and without a
+  brace, words that may take the next word as their value, list and validate modes, nested and long sudo chains,
+  each pair of may and moved heads nested, and chains of them past the depth cap) under the 88 built-in policies
+  and 37 more deny, category and reserved policies on `delete`, `force_push`, `web_post`, `store_write`,
+  `credentials`, `opaque_exec` and `github_post` tightens 431,781 pairs on 5,166 actions.
 
   *Amendment 2026-10-26 (issue #584):* a backslash-newline inside a `$` form is joined before the form is read, as
   bash joins it. Outside single quotes bash drops each `\<newline>` before it expands a word, so
