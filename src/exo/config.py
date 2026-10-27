@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -53,8 +54,9 @@ class ConfigError(ValueError):
 
 
 # Secrets never go through the file API: names that look like one (`api_key`, `token`, ...), unless
-# the name ends in `_env` (the NAME of an environment variable). Under `env` and `headers` any
-# literal is refused; use "${VAR}" so the secret stays in the environment, a platform key store, or keys.env.
+# the name ends in `_env` (the NAME of an environment variable). Such a name guards everything beneath it, and so do
+# `env` and `headers`: any literal there is refused; use "${VAR}" so the secret stays in the environment, a platform
+# key store, or keys.env. `redact` masks what `check_not_secret` refuses, through the same walk.
 SECRET_NAME = re.compile(r'(^|[_-])(key|token|secret|password|passwd|credentials?|authorization|bearer)s?($|[_-])'
                          r'|api_?key', re.I)
 _SECRET_VALUE = re.compile(r'(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|'
@@ -66,33 +68,35 @@ def _is_secret_name(name: str) -> bool:
     return bool(SECRET_NAME.search(name)) and not name.endswith('_env')
 
 
+def _is_secret(path: list[str], v: str) -> bool:
+    """A string at `path` is a secret when it looks like a key, or when it is a literal under `env`, `headers` or a
+    secret-shaped name at any depth."""
+    guarded = any(p in ('env', 'headers') or _is_secret_name(p) for p in path)
+    return bool(v) and bool(_SECRET_VALUE.search(v) or (guarded and not _VAR_REF.search(v)))
+
+
+def _map_strings(path: list[str], v: Any, fn: Callable[[list[str], str], Any]) -> Any:
+    """A copy of `v`, the value at `path`, with `fn(path, s)` in place of each string `s` in it."""
+    if isinstance(v, dict):
+        return {k: _map_strings([*path, str(k)], x, fn) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_map_strings(path, x, fn) for x in v]
+    return fn(path, v) if isinstance(v, str) else v
+
+
 def check_not_secret(key: str, value: Any) -> None:
     """Raise ConfigError when (key, value) would put a secret into config.json."""
-    def walk(path: list[str], v: Any) -> None:
-        if isinstance(v, dict):
-            for k, x in v.items():
-                walk([*path, str(k)], x)
-        elif isinstance(v, list):
-            for x in v:
-                walk(path, x)
-        elif isinstance(v, str) and v:
-            guarded = any(p in ('env', 'headers') for p in path) or _is_secret_name(path[-1])
-            if _SECRET_VALUE.search(v) or (guarded and not _VAR_REF.search(v)):
-                raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
-                                  f'use "${{VAR}}" or a *_env key naming an environment variable')
-    walk(key.split('.'), value)
+    def refuse(path: list[str], v: str) -> str:
+        if _is_secret(path, v):
+            raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
+                              f'use "${{VAR}}" or a *_env key naming an environment variable')
+        return v
+    _map_strings(key.split('.'), value, refuse)
 
 
 def redact(data: Any, key: str = '') -> Any:
-    """A copy of the config value at dotted `key` with secret-looking values masked (for `Config.redacted`)."""
-    if isinstance(data, dict):
-        return {k: redact(v, str(k)) for k, v in data.items()}
-    if isinstance(data, list):
-        return [redact(v, key) for v in data]
-    name = key.split('.')[-1]
-    if isinstance(data, str) and data and not _VAR_REF.search(data) and (_is_secret_name(name) or _SECRET_VALUE.search(data)):
-        return '***'
-    return data
+    """A copy of the config value at dotted `key` with every string `check_not_secret` refuses masked."""
+    return _map_strings(key.split('.'), data, lambda path, v: '***' if _is_secret(path, v) else v)
 
 
 def config_path(home: str | os.PathLike | None = None) -> Path:
