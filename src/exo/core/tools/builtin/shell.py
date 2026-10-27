@@ -236,7 +236,9 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
         env = tool_env(allow=env_allow, deny=env_deny)
         if github_auth:
             from exo.core.github_auth import child_env
-            env = child_env(env, *github_auth, deny=env_deny)
+            env = child_env(env, *github_auth, deny=env_deny, cwd=str(cwd))
+            from exo.core.credentials import child_env as credential_env
+            env = credential_env(env, *github_auth, consumer="bash", deny=env_deny)
         proc = subprocess.Popen(
             wrap_pipestatus(command, side_fd, env), cwd=cwd, stdin=subprocess.DEVNULL, pass_fds=(side_fd,),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=env)

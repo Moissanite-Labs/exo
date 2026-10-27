@@ -206,9 +206,12 @@ class JobManager:
                 job_id = "j_" + new_id("")[1:7]
             env = tool_env(allow=getattr(self.e, "env_allow", ()), deny=getattr(self.e, "env_deny", ()))
             from exo.core.github_auth import binding, child_env
-            env = child_env(env, self.e.home, self.e.agent, deny=getattr(self.e, "env_deny", ()))
-            auth_secrets = tuple(v for k in ('GH_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_TOKEN', 'GITHUB_ENTERPRISE_TOKEN')
-                                 if (v := env.get(k)) and binding(self.e.home, self.e.agent))
+            env = child_env(env, self.e.home, self.e.agent, deny=getattr(self.e, "env_deny", ()), cwd=str(cwd))
+            from exo.core.credentials import child_env as credential_env
+            env = credential_env(env, self.e.home, self.e.agent, consumer="jobs", deny=getattr(self.e, "env_deny", ()))
+            bound_github = bool(binding(self.e.home, self.e.agent))
+            auth_secrets = tuple(v for k, v in env.items() if v and (k.startswith('EXO_SECRET_') or
+                                 (bound_github and k in ('GH_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'))))
             self.dir.mkdir(parents=True, exist_ok=True)
             log = self.log_path(job_id)
             log.write_bytes(b"")

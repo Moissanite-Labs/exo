@@ -1,10 +1,12 @@
 # Per-seat GitHub authentication
 
-After upgrading the core to a version containing this feature, each seat can use its own GitHub identity for bash tools and background jobs. Setup does not change the machine's `gh auth` login. The currently running core must be upgraded separately. Changing a desktop's web assets alone does not enable subprocess credentials. Desktop credential setup is follow-up work. Use the CLI below with the core's exact `EXO_HOME` and seat.
+Each seat can use its own GitHub identity for bash tools and background jobs without changing the machine's `gh auth` login. The running core must contain this feature. Replacing desktop web assets alone does not enable subprocess credentials.
+
+For write-only macOS Keychain setup in the web or desktop client, see [Secure credential setup](SECURE-CREDENTIALS.md). The CLI below also supports older explicit storage choices. Use the core's exact `EXO_HOME` and logical seat, not an agent's conversational name.
 
 ## Personal access token
 
-Use a dedicated GitHub account or a fine-grained token with the repositories and permissions the agent needs. Token creation and account provisioning remain with the user.
+Use a dedicated GitHub account or a fine-grained token with the repositories and permissions the agent needs. Account creation and real credential entry remain with the user.
 
 ```sh
 exo github-auth configure --seat scout
@@ -12,13 +14,13 @@ exo github-auth status --seat scout
 exo github-auth test --seat scout
 ```
 
-The configure command prompts invisibly. For a trusted secret manager or pipeline, `--token-stdin` reads the token from standard input. There is no token argument.
+Configure prompts invisibly. A trusted secret manager or pipeline can supply the token through standard input with `--token-stdin`. There is no token argument. Never paste a token into chat, a shell command or command-line arguments.
 
-Do not paste a token into chat, a shell command, or a command-line argument. `--store keychain`, `--store secret-service` or `--store file` selects storage. The platform default is reused from provider setup. File storage uses Exo's existing 0600 keys file.
+On macOS, the default is Keychain. Missing, disabled or refusing Keychain storage does not silently fall back to a file. The CLI can explicitly select `--store keychain`, `--store secret-service` or `--store file`. File storage is plaintext in Exo's existing 0600 keys file. On other platforms the existing provider setup default applies. The secure Credentials view permits only macOS Keychain.
 
-Account names include a hash of the resolved data home, seat and hostname. Binding metadata contains only mode, host and store, never the token.
+Keychain account names include a hash of the resolved data home, seat and hostname. Binding metadata contains no token. The selected store is authoritative: host environment tokens and stale copies in other stores do not override it.
 
-The selected store is authoritative. Host environment tokens and stale copies in other stores do not override it. Changing a saved token takes effect on the next tool/job spawn, without changing the core process environment. Existing subprocesses retain their original credential until they exit.
+Replacing a token in the same host and store affects the next tool or job spawn. Existing children retain their original credential until they exit. Changing mode, hostname or store requires removing the existing binding and completing cleanup first. A refused change leaves the current credential intact.
 
 ## Separate gh login
 
@@ -26,11 +28,11 @@ The selected store is authoritative. Host environment tokens and stale copies in
 exo github-auth login --seat scout
 ```
 
-This runs an interactive HTTPS login in a private seat-owned `GH_CONFIG_DIR`, skips SSH-key upload, and uses `gh --insecure-storage` deliberately. The credential is plaintext in that directory's 0600 `hosts.yml`. The directory is private. This avoids writing an account into the host gh OS keychain.
+This legacy CLI option runs interactive HTTPS login in a private seat-owned `GH_CONFIG_DIR`, skips SSH-key upload and deliberately uses `gh --insecure-storage`. Its token is plaintext in that directory's 0600 `hosts.yml`. This avoids adding an account to the host gh OS keychain. It is outside the secure Credentials view and is not a Keychain-backed login.
 
-Exo reads only a private, unambiguous plaintext credential for the configured hostname. Missing, permissive or ambiguous files fail closed. Multiple account switching in this directory is unsupported. use a token binding instead.
+Exo reads only a private, unambiguous plaintext token for the selected hostname. Missing, permissive or ambiguous files fail closed. Multiple account switching in this directory is unsupported. Use a token binding instead.
 
-Each seat has one active hostname binding. For an enterprise host, add `--host git.example.com` during configure or login. Public GitHub and `*.ghe.com` use `GH_TOKEN`. Other hosts use `GH_ENTERPRISE_TOKEN`. Conflicting host tokens are removed from bound child environments.
+Each seat has one active hostname binding. Add `--host git.example.com` for an enterprise host. Public GitHub and `*.ghe.com` use `GH_TOKEN`. Other hosts use `GH_ENTERPRISE_TOKEN`. Conflicting inherited tokens are cleared from bound child environments.
 
 ## Explicit host authentication and removal
 
@@ -39,14 +41,24 @@ exo github-auth configure --seat scout --mode host
 exo github-auth remove --seat scout
 ```
 
-Host mode deliberately uses the machine's existing gh configuration and inherited GitHub authentication. Unconfigured seats retain the previous host behavior for compatibility. Removal deletes the seat's saved credential and private gh directory, then keeps an explicit disabled binding. It does not fall back to the host login. Re-enable by choosing a mode explicitly.
+Host mode explicitly uses the machine's existing gh configuration and inherited GitHub authentication. Unconfigured seats retain that legacy behavior for compatibility. To prepare a seat for a separate account without using host credentials, run `remove` first.
 
-`test` performs a read-only GitHub user lookup and returns a login or a generic error, without upstream error bodies or token output. `status` does not contact GitHub.
+Removal writes a disabled binding before attempting deletion. A failed deletion reports `cleanup_pending` and a nonzero CLI exit, retaining the metadata needed to retry. It does not claim the saved token was deleted. Retry removal after resolving the store problem. An already absent Keychain item counts as removed.
 
-## Boundaries
+A disabled binding allows unrelated bash commands and jobs. It uses a private gh configuration directory and public invalid credential sentinels to override ordinary gh credential lookup. The sentinels are not saved account credentials. Disabled mode does not fall back to the host login. Configure a token explicitly to enable GitHub access again.
 
-A configured seat with unavailable credentials fails before spawning bash or background jobs. It does not silently become the host user. The seat's `tools.env_deny` still wins. Provider subprocesses and code-search tools do not receive the credential through this feature. The normal tool and approval gates remain in place.
+`test` performs a read-only GitHub user lookup and returns a login or a generic error, without token output or upstream error bodies. `status` does not contact GitHub, but checking availability can access the selected secret store.
 
-Known raw credential values are redacted from shell streaming/final results and from bound jobs before their logs are written, including values split across reads. Tokens are never placed in process arguments or saved binding metadata.
+## HTTPS Git and boundaries
 
-Arbitrary shell access is trusted: a command can use, transform or exfiltrate its environment credential. Exact-value redaction is not a credential sandbox. Use limited token permissions and normal approval controls.
+Bound children receive temporary Git configuration through `GIT_CONFIG_COUNT`. Host and repository configuration files are not edited.
+
+For the selected HTTPS host, an empty helper resets the inherited helper chain, followed by `gh auth git-credential`. Inherited Git configuration environment overrides, askpass hooks and Git/gh tracing variables are cleared. Relevant HTTP extra headers are reset, including more-specific URL paths found in configuration at the starting working directory.
+
+Header inspection reads configuration key names only, with a three-second timeout, a 64 KiB output limit and a 256-name limit. Matching URL keys containing user information, a query or a fragment are refused rather than copied into the child environment. Inspection failure refuses the spawn.
+
+A configured token that is missing or unavailable fails before bash or a job starts. `tools.env_deny` wins, including when policy prevents installing the required credential or Git configuration variables. Provider subprocesses and code-search tools do not receive this credential automatically. Existing approval gates still apply.
+
+This covers ordinary gh commands and HTTPS Git authentication for the selected host. SSH keys, URL-embedded credentials, explicit `git -c` or environment overrides, and changing directories inside a command can bypass that setup.
+
+Arbitrary shell access remains trusted: code can use, transform or export its environment credential. Raw-value redaction removes known tokens from foreground output and bound job logs, including split reads. It is not a sandbox against encoded output or deliberate exfiltration.
