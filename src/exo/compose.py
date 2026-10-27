@@ -155,8 +155,8 @@ def create(seat: str | None = None) -> CoreEngine:
             eng.peers.autostart = True
             eng.peer_cfg_dir = eng.peer_cfg_dir or fitting_peers_dir()
         if instruction_provider is not None:
-            eng.workspace_instructions = instruction_provider
-            eng.loop.workspace_extra = lambda session, cwd: instruction_provider.render(cwd)
+            from exo.workspace_context import attach as attach_instructions
+            attach_instructions(eng, instruction_provider)  # one path for compose and direct embedders
         if notebook_config is not None and notebook_config.enabled:
             from exo.work_notebook import attach as attach_work_notebook
             attach_work_notebook(eng, notebook_config, principal=principal)

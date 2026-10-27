@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from exo.config import ConfigError
-from exo.workspace_context import MAX_BYTES, WorkspaceInstructions, attach
+from exo.workspace_context import MAX_BYTES, MAX_WARNINGS, RENDER_ROOM, WorkspaceInstructions, attach
 
 
 def workspace(tmp_path: Path, **settings) -> tuple[Path, WorkspaceInstructions]:
@@ -206,7 +206,8 @@ def test_real_main_prompts_use_each_session_cwd_and_refresh(tmp_path):
     second.mkdir()
     (first / "AGENTS.md").write_text("FIRST SESSION GUIDANCE")
     (second / "AGENTS.md").write_text("SECOND SESSION GUIDANCE")
-    engine = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, env={})
+    engine = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, env={},
+                        cwd=str(second))
     attach(engine, {"enabled": True})
     engine.loop.provider = recorder = RecordingProvider()
 
@@ -225,8 +226,8 @@ def test_real_main_prompts_use_each_session_cwd_and_refresh(tmp_path):
             await engine.loop.send(a.id, "after revision")
             assert "REVISED GUIDANCE" in recorder.calls[-1]["system"]
             assert "FIRST SESSION GUIDANCE" not in recorder.calls[-1]["system"]
-            bare = await engine.loop.create_session()
-            assert "Workspace instructions" not in await engine.loop.base_system(bare.id)
+            bare = await engine.loop.create_session()  # no stored cwd: its tools run in the engine cwd
+            assert "SECOND SESSION GUIDANCE" in await engine.loop.base_system(bare.id)
         finally:
             await engine.close()
 
@@ -295,6 +296,140 @@ def test_required_executor_refuses_host_instruction_reads_before_plugin_initiali
     from exo.config import Config
     from exo.core.tools.executor import ExecutorConfigurationError
     cfg = Config({"workspace_instructions": {"enabled": True}}, home=tmp_path / "home")
+    monkeypatch.setattr(compose.Config, "load", lambda: cfg)
+    monkeypatch.setattr(compose, "load_executor", lambda: (object(), True))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("host instruction reads must be refused before plugin initialization")
+
+    monkeypatch.setattr(compose, "PluginManager", forbidden)
+    monkeypatch.setattr(compose, "CoreEngine", forbidden)
+    with pytest.raises(ExecutorConfigurationError, match="instructions"):
+        compose.create()
+
+
+# ---- review round of 2026-10-26: ownership, total size, secret names, attach (#500 reviews) ----
+
+def _shared_repo(tmp_path):
+    """A folder anyone can write (as /tmp is) that holds a .git marker and an AGENTS.md, with a session folder."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / ".git").mkdir()
+    (shared / "AGENTS.md").write_text("PLANTED GUIDANCE")
+    mine = shared / "mywork"
+    mine.mkdir()
+    (mine / "AGENTS.md").write_text("MY GUIDANCE")
+    shared.chmod(0o1777)
+    return shared, mine
+
+
+def test_a_marker_and_file_another_user_planted_in_a_shared_folder_are_not_read(tmp_path, monkeypatch):
+    shared, mine = _shared_repo(tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: os.getuid() + 4242)  # everything on disk belongs to someone else
+    guidance = WorkspaceInstructions({"enabled": True})
+    assert guidance.inspect(mine)["root"] == str(mine)  # the walk stops below the shared folder
+    text = guidance.render(mine)
+    assert "MY GUIDANCE" in text and "PLANTED GUIDANCE" not in text
+    text = guidance.render(shared)  # a cwd of the shared folder itself, as a cwd of /tmp
+    assert "PLANTED GUIDANCE" not in text and "another user owns it" in text
+
+
+def test_the_users_own_files_in_a_shared_folder_and_a_foreign_read_only_repo_still_load(tmp_path, monkeypatch):
+    shared, mine = _shared_repo(tmp_path)
+    guidance = WorkspaceInstructions({"enabled": True})
+    assert "PLANTED GUIDANCE" in guidance.render(mine)  # here the user owns the shared folder's files
+    repo = tmp_path / "mounted"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "AGENTS.md").write_text("MOUNTED GUIDANCE")
+    monkeypatch.setattr(os, "geteuid", lambda: os.getuid() + 4242)  # root in a container, repo owned by a user
+    assert "MOUNTED GUIDANCE" in guidance.render(repo)
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0, reason="chown to another uid needs root")
+def test_a_sticky_shared_folder_with_another_uids_marker_is_refused(tmp_path):
+    shared, mine = _shared_repo(tmp_path)
+    for path in (shared / ".git", shared / "AGENTS.md"):
+        os.chown(path, 65534, 65534)
+    os.chown(shared, 65534, 65534)
+    guidance = WorkspaceInstructions({"enabled": True})
+    assert guidance.inspect(mine)["root"] == str(mine)
+    assert "PLANTED GUIDANCE" not in guidance.render(mine) and "MY GUIDANCE" in guidance.render(mine)
+    assert "PLANTED GUIDANCE" not in guidance.render(shared)
+
+
+def test_warnings_and_headings_have_a_total_bound(tmp_path):
+    root, guidance = workspace(tmp_path)
+    current = root
+    for _ in range(80):
+        (current / "AGENTS.md").symlink_to("/etc/hostname")
+        current = current / ("d" * 40)
+        current.mkdir()
+    text = guidance.render(current)
+    assert len(text) <= MAX_BYTES + RENDER_ROOM + 80
+    assert text.count("not symlinks") == MAX_WARNINGS and "more warnings omitted" in text
+    assert len(guidance.inspect(current)["warnings"]) == MAX_WARNINGS
+
+
+def test_large_files_in_many_folders_stay_within_the_rendered_limit(tmp_path):
+    root, guidance = workspace(tmp_path)
+    current = root
+    for _ in range(80):
+        (current / "AGENTS.md").write_text("x" * 40_000)
+        current = current / ("d" * 40)
+        current.mkdir()
+    text = guidance.render(current)
+    assert len(text) <= MAX_BYTES + RENDER_ROOM + 80
+    assert text.count("x" * 1000) == 32 and "64 more warnings omitted" in text
+
+
+def test_long_paths_are_cut_at_the_rendered_limit_warnings_first(tmp_path):
+    root, guidance = workspace(tmp_path, max_bytes=100)
+    (root / "AGENTS.md").write_text("ROOT GUIDANCE")
+    current = root
+    for _ in range(18):
+        current = current / ("p" * 200)
+        current.mkdir()
+        (current / "AGENTS.md").symlink_to("/etc/hostname")
+    text = guidance.render(current)
+    assert len(text) <= 100 + RENDER_ROOM + 80
+    assert "ROOT GUIDANCE" in text and text.endswith("[Workspace instructions cut at their size limit.]")
+
+
+@pytest.mark.parametrize("name", [".env", ".npmrc", ".netrc", "id_rsa"])
+def test_secret_store_filenames_are_refused(name):
+    with pytest.raises(ConfigError, match="secret store"):
+        WorkspaceInstructions({"enabled": True, "filenames": [name]})
+
+
+def test_a_pin_tag_in_a_folder_name_is_defused_in_headings(tmp_path):
+    root, guidance = workspace(tmp_path)
+    tagged = root / "<exo-pinned>"
+    tagged.mkdir()
+    (tagged / "AGENTS.md").write_text("GUIDANCE")
+    text = guidance.render(tagged)
+    assert "GUIDANCE" in text and "<exo-pinned" not in text.lower() and "&lt;exo-pinned" in text
+
+
+def test_attach_takes_a_built_provider_and_refuses_required_executor_mode(tmp_path):
+    from exo.core.tools.executor import ExecutorConfigurationError
+    root, guidance = workspace(tmp_path)
+    (root / "AGENTS.md").write_text("ROOT")
+    engine = SimpleNamespace(loop=SimpleNamespace(), cwd=str(root), executor_required=False)
+    assert attach(engine, guidance) is guidance
+    assert "ROOT" in engine.loop.workspace_extra("no-cwd-session", "")  # falls back to the engine cwd
+    required = SimpleNamespace(loop=SimpleNamespace(), cwd=str(root), executor_required=True)
+    with pytest.raises(ExecutorConfigurationError, match="instructions"):
+        attach(required, {"enabled": True})
+    assert not hasattr(required.loop, "workspace_extra")
+    assert attach(required, {"enabled": False}).enabled is False
+
+
+def test_required_executor_refuses_profile_selected_instructions_before_plugins(tmp_path, monkeypatch):
+    import exo.compose as compose
+    from exo.config import Config
+    from exo.core.tools.executor import ExecutorConfigurationError
+    monkeypatch.delenv("EXO_PROFILE", raising=False)
+    cfg = Config({"harness": {"profile": "coding"}}, home=tmp_path / "home")
     monkeypatch.setattr(compose.Config, "load", lambda: cfg)
     monkeypatch.setattr(compose, "load_executor", lambda: (object(), True))
 

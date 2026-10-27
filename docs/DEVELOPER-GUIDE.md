@@ -318,7 +318,8 @@ returns. Embedders that need one bounded attempt call `CoreRuntime.close`. See [
 
 Workspace prompt providers use the per-session `Loop.workspace_extra(session, cwd)` callback.
 Delegated loops inherit the callable and resolve their own cwd. The bounded Markdown provider is
-outside the core in `exo.workspace_context`. See [WORKSPACE-INSTRUCTIONS.md](WORKSPACE-INSTRUCTIONS.md).
+outside the core in `exo.workspace_context`. Install it with `attach(engine, settings)`, which
+`exo.compose` uses too. See [WORKSPACE-INSTRUCTIONS.md](WORKSPACE-INSTRUCTIONS.md).
 
 `KNOWN_UNFIRED_HOOKS` names hooks present in Hermes contracts or earlier Exo declarations that Exo does not
 fire: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`, `on_session_end`,

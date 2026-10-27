@@ -6312,5 +6312,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     reviews and closes the learner, as startup rollback did.
   - *Plugin tools.* Plugin tool handlers get no cancellation signal, so the docs now ask for bounded blocking
     work instead of cancellation-aware work.
+  - *Instructions.* Git's ownership rule, eased for a mounted repository: a marker or file another user owns,
+    in a place others can write, is not read. The rendered block has a total bound and at most 16 warnings.
+    Secret-store filenames are refused. A session with no stored cwd reads the engine cwd. `attach()` takes a
+    built provider and refuses required executor mode, and compose uses it.
   - *Deferred.* Calling the memory provider's `shutdown()` at close is a follow-up. Main never called it, and it
     changes exo-memory's shared runtime lifetime.

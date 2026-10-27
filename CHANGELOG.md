@@ -83,7 +83,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Dependency-aware plugin composition and synchronous resource cleanup on failed registration or
   final shutdown. Folder requirements are validated before import. Entry-point requirements before registration.
 - Optional scoped `AGENTS.md`/`AGENTS.override.md` workspace guidance, with bounded reads and independent
-  main/child session scope. `CLAUDE.md` fallback is configurable (`docs/WORKSPACE-INSTRUCTIONS.md`).
+  main/child session scope. `CLAUDE.md` fallback is configurable (`docs/WORKSPACE-INSTRUCTIONS.md`). Exo follows
+  Git's ownership rule for the `.git` marker and the files, bounds the whole rendered block, and refuses
+  secret-store filenames.
 - A sourced harness landscape comparison and phased roadmap with evaluation gates (`docs/HARNESS-LANDSCAPE.md`).
 
 ### Changed

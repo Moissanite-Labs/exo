@@ -36,7 +36,8 @@ For each prompt, Exo starts at the session's current working directory and finds
 the nearest ancestor containing a `.git` directory or regular `.git` file. The
 file form supports Git worktrees. It reads guidance from that root down to the
 session's directory, in order. A nested repository starts its own scope. When no
-repository marker is present, Exo reads only the session's directory.
+repository marker is present, Exo reads only the session's directory. A session
+with no stored working directory uses the core's directory, where its tools run.
 
 At each directory it considers these files in priority order and uses only the
 first one present:
@@ -71,10 +72,17 @@ invalid limits are rejected before the runtime opens its stores or imports
 plugins. Custom `filenames` replaces the default list and uses the specified
 order. Filenames cannot contain path separators or control characters.
 
-The byte budget applies to the instruction files' content, not the headings Exo
-adds. Files near the root consume the budget first. A partially included file
-and files omitted after the limit are reported. Invalid UTF-8, including a
-character split at the byte limit, is replaced and reported.
+The byte budget applies to the instruction files' content. Files near the root
+consume it first. A partially included file and files omitted after the limit
+are reported. Invalid UTF-8, including a character split at the byte limit, is
+replaced and reported. The headings, paths and warnings Exo adds get 8 KiB more,
+so the whole block stays near `max_bytes` plus 8,192 characters. Past that it is
+cut with a note, so the warnings at its end go first. At most 16 warnings are
+listed, then a count of the rest.
+
+`filenames` cannot name a secret store, such as `.env`, `.npmrc`, `.netrc` or an
+SSH key. Exo checks each name with the gate's secret-store test when the core
+starts. It checks each file's full path again before it reads it.
 
 ## Trust and execution boundaries
 
@@ -85,7 +93,17 @@ instructions. The gate and executor remain authoritative for tool execution.
 
 The loader reads regular files only. It skips instruction symlinks, including
 links to another file inside the repository, and skips special files such as
-FIFOs. Directory descent refuses symlinks introduced after discovery. It does
+FIFOs.
+
+It follows Git's ownership rule (`safe.directory`), eased for a repository that
+a container mounts from the host. A `.git` marker or instruction file is not
+trusted when another user owns it and other users can write it or its folder.
+The upward search also stops at a folder that other users can write and the
+user does not own, such as a shared `/tmp`. Exo then reads only the session's
+directory, and skips files there that another user could have planted. The
+user's own files always count. A repository owned by another user, in folders
+only that user can write, still loads. Exo checks ownership again on the open
+file. Directory descent refuses symlinks introduced after discovery. It does
 not run project code, import plugins, scan project skills, or follow the target
 named inside a worktree's `.git` file.
 
@@ -98,9 +116,13 @@ has not been implemented. Disable the capability or set
 
 `exo.workspace_context.attach(engine, settings)` installs a
 `WorkspaceInstructions` object on `engine.workspace_instructions` and a
-`workspace_extra(session, cwd)` callback on the loop. The core owns no discovery
-logic. It calls the injected callback when it builds system text. A child loop
-inherits that callback.
+`workspace_extra(session, cwd)` callback on the loop. `settings` is the
+`workspace_instructions` object, or a `WorkspaceInstructions` that the caller
+already built. `exo.compose` builds and checks one before the engine exists,
+then attaches it the same way. `attach` refuses enabled instructions in required
+executor mode, as `exo.compose` does. The core owns no discovery logic. It calls
+the injected callback when it builds system text. A child loop inherits that
+callback.
 
 `WorkspaceInstructions.render(cwd)` returns the labeled prompt block, or an
 empty string when nothing applies. `inspect(cwd)` returns source paths, scopes,
@@ -109,5 +131,7 @@ Both operations reread the current files. Disabled discovery and an empty
 filename list perform no filesystem reads.
 
 Tests: `tests/test_workspace_context.py`, including actual simultaneous session
-prompts, delegated children, repository boundaries, byte limits, and symlink
-replacement during discovery.
+prompts, delegated children, repository boundaries, byte and rendered-size limits,
+ownership in a shared folder, secret-store names, and symlink replacement during
+discovery. `tests/test_harness_composition.py` checks the same scoping through
+`exo.compose.create()`, with sessions and a child outside the configured cwd.

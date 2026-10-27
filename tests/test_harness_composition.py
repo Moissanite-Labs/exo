@@ -166,3 +166,70 @@ def test_scheduler_runs_without_delegation_and_inherits_workspace_scope(tmp_path
             await engine.close()
 
     asyncio.run(run())
+
+
+# ---- review round of 2026-10-26 (#500 reviews) ----
+
+class _Recorder:
+    name = "fake"
+
+    def __init__(self):
+        self.calls = []
+
+    async def stream(self, messages, tools, **opts):
+        from exo.core.models.fake import FakeProvider
+        self.calls.append({"system": messages[0].text(),
+                           "user": next(m.text() for m in reversed(messages) if m.role == "user")})
+        async for event in FakeProvider(["done"]).stream(messages, tools):
+            yield event
+
+
+def test_composed_instructions_follow_each_session_and_child_not_the_config_cwd(tmp_path, monkeypatch):
+    """compose.create() is the production path: two sessions in two repositories and a delegated child each read
+    their own cwd's guidance, never the config cwd's."""
+    from exo.core.tools.registry import ToolContext
+    repos = {}
+    for name in ("config", "alpha", "beta"):
+        root = tmp_path / name
+        (root / ".git").mkdir(parents=True)
+        (root / "AGENTS.md").write_text(f"{name.upper()} GUIDANCE")
+        repos[name] = root
+    configured(tmp_path, monkeypatch, "coding", cwd=str(repos["config"]), learn={"enabled": False})
+
+    async def run():
+        engine = compose.create()
+        engine.loop.provider = recorder = _Recorder()
+        try:
+            a = await engine.loop.create_session(cwd=str(repos["alpha"]))
+            b = await engine.loop.create_session(cwd=str(repos["beta"]))
+            first, second = await engine.loop.base_system(a.id), await engine.loop.base_system(b.id)
+            assert "ALPHA GUIDANCE" in first and "BETA GUIDANCE" not in first and "CONFIG GUIDANCE" not in first
+            assert "BETA GUIDANCE" in second and "ALPHA GUIDANCE" not in second and "CONFIG GUIDANCE" not in second
+            result = await engine.agents.tool({"goal": "CHILD_TASK", "role": "scout"},
+                                              ToolContext(session=b.id, cwd=str(repos["beta"])))
+            assert "Done:" in result
+            [child] = [call for call in recorder.calls if "CHILD_TASK" in call["user"]]
+            assert "BETA GUIDANCE" in child["system"] and "CONFIG GUIDANCE" not in child["system"]
+        finally:
+            await engine.close()
+
+    asyncio.run(run())
+
+
+def test_an_explicit_profile_without_instructions_overrides_the_legacy_setting(tmp_path, monkeypatch):
+    configured(tmp_path, monkeypatch, "lean", workspace_instructions={"enabled": True})
+    (tmp_path / "AGENTS.md").write_text("MUST NOT APPEAR")
+
+    async def run():
+        engine = compose.create()
+        try:
+            session = await engine.loop.create_session(cwd=str(tmp_path))
+            assert "MUST NOT APPEAR" not in await engine.loop.base_system(session.id)
+            assert engine.workspace_instructions is not None and not engine.workspace_instructions.enabled
+        finally:
+            await engine.close()
+
+    asyncio.run(run())
+
+
+
