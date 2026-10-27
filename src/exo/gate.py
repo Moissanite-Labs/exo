@@ -2913,6 +2913,46 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
     return words, sudo, None
 
 
+def _env_split_argv(split: str) -> str | None:
+    """The command a -S text's leading words name, read as env reads them, as its own argv (#591): env splits the
+    text into words and reads them itself, so a word quoted whole with the form NAME=value is an assignment, and
+    the first word that is neither an option nor an assignment starts the command. Returns the text from that word
+    on, or None when the shell line over the text already reads it: no leading word consumed, no command at all, a
+    split inside the split (env reads it again, the gate does not follow), or a shell operator before the command
+    (a word to env, but the line's own reading covers what follows it)."""
+    toks = _Lexer(split or "", scan=False).run()
+    words = [t for k, t in toks if k == "w"]
+    n, i = -1, 0
+    while i < len(words):
+        t = words[i].text
+        if _ASSIGN.fullmatch(t):          # env reads its own argv, so a quoted NAME=value is an assignment too
+            i += 1
+            continue
+        if not t.startswith("-") or t == "-":
+            n = i
+            break
+        f, i = t, i + 1
+        if f in ("-S", "--split-string") or f.startswith(("--split-string=", "-S")):
+            return None
+        if f == "--":
+            n = i                         # the options end: the next word is the command, assignments included
+            break
+        if f in _PREFIXES["env"] and i < len(words):
+            i += 1                        # a value of its own (`-u NAME`, `--chdir DIR`)
+    if n <= 0 or n >= len(words):
+        return None
+    # an operator before the command word is a word of argv to env, and the shell line over the text
+    # covers the commands after it
+    seen = 0
+    for k, _ in toks:
+        if k != "w":
+            if seen <= n:
+                return None
+            break
+        seen += 1
+    return " ".join(w.raw for w in words[n:])
+
+
 def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) -> tuple[int, list]:
     """Read a wrapper's options from argv[i] as getopt does: up to the first operand (past it with `permute`)
     or `--`, `--opt=value` or `--opt value` (an unambiguous prefix of four letters or more counts), short
@@ -3469,6 +3509,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts.append(_opaque("env -S runs a command line", cmd))
         if depth < _DEPTH:
             parts.append(classify_shell(split, depth + 1))
+            if rest := _env_split_argv(split):   # #591: the leading words are env's own argv, not a shell line
+                parts.append(classify_shell(rest, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
