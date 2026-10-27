@@ -15,34 +15,56 @@ import shutil
 import subprocess
 import sys
 from typing import Any, Callable
+from pathlib import Path
 
 Runner = Callable[[list[str]], Any]
+
+
+def _launch_command(env: dict[str, str], argv: list[str] | None) -> list[str]:
+    base = shlex.split(env.get("EXO_RESTART_CMD", ""))
+    if base:
+        return base
+    carry = [f"{k}={v}" for k, v in sorted(env.items())
+             if k.startswith("EXO_") and not k.endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD"))]
+    base = [sys.executable, *(sys.argv if argv is None else argv)]
+    return ["env", *carry, *base] if carry else base
+
+
+def _without_options(base: list[str], valued: tuple[str, ...], switches: tuple[str, ...]) -> list[str]:
+    """Remove old options, including argparse's unambiguous long-option abbreviations."""
+    out, skip = [], False
+    for arg in base:
+        if skip:
+            skip = False
+            continue
+        key = arg.split("=", 1)[0]
+        matches = [flag for flag in (*valued, *switches) if key.startswith("--") and flag.startswith(key)]
+        if len(matches) == 1:
+            skip = matches[0] in valued and "=" not in arg
+        else:
+            out.append(arg)
+    return out
 
 
 def restart_command(session: str | None, env: dict[str, str] | None = None,
                     argv: list[str] | None = None) -> list[str]:
     """The command line that resumes ``session``: EXO_RESTART_CMD, else re-exec of argv."""
     env = os.environ if env is None else env
-    base = shlex.split(env.get("EXO_RESTART_CMD", ""))
-    if not base:
-        base = [sys.executable, *(sys.argv if argv is None else argv)]
-        # A fresh tab has none of this process's env (EXO_HOME, plugins, bus): carry the EXO_* vars,
-        # except secrets, or the new tab opens a different store and starts a fresh session.
-        carry = [f"{k}={v}" for k, v in sorted(env.items())
-                 if k.startswith("EXO_") and not k.endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD"))]
-        # drop any old --session/--resume so the new one wins
-        out, skip = [], False
-        for a in base:
-            if skip:
-                skip = False
-            elif a == "--session":
-                skip = True
-            elif a == "--resume" or a.startswith("--session="):
-                continue
-            else:
-                out.append(a)
-        base = ["env", *carry, *out] if carry else out
+    base = _without_options(_launch_command(env, argv), ("--session",), ("--resume",))
     return [*base, "--session", session] if session else [*base, "--resume"]
+
+
+def new_command(cwd: str, env: dict[str, str] | None = None, argv: list[str] | None = None) -> list[str]:
+    """Open a fresh session without inheriting a title, resume or permission flag."""
+    env = os.environ if env is None else env
+    base = _without_options(_launch_command(env, argv), ("--session", "--cwd", "--title"),
+                            ("--resume", "--skip-permissions", "--dangerously-skip-permissions"))
+    # The machine launchers and ``exo resume`` also accept a positional resume subcommand.
+    for i, arg in enumerate(base[:-1]):
+        if Path(arg).name in ("exo", "exo-canary", "exo-projects") and base[i + 1] == "resume":
+            del base[i + 1]
+            break
+    return [*base, "--cwd", cwd]
 
 
 def _applescript_quote(text: str) -> str:
@@ -63,7 +85,7 @@ def open_tab(cmd: list[str], env: dict[str, str] | None = None, platform: str | 
     """Open ``cmd`` in a new terminal tab. Returns "opened" or the exact command to run by hand."""
     env = os.environ if env is None else env
     platform = platform or sys.platform
-    run = runner or (lambda a: subprocess.run(a, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    run = runner or (lambda a: subprocess.run(a, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15))
     line = shlex.join(cmd)
     here = shlex.quote(os.getcwd())
     shell_line = f"cd {here} && {line}"

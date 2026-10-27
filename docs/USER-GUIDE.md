@@ -69,7 +69,11 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 
 **Terminal (`exo tui`).** Type a message and press Enter. Options: `--resume` continues the newest thread
 with messages (each launch opens a thread, so it skips the empty ones), `--session ID` continues one, `--seat NAME`
-picks the seat, `--title TEXT` names a new thread. Keys:
+picks the seat, `--title TEXT` names a new thread, and `--cwd DIRECTORY` chooses the working directory for new
+threads. For a local connection, a new thread defaults to this terminal window's current directory, including
+when it joins a core whose seat has another default. A resumed thread keeps its saved directory. With `--url`,
+`--cwd` names a directory on the server; `@file` completion and attachments still use the client's local directory.
+Keys:
 
 | Key or prefix | Does |
 |---|---|
@@ -126,6 +130,7 @@ The technical reference, with arguments and where each command is implemented, i
 | Command | Does |
 |---|---|
 | `/new` | Start a new thread: a fresh focus, the same memory. |
+| `/tab [directory]` | Open another terminal window with a new thread in that directory, leaving this thread open. With no directory, use this thread's working directory. |
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
