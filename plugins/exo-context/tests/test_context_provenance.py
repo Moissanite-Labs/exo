@@ -1555,6 +1555,111 @@ def test_a_transcript_cut_short_at_a_summary_row_is_no_undo(tmp_path):
     assert pins(tmp_path, "s2")["ruling"] == [MINE]
 
 
+class Tail(Paraphrase):
+    """A Hermes /compress that folds everything before its tail, which keeps the last `rows` messages."""
+
+    def __init__(self, rows=4):
+        self.rows = rows
+
+    def compress(self, messages, **kw):
+        return super().compress(messages[:-self.rows], **kw)[1:2] + list(messages[-self.rows:])
+
+
+def test_a_compress_before_the_undo_lets_it_reach_back(tmp_path):
+    """#581: /compress between the last turn and /undo 2 folds the window's first row, and the window is not
+    updated. The next turn's transcript held neither that row nor its summary part, and no summary row stood for
+    it, so the undo read as cut short and the earlier undone turn's ruling stayed. The compress now notes the
+    fold with the pins, and the notice seeds the undo with that row's summary, so the ruling goes."""
+    h = Hermes(tmp_path, "c581", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.compress()
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / "c581.json").read_text())
+    assert len(data["first_row"]) == 1 and next(iter(data["first_row"].values()))
+    h.undo(2)
+    assert pins(tmp_path, "c581")["ruling"] == [NOTE, MINE]  # one notice: only the last turn is known yet
+    out = h.turn("next step")
+    assert pins(tmp_path, "c581")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+    h.turn("and the tests")
+    assert summary_block(h.compress())["ruling"] == [NOTE]
+
+
+def test_a_compress_before_the_window_still_reads_cut_short(tmp_path, caplog):
+    """#581, the strict side: a compress whose fold stops short of the window's first row — it folded only rows the
+    window never held — notes nothing, and a transcript cut short below that row still drops nothing."""
+    eng = ExoContextEngine(inner=Tail(rows=5), write_handoffs=False)
+    eng.on_session_start("w581")
+    eng.select_context([SYS, mine("early work"), ok(), mine(MINE), ok(), mine("carry on")])
+    eng.on_turn_complete([mine(MINE), ok(), mine("carry on")], usage=None)  # the window starts at the ruling
+    out = eng.compress([SYS, mine("early work"), ok(), mine(MINE), ok(), mine("carry on"), ok(), mine("go on")],
+                       force=True)  # folds only the rows before the window's first row
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / "w581.json").read_text())
+    assert "first_row" not in data
+    host_undo("w581")  # /undo 3: the ruling's turn, carry on's and go on's
+    tail = [out[0], mine("next step")]
+    with caplog.at_level("INFO", logger="exo_context.engine"):
+        eng.select_context([SYS, *tail], conversation_messages=tail, incoming_message=tail[-1])
+    assert pins(tmp_path, "w581")["ruling"] == [MINE]
+    assert [r.getMessage() for r in caplog.records if r.name == "exo_context.engine"] == [
+        "exo-context: the transcript after an undo in session w581 does not start where the window did, so no pin "
+        "was dropped"]
+    assert "British" not in caplog.text
+
+
+def test_a_second_compress_hands_the_note_to_its_own_row(tmp_path):
+    """#581: a second compress folds the row the first one noted; its own row then stands for the window's first
+    row, so the undo after it still reaches back and the earlier undone turn's ruling goes."""
+    h = Hermes(tmp_path, "d581", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.compress()
+    h.compress()  # folds the noted row; the window is still the pre-compress one
+    h.undo(2)
+    out = h.turn("next step")
+    assert pins(tmp_path, "d581")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+
+
+def test_an_undo_then_a_compress_still_reaches_back(tmp_path):
+    """#581 with the order reversed: the compress after the notice folds the window's first row itself, as the
+    pending undo has always counted. The next turn still drops the earlier undone turn's ruling."""
+    h = Hermes(tmp_path, "r581", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    h.compress()
+    out = h.turn("next step")
+    assert pins(tmp_path, "r581")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+
+
+def test_a_noted_first_row_with_no_undo_changes_nothing(tmp_path):
+    """#581: the note is for an undo. With none, the turns go on as before, no pin moves, and the note rides the
+    saves keyed to the window's first row."""
+    h = Hermes(tmp_path, "n581", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE):
+        h.turn(text)
+    h.compress()
+    h.turn("and the writer")
+    h.turn("carry on")
+    assert pins(tmp_path, "n581")["ruling"] == [NOTE, MINE]
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / "n581.json").read_text())
+    assert len(data["first_row"]) == 1
+    assert summary_block(h.compress())["ruling"] == [MINE, NOTE]  # the tail still says MINE, the pins carry NOTE
+
+
+def test_a_noted_first_row_carries_into_a_compression_child(tmp_path):
+    """#581: with compression.in_place false, the child takes the window over after the compress. The note moves
+    with it, so an undo in the child still reaches back and drops the earlier undone turn's ruling."""
+    h = Hermes(tmp_path, "c581p", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.compress()
+    h.eng.on_session_start("c581k", boundary_reason="compression", old_session_id="c581p")
+    h.sid = "c581k"
+    h.undo(2)
+    out = h.turn("next step")
+    assert pins(tmp_path, "c581k")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+
+
 class NoHead(Paraphrase):
     """A later Hermes compaction, which keeps no first rows: its summary row opens the transcript."""
 

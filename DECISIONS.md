@@ -3513,6 +3513,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   still inherits, because the file holds no digests yet; a pin the child still holds carries as before; and a
   ruling said again after the undo is pinned again: its digest leaves the list while it is live, and returns if
   a later undo drops it again, so the next rebind still carries nothing.
+  *2026-10-26 note (#581):* a `/compress` between the last turn and the undo could keep the earlier undone
+  turns' pins, as the 2026-10-25 note's list said. The compaction folds the window's first row and the window
+  is not updated, so the next turn's transcript held neither that row nor its summary part, and no summary row
+  stood for it: the undo read as cut short and skipped. A compress now notes the fold with the pins, with or
+  without a pending undo: the digest of the window's first row with the digests of the summary blocks written
+  as the compaction folded that row or what Hermes kept of it, one note per session, and a compaction that
+  folds a row already noted hands the note to its own block. A notice seeds the pending undo's summary-row
+  anchors from the note when the noted row is still the window's first row, so the next turn counts that row
+  as reaching back. A compress that folded only rows the window never held notes nothing, and a transcript cut
+  short below the window's first row still drops nothing. The note follows the pins into a compression child
+  and a `/branch` child.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
