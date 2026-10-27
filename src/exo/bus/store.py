@@ -115,10 +115,21 @@ class Store:
         return self._select(where, (), limit)
 
     def verify(self, from_seq: int = 1, to_seq: int | None = None, keys_for=None) -> dict:
-        """Recompute ids, chain links and (if keys_for(seat, envelope) -> [pubkeys] is given) signatures."""
+        """Recompute ids, chain links and (if keys_for(seat, envelope) -> [pubkeys] is given) signatures.
+
+        An inverted or empty range verifies nothing, so it reports ok False
+        instead of ok True with checked 0: a caller must not read an empty
+        check as a clean log. to_seq is clamped to the head so the returned
+        range always matches what was checked.
+        """
         from_seq = max(1, from_seq)
+        head_seq, head_hash = self.head()
         if to_seq is None:
-            to_seq = self.head()[0]
+            to_seq = head_seq
+        to_seq = min(to_seq, head_seq)
+        if to_seq < from_seq:
+            return {"ok": False, "error": "range is empty: nothing to verify",
+                    "from": from_seq, "to": to_seq, "checked": 0, "head": head_hash}
         prev_row = self.db.execute("SELECT chain FROM log WHERE seq = ?", (from_seq - 1,)).fetchone()
         prev = prev_row[0] if prev_row else wire.GENESIS
         checked = 0
