@@ -50,3 +50,26 @@ def test_explicit_boot_limit_explains_that_rounds_do_not_bound_time(tmp_path, li
             assert ROUND_LIMIT_NOTE in app.transcript_text()
             assert ('rounds: unlimited' if limit == 0 else f'rounds: {limit}') in app.status_text()
     asyncio.run(go())
+
+
+def test_composer_routes_rounds_locally_and_applies_it_to_next_turn(tmp_path):
+    async def go():
+        app = ExoApp(FakeServerClient(make_engine(tmp_path)), seat='tester')
+        async with app.run_test(size=(120, 40)) as pilot:
+            await asyncio.wait_for(app.ready.wait(), 5)
+            for text, limit in [('/rounds off', 0), ('/rounds 32', 32),
+                                ('/rounds default', None), ('/rounds 0', 0)]:
+                await send(app, pilot, text)
+                await until(lambda: app.max_rounds == limit, pilot)
+            await send(app, pilot, '/rounds -1')
+            await until(lambda: 'usage: /rounds' in app.transcript_text(), pilot)
+            assert app.max_rounds == 0
+            assert not any(isinstance(body, (s.TurnSend, s.CommandRun)) and
+                           (isinstance(body, s.TurnSend) or body.name == 'rounds') for body in app.sent)
+            await send(app, pilot, 'hello')
+            await until(lambda: any(isinstance(body, s.TurnSend) for body in app.sent), pilot)
+            turns = [body for body in app.sent if isinstance(body, s.TurnSend)]
+            assert len(turns) == 1
+            assert turns[0].text == 'hello'
+            assert turns[0].max_rounds == 0
+    asyncio.run(go())
