@@ -834,6 +834,56 @@ def test_a_line_read_two_ways_binds_to_its_text_even_as_one_act():
         assert len(readings(one)) == 1 and not gate.binds_exact(one), line
 
 
+_MAIN_READS = [
+    "ssh myhost rm -rf ./work",                                 # #610: the host stays a target beside the path
+    "cat ~/.ssh/*",                                             # #609: a glob in a secret store's folder
+    "tee ~/.exo/policies/a.yaml ~/.exo/policies/b.yaml",        # #611: every store path a write names
+    "cp /tmp/evil.py ~/.exo/plugins/x.py",                      # #604: a folder Exo loads code from
+    "gh release download v1 -R o/r -D ~/.exo/policies",         # #606: a gh download into the store
+    "cp /tmp/c ~/.exo/config.json",                             # D-074, #607: read as before D-074 too
+    f"echo $\\\n({PUSH})",                                      # #584: read joined and as written
+]
+_STORE_DENY = {"gates": {"categories": {"store_write": "deny", "credentials": "deny"}}}
+_ALL_LIST = {"gates": {"deny": ["force_push", "delete", "store_write", "credentials"]}}
+
+
+def _keeps_mains_reading(line: str, alone: str) -> None:
+    """``line`` reads the command ``alone`` with main's readings: its categories, other targets and ``ordinary``
+    reading, no lower decision under any policy here, and an approval bound to the exact text."""
+    rs, ra = readings(_c(line)), readings(_c(alone))
+    assert _categories(alone) <= _categories(line)
+    assert {t for r in ra for t in r.alt_targets} <= {t for r in rs for t in r.alt_targets}
+    assert any(r.ordinary for r in rs) >= any(r.ordinary for r in ra)
+    for p in (None, _FORCE_DENY, _DELETE_DENY, _STORE_DENY, _ALL_LIST):
+        assert gate.OUTCOMES.index(_out(line, p)) >= gate.OUTCOMES.index(_out(alone, p)), p
+    assert gate.binds_exact(_c(line))
+
+
+@pytest.mark.parametrize("alone", _MAIN_READS)
+def test_a_command_in_a_word_keeps_mains_newer_readings(alone):
+    """Main's readings since dcab371a (#604, #606, #609, #610, #611, D-074 with #607, #584) hold for a command bash
+    runs from a ${..} word as for the command alone (review 5659098661). Main reads none of the word, except the
+    glob in a secret store's folder, which its store check finds in the raw text."""
+    _keeps_mains_reading("echo ${v:-$(" + alone + ")}", alone)
+
+
+@pytest.mark.parametrize("alone", _MAIN_READS)
+def test_a_command_main_reads_past_a_word_keeps_mains_newer_readings(alone):
+    """Guard: past a word the two readings end apart, main reads the command, and so does each reading here."""
+    _keeps_mains_reading("echo \"${v:-'}\" ; " + alone + " ; echo \"'}\"", alone)
+
+
+@pytest.mark.parametrize("line,out", [
+    (f"cat <<EOF\n${{v:-$({PUSH})}}\nEOF\n", "deny"),            # an unquoted body expands the word
+    (f"cat <<EOF\n${{v:-$(echo hi)}}\n EOF\nEOF\n{PUSH}\n", "deny"),  # #333: only the exact line ends the body
+    (f"cat <<'EOF'\n${{v:-$({PUSH})}}\nEOF\n", "allow"),          # a quoted body is text
+])
+def test_a_word_in_a_here_document_body_ends_on_mains_delimiter(line, out):
+    """#333 (main's exact delimiter line) with a ${..} word in the body: the first row fails on main, which reads
+    nothing in the word; the other two are guards that hold on main."""
+    assert _out(line, _FORCE_DENY) == out
+
+
 @pytest.mark.parametrize("line", [
     "echo ${x:-$(cat <<EOF)} ; echo hi\ngit push --force origin main\nEOF",
     "echo ${x:-<(cat<<EOF)'\nEOF\n'}\ngit push --force origin main",

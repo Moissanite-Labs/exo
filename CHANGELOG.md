@@ -25,7 +25,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   decision lower than before on its built-in corpus (with and without variants) and on an aimed corpus of these
   forms. Each of the
   two readings keeps its own #584 joined reading and D-074 `ordinary` reading, and `gate.readings` lists the
-  `ordinary` reading of each. `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
+  `ordinary` reading of each. A command in a word keeps the readings it has alone: an ssh host target (#493),
+  each store path a write names (#514), a write into a code-load folder (#459), a gh download into the store
+  (#461), a glob in a secret store's folder (#594) and a here-document's exact delimiter line (#328). `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
 - A policy pattern that does not compile is refused when the policy loads (#466). `normalize_policies` checked
   types and outcome names but compiled nothing, so a rule's `match.command`, a `command:` entry or a mapping's
   `command` in `deny:` and `reserved:`, and a `posting.forbid` pattern with a typo raised `re.PatternError` only

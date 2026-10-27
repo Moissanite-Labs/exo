@@ -3039,6 +3039,18 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   the more severe, so `: # $\<newline>(git push ...)` (bash runs the next line) leads its card with the push, as on
   main. A command past the depth or the budget still asks under a deny on it, and a rule allowing `opaque_exec`
   allows it, as main allows the line (main reads none of the word); a deny there is follow-up work.
+  *Re-checked 2026-10-27 (review 5659098661, on the merge of main 15e60ddb):* `classify` reads the call each way
+  in `_classify_read`, which keeps main's #584 joined reading and D-074 `ordinary` reading for each, with budgets
+  of their own; `readings` is main's walk plus the `ordinary` reading of every reading; `binds_exact` keeps each of
+  main's conditions and adds them for every reading; `as_dict` pops what main pops (this PR adds no field). A
+  command in a word keeps the readings it has alone, main's newer ones too: an ssh host target (#493), each store
+  path a write names (#514), a code-load folder (#459), a gh download into the store (#461), a glob in a secret
+  store's folder (#594) and a here-document's exact delimiter line (#328)
+  (`test_a_command_in_a_word_keeps_mains_newer_readings`). `scripts/gate_diff.py` of main 15e60ddb against this
+  tree lowers nothing: the built-in corpus (12,029 actions x 88 policies, no variants, 19,138 pairs tightened on
+  323 actions) and the aimed corpus regenerated from this tree's tests plus 228 calls that put each of main's newer
+  readings in, beside and past a word (12,035 actions x 112 policies: the 88 built in, the 19 aimed ones and 5 on
+  `store_write` and `credentials`; 245,982 pairs tightened on 4,879 actions).
 
   *Amendment 2026-10-26 (issue #584):* a backslash-newline inside a `$` form is joined before the form is read, as
   bash joins it. Outside single quotes bash drops each `\<newline>` before it expands a word, so
