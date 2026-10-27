@@ -48,6 +48,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-015 Decision models | `docs/PROVIDERS.md` "Providers" | n/a | §9 "Call a decision model" | WP §14 |
 | D-016 Agent wire, SYM-2P | `docs/AGENT-WIRE.md` | n/a | §9 "Work with subagents" (the wire, `exo wire`) | WP §16.1 |
 | PR #222 SYM-2P grammar patterns end in `\Z`, not `$`, so an id, ref, hash or timestamp with a trailing newline is refused, in `exo.protocols.sym2p` and the `sym-protocol` skill's validator (D-016) | `docs/AGENT-WIRE.md` §1.1 "How current Exo's copy is", `skills/sym-protocol/SKILL.md`, `CHANGELOG.md` | n/a (no user commands changed) | n/a | n/a |
+| PR #674 (exo-desktop #17) `exo.wire.verify` checks a detached signature only against a key the caller pins, and returns False with none: the `pub` a signature carries is never trusted on its own (D-016 amendment) | `docs/AGENT-WIRE.md` §4.2, `DECISIONS.md` D-016, `CHANGELOG.md`, `src/exo/wire/packets.py` | n/a (no user commands changed) | §9 "Work with subagents" (the wire: pin the key) | n/a |
 | D-017 Subagents on the cheapest model | `docs/AGENT-WIRE.md` "Model tiers" | §5 "Subagents" | §5 (`[models] tier`), §9 "Work with subagents" | WP §8, §13.2, §16.1 |
 | D-018 Provider agnostic, user-chosen models | `docs/PROVIDERS.md` | §1, §3 (`/model`) | §5 | WP §13 |
 | D-019 Jev default decision model | `docs/PROVIDERS.md` "Providers" | n/a | n/a | WP §14.5 |
