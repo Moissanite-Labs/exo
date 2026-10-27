@@ -1370,7 +1370,7 @@ gate does not read:
   --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and `sftp -S`,
   `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`,
   `LocalCommand`, `RemoteCommand` (with the `remote host` exposure, each of its parts `internal`
-  as for the hop) and `KnownHostsCommand`; `git
+  as for the hop, a nested part's `private` reading kept beside it) and `KnownHostsCommand`; `git
   rebase -x`/`--exec`, `git bisect run`, `git submodule foreach` (also after `-q`, `--quiet`),
   `--upload-pack` (`clone`, `fetch`, `pull`, `ls-remote`, and its hidden synonym `git ls-remote
   --exec`, #230), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`; `zip -TT`;
@@ -2271,13 +2271,12 @@ into one still leads on equal parts and takes the host, so that form decides and
 hits as before #316. A gh post in a known text keeps its other targets ("Where a gh command
 lands"): where the part that runs the stdin names the host for an empty target, it names it for an
 empty other target too. So `echo 'gh pr comment -wR myorg/app -b hi' | ssh buildhost` may land on
-the current repo on `buildhost`, and a `github_post` deny on `buildhost` denies it. A part nested
-below the one that leads (the gh read below the store write of `gh release download
--O ~/.exo/policies/gates.yaml`, #461), keeps its own target and, where that or another of its targets
-is empty, has a copy on the host beside it (#461 follow-up), so an entry on the host still sees it as
-when it led. After a hop that
+the current repo on `buildhost`, and a `github_post` deny on `buildhost` denies it. After a hop that
 host is the first one, where the line hands the stdin over, as for the part's own target; ssh's own
-part names the inner host. So `deny` and `reserved` entries, category lines that deny and rules that deny
+part names the inner host. A part nested below the one that leads (the gh read below the store write
+of `gh release download -O ~/.exo/policies/gates.yaml`, #461) keeps its own target and, where that or
+another of its targets is empty, has a copy on the host beside it (#461 follow-up), so an entry on
+the host still sees it as when it led. So `deny` and `reserved` entries, category lines that deny and rules that deny
 a part still see every part they saw: under `{match: {category: [shell, read], reversibility:
 costly}, decision: deny}`, `{ sudo ssh host; } < cmds.sh` is denied as before, and `sudo ssh host <
 cmds.sh`, which asked, is denied too. The new `opaque_exec` part can be the part that decides the
@@ -2659,7 +2658,8 @@ target also has a copy on the host (#461 follow-up), so an entry on `{category: 
 or `{category: opaque_exec, target: host}` still reaches the gh read or the `eval` and stdin forms,
 as it did when the read led the line; so does the part that runs ssh's stdin beside such a line
 (`echo x | ssh $H gh release download ..`), and every part of an `ssh -o RemoteCommand=` line is
-`internal`, so a matrix cell on an internal action still reaches the read. Also
+`internal`, so a matrix cell on an internal action still reaches the read, while a nested part keeps
+its `private` reading as a copy, so a rule on `exposure: private` still reaches it as before. Also
 a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
 `unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and
