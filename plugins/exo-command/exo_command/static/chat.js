@@ -184,6 +184,7 @@ export function mount(root) {
         loadContext();
         sys("memory", "log " + b.start + "-" + b.end + " folded \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "context.compacted":
+        capacity = null; loadContext();
         sys("context", "compacted \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "peer.message": card({ kind: "peer", id: b.msg_id || "peer" + items.length, sender: b.sender, text: b.text, trust: b.trust, mode: b.mode }); break;
       case "taste.updated": push({ kind: "taste", id: "taste-" + b.rule_id + "-" + ev.seq, action: b.action, text: b.text, path: b.path }); break;
@@ -256,12 +257,14 @@ export function mount(root) {
   async function loadContext() {
     const id = current;
     if (!id) return;
+    capacity = null;
+    drawStatus();
     try {
       const out = await runCommand("context", "json");
       if (id !== current) return;
       applyContext(out);
       drawStatus(); drawSide(true); if (!items.length) drawHero();
-    } catch (e) { /* older core: the instruments fall back to what the events carry */ }
+    } catch (e) { if (id === current) { capacity = null; drawStatus(); } }
     try {
       const out = await runCommand("findings", "count");
       if (id === current && out && typeof out.open === "number") { findings = out.open; help.note({ findings }); drawStatus(); }
@@ -393,9 +396,10 @@ export function mount(root) {
     }
     if (ctxTokens != null) {
       const pct = capacity ? Math.min(100, Math.round(100 * ctxTokens / capacity)) : 0;
+      const remaining = capacity ? Math.max(0, capacity - ctxTokens) : 0;
       out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "memory"),
-        h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: capacity ? "context capacity: " + fmtTok(capacity) + " tokens" : "context capacity unknown" }, h("i", { style: "width:" + pct + "%" })),
-        h("span", { class: "xc-v" }, fmtTok(ctxTokens) + (capacity ? " / " + fmtTok(capacity) : " · capacity unknown"))));
+        capacity ? h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: "context capacity: " + fmtTok(capacity) + " tokens" }, h("i", { style: "width:" + pct + "%" })) : null,
+        h("span", { class: "xc-v" }, capacity ? fmtTok(ctxTokens) + " of " + fmtTok(capacity) + ". " + fmtTok(remaining) + " left." : "About " + fmtTok(ctxTokens) + " on the next call. Limit unknown.")));
     }
     if (cacheShare != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "cache"), h("span", { class: "xc-v" }, Math.round(cacheShare * 100) + "%")));
     if (findings != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "findings"), h("span", { class: "xc-v" + (findings ? " xc-via" : "") }, String(findings))));
@@ -752,8 +756,8 @@ export function mount(root) {
   // ---------------------------------------------------------------- start
 
   api("GET", "/api/providers/models").then((d) => {
-    for (const m of d.models || []) if (m.route) capacities[m.route] = m.context || null;
-    capacity = capacities[model] || capacity; drawStatus();
+    for (const m of d.models || []) if (m.route) capacities[m.route] = Number.isInteger(m.context) && m.context > 0 ? m.context : null;
+    capacity = model ? (capacities[model] ?? null) : null; drawStatus();
   }).catch(() => {});
   const offBus = bus.on(handle);
   let synced = bus.lastSeq() ? -1 : 0;
