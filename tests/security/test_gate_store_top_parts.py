@@ -242,7 +242,9 @@ def test_a_camelcase_read_keeps_the_snake_forms_check():
 
 def test_a_camelcase_word_main_read_keeps_mains_class():
     """Every name main read stays read as it was, beside the words the humps add (#515): `apiKey` is the credential
-    word, `checkOut` pays, `signUp` opens an account. Nothing main allowed reads lighter."""
+    word, `checkOut` pays, `signUp` opens an account. Each of these names keeps main's class; what a hump word adds
+    beside another name is a reading, and the hook's bypass floor and high-risk ask count each reading too (review
+    5662071801, `plugins/exo-gate/tests/test_camel_floor_hook.py`)."""
     for name, want in (("apiKey", "credentials"), ("checkOut", "payment"), ("signUp", "account"),
                        ("logIn", "credentials"), ("payOut", "payment")):
         assert gate.classify_by_name(name) == want, name

@@ -1701,8 +1701,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   delegated `credentials` could answer it. `classify` now adds a `store_write` part for each store file such a tool
   writes, moves, copies or deletes, beside the tool's own part (#448). A folder holding the store that it moves,
   renames or deletes gets one too, as with `mv` and `rm` (`move_file` from `~/.exo` to `~/.ssh/x`). So does a tool
-  with a camelCase name (`moveFile`, `deleteFile`): its category stays `unknown`, because the gate reads its name as
-  one word, but this check splits the name. With no secret, a file tool's move of such a folder is not a store write
+  with a camelCase name (`moveFile`, `deleteFile`): this check splits the name. (When this was written the call's
+  category stayed `unknown`, because the gate read the name as one word; since #515 the call leads with its hump
+  words' category, `local_write` or `delete` as `move_file` and `delete_file` do, and `unknown` is its `floor`
+  reading.) With no secret, a file tool's move of such a folder is not a store write
   yet (#494). A file tool's write or delete in `keys/` or the run folder gets a part as well, as its shell spelling
   does. The call's category, target and card do not change. The hook's error fallback (#464) reads the parts as
   well. Chosen over ranking store_write first in `_combine`, which would change the line's category, reason and
@@ -3229,6 +3231,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   rules, explicit unknown-category policies, and leading-separator MCP names.
   *Revisit if:* acronym boundaries need separate recognition (`HTTPDelete`, `getHTTPResponse`),
   or fully camel MCP prefixes need alignment (`mcpCreateFile`). The unsplit policy floor still applies.
+  *Amended 2026-10-27 (review 5662071801, after #602 merged):* two exo-gate hook checks past `decide` still read
+  the lead category alone, so the floor did not hold there on main e0968a2b: bypass ran a camelCase call whose
+  `store_write` or `credentials` was in its floor reading (D-065 amendment of the same date), and the registry's
+  high-risk ask (`risk: high`, `tool_risks`) skipped a camelCase MCP tool whose `unknown` was in its floor reading
+  (`mcp__fs__writeFile`, `mcp__fs__readFile`, `mcp__fs__uploadFile`, `mcp__fs__moveFile`, `mcp__gh__listIssues`).
+  That ask now fires when any reading (`gate.readings`) is `unknown`. In bypass it is lifted as any ask is, with a
+  `decided_by: bypass` ledger row. Also recorded: a call with a `floor` binds an `always` answer and a standing
+  grant to its exact arguments (`gate.binds_exact`), so every camelCase call (`getApiKey`, `execCommand`,
+  `mcp__github__getIssue`, `mcpCreateFile`) does since #515, and a grant on `unknown` from before #515 no longer
+  matches it. That only tightens.
 - *Amendment 2026-10-26 (issue #591):* a leading assignment quoted whole in an `env -S` text no longer hides the
   command after it. GNU env splits the `-S` text into words and reads them as its own argv, so a word quoted whole
   with the form `NAME=value` is an assignment there too — `env -S "'X=a b' printenv X"` prints `a b` — but the
@@ -4452,6 +4464,24 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   author (D-040) into every tool hook; the gate lowers an ask only when that author is the principal, so a turn a
   local caller, a peer, a bus wake or a job notice started in the same core keeps its card. A non-principal steer
   stops the lowering for the rest of the turn. The bypass ledger row names the turn author.
+- **Amendment 2026-10-27 (review 5662071801 of #602):** the floor reads every reading of a call and every part
+  (`gate.no_grant`), not only the category it leads with. #515 (#602) reads a camelCase tool name by its hump words,
+  so `readFile` leads with `read` and `mcp__slack__postMessage` with `message_send`, and a store write or secret
+  read is in the call's `floor` reading only. `decide` and `no_grant` read it, but bypass checked the lead
+  category. On main fa5dfcd8 that let bypass run `mcp__fs__searchReplace` and `findAndReplace` on
+  `~/.exo/seats/principal.toml` (bypass could make itself the seat default, which this decision rules out); #659
+  (#651) has since made those replace calls lead with `store_write`. On main e0968a2b bypass still ran `readFile`
+  and `getOrCreateFile` on `~/.exo/policies/gates.yaml`, `readFile` on the seat file, `mcp__fs__readFile` on
+  `~/.exo/config.json`, `mergeGithub` and `mcp__github__mergePullRequest` naming `~/.ssh/id_rsa`, and
+  `mcp__slack__postMessage` naming `~/.aws/credentials`, each of which asked before #602. They ask again, in
+  enforce and observe mode, and the ledger row's `bypass.floor` names the floor category. A call that leads with a
+  floor category asks as before. A post that breaks the posting rules and has its floor only in another reading is
+  still held, as on main: checked before the floor, so the decision never drops from that hold to an ask, and the
+  rewritten post asks. A hook probe (`register()`, temp store and HOME, decision model off) over the review's lines
+  and their controls, under the default policies and four aimed `gates.yaml` files, in enforce and observe mode,
+  with and without bypass, at no, high and low registry risk, gives 1360 lines on main e0968a2b and here: 164 change,
+  each to an ask or to a bypass row that records the ask, and none runs here that main asks about or blocks.
+  `gate_diff` sees neither check (both are past `decide`).
 - **Numbering:** D-057 to D-061 are on main or open PRs, D-062 and D-063 on local exosphere branches, and one more
   is held by `fix/update-and-rounds`, so this is D-065.
 - **Docs:** `docs/GATE.md` "Bypass mode (D-065)", `docs/USER-GUIDE.md` §3 and §6, `docs/COMMANDS.md`,

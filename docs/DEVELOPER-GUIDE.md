@@ -205,7 +205,9 @@ Then do the next three steps.
 
 **Classify it in the gate.** The gate decides allow, log, ask or deny by category. Add the tool to `TOOLS` in
 `src/exo/gate.py`, mapped to a category such as `read`, `local_write`, `shell`, `delegate`, `credentials`,
-`message_send`. A tool the classifier does not know and the registry calls high risk is an ask, never an allow.
+`message_send`. A tool the classifier does not know and the registry calls high risk is an ask, never an allow,
+also when the gate reads a known word in its camelCase name (`mcp__fs__writeFile`): the unsplit name is still read
+as `unknown` beside it, and any reading counts.
 If the tool sends something outward, its category must be one the gate treats as outward, so approvals bind to the
 exact text (`docs/GATE.md`).
 
