@@ -20,6 +20,13 @@ FLOOR = [
     ("terminal", {"command": "echo x >> $EXO_HOME/policies/gates.yaml"}),
     ("terminal", {"command": "sqlite3 ledger.sqlite 'delete from events'"}),
     ("terminal", {"command": "cat ~/.exo/keys/exo-gate.key"}),
+    # #651: a read-named tool that replaces text writes the store file it names, so its floor ask holds in
+    # bypass too: the seat file, a policy file and config.json, snake and camel spellings
+    ("mcp__fs__search_replace", {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}),
+    ("mcp__fs__searchReplace", {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}),
+    ("search_replace", {"path": "~/.exo/policies/gates.yaml", "search": "ask", "replace": "bypass"}),
+    ("findAndReplace", {"path": "~/.exo/policies/gates.yaml", "oldString": "ask", "newString": "bypass"}),
+    ("find_and_replace", {"path": "~/.exo/config.json", "old_string": '"ask"', "new_string": '"bypass"'}),
 ]
 
 
