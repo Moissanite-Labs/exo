@@ -668,6 +668,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   unnamed file, so the write to /dev/stdout after it was a read. A redirection target that is a store
   file under another name (the same device and inode) now counts, while reading through a hardlink
   stays a read. A named descriptor (`{fd}<`) is read as a descriptor in the lexer, as a numbered one is.
+- A write through a link chain, a `..` after a link, a link to stdin, or a relative descriptor link,
+  and a write onto a hardlink, are store writes (#324, repair after review). The first version
+  followed a link at most 8 deep, folded a `..` before following the link, and exempted links to
+  stdin even as write targets, so a 9-link chain, `s/../fd/3` with `s` pointing at `/dev/shm`, and a
+  write through a link to `/dev/stdin` all passed. The link walk now runs one component at a time to
+  40 links, a `..` after a link pops the link's target, a relative link is followed from the session
+  folder, and the stdin exemption is gone for writes. Writes onto a hardlink now ask for redirections,
+  `tee`, `cp`, `copy_file`, and `write_file`, while reads through a hardlink stay reads and moves onto
+  a hardlink stay local writes. The store inode walk now runs only when a write target is a plausible
+  hardlink, so ordinary writes never build it.
 - A stock host summary stored as a user row can no longer carry a forged pinned block (#385). Such a row
   reads as the principal's own turn, and nothing escaped its tags before exo-context saw it. A row opening
   with a compaction marker now carries nothing, whatever its role. Only a system or user message that opens

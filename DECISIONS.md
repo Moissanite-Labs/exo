@@ -3322,6 +3322,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* a `${x:-$((cmd))}` should read the commands in its default word — a `$((` inside a `${..}` body is
   still read as the brace's visible text, as the same line with a plain `$( )` there is (both were `allow` on main
   and stay so), which is the `${..}` default word's own gap, not this one.
+  *Amendment 2026-10-27 (issue #324):* the link walk missed four routes the 2026-10-25/26 reviews found.
+  It gave up past 8 links, so a 9-, 10-, or 11-link chain to a descriptor passed. It folded a `..` before
+  following the link, so `s/../fd/3` with `s` pointing at `/dev/shm` read as a folder under the working
+  folder instead of `/dev/fd/3`. It exempted any link onto the caller's own stdin, so a write through a
+  link to `/dev/stdin` or `/proc/self/fd/0` passed while the direct spelling asked. It never followed
+  a relative descriptor link from the session folder, so `d/fd/3` with `d` a link to `/dev` passed. Writes
+  onto a hardlink were also open for `tee`, `cp`, and `write_file`. The walk now follows one component
+  at a time to 40 links, a `..` after a link pops the link's target, a relative link is followed from
+  each session folder, the stdin exemption is gone for writes, and a write onto a hardlink asks for
+  redirections, `tee`, `cp`, `copy_file`, and `write_file`. The store inode walk is now guarded on a
+  plausible hardlink (an absolute path that exists with more than one link), so ordinary writes never
+  build it. Tests: `tests/security/test_gate_descriptor_link_writes.py` (44 tests). The differential
+  against main 721828fd, each tree in its own process: the gate test lines plus the PR's rows plus
+  wrapped and joined variants, 8,157 lines under the 10 policies, drops no line's outcome and tightens
+  1,248 pairs. 4 pairs swap one reserved tuple at an unchanged ask, the `exec {fd}<` category
+  correction. No classify or decide errors.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
