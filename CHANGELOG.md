@@ -9,10 +9,28 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
+
+### Changed
+- The core budget prices coupling, not only lines, and its ceiling is dropped (D-083, amending D-077).
+  The line ceiling set on 2026-10-15 was already failing its own test: `main` at `13cea687` counted 15,828
+  against 15,824, 4 over, while the work it blocked was ordinary product work, and each earlier raise
+  (#314, #346, #598, the last by 11 to 1,011) was undone by the reduction it asked for. The principal ruled
+  it "too restrictive" while the codebase is being built out, so `CORE_HEADROOM` is gone and
+  `tests/integration/test_wave1_acceptance.py` reports the count against `CORE_FLOOR = 14,813` and asserts
+  nothing about lines. What stays asserted is what D-077 said the real goal was, the engine split's step 4
+  counts: at most 39 product imports into the core (`INWARD_IMPORTS_MAX`) and at most 8 cross-module
+  private-state reads (`PRIVATE_STATE_MAX`). The floor and both counts keep their rule, they only ratchet
+  down. Docs updated together: `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md`,
+  `docs/CORE.md`, `docs/OPTIMIZATION.md`, `docs/DOCS-MAP.md`, `docs/WHITEPAPER.md` sections 11 and 27.
+
 ### Fixed
 
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
+- `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last
+  segment of a dotted key. Both now mask a secret at any level of the key path (a secret-shaped name, a container
+  under one, and a literal under `env` or `headers`), and `config set` refuses the same shapes. `${VAR}` references
+  and `*_env` names are still shown and accepted (#691).
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
@@ -223,7 +241,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
   older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
   file's path or launch line still reads as on main, for the reader has no value to check a path line against.
-- A store or secret name matches in any case (#601, D-082). On a case-insensitive file system (default APFS)
+- A store or secret name matches in any case (#601, D-087). On a case-insensitive file system (default APFS)
   `.exO/config.json` IS `.exo/config.json`, but every store and secret name check read the spelling as written, so
   a case variant walked past: `cp /tmp/x ~/.exO/config.json` and `cp /tmp/x $HOME/.EXO/config.json` were
   `shell`/allow where the plain spelling is a `store_write` ask, `echo x > ~/.KUBE/config` a `local_write`/allow
