@@ -22,6 +22,44 @@ export function mount(root) {
   let layout = getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
 
   const listEl = h("div", { class: "xc-sessions" });
+  let renameTarget = null, renameSaving = false, renameActive = true;
+  const renameButtons = new Map();
+  const renameInput = h("input", { type: "text", "aria-label": "Thread title", autocomplete: "off", maxlength: "200" });
+  const renameError = h("div", { role: "alert", class: "xc-rename-error" });
+  const renameSave = h("button", { type: "submit", class: "xc-btn xc-primary" }, "Save");
+  const renameCancel = h("button", { type: "button", class: "xc-btn", onclick: () => closeRename() }, "Cancel");
+  const renameEditor = h("form", { class: "xc-rename-editor", hidden: true, "aria-label": "Rename thread",
+    onsubmit: (e) => { e.preventDefault(); saveRename(); },
+    onkeydown: (e) => { if (e.key === "Escape") { e.preventDefault(); closeRename(); } } },
+    h("label", null, "Thread title", renameInput), renameError, h("div", { class: "xc-btnrow" }, renameSave, renameCancel));
+  function beginRename(s) {
+    if (renameSaving) return;
+    renameTarget = s.id; renameInput.value = s.title || ""; renameError.textContent = "";
+    renameEditor.hidden = false; renameInput.focus(); renameInput.select();
+  }
+  function closeRename() {
+    if (renameSaving) return;
+    const id = renameTarget; renameTarget = null; renameEditor.hidden = true; renameInput.value = "";
+    renameError.textContent = ""; renameButtons.get(id)?.focus();
+  }
+  async function saveRename() {
+    if (!renameTarget || renameSaving) return;
+    const title = renameInput.value.trim(), id = renameTarget;
+    if (!title) { renameError.textContent = "Enter a thread title."; renameInput.focus(); return; }
+    renameSaving = true; renameInput.disabled = renameSave.disabled = renameCancel.disabled = true;
+    renameError.textContent = "Saving…";
+    try {
+      await api("POST", "/api/chat/sessions/" + encodeURIComponent(id) + "/rename", { title });
+      if (!renameActive) return;
+      sessions = sessions.map((s) => s.id === id ? { ...s, title } : s); drawSessions();
+      renameSaving = false; closeRename();
+    } catch (e) {
+      if (renameActive) renameError.textContent = e && e.message ? e.message : "Could not rename this thread.";
+    } finally {
+      renameSaving = false; renameInput.disabled = renameSave.disabled = renameCancel.disabled = false;
+      if (renameActive && !renameEditor.hidden) renameInput.focus();
+    }
+  }
   const logEl = h("div", { class: "xc-log", role: "log", "aria-live": "polite" });
   const apprEl = h("div", { class: "xc-approvals" });
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
@@ -67,7 +105,7 @@ export function mount(root) {
   }
   arrange();
   root.replaceChildren(h("div", { class: "xc-chat" },
-    h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl, layoutBtn),
+    h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), renameEditor, listEl, layoutBtn),
     mainEl,
     sideEl));
 
@@ -392,12 +430,16 @@ export function mount(root) {
 
   function drawSessions() {
     const waiting = new Set(Object.values(approvals).map((a) => a.session));
-    listEl.replaceChildren(...(sessions.length ? sessions.map((s) =>
-      h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id),
-        title: "Double-click to rename (also /rename <title>)",
-        ondblclick: () => { const t = window.prompt("Rename thread", s.title || ""); if (t !== null) rename(s.id, t); } },
+    renameButtons.clear();
+    listEl.replaceChildren(...(sessions.length ? sessions.map((s) => {
+      const button = h("button", { class: "xc-btn xc-rename", type: "button", "aria-label": "Rename " + (s.title || s.id), onclick: () => beginRename(s) }, "Rename");
+      renameButtons.set(s.id, button);
+      return h("div", { class: "xc-session-row" }, h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id),
+        title: "Open thread",
+        ondblclick: () => beginRename(s) },
         h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
-        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))))) : [empty("No threads yet.")]));
+        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x])))), button);
+    }) : [empty("No threads yet.")]));
     drawWhere();
   }
 
@@ -711,7 +753,7 @@ export function mount(root) {
   const offState = bus.onState((st) => {
     if (st.synced !== synced) { synced = st.synced; recover(); }
   });
-  const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { renameActive = false; renameInput.value = ""; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
