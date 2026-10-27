@@ -755,6 +755,15 @@ system or bash will.
   `/proc/<pid>/<glob>` asks when the glob could match `environ`, for any process: `cat /proc/self/[!x]nviron`,
   `cat /proc/*/[!x]nviron` and `cat /proc/self/*` ask, while `ls /proc/*/status` stays a read. A thread's
   `/proc/<pid>/task/<tid>/<glob>` is read the same way (#313, below).
+- **Descriptor and store paths spelt with a glob, and chained relative cds (#337).** A glob spelling
+  counts when bash's expansion of it could name a descriptor path or a store path, read part by part
+  (`> /dev/f[d]/3`, `> ~/.exo/sta?e/gate-grants.json` ask); a spelling that could name only the
+  writer's stdout or stderr stays ordinary. A relative `cd` joins onto the folder the line's earlier
+  cds reached (`cd / && cd dev` lands in /dev, so a following `> fd/3` asks), and a glob `cd` target
+  counts when it could name a descriptor folder (`cd /de?`). `..` collapses in a glob as it does in
+  a literal path, and the chained-cd cap counts parts of the normalised path, so padding cannot stop
+  the tracking. The three-literal rule needs literals in the file's own part, so an ordinary glob in
+  an ordinary folder (`git add src/state/*`) is untouched.
 
 Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
 each folder's resolution) across all the line's words. Before, each word looked them up again. On three 10 KB
