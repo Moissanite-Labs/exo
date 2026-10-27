@@ -206,7 +206,8 @@ def test_remote_tab_accepts_a_server_only_directory(tmp_path, monkeypatch):
     ('exo-canary', False),
 ])
 def test_tab_warns_when_the_new_window_drops_a_permission_flag(tmp_path, monkeypatch, restart_cmd, warned):
-    # The new window starts a fresh session, so it asks for each action even though this one does not.
+    # The flag is dropped, but the new window joins this core (it keeps --seat and EXO_HOME, D-028/D-039), so the
+    # warning must say the core's mode still applies, never that the window asks for each action (#669 review).
     async def exercise():
         eng = make_engine(tmp_path)
         app = ExoApp(FakeServerClient(eng), seat='tester', cwd=str(tmp_path))
@@ -221,4 +222,6 @@ def test_tab_warns_when_the_new_window_drops_a_permission_flag(tmp_path, monkeyp
             text = app.transcript_text()
             assert 'opened a new conversation window' in text
             assert ('runs without' in text) is warned
+            assert ('joins this core' in text) is warned
+            assert 'asks for each action' not in text
     asyncio.run(exercise())

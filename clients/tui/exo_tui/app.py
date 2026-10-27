@@ -1429,8 +1429,11 @@ class ExoApp(App):
             result = await asyncio.to_thread(rs.open_tab, cmd)
             dropped = rs.dropped_permission_flags()
             if dropped:
-                self.note(f"the new window runs without {' '.join(dropped)}: it opens a fresh session, "
-                          "and a fresh session asks for each action", "warn")
+                # The new window keeps --seat and EXO_HOME, so it joins this core (D-028, D-039) and the
+                # permission mode it gets is the core's, not the command line's (#669).
+                core = ("bypass still applies there" if self.bypass
+                        else "this core's permission mode still applies")
+                self.note(f"the new window runs without {' '.join(dropped)}: it joins this core, so {core}", "warn")
             self.note("opened a new conversation window" if result == "opened" else "open a new window and run: " + result)
         elif name == "intro":
             await self.intro("manual")
