@@ -93,7 +93,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `### ` data, quoted words included. `load_handoff` reads no section out of a title that does not say what the
   header's recovered topic says: the title must be the topic value's footprint, line for line. A pre-#353 file whose
   title carried a forged Decisions copy therefore reads the principal's ruling again where it read as undecided, and
-  a forged Open decisions first loads none; a title edited by hand demotes nothing. A header value's `-->` is now
+  a forged Open decisions first loads none; a title edited by hand demotes nothing. The demotion takes the heading
+  spellings a markdown reader takes: up to three leading spaces, and after the `##` a space, a tab or the line's
+  end, while a fourth leading space stays an indented code block and the line stands as written. A header value's
+  `-->` is now
   written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
   older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
   file's path or launch line still reads as on main, for the reader has no value to check a path line against.
