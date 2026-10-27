@@ -27,6 +27,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   ask stands and whose dropped reserved hit was the misparse's phantom `$--force` target. Both groups are named
   in the D-038 amendment. Tests: `tests/security/test_gate_dollar_line_continuation.py`. **Docs:** `docs/GATE.md`,
   `DECISIONS.md` (D-038).
+- A venv or Hermes home the home's config.json records alone is protected (#612). `_code_paths` (#459) read the
+  venv and Hermes' plugin home from the environment only (`EXO_VENV`, `EXO_HERMES_HOME`, else the home's own
+  spellings), but a supported custom install records them in the file alone: `scripts/install.sh` takes the venv
+  from `EXO_VENV` at install time and writes that path back into config.json (`venv`, and `hermes_home` beside
+  it), and nothing exports the variables when the daemon runs, so with `{"venv": "<tmp>/customvenv"}` in
+  config.json and no `EXO_VENV`, a `write_file` into `<tmp>/customvenv/lib/evil.py` classified `local_write` and
+  was allowed under the default policy, while `Config.load` resolved that same folder as the venv. The gate now
+  reads the recorded `venv` and `hermes_home` too, as `_store_roots` reads the config's `principals` through
+  `store.explicit_roots`: a missing or unreadable file, or a value that is not an absolute path once ~ is
+  expanded, adds nothing, and the environment still takes precedence, as `Config.get` resolves it — a folder the
+  file records joins the protected list beside what the environment names, it never replaces one. So the
+  default-spelling rows and a config with no such keys decide as main does, and only new folders ask: a
+  config-only venv or Hermes plugin home asks as `store_write` on the floor, a `cd` into it counts, a delete or
+  move of it counts, reads stay reads. The differential against main d4cc7ea3 found nothing lowered. Tests:
+  `tests/security/test_gate_code_writes.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
 - A leading assignment quoted whole in an `env -S` text no longer hides the command after it (#591). GNU env splits
   the `-S` text into words and reads them as its own argv, so a word quoted whole with the form `NAME=value` is an
   assignment there — `env -S "'X=a b' printenv X"` prints `a b` — but the gate read the text as one shell line
