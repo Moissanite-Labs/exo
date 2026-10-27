@@ -22,6 +22,18 @@ def test_every_decision_has_a_row():
     assert not missing, f"DECISIONS.md has decisions with no row in docs/DOCS-MAP.md: {missing}"
 
 
+def test_no_duplicate_decision_rows():
+    # A decision holds one base row; amendment and stage rows may extend it (D-038,
+    # D-057, D-075). Two base rows for one decision is a rebase or merge that kept
+    # both sides (D-077 on PR #613, D-057 on the #633 rebase, issue #648).
+    rows = [m.group(1) for m in re.finditer(r"^\| (D-\d{3})(?! (?:amendment|stage)\b)", _map_text(), re.M)]
+    dupes = sorted({d for d in rows if rows.count(d) > 1})
+    assert not dupes, (
+        f"docs/DOCS-MAP.md holds more than one base row for the same decision: {dupes}; "
+        "keep one base row and put later changes in amendment or stage rows"
+    )
+
+
 def test_every_named_file_exists():
     text = _map_text()
     named = set(PATH_RE.findall(text))
