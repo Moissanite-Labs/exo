@@ -148,7 +148,7 @@ def test_null_legacy_learning_setting_keeps_startup_usable(tmp_path, monkeypatch
     asyncio.run(engine.close())
 
 
-def test_startup_rollback_goes_on_past_a_failing_step(tmp_path, monkeypatch):
+def test_startup_rollback_goes_on_past_a_failing_step(tmp_path, monkeypatch, caplog):
     from exo.scheduler import Scheduler
     home, marker = setup(tmp_path, monkeypatch)
     engines = track_engines(monkeypatch)
@@ -166,5 +166,30 @@ def test_startup_rollback_goes_on_past_a_failing_step(tmp_path, monkeypatch):
     # The steps after the failing scheduler close still ran: plugins, the writer claim and the store.
     assert marker.read_text() == "closed\n"
     assert engine._writer is None and engine.store._conn is None
+    assert "startup rollback failed" in caplog.text and "scheduler close failed" in caplog.text
     writer = agentlog.claim_writer(home, engine.agent)
     agentlog.release_writer(writer)
+
+
+def test_abort_startup_itself_releases_each_resource(tmp_path):
+    """A direct embedder's rollback, without the plugin close that compose and the constructor add after it."""
+    from exo.core import trace
+    from exo.core.plugins import Manifest, PluginManager
+    ran = []
+    manager = PluginManager()
+    assert manager._run_register(Manifest("owned"), "test",
+                                 lambda ctx: ctx.register_cleanup(lambda: ran.append("cleanup"))).ok
+    engine = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path),
+                        env={}, plugins=manager)
+    engine.claim_writer()
+    writer = engine._writer
+
+    class Learner:
+        def close(self):
+            ran.append("learner")
+
+    engine._learn = Learner()
+    assert engine._on_harness_error in [ref() for ref in trace._sinks]
+    engine.abort_startup()
+    assert ran == ["learner", "cleanup"] and writer.closed and engine.store._conn is None
+    assert engine._on_harness_error not in [ref() for ref in trace._sinks]

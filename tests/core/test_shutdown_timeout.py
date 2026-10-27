@@ -300,3 +300,214 @@ def test_a_cleanup_that_raises_systemexit_still_releases_the_writer_and_store(tm
     with pytest.raises(SystemExit):
         asyncio.run(engine.close())
     assert engine._writer is None and engine.store._conn is None
+
+
+# ---- each shutdown step is pinned: deleting one fails a test (review 5634152980 item 10) ----
+
+class _Blocking:
+    """A provider whose stream waits until released. With ``stubborn`` it also ignores cancellation and
+    interrupts, as a provider stuck in a blocking call would."""
+    name = "fake"
+
+    def __init__(self, stubborn=False):
+        self.stubborn, self.entered, self.release = stubborn, asyncio.Event(), asyncio.Event()
+
+    async def stream(self, messages, tools, **opts):
+        self.entered.set()
+        while not self.release.is_set():
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                if not self.stubborn:
+                    raise
+        async for event in FakeProvider(["done"]).stream(messages, tools):
+            yield event
+
+
+def _stubborn_task(release):
+    async def body():
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+
+    return asyncio.create_task(body())
+
+
+def test_a_job_that_ends_while_channels_stop_files_no_bug_finding(tmp_path):
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})
+
+    class SlowChannel:
+        async def stop(self):  # the job ends while close() waits here, before jobs.close() runs
+            deadline = time.monotonic() + 10
+            while engine.jobs.get(job)["state"] == "running" and time.monotonic() < deadline:
+                await asyncio.sleep(0.02)
+            await asyncio.sleep(0.3)  # a wake from that job would have reached _spawn_turn by now
+
+    async def run():
+        nonlocal job
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        job = engine.jobs.start("sleep 0.2", str(tmp_path), session.id)["id"]
+        engine.channels["slow"] = SlowChannel()
+        await engine.close()
+        assert engine.jobs.get(job)["state"] == "done"
+        assert [f["signature"] for f in engine.findings.list()] == []
+        engine.store.close()
+
+    job = None
+    asyncio.run(run())
+
+
+def test_close_interrupts_a_direct_loop_send_and_completes(tmp_path):
+    engine, order = _engine(tmp_path, lambda args, **kw: "unused")
+
+    async def run():
+        engine.loop.provider = provider = _Blocking()
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        direct = asyncio.create_task(engine.loop.send(session.id, "embedded caller"))  # not owned by the engine
+        await asyncio.wait_for(provider.entered.wait(), 5)
+        started = time.monotonic()
+        await CoreRuntime.close(engine)  # one bounded attempt: the interrupt ends the turn well inside it
+        assert time.monotonic() - started < shutdown.SHUTDOWN_TIMEOUT and direct.done()
+        assert order == ["cleanup"] and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_a_direct_turn_that_ignores_its_interrupt_times_out_then_the_retry_completes(tmp_path, monkeypatch):
+    engine, order = _engine(tmp_path, lambda args, **kw: "unused")
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 0.3)
+
+    async def run():
+        engine.loop.provider = provider = _Blocking(stubborn=True)
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        direct = asyncio.create_task(engine.loop.send(session.id, "embedded caller"))
+        await asyncio.wait_for(provider.entered.wait(), 5)
+        try:
+            with pytest.raises(ShutdownTimeout, match="turns"):
+                await asyncio.wait_for(CoreRuntime.close(engine), 5)  # bounded: never waits for the turn itself
+            assert order == [] and engine.store._conn is not None
+        finally:
+            provider.release.set()  # a failure here must not leave a turn that ignores cancellation
+        await asyncio.wait_for(direct, 5)
+        await CoreRuntime.close(engine)
+        assert order == ["cleanup"] and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_an_owned_tool_that_ignores_cancellation_keeps_resources_until_retry(tmp_path, monkeypatch):
+    from exo.core.types import ToolCall
+    release, entered = asyncio.Event(), asyncio.Event()
+
+    async def hold(args, **kwargs):
+        entered.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+        return "late"
+
+    engine, order = _engine(tmp_path, hold)
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 0.3)
+
+    async def run():
+        direct = asyncio.create_task(engine.run_tool(ToolCall("direct", "hold", {}), {}))  # owned while it runs
+        await asyncio.wait_for(entered.wait(), 5)
+        try:
+            with pytest.raises(ShutdownTimeout, match="turns"):
+                await CoreRuntime.close(engine)
+            assert order == [] and engine.store._conn is not None
+        finally:
+            release.set()
+        await asyncio.gather(direct, return_exceptions=True)
+        await CoreRuntime.close(engine)
+        assert order == ["cleanup"] and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_close_cancels_an_mcp_start_in_progress(tmp_path):
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})
+    events = []
+
+    class Mcp:
+        def __init__(self):
+            self.entered = asyncio.Event()
+
+        async def start(self, registry):
+            self.entered.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                events.append("start cancelled")
+                raise
+
+        async def close(self):
+            events.append("closed")
+
+    async def run():
+        engine.mcp = Mcp()
+        starting = asyncio.create_task(engine.start())
+        await asyncio.wait_for(engine.mcp.entered.wait(), 5)
+        await asyncio.wait_for(engine.close(), 5)
+        assert sorted(events) == ["closed", "start cancelled"]
+        await asyncio.gather(starting, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_close_retrieves_the_error_of_a_turn_that_failed_while_it_was_cancelled(tmp_path):
+    import gc
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})
+    unretrieved = []
+
+    async def turn():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise ValueError("its cleanup failed") from None
+
+    async def run():
+        asyncio.get_running_loop().set_exception_handler(lambda loop, ctx: unretrieved.append(ctx.get("message")))
+        task = asyncio.create_task(turn())  # owned the way _spawn_turn owns a turn
+        engine._tasks.add(task)
+        task.add_done_callback(engine._tasks.discard)
+        await asyncio.sleep(0)
+        await engine.close()
+        del task
+        gc.collect()
+        assert not [m for m in unretrieved if m and "never retrieved" in m]
+
+    asyncio.run(run())
+
+
+def test_a_learning_review_that_ignores_cancellation_keeps_the_store_until_retry(tmp_path, monkeypatch):
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 0.3)
+    closed = []
+
+    class Learner:
+        tasks = {}
+
+        def close(self):
+            closed.append(engine.store._conn is not None)
+
+    async def run():
+        release = asyncio.Event()
+        engine._learn = Learner()
+        engine._learn.tasks["s"] = review = _stubborn_task(release)
+        await asyncio.sleep(0)
+        try:
+            with pytest.raises(ShutdownTimeout, match="learning reviews"):
+                await CoreRuntime.close(engine)
+            assert closed == [] and engine.store._conn is not None
+        finally:
+            release.set()
+        await review
+        await CoreRuntime.close(engine)
+        assert closed == [True] and engine.store._conn is None
+
+    asyncio.run(run())

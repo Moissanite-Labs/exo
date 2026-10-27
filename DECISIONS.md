@@ -6310,6 +6310,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     during close no longer files a false bug finding. Ctrl-C or `SystemExit` in `register` or in a cleanup no
     longer loses cleanups. A close during `start()`'s peer start stops that service. Close now ends learning
     reviews and closes the learner, as startup rollback did.
+  - *Validation.* Each statement of `stop_admission`, `drain` and the startup rollback was deleted in turn. Every
+    such mutant fails a test. Two statements no mutant could fail were
+    redundant and are gone: the scheduler loop reset (`Scheduler.stop` does it) and a second cancel signal.
   - *Plugin tools.* Plugin tool handlers get no cancellation signal, so the docs now ask for bounded blocking
     work instead of cancellation-aware work.
   - *Instructions.* Git's ownership rule, eased for a mounted repository: a marker or file another user owns,

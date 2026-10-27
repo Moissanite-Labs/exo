@@ -43,14 +43,13 @@ def stop_admission(engine: Any) -> set[asyncio.Future]:
     scheduled = []
     if scheduler is not None:
         scheduled = [task for task in [scheduler._main, *scheduler.running.values()] if task is not None]
-        scheduler._main = None  # intentional stop; its done callback must not report an unexpected exit
     for loop in _loops(engine):
         loop.closing = True
         for session in tuple(loop._state):
             loop.interrupt(session)
     for context in engine.registry.workers.values():
-        context.cancel.set()  # a cooperative handler gets the signal while transports stop
-    tasks = {task for task in [*engine._tasks, *scheduled] if task is not current and not task.done()}
+        context.cancel.set()  # a cooperative handler gets the signal while transports stop; none starts after this
+    tasks ={task for task in [*engine._tasks, *scheduled] if task is not current and not task.done()}
     if engine._started is not None and not engine._started.done():
         tasks.add(engine._started)
     for task in tasks:
@@ -80,9 +79,7 @@ async def drain(engine: Any, tasks: set[asyncio.Future]) -> None:
         if time.monotonic() >= deadline:
             raise ShutdownTimeout("turns")
         await asyncio.sleep(min(0.01, left()))
-    workers = dict(engine.registry.workers)
-    for context in workers.values():
-        context.cancel.set()
+    workers = dict(engine.registry.workers)  # stop_admission set each one's cancel event
     if workers:
         _, pending = await asyncio.wait(workers, timeout=left())
         if pending:
