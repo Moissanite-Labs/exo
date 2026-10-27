@@ -428,7 +428,9 @@ class _Word:
     redir_after: bool = False  # a redirection, heredoc or here-string follows it before the next word (#207)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
     split: bool = False        # bash may make several words of it, or none: an expansion outside "..", or "$@" (#399)
+    legacy: bool = False       # holds bash's legacy arithmetic `$[ ]`, which main read as plain text (#588)
     exps: list = field(default_factory=list)  # (scan text, source, ${ frames) per ${..} and $((..)) bash expands
+    prompt: list = field(default_factory=list)  # the parameter of each `${..@P}` in it, whose value bash runs (#579)
     fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
 
 
@@ -439,6 +441,7 @@ class _Heredoc:
     quoted: bool
     ambiguous: bool = False    # delimiter spelled with $'..' or $"..": bash and dash end the body on different lines
     body: str = ""
+    prompt: list = field(default_factory=list)  # the `${..@P}` of the body, which expand as the body is made (#579)
     fd: str = ""               # the descriptor number before `<<` (`3<<EOF`); "" or 0 is stdin (#208)
     cut: str = ""              # the delimiter as the levels around read it, when it holds a part not read (#334)
 
@@ -649,8 +652,10 @@ class _Lexer:
             first = self.i
             self.i, last = _heredoc_body(self.s, self.i, hd, closer)
             if not hd.quoted:
+                w = _Word()
                 sub = _Lexer(hd.body, scan=False, nest=self.nest)
-                sub._dquote(_Word(), until_end=True)
+                sub._dquote(w, until_end=True)
+                hd.prompt = w.prompt              # a ${..@P} in the body expands as the body is made (#579)
                 self.subs += sub.subs
                 if sub.cuts:                   # the levels around hold a stand-in for the body, as for a cut
                     self.cuts.append((first, last, "$(" + _TOO_DEEP + ")\n"))
@@ -712,27 +717,38 @@ class _Lexer:
 
     def _dollar(self, w: _Word, double: bool = False) -> None:
         s, i = self.s, self.i
-        nxt = s[i + 1:i + 2]
+        k = _joins_past(s, i + 1)   # bash drops a \<newline> before it reads what follows the $ (#585)
+        nxt = s[k:k + 1]
         w.started = True
-        if s.startswith("$((", i):
+        legacy = s.startswith("$[", i)     # bash's legacy arithmetic (#588): read it as the $((..)) it stands for
+        if legacy:
             depth, j = 0, i + 1
+            pair = {"[": 1, "]": -1}.get
             while j < len(s):
-                depth += {"(": 1, ")": -1}.get(s[j], 0)
+                depth += pair(s[j], 0)
                 j += 1
                 if depth == 0:
                     break
-            body = s[i:j]
+        elif s.startswith("$((", i):
+            j = _dollar_paren(s, i)        # 0 when bash runs the span as a $( ( ) command substitution (#553)
+        else:
+            j = 0
+        if j:
+            body = "$((" + s[i + 2:j] + "))" if legacy else s[i:j]   # the span to what bash's own scan finds (#553)
+            at, end = (i + 2, j - 1) if legacy else (i + 3, j - 2)   # where the body bash reads starts and ends
+            if legacy:
+                w.legacy = True
             if self.nest >= _NEST and (_SUBST.search(body, 3) or "`" in body):
-                self.cuts.append((i + 3, max(i + 3, j - 2), "$(" + _TOO_DEEP + ")"))
+                self.cuts.append((at, max(at, end), "$(" + _TOO_DEEP + ")"))
                 self.subs.append(_TOO_DEEP)
             elif self.nest < _NEST and ("$(" in body[3:] or "`" in body):
                 sub = _Lexer(body[3:-2], scan=False, nest=self.nest + 1)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
-                self.cuts += [(x + i + 3, y + i + 3, stand_in) for x, y, stand_in in sub.cuts]
+                self.cuts += [(x + at, y + at, stand_in) for x, y, stand_in in sub.cuts]
             if self.scan and i >= self.covered:
                 w.exps.append((body, body, None))
-            w.text += body
+            w.text += s[i:j]               # as written, `$[..]`, so the word keeps its own spelling
             w.dynamic = True
             w.split = w.split or not double
             self.i = j
@@ -740,7 +756,7 @@ class _Lexer:
             if self.nest >= _NEST:
                 self._cut(w, i)
                 return
-            self.i = i + 2
+            self.i = k + 1
             start = self.i
             self.nest += 1
             toks = self.run(closer=True)
@@ -757,11 +773,20 @@ class _Lexer:
         elif nxt == "{":
             j = s.find("}", i)
             j = len(s) - 1 if j < 0 else j
+            if k > i + 1:                  # a ${ the \<newline> splits: bash still runs the $( ) and ` ` in it (#585)
+                sub = _Lexer(s[k:j + 1], scan=False, nest=self.nest)
+                sub._dquote(_Word(), until_end=True)
+                self.subs += sub.subs
             if self.scan and i >= self.covered:    # what bash reads: it may run past this first }
                 vis, close, frames = _dollar_brace(s, i, double, self.nest)
-                w.exps.append((vis, s[i:close + 1], {at - i: [end - i, None if up is None else up - i]
-                                                     for at, (end, up) in frames.items()}))
+                rel = {at - i: [end - i, None if up is None else up - i] for at, (end, up) in frames.items()}
+                w.exps.append((vis, s[i:close + 1], rel))
                 self.covered = close + 1
+                for at, (end, _) in rel.items():   # the outer ${ and every one nested in it
+                    if m := _RUNS_PROMPT.fullmatch(s[i + at:i + end + 1]):
+                        w.prompt.append(m[1])      # a value bash runs as a prompt string (#579)
+            elif m := _RUNS_PROMPT.fullmatch(s[i:j + 1]):
+                w.prompt.append(m[1])
             w.text += s[i:j + 1]
             w.dynamic = True
             # "${name[@]}", "${!name@}" and "${@:2}" make several words. bash may read past the first } when a
@@ -769,7 +794,7 @@ class _Lexer:
             w.split = w.split or not double or "@" in s[i:j + 1] or bool(re.search(r"[\"'`\\]|\$\(", s[i + 2:j]))
             self.i = j + 1
         elif nxt == "'":                       # $'..' (ANSI-C quoting): decode the escapes
-            j, out = i + 2, []
+            j, out = k + 1, []
             while j < len(s) and s[j] != "'":
                 step = 2 if s[j] == "\\" else 1
                 out.append(s[j:j + step])
@@ -783,17 +808,17 @@ class _Lexer:
             w.quoted = w.dollar_quote = True
             self.i = j + 1
         elif nxt == '"' and not double:        # $".." (locale quoting): the string itself, without the $
-            self.i = i + 2
-            w.locale = w.locale or s[i + 2:i + 3] != '"'     # bash never translates an empty $""
+            self.i = k + 1
+            w.locale = w.locale or s[k + 1:k + 2] != '"'     # bash never translates an empty $""
             w.dollar_quote = True
             self._dquote(w)
         else:
-            m = re.match(r"\$([A-Za-z_]\w*|[0-9@*#?$!-])", s[i:])
+            m = re.match(r"([A-Za-z_]\w*|[0-9@*#?$!-])", s[k:])
             if m:
-                w.text += m.group(0)
+                w.text += "$" + m.group(1)
                 w.dynamic = True
                 w.split = w.split or not double or m.group(1) == "@"
-                self.i = i + len(m.group(0))
+                self.i = k + len(m.group(1))
             else:
                 w.text += "$"
                 self.i = i + 1
@@ -840,8 +865,8 @@ _WORD_RUN = re.compile(r"[^ \t\r\n\\'\"`$<>&;|()#]+")
 _DQ_RUN = re.compile(r"[^\"\\$`]+")
 _BT_BODY = re.compile(r"(?:[^`\\]|\\.)*", re.S)
 _ANSI_BODY = re.compile(r"(?:[^'\\]|\\.)*", re.S)
+_BRACKETS = re.compile(r"[\[\]]")
 _VAR_REF = re.compile(r"\$(?:[A-Za-z_]\w*|[0-9@*#?$!-])")
-_PARENS = re.compile(r"[()]")
 _SUBST = re.compile(r"\$\((?!\()")          # a $( that is not $((
 _DELIM_MAX = 1024
 
@@ -909,42 +934,51 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
                 w.add(s, f.start, max(f.start, i - 1), "$()")
 
     def dollar(w: _Open, i: int, double: bool) -> int:     # as _Lexer._dollar
-        nxt = s[i + 1:i + 2]
+        k = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads what follows the $ (#585)
+        nxt = s[k:k + 1]
         w.started, w.digits = True, False
-        if s.startswith("$((", i):
+        if s.startswith("$((", i) and (j := _dollar_paren(s, i)):
+            w.add(s, i, j)
+            return j
+        if nxt == "[":                         # bash's legacy arithmetic (#588), read to its `]` as $(( )) to `))`
             depth, j = 0, n
-            for m in _PARENS.finditer(s, i + 1):
-                depth += 1 if m.group() == "(" else -1
+            for m in _BRACKETS.finditer(s, i + 1):
+                depth += 1 if m.group() == "[" else -1
                 if depth == 0:
                     j = m.end()
                     break
             w.add(s, i, j)
             return j
         if nxt == "(":
-            stack.append(_Open("$", i + 2))
-            return i + 2
+            stack.append(_Open("$", k + 1))
+            return k + 1
         if nxt == "{":
             j = s.find("}", i)
             j = n - 1 if j < 0 else j
             w.add(s, i, j + 1)
             return j + 1
         if nxt == "'":
-            j = _match_end(_ANSI_BODY, s, i + 2)
+            j = _match_end(_ANSI_BODY, s, k + 1)
             j = n + 1 if j < n and s[j] == "\\" else j          # a backslash that ends s takes one more step
             w.quoted = w.dollar = True
             if w.text is not None:
                 try:
-                    text = _ansi_c(s[i + 2:j])
+                    text = _ansi_c(s[k + 1:j])
                 except (UnicodeError, ValueError):
-                    text = s[i + 2:j]
+                    text = s[k + 1:j]
                 w.add(text, 0, len(text))
             return j + 1
         if nxt == '"' and not double:
             w.quoted = w.dollar = True
             stack.append(_Open('"', owner=w))
-            return i + 2
-        j = max(_match_end(_VAR_REF, s, i), i + 1)
-        w.add(s, i, j)
+            return k + 1
+        m = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
+        if m:
+            j = k + len(m.group(0))
+            w.add("$" + m.group(0), 0, 1 + len(m.group(0)))
+        else:
+            j = i + 1
+            w.add(s, i, j)
         return j
 
     def backtick(w: _Open, i: int) -> int:       # as _Lexer._backtick
@@ -1053,11 +1087,70 @@ def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
     return min(k + 1, len(s))
 
 
+def _arith_body(s: str, a: int, b: int) -> bool:
+    """chk_arithsub, bash's test of the text between a `$((` and its `))` as an arithmetic string (#553):
+    with single-quoted, double-quoted and backslash-hidden spans skipped, the unquoted parens balance and
+    no `)` comes before a `(`. Backquoted bodies are read as text, parens in them count."""
+    depth, j = 0, a
+    while j < b:
+        ch = s[j]
+        if ch == "\\":
+            j += 2
+        elif ch in "'\"":
+            j = min(_skip(s, j + 1, ch, ch == '"'), b)
+        else:
+            depth += (ch == "(") - (ch == ")")
+            if depth < 0:
+                return False
+            j += 1
+    return depth == 0
+
+
+def _dollar_paren(s: str, i: int) -> int:
+    """Where the `$((` at s[i] ends when bash reads it as arithmetic, 0 when bash runs the span as a command
+    substitution instead (#553): bash closes the `$( ` at the first `)` outside single-quoted, double-quoted,
+    backquoted and backslash-hidden text, a `#` after a blank starting a comment, and reads the span as
+    arithmetic only when the text between the parens, quoted spans skipped, holds balanced parens; else it
+    runs it as `$( ( )`, a subshell whose commands run. When no `)` closes the `$( ` at all, bash cannot
+    parse the line and runs nothing, and the span is read as arithmetic text to the end of the line, as
+    before."""
+    n, depth, j = len(s), 1, i + 2
+    while j < n:
+        ch = s[j]
+        if ch == "\\":
+            j += 2
+        elif ch in "'\"":
+            j = _skip(s, j + 1, ch, ch == '"')
+        elif ch == "`":
+            j = _skip(s, j + 1, "`", True)
+        elif ch == "#" and s[j - 1] in " \t\n":
+            k = s.find("\n", j)
+            j = n if k < 0 else k
+        else:
+            depth += (ch == "(") - (ch == ")")
+            j += 1
+            if depth == 0:
+                break
+    if depth:
+        return n
+    if s[j - 2:j - 1] != ")" or not _arith_body(s, i + 3, j - 2):
+        return 0
+    return j
+
+
 # The operators after which bash quotes single-quoted text even inside double quotes (a pattern, a case
 # change, `@`, an error message): `"${f%'$x'}"` expands nothing, `"${f:-'$x'}"` expands $x. A subscript is
 # read only up to the next bracket, so a long run of `${a[` costs one step each (a nested subscript there
 # counts as no operator, and the text stays visible).
 _DQ_QUOTING_OP = re.compile(r"[!#]?(?:[A-Za-z_]\w*|\d+|[-@*#?$!])(?:\[[^\][]*\])?(?:[#%/^,~@?]|:\?)")
+
+# The ${ of a prompt transformation (#579): a parameter, an array element, a positional parameter or one of its
+# ranges, with `@P` for its operator. With promptvars on, the default, bash expands the value as a prompt string
+# and runs its command substitutions, so the value is code the gate cannot see (`printf -v p '%s(%s)' '$' 'id';
+# echo ${p@P}` runs id, and the value can rebuild a form the gate reads only as written, a `/` substitution of a
+# store variable, #342). The operator is read only where the parameter ends, so `${x:-foo@P}` stays a default
+# word, and an operator after an indirection (`${!x@P}`) is not read here.
+_RUNS_PROMPT = re.compile(r"\$\{((?:[A-Za-z_]\w*|\d+)(?:\[[^\][{}]*\])?|[@*](?::[^\][{}]*)?)@P\}")
 
 
 def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str, int, dict[int, list]]:
@@ -1071,9 +1164,10 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
     (classify runs inside the gate hook). `nest` is the lexer's (_NEST)."""
     frames: dict[int, list] = {}
 
-    def open_(at: int, dq: bool, parent: int | None) -> list:   # [in a "..." inside it, sq expands, dq, start]
+    def open_(at: int, brace: int, dq: bool, parent: int | None) -> list:
+        # [in a "..." inside it, sq expands, dq, start]
         frames[at] = [len(s), parent]
-        return [False, dq and not _DQ_QUOTING_OP.match(s, at + 2), dq, at]
+        return [False, dq and not _DQ_QUOTING_OP.match(s, brace + 1), dq, at]
 
     def quoted_text(a: int, b: int, parent: int) -> str:
         # single-quoted text bash expands: the visible text, and the frames of the ${ in it, read within it
@@ -1087,7 +1181,9 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
             p = vis.find("${", close + 1)
         return vis
 
-    out, stack, j = ["${"], [open_(i, dq, None)], i + 2   # one entry per ${ still open, no recursion
+    b = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads the { (#585)
+    # one entry per ${ still open, no recursion
+    out, stack, j = ["${", " " * (b - i - 1)], [open_(i, b, dq, None)], b + 1
     while j < len(s):
         inq, sq, fdq, start = stack[-1]
         ch, k = s[j], j + 1
@@ -1112,7 +1208,7 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
                 k = lx.i
             out.append(" " * (k - j))
         elif s.startswith("${", j):
-            stack.append(open_(j, fdq or inq, start))
+            stack.append(open_(j, j + 1, fdq or inq, start))
             out.append("${")
             k = j + 2
         elif ch == "}" and not inq:
@@ -1661,14 +1757,16 @@ def _env_hazard(name: str, value: str | None = None, literal: bool = False) -> s
 
 
 # A variable the gate assigns without a plain NAME=value word. Parameter expansion assigns with `:=` or
-# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`) and an array subscript (`a[NAME=n]`,
-# itself arithmetic) assign an integer; a `{NAME}>` redirection drops the fd number into NAME. Each sets the
+# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`, and bash's legacy `$[NAME=n]` #588)
+# and an array subscript (`a[NAME=n]`, itself arithmetic) assign an integer, and so sets an element of an
+# array (`BASH_CMDS[ls]=1`); a `{NAME}>` redirection drops the fd number into NAME. Each sets the
 # variable as a side effect, whatever the program is, so a listed variable set this way must be read too.
 # Only what bash expands counts: the ${..} and $((..)) the lexer met outside single quotes (_Word.exps), each
 # read to the } bash closes it with and with quoted text blanked (_dollar_brace), and a bracket only as the
 # subscript of a name (`echo [HOME=x]` is a glob, `'${PATH:=.}'` and `${a:-'${PATH:=.}'}` are text).
 _PARAM_NAME = re.compile(r"\$\{([A-Za-z_]\w*)")            # then a subscript, and `:=` or `=` to assign
 _ARITH_SET = re.compile(r"\b([A-Za-z_]\w*)\s*(?:(?:<<|>>|[-+*/%&|^])?=(?!=)|\+\+|--)|(?:\+\+|--)\s*([A-Za-z_]\w*)")
+_ARITH_ELEM = re.compile(r"\b([A-Za-z_]\w*)\s*\[[^\][]*\]\s*=(?!=)")   # an element set inside the arithmetic
 _SUBSCRIPT = re.compile(r"[A-Za-z_]\w*\[([^\]]*)\]")
 _EXP_SUBSCRIPT = re.compile(r"\$\{[#!]?[A-Za-z_]\w*\[")
 _FD_VAR = re.compile(r"\{([A-Za-z_]\w*)\}")
@@ -1689,15 +1787,23 @@ def _pairs(text: str, opener: str, closer: str) -> dict[int, int]:
 
 
 def _spans(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` not inside
-    another, and the subscript of each `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare
-    `NAME=n` assigns."""
+    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` and of bash's
+    legacy `$[ ]` (#588), read as the `$((..))` it stands for, not inside another, and the subscript of each
+    `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare `NAME=n` assigns."""
     parens, brackets = _pairs(text, "(", ")"), _pairs(text, "[", "]")
     arith, i = [], 0
-    while (j := text.find("$((", i)) >= 0:
-        end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
-        arith.append((j + 3, end))
-        i = max(end, j + 3)
+    while True:
+        j, k = text.find("$((", i), text.find("$[", i)
+        if j >= 0 and (k < 0 or j < k):                   # the earlier form is read, to its own close
+            end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
+            arith.append((j + 3, end))
+            i = max(end, j + 3)
+        elif k >= 0:
+            end = brackets[k + 1]
+            arith.append((k + 2, end))
+            i = max(end, k + 2)
+        else:
+            break
     return arith, [(m.end(), brackets[m.end() - 1]) for m in _EXP_SUBSCRIPT.finditer(text)]
 
 
@@ -1781,6 +1887,7 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
             for region in (arith, subs):
                 for a, b in _covered(region):
                     out += [(m.group(1) or m.group(2), None, False) for m in _ARITH_SET.finditer(vis, a, b)]
+                    out += [(m.group(1), None, False) for m in _ARITH_ELEM.finditer(vis, a, b)]
     out += [(n, None, False) for name in names for n in _subscript_sets(name)]
     if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
         out += [(fm.group(1), None, False) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
@@ -1788,6 +1895,40 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
     targets = [t for _, t in k.redirs] + list(k.heredocs) + list(k.herestrings)
     out += [(fm.group(1), None, False) for t in targets if (fm := _FD_VAR.fullmatch(t.fd))]
     return list(dict.fromkeys(out))
+
+
+def _applies_late(k: "_Cmd") -> bool:
+    """True when this command's assignments apply only after its own words have expanded (#579): bash expands
+    every argument of export and its kind before any of the assignments takes effect, so a ${..@P} in one reads
+    the value from before the command."""
+    words = k.words
+    return bool(words) and not words[0].quoted and not words[0].dynamic and words[0].text in _EXPORTERS
+
+
+def _literal_assigns(k: "_Cmd", line: dict) -> dict[str, str | None]:
+    """What one command assigns, as written (#579), and the value each name holds after it: a `NAME=value`
+    word whose value holds no `$`, backtick or backslash gives the literal a prompt expansion of it expands
+    to itself, and a value the gate cannot read gives None — the last assignment wins, literal or not, as does
+    a name the gate cannot name (`p[$i]=x`). A bare assignment's own words, and the arguments of export and its
+    kind; `printf -v` and `read` set values the gate does not see, a for list is data the command runs over, and
+    an append (`p+=x`) joins the value the line knows: a literal onto a literal is one, anything else is None."""
+    words = k.words
+    if _applies_late(k):
+        words = words[1:]
+    elif not all(_ASSIGN.fullmatch(w.text) for w in words):
+        return {}
+    out: dict[str, str | None] = {}
+    for w in words:
+        name, eq, value = w.text.partition("=")
+        if re.match(r"[A-Za-z_]\w*\+=", w.text):
+            name = name[:-1]                          # an append: onto the literal the line knows, or onto None
+            cur = out[name] if name in out else line.get(name)
+            out[name] = cur + value if cur is not None and not re.search(r"[$`\\]", value) else None
+            continue
+        if not eq:
+            continue                                  # `export p`: it exports a value the line knows or not
+        out[name] = value if not (re.search(r"[$`\\]", value) or re.search(r"[$`]", name)) else None
+    return out
 
 
 def _unreadable_name(w: "_Word") -> bool:
@@ -1960,7 +2101,7 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
         return bool(re.match(r"~(?:[+-]\d*|\d+)(?:/|$)", w.raw.replace("\\\n", "")))
 
     def lone(w: _Word) -> bool:     # one double-quoted word stays one word, but "${!n}" with n=@ splits as "$@"
-        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw
+        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw.replace("\\\n", "")
 
     args, path, at, i = words[1:], None, 0, 0
     while i < len(args):
@@ -3040,6 +3181,46 @@ def _sudo_shell_parts(sudos: list, words: list, k: _Cmd, cmd: str, depth: int, c
     return parts
 
 
+def _env_split_argv(split: str) -> str | None:
+    """The command a -S text's leading words name, read as env reads them, as its own argv (#591): env splits the
+    text into words and reads them itself, so a word quoted whole with the form NAME=value is an assignment, and
+    the first word that is neither an option nor an assignment starts the command. Returns the text from that word
+    on, or None when the shell line over the text already reads it: no leading word consumed, no command at all, a
+    split inside the split (env reads it again, the gate does not follow), or a shell operator before the command
+    (a word to env, but the line's own reading covers what follows it)."""
+    toks = _Lexer(split or "", scan=False).run()
+    words = [t for k, t in toks if k == "w"]
+    n, i = -1, 0
+    while i < len(words):
+        t = words[i].text
+        if _ASSIGN.fullmatch(t):          # env reads its own argv, so a quoted NAME=value is an assignment too
+            i += 1
+            continue
+        if not t.startswith("-") or t == "-":
+            n = i
+            break
+        f, i = t, i + 1
+        if f in ("-S", "--split-string") or f.startswith(("--split-string=", "-S")):
+            return None
+        if f == "--":
+            n = i                         # the options end: the next word is the command, assignments included
+            break
+        if f in _PREFIXES["env"] and i < len(words):
+            i += 1                        # a value of its own (`-u NAME`, `--chdir DIR`)
+    if n <= 0 or n >= len(words):
+        return None
+    # an operator before the command word is a word of argv to env, and the shell line over the text
+    # covers the commands after it
+    seen = 0
+    for k, _ in toks:
+        if k != "w":
+            if seen <= n:
+                return None
+            break
+        seen += 1
+    return " ".join(w.raw for w in words[n:])
+
+
 def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) -> tuple[int, list]:
     """Read a wrapper's options from argv[i] as getopt does: up to the first operand (past it with `permute`)
     or `--`, `--opt=value` or `--opt value` (an unambiguous prefix of four letters or more counts), short
@@ -3579,6 +3760,21 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
     return parts
 
 
+def _runs_prompt(k: "_Cmd", literals: dict) -> str:
+    """The parameter of the first `${..@P}` the command expands whose value the gate does not see (#579), ""
+    when there is none. One of a variable the line assigns a literal value (no `$`, backtick or backslash, so
+    the prompt expansion of it is the value itself) is known and keeps the line's class: the map holds the
+    literal, or None where the last assignment set a value the gate cannot read. A prefix assignment
+    sets the command's own environment, which bash expands the words before, so it is no source."""
+    for w in [*k.words, *k.herestrings, *(t for _, t in k.redirs)]:
+        if n := next((p for p in w.prompt if literals.get(p) is None), ""):
+            return n
+    for hd in k.heredocs:
+        if n := next((p for p in hd.prompt if literals.get(p) is None), ""):
+            return n
+    return ""
+
+
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
     """One simple command into its parts: the program's own category, the redirections, anything run
     inside it, and a store write when it touches the store."""
@@ -3593,10 +3789,22 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     sudos: list = []                            # each sudo or doas on the way (#491)
     words, sudo, split = _strip_prefix_words(words, sudos)
     parts: list[Classification] = []
+    if words and words[0].text in ("read", "printf"):
+        # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
+        # one is gone from here on (#579)
+        ctx.setdefault("literals", {}).update(
+            {re.split(r"\[|\+?=", w.text, maxsplit=1)[0]: None for w in _filled_words(
+                words[0].text.rsplit("/", 1)[-1], words[1:])})
+    if n := _runs_prompt(k, ctx.setdefault("literals", {})):
+        # a prompt transformation expands the value as a prompt string, its command substitutions included (#579)
+        what = "the positional parameters" if n in ("@", "*") or n[:2] in ("@:", "*:") else n
+        parts.append(_opaque(f"runs the prompt expansion of {what}, a value the gate does not see", cmd))
     if split is not None:
         parts.append(_opaque("env -S runs a command line", cmd))
         if depth < _DEPTH:
             parts.append(classify_shell(split, depth + 1))
+            if rest := _env_split_argv(split):   # #591: the leading words are env's own argv, not a shell line
+                parts.append(classify_shell(rest, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
@@ -3633,6 +3841,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             continue
         if t.dynamic and "$" in dest:
             parts.append(_opaque(f"writes to a path from a variable ({t.text[:60]})", cmd))
+            if t.legacy:                       # main read a legacy `$[ ]` here as text; keep that write beside (#588)
+                parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text,
+                                   command=cmd))
+                if sudo:
+                    ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
             if sudo:
@@ -3845,6 +4058,19 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if top is not None and not top.target:
                 c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
+            elif top is not None and _fold_made(top.target) and \
+                    (old := _most_severe([p for p in c.parts
+                                          if p.category not in ("credentials", "store_write")])) is not None and \
+                    old.target != dest:
+                # #601: the fold made the part that took the line's category, so the decision on the alt target
+                # (#399) — the copy of the action on the host — no longer carries it: the line read as an ordinary
+                # delete there before (`ssh host 'rm -rf ~/.EXO/policies'` listed (delete, host) among its reserved
+                # parts, review of #635). The host keeps the line's own action beside the folded store path, as it
+                # kept it while the path read as an ordinary one, and the plain-spelling rows keep every part they
+                # had: a name an expansion made a store of reads the same in either spelling (_fold_made). A copy
+                # with no parts and no post, as #320's.
+                c.parts = [*c.parts, replace(old, target=dest, parts=[], text="", title="", text_file="", own_signals=[
+                    s for s in (old.signals if old.own_signals is None else old.own_signals) if s != "unseen_body"])]
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
         # An ssh that passes a stdin on gives its remote command that stdin, and an ssh there that runs it runs it
@@ -4189,17 +4415,11 @@ def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
     return i, flags
 
 
-def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
-    """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
-    `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
-    comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
-    name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
-    _classify_simple with prog "for"."""
-    args, targets, parts = words[1:], [], []
-    if prog == "for":
-        targets = args[:1]
-    elif prog == "read":
-        i = 0
+def _filled_words(prog: str, args: list) -> list:
+    """The name words `read` (also `-a`, which names an array) and `printf -v` fill, which hold a value the
+    gate does not see (#579)."""
+    if prog == "read":
+        targets, i = [], 0
         while i < len(args) and args[i].text.startswith("-") and args[i].text != "-":
             t, i = args[i].text, i + 1
             if t == "--":
@@ -4212,9 +4432,21 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
                     if ch == "a" and val is not None:
                         targets.append(val)
                     break
-        targets += args[i:]
-    elif prog == "printf" and args[:1] and args[0].text.startswith("-v"):
-        targets = [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+        return targets + args[i:]
+    if prog == "printf" and args[:1] and args[0].text.startswith("-v"):
+        return [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+    return []
+
+
+def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
+    """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
+    `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
+    comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
+    name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
+    _classify_simple with prog "for"."""
+    args, targets, parts = words[1:], [], []
+    if prog == "for":
+        targets = args[:1]
     elif prog in _EXPORTERS:
         i, flags = _builtin_options(args, prog in ("declare", "typeset", "local"))
         if "f" in flags or "F" in flags:                  # names functions, not variables
@@ -4232,6 +4464,8 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
                     parts.append(_opaque(f"{prog} -n {name} makes a reference the gate cannot follow"[:120], cmd))
                 else:
                     targets.append(_Word(text=ref, dynamic=w.dynamic))
+    else:
+        targets = _filled_words(prog, args)
     for w in targets:
         name = re.split(r"\[|\+?=", w.text, maxsplit=1)[0]
         if _unreadable_name(w):
@@ -4893,7 +5127,9 @@ def _store_hints() -> tuple[set, dict, set]:
             elif parts[k]:
                 pairs[parts[k - 1], parts[k]] = "/".join(parts[:k + 1])
         names.add(name)
-    return singles, pairs, (names | set(_run_secrets())) - {""}
+    # names fold case (#601); the sample paths stay as the environment spells them
+    return ({_fold(s) for s in singles}, {(_fold(a), _fold(b)): path for (a, b), path in pairs.items()},
+            {_fold(n) for n in (names | set(_run_secrets())) - {""}})
 
 
 def _brace_glob(text: str) -> str:
@@ -4986,19 +5222,25 @@ def _fn_glob(glob: str) -> str | None:
 
 
 def _glob_names(glob: str, names) -> list:
-    """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything."""
+    """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything. Names fold
+    case (#601); the names themselves come back as given."""
     pat = _fn_glob(glob)
-    return list(names) if pat is None else fnmatch.filter(names, pat)
+    if pat is None:
+        return list(names)
+    f = _fold_glob(pat)
+    return [n for n in names if fnmatch.fnmatchcase(_fold(n), f)]
 
 
 def _could_name(glob: str, hints: set) -> bool:
-    """A glob that could match one of ``hints``: its literal parts are tried as substrings first, which is cheap."""
+    """A glob that could match one of ``hints``: its literal parts are tried as substrings first, which is cheap.
+    Hints fold case (#601); the glob's own wildcards as written (_fold_glob)."""
     pat = _fn_glob(glob)
     if pat is None:
         return True
-    lits, blob = [x for x in re.split(r"[*?]|\[!?\]?[^\]]*\]", pat) if x], "/".join(hints)
-    return all(t in blob for t in lits) and any(all(t in h for t in lits) for h in hints) \
-        and bool(fnmatch.filter(hints, pat))
+    pat, lits = _fold_glob(pat), [x for x in re.split(r"[*?]|\[!?\]?[^\]]*\]", _fold_glob(pat)) if x]
+    blob = "/".join(_fold(h) for h in hints)
+    return all(t in blob for t in lits) and any(all(t in _fold(h) for t in lits) for h in hints) \
+        and bool([h for h in hints if fnmatch.fnmatchcase(_fold(h), pat)])
 
 
 def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
@@ -5102,11 +5344,11 @@ _ANY = object()                                     # any path, in _cd_store_rea
 
 def _could_be(s: str, name: str) -> bool:
     """Could the path part ``s`` be ``name`` (`..`, `run`, `.exo`) as bash matches it: the same text, or a glob
-    (`.?`, `ru[n]`, `.*xo`) that spells a leading dot the same way."""
-    if s == name or not _GLOBBY.search(s) or (s[:1] == ".") != (name[:1] == "."):
-        return s == name
+    (`.?`, `ru[n]`, `.*xo`) that spells a leading dot the same way. Both fold case (#601)."""
+    if _fold(s) == _fold(name) or not _GLOBBY.search(s) or (s[:1] == ".") != (name[:1] == "."):
+        return _fold(s) == _fold(name)
     pat = _fn_glob(s)
-    return pat is None or fnmatch.fnmatchcase(name, pat)
+    return pat is None or fnmatch.fnmatchcase(_fold(name), _fold_glob(pat))
 
 
 def _dotdot(q: str) -> str:
@@ -5174,7 +5416,7 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
             t = os.path.expanduser(t)
         p = _expand_text(t)
         p = os.path.normpath(p) if p else p         # bash's logical cd: /tmp/../proc is /proc, ./gh is gh
-        p = "~" if p == home else "~/" + p[len(root):] if p.startswith(root) else p
+        p = "~" if _fold(p) == _fold(home) else "~/" + p[len(root):] if _fold(p).startswith(_fold(root)) else p
         parts = _brace_glob(p).split("/")
         parts[0] = "~" if parts[0].startswith("~") else parts[0]        # ~user/.kube: its folders
         return p, [s for j, s in enumerate(parts) if s not in ("", ".") or j == 0 and s == ""] or ["."]
@@ -5185,10 +5427,11 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         has a character of its own, and a plain store folder only below its parent."""
         own = bool(re.sub(r"[*?]|\[[^\]]*\]?", "", s))
         return {x for x in singles if (x[:1] == ".") == (s[:1] == ".") and (x[:1] == "." or own)} | \
-            {b for a, b in pairs if a == prev and (b[:1] == ".") == (s[:1] == ".")}
+            {b for a, b in pairs if _fold(a) == _fold(prev) and (b[:1] == ".") == (s[:1] == ".")}
 
     def last_store_folder(parts: list) -> int:
-        return max((k for k, s in enumerate(parts) if s in singles or k and (parts[k - 1], s) in pairs or
+        return max((k for k, s in enumerate(parts) if _fold(s) in singles or
+                    k and (_fold(parts[k - 1]), _fold(s)) in pairs or
                     _GLOBBY.search(s) and _could_name(s, could_be(s, parts[k - 1] if k else None))), default=-1)
 
     # A plain store folder's parent above each target: name -> {levels up: its paths}. A target below home also
@@ -5203,9 +5446,10 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         up = [(hp[m], "/".join(hp[:m + 1])) for m in range(len(hp) - 1)] if parts[0] == "~" else []
         chain = up + [(s, "/".join(parts[:j + 1]) if j < deep else None) for j, s in enumerate(parts) if s != ".."]
         for n, (name, path) in enumerate(reversed(chain)):
-            if name in parents:
-                anc.setdefault(name, {}).setdefault(n, set()).add(path)
-                for key in ((name, path), (name, _ANY)):
+            if _fold(name) in parents:
+                path = _fold(path) if path else path
+                anc.setdefault(_fold(name), {}).setdefault(n, set()).add(path)
+                for key in ((_fold(name), path), (_fold(name), _ANY)):
                     top[key] = max(top.get(key, -1), n)
                 if name == "":
                     lo[""] = min(lo.get("", n), n)
@@ -5230,12 +5474,12 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
     def reach(n: int, a: str, need) -> bool:
         """A folder named ``a`` (at path ``need`` for a plain parent) n levels above a target, or above a `cd ..`
         after one. `..` stops at /."""
-        levels = anc.get(a, {})
+        levels = anc.get(_fold(a), {})
         if a == "" and lo.get("", n + max(ups) + 1) <= n + max(ups):
             return True
         if len(ups) > 64:                           # any number of levels up: is it there n or more levels up?
-            return top.get((a, _ANY if need is None else need), -1) >= n
-        return any(m in levels and (need is None or need in levels[m]) for m in (n + u for u in ups))
+            return top.get((_fold(a), _ANY if need is None else _fold(need)), -1) >= n
+        return any(m in levels and (need is None or _fold(need) in levels[m]) for m in (n + u for u in ups))
 
     matched: dict = {}                              # a glob -> the plain store folder names it could match
 
@@ -5249,7 +5493,7 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         first = parts[n]
         if globs and _GLOBBY.search(first) and first not in matched:
             matched[first] = _glob_names(first, kin) if _could_name(first, set(kin)) else []
-        hits = matched[first] if globs and _GLOBBY.search(first) else [first] if first in kin else []
+        hits = matched[first] if globs and _GLOBBY.search(first) else [b for b in kin if _fold(b) == _fold(first)]
         return [(path, parts[n + 1:]) for b in hits for a, path in kin[b]
                 if reach(n, a, None if a in singles else path.rpartition("/")[0])]
 
@@ -5278,7 +5522,7 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
             for o in opts:
                 count = min(count * len(o), 65)
             paths = ["/".join(x) for x in itertools.product(*opts)] if count <= 64 else []
-            stored[folder] = count > 64 or any(_SENSITIVE_PATH.search(x) or is_sensitive_path(x) for x in paths)
+            stored[folder] = count > 64 or any(_sensitive_re().search(_fold(x)) or is_sensitive_path(x) for x in paths)
         return stored[folder]
 
     def candidates():
@@ -5305,13 +5549,13 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         for q, parts, globbed in candidates():
             for path, rest in into(parts, globbed) if parts else []:
                 fp = f"{path}/{'/'.join(rest)}".rstrip("/").split("/")
-                if parts[-1] in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
+                if _fold(parts[-1]) in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
                     return q
         return _exo_relative(split, max(ups), candidates, forms)
     nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
     # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
     roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
-    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered) or any(map(is_store, roots))
+    every = any(_sensitive_re().search(_fold(p)) for p, _, _ in entered) or any(map(is_store, roots))
     hints = names | singles | nxt
     held = any(k == len(parts) - 1 for _, parts, k in entered)     # a target is itself a store folder (~/.kube)
     for q, parts, globbed in candidates():
@@ -5320,8 +5564,9 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         if not parts:
             continue
         inner = parts[:-1]              # a store folder counts when the name goes into it (`mkdir .kube` reads none)
-        if parts[-1] in names or not singles.isdisjoint(inner) or into(parts, globbed) or \
-                not pairs.keys().isdisjoint(zip(inner, inner[1:])) or globbed and any(
+        fi = [_fold(s) for s in inner]
+        if _fold(parts[-1]) in names or not singles.isdisjoint(fi) or into(parts, globbed) or \
+                not pairs.keys().isdisjoint(zip(fi, fi[1:])) or globbed and any(
                     _could_name(s, hints) for s in parts if _GLOBBY.search(s)):
             return q
     return _exo_relative(split, max(ups), candidates, forms)
@@ -5367,11 +5612,12 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
         return _TOO_MANY
 
     def inside(b: str, real: bool = False) -> bool:
-        return any(re.search(r"(^|/)\.exo(/|$)", f) or any(f == r or f.startswith(r.rstrip("/") + "/") for r in roots)
+        return any(re.search(r"(^|/)\.exo(/|$)", _fold(f)) or
+                   any(_fold(f) == _fold(r) or _fold(f).startswith(_fold(r).rstrip("/") + "/") for r in roots)
                    for f in (_path_forms(b) if real else {os.path.normpath(b)}))
 
     def near(q: str) -> bool:                       # a relative path that can lead into the store from above it
-        return not marks.isdisjoint(q.split("/"))
+        return not marks.isdisjoint(map(_fold, q.split("/")))
 
     def charge(path: str) -> None:                  # one join or level up, by the path parts it builds
         left[0] -= path.count("/") + 1
@@ -5604,7 +5850,8 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # is never its line's. A value declare reads again runs its $( ) the same way (_subscript_parts).
     inherits = stdin_unknown or any(k.piped_in or k.stdin_unknown or (k.fed and bool(k.heredocs or k.herestrings))
                                     for k in cmds)
-    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits}
+    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits,
+                 "literals": {}}     # the value each command assigns as written, what the next ${..@P} reads (#579)
     if into := _cd_into.get():            # a $( ) on a line that entered the store runs in it (#465)
         ctx["store_cwd"] = True
         if into[1]:
@@ -5622,7 +5869,13 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
             # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
             ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
             slot[0] = k.own
+            own = _literal_assigns(k, ctx["literals"])
+            late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
+            if not late:
+                ctx["literals"].update(own)    # what this command sets, the next ${..@P} reads (#579)
             got = _classify_simple(k, cmd, depth, ctx, piped)
+            if late:
+                ctx["literals"].update(own)
             if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
                 got = _given_stdin(got, _stdin_own(k), ctx)
             parts += got
@@ -5820,10 +6073,66 @@ TOOLS: dict[str, str] = {
     "close_terminal": "shell",
 }
 
+# One reading for every store and secret name below (#601): on a case-insensitive file system
+# `.exO/config.json` IS `.exo/config.json`, but the checks read the spelling as written, so a case
+# variant walked past on main a8a4ffbd (`cp x ~/.exO/config.json`, `echo x > ~/.KUBE/config`). Names
+# match in any case: the name regexes are searched on the folded text (_fold), and the list itself is
+# compiled twice (_SENSITIVE_PATH_F) because `Netlify` in it is mixed-case, which a lowered text would
+# not meet. A glob's own wildcards fold only in their literal text (_fold_glob): bash matches a class
+# and a literal after a wildcard case-sensitively, so `[HOME=x]*` and `*/KEYS` stay out where `.EXO/*`
+# reads on. `EXO_GATE_CASE_SENSITIVE=1` reads main d800f33c's case-sensitive names, for a file system
+# whose `.exO` is a different folder (tests pin both readings with it).
+
+
+# Held while a check reads one spelling as main's own (#601): the ssh hop probes a case-variant store path as
+# written, to keep the host beside the line's own action where only the fold made the store part (review #635).
+_case_off: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_case_off", default=False)
+
+
+def _fold(p: str) -> str:
+    """``p`` as the plain name compares match it: lower-cased (#601), or as written under
+    EXO_GATE_CASE_SENSITIVE=1 or while _case_off is set. The name regexes fold by their own re.IGNORECASE."""
+    return p.lower() if p and not _case_off.get() and os.environ.get("EXO_GATE_CASE_SENSITIVE", "") != "1" else p
+
+
+def _fold_glob(g: str) -> str:
+    """A glob part as bash matches it (#601): a part with no wildcard names a folder the file system opens,
+    folded; one with a wildcard is fnmatch against the entries, as written — its literals too (`ID_RSA*`,
+    `[HOME=x]*`)."""
+    return _fold(g) if not _GLOBBY.search(g) else g
+
+
+def _fold_glob_path(p: str) -> str:
+    """A glob path part by part (_fold_glob): the parts the file system opens fold, the wildcard parts do not."""
+    return "/".join(_fold_glob(x) for x in p.split("/"))
+
+
+def _fold_made(t: str) -> bool:
+    """Whether the store or secret name ``t`` reads as one only by its letter case (#601): main's spellings, the
+    checks on the text itself with the fold held off (_case_off), pass on the folded spelling and not on the one
+    as written. The ssh hop keeps the host beside the line's own action then (review of #635): the fold-made part
+    took the line's category, and the alt target's decision — the copy of the action on the host — with it. A name
+    an expansion form made a store of folds the same way in either spelling, so this is False there and the hop
+    keeps the reading both spellings share."""
+    if not t:
+        return False
+    f = _fold(t)
+    if f == t:
+        return False
+    token = _case_off.set(True)
+    try:
+        plain = _store_word(t, ancestors=True) or bool(_SENSITIVE_PATH.search(t))
+        folded = _store_word(f, ancestors=True) or bool(_SENSITIVE_PATH.search(f))
+    finally:
+        _case_off.reset(token)
+    return not plain and folded
+
 # One list of secret stores, used by the path tools (read/write/patch) and by shell parsing.
 # Segment patterns match at any depth; EXO_HOME and EXO_KEYS_FILE overrides are added by
 # is_sensitive_path() because they can sit anywhere.
-_SENSITIVE_PATH = re.compile(
+# The list twice (#601): as main spells it, and lower-cased for the folded reading — `Netlify` in it is
+# mixed-case, which a lowered text would not meet.
+_SENSITIVE_PATH_TXT = (
     r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.config/muse|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
     r"\.?credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
     r"\.claude(/[^/]*)*|"
@@ -5832,6 +6141,13 @@ _SENSITIVE_PATH = re.compile(
     r"\.config/gh/hosts\.yml|\.git-credentials|\.docker/config\.json|\.kube/config|"
     r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
     r"proc/[^/]+/(task/[^/]+/)?environ)(/|$)")
+_SENSITIVE_PATH = re.compile(_SENSITIVE_PATH_TXT)
+_SENSITIVE_PATH_F = re.compile(_SENSITIVE_PATH_TXT.lower())
+
+
+def _sensitive_re() -> re.Pattern:
+    """The secret-name list, folded (#601) or as main spells it (EXO_GATE_CASE_SENSITIVE=1)."""
+    return _SENSITIVE_PATH_F if os.environ.get("EXO_GATE_CASE_SENSITIVE", "") != "1" else _SENSITIVE_PATH
 
 # D-039: a run folder holds the principal credential and the TCP token beside each socket, so the folder itself
 # is a secret store; what is below it keeps its own class (job output in run/jobs/ stays readable). A relative
@@ -5934,16 +6250,17 @@ def _is_run_dir(path: str, real: str = "") -> bool:
     absolute path is also resolved as written, links before `..` (``real``, when the caller has resolved it)."""
     raw = path.replace("\\", "/")
     path = os.path.normpath(raw)
-    if _RUN_DIR.search(path):
+    if _RUN_DIR.search(_fold(path)):
         return True
     if not path.startswith("/"):
         return False
     try:
-        cands = {c for c in (path, real or os.path.realpath(raw)) if c.endswith("/run")}
+        cands = {c for c in (path, real or os.path.realpath(raw)) if _fold(c).endswith("/run")}
         homes = {os.path.normpath(_exo_home()), os.path.realpath(_exo_home())} if cands else set()
     except (OSError, ValueError):
         return False
-    return any(re.fullmatch(re.escape(h) + r"(/principals/[^/]+)?/run", c) for c in cands for h in homes)
+    return any(re.fullmatch(re.escape(_fold(h)) + r"(/principals/[^/]+)?/run", _fold(c))
+               for c in cands for h in homes)
 
 
 def _run_secrets() -> list[str]:
@@ -6007,7 +6324,8 @@ class _Scope:
     """What the secret-store checks of one classify call share: the folders the tool may read from (#209), the gate's
     own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot."""
     cwds: tuple[str, ...] = ()
-    tool_cwds: tuple[str, ...] = ()              # a shell call's own `cwd` or `workdir`, joined to the session folder
+    tool_cwds: tuple[tuple[str, str], ...] = ()  # a shell call's own `cwd` or `workdir` (#311), as (the folder
+                                                 # joined to the session's folder, the folder as the call spells it)
     here: str | None = None                      # the gate's own folder; "" when it cannot be read
     roots: set[str] | None = None
     real: dict[str, str] = field(default_factory=dict)
@@ -6032,12 +6350,13 @@ _TOOL_FOLDERS = ("cwd", "workdir")
 def _in_tool_folder(fn: _F) -> _F:
     """Run ``fn(action, cwd)`` in one _Scope that holds the folders the tool may read from (#209): ``cwd``, the
     session's working folder as the core passes it. A relative path is resolved from it and from the gate's own
-    folder. A shell tool's own folder argument (`cwd`, `workdir`), joined to that folder, is kept apart (tool_cwds):
+    folder. A shell tool's own folder argument (`cwd`, `workdir`), joined to that folder, is kept apart (tool_cwds),
+    beside the folder as the call spells it: the part the folder read adds names the `cd` in that spelling (#516).
     _shell_call reads the line in it (#311)."""
     @functools.wraps(fn)
     def run(action: Any, cwd: str | None = None) -> Any:
         folders: list[str] = []
-        own: list[str] = []
+        own: list[tuple[str, str]] = []
         try:
             tool, args = _args_of(action)
             base = os.path.expanduser(cwd) if isinstance(cwd, str) and cwd else ""
@@ -6047,10 +6366,14 @@ def _in_tool_folder(fn: _F) -> _F:
                 for key in _TOOL_FOLDERS:
                     sub = args.get(key)
                     if isinstance(sub, str) and sub:
-                        own.append(os.path.join(base, os.path.expanduser(sub)))
+                        own.append((os.path.join(base, os.path.expanduser(sub)), sub))
         except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
             pass
-        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders)), tool_cwds=tuple(dict.fromkeys(own))))
+        spell: dict[str, str] = {}                 # one folder per joined path, the first spelling kept
+        for joined, raw in own:
+            spell.setdefault(joined, raw)
+        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders)),
+                                  tool_cwds=tuple(spell.items())))
         try:
             return fn(action, cwd)
         finally:
@@ -6237,7 +6560,7 @@ def _sensitive_words(words: list[str]) -> bool:
     below the folder it was read from, only the part below it, so a folder like a repo's `.claude` does not count).
     A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads."""
     words = [w for w in (w.strip() for w in _expand_words(words)) if w]
-    if any(_SENSITIVE_PATH.search(w.replace("\\", "/")) for w in words if not w.endswith(".pub")):
+    if any(_sensitive_re().search(_fold(w.replace("\\", "/"))) for w in words if not _fold(w).endswith(".pub")):
         return True
     scope = _scope.get() or _Scope()
     if scope.roots is None:
@@ -6256,10 +6579,11 @@ def _sensitive_words(words: list[str]) -> bool:
                 cands = {a, real}
             except (OSError, ValueError):
                 real, cands = "", {p}
-            cands = {c for c in cands if not c.endswith(".pub")}
-            if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots) or _is_run_dir(p, real):
+            cands = {c for c in cands if not _fold(c).endswith(".pub")}
+            if any(_fold(c) == _fold(r) or _fold(c).startswith(_fold(r) + os.sep) for c in cands for r in roots) \
+                    or _is_run_dir(p, real):
                 return True
-            if real in cands and real != a and _SENSITIVE_PATH.search(_below(real, base or scope.here, w, memo)):
+            if real in cands and real != a and _sensitive_re().search(_fold(_below(real, base or scope.here, w, memo))):
                 return True
     return False
 
@@ -6299,17 +6623,18 @@ class StoreSkip:
         # A named store counts only when the folder walked is one: `~/.ssh/..` or a link `x.key` to HOME is not.
         self.whole = bool(named) and all(map(is_sensitive_path, (named, self.abs, self.real)))
         self.roots = {r for x in _dynamic_secret_paths() for r in (os.path.abspath(x), os.path.realpath(x))}
-        self.below = tuple(r + os.sep for r in self.roots)
+        self.froots = frozenset(map(_fold, self.roots))
+        self.below = tuple(_fold(r) + os.sep for r in self.roots)
         self.skipped = 0
         self._repo = {os.path.abspath(_home()): False, os.path.realpath(_home()): False}   # folder -> holds .git
 
     def _hit(self, path: str) -> bool:
-        p = path.replace("\\", "/")
-        m = _SENSITIVE_PATH.search(p)
+        p, f = path.replace("\\", "/"), _fold(path)
+        m = _sensitive_re().search(_fold(p))
         if m and m.group(2).startswith(".claude") and self._project_claude(p):
-            m = self._NO_CLAUDE.search(p)
-        return not path.endswith(".pub") and (   # public keys are meant to be shared, as in is_sensitive_path
-            bool(m) or path in self.roots or path.startswith(self.below))
+            m = self._NO_CLAUDE.search(_fold(p))
+        return not f.endswith(".pub") and (   # public keys are meant to be shared, as in is_sensitive_path
+            bool(m) or f in self.froots or f.startswith(self.below))
 
     def _project_claude(self, p: str) -> bool:
         """Every `.claude` in ``p`` is a repo's, and ``p`` is that folder or in one of its _CLAUDE_OK subfolders."""
@@ -6379,7 +6704,9 @@ _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
 def _glob_part(g: str, s: str) -> bool:
     """Could bash glob part g name s? fnmatch as bash reads it (_fn_glob), except a leading dot in s
     must be spelt with a literal dot in g: bash's *, ? and [ never match a leading dot (#594, verified
-    against bash 5.2: `[.]ssh` and `[!a]ssh` do not expand to `.ssh`, while `.*` and `.s*` do)."""
+    against bash 5.2: `[.]ssh` and `[!a]ssh` do not expand to `.ssh`, while `.*` and `.s*` do). The
+    sample folds case (#601); the glob's own wildcards as written (_fold_glob)."""
+    g, s = _fold_glob(g), _fold(s)
     if s.startswith(".") and not g.startswith("."):
         return False
     pat = _fn_glob(g)
@@ -6418,7 +6745,7 @@ def _glob_folder_hit(d: str, home: str, folders: list[str]) -> tuple[bool, bool]
                 lits = sum(len(re.sub(r"[*?\[\]]", "", g)) for g in gp)
                 if not any(g.startswith(".") for g in gp) and lits < 3:
                     continue
-                return True, bool(_SENSITIVE_PATH.search(ff.replace("\\", "/")))
+                return True, bool(_sensitive_re().search(_fold(ff.replace("\\", "/"))))
     return False, False
 
 
@@ -6434,11 +6761,12 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     linked = bool(d_abs) and _is_run_dir(raw if raw.startswith("/") else os.path.join(home, raw))
     if linked:                                           # also when normpath lost it: ~/<link to run/jobs>/..
         runs = runs + [d_abs]
-    keys = "agent-" in tok or ".principal" in tok
+    keys = "agent-" in _fold(tok) or ".principal" in _fold(tok)
     if "/" in tok:   # an agent key only when the glob spells its key part, names a run folder, or has a literal
         # folder part around its wildcards (`~/.exo/*/`); not for `*/*default*` or `~/*test*`, which bash cannot
         # expand into a run folder but fnmatch's `*` would match across `/`
-        reach = keys or linked or (d_abs in [os.path.normpath(os.path.join(home, r)) for r in runs] if d_abs else any(
+        reach = keys or linked or (_fold(d_abs) in {_fold(os.path.normpath(os.path.join(home, r))) for r in runs}
+                                   if d_abs else any(
             q and not re.fullmatch(r"[*?]+|\.{1,2}", q) for q in d.split("/")))
         samples = samples + [os.path.join(r, x) for r in runs for x in secrets if reach or x.startswith("exod.")]
     # #594: a glob in the folder part used to give up here, because d_abs is set only for a literal
@@ -6456,21 +6784,25 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     folder_samples = [x for x in all_samples if any(y != x and y.startswith(x + "/") for y in all_samples)]
     folders = [os.path.dirname(x) for x in all_samples] + folder_samples
     folder_hit, secret_folder = _glob_folder_hit(d, home, folders)
-    in_store_dir = linked or folder_hit or bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
-    if secret_folder and re.search(r"[*?\[]", base) and not base.endswith(".pub"):
+    in_store_dir = linked or folder_hit or bool(d_abs) and _fold(d_abs) != _fold(home) and any(
+        _fold(x).startswith(_fold(d_abs) + "/") for x in samples)
+    if secret_folder and re.search(r"[*?\[]", base) and not _fold(base).endswith(".pub"):
         return True
     if len(stem) < 3 and not in_store_dir:
         return False
-    if "/" not in tok:   # a bare name: a run secret by its own name, an agent key only by its `agent-` or key part
-        if any(_glob_rx(tok).match(x) for x in secrets if keys or x.startswith("exod.")):
+    i = re.search(r"[*?\[]", tok)
+    ftok = _fold_glob_path(tok)
+    fhead = ftok[:i.start()] if i else ftok      # the folded prefix; a wildcard part's own literal as bash reads it
+    if "/" not in ftok:  # a bare name: a run secret by its own name, an agent key only by its `agent-` or key part
+        if any(_glob_rx(ftok).match(_fold(x)) for x in secrets if keys or x.startswith("exod.")):
             return True
-    head, tail = re.split(r"[*?\[]", tok, maxsplit=1)[0], re.split(r"[*?\[\]]", tok)[-1]   # literal: narrow first
+    tail = re.split(r"[*?\[\]]", ftok)[-1]   # literal: narrow first; a wildcard part's own tail as bash reads it
     xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
-          if x.endswith(tail) and (x.startswith(head) if tok.startswith("/") else head in x)]
+          if _fold(x).endswith(tail) and (_fold(x).startswith(fhead) if fhead.startswith("/") else fhead in _fold(x))]
     if not xs:
         return False
-    rx = _glob_rx(tok)
-    return any(rx.match(x) for x in xs)
+    rx = _glob_rx(ftok)
+    return any(rx.match(_fold(x)) for x in xs)
 
 
 @functools.lru_cache(maxsize=4096)
@@ -6484,13 +6816,13 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files,
 # the core sockets, the bus folder (the seat registry signed answers trust and the relay database, #210), the
 # plugins folder and the other folders Exo loads code from (_code_paths, #459) steer the gate itself, so a
-# write to them always asks the principal. Names that are distinctive match anywhere (a relative
+# write to them always asks the principal. Names that are distinctive match anywhere, in any case too (#601; a relative
 # `policies/gates.yaml` may sit in the tool's working folder), and so, by their name whatever EXO_HOME is, do
 # `.exo/venv`, `.exo/src` and `.exo/hermes-home/plugins`, as `.exo/plugins` does; the rest of hermes-home (the
 # launch script's target folder, a live Hermes's state) is not the code. Absolute paths are also checked
 # against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
 # `principals` (`exo init --root`, `exo import-store --root`), the bus folder and files (_bus_paths) and the
-# code folders.
+# code folders, among them the venv and Hermes home the home's config.json records (#612).
 # $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
 # The file names that end a path, one string per name ("\0": any text), which _STORE_NAMES and _store_glob share.
 _EXO_STORE_FILES = (
@@ -6548,6 +6880,27 @@ def _bus_paths() -> list[tuple[str, tuple]]:
     return out
 
 
+def _config_code_paths() -> list[str]:
+    """The venv and Hermes' plugin home the home's config.json records (`venv`, `hermes_home`): scripts/install.sh
+    writes both (its set_cfg lines, #612) and nothing exports EXO_VENV or EXO_HERMES_HOME when the daemon runs, so a
+    supported custom install spells its code folders in the file alone. Read like store.explicit_roots reads the
+    config's `principals`: a missing or unreadable file, or a value that is not an absolute path once ~ is expanded,
+    adds nothing. The environment still takes precedence (Config.get resolves it), so a folder named here joins the
+    code paths beside what EXO_VENV or EXO_HERMES_HOME names, it never replaces one."""
+    try:
+        data = json.loads((Path(_exo_home()) / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):            # a missing file, a stale or bad one: the default spellings stand
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for key, tail in (("venv", ""), ("hermes_home", "plugins")):
+        p = os.path.expanduser(data[key]) if isinstance(data.get(key), str) else ""
+        if p.startswith("/"):
+            out.append(os.path.join(p, tail) if tail else p)
+    return out
+
+
 def _code_paths() -> list[str]:
     """The folders Exo loads code from (#459), each the environment this gate sees spells, as it does EXO_HOME: the
     venv `scripts/install.sh` puts the `exo` package and this gate in (EXO_VENV, else the home's own `venv`; a
@@ -6555,9 +6908,11 @@ def _code_paths() -> list[str]:
     (EXO_HERMES_HOME, else the home's own `hermes-home/plugins`: with --with-hermes the core loads exo-gate from
     there), the source copy it clones a git URL into and `exo update` refreshes from (`$EXO_HOME/src`; `exo web`
     reads plugins on `<package>/../../plugins` of the copy too) and every folder EXO_PLUGIN_DIRS names, which
-    default_dirs searches first and where a duplicate plugin name keeps the first found. Non-absolute spellings are
-    not read: a relative EXO_VENV or dir is a constant of the tool's working folder, which the gate cannot see; a
-    `.venv` name is not Exo's (no install script makes one, EXO_VENV is the only override)."""
+    default_dirs searches first and where a duplicate plugin name keeps the first found. The home's config.json
+    records a venv and Hermes home of its own (`venv`, `hermes_home`, #612): those join, read as _config_code_paths
+    reads them. Non-absolute spellings are not read: a relative EXO_VENV or dir is a constant of the tool's working
+    folder, which the gate cannot see; a `.venv` name is not Exo's (no install script makes one, EXO_VENV is the
+    only override)."""
     home = _exo_home()
     out = []
     venv = os.path.expanduser(os.environ.get("EXO_VENV") or "")   # install.sh: ${EXO_VENV:-$EXO_HOME/venv}
@@ -6568,7 +6923,7 @@ def _code_paths() -> list[str]:
     out.append(os.path.join(home, "src"))
     out += [d for d in (os.path.expanduser(p) for p in
                         filter(None, os.environ.get("EXO_PLUGIN_DIRS", "").split(os.pathsep))) if d.startswith("/")]
-    return out
+    return out + [p for p in _config_code_paths() if p not in out]
 
 
 def _code_forms() -> list[str]:
@@ -6584,7 +6939,8 @@ def _fd_path(p: str) -> bool:
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
-    return bool(parts) and (parts[0] in names or parts[0].startswith(("ledger.sqlite", "schedule.sqlite")))
+    p = _fold(parts[0]) if parts else ""
+    return bool(parts) and (p in names or p.startswith(("ledger.sqlite", "schedule.sqlite")))
 
 
 def _path_forms(p: str) -> set[str]:
@@ -6624,7 +6980,8 @@ def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) ->
 
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
 # counts too) and file names that end a path. The code folders (_code_paths, #459) join: the home's own `venv` and
-# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles. The home's config.json comes
+# `src`, and `hermes-home/plugins`, whose every other spelling the environment or the home's config.json settles
+# (#612). The home's config.json comes
 # from _HOME_PROTECTED; _store_glob counts it only while it counts (_config_on, D-074), so the call is marked and its
 # reading as before is main's.
 _STORE_GLOB_DIRS = tuple([".exo", *p, n] for p in ((), ("principals", "\0")) for n in _HOME_PROTECTED +
@@ -6635,7 +6992,7 @@ _STORE_GLOB_FILES = tuple(f.split("/") for f in _EXO_STORE_FILES)
 
 def _counts(sample: list) -> bool:
     """Does a store name _store_glob matched count: every one, but the home's config.json only while it does."""
-    return sample[-1] != "config.json" or _config_on()
+    return _fold(sample[-1]) != "config.json" or _config_on()
 
 
 def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> bool:
@@ -6651,7 +7008,9 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
     def could(g: str, s: str) -> bool:
         """Can glob part g be the sample part s? A NUL in s is any text, which g's own text does not fill: it must
         spell three characters of the text around it (`agent-*` can be an agent socket; `*peers*`, which prose
-        quoted as two empty backtick pairs around `peers` gives, cannot)."""
+        quoted as two empty backtick pairs around `peers` gives, cannot). The sample folds case (#601), the
+        glob's own wildcards as written (_fold_glob)."""
+        g, s = _fold_glob(g), _fold(s)
         if "\0" not in s:
             return fnmatch.fnmatchcase(s, g)
         a, b = s.split("\0")
@@ -6696,10 +7055,10 @@ def _store_word(path: str, ancestors: bool = False, from_cwd: bool = False) -> b
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
-    if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
+    if _STORE_NAMES.search(_fold(p)) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
         return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
     if not p.startswith("/"):            # relative: a name the store knows, or, for a file tool's write (#494),
-        return bool(_CONFIG_NAME.search(os.path.normpath(p))) and _config_on() or \
+        return bool(_CONFIG_NAME.search(_fold(os.path.normpath(p)))) and _config_on() or \
             from_cwd and _store_from_cwd(p, ancestors)      # one read from the session folder
     return _store_forms(_path_forms(p), ancestors)
 
@@ -6709,19 +7068,21 @@ def _store_forms(candidates: set[str], ancestors: bool) -> bool:
     (D-074), and each against the store roots' and the bus folders' forms. The spellings come from the original
     text, normpath first would erase symlink/.. traversal, and the lexical candidate counts beside the real one,
     including protected paths that link out of the store."""
-    if any(_STORE_NAMES.search(c) for c in candidates):
+    if any(_STORE_NAMES.search(_fold(c)) for c in candidates):
         return True
-    if any(_CONFIG_NAME.search(c) for c in candidates) and _config_on():
+    if any(_CONFIG_NAME.search(_fold(c)) for c in candidates) and _config_on():
         return True
     roots = [(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)]
     roots += [(r, names, False) for root, names in _bus_paths() for r in _path_forms(root)]
+    roots = [(_fold(r), names, principals) for r, names, principals in roots]
     for candidate in candidates:
+        c = _fold(candidate)
         for r, names, principals in roots:
-            if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
+            if ancestors and (r == c or r.startswith(c.rstrip("/") + "/")):
                 return True
-            if not candidate.startswith(r.rstrip("/") + "/"):
+            if not c.startswith(r.rstrip("/") + "/"):
                 continue
-            parts = candidate[len(r.rstrip("/")) + 1:].split("/")
+            parts = c[len(r.rstrip("/")) + 1:].split("/")
             if _protected_rel(parts, names) and (parts[0] != "config.json" or _config_on()):
                 return True
             if principals and parts[0] == "principals":
@@ -6732,8 +7093,8 @@ def _store_forms(candidates: set[str], ancestors: bool) -> bool:
         # #459: a write inside a folder Exo loads code from; with ``ancestors`` (a delete), also a remove or move of
         # the folder itself or of a folder above it that holds it (`rm -rf ~/.exo`, `mv ~/.exo/venv x`).
         code = _code_forms()
-        if any(candidate == c or candidate.startswith(c.rstrip("/") + "/") for c in code) or \
-                ancestors and any(c.startswith(candidate.rstrip("/") + "/") for c in code):
+        if any(c == _fold(x) or c.startswith(_fold(x).rstrip("/") + "/") for x in code) or \
+                ancestors and any(_fold(x).startswith(c.rstrip("/") + "/") for x in code):
             return True
     return False
 
@@ -6759,9 +7120,10 @@ def _in_store_dir(path: str) -> bool:
     if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")):
         return True
     if not p.startswith("/"):
-        return bool(re.search(r"(^|/)\.exo(/|$)", p))
-    roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
-    return any(c == r or c.startswith(r.rstrip("/") + "/") for c in _path_forms(p) for r in roots + _code_forms())
+        return bool(re.search(r"(^|/)\.exo(/|$)", _fold(p)))
+    roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)] + _code_forms()
+    return any(c == r or c.startswith(r.rstrip("/") + "/")
+               for c in (_fold(f) for f in _path_forms(p)) for r in map(_fold, roots))
 
 
 _PATCH_PATHS = re.compile(
@@ -6789,8 +7151,15 @@ _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "new_path", "paths", 
 _WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
                          "revoke", "trash"))
 # Name words of a tool whose name reads as a read but that writes what it took where its path arguments say
-# (`download_file`, `export_csv`): the store scan reads those arguments as a write's (#494).
-_FETCH_WRITE_WORDS = frozenset(("download", "export"))
+# (`download_file`, `export_csv`): the store scan reads those arguments as a write's (#494). A name that says it
+# replaces, substitutes, patches, edits, updates or seds the file its path names writes it too (#651): a
+# `search_replace` on a store path is a write of the seat, policy or config file it names, as `write_file` is,
+# never a read the store skips.
+_FETCH_WRITE_WORDS = frozenset(("download", "export", "replace", "substitute", "patch", "edit", "update", "sed"))
+# The old and new text a replace carries in its arguments, beside the path it names: the replace signal of a tool
+# whose name alone does not say it writes (#651).
+_REPLACE_ARG_KEYS = (("old_string", "new_string"), ("old_text", "new_text"), ("search", "replace"),
+                     ("find", "replace"), ("old", "new"), ("pattern", "replacement"))
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
@@ -6805,6 +7174,12 @@ def args_sensitive(args: Mapping) -> str:
                 if words is None or _sensitive_words(words) or _glob_words(words):
                     return item
     return ""
+
+
+def _replace_args(args: Mapping) -> bool:
+    """Whether the call's arguments carry the old text and the new, beside the path they name (#651): a tool whose
+    name reads as a read but that declares both replaces the file its path names, as `write_file` writes one."""
+    return any(args.get(a) and args.get(b) for a, b in _REPLACE_ARG_KEYS)
 
 
 _KEYCHAIN = re.compile(r"\bsecurity\s+(?:-\S+\s+)*(find-generic-password|find-internet-password|"
@@ -7085,12 +7460,15 @@ def _args_of(action: Any) -> tuple[str, dict]:
 def _shell_call(cmd: str) -> Classification:
     """A shell tool's line, as classify_shell reads it, run in the call's own folder argument (#311). The line keeps
     its own classification: category, target, axes, text and parts. When it reads a secret store from that folder
-    (_tool_folder_read), a credentials part is added for the read, weighed as a `cd` form's (_weigh). decide's
-    credentials floor then asks, and no_grant keeps a standing grant off the call, while the line's own deny
-    entries, rules, matrix cell, posting checks and reserved entries still apply. Before #311 a relative word that
-    resolves into a store from the folder made the whole call credentials (#209); that reading is kept beside the
-    line (``also``), and decide keeps the stricter of the two. One check per call, on the whole line: a nested line
-    is read in its own folders only."""
+    (_tool_folder_read), a credentials part is added for the read, weighed as a `cd` form's (_weigh). It keeps no
+    own text, and carries a `_StandIn` for `cd <folder>` among its setters (#516), so a rule keyed on `command`
+    that would lower the line names the folder, as it names the `cd` in the cd form; naming the folder lifts no
+    deny of the part's. decide's credentials floor then asks, and no_grant keeps a standing grant off the call,
+    while the line's own
+    deny entries, rules, matrix cell, posting checks and reserved entries still apply. Before #311 a relative word
+    that resolves into a store from the folder made the whole call credentials (#209); that reading is kept beside
+    the line (``also``), and decide keeps the stricter of the two. One check per call, on the whole line: a nested
+    line is read in its own folders only."""
     scope = _scope.get()
     if scope is None or not scope.tool_cwds:
         return classify_shell(cmd)
@@ -7102,7 +7480,7 @@ def _shell_call(cmd: str) -> Classification:
         here = ""
     # joined, not folded: the shell runs in `sdir/../keys` through the link sdir, as the kernel reads it; and folded
     # too, as #209 read the folder before #311, so that reading never loses a store
-    mine = [g for f in folders for g in (os.path.join(here, f), os.path.normpath(os.path.join(here, f)))]
+    mine = [g for f, _ in folders for g in (os.path.join(here, f), os.path.normpath(os.path.join(here, f)))]
     wide = replace(scope, cwds=tuple(dict.fromkeys([*scope.cwds, *mine])))
     token, memo = _scope.set(wide), _shell_seen.set(seen)
     try:
@@ -7125,11 +7503,16 @@ def _shell_call(cmd: str) -> Classification:
     top = _most_severe(p for p in _each_part(c) if p.category != "credentials") if c.category == "credentials" else None
     if new and top is not None:                 # first, as main reads the line before its parts
         c.parts = [replace(top, parts=[], own=None, line_copy=True), *c.parts]
-    for summary, target in new:
+    for summary, target, cd in new:
+        # The part keeps no own text, as a `cd` form's parts have (#394), so no rule keyed on `command` lifts its
+        # deny: _override_deny passes every such rule over for it. It carries a `_StandIn` for `cd <folder>` (#516)
+        # among its setters, the folder as the call spells it, so the line is not one text for _one_text and the
+        # #394 pass runs: a rule that would lower the line names the folder, as it names the `cd` in the cd form,
+        # and one that names only the line's text is passed over. The read keeps its own weight, and a heavier
+        # command on the line is a credentials part with that weight beside it, as beside a secret line (#468). So
+        # each matrix cell or rule the cd form's parts meet is met.
         part = _make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
-                     signals=["secret store"])
-        # the read keeps its own weight, and a heavier command on the line is a credentials part with that weight
-        # beside it, as beside a secret line (#468). So each matrix cell or rule the cd form's parts meet is met.
+                     setters=[_StandIn(cd)], signals=["secret store"])
         c.parts = [*c.parts, _weigh(part, c, cmd)]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     return c
@@ -7148,16 +7531,21 @@ def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
         _brace_left.reset(left)
 
 
-def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification | None) -> list[tuple[str, str]]:
-    """How a shell call reads a secret store from its own folder argument (#311), as [(summary, target)], or []. In
-    this order: the folder is itself a store, as a `cd` word is (a link resolved, a glob that could name one); a
-    relative word resolves into one from it (#209; ``read`` is that reading's credentials part); and the line reads
-    a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192): the words as written first, then
-    with #320's forms, whose name is a second read when it is another target, as on a cd line. The target is the
-    folder, or the folder joined with the name. A folder in a repo's own .claude worktrees, commands, agents or
-    skills is the repo's, not a store (_repo_claude), so only a word that resolves into a store counts there."""
+def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...],
+                      read: Classification | None) -> list[tuple[str, str, str]]:
+    """How a shell call reads a secret store from its own folder argument (#311), as [(summary, target, cd)], or
+    []. In this order: the folder is itself a store, as a `cd` word is (a link resolved, a glob that could name
+    one); a relative word resolves into one from it (#209; ``read`` is that reading's credentials part); and the
+    line reads a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192): the words as written
+    first, then with #320's forms, whose name is a second read when it is another target, as on a cd line. The
+    target is the folder, or the folder joined with the name. ``folders`` holds each folder as the call spells it
+    beside its joined path, and the third word is the `cd` the part's stand-in setter names (#516): `cd <folder>`,
+    the folder as the call spells it, said once.
+    A folder in a repo's own .claude worktrees, commands, agents or skills is the repo's, not a store (_repo_claude),
+    so only a word that resolves into a store counts there."""
+    spell = dict(folders)                       # the folder as the call spells it, for the part's `cd` (#516)
     forms: list[tuple[str, str]] = []           # (the folder as the call gives it, a form to check)
-    for f in folders:
+    for f in spell:
         x = _expand_text(f)
         try:
             real = os.path.realpath(x) if os.path.isabs(x) and not _GLOBBY.search(x) else ""
@@ -7169,21 +7557,24 @@ def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification |
         forms += [(f, g) for g in [*linked, f] if not _repo_claude(g)]
     for f, g in forms:
         if is_sensitive_path(g) or _glob_hits_secret(g):
-            return [(f"shell runs in {f}", g)]
-    out: list[tuple[str, str]] = []
+            return [(f"shell runs in {f}", g, f"cd {spell[f]}")]
+    out: list[tuple[str, str, str]] = []
     if read is not None:                        # the target: the name in the folder it resolves into a store from
-        where = folders[0] if len(folders) == 1 else " or ".join(folders)
-        paths = [_in_folder(_expand_text(f), read.target) for f in folders]
+        where = folders[0][0] if len(folders) == 1 else " or ".join(f for f, _ in folders)
+        paths = [_in_folder(_expand_text(f), read.target) for f, _ in folders]
         linked = [_in_folder(g, read.target) for f, g in forms if g != f]   # `..` read past the link, as the kernel
-        out.append((f"{read.summary} in {where}", next((p for p in linked + paths if is_sensitive_path(p)), paths[0])))
+        cds = [f"cd {raw}" for _, raw in folders]
+        out.append((f"{read.summary} in {where}",
+                    next((p for p in linked + paths if is_sensitive_path(p)), paths[0]),
+                    cds[0] if len(cds) == 1 else " or ".join(cds)))
     cmds, subs, _ = _parse(cmd or "")           # #320: also beside ``read``, which only its forms may have made
     walked: list = []
     for wide in (False, True):                  # main's reading first, #320's beside it
         for f, g in forms:
             if found := _cd_store_read(cmds, subs, wide, walked, tools=(g,)):
                 target = _in_folder(_expand_text(g), found)
-                if all(target != t for _, t in out):
-                    out.append((f"shell touching {found} in {f}", target))
+                if all(target != t for _, t, *_ in out):
+                    out.append((f"shell touching {found} in {f}", target, f"cd {spell[f]}"))
                 break
     return out
 
@@ -7211,7 +7602,7 @@ def _repo_claude(folder: str) -> bool:
         return False
     n = len(parts) - parts[::-1].index(".claude") + 1       # the first part below .claude/<worktrees...>
     singles, pairs, _ = _store_hints()
-    return not any(s in singles or (a, s) in pairs for a, s in zip(parts[n - 1:], parts[n:]))
+    return not any(_fold(s) in singles or (_fold(a), _fold(s)) in pairs for a, s in zip(parts[n - 1:], parts[n:]))
 
 
 def _store_part(path: str, summary: str) -> Classification:
@@ -7366,8 +7757,12 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
             cat = "credentials"
         stores: list[str] = []
         # A tool named with a read verb that writes what it took where its path arguments say (`download_file`)
-        # reads the store as a write's too (#494); a plain read of the store stays a read.
-        fetch = own in ("read", "web_read") and not _FETCH_WRITE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+        # reads the store as a write's too (#494); a name that says it replaces, patches or edits the file counts
+        # with them, and so do arguments that carry the old and new text beside a path (#651): a `search_replace`
+        # or `find_and_replace` of the seat, a policy file or config.json writes it, as `write_file` does. A plain
+        # read of the store stays a read.
+        fetch = own in ("read", "web_read") and (not _FETCH_WRITE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+                                                 or _replace_args(args))
         if own not in ("read", "web_read") or fetch:
             # A delete reaches the store through a folder that holds it, as `rm` does, and so does a move or
             # rename, as `mv` does, with or without a secret beside it (#494). A tool whose camelCase name says so
@@ -7732,8 +8127,9 @@ def _line_matcher(c: Classification) -> Callable[[str], bool]:
 def _one_text(c: Classification) -> bool:
     """Whether no two parts of the line have different own texts (#394): a line of one simple command, beside the
     parts the gate made for it with no own text (a secret path it names in `cat ~/.kube/config`, a string literal in
-    its code). A rule that matches such a line as before names its one command, so the line is decided as before,
-    as a line of one part is."""
+    its code). The part the call's own folder added carries a `_StandIn` for `cd <folder>` among its setters (#516),
+    so a line with it is not one text: the #394 pass runs, and a rule that would lower the line names the folder, as
+    it names the `cd` in the cd form; naming the folder lifts no deny of the part's."""
     texts = {t for p in _each_part(c) for t in (p.own, *p.setters) if t is not None}
     return len(texts) < 2
 
@@ -7930,7 +8326,10 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     decided as before, and that decision stands unless the other is stricter, reason and all. That pass reads rules
     and patterns the decision before never reached (a regex past the first match, a rule after the one skipped), so
     when it fails, the line is decided as before, which then fails only where it failed before. A line of one simple
-    command, beside parts the gate made for it, is decided as before (_one_text).
+    command, beside parts the gate made for it, is decided as before (_one_text) — unless the part the call's own
+    folder added is on it. That part carries a `_StandIn` for `cd <folder>` among its setters (#516), so the line
+    goes through the own text pass: a rule that names only the command is passed over, and the part's matrix deny
+    stands, as it does on the cd form, whose parts the `cd`'s own text makes two texts of.
 
     A line the gate reads more than one way is decided on each reading first (readings): the shell call as read
     before #311 (``also``), the gh line as read before gh's subcommand search (``floor``, #399) and that line's own

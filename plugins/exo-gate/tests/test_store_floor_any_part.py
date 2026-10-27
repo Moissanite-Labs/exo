@@ -414,7 +414,25 @@ def test_a_target_entry_on_a_later_store_path_matches(monkeypatch, action, store
     assert (d.outcome, d.rule) == ("deny", "deny"), (action, d)
 
 
+def test_two_redirect_targets_each_become_a_part(monkeypatch):
+    # A redirect line can carry two store targets now: the scan keeps every redirect hit, so a deny on the
+    # second reaches the line, as it does for the file tools above (#611 review, #614).
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    c = gate.classify({"tool": "terminal", "args": {"command":
+                       "echo x > ~/.exo/policies/a.yaml 2> ~/.exo/policies/gates.yaml"}})
+    targets = [p.target for p in gate._each_part(c) if p.category == "store_write"]
+    assert "~/.exo/policies/gates.yaml" in targets, (c, targets)
+    assert gate.decide(c).outcome == "ask"
+    d = gate.decide(c, gate.normalize_policies({"gates": {"deny": ["target:*/gates.yaml"]}}))
+    assert (d.outcome, d.rule) == ("deny", "deny"), (c, d)
+    # the first target alone keeps the floor's ask, as before
+    c = gate.classify({"tool": "terminal", "args": {"command":
+                       "echo x > ~/.exo/policies/a.yaml 2> ~/.exo/policies/b.yaml"}})
+    assert gate.decide(c, gate.normalize_policies({"gates": {"deny": ["target:*/gates.yaml"]}})).outcome == "ask", c
+
+
 def test_a_later_store_path_changes_no_call_that_named_one_path(monkeypatch):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
     monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
     pol = gate.normalize_policies({"gates": {"deny": ["target:*/gates.yaml"]}})
     # the first path alone: no entry on it, so the floor asks as before

@@ -69,7 +69,11 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 
 **Terminal (`exo tui`).** Type a message and press Enter. Options: `--resume` continues the newest thread
 with messages (each launch opens a thread, so it skips the empty ones), `--session ID` continues one, `--seat NAME`
-picks the seat, `--title TEXT` names a new thread. Keys:
+picks the seat, `--title TEXT` names a new thread, and `--cwd DIRECTORY` chooses the working directory for new
+threads. For a local connection, a new thread defaults to this terminal window's current directory, including
+when it joins a core whose seat has another default. A resumed thread keeps its saved directory. With `--url`,
+`--cwd` names a directory on the server; `@file` completion and attachments still use the client's local directory.
+Keys:
 
 | Key or prefix | Does |
 |---|---|
@@ -126,6 +130,7 @@ The technical reference, with arguments and where each command is implemented, i
 | Command | Does |
 |---|---|
 | `/new` | Start a new thread: a fresh focus, the same memory. |
+| `/tab [directory]` | Open another terminal window with a new thread in that directory, leaving this thread open. With no directory, use this thread's working directory. |
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
@@ -356,7 +361,9 @@ What the gate asks about, and why:
   (#161, fixed in #198), and a pipe, here-string or heredoc into the shell `sudo -s` or `sudo -i` starts
   (#491). The gate finds programs only in the shell forms its parser reads. A command inside a
   parameter expansion such as `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in
-  #158). A command nested more than four levels deep
+  #158). A `${name@P}` prompt transformation runs the value's command substitutions and parameters, so
+  `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` asks (#579), and `p=x; echo ${p@P}` stays a read when the line
+  assigns `p` a literal value with no `$`, backtick or backslash. A command nested more than four levels deep
   (`bash -c` inside `bash -c` and so on) or an `ssh` or `mosh` chain more than four hops deep (#153) asks, even
   when your policy denies it (#137).
 - **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
@@ -403,7 +410,8 @@ What the gate asks about, and why:
   lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
-  This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length
+  A standing "always" grant covers a call only where the old and the new policy would both run it (#586). This
+  covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length
   (or 0) applies at once. A seat you add waits for `/gate accept`.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
   act on a public place. Reading and local edits do not. Your `policies/gates.yaml` can change any cell.
@@ -444,7 +452,8 @@ with the exact command. `/permissions` shows the counts. `/permissions ask` turn
 Only you can turn it on, from your own window or page. The agent, a tool it runs, a peer or a bus message cannot. It
 lasts until the core stops; the next start asks again unless you give the flag again. To make it the default for a
 seat, put `[permissions] mode = "bypass"` in the seat file (`docs/SEATS.md`); changing a seat file always asks you.
-On an Exo OS installation (a required tool executor) bypass is not available.
+On an Exo OS installation (a required tool executor) bypass is not available. It is your consent, and it covers only
+your own turns: a turn a peer, a bus wake, a job notice or a local caller started asks as if bypass were off.
 
 Details: `docs/GATE.md`.
 

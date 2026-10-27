@@ -182,11 +182,14 @@ WEIGHED = [
 @pytest.mark.parametrize("gates", [
     "matrix:\n  irreversible: {private: deny}\n",
     "rules:\n  - match: {category: credentials, reversibility: irreversible}\n    decision: deny\n",
-], ids=["matrix", "rule"])
+    "matrix:\n  irreversible: {private: deny}\nrules:\n  - match: {command: 'git push'}\n    decision: allow\n",
+], ids=["matrix", "rule", "rule-on-the-line"])
 @pytest.mark.parametrize("tool, args", WEIGHED)
 def test_an_irreversible_deny_reaches_the_folders_part(tmp_path, home, monkeypatch, gates, tool, args):
     """The store read from the folder weighs as its `cd` form's does: the line's irreversible command is a
-    credentials part beside it. So these are blocked as `cd ~/.kube && ...` is, where they only asked before."""
+    credentials part beside it. So these are blocked as `cd ~/.kube && ...` is, where they only asked before. An
+    allow rule on the line's text does not lift the part's matrix deny: the part keeps no own text and carries the
+    `cd <folder>` stand-in among its setters, which the rule does not name (#516)."""
     _, ctx = make_gate(_seat_answers_credentials(tmp_path, home, monkeypatch, gates))
     assert call(ctx, tool, args)["action"] == "block"
     plain = {k: v for k, v in args.items() if k not in ("cwd", "workdir")}

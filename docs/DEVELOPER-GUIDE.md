@@ -261,9 +261,11 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
 `on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. The tool hooks (`pre_tool_call`,
 `post_tool_call`, `transform_tool_result`) get `tool_name`, `args`, `session_id`, `task_id`, `tool_call_id`,
-`turn_id`, `risk` and `cwd`, the session's working folder from which relative paths in `args` resolve (the gate
-reads them there, #209). Each callback gets only the keywords it declares, or all of them when it takes
-`**kwargs`, so a key added later does not break an older callback. A failing callback is logged and
+`turn_id`, `author` (who started the turn, D-040: `principal` or `principal:<label>`, `local`, `peer:<name>`,
+`bus:<seat>`, `job`, `schedule`, `delegate`, `system`; empty from an older caller), `risk` and `cwd`, the
+session's working folder from which relative paths in `args` resolve (the gate reads them there, #209). Each
+callback gets only the keywords it declares, or all of them when it takes `**kwargs`, so a key added later does
+not break an older callback. A failing callback is logged and
 skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
@@ -311,10 +313,15 @@ anything kept from the undone turns (D-041), including the text of each `on_comp
 `node.session` is the tree key). exo-context drops their pins and those nodes, then writes again each handoff
 that may quote them. Hermes's CLI and TUI tell only their memory provider about `/undo`, so exo-memory passes the
 notice on with `exo.host_undo.report(session)`. exo-context drops the last undone turn's pins in
-`on_host_undo(session)`, and those of the earlier turns of `/undo N` in the next `select_context`, from its
-`conversation_messages` (#389). A memory provider used beside exo-context in exo-memory's place can do the same. A
+`on_host_undo(session)`, records the undo with `exo.host_undo.pend(session, window)`, and those of the earlier
+turns of `/undo N` go in the next `select_context` of that session, from its `conversation_messages`, by
+`exo.host_undo.take(session)`: the record waits under the session, not under one engine, so the turn resolves it
+in whichever agent the host built then (#389, #580). A compression move carries the record into the child with
+`exo.host_undo.move(old, new)`. A memory provider used beside exo-context in exo-memory's place can do the same. A
 listener calls `exo.host_undo.turn(session)` on each turn it sees, and acts on a notice only when its last number is
-`exo.host_undo.latest(session)`, so an old engine left behind by an agent rebuild stays out of it.
+`exo.host_undo.latest(session)`, so an old engine left behind by an agent rebuild stays out of it. A host with no
+agent left reports `exo.host_undo.report(session)` itself, which reaches the engines still registered for the
+session (#580).
 
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat
