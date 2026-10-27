@@ -31,10 +31,45 @@ def _content(m: Message) -> str | list[dict[str, Any]]:
     return parts
 
 
-def convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
+
+def _reasoning_field(m: Message) -> str:
+    return m.meta.get("_reasoning_field") or "reasoning_content"
+
+
+def _provider_of(identity: Any) -> str | None:
+    if identity is None:
+        return None
+    s = str(identity)
+    return s.split(":", 1)[0] if ":" in s else s
+
+
+def _origin_ok(origin: Any, current: Any) -> bool:
+    """Replay reasoning only within the same provider (and route, when both are known)."""
+    if origin is None or current is None:
+        return True
+    if _provider_of(origin) != _provider_of(current):
+        return False
+    if ":" in str(origin) and ":" in str(current):
+        if str(origin).split(":", 1)[1] != str(current).split(":", 1)[1]:
+            return False
+    return True
+
+
+def convert_messages(messages: list[Message], keep_reasoning: Any = True, **opts: Any) -> list[dict[str, Any]]:
     """Exo messages to Chat Completions messages. A tool message with several results
-    becomes one ``role: tool`` message per result. Reasoning is not replayed: strict
-    providers 400 on unknown keys."""
+    becomes one ``role: tool`` message per result. Reasoning is replayed on assistant
+    tool-call turns when ``keep_reasoning`` is not False and the turn originated on
+    the same provider/route as the current request; strict providers that never
+    emitted reasoning are unaffected because no field is added then."""
+    for key in ("keep_thinking", "replay_reasoning", "include_reasoning"):
+        if key in opts:
+            keep_reasoning = opts.pop(key)
+    current = None
+    for key in ("model", "current_model", "provider", "current_provider", "route", "current_route"):
+        if opts.get(key) is not None:
+            current = opts.pop(key)
+            break
+
     out: list[dict[str, Any]] = []
     for m in messages:
         if m.role == "tool":
@@ -43,10 +78,15 @@ def convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
                 out.append({"role": "tool", "tool_call_id": r.call_id, "content": text})
         elif m.role == "assistant":
             msg: dict[str, Any] = {"role": "assistant", "content": m.text() or None}
+            reasoning_text = "".join(p.text for p in m.content if p.type == "reasoning")
             if m.tool_calls:
                 msg["tool_calls"] = [{"id": tc.id, "type": "function",
                                       "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)}}
                                      for tc in m.tool_calls]
+                origin = (m.meta.get("model") or m.meta.get("provider") or m.meta.get("route")
+                          or m.meta.get("origin"))
+                if (keep_reasoning is not False and reasoning_text and _origin_ok(origin, current)):
+                    msg[_reasoning_field(m)] = reasoning_text
             elif msg["content"] is None:
                 msg["content"] = ""
             out.append(msg)
@@ -98,7 +138,14 @@ class OpenAIChatProvider(HttpTransport):
         return text
 
     def build_body(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": opts.get("model") or self.model or "", "messages": convert_messages(messages),
+        keep = opts.pop("replay_reasoning", opts.pop("keep_reasoning", None))
+        if keep is None:
+            keep = True
+        current = self.name
+        model = opts.get("model") or self.model
+        if model:
+            current = f"{self.name}:{model}"
+        body: dict[str, Any] = {"model": model or "", "messages": convert_messages(messages, keep_reasoning=keep, model=current),
                                 "stream": True, "stream_options": {"include_usage": True}}
         if tools:
             body["tools"] = convert_tools(tools)
@@ -150,8 +197,13 @@ class OpenAIChatProvider(HttpTransport):
         for choice in d.get("choices") or []:
             delta = choice.get("delta") or {}
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-            if isinstance(reasoning, str) and (ev := st.add_text("reasoning", reasoning)) is not None:
-                yield ev
+            if isinstance(reasoning, str):
+                if "reasoning_content" in delta:
+                    st.meta["_reasoning_field"] = "reasoning_content"
+                elif "reasoning" in delta:
+                    st.meta["_reasoning_field"] = "reasoning"
+                if (ev := st.add_text("reasoning", reasoning)) is not None:
+                    yield ev
             if isinstance(delta.get("content"), str) and (ev := st.add_text("text", delta["content"])) is not None:
                 yield ev
             pending: dict[int, dict] = st.meta.setdefault("_tools", {})
