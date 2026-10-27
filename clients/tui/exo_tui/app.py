@@ -1427,6 +1427,10 @@ class ExoApp(App):
                     return
             cmd = rs.new_command(cwd)
             result = await asyncio.to_thread(rs.open_tab, cmd)
+            dropped = rs.dropped_permission_flags()
+            if dropped:
+                self.note(f"the new window runs without {' '.join(dropped)}: it opens a fresh session, "
+                          "and a fresh session asks for each action", "warn")
             self.note("opened a new conversation window" if result == "opened" else "open a new window and run: " + result)
         elif name == "intro":
             await self.intro("manual")

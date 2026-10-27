@@ -19,6 +19,14 @@ from pathlib import Path
 
 Runner = Callable[[list[str]], Any]
 
+PERMISSION_FLAGS = ("--skip-permissions", "--dangerously-skip-permissions")
+
+
+def _matching(arg: str, flags: tuple[str, ...]) -> list[str]:
+    """The flags ``arg`` names, argparse abbreviation included (``--skip-perm`` names ``--skip-permissions``)."""
+    key = arg.split("=", 1)[0]
+    return [flag for flag in flags if key.startswith("--") and flag.startswith(key)]
+
 
 def _launch_command(env: dict[str, str], argv: list[str] | None) -> list[str]:
     base = shlex.split(env.get("EXO_RESTART_CMD", ""))
@@ -38,12 +46,27 @@ def _without_options(base: list[str], valued: tuple[str, ...], switches: tuple[s
             skip = False
             continue
         key = arg.split("=", 1)[0]
-        matches = [flag for flag in (*valued, *switches) if key.startswith("--") and flag.startswith(key)]
+        matches = _matching(arg, (*valued, *switches))
         if len(matches) == 1:
             skip = matches[0] in valued and "=" not in arg
         else:
             out.append(arg)
     return out
+
+
+def dropped_permission_flags(env: dict[str, str] | None = None, argv: list[str] | None = None) -> list[str]:
+    """Permission flags in the command ``new_command`` starts from, so these are the ones it strips.
+
+    The source is ``_launch_command``, the same one ``new_command`` uses: with ``EXO_RESTART_CMD`` set the
+    restart command is the source, not this process's ``sys.argv``.
+    """
+    base = _launch_command(os.environ if env is None else env, argv)
+    dropped: list[str] = []
+    for arg in base:
+        matches = _matching(arg, PERMISSION_FLAGS)
+        if len(matches) == 1 and matches[0] not in dropped:
+            dropped.append(matches[0])
+    return dropped
 
 
 def restart_command(session: str | None, env: dict[str, str] | None = None,

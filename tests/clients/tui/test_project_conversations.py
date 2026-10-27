@@ -198,3 +198,27 @@ def test_remote_tab_accepts_a_server_only_directory(tmp_path, monkeypatch):
             assert opened[0][-2:] == ['--cwd', '/server-only/project']
             assert app.files is local_files
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('restart_cmd, warned', [
+    ('exo-canary --skip-permissions', True),
+    ('exo-canary --dangerously-skip-permissions', True),
+    ('exo-canary', False),
+])
+def test_tab_warns_when_the_new_window_drops_a_permission_flag(tmp_path, monkeypatch, restart_cmd, warned):
+    # The new window starts a fresh session, so it asks for each action even though this one does not.
+    async def exercise():
+        eng = make_engine(tmp_path)
+        app = ExoApp(FakeServerClient(eng), seat='tester', cwd=str(tmp_path))
+        async with app.run_test(size=(120, 40)):
+            await asyncio.wait_for(app.ready.wait(), 5)
+            monkeypatch.setenv('EXO_RESTART_CMD', restart_cmd)
+            opened = []
+            monkeypatch.setattr('exo_tui.restart.open_tab', lambda cmd: opened.append(cmd) or 'opened')
+            await app.slash('tab', str(tmp_path))
+            assert opened and opened[0][-2:] == ['--cwd', str(tmp_path)]
+            assert all('--skip-permissions' not in a and '--dangerously' not in a for a in opened[0])
+            text = app.transcript_text()
+            assert 'opened a new conversation window' in text
+            assert ('runs without' in text) is warned
+    asyncio.run(exercise())
