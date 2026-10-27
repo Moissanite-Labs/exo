@@ -85,11 +85,13 @@ CATEGORIES: dict[str, tuple[str, str, bool]] = {
     # unknown program) asks; a write to the Exo store asks the principal every time and is never granted.
     "opaque_exec":       ("costly", "private", False),
     "store_write":       ("costly", "private", False),
+    # #331: a write into a trusted bin folder plants a program that runs under a trusted name.
+    "bin_write":         ("costly", "private", False),
 }
 
 # Categories no standing grant covers and only the principal answers (D-033 terms, every time).
-PRINCIPAL_ONLY = ("store_write",)
-NO_GRANT = ("credentials", "store_write")
+PRINCIPAL_ONLY = ("store_write", "bin_write")
+NO_GRANT = ("credentials", "store_write", "bin_write")
 
 # Categories whose outbound text is checked against the posting rules by default.
 OUTBOUND = ("github_post", "message_send", "email_send", "social_post", "web_post", "publish")
@@ -3227,6 +3229,102 @@ def _trusted_path(prog: str) -> bool:
     return p.startswith("/") and os.path.dirname(os.path.normpath(p)) in _SYSTEM_BIN
 
 
+def _bin_word(path: str) -> bool:
+    """True when ``path`` names a trusted bin folder or a file directly inside one: the write side of
+    _trusted_path's check (#331). Those folders are user-writable on a Homebrew install, so a write
+    there plants a program that later runs under a trusted name. A subfolder is not one, and neither
+    is a user's own bin folder. A leading `//` is folded first: normpath keeps it, and `//opt/...`
+    would otherwise miss every folder."""
+    p = _expand_text(path).strip().replace("\\", "/")
+    if not p.startswith("/"):
+        return False                     # relative: the caller joins it to a folder first
+    p = os.path.normpath("/" + p.lstrip("/"))
+    return p in _SYSTEM_BIN or os.path.dirname(p) in _SYSTEM_BIN
+
+
+def _bin_cwd_hit(path: str) -> list[str]:
+    """[the folder] when ``path`` is a trusted bin folder or an ancestor of one (_shell_hits' find for
+    cd targets, #331): a relative name after the cd lands in the folder, or in the bin folder below
+    the ancestor."""
+    p = _expand_text(path).strip().replace("\\", "/")
+    if not p.startswith("/"):
+        return []
+    p = os.path.normpath("/" + p.lstrip("/"))
+    if p in _SYSTEM_BIN or any(b == p or b.startswith(p.rstrip("/") + "/") for b in _SYSTEM_BIN):
+        return [p]
+    return []
+
+
+def _unknown_bin(w: _Word, seen: dict, inside: bool = False) -> bool:
+    """Is shell word ``w`` a bin path (``inside``: a bin folder or one above it) when each expansion in
+    it that the gate cannot spell out prints what _unknown_forms reads (#331, as _unknown_store does
+    for the store)? `$HOMEBREW_PREFIX/bin/rg` reads as `/bin/rg` with the variable empty, which is
+    one. A form with no named part (`$D`) is not one."""
+    src = w.raw.replace("\\\n", "")
+    if "$" not in src and "`" not in src:
+        return False
+    key = ("unknown-bin", src)
+    if key not in seen:
+        alts = _brace_words(src, pool=2) if w.brace else [src]
+        seen[key] = None if alts is None else list(dict.fromkeys(
+            p for a in alts[1:] or alts for e in _unknown_words(a) for p in [e] + re.split(r"[:=,]", e) if p))
+    pieces = seen[key]
+    if pieces is None:
+        return True
+    return any((_bin_cwd_hit(p) if inside else _bin_word(p)) for p in pieces)
+
+
+def _unknown_bin_folder(w: _Word, seen: dict) -> str:
+    """The first folder an unknown form of ``w`` names that is a bin folder or one above it, or ""
+    (#331, for cd targets: `$HOMEBREW_PREFIX/bin` reads as `/bin`)."""
+    src = w.raw.replace("\\\n", "")
+    if "$" not in src and "`" not in src:
+        return ""
+    key = ("unknown-bin", src)
+    if key not in seen:
+        alts = _brace_words(src, pool=2) if w.brace else [src]
+        seen[key] = None if alts is None else list(dict.fromkeys(
+            p for a in alts[1:] or alts for e in _unknown_words(a) for p in [e] + re.split(r"[:=,]", e) if p))
+    pieces = seen[key]
+    if pieces is None:
+        return ""
+    for p in pieces:
+        if (hit := _bin_cwd_hit(p)):
+            return hit[0]
+    return ""
+
+
+def _bin_cd_folder(target: _Word, ctx: dict) -> str | None:
+    """The folder a `cd`/`pushd` into ``target`` leaves the line in (#331), or None when the gate
+    cannot pin it, or "?" past the brace cap. A bin folder or an ancestor of one is kept as
+    written, so a relative name after it resolves into the bin folder; any other absolute folder
+    is kept too, so a relative name after it resolves outside one; a relative target joins the
+    folder the line is already in. A later cd elsewhere replaces it, so `cd /opt/homebrew/bin &&
+    cd /tmp` leaves the line in /tmp. A target with no named part (`cd $D`) is unknown; `cd -`
+    never reaches here, the cd branch swaps it with the previous folder."""
+    seen = ctx.setdefault("bin_braces", {})
+    hits = _shell_hits(target, seen, "dir", _bin_cwd_hit, pool=2)
+    if hits:
+        return hits[0]
+    if hits is None:
+        return "?"
+    if (folder := _unknown_bin_folder(target, seen)):
+        return folder
+    text = _expand_text(target.text).strip()
+    if not text or text == "-":
+        return None
+    if "$" in text or "`" in text:
+        # A part the gate cannot spell out is not a literal folder name: joining it onto the
+        # current folder would invent `/opt/homebrew/bin/$D`, which no real cd reaches.
+        return None
+    if text.startswith("/"):
+        return os.path.normpath("/" + text.lstrip("/"))
+    here = ctx.get("bin_cwd")
+    if isinstance(here, str) and here.startswith("/"):
+        return os.path.normpath(os.path.join(here, text))
+    return None
+
+
 def _expands(w: _Word) -> bool:
     """Whether bash may turn a word into other text or into several words (#208): a `$` expansion or backticks,
     a brace expansion (`Zo{r,}k`, `{1..3}`), a glob character, or a leading `~`. `{owner}` with no comma or
@@ -3735,6 +3833,13 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         c = _make("store_write", summary=what[:120], target=t, link=t, command=cmd)
         c.signals.append("exo store")
         parts.append(c)
+    for t in _bin_touch(k, words, parts, ctx):
+        # #331: a write into a trusted bin folder plants a program under a trusted name. The part
+        # sits beside the command's own parts, so a deny, reserved entry, matrix cell or rule on
+        # the call's own category still holds, as for a store write (#435, #448).
+        c = _make("bin_write", summary=f"write to a trusted bin folder: {t}"[:120], target=t, link=t, command=cmd)
+        c.signals.append("trusted bin")
+        parts.append(c)
     if any(w.locale for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]):
         # The words are classified as decoded, so category, target and vetoes still see them, but a message
         # catalog can replace them: the indirection signal asks unless opaque_exec is named.
@@ -3853,6 +3958,45 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
                 ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
+        # #331: the folder the line is in after the cd, replaced by every later cd, so a relative
+        # write after it resolves where bash puts it, and a cd out stops it counting. `cd -` swaps
+        # with the previous folder, as bash swaps PWD and OLDPWD, and a bare `pushd` swaps with it
+        # too (the top two stack entries, which is the same swap for a stack of two). A cd the gate
+        # cannot pin keeps the previous folder, failing closed. A lone `-` is an operand, not an
+        # option, and `--` ends the options, so both spellings of `cd -` swap.
+        prev = ctx.get("bin_cwd")
+        dash = False
+        j = 1
+        while j < len(words):
+            t = words[j].text
+            if t == "--":
+                dash = j + 1 < len(words) and words[j + 1].text == "-"
+                break
+            if t.startswith("-") and len(t) > 1:
+                j += 1
+                continue
+            dash = t == "-"
+            break
+        if dash:
+            if isinstance(ctx.get("bin_old"), str):
+                ctx["bin_cwd"], ctx["bin_old"] = ctx["bin_old"], prev
+            else:
+                # No previous folder was ever tracked, so the line started in the session folder:
+                # `cd -` leaves the bin folder for it, and a later `cd -` swaps back.
+                ctx["bin_cwd"], ctx["bin_old"] = None, prev
+        elif target is None:
+            if prog == "pushd" and len(words) == 1 and isinstance(ctx.get("bin_old"), str):
+                ctx["bin_cwd"], ctx["bin_old"] = ctx["bin_old"], prev
+            elif prog == "cd":
+                ctx["bin_old"] = prev
+                ctx["bin_cwd"] = _home()
+            # a bare pushd with no previous folder errors in bash, so the folder stays, as does a
+            # pushd whose only operands rotate the stack (`pushd +N`/`-N`).
+        else:
+            new = _bin_cd_folder(target, ctx)
+            ctx["bin_old"] = prev
+            if new is not None:
+                ctx["bin_cwd"] = new
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -4751,19 +4895,21 @@ def _ln_targets(argv: list[str]) -> list[str]:
 _COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
 
 
-def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str]]) -> list[str] | None:
+def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str]],
+                pool: int = 1) -> list[str] | None:
     """What ``find`` gives on the words bash makes of shell word ``w`` for a store check (#224): its text, plus its
     source spelling brace-expanded and then dequoted, as _shell_credential_hit reads it. A word the gate built (an
     `ln` target) has no source spelling and keeps its text. ``seen`` keeps each spelling's words and each check's
     hits on it for the line, so a spelling is expanded and charged once and each check runs once on it. A later
     command that repeats the spelling gets the same hits, so its own store part stays (#611 follow-up: [] there
     gave its write to the first command's text). [] when a check covering ``check`` found none; None past the cap,
-    which callers count as a hit."""
+    which callers count as a hit. ``pool`` charges the brace budget of that check's family (1 the store's,
+    2 the trusted-bin's, #331); callers with their own ``seen`` dict never share a check's hits."""
     src = w.raw.replace("\\\n", "")
     if "{" not in src:
         return find(w.text)
     if src not in seen:
-        words = _brace_words(src, pool=1)
+        words = _brace_words(src, pool=pool)
         seen[src] = (None if words is None else list(dict.fromkeys([w.text] + [d for e in words[1:] for d in _dequote(e)])),
                      {})
     words, done = seen[src]
@@ -4887,6 +5033,303 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     return list(dict.fromkeys(hits))
 
 
+def _opt_scan(argv: list[str], shorts: str, longs: tuple[str, ...]) -> tuple[list[str], dict[str, list[str]], set[str]]:
+    """A getopt-aware scan of ``argv`` (#331): (operands, {option: values}, flags seen). ``shorts``
+    names the short options that take a value; ``longs`` the long ones that take a value (exact
+    match, except --target-directory, which any unique prefix names, as _ln_targets does, and
+    --suffix, which needs more than `--s`). A value is the rest of its cluster, an `=value`, or
+    the next word. `--` ends the options. An unknown short option is a flag and an unknown long
+    option is skipped as a flag, so a separate value after one reads as an operand: only options
+    that take a value are listed, so a table must name every one the program has, or a value
+    after the destination is read as the destination (`install ... -m 755`, `rsync ... -e ssh`)."""
+    operands: list[str] = []
+    vals: dict[str, list[str]] = {}
+    flags: set[str] = set()
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        i += 1
+        if a == "--":
+            operands += argv[i:]
+            break
+        if a.startswith("--"):
+            name, eq, val = a.partition("=")
+            opt = ""
+            if name[2:] in longs:
+                opt = name[2:]
+            elif "--target-directory".startswith(name):
+                opt = "target-directory"
+            elif len(name) > 3 and "--suffix".startswith(name):
+                opt = "suffix"
+            if opt:
+                if eq:
+                    vals.setdefault(opt, []).append(val)
+                elif i < len(argv):
+                    vals.setdefault(opt, []).append(argv[i])
+                    i += 1
+            else:
+                flags.add(name[2:])
+            continue
+        if a.startswith("-") and a != "-":
+            j = 1
+            while j < len(a):
+                ch = a[j]
+                if ch in shorts:
+                    if j + 1 < len(a):
+                        vals.setdefault(ch, []).append(a[j + 1:])
+                    elif i < len(argv):
+                        vals.setdefault(ch, []).append(argv[i])
+                        i += 1
+                    break
+                flags.add(ch)
+                j += 1
+            continue
+        operands.append(a)
+    return operands, vals, flags
+
+
+def _write_targets(argv: list[str], prog: str) -> list[str]:
+    """The paths a command writes, as strings, for the trusted-bin check (#331): copy, move and
+    install destinations, link names, download outputs, dd's of=, tee and truncate operands, sed -i
+    files, a compiler's -o. Reading a bin path is never one: only positions the command writes to
+    count, so `cat /usr/local/bin/x > /tmp/y`, `git config core.editor /usr/bin/vim` and copying
+    out of a bin folder stay reads. tar is not here: its -C folder and -f file need different
+    checks (a folder, or an ancestor of one, for -C), so _bin_touch reads them itself."""
+    if prog in ("cp", "mv"):
+        operands, vals, _ = _opt_scan(argv, "tZ" if prog == "cp" else "t", ("target-directory", "suffix"))
+        t = vals.get("t", []) + vals.get("target-directory", [])
+        return t if t else operands[-1:] if operands else []
+    if prog == "install":
+        operands, vals, flags = _opt_scan(argv, "gmtoS",
+                                          ("mode", "owner", "group", "target-directory", "suffix", "strip-program"))
+        if "d" in flags:                       # -d creates directories, not files in them
+            return []
+        t = vals.get("t", []) + vals.get("target-directory", [])
+        return t if t else operands[-1:] if operands else []
+    if prog == "rsync":
+        operands, _, _ = _opt_scan(argv, "BefMT", ("rsh", "rsync-path", "log-file", "log-file-format",
+            "password-file", "include-from", "exclude-from", "files-from", "filter", "exclude", "include",
+            "chmod", "usermap", "groupmap", "chown", "suffix", "backup-dir", "partial-dir", "compare-dest",
+            "copy-dest", "link-dest", "config", "address", "port", "sockopts", "timeout", "contimeout",
+            "bwlimit", "max-size", "min-size", "checksum-seed", "protocol", "outformat", "info", "debug",
+            "remote-option", "temp-dir", "early-input", "write-batch", "only-write-batch",
+            "compress-level", "block-size", "checksum-choice"))
+        return operands[-1:] if operands else []
+    if prog == "ln":
+        operands, vals, _ = _opt_scan(argv, "tS", ("target-directory", "suffix"))
+        out = list(_ln_targets(argv))
+        if not vals.get("t") and not vals.get("target-directory") and operands:
+            out.append(operands[-1])
+        return out
+    if prog == "curl":
+        _, vals, flags = _opt_scan(argv, "oD", ("output", "dump-header", "output-dir"))
+        out = vals.get("o", []) + vals.get("output", []) + vals.get("D", []) + vals.get("dump-header", [])
+        if "O" in flags or "remote-name" in flags:
+            out += vals.get("output-dir", [])
+        return out
+    if prog == "wget":
+        _, vals, _ = _opt_scan(argv, "oOeP", ("output-file", "output-document", "directory-prefix", "execute"))
+        return vals.get("o", []) + vals.get("O", []) + vals.get("P", []) + \
+            vals.get("output-file", []) + vals.get("output-document", []) + vals.get("directory-prefix", [])
+    if prog == "dd":
+        operands, _, _ = _opt_scan(argv, "", ())
+        return [a[3:] for a in operands if a.startswith("of=")]
+    if prog == "tee":
+        operands, _, _ = _opt_scan(argv, "", ())
+        return [a for a in operands if a != "-"]
+    if prog == "truncate":
+        operands, _, _ = _opt_scan(argv, "sr", ("size", "reference"))
+        return operands
+    if prog == "sed":
+        operands, vals, flags = _opt_scan(argv, "ef", ("expression", "file"))
+        if "i" not in flags and "in-place" not in flags:
+            return []
+        if vals.get("e") or vals.get("f") or vals.get("expression") or vals.get("file"):
+            return operands
+        return operands[1:]
+    if prog in ("gcc", "cc", "clang", "g++", "c++"):
+        _, vals, _ = _opt_scan(argv, "o", ("output",))
+        return vals.get("o", []) + vals.get("output", [])
+    return []
+
+
+def _bin_word_hit(x: str) -> list[str]:
+    """[x] when x is a bin path (_shell_hits' find for a write target)."""
+    return [x] if _bin_word(x) else []
+
+
+def _unknown_bin_folder_text(s: str) -> bool:
+    """Whether an unknown form of string ``s`` is a bin folder or one above it (#331, for tar -C
+    values, which are strings, not words)."""
+    if "$" not in s and "`" not in s:
+        return False
+    return any(_bin_cwd_hit(f) for f in _unknown_words(s))
+
+
+def _bin_here(k: _Cmd, ctx: dict) -> tuple[list[str], bool]:
+    """(folders, past_cap) a simple command writes relative names into (#331): an env or sudo
+    -C/--chdir on this command first, else the folder a cd on the line left it in, else the
+    session and tool folders the core passed (a shell tool's `cwd` runs the line there, #311).
+    ``past_cap`` is a cd past the brace cap, where a relative name fails closed."""
+    folders: list[str] = []
+    words = [w.text for w in k.words]
+    i = 0
+    while i < len(words) and (words[i] in _OPENERS or _ASSIGN.fullmatch(words[i])):
+        i += 1
+    while i < len(words):
+        base = words[i].rsplit("/", 1)[-1]
+        if base not in _PREFIXES:
+            break
+        i += 1
+        if base not in ("env", "sudo"):
+            takes = _PREFIXES[base]
+            while i < len(words) and words[i].startswith("-") and words[i] != "-":
+                f = words[i]
+                i += 1
+                if f in takes and i < len(words):
+                    i += 1
+            continue
+        takes = _PREFIXES[base]
+        while i < len(words) and words[i].startswith("-") and words[i] != "-":
+            word = words[i]
+            i += 1
+            opt, eq, val = word.partition("=")
+            if len(opt) >= (3 if base == "env" else 5) and "--chdir".startswith(opt):
+                opt = "--chdir"
+            c = next((j for j in range(1, len(word)) if "-" + word[j] in takes), 0)
+            if word[1:2] != "-" and len(word) > 2 and c:
+                opt, eq, val = "-" + word[c], word[c + 1:], word[c + 1:]
+            if not eq and (opt in takes or opt in _CHDIR_OPTS.get(base, ())) and i < len(words):
+                val, i = words[i], i + 1
+            if opt in _CHDIR_OPTS.get(base, ()):
+                if val.startswith("="):
+                    val = val[1:]
+                folders.append(val)
+                break
+        break
+    resolved: list[str] = []
+    for f in folders:
+        text = _expand_text(f).strip()
+        if text.startswith("/"):
+            resolved.append(os.path.normpath("/" + text.lstrip("/")))
+        else:
+            here = ctx.get("bin_cwd")
+            if isinstance(here, str) and here.startswith("/"):
+                resolved.append(os.path.normpath(os.path.join(here, text)))
+    here = ctx.get("bin_cwd")
+    if isinstance(here, str) and here.startswith("/"):
+        resolved.append(here)
+    scope = _scope.get()
+    if scope is not None:
+        resolved += [c for c in scope.cwds if c.startswith("/")]
+    return list(dict.fromkeys(resolved)), here == "?"
+
+
+def _bin_hit_word(w: _Word, seen: dict, folders: list[str], past_cap: bool) -> bool:
+    """Whether shell word ``w``, a write target, lands in a trusted bin folder (#331): its text
+    and brace expansions, its unknown forms, or joined to a folder the command runs in. Past the
+    brace cap counts, as a store check does."""
+    found = _shell_hits(w, seen, "target", _bin_word_hit, pool=2)
+    if found is None:
+        return True
+    if found:
+        return True
+    if _unknown_bin(w, seen):
+        return True
+    text = _expand_text(w.text).strip()
+    if text and not text.startswith("/"):
+        if past_cap:
+            return True
+        for folder in folders:
+            if _bin_word(os.path.join(folder, text)):
+                return True
+        if "$" in w.raw or "`" in w.raw:
+            for form in _unknown_words(w.raw):
+                if form and not form.startswith("/"):
+                    for folder in folders:
+                        if _bin_word(os.path.join(folder, form)):
+                            return True
+    return False
+
+
+def _bin_hit_text(s: str, folders: list[str], past_cap: bool) -> bool:
+    """_bin_hit_word for an option value string (#331): its expanded text, brace expansions, and
+    unknown forms, or joined to a folder the command runs in."""
+    text = _expand_text(s).strip()
+    if _bin_word(text):
+        return True
+    words = _brace_words(s, pool=2)
+    if words is None:
+        return True
+    if any(_bin_word(x) for x in words):
+        return True
+    if "$" in s or "`" in s:
+        for form in _unknown_words(s):
+            if _bin_word(form):
+                return True
+            if form and not form.startswith("/"):
+                for folder in folders:
+                    if _bin_word(os.path.join(folder, form)):
+                        return True
+    if text and not text.startswith("/"):
+        if past_cap:
+            return True
+        for folder in folders:
+            if _bin_word(os.path.join(folder, text)):
+                return True
+    return False
+
+
+def _bin_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> list[str]:
+    """Each trusted-bin path in a simple command that a write reaches, in the order the scan meets
+    them (#331), or []. Only positions the command writes to count, so reading a bin path never
+    does: `cat /usr/local/bin/x > /tmp/y` reads it, `git config core.editor /usr/bin/vim` names
+    it, and copying out of one reads it. A relative target is read from the folder the command
+    runs in: a cd on the line, an env -C on the command, or the tool's cwd. tar reads its -C
+    folder as a folder or an ancestor of one, since the members land below it, and its -f file
+    only when it creates the archive."""
+    seen = ctx.setdefault("bin_braces", {})
+    folders, past_cap = _bin_here(k, ctx)
+    hits: list[str] = []
+    for op, t in k.redirs:
+        if op in _WRITE_REDIRS and _bin_hit_word(t, seen, folders, past_cap):
+            hits.append(t.text)
+    prog = words[0].text.rsplit("/", 1)[-1] if words else ""
+    argv = [w.text for w in words]
+    if prog == "tar":
+        operands, vals, flags = _opt_scan(argv, "Cf", ("directory", "file"))
+        mode = set(flags)
+        if operands and re.fullmatch(r"[a-zA-Z]+", operands[0]) and set(operands[0]) & set("xct"):
+            mode |= set(operands[0])
+        if "extract" in flags:
+            mode.add("x")
+        if "create" in flags:
+            mode.add("c")
+        if "x" in mode:
+            for v in vals.get("C", []) + vals.get("directory", []):
+                text = _expand_text(v).strip()
+                if _bin_cwd_hit(text) or _unknown_bin_folder_text(v):
+                    hits.append(v)
+                elif text and not text.startswith("/"):
+                    for folder in folders:
+                        if _bin_cwd_hit(os.path.join(folder, text)):
+                            hits.append(v)
+                            break
+        if "c" in mode:
+            for v in vals.get("f", []) + vals.get("file", []):
+                if _bin_hit_text(v, folders, past_cap):
+                    hits.append(v)
+    else:
+        for v in _write_targets(argv, prog):
+            if _bin_hit_text(v, folders, past_cap):
+                hits.append(v)
+        if prog in ("gcc", "cc", "clang", "g++", "c++") and not _write_targets(argv, prog):
+            # No -o: the compiler writes a.out where it runs, which is a plant when that is a bin folder.
+            if any(f in _SYSTEM_BIN for f in folders):
+                hits.append("a.out")
+    return list(dict.fromkeys(hits))
+
+
 def _store_quiet(p: Classification) -> bool:
     """A part the store check takes as a read: a read, or an opaque part that only records a path for a later name
     to run (_REBINDS) and was built from such parts and the plain shell part of an ssh or mosh hop alone
@@ -4955,10 +5398,12 @@ def _raise_axes(c: Classification, exposure: str = "private", reversibility: str
 
 
 def _lead(parts: list[Classification]) -> Classification | None:
-    """The part _combine keeps: the first credentials part, else the first store write, else the most severe."""
+    """The part _combine keeps: the first credentials part, else the first store write, else the first bin write,
+    else the most severe."""
     credentials = [p for p in parts if p.category == "credentials"]
     store = [p for p in parts if p.category == "store_write"]
-    c = credentials[0] if credentials else (store[0] if store else _most_severe(parts))
+    bin_ = [p for p in parts if p.category == "bin_write"]
+    c = credentials[0] if credentials else (store[0] if store else (bin_[0] if bin_ else _most_severe(parts)))
     if c is not None and c.displaced is not None:
         # #454: match _combine's ranking before a sudo write displaced a read, also when ssh asks which part leads
         # before filling the host (#316). Selection stays pure: only _combine changes the summary and parts.
@@ -4971,7 +5416,8 @@ def _lead(parts: list[Classification]) -> Classification | None:
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
-    """The most severe part, with every part's signals. A store write outranks everything but credentials."""
+    """The most severe part, with every part's signals. A store write outranks everything but credentials, and a
+    bin write the rest."""
     signals = [s for p in parts for s in p.signals]
     c = _lead(parts) or _make("shell", command=cmd)
     if c.displaced is not None:
@@ -5706,7 +6152,7 @@ def _store_post_text(c: Classification, body: str) -> None:
     On a secret line, the most severe post below the secret and any store write takes it so (#320: `cat
     ${x-.netrc}; mail a@b.c <<EOF`, which these forms make a secret line, keeps its posting checks).
     Parts are shared (_own_copy), so the post and each part on the way down to it are copied, never changed."""
-    above = ("store_write",) if c.category == "store_write" else ("store_write", "credentials")
+    above = ("store_write", "bin_write") if c.category in ("store_write", "bin_write") else ("store_write", "credentials")
     post = _most_severe(p for p in _each_part(c) if p.category not in above)
     if post is None or post.text or post.text_file or post.category not in OUTBOUND or post.category == "web_post":
         return
@@ -6929,6 +7375,25 @@ def _config_on() -> bool:
     return True
 
 
+def is_bin_path(path: str, from_cwd: bool = False) -> bool:
+    """True when ``path`` names a trusted bin folder or a file directly inside one (#331). A brace set
+    counts when any word bash expands it to is one, or when it expands past the cap. With
+    ``from_cwd``, a relative name is read from the session folder too, as a file tool's write is."""
+    words = _brace_words(str(path or ""), pool=2)
+    if words is None:
+        return True
+    return any(_bin_word(w) or from_cwd and _bin_from_cwd(w) for w in words)
+
+
+def _bin_from_cwd(p: str) -> bool:
+    """A relative name read from the session's working folder (#331), as _store_from_cwd reads a
+    relative store name: joined to each folder the core passed, then read as an absolute path."""
+    scope = _scope.get()
+    if scope is None or not scope.cwds or p.startswith(("/", "~", "$")):
+        return False
+    return any(_bin_word(os.path.join(base, p)) for base in scope.cwds)
+
+
 def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) -> bool:
     """True when ``path`` is (or, with ``ancestors``, contains) a protected part of the Exo store. A brace set
     counts when the path or any word bash expands it to is in the store, or when it expands past the cap (#224).
@@ -7589,6 +8054,14 @@ def _store_part(path: str, summary: str) -> Classification:
     return c
 
 
+def _bin_part(path: str, summary: str) -> Classification:
+    """The bin write part of a file tool that also names a store path (#331, as _store_part): the
+    call keeps its lead, and a bin_write deny or reserved entry still reaches the path."""
+    c = _make("bin_write", summary=summary[:120], target=path, link=path)
+    c.signals.append("trusted bin")
+    return c
+
+
 def _joined_call(action: Any) -> tuple[str, dict] | None:
     """A shell call with its line joined (_join_dollars), for classify's joined reading (#584); None for any other
     call, and inside a classify that already reads one."""
@@ -7687,10 +8160,16 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         if not path:
             path = next((p for p in paths if is_store_path(p, from_cwd=True)), "")
             cat = "store_write" if path else "local_write"
+        if not path:
+            path = next((p for p in paths if is_bin_path(p, from_cwd=True)), "")
+            if path:
+                cat = "bin_write"
         path = path or (paths[0] if paths else "")
         c = _make(cat, summary=f"write {path}", target=path, link=path)
         if cat == "store_write":
             c.signals.append("exo store")
+        if cat == "bin_write":
+            c.signals.append("trusted bin")
         # #448: each file it writes stays a part, so its deny, reserved and matrix entries apply. A local write of more
         # than one file too, so an exact target entry reaches a path that only the reading on one line found (#559).
         if cat != "local_write" or len(set(paths)) > 1:
@@ -7701,6 +8180,10 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         if cat != "local_write":
             c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths)
                         if (cat == "credentials" or p != path) and is_store_path(p, from_cwd=True)]
+        # #331: each bin file past the lead, so a bin_write deny or reserved entry reaches it too.
+        if cat != "local_write":
+            c.parts += [_bin_part(p, f"write {p}") for p in dict.fromkeys(paths)
+                        if p != path and is_bin_path(p, from_cwd=True)]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
@@ -7726,6 +8209,7 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         if secret:
             cat = "credentials"
         stores: list[str] = []
+        bins: list[str] = []
         # A tool named with a read verb that writes what it took where its path arguments say (`download_file`)
         # reads the store as a write's too (#494); a name that says it replaces, patches or edits the file counts
         # with them, and so do arguments that carry the old and new text beside a path (#651): a `search_replace`
@@ -7743,6 +8227,23 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
             stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide, from_cwd=True)))
             if stores and not secret and (cat in ("local_write", "delete") or fetch):
                 cat = "store_write"
+            # #331: a bin path the call writes, as the store scan reads one. A tool whose name says
+            # it moves, renames or copies counts only its destination keys: copying out of a bin
+            # folder reads it. Reads stay reads: only a writing own category, or a fetch that
+            # writes what it took, promotes, and the store keeps the lead when both name a path.
+            tokens = _name_tokens(_CAMEL.sub("_", tool))
+            bin_keys = _PATH_ARG_KEYS if set(tokens).isdisjoint(("move", "rename", "mv", "copy", "cp")) else \
+                ("dest", "dst", "destination", "to", "target", "new_path")
+            bin_vals: list[str] = []
+            for k in bin_keys:
+                v = args.get(k)
+                if isinstance(v, (list, tuple)):
+                    bin_vals.extend(w for w in v if isinstance(w, str))
+                elif isinstance(v, str):
+                    bin_vals.append(v)
+            bins = list(dict.fromkeys(v for v in bin_vals if is_bin_path(v, from_cwd=True)))
+            if bins and not secret and cat != "store_write" and (cat in ("local_write", "delete") or fetch):
+                cat = "bin_write"
         store = stores[0] if stores and not secret else ""
         target = _first(args, _TARGET_KEYS)
         text = _first(args, _TEXT_KEYS) if cat in OUTBOUND else ""
@@ -7772,6 +8273,9 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         if store:
             c.signals.append("exo store")
             c.summary, c.target = f"{tool} {store}"[:120], store
+        if bins and cat == "bin_write":
+            c.signals.append("trusted bin")
+            c.summary, c.target = f"{tool} {bins[0]}"[:120], bins[0]
         if cat != own:  # #448: the tool's own reading stays a part, so its deny, reserved and matrix entries apply
             out = own in OUTBOUND
             c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
@@ -7780,6 +8284,9 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         # target, as they all are beside a secret (#447): a target entry on any of them matches, whatever path
         # the scan met first. The first path is the call's own target, as before.
         c.parts += [_store_part(p, f"{tool} {p}") for p in (stores if secret else stores[1:])]
+        # #331: each bin path past the lead, so a bin_write deny or reserved entry reaches it too.
+        if bins and cat == "bin_write":
+            c.parts += [_bin_part(p, f"{tool} {p}") for p in bins[1:]]
         # Keep the complete unsplit reading, including argument checks and outbound metadata. New name words
         # must not lower an old secret/store floor, category policy or posting rule (#515).
         if not legacy_name and tool not in TOOLS and _CAMEL.search(tool):
@@ -8542,6 +9049,11 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     # Store floor (D-038): the gate's own policies, grants, ledger, keys, seats and sockets. Same terms.
     if eff.category == "store_write":
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
+
+    # Bin floor (#331): a program in a trusted bin folder runs under a trusted name, and the folders
+    # are user-writable on a Homebrew install, so a write there plants one. Same terms as the store.
+    if eff.category == "bin_write":
+        bump("ask", "writes to a trusted bin folder; a program there runs under a trusted name", "floor")
 
     # #191: a matrix cell (#464), category line or rule that would deny a part alone denies the line, as a deny entry
     # does (D-075).

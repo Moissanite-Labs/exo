@@ -3322,6 +3322,26 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* a `${x:-$((cmd))}` should read the commands in its default word — a `$((` inside a `${..}` body is
   still read as the brace's visible text, as the same line with a plain `$( )` there is (both were `allow` on main
   and stay so), which is the `${..}` default word's own gap, not this one.
+- *Amendment 2026-10-27 (issue #331):* a write into a trusted bin folder is `bin_write` and shares the
+  store's terms: it asks every time, only the principal answers, and no standing grant covers it. The
+  folders are the eight in `_SYSTEM_BIN` (`/bin`, `/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin`,
+  `/sbin`, `/usr/sbin`, `/usr/local/sbin`, `/opt/local/bin`) — a write into a virtualenv or
+  `node_modules/.bin` folder is not one, since those folders are trusted for running only. The first
+  repair replaced the call's own category with `bin_write`, so a deny on it no longer applied; now
+  the call's own category stays as a part beside `bin_write`, so its deny, reserved and matrix
+  entries still reach it, and the bin floor sits below the store floor. Only positions the command
+  writes to count: a redirect, a copy/move/install destination, a link destination, a tar extract
+  or create target, a curl/wget output, a `dd` output, a `tee`/`truncate` operand, a `sed -i` file,
+  a compiler output (or the implicit `a.out` where it lands), and a tool call's write path. Running,
+  reading or copying out of a folder is unchanged, and a later `cd` elsewhere stops a relative name
+  counting. The scan reads option values attached to their letter, short option abbreviations, and
+  options after the destination, and a `cd` into an ancestor folder, an `env -C`, a tool `cwd`,
+  and a `$HOMEBREW_PREFIX` spelling all count. A later `cd` elsewhere stops a relative name
+  counting; `cd -` and a bare `pushd` swap with the previous folder, and a cd the gate cannot pin
+  keeps the previous folder. Limits: a write to a Homebrew Cellar target, a
+  package-manager install, a `git clone` or `unzip -d` into a folder, and a copied directory that
+  becomes a bin folder still replace what a trusted name runs, and a `curl -O` name taken from the
+  URL is not tracked (GATE.md "Known limits"). Tests: `tests/security/test_gate_trusted_bin_writes.py`.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
