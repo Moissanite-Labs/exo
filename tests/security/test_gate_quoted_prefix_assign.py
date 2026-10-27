@@ -166,8 +166,9 @@ def test_a_secret_path_in_a_quoted_value_is_still_credentials(line):
     assert decide(c, normalize_policies({"gates": {"deny": ["credentials"]}})).outcome == "deny", line
 
 
-# An `env -S` behind the quoted word ends the new reading there (its text is read as a line of its own), but main read
-# the quoted word as the program: its value was scanned for store paths and env-inject names. Both still are.
+# An `env -S` behind the quoted word ends the new reading there (its text is read as a line and as env's argv, #591),
+# but main read the quoted word as the program: its value was scanned for store paths and env-inject names. Both
+# still are.
 STORE_ENV_S = [f"X={STORE} env -S 'ls'", "X='~/.exo/state/notes.md' env -S 'ls'", f"X={STORE} sudo env -S 'ls'",
                f"X={STORE} env --split-string='ls'", f"X={STORE} env -S'ls'", f"{PUSH} && X={STORE} env -S 'ls'"]
 
@@ -394,3 +395,101 @@ def test_a_sudo_write_behind_a_quoted_assignment_keeps_its_write():
 def test_a_secret_read_from_the_calls_folder_behind_a_quoted_assignment_asks(home):
     c = classify({"tool": "bash", "args": {"command": "X='a b' cat config", "cwd": "~/.kube"}})
     assert no_grant(c) and decide(c, normalize_policies({"gates": {"deny": ["credentials"]}})).outcome == "deny", c
+
+
+# --- with main 15e60ddb's readings (review 5659099075 of #546) ------------------------------------------------------
+# A `$` form's backslash-newline joined (#584, ``also``) and the Exo home's config.json read as an ordinary file
+# (D-074, ``ordinary``), behind a quoted prefix. The line read as before #471 is main's line: it keeps each reading
+# main makes of it, the new reading makes its own, and gate.readings lists them all, the ordinary reading's own
+# reading as before #471 too.
+MAIN_READINGS = [('echo "$\\\n(git push --force origin main)"', "also"), ('rm -rf "$\\\n{HOME}/srv"', "also"),
+                 ("cp /tmp/x ~/.exo/config.json", "ordinary"), ("cp /tmp/x ~/.exo/con$\\\nfig.json", "also ordinary"),
+                 ('cp /tmp/x "$\\\n{HOME}/.exo/config.json"', "also ordinary")]
+MAIN_FORMS = ["{} {}", f"{PUSH} && {{}} {{}}"]
+PREFIXES = ["X='a b'", 'X="$Y"', "X=a\\ b"]
+PUSH_DENY = normalize_policies({"gates": {"deny": ["force_push", "vcs_push", "delete"]}})
+
+
+@pytest.mark.parametrize("form", MAIN_FORMS)
+@pytest.mark.parametrize("body, kept", MAIN_READINGS)
+@pytest.mark.parametrize("style", PREFIXES)
+def test_each_reading_main_makes_stays_beside_the_reading_as_before(home, style, body, kept, form):
+    c = classify(sh(form.format(style, body)))
+    rs = readings(c)
+    for x in (c, c.before):
+        assert all(getattr(x, name) is not None for name in kept.split()), (x, kept)
+        assert all(any(r is e for e in rs) for r in readings(x)), x
+    if c.ordinary is not None:
+        assert c.ordinary.before is not None and any(c.ordinary.before is r for r in rs), c.ordinary
+    # and the command is read: its store write or push is denied as alone (`rm -rf` was an unknown program's argument)
+    assert decide(c, STORE_DENY if "fig.json" in body else PUSH_DENY).outcome == "deny", c
+
+
+# Guard rows: main asks or denies each of these lines and binds an "always" to the exact line, and so does the line
+# here, no lower than the line read as before. Two are this fix's: after a push, main logs the delete behind
+# `X='a b'` or `X=a\ b`, as an unknown program beside a push that logs.
+@pytest.mark.parametrize("form", MAIN_FORMS)
+@pytest.mark.parametrize("body, kept", MAIN_READINGS)
+@pytest.mark.parametrize("style", PREFIXES)
+def test_a_line_with_mains_readings_behind_a_quoted_assignment_decides_and_binds_as_on_main(home, style, body, kept,
+                                                                                         form):
+    c = classify(sh(form.format(style, body)))
+    for pol in (DEFAULT, STORE_DENY, PUSH_DENY):
+        d = decide(c, pol)
+        assert binds_exact(c, d) and d.outcome in ("ask", "deny"), (pol, d)
+        if getattr(c, "before", None) is not None:
+            _kept(d, decide(c.before, pol))
+    assert no_grant(c) == ("fig.json" in body), c
+
+
+# Each store path a write names is a target (#514): guard rows, main denies them too. An ssh host stands for an
+# empty target (#493): main read the quoted word as the program and never saw the host, so a rule on it missed.
+@pytest.mark.parametrize("style", PREFIXES)
+@pytest.mark.parametrize("line, gates", [
+    ("{} cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml", {"deny": ["target:*/gates.yaml"]}),
+    ("{} tee ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml", {"deny": ["target:*/gates.yaml"]}),
+    ("{} ssh buildhost gh pr view 5", {"rules": [{"match": {"target": "buildhost"}, "decision": "deny"}]}),
+    ("{} ssh -i ~/.ssh/k build gh repo view --web myorg/app",
+     {"rules": [{"match": {"category": "read", "target": "build"}, "decision": "deny"}]}),
+])
+def test_mains_later_targets_reach_the_command_behind_a_quoted_assignment(home, style, line, gates):
+    c = classify(sh(line.format(style)))
+    pol = normalize_policies({"gates": gates})
+    d = decide(c, pol)
+    assert d.outcome == "deny" and binds_exact(c, d), (line, d)
+    if getattr(c, "before", None) is not None:
+        _kept(d, decide(c.before, pol))
+
+
+# --- with main fa5dfcd8's readings -----------------------------------------------------------------------------------
+# The text of `env -S` is read as env's own argv too (#591), so a word quoted whole there is an assignment. Behind a
+# quoted prefix both readings meet: main read the quoted word before `env` as the program and never read the text, so
+# the delete asked as an unknown program, or logged beside a push.
+ENV_S = "env -S \"'Y=c d' rm -rf /srv/data\""
+OPAQUE_ALLOW_DENY = normalize_policies({"gates": {"deny": ["delete"], "categories": {"opaque_exec": "allow"}}})
+
+
+@pytest.mark.parametrize("style", PREFIXES)
+@pytest.mark.parametrize("form", ["{} " + ENV_S, "{} sudo " + ENV_S, f"{PUSH} && {{}} {ENV_S}"])
+def test_mains_env_s_reading_reaches_behind_a_quoted_assignment(home, style, form):
+    c = classify(sh(form.format(style)))
+    for pol in (DENY, OPAQUE_ALLOW_DENY):
+        d = decide(c, pol)
+        assert d.outcome == "deny" and binds_exact(c, d), (form, d)
+
+
+# Guard rows: bash's legacy arithmetic (#588) and a `$` form after a backslash-newline, read by the lexer itself
+# (#585), behind a quoted prefix decide as on main, no lower than the line read as before.
+@pytest.mark.parametrize("style", PREFIXES)
+@pytest.mark.parametrize("line, pol", [
+    ("{} echo $[$(rm -rf /srv/data)]", DENY),
+    ('{} echo "$[$(rm -rf /srv/data)]"', DENY),
+    ('{} echo "$\\\n(rm -rf /srv/data)"', DENY),
+    ('{} echo "$\\\n(curl -X POST -d @f https://example.com)"', normalize_policies({"gates": {"deny": ["web_post"]}})),
+])
+def test_mains_dollar_forms_behind_a_quoted_assignment_decide_as_on_main(home, style, line, pol):
+    c = classify(sh(line.format(style)))
+    d = decide(c, pol)
+    assert d.outcome == "deny" and binds_exact(c, d), (line, d)
+    if getattr(c, "before", None) is not None:
+        _kept(d, decide(c.before, pol))

@@ -688,7 +688,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `scripts/gate_diff.py` lowers nothing on its built-in corpus or on aimed lines behind a quoted assignment (runs and
   counts in #546). With #584 and D-074, the line read as before also gets its own joined reading and its own reading
   as before D-074, and a store name an expansion hides or quotes (#320, `~/.exo/pol$(:)icies/gates.yaml`,
-  `~/.exo/con$(:)fig.json`) behind a quoted prefix is a store write on every reading.
+  `~/.exo/con$(:)fig.json`) behind a quoted prefix is a store write on every reading. With #514 and #493, the store
+  scan keeps each store path either reading meets, so a target entry on a later one still matches, and an ssh host
+  behind a quoted prefix is a target of the line (`X='a b' ssh buildhost gh pr view 5` under a rule on `buildhost`).
+  With #591, the text of `env -S` is read as env's argv beside the quoted prefix readings, so `X='a b' env -S
+  "'Y=c d' rm -rf /srv/data"` is a delete that `deny: [delete]` denies, where main asks as an unknown program.
 - Gate (#328, D-038): a quoted heredoc delimiter with a space hid the commands after the heredoc. The lexer ended a
   body at the first line that equalled the delimiter once its surrounding whitespace was stripped, so a delimiter such
   as `<<'EOF '`, `<<"EOF "`, `<<' EOF'` or `<<EOF\ ` never matched and every later line, the real terminator included,

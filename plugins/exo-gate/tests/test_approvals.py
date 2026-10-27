@@ -463,6 +463,37 @@ def test_a_pending_reserved_entry_holds_off_a_grant_on_the_line_read_as_before_4
     assert r is not None and r["action"] == "approve" and "policy files changed this session" in r["message"], r
 
 
+# Guard rows (review 5659099075): with main's joined reading (#584) and its reading as before D-074 (the home's
+# config.json), the line read as before #471 keeps both, and so does the new reading. A config.json store write in
+# any of them stays the principal's, once, and an "always" on a push read joined behind the quoted word covers that
+# exact line only, as on main.
+@pytest.mark.parametrize("line", ["X='a b' cp /tmp/x ~/.exo/con$\\\nfig.json",
+                                  "X='a b' cp /tmp/x \"$\\\n{HOME}/.exo/config.json\"",
+                                  "git push origin feature && X=\"$Y\" cp /tmp/x ~/.exo/config.json"])
+def test_a_config_store_write_behind_a_quoted_assignment_keeps_the_principal_once(tmp_path, monkeypatch, line):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("EXO_HOME", str(tmp_path / "home" / ".exo"))
+    store, key = _seat_gate(tmp_path, "st471c")
+    (store / "policies" / "approvals.yaml").write_text(DELEGATED)
+    g, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r.get("once") is True and r["approvers"] == ["principal"], r
+    answer(ctx, r, "always")
+    assert g.grants.list() == []
+
+
+def test_an_always_on_a_joined_push_behind_a_quoted_assignment_covers_that_line_only(tmp_path):
+    store, key = _seat_gate(tmp_path, "st471j")
+    _, ctx = make_gate(store, key)
+    line = "X='a b' echo \"$\\\n(git push --force origin main)\""
+    r = call(ctx, "terminal", {"command": line})
+    assert r and r["action"] == "approve" and r["approvers"] == ["principal"], r
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": line}) is None
+    r = call(ctx, "terminal", {"command": line.replace("main", "release")})
+    assert r and r["action"] == "approve", r
+
+
 # --- standing grants ------------------------------------------------------------------------
 
 def test_always_grant_survives_restart_and_expires(keyed_store):
