@@ -79,7 +79,8 @@ function show(id) {
 }
 
 bus.onState((s) => {
-  connText.textContent = s.connected ? "live" : s.denied ? "page link expired: open the latest complete link printed by exo web" : !token() ? "page token missing" : "reconnecting";
+  connText.textContent = s.connected ? "live" : s.denied ? "page link expired: open the latest complete link printed by exo web" : !token() ? "page token missing" : !s.transport_connected ? "web reconnecting"
+    : s.core_state === "unavailable" ? "core unavailable" : "connecting to core";
   led.className = "xc-dot " + (s.connected ? "ok" : "");
 });
 

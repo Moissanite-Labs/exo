@@ -180,6 +180,7 @@ export interface ModelCall {
   stop_reason?: string;
   error?: string;
   retries?: number;
+  reasoning?: Record<string, unknown>;
 }
 
 export interface ModelsList {

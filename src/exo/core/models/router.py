@@ -529,9 +529,15 @@ class Router:
             event.attempts = [{"route": route.ref, "outcome": "spend_refused"}]
             yield event
             return
+        from exo.core.models.reasoning import attempt_options
+        opts, reasoning = attempt_options(self.providers, route, opts)
         if self.spend is not None:
             async for event in admitted_stream(self.spend, route.ref, cred.provider, messages, tools,
                                                {**opts, "model": route.model}):
+                if reasoning and event.attempts:
+                    event.attempts = [{**a, "reasoning": (
+                        {**reasoning, "sent": None, "status": "not confirmed; spend refused or stopped"}
+                        if a.get("outcome") in ("spend_refused", "spend_stopped") else reasoning)} for a in event.attempts]
                 yield event
             return
         started, t0 = False, time.monotonic()
@@ -540,6 +546,7 @@ class Router:
 
         def note(outcome: str, err: str = "") -> None:
             attempts.append({"route": route.ref, "outcome": outcome, "error": scrub(err, 160),
+                             **({"reasoning": reasoning} if reasoning else {}),
                              "ms": int((time.monotonic() - t0) * 1000),
                              **({"cooldown_s": int(cool)} if cool else {})})
 
