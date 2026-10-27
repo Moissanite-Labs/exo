@@ -1276,6 +1276,25 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `rm` of both paths was denied already (its `delete` part names the last path), reads keep their class, and the
   first path alone decides as before. Each new part only adds a match, so no decision is lower; gate_diff ran
   main 5a5a535d against this change and found 0 lowered.
+- *Amendment 2026-10-26 (issue #516):* an allow rule keyed on `command` that would lower the line over the matrix
+  deny of the part a shell call's own folder read adds (#311) must name the folder, as it names the `cd` in the cd
+  form; naming the folder never lifts that deny. The part had no own text, so a line of
+  one command beside it was one text for the #394 own-text test (`_one_text`) and the rule decided the line as
+  before, over the part's cell: `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir`
+  asked under `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`, where its `cd` form was
+  denied, since the rule does not name the `cd`. Now the part carries a `_StandIn` for `cd <folder>` among its
+  setters, the folder as the call spells it (`~/.ssh`, or a relative `keys` when the call gives one), so the line
+  is not one text and the #394 pass runs: a rule that names the line's text but not the folder is passed over, for
+  the part as for any part it does not name, and the part's cell stands, as the cd form's parts' cells do. The
+  part itself keeps no own text, so no rule lifts its deny — not one that names everything either, as before, and
+  not one that lifts the weight a heavier command adds beside the part (#468), which has no own text. A line of
+  two or more commands, a policy with no rule and no matrix deny decide as before. Chosen over keying the part on
+  the line's own command scope: the stand-in keeps the part weighed as the `cd` form's is and rules matched against
+  what a `cd` on the line would read as, so the two spellings agree. *Differential against main 6054da56*
+  (`scripts/gate_diff.py --no-variants --jobs 4`): 11,406 actions x 88 policies, 1,003,728 pairs, none lowered
+  (outcome, reserved or posting violation), 728 pairs tightened on 361 actions — a folder part's matrix or category
+  deny standing where an allow rule on the line lifted it, this amendment's rows among them. Tests:
+  `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
 - *Amendment 2026-10-26 (issue #461):* a gh download or clone writes the store the way `curl -o` and
   `git clone` do. gh's download and clone subcommands read on GitHub, so the store check took a line whose
   every part reads as a read for a read and never looked at their output paths: `gh release download -O
