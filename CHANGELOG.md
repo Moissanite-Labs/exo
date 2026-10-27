@@ -7,7 +7,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Gate: a line that turns credentials keeps the host read that led it, so reserved/deny/rule entries on that reading still match (#578).
+
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
+- A line that turns credentials keeps the host read of an ssh whose remote command turns it, so a reserved entry on that reading still matches (#578).
 - A `$((` bash reads as a command substitution is read as one now (#553). bash closes the `$( ` at the first `)`
   outside quotes, backquotes, `$( )` bodies and comments, and reads the span as arithmetic only when the text
   between the parens, quoted spans skipped, holds balanced parens (chk_arithsub); else it re-reads the span as
