@@ -88,6 +88,9 @@ boundary and cannot redeem the parent's references or compress its copied old re
 Undo hides the result and revokes its reference. A reference also expires when its
 message leaves the configured recent-message window. Missing, expired, hidden and
 foreign references return an explicit unavailable error.
+Expansion serves only results that the view could excerpt. It refuses a reference to an
+error result, a result shorter than `threshold_chars`, a `tool_output` page or a result
+without its source call, even when the digest matches.
 
 The window limits this retrieval feature. It does not delete the source transcript or
 change existing memory access. No duplicate output archive, database, cache, SDK,

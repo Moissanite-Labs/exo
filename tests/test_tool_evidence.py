@@ -15,10 +15,11 @@ import pytest
 from exo.config import Config, ConfigError
 from exo.core.context import TreeContext
 from exo.core.loop import Loop
+from exo.core.models.keys import redact_secrets
 from exo.core.sessions import SessionStore
 from exo.core.tools.registry import Registry, ToolContext, ToolError
 from exo.core.types import ContentPart, Message, ProviderEvent, ToolCall, ToolResult, ToolSpec
-from exo.tool_evidence import Evidence, EvidenceContext, META, Options, TOOL, TRUST, attach
+from exo.tool_evidence import Evidence, EvidenceContext, META, Options, TOOL, TRUST, _digest, attach
 
 
 def reference(text):
@@ -315,6 +316,22 @@ def test_invalid_missing_and_changed_references_do_not_fall_back(evidence):
             obj.read(sid, bad)
     with pytest.raises(ToolError, match="unavailable"):
         obj.read(None, ref)
+
+
+@pytest.mark.parametrize("case", ["error", "short", "expansion", "no-call"])
+def test_expansion_refuses_results_the_view_never_excerpts(evidence, case):
+    """A digest made from text the caller already holds redeems only what render could have issued."""
+    obj, sid = evidence
+    text = "x" * 1000 if case == "short" else source("log")
+    if case == "no-call":
+        messages = [obj.store.append_message(sid, Message.tool([ToolResult.of_text("call-1", text)]))]
+    else:
+        messages = recorded(obj, sid, text, error=case == "error", tool=TOOL if case == "expansion" else "build")
+    assert obj.render(sid, messages) == messages
+    result = messages[-1].tool_results[0]
+    forged = f"te1:{messages[-1].id}:0:{_digest(result, redact_secrets(text, keep_markers=True))}"
+    with pytest.raises(ToolError, match="unavailable"):
+        obj.read(sid, forged)
 
 
 def test_known_secrets_redacted_before_preview_and_expansion(evidence, monkeypatch):

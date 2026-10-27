@@ -166,7 +166,10 @@ class Evidence:
         return out
 
     def read(self, session: str | None, reference: str, offset: int = 0, limit: int | None = None) -> dict[str, Any]:
-        """A bounded page from one visible message in the caller's own session."""
+        """A bounded page from one visible message in the caller's own session.
+
+        Only a result render could excerpt qualifies, so a digest alone redeems nothing render withholds.
+        """
         unavailable = "Tool output is missing, expired, hidden or unavailable in this session"
         match = _REF.fullmatch(reference) if isinstance(reference, str) else None
         if not session or not match:
@@ -180,10 +183,12 @@ class Evidence:
         if not rows or rows[-1].id != mid or index >= len(rows[-1].tool_results):
             raise ToolError(unavailable)
         result = rows[-1].tool_results[index]
-        if len(result.content) != 1 or result.content[0].type != "text" or len(result.call_id) > 256:
+        name = {c.id: c.name for m in rows[:-1] for c in m.tool_calls}.get(result.call_id)
+        if (len(result.content) != 1 or result.content[0].type != "text" or len(result.call_id) > 256
+                or result.is_error or not name or name == TOOL or len(name) > 256):
             raise ToolError(unavailable)
         text = result.text()
-        if len(text) > MAX_RESULT_CHARS:
+        if not self.options.threshold_chars <= len(text) <= MAX_RESULT_CHARS:
             raise ToolError(unavailable)
         text = redact_secrets(text, keep_markers=True)
         if _digest(result, text) != digest:
@@ -198,9 +203,8 @@ class Evidence:
         while encoded > MAX_PAGE_JSON_CHARS:
             stop = offset + max(1, (stop - offset) * (MAX_PAGE_JSON_CHARS - 2) // encoded - 1)
             encoded = len(json.dumps(text[offset:stop], ensure_ascii=True))
-        names = {c.id: c.name for m in rows[:-1] for c in m.tool_calls}
         return {"reference": reference, "trust": TRUST, "call_id": result.call_id, "is_error": result.is_error,
-                "tool": names.get(result.call_id, "unknown")[:256], "message_id": mid, "result_index": index,
+                "tool": name, "message_id": mid, "result_index": index,
                 "offset": offset, "next_offset": stop if stop < len(text) else None,
                 "total_chars": len(text), "text": text[offset:stop],
                 "sha256": hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()}

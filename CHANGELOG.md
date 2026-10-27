@@ -79,6 +79,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Optional retained tool-output excerpts with exact paginated expansion, scoped to the session and
   configured principal. Originals stay in the transcript. Earlier tool caps are not recoverable
   (`docs/TOOL-OUTPUT.md`, D-084, #501 stage 1; in progress).
+  Expansion refuses a reference to a result that the view would not excerpt.
 - Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
   explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
   The approval gate and required executor constraints remain enforced. Existing configurations

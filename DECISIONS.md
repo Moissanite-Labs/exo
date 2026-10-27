@@ -6457,3 +6457,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   source fingerprints live in `docs/evidence/optional-features-smoke-2026-10-23.json`.
   Tool-output CPU/startup samples were refreshed after the current-main and metadata changes.
   These offline fixtures do not establish task quality or replace the principal canary.
+- **Amendment 2026-10-27 (#510 review):** Expansion serves only results that rendering could excerpt.
+  A reference to an error result, a result shorter than `threshold_chars`, a `tool_output` page or a
+  result without its source call is refused, even when its digest matches. Before, such a digest needed
+  the exact text, so no access was gained. The check keeps it that way if a later caller can get a digest
+  some other way. The feature module is outside the counted core.
