@@ -3876,6 +3876,19 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if top is not None and not top.target:
                 c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
+            elif top is not None and _fold_made(top.target) and \
+                    (old := _most_severe([p for p in c.parts
+                                          if p.category not in ("credentials", "store_write")])) is not None and \
+                    old.target != dest:
+                # #601: the fold made the part that took the line's category, so the decision on the alt target
+                # (#399) — the copy of the action on the host — no longer carries it: the line read as an ordinary
+                # delete there before (`ssh host 'rm -rf ~/.EXO/policies'` listed (delete, host) among its reserved
+                # parts, review of #635). The host keeps the line's own action beside the folded store path, as it
+                # kept it while the path read as an ordinary one, and the plain-spelling rows keep every part they
+                # had: a name an expansion made a store of reads the same in either spelling (_fold_made). A copy
+                # with no parts and no post, as #320's.
+                c.parts = [*c.parts, replace(old, target=dest, parts=[], text="", title="", text_file="", own_signals=[
+                    s for s in (old.signals if old.own_signals is None else old.own_signals) if s != "unseen_body"])]
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
         # An ssh that passes a stdin on gives its remote command that stdin, and an ssh there that runs it runs it
@@ -5889,10 +5902,15 @@ TOOLS: dict[str, str] = {
 # whose `.exO` is a different folder (tests pin both readings with it).
 
 
+# Held while a check reads one spelling as main's own (#601): the ssh hop probes a case-variant store path as
+# written, to keep the host beside the line's own action where only the fold made the store part (review #635).
+_case_off: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_case_off", default=False)
+
+
 def _fold(p: str) -> str:
     """``p`` as the plain name compares match it: lower-cased (#601), or as written under
-    EXO_GATE_CASE_SENSITIVE=1. The name regexes fold by their own re.IGNORECASE."""
-    return p.lower() if p and os.environ.get("EXO_GATE_CASE_SENSITIVE", "") != "1" else p
+    EXO_GATE_CASE_SENSITIVE=1 or while _case_off is set. The name regexes fold by their own re.IGNORECASE."""
+    return p.lower() if p and not _case_off.get() and os.environ.get("EXO_GATE_CASE_SENSITIVE", "") != "1" else p
 
 
 def _fold_glob(g: str) -> str:
@@ -5905,6 +5923,27 @@ def _fold_glob(g: str) -> str:
 def _fold_glob_path(p: str) -> str:
     """A glob path part by part (_fold_glob): the parts the file system opens fold, the wildcard parts do not."""
     return "/".join(_fold_glob(x) for x in p.split("/"))
+
+
+def _fold_made(t: str) -> bool:
+    """Whether the store or secret name ``t`` reads as one only by its letter case (#601): main's spellings, the
+    checks on the text itself with the fold held off (_case_off), pass on the folded spelling and not on the one
+    as written. The ssh hop keeps the host beside the line's own action then (review of #635): the fold-made part
+    took the line's category, and the alt target's decision — the copy of the action on the host — with it. A name
+    an expansion form made a store of folds the same way in either spelling, so this is False there and the hop
+    keeps the reading both spellings share."""
+    if not t:
+        return False
+    f = _fold(t)
+    if f == t:
+        return False
+    token = _case_off.set(True)
+    try:
+        plain = _store_word(t, ancestors=True) or bool(_SENSITIVE_PATH.search(t))
+        folded = _store_word(f, ancestors=True) or bool(_SENSITIVE_PATH.search(f))
+    finally:
+        _case_off.reset(token)
+    return not plain and folded
 
 # One list of secret stores, used by the path tools (read/write/patch) and by shell parsing.
 # Segment patterns match at any depth; EXO_HOME and EXO_KEYS_FILE overrides are added by

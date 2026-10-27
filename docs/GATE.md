@@ -655,7 +655,10 @@ A path names a secret store (`credentials`, always asks) when it matches the sto
 (`~/.ssh`, `~/.aws`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `.env`, `*.key`,
 token files, Exo's `keys/`...), or when it is a glob that could match one of the sample store paths. The
 names match in any case (#601, D-082): on a case-insensitive filesystem `~/.SSH/config` and `~/.KUBE/config`
-are `~/.ssh/config` and `~/.kube/config`, and they ask as the plain spellings do. This holds
+are `~/.ssh/config` and `~/.kube/config`, and they ask as the plain spellings do. The descriptor folders
+are the exception, matched as written: `printf x > /DEV/FD/3` writes an ordinary file where `> /dev/fd/3`
+writes one the gate cannot resolve, and only the lower-case spelling asks. The process folders do fold:
+`/PROC/self/environ` asks as `/proc/self/environ` does. This holds
 for shell words, redirection targets, `bash -c` and `$( )` text, string literals in code, and the path arguments
 of file tools. Brace sets are expanded as bash does before matching (issue #184). In a shell word the gate
 expands the source text, quotes kept, and then removes the quotes from each word, so only unquoted braces

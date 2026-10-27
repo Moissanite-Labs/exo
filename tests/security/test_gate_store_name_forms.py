@@ -1029,3 +1029,26 @@ def test_the_plain_spellings_keep_their_class(cmd, cat, on, monkeypatch):
     c = gate.classify(sh(cmd))
     assert c.category == cat, (cmd, c.category)
     assert gate.decide(c).outcome == "ask"
+
+
+# An ssh hop keeps the host beside a case-variant store path (#601, review of #635). Main read such a line as a
+# plain delete of the path, and the copy of the action on the alt target carried the host into the reserved set;
+# the folded reading makes the line store_write, and the host keeps the line's own action beside the folded store
+# path. The same rows hold under EXO_GATE_CASE_SENSITIVE=1, which reads main's spellings: the sets are main's own
+# in either reading.
+SSH_RESERVED = [
+    ("ssh host 'rm -rf ~/.EXO/policies'",
+     {("delete", "host"), ("delete", "~/.EXO/policies")}),
+    ("ssh host 'rm -rf /srv/app/state'",   # no store reading: the hop's own host entry, as main lists it
+     {("delete", "host"), ("delete", "/srv/app/state")}),
+    ("rm -rf ~/.EXO/policies",             # no hop: the one path part, as main lists it
+     {("delete", "~/.EXO/policies")}),
+]
+
+
+@pytest.mark.parametrize("on", [True, False], ids=["any-case", "mains-case"])
+@pytest.mark.parametrize("cmd,hits", SSH_RESERVED)
+def test_an_ssh_hop_keeps_the_host_beside_a_case_variant_store_path(cmd, hits, on, monkeypatch):
+    _case(monkeypatch, on)
+    d = gate.decide(gate.classify(sh(cmd)), {"gates": {"reserved": ["delete"]}})
+    assert d.outcome == "ask" and set(d.reserved) == hits, d

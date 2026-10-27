@@ -156,7 +156,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   distinct `.exO` folder, the fail-closed side as for a glob that could name one. In a glob a part with no
   wildcard folds (a folder the file system opens: `~/.EXO/*`, `~/*/RUN/x`), and a part that holds a wildcard
   stays as written, as bash matches it against the entries (`[HOME=x]*`, `~/.e*O/*` stay ordinary).
-  `EXO_GATE_CASE_SENSITIVE=1` reads main d800f33c's case-sensitive names.
+  `EXO_GATE_CASE_SENSITIVE=1` reads main d800f33c's case-sensitive names. An ssh hop whose remote command names a
+  case-variant store path keeps the host beside the line's own action in its reserved parts (`ssh host
+  'rm -rf ~/.EXO/policies'` lists `(delete, host)` beside `(delete, ~/.EXO/policies)`, as main did), and the
+  plain-spelling rows keep every part they had.
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
   `reserved:` entry on a later path missed and an approver could have waved the write through:
