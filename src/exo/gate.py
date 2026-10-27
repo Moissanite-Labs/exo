@@ -429,6 +429,7 @@ class _Word:
     split: bool = False        # bash may make several words of it, or none: an expansion outside "..", or "$@" (#399)
     legacy: bool = False       # holds bash's legacy arithmetic `$[ ]`, which main read as plain text (#588)
     exps: list = field(default_factory=list)  # (scan text, source, ${ frames) per ${..} and $((..)) bash expands
+    prompt: list = field(default_factory=list)  # the parameter of each `${..@P}` in it, whose value bash runs (#579)
     fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
 
 
@@ -439,6 +440,7 @@ class _Heredoc:
     quoted: bool
     ambiguous: bool = False    # delimiter spelled with $'..' or $"..": bash and dash end the body on different lines
     body: str = ""
+    prompt: list = field(default_factory=list)  # the `${..@P}` of the body, which expand as the body is made (#579)
     fd: str = ""               # the descriptor number before `<<` (`3<<EOF`); "" or 0 is stdin (#208)
     cut: str = ""              # the delimiter as the levels around read it, when it holds a part not read (#334)
 
@@ -649,8 +651,10 @@ class _Lexer:
             first = self.i
             self.i, last = _heredoc_body(self.s, self.i, hd, closer)
             if not hd.quoted:
+                w = _Word()
                 sub = _Lexer(hd.body, scan=False, nest=self.nest)
-                sub._dquote(_Word(), until_end=True)
+                sub._dquote(w, until_end=True)
+                hd.prompt = w.prompt              # a ${..@P} in the body expands as the body is made (#579)
                 self.subs += sub.subs
                 if sub.cuts:                   # the levels around hold a stand-in for the body, as for a cut
                     self.cuts.append((first, last, "$(" + _TOO_DEEP + ")\n"))
@@ -769,9 +773,14 @@ class _Lexer:
                 self.subs += sub.subs
             if self.scan and i >= self.covered:    # what bash reads: it may run past this first }
                 vis, close, frames = _dollar_brace(s, i, double, self.nest)
-                w.exps.append((vis, s[i:close + 1], {at - i: [end - i, None if up is None else up - i]
-                                                     for at, (end, up) in frames.items()}))
+                rel = {at - i: [end - i, None if up is None else up - i] for at, (end, up) in frames.items()}
+                w.exps.append((vis, s[i:close + 1], rel))
                 self.covered = close + 1
+                for at, (end, _) in rel.items():   # the outer ${ and every one nested in it
+                    if m := _RUNS_PROMPT.fullmatch(s[i + at:i + end + 1]):
+                        w.prompt.append(m[1])      # a value bash runs as a prompt string (#579)
+            elif m := _RUNS_PROMPT.fullmatch(s[i:j + 1]):
+                w.prompt.append(m[1])
             w.text += s[i:j + 1]
             w.dynamic = True
             # "${name[@]}", "${!name@}" and "${@:2}" make several words. bash may read past the first } when a
@@ -1083,6 +1092,14 @@ def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
 # read only up to the next bracket, so a long run of `${a[` costs one step each (a nested subscript there
 # counts as no operator, and the text stays visible).
 _DQ_QUOTING_OP = re.compile(r"[!#]?(?:[A-Za-z_]\w*|\d+|[-@*#?$!])(?:\[[^\][]*\])?(?:[#%/^,~@?]|:\?)")
+
+# The ${ of a prompt transformation (#579): a parameter, an array element, a positional parameter or one of its
+# ranges, with `@P` for its operator. With promptvars on, the default, bash expands the value as a prompt string
+# and runs its command substitutions, so the value is code the gate cannot see (`printf -v p '%s(%s)' '$' 'id';
+# echo ${p@P}` runs id, and the value can rebuild a form the gate reads only as written, a `/` substitution of a
+# store variable, #342). The operator is read only where the parameter ends, so `${x:-foo@P}` stays a default
+# word, and an operator after an indirection (`${!x@P}`) is not read here.
+_RUNS_PROMPT = re.compile(r"\$\{((?:[A-Za-z_]\w*|\d+)(?:\[[^\][{}]*\])?|[@*](?::[^\][{}]*)?)@P\}")
 
 
 def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str, int, dict[int, list]]:
@@ -1827,6 +1844,31 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
     targets = [t for _, t in k.redirs] + list(k.heredocs) + list(k.herestrings)
     out += [(fm.group(1), None, False) for t in targets if (fm := _FD_VAR.fullmatch(t.fd))]
     return list(dict.fromkeys(out))
+
+
+def _literal_assigns(k: "_Cmd") -> dict[str, str]:
+    """What one command assigns a literal value, as written (#579): `NAME=value` words whose value holds no `$`,
+    backtick or backslash, so a prompt expansion of it expands to itself. A bare assignment's own words, and the
+    arguments of export and its kind; `printf -v` and `read` set values the gate does not see, a for list is data
+    the command runs over, and an append (`p+=x`) adds to a value the line does not know."""
+    words = k.words
+    if words and not words[0].quoted and not words[0].dynamic and words[0].text in _EXPORTERS:
+        words = words[1:]
+    elif not all(not w.dynamic and _ASSIGN.fullmatch(w.text) for w in words):
+        return {}
+    out: dict[str, str] = {}
+    for w in words:
+        name, eq, value = w.text.partition("=")
+        if re.match(r"[A-Za-z_]\w*\+=", w.text):
+            # an append: a literal one keeps a literal the line set, any other leaves the value unknown
+            if name[:-1] in out and not re.search(r"[$`\\]", value):
+                out[name[:-1]] += value
+            else:
+                out.pop(name[:-1], None)
+            continue
+        if eq and not re.search(r"[$`\\]", value):
+            out[name] = value
+    return out
 
 
 def _unreadable_name(w: "_Word") -> bool:
@@ -3532,6 +3574,20 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
     return parts
 
 
+def _runs_prompt(k: "_Cmd", literals: dict) -> str:
+    """The parameter of the first `${..@P}` the command expands whose value the gate does not see (#579), ""
+    when there is none. One of a variable the line assigns a literal value (no `$`, backtick or backslash, so
+    the prompt expansion of it is the value itself) is known and keeps the line's class. A prefix assignment
+    sets the command's own environment, which bash expands the words before, so it is no source."""
+    for w in [*k.words, *k.herestrings, *(t for _, t in k.redirs)]:
+        if n := next((p for p in w.prompt if p not in literals), ""):
+            return n
+    for hd in k.heredocs:
+        if n := next((p for p in hd.prompt if p not in literals), ""):
+            return n
+    return ""
+
+
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
     """One simple command into its parts: the program's own category, the redirections, anything run
     inside it, and a store write when it touches the store."""
@@ -3545,6 +3601,10 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     before = words
     words, sudo, split = _strip_prefix_words(words)
     parts: list[Classification] = []
+    if n := _runs_prompt(k, ctx.setdefault("literals", {})):
+        # a prompt transformation expands the value as a prompt string, its command substitutions included (#579)
+        what = "the positional parameters" if n in ("@", "*") or n[:2] in ("@:", "*:") else n
+        parts.append(_opaque(f"runs the prompt expansion of {what}, a value the gate does not see", cmd))
     if split is not None:
         parts.append(_opaque("env -S runs a command line", cmd))
         if depth < _DEPTH:
@@ -5559,7 +5619,8 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # is never its line's. A value declare reads again runs its $( ) the same way (_subscript_parts).
     inherits = stdin_unknown or any(k.piped_in or k.stdin_unknown or (k.fed and bool(k.heredocs or k.herestrings))
                                     for k in cmds)
-    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits}
+    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits,
+                 "literals": {}}     # a literal value each command assigns, what a later ${..@P} reads (#579)
     if into := _cd_into.get():            # a $( ) on a line that entered the store runs in it (#465)
         ctx["store_cwd"] = True
         if into[1]:
@@ -5577,6 +5638,7 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
             # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
             ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
             slot[0] = k.own
+            ctx["literals"].update(_literal_assigns(k))    # what this command sets, the next ${..@P} reads (#579)
             got = _classify_simple(k, cmd, depth, ctx, piped)
             if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
                 got = _given_stdin(got, _stdin_own(k), ctx)

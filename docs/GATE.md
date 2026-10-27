@@ -1473,7 +1473,26 @@ gate does not read:
   exporter, `unset`, `read`, `printf -v`, a nameref or `test -v` takes. `mapfile` and `getopts`
   already ask. Parameter expansion that
   only reads or substitutes (`${PATH}`, `${PATH:-/usr/bin}`, `${PATH#/x}`) assigns nothing and
-  stays `allow`. So does text bash does not expand: single-quoted text, a quoted here-doc, and
+  stays `allow`. A `${..@P}` prompt transformation is different (#579). With `promptvars` on,
+  the default, bash expands the value as a prompt string, which runs its command substitutions
+  and expands its parameters: `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` runs `id`, and a
+  value `read` or `printf -v` fills can rebuild a form the gate reads only as written, a `/`
+  substitution of a store variable (#342), so `cat ${p@P}` reads `$HOME/.kube/config`. The gate
+  cannot see that value, so any `${name@P}`, `${arr[0]@P}`, `${@@P}`, `${*@P}` or `${@:2@P}` the
+  line expands is `opaque_exec` and asks — also in a here-string, a here-document body, or a
+  redirection target, and in a word bash expands inside another one's default
+  (`echo "${a:-'${b@P}'}"` asks). One exception: when the line assigns the variable a literal
+  value with no `$`, backtick or backslash (`p=x; echo ${p@P}` is `echo x`), the prompt
+  expansion of it is the value itself, so the line keeps its class; the last literal wins, an
+  exporter's assignment counts, and a literal appended to a literal is still one (`p+=y`).
+  A prefix assignment sets the command's own environment, which bash expands the words before,
+  so `p=x echo ${p@P}` asks; an append onto a value the line does not know leaves it unknown;
+  and a value `printf -v` or `read` fills is never one the line spells. A backslash is a prompt
+  escape (`p='\u'` is the username), so a value with one asks. The other operators (`@Q`, `@E`,
+  `@a`, `@K`, `@L`, `@U`, `@#`, `@t`, `@k`) decode or spell the value and run nothing, so they
+  keep their reading, and the operator is read only where the parameter ends, so
+  `echo ${x:-foo@P}` stays a default word and `echo '${p@P}'` is text.
+  So does text bash does not expand: single-quoted text, a quoted here-doc, and
   a bracket outside a subscript, which is a glob (`git commit -m 'read ${PATH:=.}'`,
   `pytest -q 'test_x[HOME=/tmp]'`, `echo [HOME=x]`). An expansion runs to the `}` bash closes
   it with, past a nested `${b}` but not into quoted or escaped text, and the single-quoted text
