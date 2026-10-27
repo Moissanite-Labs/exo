@@ -1247,6 +1247,17 @@ def test_an_entry_on_the_host_s_read_still_matches_beside_an_odd_first_store(odd
     assert full(hop.format(f"cat {odd} ~/.ssh/id_rsa"), policy)[:2] == ("credentials", "deny")
 
 
+# #601 matches a store name in any letter case, and a folder part with no wildcard folds too. The lexical form folds as
+# the form as written does, so a name in another case and in an odd spelling at once asks (#513 checker, the merge of
+# main e0968a2b). A wildcard part keeps its case, as bash matches it, so `cat /PRO?/self/environ` stays a read.
+@pytest.mark.parametrize("call", [
+    "cat ~/.KUBE//config", "cat ~/.Kube/./Config", "cat ~/.DOCKER/x/../config.json",
+    "cat /PROC/self/root/pro?/1/environ", {"tool": "read_file", "args": {"path": "~/.KUBE//config"}},
+])
+def test_a_store_name_in_another_case_and_an_odd_spelling_asks(call):
+    assert (bash(call) if isinstance(call, str) else decided(call)) == ("credentials", "ask")
+
+
 @pytest.mark.parametrize("line", ["ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'", "ssh prod 'cat ~/.kube/config'",
                                   "ssh prod 'cat ~/.kube/config ~/.ssh/id_rsa'"])
 def test_the_host_keeps_every_reserved_hit_main_lists(line):
