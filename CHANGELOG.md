@@ -6,6 +6,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
+  string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
+  so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
+  'id'; echo ${p@P}` runs `id`, and a value a command the gate does not read as an assignment sets (`printf -v`,
+  `read`) rebuilds a form the gate reads only as written — a `/` substitution of a store variable (#342) — so
+  `read -r p <<< '${HOME/%//.kube}/config'; cat ${p@P}` read `$HOME/.kube/config` as an allowed read. Now any
+  `${..@P}` the line expands (also in double quotes, a here-string, a here-document body or a redirection
+  target) is `opaque_exec` and asks, beside the line's other parts, so a deny on them still wins. One exception:
+  a variable the line assigns a literal value with no `$`, backtick or backslash prompt-expands to itself, so
+  `p=x; echo ${p@P}` stays a read. The other `@` operators run nothing and keep their reading. Tests:
+  `tests/security/test_gate_prompt_expansion.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
 - A `$` form a `\<newline>` splits is read by the lexer itself now, as bash reads it (#585). #584 read such a line
   joined beside itself, but the line as written still read a `$` and then a backslash as a literal `$`, so its
   words were plain text and the decision leaned on the joined reading alone: `hash "$\<newline>@"; ls`,

@@ -1230,6 +1230,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-26 (issue #579):* a prompt-string transformation is code the gate cannot see, unless the
+  line assigns the variable a literal value. `${name@P}` expands the value as a prompt string, and with
+  `promptvars` on, the default, that runs its command substitutions and expands its parameters, so the gate
+  read such a word as the parameter's ordinary expansion and allowed it: `printf -v p '%s(%s)' '$' 'id';
+  echo ${p@P}` runs `id`, `p='$(id)'; echo ${p@P}` ran it where the gate's ask came only from the assignment
+  it read, and a value a command the gate does not read as an assignment sets (`printf -v`, `read`) rebuilds
+  a form the gate reads only as written — a `/` substitution of a store variable (#342) — so
+  `read -r p <<< '${HOME/%//.kube}/config'; cat ${p@P}` read `$HOME/.kube/config` as an allowed read. Now any
+  `${..@P}` the line expands (a parameter, an array element, the positional parameters and their ranges,
+  also in double quotes, a here-string, a here-document body or a redirection target, and nested in a word
+  bash expands) is an `opaque_exec` part that asks, beside the line's other parts (D-075), so a deny on them
+  still wins. One exception keeps the everyday lines: a variable the line assigns a literal value with no
+  `$`, backtick or backslash prompt-expands to itself, so `p=x; echo ${p@P}` stays a read; the last assignment
+  wins, so a literal keeps the line a read while a value the gate cannot read makes the parameter unknown
+  again (`p=x; p=$y`, an append onto it too, `p=x; p+=$y`), an exporter's assignment counts, a literal
+  appended to a literal is still one, and after an `unset` the value is empty. An exporter's arguments
+  expand before any of its assignments applies, so a `${..@P}` in one reads the value from before it
+  (`export p=x q=${p@P}` asks). A prefix assignment sets the command's own environment, which bash expands
+  the words before, so it is no source, and a value `printf -v` or `read` fills is never one the line
+  spells, so either clears the literal the line set for the name. The
+  other `@` operators decode or spell the value and run nothing, so they keep their reading, and the
+  operator is read only where the parameter ends, so `echo ${x:-foo@P}` stays a default word. Chosen over
+  reading the value's own substitutions (the gate cannot know where the value's text ends or what a prompt
+  escape spells — `p='\u'` is the username) and over asking on every transformation (the inert ones run
+  nothing). No decision is lower: each new part only adds an ask. Tests:
+  `tests/security/test_gate_prompt_expansion.py`.
 - *Amendment 2026-10-26 (issue #466):* a pattern a decision runs that does not compile is refused when the policy
   loads, not when `decide` first reaches it. `normalize_policies` checked types and outcome names but compiled
   nothing, so a rule's `match.command`, a `command:<regex>` entry or a mapping's `command` in `deny:` and
