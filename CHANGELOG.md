@@ -215,7 +215,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   denied before #514 and asked after it, and so did a matrix deny, a `log` or `ask` rule, and `tee`, `sudo tee`,
   `truncate` or `scp`. With `cp /var/tmp/a` first, the line asked before #514 too. Each check's hits on a spelling
   are kept with it now, and each command that repeats the spelling gets them for its own part, so the braced line
-  decides as the unbraced one. `apply_patch` and `write_file` that write two store files make the second a
+  decides as the unbraced one, and so does a case variant the store reads since #635 (`~/.EXO/policies/{g,h}.yaml`).
+  `apply_patch` and `write_file` that write two store files make the second a
   `store_write` part too, as `copy_file` does, so a `{category: store_write, target}` deny or reserved entry on it
   matches. Tests: `plugins/exo-gate/tests/test_store_floor_any_part.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md`
   (D-038).

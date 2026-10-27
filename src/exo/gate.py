@@ -4752,7 +4752,10 @@ def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str
     if check not in done:
         if any(done.get(c, 0) == [] for c in _COVERS[check]):
             return []
-        done[check] = None if words is None else list(dict.fromkeys(h for x in words for h in find(x)))
+        found = None if words is None else (h for x in words for h in find(x))
+        # a redirect target or a folder check asks only whether there is a hit, so it stops at the first, as any() did
+        done[check] = None if found is None else list(itertools.islice(found, 1) if check in ("target", "dir") else
+                                                      dict.fromkeys(found))
         return done[check]
     hits, left = done[check], _brace_left.get()
     if hits and left is not None:   # each repeat's hits come from a budget of their own, so a line of many repeats
