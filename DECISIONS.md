@@ -3010,6 +3010,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   rules, explicit unknown-category policies, and leading-separator MCP names.
   *Revisit if:* acronym boundaries need separate recognition (`HTTPDelete`, `getHTTPResponse`),
   or fully camel MCP prefixes need alignment (`mcpCreateFile`). The unsplit policy floor still applies.
+- *Amendment 2026-10-26 (issue #591):* a leading assignment quoted whole in an `env -S` text no longer hides the
+  command after it. GNU env splits the `-S` text into words and reads them as its own argv, so a word quoted whole
+  with the form `NAME=value` is an assignment there too — `env -S "'X=a b' printenv X"` prints `a b` — but the
+  gate read the text as one shell line, whose first word was an unknown program, so the command behind it was
+  never read: `env -S "'X=a b' rm -rf /srv/data"` was `opaque_exec` and asked under `deny: [delete]`, where
+  `env 'X=a b' rm -rf /srv/data` is `delete` and denies, and under `categories: {opaque_exec: allow}` it was
+  allowed. The gate now reads the leading words of the split text as env's own argv, as env's own arguments
+  already are: the first word that is neither an env option nor an assignment starts the command, and the text
+  from it on is classified beside the shell line's reading, so the hidden command's category reaches the decision
+  the way the spelling without `-S` does. After `--` a quoted `NAME=value` word is the command, a word an operator
+  would separate stays with the line's own reading (a word of argv to env), and a split inside the split is not
+  followed — each reads as before, so nothing lowers; an unknown program first is still the command and its
+  arguments run nothing. The differential against main 3bf26afc (11438 actions, 88 policies) found nothing
+  lowered. Tests: `tests/security/test_gate_category_deny_parts.py`.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

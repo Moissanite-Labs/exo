@@ -7,6 +7,7 @@ Classification and decision only; nothing is executed.
 """
 import pytest
 
+from exo import gate
 from exo.gate import classify, decide, normalize_policies
 
 
@@ -135,3 +136,64 @@ def test_a_shell_fed_to_ssh_is_denied_under_a_shell_or_host_deny(line):
     assert decide(c, category_deny("shell")).outcome == "deny"
     d = decide(c, HOST_RULE)
     assert d.outcome == "deny" and "no prod-db" in d.reason, d
+
+
+# A leading assignment quoted whole in a -S text hid the command after it (#591): env splits the text into words
+# and reads them as its own argv, so a word quoted whole with the form NAME=value is an assignment and the next
+# word starts the command. main read the text as one shell line, whose first word was an unknown program, so the
+# command behind it was never read. main's decisions: allow under the allow line below, log for the push row.
+ENV_S = [
+    "env -S \"'X=a b' rm -rf /srv/data\"",
+    "sudo env -S \"'X=a b' rm -rf /srv/data\"",
+    "env -S '\"X=a b\" rm -rf /srv/data'",
+    "env -S \"-i 'X=a b' rm -rf /srv/data\"",
+    "env --split-string=\"'X=a b' rm -rf /srv/data\"",
+    "env -S \"-i --null 'X=a b' rm -rf /srv/data\"",
+    "sudo env -S \"X=a 'Y=2' rm -rf /srv/data\"",
+    "env -S \"'X=a b' 'Y=2 c' Z=3 rm -rf /srv/data\"",
+]
+
+
+@pytest.mark.parametrize("line", ENV_S)
+def test_an_assignment_quoted_whole_in_a_split_text_no_longer_hides_the_command(line):
+    c = classify(sh(line))
+    assert any(p.category == "delete" for p in gate._each_part(c)), c
+    assert decide(c, normalize_policies({"gates": {"deny": ["delete"]}})).outcome == "deny", c
+
+
+@pytest.mark.parametrize("line", [
+    "env -S \"'X=a b' rm -rf /srv/data\"",
+    "git push origin feature && env -S \"'X=a b' git push --force origin main\"",
+])
+def test_the_command_behind_a_split_assignment_decides_when_the_shell_around_is_allowed(line):
+    d = decide(classify(sh(line)), normalize_policies({"gates": {"categories": {"opaque_exec": "allow"}}}))
+    assert d.outcome == "ask", (line, d)
+
+
+@pytest.mark.parametrize("line", [
+    "gh pr comment 5 -R myorg/app --body $'ok\\nF' && env -S \"'X=a b' gh pr comment 6 -R myorg/app --body 'Zork leaked'\"",
+    "gh pr comment 5 -R myorg/app --body $'ok\\nF' && gh pr comment 6 -R myorg/app --body 'Zork leaked'",
+])
+def test_a_post_behind_a_split_assignment_decides_as_the_spelling_without_the_split(line):
+    # forbid_words names a post's body, so neither spelling trips it; the hidden post is read all the same.
+    pol = normalize_policies({"gates": {"forbid_words": ["Zork"]}})
+    c = classify(sh(line))
+    assert any("myorg/app#6" in p.summary for p in gate._each_part(c)), c
+    assert decide(c, pol).outcome == "ask", (line, decide(c, pol))
+
+
+@pytest.mark.parametrize("line, expected", [
+    # a command, or an unquoted assignment, first: read as the shell line reads it, as on main
+    ("env -S \"nohup rm -rf /srv/data\"", "deny"),
+    ("env -S \"X=a rm -rf /srv/data\"", "deny"),
+    ("env -S \"'X=a b' && rm -rf /srv/data\"", "deny"),
+    # an unknown program first, or one behind an assignment: its arguments run nothing
+    ("env -S \"frobnicate rm -rf /srv/data\"", "ask"),
+    ("env -S \"X=1 frobnicate rm -rf /srv/data\"", "ask"),
+    # after `--` a quoted NAME=value is the command, not an assignment
+    ("env -S \"-- 'X=a b' rm -rf /srv/data\"", "ask"),
+])
+def test_the_split_reading_keeps_its_old_decisions(line, expected):
+    c = classify(sh(line))
+    assert any(p.category == "delete" for p in gate._each_part(c)) == (expected == "deny"), c
+    assert decide(c, normalize_policies({"gates": {"deny": ["delete"]}})).outcome == expected, (line, c)
