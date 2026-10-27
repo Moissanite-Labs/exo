@@ -22,7 +22,7 @@ export function mount(root) {
   let coreUsable = true, activityFresh = true, coreState = "connected", webUsable = true;
   let statusVersion = 0;
   const statusUpdates = new Map();
-  let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
+  let requested = "", ctxTokens = null, lastCallTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // estimates from /context; completed-call instruments from model.call
   const seen = new Set();   // panels already reported as opened
   const landed = new Set();   // user messages the core has added to a conversation
   let layout = getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
@@ -208,13 +208,15 @@ export function mount(root) {
       case "usage.updated": {
         if (b.session_total) { costSeen = true; cost = b.session_total.cost_usd == null ? null : b.session_total.cost_usd; }   // null = unpriced, never $0
         if (b.model && !model) model = b.model;
-        instruments(b.usage); drawStatus(); break;
+        // Usage updates can roll up several child calls; only model.call identifies one prompt.
+        drawStatus(); break;
       }
       case "model.call":
         if (routeNotice && b.call_id === routeNotice && !b.error && b.stop_reason !== "interrupted") flash("");
         help.note({ providerError: !!b.error });
         if (b.route) { model = b.route; capacity = capacities[model] || null; }
         if (b.requested) requested = b.requested;
+        lastCallTokens = null; cacheShare = null;
         if (b.usage) instruments(b.usage);
         calls.unshift({ route: b.route || "", requested: b.requested || "", ttft: b.ttft_ms, ms: b.total_ms, cache: b.usage ? cacheOf(b.usage) : null, cost: b.usage ? b.usage.cost_usd : undefined, error: b.error });
         calls = calls.slice(0, 6);
@@ -279,11 +281,11 @@ export function mount(root) {
     }
   }
 
-  // What the next call carries (input + cached) and how much of it came from the cache.
+  // What the last completed model call carried; never overwrite the /context estimate.
   function instruments(u) {
     if (!u) return;
     const total = (u.input_tokens || 0) + (u.cache_read_tokens || 0) + (u.cache_write_tokens || 0);
-    if (total > 0) { ctxTokens = total; cacheShare = (u.cache_read_tokens || 0) / total; }
+    if (total > 0) { lastCallTokens = total; cacheShare = (u.cache_read_tokens || 0) / total; }
   }
   function cacheOf(u) {
     const t = (u.input_tokens || 0) + (u.cache_read_tokens || 0) + (u.cache_write_tokens || 0);
@@ -448,12 +450,14 @@ export function mount(root) {
       out.push(m);
     }
     if (ctxTokens != null) {
-      const pct = capacity ? Math.min(100, Math.round(100 * ctxTokens / capacity)) : 0;
-      const remaining = capacity ? Math.max(0, capacity - ctxTokens) : 0;
+      const estimateCapacity = ctx ? ctx.capacity : null;
+      const pct = estimateCapacity ? Math.min(100, Math.round(100 * ctxTokens / estimateCapacity)) : 0;
+      const remaining = estimateCapacity ? Math.max(0, estimateCapacity - ctxTokens) : 0;
       out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "memory"),
-        capacity ? h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: "context capacity: " + fmtTok(capacity) + " tokens" }, h("i", { style: "width:" + pct + "%" })) : null,
-        h("span", { class: "xc-v" }, capacity ? fmtTok(ctxTokens) + " of " + fmtTok(capacity) + ". " + fmtTok(remaining) + " left." : "About " + fmtTok(ctxTokens) + " on the next call. Limit unknown.")));
+        estimateCapacity ? h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: "context capacity: " + fmtTok(estimateCapacity) + " tokens" }, h("i", { style: "width:" + pct + "%" })) : null,
+        h("span", { class: "xc-v" }, estimateCapacity ? "Estimated next call: " + fmtTok(ctxTokens) + " of " + fmtTok(estimateCapacity) + ". " + fmtTok(remaining) + " left." : "Estimated next call: about " + fmtTok(ctxTokens) + ". Limit unknown.")));
     }
+    if (lastCallTokens != null) out.push(cell("last call", fmtTok(lastCallTokens) + " input tokens"));
     if (cacheShare != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "cache"), h("span", { class: "xc-v" }, Math.round(cacheShare * 100) + "%")));
     if (findings != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "findings"), h("span", { class: "xc-v" + (findings ? " xc-via" : "") }, String(findings))));
     if (cost != null || costSeen) out.push(cell("cost", cost != null ? money(cost) : "unknown"));
@@ -516,11 +520,11 @@ export function mount(root) {
     const mem = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Memory"));
     if (ctx) {
       const max = Math.max(ctx.total, 1);
-      mem.append(h("div", { class: "xc-big" }, h("span", null, fmtTok(ctx.total)), h("span", { class: "xc-i" }, "tokens on the next call")),
+      mem.append(h("div", { class: "xc-big" }, h("span", null, fmtTok(ctx.total)), h("span", { class: "xc-i" }, "estimated tokens for next call")),
         gaugeRow("system", ctx.system, max), gaugeRow("tree", ctx.tree, max), gaugeRow("threads", ctx.notes, max), gaugeRow("tail", ctx.tail, max),
         h("div", { class: "xc-pm" }, "tree \u00B7 " + ctx.summaries + " summaries over " + ctx.nodes + " nodes" + (ctx.pending ? " \u00B7 " + ctx.pending + " pending" : "")),
         h("div", { class: "xc-pm" }, "log \u00B7 " + ctx.log + " entries, folded up to " + ctx.frontier));
-    } else mem.append(h("div", { class: "xc-pm" }, ctxTokens != null ? fmtTok(ctxTokens) + " tokens on the last call" : "no report yet"));
+    } else mem.append(h("div", { class: "xc-pm" }, lastCallTokens != null ? fmtTok(lastCallTokens) + " tokens on the last call" : "no report yet"));
     const cl = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Last calls"));
     if (calls.length) calls.forEach((k) => cl.append(h("div", { class: "xc-call" + (k.error ? " xc-bad" : "") },
       h("span", { class: "xc-v" }, short((k.route || k.requested || "no route").split(":").pop(), 22)),
@@ -561,7 +565,7 @@ export function mount(root) {
     capacity = null;
     current = id; loading = true; pending = []; items = [];
     setBusy(snapshotBusy(null, sessions.find(s => s.id === id)));
-    cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
+    cost = null; requested = ""; ctxTokens = null; lastCallTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
@@ -595,6 +599,8 @@ export function mount(root) {
       const d = id ? await api("GET", "/api/chat/sessions/" + encodeURIComponent(id)) : null;
       if (id !== current || generation !== snapshotGeneration) return;
       sessions = freshSessions;
+      // A transcript snapshot cannot restore missed per-call usage; replay newer events below.
+      lastCallTokens = null; cacheShare = null;
       if (d) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
         dropSteers(id, had, d.steers);

@@ -130,6 +130,11 @@ In Chat, a busy thread says `waiting for approval` while its approval card, or a
 needs an answer. Other threads' cards do not change its phase. When the core or activity state is unavailable,
 the label says `last known`. Stop and Send keep their existing behavior. Answer through the approval card.
 
+The web memory gauge and side panel show the last next-call estimate from `/context`. The separately
+labelled last-call input count comes from `model.call` events. A later tool round can change that count
+without refreshing the estimate. A call with no reported input usage clears the last-call count and cache share.
+Neither display promises a live measurement of the next prompt.
+
 The web page has its own sub-pages for Tasks, Schedule, Command and Providers. Its composer runs `/context`,
 `/findings`, `/trace`, `/new`, `/rename` and `/layout`. Type `/` for the menu. The Layout button in the page does what
 `/layout` does. Use Rename beside a thread to edit its title, then Save or Cancel. Enter saves and Escape cancels.
