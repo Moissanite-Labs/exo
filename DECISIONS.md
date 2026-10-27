@@ -2439,6 +2439,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   against c833d5b0 with the same 95 policies, the built-in corpus, the check's corpus of 3,287 lines and 490 lines of
   double-quoted indirect words under seven wrappers. It runs 83,465 actions, and 1,231 pairs on 241 actions are lower.
   Each is a line with `${!`, in group (2) 89, (3) 60 or (4) 1,082.
+  *Note 2026-10-26 (issue #585).* A `$` form a `\<newline>` splits is read as its plain spelling is now (#585): the
+  lexer skips each `\<newline>` after the `$`, and `lone()` tests `${!` with them dropped, so
+  `hash "$\<newline>@"; ls`, `hash "${\<newline>!n}"; ls` and `hash -p "${\<newline>!n}"; ls` are opaque as
+  `hash "$@"`, `hash "${!n}"` and `hash -p "${!n}"` are, while `hash "$cmd"`, `hash -p "$P"` and `hash "$r"`
+  through a nameref stay `read`.
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
   word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was
@@ -3024,6 +3029,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   followed — each reads as before, so nothing lowers; an unknown program first is still the command and its
   arguments run nothing. The differential against main 3bf26afc (11438 actions, 88 policies) found nothing
   lowered. Tests: `tests/security/test_gate_category_deny_parts.py`.
+- *Amendment 2026-10-26 (issue #585):* the lexer reads the `$` form after a `\<newline>` itself now, as bash reads
+  it. #584 read such a line joined beside itself, but the line as written still read a `$` and then a backslash as
+  a literal `$`, so its words were plain text and the decision leaned on the joined reading alone.
+  `_Lexer._dollar` (which `_dquote`'s `$` path calls, so double-quoted forms too) skips each `\<newline>` after
+  the `$` before it reads the next character: the substitutions, `$@`, `${..}`, `$'..'`, `$".."` and plain names.
+  `_dollar_brace` skips them before the `{` and blanks them in its visible text, and a `${..}` the `\<newline>`
+  splits still has the `$( )` and backticks inside it classified, as the word-walk it replaced did.
+  `_nest_end`'s twin skips them too, so the two readers still end together. `_hash_rebind`'s `lone()` tests
+  `"${!"` on the word with the `\<newline>`s dropped, as `glob()` and `tilde()` already do, so
+  `hash -p "${\<newline>!n}"` asks as `hash -p "${!n}"` does, while `hash "$cmd"`, `hash -p "$P"`, `hash "$r"`
+  through a nameref (bash prints `"${r}"` of `r='a[@]'` as one word) and a `\\<newline>` after a `$` (an escaped
+  backslash, not a continuation of the form) stay `read`. Each line of the issue decides as its plain spelling
+  does: the hash rows opaque (`hash "$\<newline>@"; ls`, `hash -p "$\<newline>@"; ls`,
+  `hash "$\<newline>{!n}"; ls`, `hash $\<newline>O /tmp/x ls; ls`, `hash -p $\<newline>P; ls`), the POST row
+  `web_post` and the plain push row `vcs_push`.
+  The #423 differential against main c6b24779 (11564 actions, 88 policies) lowers 9 pairs in two groups, each the
+  misparse's artifact going away, each deciding as its plain spelling does on main. `matrix_ask_log_then_allow`
+  (6 pairs): `echo $\<newline>(git push --force origin main)`, its doubled `\<newline>` and `x=$(..)` forms — the
+  misparse split the line into `echo $` and a subshell, so the `allow git` rule could not name the echo command's
+  own text (#394); the plain spelling `echo "$(git push --force origin main)"` allows on main.
+  `reserved_tool_terminal` (3 pairs): `git push $\<newline>'--force' origin main` and the ssh forms — the ask
+  stands; the dropped second reserved hit was the misparse's phantom `$--force` push target, which bash does not
+  read (the quoted `'--force'` is the flag). Tests: `tests/security/test_gate_dollar_line_continuation.py`.
+  *Revisit if:* a `${..}` the `\<newline>` splits should read its operator in the line as written too — the
+  scan's visible text blanks the `{`, so `_hidden_sets` sees an assignment in it only on the joined reading,
+  which still decides the line.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
