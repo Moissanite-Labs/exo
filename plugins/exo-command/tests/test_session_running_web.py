@@ -60,9 +60,9 @@ def click(browser, sid):
     browser.eval('Array.from(document.querySelectorAll(".xc-sess")).find(e=>e.querySelector(".xc-sess-title").textContent===' + repr(sid) + ').click()')
 
 
-def expect(browser, sid, working):
+def expect(browser, sid, working, phase=None):
     browser.wait('document.querySelector(".xc-sess.on .xc-sess-title").textContent===' + repr(sid)
-                 + ' && document.querySelector(".xc-state").textContent===' + repr('working' if working else 'idle'))
+                 + ' && document.querySelector(".xc-state").textContent===' + repr(phase or ('working' if working else 'idle')))
     assert browser.eval('document.querySelector("#xc-live").classList.contains("on")') is working
     assert browser.eval('!!document.querySelector(".xc-strip .xc-state.on .xc-dot.on")') is working
     assert browser.eval('!!document.querySelector(".xc-wire")') is working
@@ -202,5 +202,5 @@ def test_running_snapshot_with_pending_approval_keeps_working_indicators(page):
     click(browser, 's2')
     expect(browser, 's2', False)
     click(browser, 's1')
-    expect(browser, 's1', True)
+    expect(browser, 's1', True, phase='waiting for approval')
     browser.wait('!!document.querySelector("[data-approval=a_fixture]")')

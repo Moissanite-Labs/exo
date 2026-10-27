@@ -117,6 +117,10 @@ It shows approvals, decisions waiting on you, live sessions, tasks, projects and
 `docs/media/web-*.png`, and the Providers tab is `docs/ui/web-providers.png`. Details are in `docs/ui/WEB.md` and
 `plugins/exo-command/README.md`.
 
+In Chat, a busy thread says `waiting for approval` while its approval card, or a global approval card,
+needs an answer. Other threads' cards do not change its phase. When the core or activity state is unavailable,
+the label says `last known`. Stop and Send keep their existing behavior. Answer through the approval card.
+
 The web page has its own sub-pages for Tasks, Schedule, Command and Providers. Its composer runs `/context`,
 `/findings`, `/trace`, `/new`, `/rename` and `/layout`. Type `/` for the menu. The Layout button in the page does what
 `/layout` does. Double-click a thread in the list to rename it. Anything else you type there goes to the agent as a

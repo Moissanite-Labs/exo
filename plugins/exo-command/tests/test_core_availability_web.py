@@ -71,7 +71,7 @@ def test_unavailable_core_marks_last_known_working_preserves_draft_pending_and_r
             source.available = False
             web.call(web.centre.set_core_state, 'unavailable')
             browser.wait('document.querySelector(".xc-conn").textContent === "core unavailable"')
-            browser.wait('document.querySelector(".xc-state").textContent.includes("last known working")')
+            browser.wait('document.querySelector(".xc-state").textContent.includes("last known waiting for approval")')
             assert browser.eval('document.querySelector(".xc-input").value') == 'keep this draft'
             assert not browser.eval('!!document.querySelector(".xc-wire") || document.querySelector("#xc-live").classList.contains("on")')
             assert browser.eval('Array.from(document.querySelectorAll(".xc-btn")).find(b=>["Stop", "Try stop"].includes(b.textContent)).disabled')

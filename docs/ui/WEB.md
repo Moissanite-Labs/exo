@@ -321,6 +321,12 @@ table and snapshot stubbed, no key read) and shoots every tab with data and empt
 
 ## Motion and accessibility
 
+Chat labels a busy thread `waiting for approval` when a pending request belongs to that thread or applies
+globally. The thread list uses the same phase for live threads. Requested and resolved events, approval
+snapshots and thread navigation refresh the label. Connection loss or failed activity recovery retains the
+`last known` qualifier. This phase uses pending approval state, without estimating tool execution time.
+Busy indicators and Stop, Send and approval authority keep their existing behavior.
+
 Every animation (pulse, packet, caret blink, reveal, boot) sits behind `prefers-reduced-motion: reduce`, which
 turns them all off and hides the boot. The page is dark only, like the site, and paints its own background.
 

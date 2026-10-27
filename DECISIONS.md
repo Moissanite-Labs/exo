@@ -3785,6 +3785,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27 (aska-digital/exo-desktop#37, partial):** Chat distinguishes a busy thread waiting for its own or a
+  global approval from other active work. Events, snapshots and navigation refresh this phase. Unavailable core
+  or activity state keeps the last-known qualifier. Existing busy, Stop, Send and approval authority remain.
+  No elapsed-time or execution-duration estimate is introduced.
 - **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
   alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
   reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
