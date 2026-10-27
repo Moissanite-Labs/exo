@@ -129,9 +129,11 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 - **Brand bar.** `E X O`, the agent and thread, the tabs, the connection led. The square dot before `E X O`
   pulses orange while a turn runs and is hollow when idle.
 - **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
-  that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
-  against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
-  `/context` reports), cache share of that call, session cost. While busy a
+  that served differs from the one asked, from `model.call`), memory gauge (with a known limit it reads `X of N. Y left.` with the bar. With an unknown limit it reads
+  `About X on the next call. Limit unknown.` with no bar. A known route limit stays while `/context` is pending
+  or fails, even where `/context` cannot answer. A report of unknown capacity does not reuse an older route
+  limit. Only a positive whole-number route limit counts as known. The count comes from `usage.updated`
+  and structured `/context` reports), cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed; click
   to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded · 1781 → 153 tok`

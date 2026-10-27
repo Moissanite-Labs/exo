@@ -7,6 +7,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- The chat status strip keeps a known route limit while `/context` is pending or fails, instead of briefly
+  showing `Limit unknown` with no bar (#697). With an unknown limit it reads `About X on the next call.
+  Limit unknown.` with no bar, and only a positive whole-number route limit counts as known.
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).

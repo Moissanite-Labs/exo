@@ -184,7 +184,7 @@ export function mount(root) {
         loadContext();
         sys("memory", "log " + b.start + "-" + b.end + " folded \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "context.compacted":
-        capacity = null; loadContext();
+        loadContext();
         sys("context", "compacted \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "peer.message": card({ kind: "peer", id: b.msg_id || "peer" + items.length, sender: b.sender, text: b.text, trust: b.trust, mode: b.mode }); break;
       case "taste.updated": push({ kind: "taste", id: "taste-" + b.rule_id + "-" + ev.seq, action: b.action, text: b.text, path: b.path }); break;
@@ -257,14 +257,12 @@ export function mount(root) {
   async function loadContext() {
     const id = current;
     if (!id) return;
-    capacity = null;
-    drawStatus();
     try {
       const out = await runCommand("context", "json");
       if (id !== current) return;
       applyContext(out);
       drawStatus(); drawSide(true); if (!items.length) drawHero();
-    } catch (e) { if (id === current) { capacity = null; drawStatus(); } }
+    } catch (e) { if (id === current) { capacity = model ? (capacities[model] ?? null) : null; drawStatus(); } }
     try {
       const out = await runCommand("findings", "count");
       if (id === current && out && typeof out.open === "number") { findings = out.open; help.note({ findings }); drawStatus(); }
