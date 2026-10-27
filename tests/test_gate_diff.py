@@ -513,6 +513,8 @@ def _blind_by_design(entry: tuple, t: dict) -> str:
         return "a prefix of a longer option of the wrapper, which _wrapper_args then reads it as"
     if table == "_SENSITIVE_SAMPLES" and "/" in key and re.search(t["_SENSITIVE_PATH"], "/" + key.rpartition("/")[0] + "/"):
         return "its folder is a secret store by _SENSITIVE_PATH"
+    if table == "_STORE_FOLDERS" and key == ".config/netlify":
+        return "the folded Netlify name is a store by itself (#601), so the folder's pair adds no form of its own"
     if table == "TOOLS" and key in t["tool_names"]:
         return "the tool has a branch of its own in classify"
     from exo import gate
@@ -663,8 +665,8 @@ LOOSENINGS = {
     "send action": (('if str(args.get("action", "send")).lower() == "list":',
                      'if str(args.get("action", "send")).lower() != "send":'),
                     {"tool": "send_message", "args": {"action": "reply"}}, "default"),
-    "link": (('            if real in cands and real != a and _SENSITIVE_PATH.search(_below(real, base or scope.here, w, '
-              'memo)):\n                return True\n', ''), "cat ~/notes-link.txt", "default"),
+    "link": (('            if real in cands and real != a and _sensitive_re().search(_fold(_below(real, base or scope.here, '
+              'w, memo))):\n                return True\n', ''), "cat ~/notes-link.txt", "default"),
     "privileged": (('_PRIVILEGED_WRAPPERS = ("chroot", "nsenter", "unshare", "systemd-run")',
                     '_PRIVILEGED_WRAPPERS = ("nsenter", "unshare", "systemd-run")'), "chroot 1 touch notes.md",
                    "rule_costly_part_deny"),

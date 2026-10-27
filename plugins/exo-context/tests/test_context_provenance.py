@@ -1898,3 +1898,20 @@ def test_a_rebind_while_an_undo_pends_leaves_the_record_its_session(tmp_path):
     out = built.turn("next step")
     assert pins(tmp_path, "b3")["ruling"] == [] and (out is None or MINE not in hf.message_text(out[0]))
     assert pins(tmp_path, "b4")["ruling"] == [MINE]  # the child's copy stays its own, as main keeps it
+
+def test_a_rebind_leaves_alone_a_pin_the_parent_undid(tmp_path):
+    """#645: a pin the parent undid must not resurrect in a child bound from it. The parent's undo lands
+    in another engine, so this engine's in-memory cache of the parent's pins stays stale; the bind must
+    read the parent's pins fresh from disk, not the cache."""
+    cached = ExoContextEngine(write_handoffs=False)
+    cached.select_context([SYS, mine(NOTE), mine(MINE), mine("carry on")], session_id="p")
+    actor = ExoContextEngine(write_handoffs=False)
+    actor.select_context([SYS, mine(NOTE), mine("carry on")], session_id="p")
+    actor.select_context([SYS, mine(NOTE), mine("carry on"), mine("turn two"), mine(MINE)], session_id="p")
+    host_undo("p")
+    assert pins(tmp_path, "p")["ruling"] == [NOTE]
+    cached.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    assert pins(tmp_path, "c")["ruling"] == [NOTE]
+    assert MINE not in pins(tmp_path, "c")["ruling"]
+    out = cached.select_context([SYS, mine("go on")], session_id="c")
+    assert out is None or MINE not in hf.message_text(out[0])
