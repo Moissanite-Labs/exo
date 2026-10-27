@@ -4929,7 +4929,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `exo.store`, `exo.turn_settle`, `exo.wire`) and 7 private-state reads (`loop._state` 3 in `engine.py`,
   `hub._subs` in `jobs.py` and in `peer_target.py`, `loop._state` 2 in `peer_target.py`).
 - **Revisit if:** the two step 4 caps stay still for a long stretch, or the headroom is raised again.
-- **Validation:** `tests/integration/test_wave1_acceptance.py` (6 passed) and the whole of `tests/integration` with
-  `tests/docs` (`tests/integration` 146 passed, 2 skipped; `tests/docs` 5 passed).
+- **Validation:** after merging main `00e2840e` (`c4b451fd`), `tests/integration` with `tests/docs` and `tests/core`
+  gave 1,314 passed and 1 skipped, including the six `test_core_line_budget` cases.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md` §27,
   `docs/DOCS-MAP.md`, `CHANGELOG.md`.
