@@ -786,9 +786,11 @@ system or bash will.
   `/proc/<pid>/environ` and its thread form) is matched in that lexical form too, after `~` and `$HOME` are spelt
   out. So `cat ~/.kube//config`, `cat ~/.kube/./config`, `cat ~/.kube/x/../config`, `sudo cat ~/.kube//config`,
   `bash -c 'cat ~/.kube//config'` and `read_file ~/.kube//config` ask, as `cat ~/.kube/config` does. The lexical
-  form is matched in any letter case, as the form as written is (#601), so `cat ~/.KUBE//config` asks. Single-folder
-  stores (`~/.ssh//id_rsa`) already asked. Both forms count, so the form as written still asks where the lexical
-  one leaves the store (`cat ~/.ssh/../notes`, as before). The lexical form follows no link. When `x` in
+  form is matched in any letter case, as the form as written is (#601), so `cat ~/.KUBE//config` asks. An ssh hop
+  keeps the host's copy of a remote command beside `~/.Kube//config` as it does beside `~/.Kube/config`, so
+  `ssh prod 'rm -rf ~/.Kube//config'` is denied under `deny: [{category: delete, target: prod}]`, as on main.
+  Single-folder stores (`~/.ssh//id_rsa`) already asked. Both forms count, so the form as written still asks where
+  the lexical one leaves the store (`cat ~/.ssh/../notes`, as before). The lexical form follows no link. When `x` in
   `~/.kube/x/../config` is a link to another folder, the kernel reads a file beside that folder, and the line asks
   when it need not (fails closed). A link that leads into a store before a `..` is still resolved (#209). A glob
   word with an absolute path is read that way too: when its folder part before the glob holds a `..`, that part is

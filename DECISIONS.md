@@ -3142,7 +3142,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (#320), so an entry on the host's read sees it. Main's target part has a target, and the hop took that part, so it
   made no copy. `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'` asked under `deny: [{category: read, target: prod}]`,
   where main denies it, and `reserved: [target:prod]` listed one hit fewer. mosh, a `$( )` and a second hop did the
-  same. The hop now passes over main's target part. It held at 0b35021a too.
+  same. The hop now passes over main's target part. It held at 0b35021a too. (x) The check's differential found where
+  #601 and #446 meet on a remote line. #601 keeps the line's own action on the host beside a path that is a store only
+  by its letter case, so main denies `ssh prod 'rm -rf ~/.Kube/config'` under
+  `deny: [{category: delete, target: prod}]`. That test read the store names as written, so `~/.Kube//config`, a
+  store only in another case and in its lexical form, kept no copy for the host, and the line asked where main denies
+  both it and its plain spelling. The test now reads each spelling in its lexical form too.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
