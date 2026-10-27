@@ -200,6 +200,31 @@ input.value="/new private extra";await send.attrs.onclick();assert.match(strip.t
 input.value="/context broken";await send.attrs.onclick();assert.match(strip.textContent,/usage: \/context/);
 input.value="/contex help";await send.attrs.onclick();assert.equal(input.value,"/context");
 assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
+// Notices belong to a thread. Only the exact completed call clears a route warning.
+input.value="draft survives";
+let eventSeq=1000;
+const emit=(type,body,session="s1")=>bus.emit({seq:eventSeq++,session,type,body});
+const has=t=>strip.textContent.includes(t);
+emit("notice",{text:"selected general"});assert.ok(has("selected general"));
+emit("notice",{text:"foreign warning",source:"model_route",call_id:"foreign"},"other");
+emit("notice",{text:"unscoped warning"},null);assert.ok(has("selected general"));assert.ok(!has("foreign warning"));
+emit("notice",{text:"route retry",source:"model_route",call_id:"call1"});
+emit("model.call",{call_id:"other-call",route:"fake:x"});assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",route:"fake:x"},"other");assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",error:"failed"});assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",stop_reason:"interrupted"});assert.ok(has("route retry"));
+emit("model.call",{call_id:"call1",route:"fake:x",stop_reason:"end"});assert.ok(!has("route retry"));
+emit("notice",{text:"route retry2",source:"model_route",call_id:"call2"});
+emit("notice",{text:"new general notice"});emit("model.call",{call_id:"call2",route:"fake:x"});
+assert.ok(has("new general notice"));emit("turn.completed",{});assert.ok(has("new general notice"));
+emit("error",{message:"persistent command failure"});emit("model.call",{call_id:"call2",route:"fake:x"});
+assert.ok(has("persistent command failure"));
+emit("notice",{text:"unfinished route",source:"model_route",call_id:"call3"});
+emit("turn.completed",{},"other");assert.ok(has("unfinished route"));
+emit("turn.completed",{});assert.ok(!has("unfinished route"));
+emit("notice",{text:"legacy general warning",level:"warn"});
+emit("model.call",{route:"fake:x"});emit("turn.completed",{});assert.ok(has("legacy general warning"));
+assert.equal(input.value,"draft survives");
 off();console.log("ok");
 ''')
     result = subprocess.run([NODE, str(tmp_path / "test.mjs")], text=True, capture_output=True, timeout=10)

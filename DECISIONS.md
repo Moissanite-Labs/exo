@@ -3806,6 +3806,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-27 (#708):** Command refreshes its snapshot on every current stream open, using the
   existing event debounce. A quiet reopen no longer waits for another event. Superseded or disposed stream
   handles cannot schedule the refresh, and unmount cancels a queued refresh. No user or extension step changes.
+- **Amendment 2026-10-27:** chat notices belong to their selected session. Additive optional notice source
+  and model-call identity fields let a successful matching call clear its route warning without clearing
+  newer general notices or command errors. Turn completion clears only outstanding route warnings.
 - **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
   alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
   reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early

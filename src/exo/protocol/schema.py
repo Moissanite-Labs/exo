@@ -579,6 +579,7 @@ class ModelCall:
     error: str = ""
     retries: int = 0  # loop-level retries before this outcome
     reasoning: dict[str, Any] = field(default_factory=dict)  # requested vs sent, not measured adaptive computation
+    call_id: str = ""  # assistant message ID identifying this model call
 
 
 @event("harness.error")
@@ -596,6 +597,8 @@ class HarnessError:
 class Notice:
     text: str
     level: Literal["info", "warn"] = "info"
+    source: str = ""  # model_route identifies a transient routing warning
+    call_id: str = ""  # matching ModelCall; empty on legacy/general notices
 
 
 @event("error")

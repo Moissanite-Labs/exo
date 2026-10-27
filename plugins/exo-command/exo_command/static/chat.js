@@ -17,7 +17,7 @@ import { attachPaneLayout } from "./pane_layout.js";
 export function mount(root) {
   let maxRounds = null; // this mounted window only; never persisted or shared between tabs
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
-  let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
+  let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let coreUsable = true, activityFresh = true, coreState = "connected", webUsable = true;
   let statusVersion = 0;
@@ -84,7 +84,7 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- items
 
-  function flash(msg) { notice = msg || ""; drawStatus(); }
+  function flash(msg) { notice = msg || ""; routeNotice = null; drawStatus(); }
   function fail(e) { flash(e && e.message ? e.message : String(e)); }
 
   // A context note (meta.note: other threads' news) is for the model, not a message the user typed (D-028), so the
@@ -145,8 +145,11 @@ export function mount(root) {
       case "approval.resolved": gone.add(b.request_id); delete approvals[b.request_id]; drawApprovals(); drawSessions(); return;
       case "ui.panel": panelsOpen = bus.openPanels(); drawSide(); return;
       case "notice":
+        if (!mine) return;
         if (mine && /^tip\b/i.test(b.text || "")) { push({ kind: "sys", id: "tip" + ev.seq, tone: "tip", text: b.text.replace(/^tip:?\s*/i, "") }); return; }
-        flash(b.text); return;
+        flash(b.text);
+        if (b.source === "model_route" && b.call_id) routeNotice = b.call_id;
+        return;
       default: break;
     }
     // Keep background threads current too: returning to one must not revive a
@@ -158,6 +161,7 @@ export function mount(root) {
     switch (ev.type) {
       case "turn.started": setBusy(true); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); break;
       case "turn.completed": {
+        if (routeNotice) flash("");
         setBusy(false); drawStatus(); loadContext();
         const tm = b.timing || {};
         help.note({ busy: false, turns: items.filter((i) => i.kind === "user").length, longTurn: (tm.wall_ms || 0) - (tm.tool_ms || 0) - (tm.approval_ms || 0) >= 60000 });
@@ -169,6 +173,7 @@ export function mount(root) {
         instruments(b.usage); drawStatus(); break;
       }
       case "model.call":
+        if (routeNotice && b.call_id === routeNotice && !b.error && b.stop_reason !== "interrupted") flash("");
         help.note({ providerError: !!b.error });
         if (b.route) { model = b.route; capacity = capacities[model] || null; }
         if (b.requested) requested = b.requested;
