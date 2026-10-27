@@ -6,11 +6,10 @@ import json
 
 from exo.core.approvals import Pending
 from exo.core.engine import CoreEngine
-from exo.core.models.fake import FakeProvider, tool_turn
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher
 from exo_command.config import load_settings
-from exo_command.server import WebServer
+from exo_command.server import MAX_BODY, WebServer
 from exo_command.service import CommandCentre
 from exo_command.source import DispatcherSource
 
@@ -60,18 +59,23 @@ def test_approval_malformed_content_length_answers_400(tmp_path):
         eng.hub.publish(req, sid)
         await centre.sync()
 
-        # malformed header must not drop the connection
+        # empty header must not drop the connection (pre-fix dropped it)
+        status, _ = await raw(port, "", b'{"decision":"allow"}')
+        assert status == 400, status
+        assert not fut.done()
+
+        # malformed non-numeric header must not drop the connection
         status, _ = await raw(port, "not-a-number", b'{"decision":"allow"}')
         assert status == 400, status
         assert not fut.done()
 
-        # negative length must also be rejected
+        # negative length must also be rejected (-1 already returned 400 on old source)
         status, _ = await raw(port, "-1", b"")
         assert status == 400, status
         assert not fut.done()
 
-        # oversize length must be rejected
-        status, _ = await raw(port, str(64 * 1024 + 1), b"")
+        # oversize length must be rejected (already returned 400 on old source)
+        status, _ = await raw(port, str(MAX_BODY + 1), b"")
         assert status == 400, status
         assert not fut.done()
 
