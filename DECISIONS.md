@@ -3015,7 +3015,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   lines #568 tracks too, so group 2 is empty. The folder pass of (s) now reads main's line again only where the call's
   reading has a credentials part. #446 only adds reads, so a line with no secret read here had none on main either,
   and the decisions do not change. A call such as `cat` with 2,000 file names and `cwd: ~/.ssh` no longer parses its
-  line a second time: it takes 0.101 s, against 0.092 s on main and 0.146 s before.
+  line a second time, and costs what it costs on main: 0.094 s against 0.093 s (CPU time, best of five).
+  (u) The check's differential after the merge of main 15e60ddb found one more shape of (s). The bare word main read
+  first can also be a part with a name of its own: `conf*` in `cat ~/.kube//config; cd ~/.docker && cat conf*`, which
+  the line reads after its `cd` (D-038), or `keys` in `cat ~/.docker/./config.json; cd ~/.exo && rm keys`. With
+  `cwd: ~/.exo`, the folder pass of (s) took that part as main's read, so its path was the name in the folder
+  (`~/.exo/conf*`). Main's read was the line, with no target, and its path the folder as written. The call asked
+  under `deny: [target:*/.exo]`, where main denies it, and a `reserved:` entry like it listed one hit fewer. Where
+  main read a secret on the line and the call's first credentials part is one main did not read, the folder pass now
+  takes main's read of the line, as main made it. It held at 0b35021a too.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

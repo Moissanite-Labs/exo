@@ -7175,12 +7175,14 @@ def _shell_call(cmd: str) -> Classification:
             plain_read = next((p for p in _each_part(whole) if p.category == "credentials" and (
                 is_sensitive_path(p.target, True) or _glob_hits_secret(p.target, True) or not (
                     is_sensitive_path(p.target) or _glob_hits_secret(p.target)))), None)
-            # A word main read with no name of its own (`keys` in `~/.exo`) made main's line a secret line with no
-            # target and gets no part (_plain_part), so main's read is the line, and its path the folder as written.
-            # A line with no secret read here has none as main read it either, so it costs no second reading
-            if plain_read is None and read is not None and (mine := _plain_hit(cmd)):
-                plain_read = _make("credentials", summary=f"shell touching {mine}"[:120],
-                                   target=mine if "/" in mine or "." in mine else "")
+            # Where main read a secret on the line, its read is the line, the first part main read. A word with no name
+            # of its own (`keys` in `~/.exo`) made it a secret line with no target and gets no part (_plain_part), so
+            # its path is the folder as written, also beside a later part main read (`cd ~/.docker && cat conf*`). A
+            # line with no secret read here has none as main read it either, and one whose first read main made too
+            # needs no second reading
+            if read is not None and plain_read is not read and (said := _plain_hit(cmd)):
+                plain_read = _make("credentials", summary=f"shell touching {said}"[:120],
+                                   target=said if "/" in said or "." in said else "")
             found += [f for f in _tool_folder_read(cmd, folders, plain_read, plain=True)
                       if f[1] not in {t for _, t in found}]
     finally:

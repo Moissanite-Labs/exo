@@ -527,7 +527,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   part, so `deny: [target:*/.ssh*]` denies the call, as on main. The same holds for the folder of a call whose line
   names a store only in such a spelling (`cat ~/.kube//config` with `cwd: ~/.ssh`), for the folder itself where a word
   with no name of its own resolves into a store from it (`cat ~/.kube//config keys` with `cwd: ~/.exo` under
-  `deny: [target:*/.exo]`), for the name such a line reads after a `cd`
+  `deny: [target:*/.exo]`, also beside a later read, as in `cat ~/.kube//config; cd ~/.docker && cat conf*`), for the
+  name such a line reads after a `cd`
   (`cd ~/.config/gh && cat /pro?/self/environ hosts.yml` under `deny: [target:*hosts.yml]`, and
   `cd ~/.k$(:)ube && cat config; cat ~/.docker//config.json`, whose name #320's expansion forms read, under
   `deny: [target:config]`), and for the first store beside a `$( )` that reads a store through a redirection with a

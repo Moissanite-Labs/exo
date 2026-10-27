@@ -1038,6 +1038,29 @@ def test_main_s_read_of_the_folder_a_bare_word_reads_from_stays_a_part(tool, key
     assert (outcome, "credentials" in hits) == ("ask" if reserved else "deny", reserved)
 
 
+# The same read beside a later part main read too: the glob `conf*` after `cd ~/.docker`, or `keys` after `cd ~/.exo`.
+# Main's first read on the line was still the bare word read from the call's folder, so that read's path was the folder
+# as written, not the later part's name in it (#513 checker, after the merge of main 15e60ddb)
+@pytest.mark.parametrize("policy", EXO_FOLDER_ENTRIES)
+@pytest.mark.parametrize("line", ["cat ~/.kube//config; cd ~/.docker && cat conf*",
+                                  "cat ~/.kube//config; cd ~/.kube && cat [^]x]onfig",
+                                  "cat ~/.docker/./config.json; cd ~/.exo && rm keys"])
+@pytest.mark.parametrize("folder_key", ["cwd", "workdir"])
+@pytest.mark.parametrize("tool, key", SHELL_TOOLS)
+def test_main_s_read_of_the_folder_stays_a_part_beside_a_later_part_main_read(tool, key, folder_key, line, policy):
+    _, outcome, hits, _ = full({"tool": tool, "args": {key: line, folder_key: "~/.exo"}}, policy)
+    reserved = "reserved" in policy["gates"]
+    assert (outcome, "credentials" in hits) == ("ask" if reserved else "deny", reserved)
+
+
+@pytest.mark.parametrize("line", ["cat ~/.kube/config; cd ~/.docker && cat conf*",
+                                  "cat ~/.docker/config.json; cd ~/.exo && rm keys"])
+def test_no_folder_part_beside_a_later_part_where_main_read_the_store_first(line):
+    # main read the plain store first, so its read of the folder took that path, and an entry for `~/.exo` alone asks,
+    # here and on main
+    assert full({"tool": "bash", "args": {"command": line, "cwd": "~/.exo"}}, EXO_FOLDER_ENTRIES[0])[1] == "ask"
+
+
 @pytest.mark.parametrize("line", ["cat ~/.kube/config keys", "cat ~/.kube//config ./keys",
                                   "cat ~/.kube//config keys $(cat ~/.ssh/id_rsa)"])
 def test_no_folder_part_where_main_s_read_named_its_own_path(line):

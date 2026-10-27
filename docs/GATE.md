@@ -2169,7 +2169,8 @@ name of its own that resolves into a store from the folder (`keys` with `~/.exo`
 made main's line, read in that folder, a secret line with no target, so main's read of the folder
 took the folder itself as its path. That read stays a part beside such a store too:
 `cat ~/.kube//config keys` with `~/.exo` as `cwd` is denied under `deny: [target:*/.exo]`, as on
-main. A line that writes the Exo store stays `store_write`, and a store read from its folder is a
+main. So is `cat ~/.kube//config; cd ~/.docker && cat conf*` there, where the bare word is also a
+part with a name, read after the `cd`. A line that writes the Exo store stays `store_write`, and a store read from its folder is a
 `credentials` part beside the write, as a key read after `tar -C` is (#464). So
 `cat config; echo x > ~/.exo/policies/a` with `~/.kube` as `cwd` is denied by `deny: [credentials]`,
 as its `cd` form is, and only the principal answers it. A `cd` on the line is read as before.
