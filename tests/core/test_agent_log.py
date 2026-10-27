@@ -146,6 +146,36 @@ def test_private_covers_a_private_threads_children_at_any_depth():
     assert [st.private(x) for x in (t.id, tkid.id, plain.id, "s_missing", "", None)] == [False] * 6
 
 
+def test_shared_search_leaves_out_a_private_threads_descendants():
+    """#632: the private boundary is hereditary in the shared agent-log search and recall (D-028): an ordinary
+    thread under a private thread matches no shared search at any depth, and its matches cannot eat the limit.
+    A parent loop ends. Public threads and their descendants, hidden rows and the private thread's own local
+    search keep their old behavior."""
+    st = SessionStore()
+    t = st.create_session(agent="razi")
+    p = st.create_session(agent="razi", kind="private", parent=t.id)
+    kid = st.create_session(agent="razi", parent=p.id)
+    grandkid = st.create_session(agent="razi", parent=kid.id)
+    tkid = st.create_session(agent="razi", parent=t.id)      # a public thread's child stays in
+    st.append_message(t.id, Message.user("heliotrope plans are public"))
+    st.append_message(tkid.id, Message.user("heliotrope plans are public too"))
+    st.append_message(p.id, Message.user("heliotrope secret here"))
+    st.append_message(kid.id, Message.user("heliotrope heliotrope heliotrope secret"))
+    st.append_message(grandkid.id, Message.user("heliotrope secret deeper"))
+    assert st.private(kid.id) and st.private(grandkid.id)
+
+    def sessions(limit: int) -> list[str]:
+        return [h["session"] for h in st.search("heliotrope", limit=limit, agent="razi")]
+
+    assert set(sessions(20)) == {t.id, tkid.id}              # no private thread and no thread under one
+    assert sessions(1)[0] in (t.id, tkid.id)                 # a private hit cannot eat the limit
+    assert st.search("heliotrope secret", session=kid.id)    # the thread's own local search still finds them
+    st.truncate(t.id, 0)                                     # hidden rows stay out, as before
+    assert sessions(20) == [tkid.id]
+    st._q("UPDATE sessions SET parent=? WHERE id=?", (kid.id, p.id))  # a parent loop must not hang the walk
+    assert sessions(20) == [tkid.id]
+
+
 def test_a_private_threads_subagent_opens_from_that_thread_and_its_forks_only():
     """D-028: memory_zoom(subagent=) opens a delegate child of a private thread from that thread or a fork of it.
     A fork of a private thread is private too, with the original as its parent: its own children still open from it.

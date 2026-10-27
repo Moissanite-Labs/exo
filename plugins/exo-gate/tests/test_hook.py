@@ -843,6 +843,45 @@ def test_credentials_always_ask_once_only_even_in_observe_mode(keyed_store):
     assert call(ctx, "read_file", {"path": "docs/keys.md"}) is None
 
 
+REPLACE_WRITES = [
+    # #651: the seat file, snake and camel spellings -- a replace that turns the seat's default into bypass
+    ("mcp__fs__search_replace", {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}),
+    ("mcp__fs__searchReplace", {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}),
+    # a policy file
+    ("search_replace", {"path": "~/.exo/policies/gates.yaml", "search": "ask", "replace": "bypass"}),
+    ("find_and_replace_file", {"path": "~/.exo/policies/gates.yaml", "old_string": "ask", "new_string": "bypass"}),
+    # config.json
+    ("find_and_replace", {"path": "~/.exo/config.json", "old_string": '"ask"', "new_string": '"bypass"'}),
+    ("findAndReplace", {"path": "~/.exo/config.json", "oldString": '"ask"', "newString": '"bypass"'}),
+]
+
+
+@pytest.mark.parametrize("tool,args", REPLACE_WRITES)
+def test_a_read_named_tool_that_replaces_a_store_file_asks_in_enforce_and_observe(keyed_store, tool, args):
+    """#651: the replace of the seat file, a policy file or config.json is a store_write the principal answers
+    once, in enforce mode and in observe mode too, where `no_grant` keeps the ask from running the call."""
+    store, key = keyed_store
+    for extra in ({}, {"mode": "observe"}):
+        _, ctx = make_gate(store, key, decision_model=False, **extra)
+        r = call(ctx, tool, args)
+        assert r["action"] == "approve" and r["once"] is True, (tool, extra, r)
+        assert r["rule_key"].startswith("exo-gate:store_write:"), (tool, extra, r)
+        assert (r["approvers"], r["once"]) == (["principal"], True), (tool, extra, r)
+
+
+@pytest.mark.parametrize("tool,args", REPLACE_WRITES[:1] + [("read_file", {"path": "~/.exo/seats/principal.toml"})])
+def test_the_replace_asks_where_a_plain_read_of_the_same_path_runs(keyed_store, tool, args):
+    """#651's guard, through the hook: the seat file's replace asks where `read_file` of the same path runs with
+    no ask, in both modes."""
+    store, key = keyed_store
+    for extra in ({}, {"mode": "observe"}):
+        _, ctx = make_gate(store, key, decision_model=False, **extra)
+        if tool == "read_file":
+            assert call(ctx, tool, args) is None, (tool, extra)
+        else:
+            assert call(ctx, tool, args)["action"] == "approve", (tool, extra)
+
+
 def test_internal_error_on_a_secret_read_is_not_a_free_pass(keyed_store, monkeypatch):
     store, key = keyed_store
     g, ctx = make_gate(store, key, decision_model=False)
