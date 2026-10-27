@@ -11,6 +11,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 ### Fixed
 
+- The climb no longer takes a lesson whose evidence has decayed, and it catches a lesson that breaks another
+  domain (exo-desktop #35 by orda-aska, ported with the follow-up from abu-aska's review there; issue 13 on the fork).
+  A climb candidate needs a computed evidence weight of medium or high, not a stored `confidence`; a year after its
+  one correction a preference was still a candidate on 721828fd. The held-out gate checked only the candidate's own
+  domains, so a lesson that broke a work item while it won on mind was accepted. It now also gates each other
+  domain's held-out items on their own; the own-domain check, with the pinned items, is unchanged, since pooling
+  every domain into one composite let a work item that flipped up hide a mind item the candidate broke. An accepted
+  candidate rescores every dev, held-out and pinned item, so `eval/incumbent.json` and the night's composite stop
+  carrying the old incumbent's rows outside its domains; if the call budget runs out first, the merged rows are
+  cached under a key the next night does not trust. A 120-item night with one accepted candidate made 256 responder
+  calls, 173 before (+48%). Tests: `tests/eval/test_eval_climb.py`, `tests/learn/test_learn_nightly.py`.
+  **Docs:** `docs/LEARNING.md` "The slow loop", `DECISIONS.md` (D-012).
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook

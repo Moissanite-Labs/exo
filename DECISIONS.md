@@ -215,6 +215,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
   style save-without-eval (same); keeping taste separate from memory and skills (the gap in PR #126940).
+- **Amendment 2026-10-27 (exo-desktop #35 by orda-aska, ported to exo with the follow-up from abu-aska's review
+  there):** a lesson is a climb candidate only when its computed evidence weight (`taste.label` of the noisy-or
+  weight, decayed to now) is medium or high; the stored `confidence` no longer decides, so a lesson whose evidence
+  has decayed stops being a candidate. Every rule reaches every domain, so the held-out gate covers them all, in two
+  parts: the candidate's own domains' held-out items (its domain and `general`) and the pinned items, from any
+  domain, are gated together as one pool exactly as before, and each other domain's held-out items are gated on
+  their own (`held_tolerance` 0.0 per domain, plus the rule, guarded-domain and domain-drop checks). Pooling every
+  domain into one held-out check would let a gain in one domain pay for a loss in another: with 15 mind and 10 work
+  held-out items, a candidate that broke one mind item while one work item flipped up passed it. Inside the own
+  pool a gain on one item can still offset a loss on another, as before. An accepted candidate rescores every dev,
+  held-out and pinned item, so the cache and the night's composite are its own scores everywhere; when the call
+  budget runs out first, the merged rows are cached under a key no night matches. Cost: a 120-item night with one
+  accepted candidate made 256 calls, 173 before (+48%).
 
 ## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
 - **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as

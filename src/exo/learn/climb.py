@@ -143,6 +143,8 @@ def candidates_for(lr: Learner, limit: int) -> list[dict]:
     checks in `apply_policy`) and with no critic objection. No candidate scores on its lesson's own evidence: the
     replays and preference pairs built from it count neither for adding the lesson nor for dropping it."""
     rt = lr.runtime
+    if rt is None:
+        return []
     pol = lr.settings["promote"]
     st = load_state(rt.ledger)
     policy = load_policy(rt.store)

@@ -93,9 +93,17 @@ is not worse on held-out cases, and passes the gate. The night is capped by `cli
 
 The climb adds only ordinary lessons: not guarded, not gated by rule 5, and with no critic objection. Only rule 5
 promotes a gated lesson on its own. It runs earlier the same night and keeps its critic, weight, session and
-held-out checks. A candidate with no held-out case in its domains fails the gate. A lesson's own evidence never
-counts for or against it, on dev or on held-out cases, whether the candidate adds the lesson or drops it. The climb
-can add a lesson drawn only from imported history, but only when the eval shows it helps.
+held-out checks. A lesson is a candidate only while its computed evidence weight, decayed to now, is medium or high
+(the stored `confidence` does not decide). Every rule reaches every domain, so the gate reads all held-out cases in
+two parts. The held-out cases in the candidate's own domains (its domain and `general`) and the pinned cases, from
+any domain, are still checked as one pool, as before: in that pool a gain on one case can still offset a loss on
+another, such as a `general` or pinned case against a case in the lesson's domain. Each other domain's held-out
+cases are checked on their own, so a gain in the pool never pays for a loss in another domain's held-out cases, and
+a gain there never pays for a loss in the pool. A candidate with no held-out case in its domains fails the gate. An
+accepted candidate is scored again on every case, so the cached incumbent is its own scores in every domain.
+A lesson's own evidence never counts for or against it, on dev or on held-out cases, whether the candidate adds the
+lesson or drops it. The climb can add a lesson drawn only from imported history, but only when the eval shows it
+helps.
 
 The cases are your eval Q&A, your preference pairs, and replays built from the ledger. A replay comes only from
 your own verdict, answer or ruling, and its question is your own message before it (D-040). An agent's
