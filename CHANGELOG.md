@@ -36,6 +36,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_bypass.py`. **Docs:** `docs/GATE.md`,
   `DECISIONS.md` (D-038).
 - Command web tests now include the `permissions` module fixture in their offline Node module sets, so the `chat.js` and `app.js` imports resolve (#617).
+- Shared agent-log search and recall left out only a private thread's own rows, so an ordinary thread under one
+  still matched (#632). The agent branch of `SessionStore.search` now excludes a private thread and its
+  descendants at any depth inside the one query (a recursive `hid` set, as `store.private` and
+  `memory_zoom(subagent=)` already walked), so a private hit cannot eat the result limit, a parent loop ends,
+  and public threads, hidden-row filtering and the thread's own local search are unchanged.
+  Tests: `tests/core/test_agent_log.py::test_shared_search_leaves_out_a_private_threads_descendants`.
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
