@@ -268,9 +268,9 @@ at `dce1e9b`. A new `[[watch]]` follows Hermes's delegation files for edge-case 
 repair, JSON fallback, signing, negotiation, renderer coverage, bus bodies, the CLI; and on the engine: one
 child end to end, a parallel fan-out held at the concurrency cap, parent interrupt cancelling all children, a
 client interrupting one child, timeout, turn and token limits, toolset narrowing, depth limits, nested
-delegation, signed receipts, restart recovery and client rendering. The core stays under its 8,000-line
-budget (7,952 lines; 48 lines of headroom left, so the next core addition should raise the budget to the
-wave 3 figure of 15,000 that `docs/STANDALONE.md` sets).
+delegation, signed receipts, restart recovery and client rendering. The core's counted lines are
+reported against a floor, with no ceiling (D-077, D-083, `docs/ENGINE-SPLIT.md` "Budget policy"); the figure the
+wave 3 plan set is in `docs/STANDALONE.md`.
 
 ### Model tiers
 

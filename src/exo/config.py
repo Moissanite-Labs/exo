@@ -27,7 +27,7 @@ import os
 import re
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -53,10 +53,9 @@ class ConfigError(ValueError):
     pass
 
 
-# Secrets never go through the file API: names that look like one (`api_key`, `token`, ...), unless
-# the name ends in `_env` (the NAME of an environment variable). Such a name guards everything beneath it, and so do
-# `env` and `headers`: any literal there is refused; use "${VAR}" so the secret stays in the environment, a platform
-# key store, or keys.env. `redact` masks what `check_not_secret` refuses, through the same walk.
+# Secrets never go through the file API: names that look like one (`api_key`, `token`, ...) at any level of
+# the key path, unless the name ends in `_env` (the NAME of an environment variable). Under `env` and `headers`
+# any literal is refused; use "${VAR}" so the secret stays in the environment, a platform key store, or keys.env.
 SECRET_NAME = re.compile(r'(^|[_-])(key|token|secret|password|passwd|credentials?|authorization|bearer)s?($|[_-])'
                          r'|api_?key', re.I)
 _SECRET_VALUE = re.compile(r'(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|'
@@ -68,35 +67,38 @@ def _is_secret_name(name: str) -> bool:
     return bool(SECRET_NAME.search(name)) and not name.endswith('_env')
 
 
-def _is_secret(path: list[str], v: str) -> bool:
-    """A string at `path` is a secret when it looks like a key, or when it is a literal under `env`, `headers` or a
-    secret-shaped name at any depth."""
-    guarded = any(p in ('env', 'headers') or _is_secret_name(p) for p in path)
-    return bool(v) and bool(_SECRET_VALUE.search(v) or (guarded and not _VAR_REF.search(v)))
-
-
-def _map_strings(path: list[str], v: Any, fn: Callable[[list[str], str], Any]) -> Any:
-    """A copy of `v`, the value at `path`, with `fn(path, s)` in place of each string `s` in it."""
-    if isinstance(v, dict):
-        return {k: _map_strings([*path, str(k)], x, fn) for k, x in v.items()}
-    if isinstance(v, list):
-        return [_map_strings(path, x, fn) for x in v]
-    return fn(path, v) if isinstance(v, str) else v
+def _secret_path(path: Sequence[str]) -> bool:
+    """Whether a literal at this key path is a secret: a secret-shaped name at any level, or under env or headers.
+    Every level counts, so a container named like a secret holds secrets in its leaves (#691)."""
+    return any(_is_secret_name(p) or p in ('env', 'headers') for p in path)
 
 
 def check_not_secret(key: str, value: Any) -> None:
     """Raise ConfigError when (key, value) would put a secret into config.json."""
-    def refuse(path: list[str], v: str) -> str:
-        if _is_secret(path, v):
-            raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
-                              f'use "${{VAR}}" or a *_env key naming an environment variable')
-        return v
-    _map_strings(key.split('.'), value, refuse)
+    def walk(path: list[str], v: Any) -> None:
+        if isinstance(v, dict):
+            for k, x in v.items():
+                walk([*path, str(k)], x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(path, x)
+        elif isinstance(v, str) and v:
+            if _SECRET_VALUE.search(v) or (_secret_path(path) and not _VAR_REF.search(v)):
+                raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
+                                  f'use "${{VAR}}" or a *_env key naming an environment variable')
+    walk(key.split('.'), value)
 
 
-def redact(data: Any, key: str = '') -> Any:
-    """A copy of the config value at dotted `key` with every string `check_not_secret` refuses masked."""
-    return _map_strings(key.split('.'), data, lambda path, v: '***' if _is_secret(path, v) else v)
+def redact(data: Any, path: Sequence[str] = ()) -> Any:
+    """A copy of config data with secret-looking values masked (for config get, config show and the JSON API).
+    `path` is the key path of `data`, so a dotted key is judged level by level, as a write is."""
+    if isinstance(data, dict):
+        return {k: redact(v, [*path, str(k)]) for k, v in data.items()}
+    if isinstance(data, list):
+        return [redact(v, path) for v in data]
+    if isinstance(data, str) and data and not _VAR_REF.search(data) and (_secret_path(path) or _SECRET_VALUE.search(data)):
+        return '***'
+    return data
 
 
 def config_path(home: str | os.PathLike | None = None) -> Path:
@@ -246,14 +248,6 @@ class Config:
         out['exo_home'] = str(self.home)
         return out
 
-    def redacted(self, key: str | None = None, default: Any = None) -> Any:
-        """The effective value at `key` (every key when None) with secrets masked. `exo config show` and `get`
-        print it and `config.get` returns it, so the CLI and the API mask the same values."""
-        if key is None:
-            return redact(self.resolved())
-        v = self.get(key, _MISSING)
-        return default if v is _MISSING else redact(v, key)
-
     # --- typed views -----------------------------------------------------------
 
     @property
@@ -342,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(prog='exo config', description='read and write $EXO_HOME/config.json')
     sp = ap.add_subparsers(dest='op', required=True)
-    sp.add_parser('show', help='every key with its effective value, secrets masked')
+    sp.add_parser('show', help='every key with its effective value')
     sp.add_parser('path', help='where the file lives')
     sp.add_parser('roles', help='resolved model route per role (no secrets)')
     p = sp.add_parser('get'); p.add_argument('key')
@@ -359,12 +353,13 @@ def main(argv: list[str] | None = None) -> int:
             for role, refs in build_router().resolved_roles().items():
                 print(f"{role:<9} {' > '.join(refs) or '-'}")
         elif a.op == 'show':
-            print(json.dumps(cfg.redacted(), indent=2, sort_keys=True))
+            print(json.dumps(redact(cfg.resolved()), indent=2, sort_keys=True))
         elif a.op == 'get':
-            v = cfg.redacted(a.key, _MISSING)
+            v = cfg.get(a.key, _MISSING)
             if v is _MISSING:
                 print(f'exo config: {a.key} is not set', file=sys.stderr)
                 return 1
+            v = redact(v, a.key.split('.'))
             print(v if isinstance(v, str) else json.dumps(v))
         elif a.op == 'set':
             cfg.set(a.key, _parse_value(a.value))
