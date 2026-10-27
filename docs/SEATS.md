@@ -100,7 +100,9 @@ is never replaced: the clash is refused, listed under `refused` in the server's 
 
 ## Config and secrets
 
-`config.get` returns the effective config with secret-looking values masked. `config.set` writes
+`config.get` returns the effective config with secret-looking values masked. `exo config show` and `exo config get`
+print the same values: all three go through one function, `Config.redacted`, which tests the last part of a dotted
+key as the name. `config.set` writes
 `$EXO_HOME/config.json` and refuses secrets: names such as `api_key` or `token` (names ending `_env` are
 fine, they hold an environment variable name), literals under `env` or `headers` (use `"${VAR}"`), and
 values shaped like API keys. Changes apply on the next start.

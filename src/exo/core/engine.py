@@ -38,7 +38,7 @@ from exo.core import jobs as jobs_mod
 from exo.core.peer_target import EngineTarget
 from exo.core.ingress import STANDING_LINE, PeerConfig
 from exo.core.plugins import PluginManager, call_plugin, safe_plugin_call
-from exo.config import Config, ConfigError, check_not_secret, redact
+from exo.config import Config, ConfigError, check_not_secret
 from exo.principal import CHANNEL, current_caller, ingress_author, is_principal, require_principal
 from exo.core.approvals import ApprovalDesk
 from exo.core.seats import Seat, list_seats
@@ -818,11 +818,11 @@ class CoreRuntime:
     async def _config_get(self, b: s.ConfigGet) -> dict[str, Any]:
         cfg = Config.load(self.home)
         if b.key is None:
-            return {"config": redact(cfg.resolved())}
-        value = cfg.get(b.key, _MISSING)
+            return {"config": cfg.redacted()}
+        value = cfg.redacted(b.key, _MISSING)
         if value is _MISSING:
             raise CommandFailed("not_found", f"{b.key} is not set")
-        return {"key": b.key, "value": redact(value, b.key.split(".")[-1])}
+        return {"key": b.key, "value": value}
 
     async def _config_set(self, b: s.ConfigSet) -> dict[str, Any]:
         require_principal("change settings")

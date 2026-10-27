@@ -83,12 +83,13 @@ def check_not_secret(key: str, value: Any) -> None:
     walk(key.split('.'), value)
 
 
-def redact(data: Any, name: str = '') -> Any:
-    """A copy of config data with secret-looking values masked (for config.get)."""
+def redact(data: Any, key: str = '') -> Any:
+    """A copy of the config value at dotted `key` with secret-looking values masked (for `Config.redacted`)."""
     if isinstance(data, dict):
         return {k: redact(v, str(k)) for k, v in data.items()}
     if isinstance(data, list):
-        return [redact(v, name) for v in data]
+        return [redact(v, key) for v in data]
+    name = key.split('.')[-1]
     if isinstance(data, str) and data and not _VAR_REF.search(data) and (_is_secret_name(name) or _SECRET_VALUE.search(data)):
         return '***'
     return data
@@ -241,6 +242,14 @@ class Config:
         out['exo_home'] = str(self.home)
         return out
 
+    def redacted(self, key: str | None = None, default: Any = None) -> Any:
+        """The effective value at `key` (every key when None) with secrets masked. `exo config show` and `get`
+        print it and `config.get` returns it, so the CLI and the API mask the same values."""
+        if key is None:
+            return redact(self.resolved())
+        v = self.get(key, _MISSING)
+        return default if v is _MISSING else redact(v, key)
+
     # --- typed views -----------------------------------------------------------
 
     @property
@@ -329,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(prog='exo config', description='read and write $EXO_HOME/config.json')
     sp = ap.add_subparsers(dest='op', required=True)
-    sp.add_parser('show', help='every key with its effective value')
+    sp.add_parser('show', help='every key with its effective value, secrets masked')
     sp.add_parser('path', help='where the file lives')
     sp.add_parser('roles', help='resolved model route per role (no secrets)')
     p = sp.add_parser('get'); p.add_argument('key')
@@ -346,13 +355,13 @@ def main(argv: list[str] | None = None) -> int:
             for role, refs in build_router().resolved_roles().items():
                 print(f"{role:<9} {' > '.join(refs) or '-'}")
         elif a.op == 'show':
-            print(json.dumps(redact(cfg.resolved()), indent=2, sort_keys=True))
+            print(json.dumps(cfg.redacted(), indent=2, sort_keys=True))
         elif a.op == 'get':
-            v = cfg.get(a.key, _MISSING)
+            v = cfg.redacted(a.key, _MISSING)
             if v is _MISSING:
                 print(f'exo config: {a.key} is not set', file=sys.stderr)
                 return 1
-            print(redact(v, a.key) if isinstance(v, str) else json.dumps(redact(v, a.key)))
+            print(v if isinstance(v, str) else json.dumps(v))
         elif a.op == 'set':
             cfg.set(a.key, _parse_value(a.value))
             cfg.save()

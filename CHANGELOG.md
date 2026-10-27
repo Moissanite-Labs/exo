@@ -9,6 +9,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - `exo config show` and `exo config get` mask secret values, as the core API already did (exo-desktop #4,
   #16). Both printed the raw value, so a key stored in config reached the terminal and any log of it.
+- `exo config get` masks a secret reached by a dotted key, such as `plugin_config.exo-memory.token`, as
+  `exo config show` and `config.get` do (#691). It tested the whole key as one name, and the `.` before `token`
+  hid the name. The two commands and `config.get` now print through one function, `Config.redacted`.
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.
