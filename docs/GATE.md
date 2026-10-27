@@ -2798,6 +2798,12 @@ default, and no policy file turns it on.
 | A public post that breaks the posting rules (an internal name, a home path, a missing footer) | asks, with the fixes | held: the call fails with the fixes, so the agent rewrites the text and calls again |
 | A standing grant, `allow` or `log` | runs | runs |
 
+**Whose turn.** Lowering reaches only a turn the principal started. The core passes the turn's author (D-040) into
+every tool hook, and the gate lowers an ask only when that author is the principal: a turn a local caller, a peer,
+a bus wake, a job notice or the scheduler started in the same core runs its asks as if bypass were off, and the
+card opens and waits. A non-principal steer stops the lowering for the rest of the turn. Every bypass ledger row
+names the turn author (`turn_author`), so the audit says whose turn each auto-approved call served (#598).
+
 **Why that floor.** It is not about permission. It protects the record of what the agent did. If the agent could
 rewrite its own ledger, policies or grants while nobody is asked, the audit of a bypass session would be worthless,
 and it could make bypass permanent. Secrets stay asked because a key, once read, cannot be un-read, and the record
@@ -2816,6 +2822,7 @@ agent gets the list of fixes and goes on.
   arguments are recorded with obvious secrets redacted (`redacted` counts them) and cut at 8000 characters
   (`truncated` gives the length); `args_sha256` still identifies the exact call. Held posts have `decided_by:
   bypass` and `decision.rule: bypass_hold`. Floor calls that still asked carry `bypass: {floor: <category>}`.
+  Each row also names the turn it served (`turn_author`).
 - `/permissions` gives the counts for this run: auto-approved, held, and still asked.
 
 **Exo OS.** With a required tool executor (D-020, #70) bypass is refused: `/permissions bypass` fails with
