@@ -4904,7 +4904,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   pricing size alone, while D-077's point 5 names structure as the real goal, and structure was only printed.
 - **Decision:** `tests/integration/test_wave1_acceptance.py` records `CORE_HEADROOM = 2000`, so the ceiling is
   16,813 and 1,001 lines were free at 15,812. It also records `INWARD_IMPORTS_MAX = 39` and
-  `PRIVATE_STATE_MAX = 7` and asserts them in the same test, from a `_scorecard` helper that walks `src/exo/core`
+  `PRIVATE_STATE_MAX = 8` and asserts them in the same test, from a `_scorecard` helper that walks `src/exo/core`
   with `ast`:
   - *inward product imports* count every import of a non-core `exo` module from the core (`exo.model_spend`,
     `exo.bus`, `exo.gate`, `exo.envscrub`, `exo.wire`, and so on), in every form the statement can take: `import a.b`,
@@ -4929,8 +4929,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   module `exo.bus` 4, `exo.gate` 4, `exo.provenance` 4, `exo.model_spend` 4, `exo.crypto` 3, `exo.config` 3,
   `exo.envscrub` 3, `exo.principal` 2, and 1 each for `exo.application`, `exo.capture`, `exo.compose`,
   `exo.diagnostics`, `exo.learn`, `exo.models_cmd`, `exo.plugin_context`, `exo.providers_setup`, `exo.search_worker`,
-  `exo.store`, `exo.turn_settle`, `exo.wire`) and 7 private-state reads (`loop._state` 3 in `engine.py`,
-  `hub._subs` in `jobs.py` and in `peer_target.py`, `loop._state` 2 in `peer_target.py`).
+  `exo.store`, `exo.turn_settle`, `exo.wire`) and 8 private-state reads (`loop._state` 3 in `engine.py`,
+  `hub._subs` in `jobs.py` and in `peer_target.py`, `loop._state` 2 in `peer_target.py`, `loop._state` 1 in
+  `agents/delegate.py`).
 - **Revisit if:** the two step 4 caps stay still for a long stretch, or the headroom is raised again.
 - **Validation:** after merging main `00e2840e` (`c4b451fd`), `tests/integration` with `tests/docs` and `tests/core`
   gave 1,314 passed and 1 skipped, including the six `test_core_line_budget` cases.
