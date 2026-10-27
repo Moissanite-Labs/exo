@@ -171,6 +171,10 @@ BUILTIN_POLICIES: dict[str, dict] = {
     "deny_target_pub": {"gates": {"deny": ["target:pub/*"]}},
     "deny_target_store": {"gates": {"deny": ["target:*/.exo/*", "target:*.exo*"]}},
     "deny_target_dev_proc": {"gates": {"deny": ["target:/dev*", "target:/proc*"]}},
+    # a rule keyed on the host of an ssh or mosh hop (#493): it must reach a hop whose remote command
+    # names a target of its own, and lower nothing on main
+    "rule_target_host_ask": {"gates": {"rules": [{"match": {"target": "host*"}, "decision": "ask",
+                                                  "reason": "host"}]}},
     # command allow rules
     "allow_ls_anchored": {"gates": {"rules": [_rule("^ls( |$)")]}},
     "allow_ls_unanchored": {"gates": {"rules": [_rule("ls")]}},

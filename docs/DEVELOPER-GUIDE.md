@@ -237,8 +237,10 @@ default for each key), `tags`. Look at `plugins/exo-command/plugin.yaml` for a f
 
 Plugin folders are found in `$EXO_PLUGIN_DIRS`, then `$EXO_HOME/plugins`; installed `exo.plugins` entry points
 also load. To use the repo's plugins during development, set `EXO_PLUGIN_DIRS` to its `plugins/` folder.
-A tool call that writes into `$EXO_HOME/plugins` asks the principal every time (#435, `docs/GATE.md` "The store is
-credentials"), so do not copy a plugin there to try it.
+A tool call that writes into `$EXO_HOME/plugins`, or into any of the other folders Exo loads code from (the venv,
+Hermes' plugin home, the source copy and every folder `$EXO_PLUGIN_DIRS` names; #459, `docs/GATE.md` "The store is
+credentials"), asks the principal every time, so do not copy a plugin there to try it and use a different venv than
+`${EXO_VENV:-$EXO_HOME/venv}` for private experiments; loose `EXO_PLUGIN_DIRS` while you edit instead.
 A seat can limit the list with `[plugins] enabled`. A failed `register` is rolled back, so a half-loaded plugin
 leaves nothing behind.
 
