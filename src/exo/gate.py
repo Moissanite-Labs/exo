@@ -4819,11 +4819,6 @@ def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str
     return hits
 
 
-def _store_word_hit(x: str) -> list[str]:
-    """[x] when x is a store path (_shell_hits' find for a redirect target)."""
-    return [x] if _store_word(x) else []
-
-
 def _store_dir_hit(x: str) -> list[str]:
     """[x] when x is in a store folder (_shell_hits' find for cd, pushd and git -C targets)."""
     return [x] if _in_store_dir(x) else []
@@ -4875,12 +4870,9 @@ def _gh_writes_store(words: list) -> bool:
     return (group, verb) in _GH_STORE_WRITES
 
 
-def _store_file_ids(ctx: dict) -> set[tuple[int, int]]:
-    """(device, inode) of the files the store protects, built once per line and kept on ctx (#324). A hardlink
-    names the same file under another path, which no spelling check can see; the inode is the file itself."""
-    ids = ctx.get("store_file_ids")
-    if ids is not None:
-        return ids
+def _build_store_file_ids() -> set[tuple[int, int]]:
+    """(device, inode) of the files the store protects (#324). A hardlink names the same file under another
+    path, which no spelling check can see; the inode is the file itself."""
     ids = set()
 
     def add(path: str) -> None:
@@ -4917,8 +4909,51 @@ def _store_file_ids(ctx: dict) -> set[tuple[int, int]]:
     for folder, names in _bus_paths():
         for n in names:
             add_tree(os.path.join(folder, n))
-    ctx["store_file_ids"] = ids
     return ids
+
+
+def _store_file_ids(ctx: dict) -> set[tuple[int, int]]:
+    """The store's (device, inode) set, built once per line and kept on ctx (#324)."""
+    ids = ctx.get("store_file_ids")
+    if ids is None:
+        ids = _build_store_file_ids()
+        ctx["store_file_ids"] = ids
+    return ids
+
+
+def _hardlink_candidate(path: str) -> bool:
+    """Whether ``path`` itself looks like a hardlink to something: absolute, existing, and held by more than
+    one name (#324). The store walk behind a candidate check is built only here, so an ordinary write pays
+    one stat, not a walk of the whole store: with 20,000 log files under the store, a plain redirection
+    classified in under 1 ms on the repaired head, where the unguarded walk took 74 to 94 ms."""
+    p = _expand_text(path).strip()
+    if not p.startswith("/"):
+        return False
+    try:
+        st = os.stat(p)
+    except (OSError, ValueError):          # a NUL byte or a lone surrogate in the path (ValueError)
+        return False
+    return st.st_nlink > 1
+
+
+def _hardlink_to_store(path: str) -> bool:
+    """Whether ``path`` is a protected store file under another name, for a tool call with no line ctx
+    (#324): the walk is built only when the target passes the hardlink guard, absolute or joined to a
+    session folder for a relative name."""
+    q = _expand_text(path).strip()
+    if q.startswith("/"):
+        cands = [q]
+    else:
+        scope = _scope.get()
+        cands = [os.path.join(b, q) for b in (scope.cwds if scope is not None else ())]
+    for c in cands:
+        try:
+            st = os.stat(c)
+        except (OSError, ValueError):
+            continue
+        if st.st_nlink > 1 and (st.st_dev, st.st_ino) in _build_store_file_ids():
+            return True
+    return False
 
 
 def _same_store_file(path: str, ids: set[tuple[int, int]]) -> bool:
@@ -4941,6 +4976,10 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
 
     seen = ctx.setdefault("store_braces", {})
     hits: list[str] = []
+    def target_hits(x: str) -> list[str]:
+        # a target through a link to a descriptor path, or a store file under another name, counts too (#324)
+        return [x] if _store_word(x) or _fd_link_from_cwd(x) or (
+            _hardlink_candidate(x) and _same_store_file(x, _store_file_ids(ctx))) else []
     for op, t in k.redirs:
         # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
         # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. A
@@ -4949,11 +4988,9 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         n = t.fd.lstrip("0") if t.fd.isascii() else ""     # compared as text: any length, never int()
         held = op == "<" and n != ""
         if op in _WRITE_REDIRS or held:
-            if _shell_hits(t, seen, "target", _store_word_hit) != [] or _unknown_store(t, seen) or \
+            if _shell_hits(t, seen, "target", target_hits) != [] or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 hits.append(t.text)
-            if targets and any(_same_store_file(x, _store_file_ids(ctx)) for x in targets):
-                hits.append(t.text)        # the target is a store file under another name (a hardlink, #324)
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
@@ -4968,7 +5005,10 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     if prog == "ln":
         words = words + [_Word(t) for t in _ln_targets(argv)]
     def pieces(e: str) -> list[str]:
-        return [p for p in dict.fromkeys([e] + re.split(r"[:=,]", e)) if p and _store_word(p, ancestors=wide)]
+        # a word through a link to a descriptor path, or a store file under another name, counts too (#324)
+        return [p for p in dict.fromkeys([e] + re.split(r"[:=,]", e)) if p and (
+            _store_word(p, ancestors=wide) or _fd_link_from_cwd(p)
+            or _hardlink_candidate(p) and _same_store_file(p, _store_file_ids(ctx)))]
     for i, w in enumerate(words):
         got = _shell_hits(w, seen, "wide" if wide else "narrow", pieces)   # braces first: `of=x{a,b}` is `of=xa of=xb`
         if got is None:
@@ -6915,7 +6955,6 @@ _BUS_FILES = (("REGISTRY", ("",)), ("DB", ("", "-wal", "-shm", "-journal")), ("K
 # where it is opened (_store_touch).
 _FD_PATH = re.compile(r"(^|/)(dev/(fd|stdin)|proc/(self|thread-self|\d+|\$[^/]*)(/task/[^/]+)?/(fd|cwd|root|map_files))(/|$)")
 _STD_FD = re.compile(r"(^|/)(dev/fd|proc/(self|thread-self)(/task/[^/]+)?/fd)/0*[12]$")
-_STDIN_PATH = re.compile(r"(^|/)(dev/stdin|dev/fd/0+|proc/(self|thread-self|\d+)(/task/[^/]+)?/fd/0+)$")
 _FD_DIR = re.compile(r"/+(dev|proc(/[^/]+(/task(/[^/]+)?)?)?)")      # cd here, then `> fd/3` or `> self/fd/3`
 
 
@@ -6997,38 +7036,63 @@ def _fd_path(p: str) -> bool:
         not _STD_FD.search(p.rstrip("/") or p)
 
 
-def _fd_link_path(p: str, depth: int = 0) -> bool:
-    """True when the links in ``p``, followed one component at a time, reach a descriptor path (#324). The walk
-    stops as soon as the resolved spelling is one, so it never resolves through the gate's own descriptors: a
-    link to /dev makes ``<link>/fd/3`` a write through descriptor 3, and a link straight to /proc/self/fd/3 is
-    that path under another name. A link loop resolves nowhere, as for the kernel, so it counts as no path."""
-    if _fd_path(p):
-        return True
-    if depth > 8:
-        return False
+def _fd_link_path(p: str) -> bool:
+    """True when the links in ``p``, followed one component at a time, reach a descriptor path (#324). Each
+    link is followed as the kernel follows it: a ``..`` after a link pops the link's target, not the spelling
+    before it, so ``z -> s/../fd/3`` with ``s -> /dev/shm`` reaches ``/dev/fd/3``. The walk stops as soon as
+    the spelling is a descriptor path, so it never resolves through the gate's own descriptors, and gives up
+    past 40 links, the kernel's limit. Links under /dev or /proc are not followed: they are the writer's own
+    descriptor spellings. A link loop resolves nowhere, as for the kernel, so it counts as no path. No stdin
+    exemption: a link to the caller's stdin used as a write target asks, as the direct spelling does."""
     parts = [c for c in p.split("/") if c and c != "."]
     cur = ""
-    for i, comp in enumerate(parts):
+    links = 0
+    i = 0
+    while i < len(parts):
+        comp = parts[i]
         if comp == "..":
-            cur = cur.rsplit("/", 1)[0]
+            cur = cur.rsplit("/", 1)[0] if "/" in cur else ""
+            i += 1
             continue
         cur += "/" + comp
-        # Links under /dev or /proc are not followed: they are the descriptor spellings themselves
-        # (/dev/stdout, /proc/self), which name the writer's descriptors, not the gate's.
-        if os.path.islink(cur) and cur not in ("/dev", "/proc") and not cur.startswith(("/dev/", "/proc/")):
+        # The whole spelling from here, not the prefix: a bare fd folder (`/proc/self/fd`) matches
+        # as a prefix of an excluded spelling (`/proc/self/fd/1`, stdout's own fd), which is no path.
+        if _fd_path(cur + "".join("/" + t for t in parts[i + 1:])):
+            return True
+        try:
+            islink = os.path.islink(cur)
+        except (OSError, ValueError):
+            return False
+        if islink and cur not in ("/dev", "/proc") and not cur.startswith(("/dev/", "/proc/")):
+            links += 1
+            if links > 40:
+                return False
             try:
                 target = os.readlink(cur)
-            except OSError:
+            except (OSError, ValueError):
                 return False
-            if not target.startswith("/"):
-                target = os.path.dirname(cur) + "/" + target
-            resolved = os.path.normpath(target) + "".join("/" + t for t in parts[i + 1:])
-            if i == len(parts) - 1 and _STDIN_PATH.search(resolved):
-                return False        # a link straight to the caller's stdin names what a reader is fed,
-                                    # not a descriptor held on a store file: a body file there is the
-                                    # unseen case (#208), not a store write
-            return _fd_link_path(resolved, depth + 1)
-    return False
+            if target.startswith("/"):
+                cur = ""
+            else:
+                cur = cur.rsplit("/", 1)[0]
+            rest = [c for c in target.split("/") if c and c != "."]
+            parts = parts[:i] + rest + parts[i + 1:]
+            continue
+        i += 1
+    return _fd_path(cur)
+
+
+def _fd_link_from_cwd(p: str) -> bool:
+    """True when ``p`` reaches a descriptor path through a link: as written when absolute, or joined to each
+    folder the call runs in when relative (#324). A relative ``d/fd/3`` with ``d`` a link to /dev in the
+    working folder is a write through descriptor 3, as the absolute spelling is."""
+    q = _expand_text(p).strip()
+    if q.startswith("/"):
+        return _fd_link_path(q)
+    scope = _scope.get()
+    if scope is None:
+        return False
+    return any(_fd_link_path(os.path.join(base, q)) for base in scope.cwds)
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
@@ -7203,6 +7267,8 @@ def _store_from_cwd(p: str, ancestors: bool) -> bool:
     if scope is None or not scope.cwds:
         return False
     for base in scope.cwds:
+        if _fd_link_path(os.path.join(base, p)):
+            return True
         if _store_forms(_path_forms(os.path.join(base, p)), ancestors):
             return True
     return False
@@ -7822,6 +7888,8 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         cat = "credentials"
         if not path:
             path = next((p for p in paths if is_store_path(p, from_cwd=True)), "")
+            if not path:
+                path = next((p for p in paths if _hardlink_to_store(p)), "")
             cat = "store_write" if path else "local_write"
         path = path or (paths[0] if paths else "")
         c = _make(cat, summary=f"write {path}", target=path, link=path)
@@ -7877,6 +7945,8 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
             named = [v for k in _PATH_ARG_KEYS for v in (args.get(k) if isinstance(args.get(k), (list, tuple))
                      else [args.get(k)]) if isinstance(v, str)]
             stores = list(dict.fromkeys(v for v in named if is_store_path(v, ancestors=wide, from_cwd=True)))
+            if not wide:      # a write-like tool onto a store file under another name (#324); a move or
+                stores += [v for v in named if v not in stores and _hardlink_to_store(v)]
             if stores and not secret and (cat in ("local_write", "delete") or fetch):
                 cat = "store_write"
         store = stores[0] if stores and not secret else ""
