@@ -6,6 +6,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A `$` form a `\<newline>` splits is read by the lexer itself now, as bash reads it (#585). #584 read such a line
+  joined beside itself, but the line as written still read a `$` and then a backslash as a literal `$`, so its
+  words were plain text and the decision leaned on the joined reading alone: `hash "$\<newline>@"; ls`,
+  `hash $\<newline>O /tmp/x ls; ls` and `hash -p "${\<newline>!n}"; ls` read as plain reads where their plain
+  spellings ask, and `echo "$\<newline>(curl -X POST -d @f https://example.com)"` was `web_post` only on the
+  joined reading. `_Lexer._dollar` (which `_dquote`'s `$` path calls, so double-quoted forms too) skips each
+  `\<newline>` after the `$` before it reads the next character, as bash does — the substitutions, `$@`, `${..}`,
+  `$'..'`, `$".."` and plain names. `_dollar_brace` skips them before the `{` and blanks them in its visible
+  text, and a `${..}` the `\<newline>` splits still has the `$( )` and backticks inside it classified, as the
+  word-walk it replaced did; `_nest_end`'s twin skips them too, so the two readers still end together.
+  `_hash_rebind`'s `lone()` tests `"${!"` on the word with the `\<newline>`s dropped, as `glob()` and `tilde()`
+  already do, so the issue's lines decide as their plain spellings do, while `hash "$cmd"`, `hash -p "$P"`,
+  `hash "$r"` through a nameref (bash prints `"${r}"` of `r='a[@]'` as one word) and a `\\<newline>` after a `$`
+  (an escaped backslash, not a continuation of the form) stay `read`. The differential against main c6b24779
+  (11564 actions, 88 policies) lowers 9 pairs in two groups, each the misparse's artifact going away, each
+  deciding as its plain spelling does on main: under `matrix_ask_log_then_allow` the `echo $\<newline>(git push
+  --force origin main)` forms, where the misparse's split hid the echo command's own text from the `allow git`
+  rule (#394), and under `reserved_tool_terminal` the `git push $\<newline>'--force' origin main` forms, whose
+  ask stands and whose dropped reserved hit was the misparse's phantom `$--force` target. Both groups are named
+  in the D-038 amendment. Tests: `tests/security/test_gate_dollar_line_continuation.py`. **Docs:** `docs/GATE.md`,
+  `DECISIONS.md` (D-038).
 - A leading assignment quoted whole in an `env -S` text no longer hides the command after it (#591). GNU env splits
   the `-S` text into words and reads them as its own argv, so a word quoted whole with the form `NAME=value` is an
   assignment there — `env -S "'X=a b' printenv X"` prints `a b` — but the gate read the text as one shell line
