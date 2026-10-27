@@ -187,7 +187,7 @@ CORE = ["src/exo/core", "src/exo/protocol", "src/exo/server", "src/exo/cli_chat.
 
 # The core budget is a ratchet with headroom (D-077, docs/ENGINE-SPLIT.md "Budget policy").
 CORE_FLOOR = 14813  # counted lines right after the last real reduction (#124, D-067). It only ever goes down.
-CORE_HEADROOM = 1000  # room for shipping. A security or robustness fix may raise it, by the minimum, with a note.
+CORE_HEADROOM = 1011  # room for shipping. A security or robustness fix may raise it, by the minimum, with a note.
 BIG_FILE = 1000  # the report flags counted files above this many lines. Information, not an assertion.
 
 
@@ -216,7 +216,8 @@ def test_core_line_budget():
     is a wave 3 item, so the budget moved to 15k on 2026-10-12. Raised to 16k the same day for the audit security
     wave (D-038..D-042). Engine split step 4 (D-067, #124) brought the count to 14,813, and the cap went back to
     15k on 2026-10-13 as a hard wall. On 2026-10-15 the wall became this ratchet (D-077): floor 14,813, headroom
-    1,000, ceiling 15,813. Issue #46 tracks the rest of the split."""
+    1,000, ceiling 15,813. Issue #46 tracks the rest of the split. On 2026-10-26 #598 (a security fix) raised
+    headroom by 11 to 1,011 for the turn-author plumbing into hooks."""
     files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
              if "generated" not in p.parts]
     counts = {p.relative_to(REPO).as_posix(): len(p.read_text().splitlines()) for p in files}
