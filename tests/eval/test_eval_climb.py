@@ -431,3 +431,37 @@ def test_climb_rescores_the_incumbent_when_what_scores_it_changes(tmp_path, nigh
     inner = night2.get("responder_for", _says("line ?"))
     run([], **{**night2, "responder_for": lambda cfg: (lambda p: (n.__setitem__(0, n[0] + 1), inner(cfg)(p))[1])})
     assert n[0] == 0
+
+
+def test_climb_gates_cross_domain_held_out_regression(tmp_path):
+    """issue 13 (#3): render_system injects every rule globally, so a new rule can regress held-out items in a
+    domain the candidate did not declare. The gate must consider all held-out, not just the candidate's domains."""
+    cut = int(round(E.HELD_FRACTION * 100))
+    mind = items(30, "mind")                       # candidate wins here, incumbent loses
+    # work items forced into the held-out set (low hash) so the candidate's cross-domain regression lands on held-out
+    work, k = [], 0
+    while len(work) < 6:
+        iid = f"w{k}"
+        if E._hash_pct(iid) < cut:
+            work.append({"id": iid, "question": f"Write work line {k}", "gold": f"work line {k}",
+                         "domain": "work", "ts": f"2026-09-{k % 28 + 1:02d}T00:00:00Z"})
+        k += 1
+    pool = mind + work
+    assert any(i["domain"] == "work" for i in E.split(pool)["held"])
+
+    def rf(cfg):
+        def respond(prompt):
+            # incumbent (base) is bad on mind, good on work; candidate (bad) is good on mind, bad on work
+            if "work" in prompt:                   # a work item
+                return "work line " + prompt.rsplit(" ", 1)[-1] if cfg["mode"] == "base" else "BROKEN on work"
+            return "line " + prompt.rsplit(" ", 1)[-1] if cfg["mode"] == "bad" else "Status fine"
+        return respond
+    rep = E.climb(tmp_path, E.Budget(), incumbent={"id": "i", "config": {"mode": "base"}},
+                  candidates=[{"id": "c", "config": {"mode": "bad"}, "domains": ["mind", "general"]}],
+                  responder_for=rf, grader=E.exact_grader, rules=[], items=pool)
+    c = rep["candidates"][0]
+    assert c["dev"]["better"]                      # it looks like a win on its own domain
+    # the cross-domain held-out regression must be caught (would be accepted before the fix, which only gated the
+    # candidate's declared domains)
+    assert c["status"] == "gate_failed" and "domain_drop" in c["reason"]
+    assert rep["accepted"] == []
