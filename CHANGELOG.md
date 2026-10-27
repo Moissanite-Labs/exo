@@ -10,14 +10,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
-  checks past the decision read only the lead category, so on main fa5dfcd8 bypass ran `mcp__fs__searchReplace`
-  or `findAndReplace` on `~/.exo/seats/principal.toml` (bypass could make itself the seat default), `readFile`
-  and `getOrCreateFile` on `~/.exo/policies/gates.yaml`, `mcp__fs__readFile` on `~/.exo/config.json`,
-  `mergeGithub` naming `~/.ssh/id_rsa` and `mcp__slack__postMessage` naming `~/.aws/credentials`, and a tool the
-  registry calls high risk ran in every mode (`mcp__fs__writeFile`, `mcp__fs__uploadFile`, `mcp__gh__listIssues`).
-  Bypass now keeps the floor when any reading or part is `store_write` or `credentials` (`gate.no_grant`), and the
-  high-risk ask fires when any reading is `unknown`. A post held for its posting fixes stays held. Snake names and
-  camelCase calls with no floor reading decide as before. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`.
+  checks past the decision read only the lead category. #659 (#651) since made a replace of a store file lead with
+  `store_write` (`mcp__fs__searchReplace`, `findAndReplace` on `~/.exo/seats/principal.toml`), but on main
+  e0968a2b bypass still ran `readFile` and `getOrCreateFile` on `~/.exo/policies/gates.yaml`, `readFile` on the
+  seat file, `mcp__fs__readFile` on `~/.exo/config.json`, `mergeGithub` and `mcp__github__mergePullRequest`
+  naming `~/.ssh/id_rsa` and `mcp__slack__postMessage` naming `~/.aws/credentials`, and a tool the registry calls
+  high risk ran in every mode (`mcp__fs__writeFile`, `mcp__fs__uploadFile`, `mcp__fs__searchReplace` on a plain
+  path, `mcp__gh__listIssues`). Bypass now keeps the floor when any reading or part is `store_write` or
+  `credentials` (`gate.no_grant`), and the high-risk ask fires when any reading is `unknown`. A post held for its
+  posting fixes stays held. Snake names and camelCase calls with no floor reading decide as before. Hook probe
+  against main e0968a2b: 1360 lines, 164 changed, 0 lowered. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`.
   **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-065, D-038), `docs/DEVELOPER-GUIDE.md` §3.
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.

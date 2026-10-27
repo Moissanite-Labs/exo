@@ -21,12 +21,14 @@ from test_hook import FOOT, call, make_gate
 SEAT = "~/.exo/seats/principal.toml"
 GATES = "~/.exo/policies/gates.yaml"
 HI = f"hi\n\n{FOOT}"   # the example store's posting rules want the footer
-# The review's rows: each asked in bypass before #602, and ran with it.
+# The review's rows: each asked in bypass before #602, and ran with it. Since #659 (#651) the three replace rows
+# lead with `store_write` on main e0968a2b and ask there too; they stay here as guards.
 CAMEL_FLOOR = [
     ("mcp__fs__searchReplace", {"path": SEAT, "search": "ask", "replace": "bypass"}, "store_write"),
     ("findAndReplace", {"path": SEAT, "search": "ask", "replace": "bypass"}, "store_write"),
     ("mcp__fs__searchReplace", {"path": GATES, "search": "deny", "replace": "allow"}, "store_write"),
     ("readFile", {"path": GATES}, "store_write"),
+    ("readFile", {"path": SEAT}, "store_write"),
     ("getOrCreateFile", {"path": GATES}, "store_write"),
     ("mcp__fs__readFile", {"path": "~/.exo/config.json"}, "store_write"),
     ("mergeGithub", {"path": "~/.ssh/id_rsa"}, "credentials"),
@@ -145,7 +147,7 @@ def test_a_high_risk_camelcase_mcp_tool_asks_in_enforce(gate_in, tool, args):
     _, ctx, store = gate_in("enforce", False)
     r = call(ctx, tool, args, risk="high")
     assert r is not None and r["action"] == "approve", (tool, r)
-    assert "registry risk is high" in rows(store)[0]["decision"]["reason"]
+    assert f"registry risk is high and {tool} is known only by its hump words" in rows(store)[0]["decision"]["reason"]
 
 
 @pytest.mark.parametrize("tool,args", CAMEL_HIGH)
@@ -178,6 +180,8 @@ def test_a_high_risk_known_snake_tool_keeps_its_rule_outcome(gate_in, tool, args
 
 
 def test_a_high_risk_tool_the_gate_does_not_know_still_asks(gate_in):
-    _, ctx, _ = gate_in("enforce", False)
+    _, ctx, store = gate_in("enforce", False)
     assert call(ctx, "mcp__x__doThing", {}, risk="high")["action"] == "approve"
+    assert call(ctx, "mcp__x__do_thing", {}, risk="high")["action"] == "approve"
+    assert "registry risk is high and mcp__x__do_thing is not a known tool" in rows(store)[-1]["decision"]["reason"]
     assert call(ctx, "mcp__x__doThing", {}, risk="low") is None
