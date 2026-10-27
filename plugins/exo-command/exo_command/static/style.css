@@ -793,3 +793,17 @@ body { margin: 0; background: #08090a; }
 .xc-md [data-align="right"] { text-align: right; }
 .xc-md .xc-code { white-space: pre; max-width: 100%; overflow-x: auto; }
 .xc-table-cell { min-width: 6rem; max-width: 28rem; overflow-wrap: anywhere; white-space: normal; }
+
+/* Searchable model routes: full route remains visible even when names overlap. */
+.xc-search-model-picker { width: 100%; min-width: 0; display: grid; gap: 8px; }
+.xc-search-model-picker label { display: grid; gap: 6px; }
+.xc-model-options { max-height: 260px; overflow-y: auto; border: 1px solid var(--line); }
+.xc-model-options:empty { display: none; }
+.xc-model-option { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.xc-model-option.active, .xc-model-option:hover { background: var(--xc-raise); outline: 1px solid currentColor; outline-offset: -1px; }
+.xc-model-name { font-weight: 600; }
+.xc-model-route { font: 12px var(--xc-mono); opacity: .8; overflow-wrap: anywhere; }
+.xc-model-status, .xc-model-note { margin: 0; font-size: 12px; opacity: .8; }
+.xc-prov-def > .xc-search-model-picker { flex: 1; }
+
+.xc-model-current { margin-left: 8px; font-size: 10px; font-weight: 400; text-transform: uppercase; opacity: .7; }

@@ -13,7 +13,7 @@ NODE = shutil.which("node")
 
 @pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_chat_reconnect_refresh_commands_and_structured_memory(tmp_path):
-    for name in ("chat", "chat_state", "approvals", "markdown"):
+    for name in ("chat", "chat_state", "approvals", "markdown", "model_picker"):
         if name == "approvals" and not (STATIC / "approvals.js").exists():
             continue  # older chat embeds approval handling; newer chat imports the actual controller
         (tmp_path / f"{name}.mjs").write_text((STATIC / f"{name}.js").read_text().replace('.js"', '.mjs"'))
@@ -107,14 +107,14 @@ for(const line of ["/grants", "/grant list", "/MODEL fake:y"]){
 assert.deepEqual(requests.findLast(x=>x.path.endsWith("/model")).body,{model:"fake:y"});
 input.value="/model";await send.attrs.onclick();await settle();
 const picker=nodes.find(x=>x.attrs.class==="xc-model-picker"); assert.equal(picker.hidden,false);
-const select=nodes.findLast(x=>x.attrs["aria-label"]==="Main model");
-assert.equal(select.children.length,2);select.value="fake:x";
+const select=nodes.findLast(x=>x.attrs["aria-label"]==="Main model search");
+select.value="fake:x";select.listeners.input();
 await nodes.findLast(x=>x.textContent==="Use model").attrs.onclick();await settle();
 assert.equal(picker.hidden,true);assert.deepEqual(requests.findLast(x=>x.path.endsWith("/model")).body,{model:"fake:x"});
 input.value="/model default fake:y";await send.attrs.onclick();await settle();
 assert.deepEqual(requests.findLast(x=>x.path==="/api/providers/default").body,{ref:"fake:y",role:"main"});
 input.value="/default";await send.attrs.onclick();await settle();
-assert.equal(nodes.findLast(x=>x.attrs["aria-label"]==="Default model").tagName,"SELECT");
+assert.equal(nodes.findLast(x=>x.attrs["aria-label"]==="Default model for new threads search").tagName,"INPUT");
 const before=requests.length;input.value="/model -bad";await send.attrs.onclick();assert.equal(requests.length,before);
 input.value="/grants revoke g1";await send.attrs.onclick();assert.equal(input.value,"/grants revoke g1");
 assert.match(strip.textContent,/\/grants runs in exo tui/);
