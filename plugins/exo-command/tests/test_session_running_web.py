@@ -1,0 +1,206 @@
+"""Running state survives navigation and reconnects in a disposable headless browser."""
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import threading
+
+import pytest
+
+from browser import Browser, Served, find_chrome
+from exo_command.source import SourceError
+from test_model_command_web import ModelSrc
+
+pytestmark = pytest.mark.skipif(not find_chrome() or not importlib.util.find_spec('websockets'),
+                                reason='headless Chrome or websockets unavailable')
+
+
+class RunningSource(ModelSrc):
+    def __init__(self):
+        super().__init__()
+        self.status = {'s1': 'idle', 's2': 'idle'}
+        self.fail = set()
+        self.gates = {}
+        self.started = set()
+        self.entered = {sid: threading.Event() for sid in self.status}
+
+    async def call(self, body):
+        typ = type(body).TYPE
+        if typ == 'approvals.list':
+            return {'approvals': list(self.centre.state.approvals.values())}
+        if typ == 'session.list':
+            # A cached list can lag the following transcript response.
+            return {'sessions': [{'id': sid, 'title': sid, 'model': 'fake:x', 'status': 'idle'} for sid in self.status]}
+        if typ == 'session.get':
+            sid = body.session
+            status = self.status[sid]  # snapshot taken before a delayed response
+            self.started.add(sid)
+            self.entered[sid].set()
+            if sid in self.gates:
+                await self.gates[sid].wait()
+            if sid in self.fail:
+                raise SourceError('unavailable', 'snapshot unavailable')
+            return {'session': {'id': sid, 'model': 'fake:x', 'status': status},
+                    'messages': [{'id': 'u_' + sid, 'role': 'user', 'content': [{'type': 'text', 'text': 'fixture ' + sid}]}]}
+        return await super().call(body)
+
+
+@pytest.fixture
+def page():
+    src = RunningSource()
+    srv = Served(src)
+    with Browser() as browser:
+        browser.goto(srv.url())
+        browser.wait('document.querySelectorAll(".xc-sess").length === 2 && !!document.querySelector(".xc-msg")')
+        yield src, srv, browser
+    srv.close()
+
+
+def click(browser, sid):
+    browser.eval('Array.from(document.querySelectorAll(".xc-sess")).find(e=>e.querySelector(".xc-sess-title").textContent===' + repr(sid) + ').click()')
+
+
+def expect(browser, sid, working):
+    browser.wait('document.querySelector(".xc-sess.on .xc-sess-title").textContent===' + repr(sid)
+                 + ' && document.querySelector(".xc-state").textContent===' + repr('working' if working else 'idle'))
+    assert browser.eval('document.querySelector("#xc-live").classList.contains("on")') is working
+    assert browser.eval('!!document.querySelector(".xc-strip .xc-state.on .xc-dot.on")') is working
+    assert browser.eval('!!document.querySelector(".xc-wire")') is working
+    assert browser.eval('document.querySelector(".xc-composer").classList.contains("xc-steer")') is working
+    assert browser.eval('Array.from(document.querySelectorAll(".xc-btn")).find(e=>e.textContent==="Stop").disabled') is not working
+
+
+def emit(srv, seq, sid, kind):
+    event = {'seq': seq, 'type': kind, 'session': sid, 'ts': '2026-10-27T09:30:00Z',
+             'body': {'session': {'id': sid}} if kind == 'session.updated' else {'turn_id': 't_fixture', 'model': 'fake:x'}}
+    def record():
+        srv.centre.state.apply(event)
+        srv.centre.record(event)
+    srv.call(record)
+
+
+def test_switch_back_uses_fresh_running_snapshot_not_cached_idle(page):
+    src, srv, browser = page
+    src.status['s1'] = 'live'
+    emit(srv, 1, 's1', 'turn.started')
+    expect(browser, 's1', True)
+    click(browser, 's2')
+    expect(browser, 's2', False)
+    click(browser, 's1')
+    expect(browser, 's1', True)
+
+
+def test_terminal_while_away_and_other_thread_terminal_do_not_revive_or_clear_working(page):
+    src, srv, browser = page
+    src.status.update(s1='live', s2='live')
+    emit(srv, 1, 's1', 'turn.started')
+    expect(browser, 's1', True)
+    click(browser, 's2')
+    expect(browser, 's2', True)
+    src.status['s1'] = 'idle'
+    emit(srv, 2, 's1', 'turn.completed')
+    expect(browser, 's2', True)  # background completion cannot stop this thread's animation
+    src.fail.add('s1')
+    click(browser, 's1')
+    expect(browser, 's1', False)  # failed snapshot falls back to the completed event, not old live cache
+    browser.wait('document.querySelector(".xc-strip").textContent.includes("snapshot unavailable")')
+
+
+def test_failed_snapshot_preserves_last_known_running_event(page):
+    src, srv, browser = page
+    src.status['s1'] = 'live'
+    emit(srv, 1, 's1', 'turn.started')
+    expect(browser, 's1', True)
+    click(browser, 's2')
+    expect(browser, 's2', False)
+    src.fail.add('s1')
+    click(browser, 's1')
+    expect(browser, 's1', True)
+    browser.wait('document.querySelector(".xc-strip").textContent.includes("snapshot unavailable")')
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_late_snapshot_or_failure_cannot_overwrite_new_selection(page, fails):
+    src, srv, browser = page
+    src.status['s1'] = 'live'
+    srv.call(lambda: src.gates.update(s1=asyncio.Event()))
+    src.entered['s1'].clear()
+    click(browser, 's1')
+    assert src.entered['s1'].wait(2)
+    click(browser, 's2')
+    expect(browser, 's2', False)
+    if fails:
+        src.fail.add('s1')
+    srv.call(src.gates['s1'].set)
+    browser.wait('document.querySelector(".xc-log").textContent.includes("fixture s2")')
+    expect(browser, 's2', False)
+    assert not browser.eval('document.querySelector(".xc-strip").textContent.includes("snapshot unavailable")')
+
+
+@pytest.mark.parametrize(('initial', 'event', 'working'), [('idle', 'turn.started', True), ('live', 'turn.completed', False)])
+def test_turn_event_buffered_during_snapshot_wins_over_old_response(page, initial, event, working):
+    src, srv, browser = page
+    src.status['s2'] = initial
+    srv.call(lambda: src.gates.update(s2=asyncio.Event()))
+    src.entered['s2'].clear()
+    click(browser, 's2')
+    assert src.entered['s2'].wait(2)
+    emit(srv, 1, 's2', event)
+    srv.call(src.gates['s2'].set)
+    expect(browser, 's2', working)
+
+
+def test_reconnect_uses_transcript_status_newer_than_session_list(page):
+    src, srv, browser = page
+    expect(browser, 's1', False)
+    src.status['s1'] = 'live'
+    browser.eval('(async()=>{const bus=await import("/static/bus.js");await bus.restart()})()')
+    expect(browser, 's1', True)
+
+
+def test_stale_session_list_cannot_replace_a_newer_transcript_running_status(page):
+    src, srv, browser = page
+    list_entered, list_release = threading.Event(), None
+    original = src.call
+    async def delayed_list(body):
+        if type(body).TYPE == 'session.list':
+            snapshot = await original(body)
+            list_entered.set()
+            await list_release.wait()
+            return snapshot
+        return await original(body)
+    def delay():
+        nonlocal list_release
+        list_release = asyncio.Event()
+        src.call = delayed_list
+    srv.call(delay)
+    emit(srv, 1, 's1', 'session.updated')  # a list request snapshots idle, then waits
+    assert list_entered.wait(2)
+    src.status['s1'] = 'live'
+    click(browser, 's1')
+    expect(browser, 's1', True)  # a newer SessionGet supplies the running truth
+    srv.call(list_release.set)
+    browser.wait('document.querySelector(".xc-sess.on .xc-dim").textContent.includes("running")')
+    click(browser, 's2')
+    expect(browser, 's2', False)
+    src.fail.add('s1')
+    click(browser, 's1')
+    expect(browser, 's1', True)  # stale list did not replace the valid snapshot fallback
+
+
+def test_running_snapshot_with_pending_approval_keeps_working_indicators(page):
+    src, srv, browser = page
+    src.status['s1'] = 'live'
+    event = {'seq': 1, 'type': 'approval.requested', 'session': 's1', 'ts': '2026-10-27T09:30:00Z',
+             'body': {'request_id': 'a_fixture', 'summary': 'Fixture approval', 'risk': 'medium',
+                      'call': {'id': 'c_fixture', 'name': 'bash', 'arguments': {'command': 'true'}},
+                      'options': ['allow', 'deny']}}
+    def record():
+        srv.centre.state.apply(event)
+        srv.centre.record(event)
+    srv.call(record)
+    click(browser, 's2')
+    expect(browser, 's2', False)
+    click(browser, 's1')
+    expect(browser, 's1', True)
+    browser.wait('!!document.querySelector("[data-approval=a_fixture]")')
