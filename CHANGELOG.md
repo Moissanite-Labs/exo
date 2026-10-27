@@ -24,6 +24,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   before, so the deep-nest readings stay linear. Plain arithmetic decides as it did
   (`$((1+2))`, `$((PATH=5))`, `$[PATH=5]`, a ternary, a `$( )` or a backquote inside the body), and `_nest_end`
   ends a cut at the same span. Tests: `tests/security/test_gate_dollar_paren_cmdsub.py`. **Docs:** `docs/GATE.md`,
+- A read-named tool that replaces text writes the store file it names (#651). `search_replace` and
+  `find_and_replace` read as reads, so the store scan skipped them (#494) and
+  `mcp__fs__search_replace {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}` ran
+  with no ask in every permission mode -- the seat file's default could be made bypass, and the policy files and
+  config.json were as bare. The name's replace, substitute, patch, edit, update and sed words count as
+  fetch-write words now, and so do arguments that carry the old text and the new beside the path they name, so
+  the replace of a store file is a `store_write` the principal alone answers, as `write_file` is (the store
+  floor, observe's `no_grant` and bypass's floor all hold); a plain read of the store stays a read.
+  Differential against main fa5dfcd8: 0 lowered. Tests: `tests/security/test_gate_file_tool_replace_writes.py`,
+  `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_bypass.py`. **Docs:** `docs/GATE.md`,
   `DECISIONS.md` (D-038).
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,

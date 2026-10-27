@@ -1430,6 +1430,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `store_write` ask, and to `credentials` ask where the new keys name a secret), 409 pairs reworded in detail.
   Tests beside the #489 rows (`plugins/exo-gate/tests/test_store_floor_any_part.py`) and in the D-074 file
   (`tests/security/test_gate_config_store.py`).
+- *Amendment 2026-10-26 (issue #651):* a read-verb name that says it replaces the file its path names runs the
+  store scan as a write's, as the #494 fetch words do: the name's replace, substitute, patch, edit, update and
+  sed words join `_FETCH_WRITE_WORDS`, and arguments that carry the old text and the new beside the path they
+  name are the replace signal of a name that does not say so. `mcp__fs__search_replace
+  {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}` was a `read` in every
+  permission mode, so the seat file's default could be made bypass with no ask, which the seat's bypass reading
+  (D-065) does not allow a non-principal hand to reach; the policy files and config.json were as bare. The
+  replace is a `store_write` now, the principal alone answers it as `write_file`'s, and a plain read of the
+  store stays a read. The differential against main fa5dfcd8 (`scripts/gate_diff.py --no-variants --jobs 4`,
+  base main, head this branch) finds 0 lowered pairs: 11,868 actions, 2,040 pairs tightened on 24 actions (read
+  allow to `store_write` ask, 72 of them to deny under a store_write deny policy), 1,616 pairs reworded in
+  detail. Tests: `tests/security/test_gate_file_tool_replace_writes.py` (6 rows fail on main fa5dfcd8), the
+  #651 rows in `plugins/exo-gate/tests/test_hook.py` (7 of 8 fail on main) and `test_bypass.py` (5 of 9 fail on
+  main).
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
   `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
   grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on

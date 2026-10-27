@@ -469,7 +469,10 @@ folder that holds the store counts too, as `mv` and `rm` do (`move_file` from `~
 only `path` and `source`: `to`, `target`, `new_path`, `old_path`, `from` and `dst` among the others
 (#494). A tool named with a read verb that writes what it took where its path arguments say
 (`download_file`, `export_report`) reads the store as a write's, so a download into the policy
-files asks; a plain read of the store stays a read. A relative destination is read from the
+files asks; so does a name that says it replaces, patches, edits or updates the file it names
+(`search_replace`, `find_and_replace`, #651), or a call whose arguments carry the old text and
+the new beside the path, so a replace of the seat file, a policy file or config.json asks as
+`write_file` does, in every permission mode; a plain read of the store stays a read. A relative destination is read from the
 session's folder, as a secret name is (#209): `move_file` to `policies/default.yaml` from a session
 folder in `~/.exo` asks, and beside a secret the store file is a part, so only the principal
 answers. A shell line still reads its store writes from its own words, so `echo x > gates.yaml`
