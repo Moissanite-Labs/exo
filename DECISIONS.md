@@ -3588,6 +3588,29 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   as reaching back. A compress that folded only rows the window never held notes nothing, and a transcript cut
   short below the window's first row still drops nothing. The note follows the pins into a compression child
   and a `/branch` child.
+  *2026-10-26 note (#580):* the pending undo waits under its session in `exo.host_undo`, not in the engine that
+  heard the notice. The engine that acts on a notice records it with `pend`, holding the window the notice left,
+  and the engine that runs the session's next turn takes it with `take` and drops the earlier turns' pins from the
+  transcript, whichever agent Hermes built that engine on: a `/reasoning`, `/fast` or `/personality` rebuild
+  between an `/undo N` and the next turn no longer keeps them. A second notice before that turn keeps the first
+  record's window, and a compression move carries the record into the child session, as before. A compaction that
+  folds the window's first row ties its block to the record while it waits, in the engine that compacts or in a
+  rebuilt one. Expiry: the record never outlives the session's next turn, which settles it whatever it finds, a
+  transcript cut short included. A request that names no session and carries no user message leaves it for the
+  real turn. It can drop only the pins the window it holds showed, and only when the transcript reaches back to
+  where that window started, so a stale record never reaches a pin taken after it. Case 1 of the issue, an
+  `/undo` in the no-agent gap, still needs the CLI: with no agent there is no memory provider to pass the notice
+  on. The exo side is ready: `exo.host_undo.report(session)` from the `/undo` handler, one call beside the
+  provider notice, reaches the engines still registered for the session, which the registry holds weakly, and the
+  pending undo then waits for the rebuilt agent's turn. When no engine is registered any more, nothing holds the
+  window, so nothing can tell which pins the undone turns held, and that part waits on the CLI change. Not covered
+  now, six cases. Hermes's messaging gateway sends no notice (#537). Neither does the CLI while it has no agent,
+  from a command such as `/reasoning`, `/fast` or `/personality` to the next turn, until it reports
+  `exo.host_undo.report(session)` itself. Once no engine is registered any more, the gap-undo stays unheard for
+  good. A host without exo-memory as its memory provider never passes the notice on. An undo before the engine has
+  seen a turn of that session since it started finds no window. A `/compress` between the last turn and the undo
+  can keep the earlier undone turns' pins (#581). A summary row and a handoff file written before the drop keep
+  the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
