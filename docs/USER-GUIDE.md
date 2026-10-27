@@ -52,7 +52,8 @@ conversation history.
 
 `coding` and `full` also read repository `AGENTS.md` guidance for each session's working
 directory. `AGENTS.override.md` takes priority at the same directory. This reads instructions.
-It does not run project setup code or change tool permissions. See [profiles](HARNESS.md) and
+It does not run project setup code or change tool permissions. It skips a file that another
+user owns or can write, also when you run Exo as root. See [profiles](HARNESS.md) and
 [workspace instructions](WORKSPACE-INSTRUCTIONS.md) for settings and scope.
 
 If Claude Code is installed (the `claude` command is on your PATH) and logged in, you need no key. While the

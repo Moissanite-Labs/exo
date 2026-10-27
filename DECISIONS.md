@@ -6339,3 +6339,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   now killed all at once, under a shield. A hard stop during the wait itself still ends `close()` at once, with
   jobs and transports already stopped. The last two gaps were on main too. The count does not change: the
   channel step takes one line out of `close()`, and `JobManager.close` gains one.
+- **Amendment 2026-10-27 (fresh review on #500):** an independent review of the checker round's head.
+  - *Instructions.* The 2026-10-26 rule still read a marker or file that another user owns, when nobody else
+    could write it or its folder. That user controls it. Now a marker or file counts only when the user or root
+    owns it and its folder, and nobody else can write either. Group write counts as someone else, except for the
+    user's private group: named after the user, its primary group, no other member. That is the usual umask 002
+    setup. The upward search stops at the first folder that fails this test. This drops the mounted-repository
+    case: root no longer reads a repository that another user owns. Git refuses it as well. The tests fake stat
+    results, so they run the same as root or as a plain user.

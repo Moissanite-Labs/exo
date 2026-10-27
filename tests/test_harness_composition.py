@@ -13,6 +13,15 @@ from exo.harness_runtime import DisabledDelegator, DisabledJobs
 REPO = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _owner_only_umask():
+    """The guidance files these tests write must not be writable by a group: the loader would skip them."""
+    import os
+    previous = os.umask(0o022)
+    yield
+    os.umask(previous)
+
+
 def configured(tmp_path, monkeypatch, profile="lean", **extra):
     monkeypatch.delenv("EXO_PROFILE", raising=False)
     monkeypatch.setenv("EXO_PLUGIN_DIRS", str(REPO / "plugins"))

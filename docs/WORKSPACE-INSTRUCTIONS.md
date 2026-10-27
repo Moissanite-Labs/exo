@@ -95,17 +95,19 @@ The loader reads regular files only. It skips instruction symlinks, including
 links to another file inside the repository, and skips special files such as
 FIFOs.
 
-It follows Git's ownership rule (`safe.directory`), eased for a repository that
-a container mounts from the host. A `.git` marker or instruction file is not
-trusted when another user owns it and other users can write it or its folder.
-The upward search also stops at a folder that other users can write and the
-user does not own, such as a shared `/tmp`. Exo then reads only the session's
-directory, and skips files there that another user could have planted. The
-user's own files always count. A repository owned by another user, in folders
-only that user can write, still loads. Exo checks ownership again on the open
-file. Directory descent refuses symlinks introduced after discovery. It does
-not run project code, import plugins, scan project skills, or follow the target
-named inside a worktree's `.git` file.
+Exo reads a `.git` marker or an instruction file only when the user or root
+owns it and its folder, and nobody else can write either of them. Group write
+counts as someone else, except for the user's private group. That group is
+named after the user, is the user's primary group and has no other member. It
+is the usual setup with umask 002. The upward search stops at the first folder
+that fails this test, such as a shared `/tmp`. Exo then reads only the
+session's directory, and skips files there that fail it. A repository that
+another user owns is not read, also when Exo runs as root. Git refuses such a
+repository too. In a container that mounts a host repository, run Exo as the
+user who owns the repository. Exo checks ownership again on the open file.
+Directory descent refuses symlinks introduced after discovery. It does not run
+project code, import plugins, scan project skills, or follow the target named
+inside a worktree's `.git` file.
 
 Required executor mode currently rejects enabled workspace instructions: this
 loader reads the host filesystem, and an executor-mediated instruction reader
@@ -132,6 +134,7 @@ filename list perform no filesystem reads.
 
 Tests: `tests/test_workspace_context.py`, including actual simultaneous session
 prompts, delegated children, repository boundaries, byte and rendered-size limits,
-ownership in a shared folder, secret-store names, and symlink replacement during
-discovery. `tests/test_harness_composition.py` checks the same scoping through
+ownership, secret-store names and folders, and symlink replacement during
+discovery. The ownership tests fake the owner in stat results, so they run the
+same as root or as any other user. `tests/test_harness_composition.py` checks the same scoping through
 `exo.compose.create()`, with sessions and a child outside the configured cwd.

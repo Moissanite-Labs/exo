@@ -12,6 +12,15 @@ from exo.config import ConfigError
 from exo.workspace_context import MAX_BYTES, MAX_WARNINGS, RENDER_ROOM, WorkspaceInstructions, attach
 
 
+@pytest.fixture(autouse=True)
+def _owner_only_umask():
+    """Files the tests write are writable by their owner only, whatever the developer's umask is: the loader skips
+    a file that someone else can write."""
+    previous = os.umask(0o022)
+    yield
+    os.umask(previous)
+
+
 def workspace(tmp_path: Path, **settings) -> tuple[Path, WorkspaceInstructions]:
     root = tmp_path / "repo"
     root.mkdir()
@@ -323,26 +332,135 @@ def _shared_repo(tmp_path):
     return shared, mine
 
 
-def test_a_marker_and_file_another_user_planted_in_a_shared_folder_are_not_read(tmp_path, monkeypatch):
-    shared, mine = _shared_repo(tmp_path)
-    monkeypatch.setattr(os, "geteuid", lambda: os.getuid() + 4242)  # everything on disk belongs to someone else
-    guidance = WorkspaceInstructions({"enabled": True})
-    assert guidance.inspect(mine)["root"] == str(mine)  # the walk stops below the shared folder
-    text = guidance.render(mine)
-    assert "MY GUIDANCE" in text and "PLANTED GUIDANCE" not in text
-    text = guidance.render(shared)  # a cwd of the shared folder itself, as a cwd of /tmp
-    assert "PLANTED GUIDANCE" not in text and "another user owns it" in text
+# ---- fresh review of 2026-10-27: only the user or root may control a marker, a file or its folder ----
+# The suite runs as root in some places and as a plain user in others, so these tests never chown. They fake the
+# owner in stat results instead: the loader reads only st_uid, st_gid and the mode bits.
+
+ME, OTHER = 4000001, 4000002  # uids no real account here uses
 
 
-def test_the_users_own_files_in_a_shared_folder_and_a_foreign_read_only_repo_still_load(tmp_path, monkeypatch):
-    shared, mine = _shared_repo(tmp_path)
-    guidance = WorkspaceInstructions({"enabled": True})
-    assert "PLANTED GUIDANCE" in guidance.render(mine)  # here the user owns the shared folder's files
-    repo = tmp_path / "mounted"
+def _as(monkeypatch, me, owners=()):
+    """Run the loader as uid ``me``. Each entry the test process owns reports ``me`` as its owner, and each path in
+    ``owners`` reports the uid paired with it."""
+    real = os.getuid()
+    marked = {(os.lstat(path).st_dev, os.lstat(path).st_ino): uid for path, uid in owners}
+    monkeypatch.setattr(os, "geteuid", lambda: me)
+    for name in ("stat", "lstat", "fstat"):
+        def fake(*args, _real_call=getattr(os, name), **kwargs):
+            info = _real_call(*args, **kwargs)
+            uid = marked.get((info.st_dev, info.st_ino), me if info.st_uid == real else info.st_uid)
+            return os.stat_result((*info[:4], uid, *info[5:10]))
+        monkeypatch.setattr(os, name, fake)
+
+
+def _repo(tmp_path):
+    """A repository with a marker and a guidance file, in 0755 folders with 0644 files."""
+    repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
-    (repo / "AGENTS.md").write_text("MOUNTED GUIDANCE")
-    monkeypatch.setattr(os, "geteuid", lambda: os.getuid() + 4242)  # root in a container, repo owned by a user
-    assert "MOUNTED GUIDANCE" in guidance.render(repo)
+    (repo / "AGENTS.md").write_text("REPO GUIDANCE")
+    work = repo / "work"
+    work.mkdir()
+    (work / "AGENTS.md").write_text("WORK GUIDANCE")
+    for path in (repo, repo / ".git", work):
+        path.chmod(0o755)
+    for path in (repo / "AGENTS.md", work / "AGENTS.md"):
+        path.chmod(0o644)
+    return repo, work
+
+
+@pytest.mark.parametrize("me", [ME, 0], ids=["user", "root"])
+@pytest.mark.parametrize("owner", ["me", "root", "other"])
+def test_a_file_the_user_or_root_owns_loads_and_another_users_file_does_not(tmp_path, monkeypatch, me, owner):
+    repo, work = _repo(tmp_path)
+    uid = {"me": me, "root": 0, "other": OTHER}[owner]
+    _as(monkeypatch, me, [(work / "AGENTS.md", uid)])
+    text = WorkspaceInstructions({"enabled": True}).render(work)
+    assert "REPO GUIDANCE" in text
+    assert ("WORK GUIDANCE" in text) is (owner != "other")
+    assert ("another user owns or can write it" in text) is (owner == "other")
+
+
+@pytest.mark.parametrize("me", [ME, 0], ids=["user", "root"])
+@pytest.mark.parametrize("foreign", ["marker", "repo folder"])
+def test_another_users_marker_or_repository_folder_is_not_a_root_even_for_root(tmp_path, monkeypatch, me, foreign):
+    """The review's layout: another user's repository holds the session's folder. Git refuses it as well."""
+    repo, work = _repo(tmp_path)
+    _as(monkeypatch, me, [(repo / ".git", OTHER)] if foreign == "marker" else
+        [(repo, OTHER), (repo / ".git", OTHER), (repo / "AGENTS.md", OTHER)])
+    guidance = WorkspaceInstructions({"enabled": True})
+    report = guidance.inspect(work)
+    assert report["root"] == str(work) and [f["path"] for f in report["files"]] == [str(work / "AGENTS.md")]
+    text = guidance.render(work)
+    assert "WORK GUIDANCE" in text and "REPO GUIDANCE" not in text
+
+
+@pytest.mark.parametrize("target,mode", [("file", 0o646), ("file", 0o664), ("folder", 0o777), ("folder", 0o775)])
+def test_an_own_file_or_folder_someone_else_can_write_is_refused(tmp_path, monkeypatch, target, mode):
+    repo, work = _repo(tmp_path)
+    (work / "AGENTS.md" if target == "file" else work).chmod(mode)
+    _as(monkeypatch, ME)
+    guidance = WorkspaceInstructions({"enabled": True})
+    text = guidance.render(work)
+    assert "WORK GUIDANCE" not in text and "another user owns or can write it" in text
+    # The walk passes only folders nobody else can write, so a writable session folder is its own root.
+    assert guidance.inspect(work)["root"] == str(repo if target == "file" else work)
+    assert ("REPO GUIDANCE" in text) is (target == "file")
+
+
+def test_the_walk_stops_at_a_folder_someone_else_can_write(tmp_path, monkeypatch):
+    repo, work = _repo(tmp_path)
+    work.chmod(0o775)
+    deeper = work / "deeper"
+    deeper.mkdir()
+    deeper.chmod(0o755)
+    _as(monkeypatch, ME)
+    assert WorkspaceInstructions({"enabled": True}).inspect(deeper)["root"] == str(deeper)
+
+
+@pytest.mark.parametrize("name,members,loads", [
+    ("me", [], True), ("me", ["me"], True), ("me", ["me", "bob"], False), ("staff", [], False)])
+def test_group_write_counts_as_nobody_else_only_for_the_users_private_group(tmp_path, monkeypatch, name, members,
+                                                                            loads):
+    """A umask 002 setup: each user has a group named after them, with nobody else in it."""
+    import exo.workspace_context as wc
+    repo, work = _repo(tmp_path)
+    (work / "AGENTS.md").chmod(0o664)
+    gid = (work / "AGENTS.md").stat().st_gid
+    _as(monkeypatch, ME)
+    monkeypatch.setattr(wc.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_name="me", pw_gid=gid))
+    monkeypatch.setattr(wc.grp, "getgrgid", lambda g: SimpleNamespace(gr_name=name, gr_mem=members))
+    assert ("WORK GUIDANCE" in WorkspaceInstructions({"enabled": True}).render(work)) is loads
+
+
+def test_a_file_swapped_for_another_users_after_the_check_is_not_read(tmp_path, monkeypatch):
+    """The owner is checked again on the opened file, so a swap between the check and the open is caught."""
+    import exo.workspace_context as wc
+    repo, work = _repo(tmp_path)
+    planted = tmp_path / "planted"
+    planted.write_text("PLANTED GUIDANCE")
+    planted.chmod(0o644)
+    work_inode = work.stat().st_ino
+    _as(monkeypatch, ME, [(planted, OTHER)])
+    real_open = os.open
+
+    def swap_then_open(path, flags, *args, dir_fd=None, **kwargs):
+        if path == "AGENTS.md" and dir_fd is not None and os.fstat(dir_fd).st_ino == work_inode and planted.exists():
+            os.replace(planted, work / "AGENTS.md")
+        return real_open(path, flags, *args, dir_fd=dir_fd, **kwargs)
+
+    monkeypatch.setattr(wc.os, "open", swap_then_open)
+    text = WorkspaceInstructions({"enabled": True}).render(work)
+    assert "PLANTED GUIDANCE" not in text and "changed after it was checked" in text
+
+
+def test_a_file_below_a_secret_store_folder_is_not_read(tmp_path):
+    """The name check at startup sees only the filename. The full path is checked before each read."""
+    root, guidance = workspace(tmp_path)
+    store = root / ".ssh"
+    store.mkdir()
+    (store / "AGENTS.md").write_text("KEY FOLDER TEXT")
+    text = guidance.render(store)
+    assert "KEY FOLDER TEXT" not in text and "the path is a secret store" in text
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0, reason="chown to another uid needs root")

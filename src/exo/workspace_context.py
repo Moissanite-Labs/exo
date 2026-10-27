@@ -6,7 +6,9 @@ does not change tool permissions. The loop only needs the injected
 """
 from __future__ import annotations
 
+import grp
 import os
+import pwd
 import stat
 from pathlib import Path
 from typing import Any
@@ -20,14 +22,29 @@ RENDER_ROOM = 8 * 1024  # characters for the intro, source headings and warnings
 DEFAULT_FILENAMES = ("AGENTS.override.md", "AGENTS.md")
 
 
-def _others_can_write(mode: int) -> bool:
-    return bool(mode & (stat.S_IWGRP | stat.S_IWOTH))
+def _others_can_write(info: os.stat_result) -> bool:
+    """World write, or group write for a group that may hold someone else. The user's private group (named after
+    the user, its primary group, no other listed member: the usual umask 002 setup) holds only the user."""
+    if info.st_mode & stat.S_IWOTH:
+        return True
+    if not info.st_mode & stat.S_IWGRP:
+        return False
+    try:
+        user, group = pwd.getpwuid(os.geteuid()), grp.getgrgid(info.st_gid)
+    except KeyError:
+        return True
+    return not (info.st_gid == user.pw_gid and group.gr_name == user.pw_name and set(group.gr_mem) <= {user.pw_name})
+
+
+def _controlled(info: os.stat_result) -> bool:
+    """The user or root owns it, and nobody else can write it."""
+    return info.st_uid in (os.geteuid(), 0) and not _others_can_write(info)
 
 
 def _trusted(entry: os.stat_result, folder: os.stat_result) -> bool:
-    """Git's ownership rule (safe.directory), eased for a bind-mounted repository: an entry is not read when another
-    user owns it and others can write it or its folder, as in a shared ``/tmp``. The user's own entries count."""
-    return entry.st_uid == os.geteuid() or not (_others_can_write(entry.st_mode) or _others_can_write(folder.st_mode))
+    """An instruction file or ``.git`` marker counts only when it and its folder are each controlled: owned by the
+    user or root, and writable by nobody else. Another user's file is refused, also for root."""
+    return _controlled(entry) and _controlled(folder)
 
 
 def _warn(report: dict[str, Any], text: str) -> None:
@@ -77,12 +94,12 @@ class WorkspaceInstructions:
 
     @staticmethod
     def _root(cwd: Path) -> Path:
-        """The nearest folder at or above cwd with a trusted ``.git`` marker, else cwd. The walk stops at a folder
-        that other users can write and the user does not own, and at a marker such a user could have planted."""
+        """The nearest folder at or above cwd with a trusted ``.git`` marker, else cwd. The walk stops at the first
+        folder that is not controlled (another user owns it or someone else can write it), and at such a marker."""
         for folder in (cwd, *cwd.parents):
             try:
                 here = folder.stat()
-                if here.st_uid != os.geteuid() and _others_can_write(here.st_mode):
+                if not _controlled(here):
                     return cwd
                 marker = (folder / ".git").lstat()
             except FileNotFoundError:
@@ -144,7 +161,7 @@ class WorkspaceInstructions:
                 _warn(report, f"Skipped {path}: instruction files must be regular files, not symlinks")
                 return
             if not _trusted(mode, here):
-                _warn(report, f"Skipped {path}: another user owns it, and others can write it or its folder")
+                _warn(report, f"Skipped {path}: another user owns or can write it or its folder")
                 return
             if is_sensitive_path(str(path)):
                 _warn(report, f"Skipped {path}: the path is a secret store")
