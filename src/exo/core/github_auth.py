@@ -175,14 +175,13 @@ def child_env(env: dict[str, str], home: str | Path, seat: str,
     meta = binding(home, seat)
     if not meta:
         return dict(env)
+    deny = tuple(deny)
     names = ('GH_TOKEN', 'GH_CONFIG_DIR', 'GH_HOST', 'GH_PROMPT_DISABLED')
     if any(fnmatch.fnmatchcase(name, pattern) for name in names for pattern in deny):
         raise AuthError('Seat GitHub authentication is blocked by tools.env_deny')
     if meta['mode'] == 'host':
-        out = dict(env)
-        for name in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_CONFIG_DIR'):
-            if name in os.environ and not any(fnmatch.fnmatchcase(name, pattern) for pattern in deny):
-                out[name] = os.environ[name]
+        out = {name: value for name, value in env.items()
+               if not any(fnmatch.fnmatchcase(name, pattern) for pattern in deny)}
         out['GH_HOST'] = meta['host']
         return out
     disabled = meta['mode'] == 'disabled'

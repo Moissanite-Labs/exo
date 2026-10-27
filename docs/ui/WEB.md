@@ -24,6 +24,18 @@ replays from the last event it applied, so no reply or approval card is lost. Th
 events. After a longer gap, such as a long outage while the core kept working, it replays the newest 5,000 as on
 start, so an approval asked before them does not show.
 
+## Core availability and activity
+
+The browser connection and the core connection are separate. The web header uses a named `core-state` stream
+frame for core availability. This frame has no event id and does not advance the replay cursor. A core feed
+that ends, including normal EOF, marks the core unavailable.
+
+Chat retains last known activity, drafts, queued steers and pending approvals during an outage. Working
+animation and Send require a usable core connection and a fresh session snapshot. A failed refresh offers
+Retry activity. Stop remains available as Try stop when only the web feed or activity snapshot is unavailable.
+Confirmed core loss disables it. Reconnecting does not resend a message. With an explicit attached socket,
+it does not start a core.
+
 ## Opening the page and the page token (D-039)
 
 `exo web` makes a random page token for each launch and keeps it in memory only. It prints the page address with
@@ -128,6 +140,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 
 - **Brand bar.** `E X O`, the agent and thread, the tabs, the connection led. The square dot before `E X O`
   pulses orange while a turn runs and is hollow when idle.
+- **Thread list.** Background turn updates and list refreshes keep keyboard focus on the same thread.
+  Repeated status events leave its button in place. Returning to a thread reads its fresh running status,
+  so a running turn restores the working indicators and enables Stop.
 - **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
   that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
   against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
@@ -151,7 +166,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   memory column.
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
   `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
-  automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
+  automatically. Each card shows the answer sequence for its available options and says "Ctrl+F to focus the first
+  approval". The help changes during always confirmation and deny-note entry. A deliberately focused card has an
+  accent outline. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
   a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
   another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
   its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,
@@ -247,11 +264,23 @@ with the approval cards under it, then the thread with the newest item first; cl
 top to bottom, and a thread opens on its newest item at the top (`docs/media/web-08-inverse.png`). **Classic** is the usual
 order, and a long thread now opens at its newest message at the bottom (`docs/media/web-09-classic-bottom.png`). Switch with
 the "Layout" button under the thread list or `/layout inverse|classic`; the choice is saved in this browser
-(`localStorage` key `xc-layout`, the only use of it, pinned by a test). The code is `static/layout.js` (pure, tested in node)
+(`localStorage` key `xc-layout`, pinned by a test). The code is `static/layout.js` (pure, tested in node)
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
 DevTools (`tests/browser.py`, skipped when Chrome is missing). The page has no big composer pane; that is terminal only.
+
+### Chat panes
+
+The pane toolbar hides or shows Threads and Details, moves each pane left or right, and adjusts side widths
+between 160 and 520 pixels. The conversation stays visible. Reset panes restores default order, widths and
+visibility. Narrow windows stack panes in the chosen order and hide width sliders. Existing pane nodes move
+without remounting the composer, transcript, approvals or stream listeners.
+
+Only validated layout fields are saved. Browser pages use `exo-pane-layout-v1` in localStorage. Desktop builds
+with the pane bridge use native preferences across ports and relaunches. The bridge accepts layout messages
+only from the main frame at the current launcher loopback origin. Failed saves show a message. A delayed
+startup read cannot overwrite a layout change made while the page was loading.
 
 ## Cost and jobs (D-032)
 
@@ -308,7 +337,8 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   Allow always is a standing grant, so as on the Chat card it waits for a separate Confirm always click. Cancel,
   another section, Refresh or the request closing elsewhere drops the confirm. Allow and deny answer at once.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
-  Empty sections say what will appear and how.
+  Empty sections say what will appear and how. When the event stream opens, Command refreshes its snapshot
+  after the same short debounce used for events, including when the reopened stream stays quiet.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
   and roles as labelled values, with the key field and buttons under them. The default model has its own panel.
 - **Focus and motion.** Every control keeps the orange focus ring (inset on tabs and gauges). The page head reveals
@@ -320,6 +350,12 @@ Screenshots: `python scripts/shots_web_tabs.py OUTDIR` serves the client over de
 table and snapshot stubbed, no key read) and shoots every tab with data and empty, at 1440 and 400px, full page.
 
 ## Motion and accessibility
+
+Chat labels a busy thread `waiting for approval` when a pending request belongs to that thread or applies
+globally. The thread list uses the same phase for live threads. Requested and resolved events, approval
+snapshots and thread navigation refresh the label. Connection loss or failed activity recovery retains the
+`last known` qualifier. This phase uses pending approval state, without estimating tool execution time.
+Busy indicators and Stop, Send and approval authority keep their existing behavior.
 
 Every animation (pulse, packet, caret blink, reveal, boot) sits behind `prefers-reduced-motion: reduce`, which
 turns them all off and hides the boot. The page is dark only, like the site, and paints its own background.

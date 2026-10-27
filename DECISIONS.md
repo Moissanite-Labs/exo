@@ -3207,6 +3207,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and stay so), which is the `${..}` default word's own gap, not this one.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
+- **Amendment 2026-10-27 (aska-digital/exo-desktop#50):** explicit GitHub host mode respects the supplied, commonly
+  scrubbed child environment. It does not restore core-process tokens or `GH_CONFIG_DIR`, overwrite approved
+  supplied values, or retain variables matching `env_deny`. Stored host gh configuration remains available.
+  Token bindings, disabled bindings and their Git helpers keep their existing behavior.
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
   approvals with `allow_always`. (b) `exo web` re-exposed the whole protocol and the event stream with no token;
@@ -3785,6 +3789,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27 (aska-digital/exo-desktop#37, partial):** Chat distinguishes a busy thread waiting for its own or a
+  global approval from other active work. Events, snapshots and navigation refresh this phase. Unavailable core
+  or activity state keeps the last-known qualifier. Existing busy, Stop, Send and approval authority remain.
+  No elapsed-time or execution-duration estimate is introduced.
+- **Amendment 2026-10-27:** web approval cards state their available answer sequence and the deliberate Ctrl+F focus
+  step. Instructions change for always confirmation and deny-note entry. A focused card has an accent outline.
+  Existing focus, confirmation and approval authority rules remain unchanged.
+- **Amendment 2026-10-27:** core availability is separate from browser connectivity and durable events. Chat
+  labels last known activity during outages and waits for a fresh snapshot before enabling Send. Retry activity
+  and deliberate Try stop preserve drafts and pending approvals without replaying user messages.
+- **Amendment 2026-10-27 (#708):** Command refreshes its snapshot on every current stream open, using the
+  existing event debounce. A quiet reopen no longer waits for another event. Superseded or disposed stream
+  handles cannot schedule the refresh, and unmount cancels a queued refresh. No user or extension step changes.
 - **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
   alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
   reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early
@@ -3828,6 +3845,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Amendment 2026-10-27:** a separate Chat pane toolbar controls order, side widths and side visibility. The
+  conversation stays visible and its existing nodes are retained. Persistence accepts only validated layout
+  fields, with a native bridge for desktop builds and a browser fallback. Reset restores defaults.
 - **Why (A, verbatim):** "for the cli the user shouldnt have to click exactly inside the tiny text bar for them to start
   prompting." And: "something like a composer built into the cli so write longer more structured prompts." And on a chat
   that opened at its top: "instead of fixing it and flipping it, lets be creative. lets experiment with an inverse ui where
@@ -3835,6 +3855,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Focus (terminal):** a click on the transcript or any plain surface returns focus to the composer, and a printable key
   that reaches the app with focus on the transcript (or nowhere) is typed into the composer. A focused panel, the
   completion menu, an input field and the approval card keep their own keys.
+- **Web focus amendment (2026-10-27):** background turn events redraw the thread list only when its visible
+  status changes. List refreshes restore keyboard focus by thread ID without moving focus from the composer.
+  Turn events for a thread arriving during a list request are kept until that response can merge them.
 - **Composer pane (terminal only):** the same composer widget grows to most of the screen, so the D-037 menu, `@` files and
   ghost text work unchanged and the draft is just the composer text: closing the pane cannot lose it. Open with `ctrl+g`
   (ctrl+e was taken by "edit the last answer", and is cursor-to-end in a text area) or `/compose`. Enter adds a line,
