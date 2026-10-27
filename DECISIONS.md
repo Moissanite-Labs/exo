@@ -1078,6 +1078,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
   are not secret-scrubbed by this display helper. No command, key, setting or setup step changes.
+- **Amendment 2026-10-27 (#691, exo-desktop #16):** `exo config show`, `exo config get` and `config.get` print
+  the config through one function, `Config.redacted`, so the commands mask what the API masks. Before exo-desktop
+  #16 the two commands printed raw values. After it, `get` tested a dotted key such as
+  `plugin_config.exo-memory.token` as one name, and the `.` before `token` hid the name. The name test now reads
+  the last part of the key, as `config.get` already did. No command, key or setting changes.
 - **Why:** a new user had no clean way to add a model key. Keys went in by hand (env, `security`, or a 0600
   file), `exo models` only reported, and the web client had no provider settings at all.
 - **Engine:** `exo/providers_setup.py`. `rows` gives every catalog provider with status (key found and where,
