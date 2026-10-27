@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from exo import peers
-from exo.config import Config
+from exo.config import Config, ConfigError
 from exo.core.engine import SYSTEM_PROMPT
 from exo.application import CoreEngine
 from exo.core.plugins import PluginManager
@@ -42,6 +42,12 @@ def create(seat: str | None = None) -> CoreEngine:
 
     ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
     cfg = Config.load()
+    notebook_config = None
+    if "work_notes" in cfg.data:
+        from exo.work_notebook import NotebookConfig
+        if not isinstance(cfg.data["work_notes"], dict):
+            raise ConfigError("work_notes must be an object")
+        notebook_config = NotebookConfig(cfg.data["work_notes"])
     executor, executor_required = load_executor()  # required failures precede all plugin imports
     st = None
     if seat or os.environ.get("EXO_SEAT"):
@@ -100,6 +106,9 @@ def create(seat: str | None = None) -> CoreEngine:
     if eng.peers is not None:
         eng.peers.autostart = True
     eng.peer_cfg_dir = eng.peer_cfg_dir or fitting_peers_dir()
+    if notebook_config is not None and notebook_config.enabled:
+        from exo.work_notebook import attach as attach_work_notebook
+        attach_work_notebook(eng, notebook_config, principal=principal)
     if cfg.get("learn", {}).get("enabled", True) is not False:
         from exo import learn
         learn.attach(eng)
