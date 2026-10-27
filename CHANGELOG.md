@@ -72,6 +72,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   a peer, a bus wake or a job notice started in the same core asks as if bypass were off. A non-principal steer
   stops the lowering for the rest of the turn. The bypass ledger row names the turn author, and hooks that do not
   take the new kwarg are unchanged.
+- bash's legacy arithmetic `$[..]` is read as the `$((..))` it stands for (#588). bash still accepts the legacy
+  form, and it evaluates as `$((..))` does, assignments included, but the lexer read `$[..]` as plain text, so an
+  assignment in it went unseen where the same line written with `$((..))` asked (#341/#409): `echo $[PATH=5]; ls`
+  and `echo "$[PATH=5]"; ls` were allowed `read`s, and so were `echo $[BASH_ENV=5]; ls`, `echo $[a[PATH=5]]; ls`
+  (a subscript is arithmetic, and it assigns) and the #584 join `$\<newline>[PATH=5]`. The lexer now reads `$[..]`
+  as the `$((..))` it stands for, with the word keeping `$[..]` as written, and an element the body sets is read
+  too (`echo $[BASH_CMDS[ls]=1]; ls` rebinds a program name, as `hash -p` does) — also through `$((..))`, where
+  main allowed it — and `${x:-$[PATH=5]}` reads the body through the expansion word it is in. A `$[..]` in a
+  write's target keeps main's `local_write` of the path as written beside the dynamic reading, so a deny on the
+  write still reaches the line, and `echo $[1+2]` stays a read.
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
   `reserved:` entry on a later path missed and an approver could have waved the write through:
