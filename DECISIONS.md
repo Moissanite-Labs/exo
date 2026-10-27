@@ -6347,3 +6347,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     setup. The upward search stops at the first folder that fails this test. This drops the mounted-repository
     case: root no longer reads a repository that another user owns. Git refuses it as well. The tests fake stat
     results, so they run the same as root or as a plain user.
+  - *Hard stop.* `CoreEngine.close` retried every `ShutdownTimeout`, also one that carried a `CancelledError`
+    from a stop step. So a second SIGTERM while peers stopped, with a sync tool past the bound, was lost:
+    `close()` returned normally once the tool did. A `CancelledError`, `KeyboardInterrupt` or `SystemExit` in
+    `errors` is now raised after the bounded attempt, and the rest stays as after a timeout.

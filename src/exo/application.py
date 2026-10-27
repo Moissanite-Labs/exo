@@ -42,12 +42,19 @@ class CoreEngine(CoreRuntime):
         channels, peers, the scheduler and MCP, and it keeps plugin resources, the store and the writer claim.
         Python cannot stop that thread, and the process waits for it at exit anyway, so this logs and closes
         again until the tool returns. Then plugin cleanups run once and the writer claim is released.
+
+        A hard stop is not retried. When a stop step met a second Ctrl-C or SIGTERM (``CancelledError``,
+        ``KeyboardInterrupt`` or ``SystemExit``), that error is raised once the bounded attempt ends, and the rest
+        stays as after a timeout.
         """
         from exo.runtime_shutdown import ShutdownTimeout
         while True:
             try:
                 return await super().close()
             except ShutdownTimeout as exc:
+                stop = next((error for error in exc.errors if not isinstance(error, Exception)), None)
+                if stop is not None:
+                    raise stop from exc
                 logging.getLogger(__name__).warning("%s; closing again", exc)
 
     def abort_startup(self) -> None:

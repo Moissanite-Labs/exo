@@ -190,6 +190,8 @@ the writer claim. If a step in 2 also failed, `ShutdownTimeout` names that error
 it in `errors`. A later `close()` finishes the job once the tool returns. The engine
 that `exo serve` and the terminal build (`exo.application.CoreEngine`) logs a warning and
 closes again until it does. Its plugin cleanups then run once and exod exits normally.
+It does not close again after a hard stop in step 2. That `CancelledError`, Ctrl-C or
+`SystemExit` is raised once the wait ends, and the rest stays as after a timeout.
 No detached cleanup watcher is created.
 
 Plugin tool handlers are called as `fn(args, session_id=, task_id=, tool_call_id=)`. They

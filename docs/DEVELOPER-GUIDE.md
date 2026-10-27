@@ -314,7 +314,9 @@ It does not remove gate registrations. Plugin tool handlers get no cancellation 
 their blocking work. `CoreRuntime.close()` stops jobs and transports, then waits five seconds for
 tool workers. If one is still running it raises `ShutdownTimeout` and keeps plugin resources,
 the store and the writer claim. `exo.application.CoreEngine.close()` retries until the worker
-returns. Embedders that need one bounded attempt call `CoreRuntime.close`. See [HARNESS.md](HARNESS.md).
+returns. It does not retry after a hard stop in the stop steps (a second Ctrl-C or SIGTERM): it
+raises that error once the wait ends. Embedders that need one bounded attempt call
+`CoreRuntime.close`. See [HARNESS.md](HARNESS.md).
 
 Workspace prompt providers use the per-session `Loop.workspace_extra(session, cwd)` callback.
 Delegated loops inherit the callable and resolve their own cwd. The bounded Markdown provider is

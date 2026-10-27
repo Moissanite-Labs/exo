@@ -677,3 +677,45 @@ def test_a_hard_stop_while_jobs_are_killed_still_ends_every_job(tmp_path, monkey
         assert not engine.jobs.live and engine.store._conn is None
 
     asyncio.run(run())
+
+
+# ---- fresh review of 2026-10-27 (#500): a hard stop ends close, and close refuses new work ----
+
+def test_a_hard_stop_while_peers_stop_is_raised_after_the_bounded_attempt(tmp_path, monkeypatch):
+    """The review's probe: a second SIGTERM lands while close() stops peers, and a sync tool outlives the bound.
+    The owner's close raises the CancelledError after its one bounded attempt, instead of closing again until the
+    tool returns. Jobs are stopped, and the rest stays as after a timeout."""
+    hold, started, release = _held()
+    engine, order = _engine(tmp_path, hold)
+    engine.claim_writer()
+    stopping = asyncio.Event()
+
+    class SlowPeers(_Peers):
+        async def stop(self):
+            self.stops += 1
+            stopping.set()
+            await asyncio.sleep(0.5)
+
+    engine.peers = SlowPeers()
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 0.3)
+
+    async def run():
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        proc = engine.jobs.live[engine.jobs.start("sleep 120", str(tmp_path), session.id)["id"]].proc
+        engine.start_turn(session.id, "hold")
+        assert await asyncio.to_thread(started.wait, 5)
+        try:
+            closing = asyncio.create_task(engine.close())
+            await asyncio.wait_for(stopping.wait(), 5)
+            closing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(closing, 5)  # a retry would hold close() until the tool returns
+            assert _ended(proc) and engine.jobs.target.closed and not engine.jobs.live
+            assert "cleanup" not in order and engine._writer is not None and engine.store._conn is not None
+        finally:
+            release.set()
+        await asyncio.gather(*list(engine.registry.workers))
+        await engine.close()  # a later close completes
+        assert order == ["cleanup"] and engine._writer is None and engine.store._conn is None
+
+    asyncio.run(run())
