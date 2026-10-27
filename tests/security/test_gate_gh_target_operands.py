@@ -263,8 +263,10 @@ def test_an_ssh_host_stands_for_every_empty_target(line):
 
 
 def test_an_ssh_host_is_not_an_other_target_of_itself():
+    # #493: where the remote command has a target of its own, the host stays an other target, so a rule on it
+    # still sees the line (`gh pr view 5` was left with no other target on main).
     c, _ = run("ssh buildhost gh pr view 5")
-    assert (c.target, c.alt_targets) == ("#5", []), c
+    assert (c.target, c.alt_targets) == ("#5", ["buildhost"]), c
     c, _ = run("ssh buildhost gh pr view")
     assert (c.target, c.alt_targets) == ("buildhost", []), c
 
