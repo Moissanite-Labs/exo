@@ -2,6 +2,7 @@
 // composer, and the side panel area on the right. All state comes from /api/chat/* and the /api/events stream.
 import { h, api, short, when, partsText, tag, empty } from "./dom.js";
 import * as bus from "./bus.js";
+import { createModelPicker } from "./model_picker.js";
 import { renderMarkdown } from "./markdown.js";
 import { renderPanel } from "./panels.js";
 import { createHero } from "./hero.js";
@@ -524,7 +525,7 @@ export function mount(root) {
   function closePicker() { modelPicker.hidden = true; ++pickerGeneration; input.focus(); }
 
   // One model change at a time: send() and the picker wait for it, so a second Enter is not a second models.set.
-  async function chooseModel(ref, defaults, sid) {
+  async function chooseModel(ref, defaults, sid, generation = pickerGeneration) {
     changingModel = true;
     try {
       if (defaults) await api("POST", "/api/providers/default", { ref, role: "main" });
@@ -534,6 +535,7 @@ export function mount(root) {
       throw lan ? Error("/default saves provider settings, which only a page opened at 127.0.0.1 or localhost may change (D-034). /model works here.") : e;
     } finally { changingModel = false; }
     if (!defaults && current === sid) { model = ref; capacity = capacities[ref] || null; requested = ""; drawStatus(); }
+    if (sid !== current || generation !== pickerGeneration) { await refreshSessions(); return; }
     closePicker();
     await refreshSessions();
     flash((defaults ? "Default model: " : "Main model: ") + ref);
@@ -544,26 +546,25 @@ export function mount(root) {
     if (!defaults && !sid) { flash("open a thread first for /model; /default sets the model for new threads"); return; }
     try {
       if (args) { await chooseModel(args, defaults, sid); return true; }
-      const d = await api("GET", "/api/chat/models");
-      if (sid !== current || generation !== pickerGeneration) return;
-      const rows = [...(Array.isArray(d.models) ? d.models : []), ...(Array.isArray(d.available) ? d.available : [])];
-      const routes = [...new Set(rows.map(m => m && m.route).filter(ref => typeof ref === "string" && ref))];
-      if (!routes.length) { flash("No models listed. Open Providers to set up a provider."); return; }
-      const select = h("select", { class: "xc-field", "aria-label": defaults ? "Default model" : "Main model" },
-        ...routes.map(ref => h("option", { value: ref, selected: ref === model }, ref)));
-      select.value = routes.includes(model) ? model : routes[0];
-      const apply = h("button", { class: "xc-btn", onclick: async () => {
-        if (sid !== current) { modelPicker.hidden = true; return; }
-        if (changingModel) return;
-        apply.disabled = true;
-        try { await chooseModel(select.value, defaults, sid); } catch (e) { fail(e); }
-        finally { apply.disabled = false; }
-      } }, defaults ? "Set default" : "Use model");
-      modelPicker.replaceChildren(h("label", null, defaults ? "Default model for new threads" : "Main model", select),
-        h("p", null, "Changes the shared main route; existing fallbacks remain."), apply,
-        h("button", { class: "xc-btn", onclick: closePicker }, "Cancel"));
+      const picker = createModelPicker({ label: defaults ? "Default model for new threads" : "Main model", selected: model,
+        applyLabel: defaults ? "Set default" : "Use model",
+        note: defaults ? "Saves the default for new threads. Applies to the shared core now or on its next start."
+          : "Changes the shared core’s main route. Existing fallbacks remain.",
+        onCancel: closePicker, onApply: async ref => {
+          if (sid !== current || generation !== pickerGeneration || changingModel) return;
+          await chooseModel(ref, defaults, sid, generation);
+        } });
+      modelPicker.replaceChildren(picker.element);
       modelPicker.hidden = false;
-      select.focus();
+      picker.focus();
+      try {
+        const d = await api("GET", "/api/chat/models");
+        if (sid !== current || generation !== pickerGeneration) return;
+        picker.setRows([...(Array.isArray(d.models) ? d.models : []), ...(Array.isArray(d.available) ? d.available : [])]);
+      } catch (e) {
+        if (sid === current && generation === pickerGeneration) { picker.setError(e.message || "Models could not be loaded. Cancel and retry."); fail(e); }
+        return false;
+      }
       return true;
     } catch (e) { if (args || generation === pickerGeneration) fail(e); return false; }   // a newer picker owns the strip
   }
@@ -711,7 +712,7 @@ export function mount(root) {
   const offState = bus.onState((st) => {
     if (st.synced !== synced) { synced = st.synced; recover(); }
   });
-  const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { ++pickerGeneration; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
