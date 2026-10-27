@@ -3148,10 +3148,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `deny: [{category: delete, target: prod}]`. That test read the store names as written, so `~/.Kube//config`, a
   store only in another case and in its lexical form, kept no copy for the host, and the line asked where main denies
   both it and its plain spelling. The test now reads each spelling in its lexical form too. (y) The check ran main's
-  script (e0968a2b) on main e0968a2b against d6f10f70, under the 87 built-in policies and 336 more: this round's
+  script (e0968a2b) on main e0968a2b against d6f10f70, under the 88 built-in policies and 335 more: this round's
   entries on each store folder, file and name, entries on a remote host's actions, and #516's allow rules. The
   built-in set, 85,852 actions, lowered 81 pairs on 17 actions, all `ssh prod 'rm -rf ~/.kube//config'` in the forms
-  the script makes of this round's test rows. A focused run of 24,438 calls held 16,614 new ones (a store spelt oddly
+  the script makes of this round's test rows. Under the 88 built-in policies alone that is 17 pairs on 17 actions,
+  against 31 on 23 in (n). A focused run of 24,438 calls held 16,614 new ones (a store spelt oddly
   and in another case at once, in lines and in a call's own folders, beside #516's rules), 1,053 remote lines and the
   7,868 calls of the check's run before. It lowered 38 pairs on 12 actions. The check's earlier corpora lowered none on
   15,824 actions, and 123 pairs on 122 of 35,329, each a reserved hit. Each lowered pair decides as main decides the
