@@ -466,6 +466,9 @@ class _Cmd:
     subs_met: int = 0            # how many of the line's subs lie in its text and before it, in the lexer's order (#465)
     opens: tuple | None = None   # on a compound's closer: (the compound's first command, the subs met before the
                                  # closer's redirections), which bash expands before the compound runs (#465)
+    nested: bool = False         # inside a compound when parsed (a subshell, brace group, if/loop/case body) (#203)
+    sep_before: str | None = None  # operator before this command (None at line start) (#203)
+    sep_after: str | None = None   # operator ending this command (None at line end) (#203)
     stdin_unknown: bool = False  # a stdin the gate cannot read reaches it: a compound's feed or its wrapper's (#316)
     stdin_apart: bool = False    # a wrapper runs it with the wrapper's stdin, which is not its line's (#316)
 
@@ -1367,7 +1370,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     o_tok = -1                      # the index of cur's last token
     p_at = -1                       # where the pipeline cur is in starts, when only simple commands came before it
 
-    def end(piped: bool = False) -> None:
+    def end(piped: bool = False, sep: str | None = None) -> None:
         nonlocal cur, shut, lead, head, o_first, o_body, o_end, o_tok, p_at
         if shut is not None:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
@@ -1376,6 +1379,9 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             cur.own = lx._source(at, o_end)
             cur.subs_met = lx.met[o_tok]
             cur.opens = (shut[1], shut_met) if shut is not None else None
+            cur.nested = len(opened) > 0  # a compound still open around it (#203); a closer runs before its
+                                          # close, so a compound's last command still sees it open
+            cur.sep_after = sep           # the operator ending it (#203)
             if cur.piped_in and p_at >= 0:
                 cur.pipe_src = functools.partial(pipes.text, p_at, o_end)   # read only by _stdin_own
             cmds.append(cur)
@@ -1384,7 +1390,8 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
         # the next command's pipeline starts here, or where this one's did; a compound before it has no such text.
         # A command piped from a compound (piped_group) finds p_at at -1, as the end before it had a compound shut.
         p_at = (p_at if cur.piped_in else at) if piped and shut is None and at >= 0 else -1
-        cur, shut, lead, head = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True, True
+        cur, shut, lead, head = _Cmd(piped_in=piped, piped_group=piped and shut is not None,
+                                     sep_before=sep), None, True, True
         o_first = o_body = o_end = o_tok = -1
 
     def push(entry: tuple) -> None:
@@ -1416,7 +1423,7 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
             after = owners.pop() if v == ")" and owners else None
             owners += [opens] if v == "(" else []
             into = cmds[-1] if v == "(" and cur.piped_in and cmds else None
-            end(piped=v in ("|", "|&"))
+            end(piped=v in ("|", "|&"), sep=v)
             if v == "(":
                 push(("(", len(cmds), into))
             elif v == ")" and opened and opened[-1][0] == "(":
@@ -3745,6 +3752,24 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     return parts
 
 
+def _cd_takes_effect(k: _Cmd) -> bool:
+    """A `cd`/`pushd` the gate can prove moves the shell it stands in (#203): the bare builtin at the
+    top level, joined to what came before by nothing conditional, not piped or backgrounded, with exactly
+    one target and no option. Anything else — a subshell, a branch or loop body, a pipeline, a background
+    job, a `&&`/`||` chain, a prefix such as `sudo` or `nohup`, an extra operand — may leave the shell
+    where it was, so it must not move the folder the line stands in. A cd that fails on a missing folder
+    is not told apart from one that works: the spelling alone cannot say, so a well-formed top-level cd
+    is read as taking effect."""
+    if k.nested or k.piped_in or k.sep_after in ("|", "|&", "&") or \
+            k.sep_before in ("&&", "||", "|", "|&", "(", ")"):
+        return False
+    if not k.words or k.words[0].quoted or k.words[0].text not in ("cd", "pushd"):
+        return False
+    rest = [w for w in k.words[1:] if not w.text.startswith("-")]
+    opts = [w for w in k.words[1:] if w.text.startswith("-")]
+    return len(rest) == 1 and not opts
+
+
 def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                       piped: str | None) -> list[Classification]:
     p = words[0]
@@ -3848,6 +3873,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         return parts
     if prog == "popd":
         ctx.pop("home_cwd", None)      # #203: the line no longer stands in the folder pushd entered
+        ctx["home_blocked"] = True     # #203: popd returns to a pushed folder the gate does not pin
     if prog in ("cd", "pushd"):
         target = next((w for w in words[1:] if not w.text.startswith("-")), None)
         dest = target.text if target else ""
@@ -3858,10 +3884,19 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
                 ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
                 ctx.pop("home_cwd", None)
+                ctx["home_blocked"] = True
             elif _home_folder(dest):
-                ctx["home_cwd"] = True             # #203: a non-store folder of the home (plugins/, venv/, src/)
+                if _cd_takes_effect(k):
+                    ctx["home_cwd"] = True         # #203: a non-store folder of the home, entered for real
+                # else: a cd that may not take effect leaves the shell where it was
             else:
                 ctx.pop("home_cwd", None)
+                ctx["home_blocked"] = True         # #203: the line has stood in the store; a later home
+                                                   # cd does not re-open the carve-out
+        elif target and _home_folder(dest):
+            if _cd_takes_effect(k):
+                ctx["home_cwd"] = True             # #203: a home folder spelt past the store check
+            # else: a cd that may not take effect leaves the shell where it was
         else:
             ctx.pop("home_cwd", None)              # #203: the line no longer stands in that folder
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
@@ -4943,14 +4978,15 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                 _unknown_store(words[i + 1], seen, inside=True)):
             hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
-        if ctx.get("home_cwd") and not ctx.get("fd_cwd") and _plain_folder_write(k, words, parts):
+        if ctx.get("home_cwd") and not ctx.get("home_blocked") and not ctx.get("fd_cwd") and _plain_folder_write(k, words, parts):
             # #203: a plainly spelt write the gate can see, in a non-store folder of the home. Its
             # words name files of that folder only, so _cd_store_read does not read them as store
             # names either; the flag rides on the command to say so. Another command's word of the
-            # same spelling still counts there.
+            # same spelling still counts there. Only the after-cd hit is skipped: a word that itself
+            # names a store path still stands (a `bus/registry.json` word is one, as before).
             k.plain_home_write = True
-            return []
-        hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
+        else:
+            hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
     return list(dict.fromkeys(hits))
 
 
@@ -7148,7 +7184,8 @@ def _store_from_cwd(p: str, ancestors: bool) -> bool:
 
 def _home_folder(dest: str) -> bool:
     """A `cd` target the gate can pin to one folder of a store root that is not itself a store path
-    (#203): `~/.exo/plugins/foo` counts, `~/.exo` itself and `~/.exo/policies` do not. The spelling
+    (#203): `~/.exo/handoffs` counts, `~/.exo` itself, `~/.exo/policies` and `~/.exo/plugins/foo`
+    (a store folder since #435) do not, nor does any `.git` folder, whose hooks run code. The spelling
     must expand to a single absolute path with nothing left over — no glob, brace or unresolved
     variable, which could name a different folder — and every form of it (as written and resolved)
     must sit strictly below a `.exo` root without being a store path, so a link out of the home, or
@@ -7164,7 +7201,8 @@ def _home_folder(dest: str) -> bool:
         return False
     roots = [r for root, _, _ in _store_roots() for r in _path_forms(root) if ".exo" in r.split("/")]
     return bool(roots) and all(
-        not is_store_path(f) and any(f != r and f.startswith(r.rstrip("/") + "/") for r in roots)
+        not is_store_path(f) and ".git" not in f.split("/") and
+        any(f != r and f.startswith(r.rstrip("/") + "/") for r in roots)
         for f in _path_forms(p))
 
 
