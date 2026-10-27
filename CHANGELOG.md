@@ -6,6 +6,41 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A policy pattern that does not compile is refused when the policy loads (#466). `normalize_policies` checked
+  types and outcome names but compiled nothing, so a rule's `match.command`, a `command:` entry or a mapping's
+  `command` in `deny:` and `reserved:`, and a `posting.forbid` pattern with a typo raised `re.PatternError` only
+  when `decide` reached it. The exo-gate hook caught that: with no required executor a read tool ran with no ask,
+  observe mode ran the call, and enforce mode showed a fallback card with no approver list offering "always", so
+  one typo in a deny entry a principal added to tighten the gate could let a seat answer every later call the
+  gate failed on. The loader now compiles each of those patterns and raises `PolicyError` naming the entry, and
+  `load_policies` names the file before it (`policies/gates.yaml: gates.deny[0].command: bad pattern '^(rm|shred':
+  missing ), unterminated subpattern at position 1`), so the hook's fallback runs on the defaults, which ask on
+  anything irreversible or public, with the message in every decision's reason and in `/gate`; a store write, a
+  secret and a force push still ask the principal alone, once, in every mode, on a real rule key. A policy whose
+  patterns compile decides identically; only the broken one changes. Tests: `tests/security/
+  test_gate_policy_patterns.py`, `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
+  **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
+- Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
+  took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
+  `reserved:` entry on a later path missed and an approver could have waved the write through:
+  `cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from `a.yaml` to
+  `gates.yaml` and `delete_file` on both paths asked under `deny: ["target:*/gates.yaml"]`. The store scan now
+  keeps each store path a shell line or file tool writes, in the order it meets them, and each is a `store_write`
+  part with that path as its target, as beside a secret (#447), so the entry matches whichever path it names. The
+  first path still leads the line, `rm` of both paths was denied already (its `delete` part names the last path),
+  reads keep their class, and the first path alone decides as before.
+- A glob in a secret store's folder asks (#594). `cat ~/.ss?/*`, `cat ~/.aw?/*` and `cat ~/.exo/key?/*` read as ordinary reads because `_glob_word` gave up whenever the folder part held a glob; the globbed folder is now tested against each sample's folder, with the same three-literal discipline the file side keeps and bash's rule that only a literal dot matches a leading dot, so `cat ~/*/*` stays a read.
+- An ssh or mosh hop keeps its host among the line's other targets when the remote command names a target of its
+  own (#493). The hop gave the host as the line's target only when the remote command's dominant part had none, so
+  `ssh prod 'echo hi > /etc/hosts'` was a `local_write` of `/etc/hosts` alone: a `target: prod` rule allowed it,
+  `scopes: {private: [/etc/*]}` read a path on another host as the principal's own, and a standing grant for a
+  local write to `/etc/hosts` covered the same write on any host. A deny or `reserved:` entry on the host still
+  reached the hop's part (D-075). Now the host and the destination stay among the other targets (#399) whenever
+  the line's target is not one of them, so the line is decided on the host too and the strictest stands: the rule
+  reaches the line as a deny reaches the hop's part, a scope on a local path stops at the host's reading, which
+  keeps the exposure the hop gives the line, and the other targets bind the call to the exact command, so no grant
+  for a local write runs the hop. The written path stays the line's target, so a rule on it still matches as
+  before, and a rule on the bare host reaches a `user@host` destination too.
 - An ssh or mosh hop keeps its host on a gh download or clone into the store (#461 follow-up). After #461 the
   store write leads the remote line and the gh read is a part below it, and the hop gave the host only to the
   line's own parts, so the read lost the host its empty other target took when it led:
@@ -35,6 +70,43 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   part (D-075), so a deny, reserved entry, rule or matrix cell on it still applies, also on the host of an ssh
   or mosh hop (with the follow-up above), and the decision is the principal-only floor. `-O -` prints to stdout
   and stays a read, and so does a path outside the store.
+- Gate (#587 follow-up, D-074): a `config.json` name an expansion hides keeps main's reading again. The merge of
+  #320 into #587 let #320's store glob count the home's `config.json` without marking the call, so the line kept no
+  reading as before D-074, or that reading counted the file too. Under `matrix_deny_cells`,
+  `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/con$(:)fig.json' h` asked where main before #587
+  denied it, and so did a delete beside such a name under `delete: deny` with a rule allowing `^rm`, and an
+  `echo x >` to it over ssh under an entry on `opaque_exec` at `internal` exposure. The glob now counts the file
+  only while it counts, so the call is also read as before D-074. Such a name still asks as a store write.
+- A file tool's store path is read under every key it names a path by, and a move or rename of a folder that holds
+  the store is a store write with no secret beside it, as `mv` is (#494). `move_file ~/.exo -> /tmp/x` was a
+  `local_write` that ran with no ask where the shell spelling asked, `mcp__filesystem__move_file` with the same
+  args only logged, and a store path under `to`, `target`, `new_path`, `old_path`, `from` or `dst` was missed, so
+  `rename_file {"path": "~/.ssh/id_rsa", "new_path": "~/.exo/policies/gates.yaml"}` got no store write part beside
+  the secret and a seat delegated `credentials` could answer it. The scan now reads those keys, a tool whose name
+  says move, rename or delete passes `ancestors=` as `mv` and `rm` do (a camelCase name split, so `deleteFile` on
+  `~/.exo` asks), and a read-verb tool that writes what it took where its path arguments say (`download_file`,
+  `export_report`) runs the store scan, so a download into the policy files asks. A relative destination is read
+  from the session's folder the core passes, as a secret name is: `move_file` to `policies/default.yaml` from a
+  session folder in `~/.exo` asks. A plain read of the store stays a read, and a copy of the store keeps its
+  reading, as `cp -r` does. The resolution is the file tools' own; a shell line's store writes are still read from
+  its own words. D-074's config file is reached under the new keys and from the session folder as under `path`.
+  The gate differential against main finds nothing lowered.
+- A write into a folder Exo loads code from is a store write, as a write into `$EXO_HOME/plugins` has been since
+  #435 (#459). The gate itself, the plugins the core loads and the exo-gate plugin live in four others: the venv
+  (its site-packages holds the `exo` package, so a changed `gate.py` decides every later call and a `.pth` there
+  runs on each start; `${EXO_VENV:-$EXO_HOME/venv}`), Hermes' plugin home (loaded with `--with-hermes`;
+  `${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}/plugins`), the source copy the installer clones a git URL into and
+  `exo update` and `exo web` read plugins from (`$EXO_HOME/src`), and every folder `$EXO_PLUGIN_DIRS` names
+  (`default_dirs` searches them first and keeps the first plugin found of a name, so a plugin named `exo-gate`
+  there takes the real one's place). Each is read as the environment the gate sees spells it, as EXO_HOME is, and
+  `.exo/venv`, `.exo/src` and `.exo/hermes-home/plugins` match anywhere by name, as `.exo/plugins` does. So `cp
+  evil.py ~/.exo/venv/lib/python3.13/site-packages/exo/gate.py`, a `write_file` there, `pip install --target` into
+  any of the folders, `tar -C ~/.exo/src`, `git clone` into the venv and a `.pth` beside the `exo` package now ask
+  the principal, where the same line was an allowed `shell` or `local_write`. A `cd` into one counts like a `cd`
+  into the store, and a delete or move of a code folder (or of the home that holds one) counts as a delete of it.
+  Reads stay reads. A relative `EXO_VENV` or dir, a `.venv` under the home and Hermes' own state are not code and
+  keep their class. The cost: a `pip install` into the venv Exo itself runs from now asks; everyday work installs
+  into a project or scratch venv instead, so the ask is rare. The D-038 amendment of 2026-10-26 records it.
 - A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
   after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
   that path and its write was never read. A patch tool skips the bare line and applies the next header, so after
@@ -444,6 +516,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#328, D-038): a quoted heredoc delimiter with a space hid the commands after the heredoc. The lexer ended a
+  body at the first line that equalled the delimiter once its surrounding whitespace was stripped, so a delimiter such
+  as `<<'EOF '`, `<<"EOF "`, `<<' EOF'` or `<<EOF\ ` never matched and every later line, the real terminator included,
+  was read as body: `cat <<'EOF ' ... EOF ` then `git push --force`, `rm -rf build` or `gh pr merge` ran under the
+  default policy as an allowed `cat`. The lexer now ends the body on the line that equals the delimiter exactly, as
+  bash does (the delimiter is the opener word after quote removal, for every quoting form; leading tabs dropped on the
+  terminator only for `<<-`), so the commands after it are classified and denied. When no line ends the body it fails
+  closed and reads the body as commands. Whitespace-near lines mark the body ambiguous without ending it early;
+  carriage returns in delimiter words are retained, and `EOF)` ends a body only inside a substitution. Named
+  descriptors retain hidden-variable assignment checks. A `{var}<<` heredoc or `{var}<<<` here-string (bash 4.1+ puts it on a new
+  descriptor, not stdin) is no longer read as a command's stdin, as a numbered `3<<` already was (#306): a post whose
+  real body comes from a pipe is not mistaken for the heredoc, and its body stays unseen. (Known limit kept: a `~`
+  after `=` in a word such as `body=~/F` is not yet treated as an expansion, so the home-path scrub reads it literally.)
 - Gate (#584, D-038 amendment): a backslash-newline right after a `$` no longer hides a command substitution, a
   parameter expansion or a `$@` split. Bash drops each `\<newline>` outside single quotes before it reads a word,
   so `echo "$\<newline>(git push --force origin main)"` runs the push, but the gate read the `$` as text and
@@ -453,6 +538,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   line read again from it once decoded (`bash -c $'..'`, `eval "..."`, ssh, backquotes), and also as written, as
   before. `decide` keeps the stricter (`gate.readings`), the more severe reading leads the approval card, and an
   approval for such a line binds to its exact text. A line the join leaves as it is is read once, as before.
+- Gate (#515, D-038 amendment): The name parser adds camelCase words beside each separator part. The complete unsplit call is also
+  read as a policy floor: its secret and store checks, target, posting text and category rules still apply.
+  This prevents a new read hint from bypassing a store-source ask, an outbound hint from bypassing a
+  credential ask, and a draft hint from weakening an existing send reading. A policy that asks or denies
+  `unknown` still applies to a camelCase call previously read as unknown. `deleteFile` on `~/.exo`
+  now asks through its new store-write reading; `readFile` on a store file still asks through the old
+  store-source reading. Compact names such as `apiKey`, `checkOut` and `signUp` retain their old
+  reading. Empty separator parts are dropped, preserving the MCP remote-write flag for leading separators.
+  Earlier built-in differential counts covered the pre-review implementation only and do not validate
+  these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
+  rules, explicit unknown-category policies, and leading-separator MCP names.
 - Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
   (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
   #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under
@@ -469,7 +565,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `config.json` counted is also read as before (`Classification.ordinary`, one of `gate.readings`), and the stricter
   decision stands, so `matrix_deny_cells` still denies
   `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h` and `deny: [credentials]` still denies
-  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A copy or extraction into a folder that holds the file is #483.
+  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A quoted or split name (`~/.exo/con'fig'.json`) and a symlink
+  to the file (made earlier, or by an `ln` on the same line) count too; the name is matched case-sensitively, as the
+  other store names are. A copy or extraction into a folder that holds the file is #483.
 - Gate (#225, #269, #309, #341, D-038): store names an expansion hides, and relative names that reach the run
   folder, now ask. #307 read an expansion inside a secret-store name as empty and, between literal text, as `*`.
   That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,
