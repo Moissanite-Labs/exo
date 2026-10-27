@@ -63,6 +63,19 @@ def _decided(action):
     f"exec < {GRANTS}; cat 1<&0",                 # a plain command's copy inherits the shell's stdin
     "exec < ~/.exo/sta*/gate-grants.json; exec 1<&0; printf F",   # a glob target held on stdin
     "exec < gate-grants.json; exec 1<&0; printf F",               # a relative name held on stdin
+    # repair pins (#336 reviews): compound pairing, seed restore, unpinned sources, command --, no-space, subs
+    f"exec < {GRANTS}; ( printf F > /dev/stdout ) 1<&0",          # a subshell closer seeds its own commands
+    f"{{ ( printf F > /dev/stdout ) 1<&0; }} < {GRANTS}",         # a subshell inside a group, both seeded
+    f"if :; then {{ printf F 1<&0 > /dev/stdout; }}; fi < {GRANTS}",  # an if's stdin reaches a nested group
+    f"exec < {GRANTS}; {{ :; }} < /dev/null; exec 1<&0; printf F > /dev/stdout",  # a group's stdin ends at }
+    f"n=0; exec < {GRANTS}; exec 1<&$n; printf F > /dev/stdout",   # a variable source fails closed, not cleared
+    f"exec < {GRANTS}; exec 1<&{{0..0}}; printf F > /dev/stdout",  # a brace source with one digit is that digit
+    f"exec < {GRANTS}; exec 1<&{{0,1}}; printf F > /dev/stdout",   # several digits fail closed, not cleared
+    f"command -- exec < {GRANTS}; exec 1<&0; printf F > /dev/stdout",  # `command --` still reaches exec
+    f"printf F < {GRANTS} 1<&0>/dev/stdout",                       # no space before the next redirection
+    f"exec < {GRANTS}; : $(printf F 1<&0 > /dev/stdout)",         # a substitution inherits the shell's descriptors
+    f"exec < {GRANTS}; ( exec 1<&0; printf F > /dev/stdout )",    # a subshell inherits them too
+    f"exec < {GRANTS}; exec 1<&0-; printf F > /dev/stdout",       # the copy hits before the close
 ])
 def test_a_copy_onto_stdout_or_stderr_from_a_held_descriptor_is_a_store_write(cmd):
     assert _decided(_sh(cmd)) == ("store_write", "ask", True), cmd
@@ -86,6 +99,12 @@ def test_a_copy_onto_stdout_or_stderr_from_a_held_descriptor_is_a_store_write(cm
     # a descriptor closed before the copy, or rebound to a plain file and never copied after
     ('exec < ' + GRANTS + '; exec 0<&-; exec 1<&0; printf F', "read"),
     ('exec 3< "$F"; exec 3<&-; exec 1<&3; printf F > /dev/stdout', "read"),
+    # repair pins: what a compound holds ends at its closer, and a fed body does not inherit stdin
+    ('exec < /dev/null; { exec < ' + GRANTS + '; }; exec 1<&0; printf F > /dev/stdout', "read"),
+    ('exec < /dev/null; { exec 0</dev/null; } < ' + GRANTS + '; exec 1<&0; printf F > /dev/stdout', "read"),
+    (f"exec < {GRANTS}; {{ exec 1<&0; printf F > /dev/stdout; }} < /dev/null", "read"),
+    (f"exec < {GRANTS}; exec 0<&0-; exec 1<&0; printf F", "read"),
+    (f"exec < {GRANTS}; cat > >(printf F 1<&0 > /dev/stdout)", "local_write"),
 ])
 def test_reads_and_copies_that_hold_nothing_stay_classified(cmd, category):
     assert gate.classify(_sh(cmd)).category == category, cmd
