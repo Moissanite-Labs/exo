@@ -13,18 +13,24 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from typing import Any, Sequence
 
 SHUTDOWN_TIMEOUT = 5.0
 
 
 class ShutdownTimeout(RuntimeError):
     """close() reached its bound with work still running. Jobs and transports are stopped; plugin resources, the
-    session store and the writer claim are kept until close() is called again."""
+    session store and the writer claim are kept until close() is called again.
 
-    def __init__(self, waiting_for: str) -> None:
+    ``errors`` are the close steps that failed before the bound. The message names the first and it is the cause,
+    so a retry whose steps pass does not hide it."""
+
+    def __init__(self, waiting_for: str, errors: Sequence[BaseException] = ()) -> None:
+        self.errors = list(errors)
+        failed = f"; a close step also failed: {type(errors[0]).__name__}: {errors[0]}" if errors else ""
         super().__init__(f"engine shutdown timed out waiting for {waiting_for}; jobs and transports are stopped, "
-                         "resources retained, retry close")
+                         f"resources retained, retry close{failed}")
+        self.__cause__ = errors[0] if errors else None
 
 
 def _loops(engine: Any) -> list[Any]:
@@ -57,10 +63,13 @@ def stop_admission(engine: Any) -> set[asyncio.Future]:
     return tasks
 
 
-async def drain(engine: Any, tasks: set[asyncio.Future]) -> None:
-    """Wait for cancelled turns, direct ``Loop.send`` callers, sync tool workers and learning reviews.
+async def drain(engine: Any, tasks: set[asyncio.Future], errors: list[BaseException]) -> None:
+    """Wait for cancelled turns, direct ``Loop.send`` callers, sync tool workers and learning reviews, then close the
+    learner.
 
-    Raises ``ShutdownTimeout`` when they are still running at ``SHUTDOWN_TIMEOUT``."""
+    ``errors`` holds the close steps that failed so far. A learner that fails to close is added to it, so close()
+    still runs its final steps. Raises ``ShutdownTimeout``, carrying ``errors``, when work is still running at
+    ``SHUTDOWN_TIMEOUT``."""
     deadline = time.monotonic() + SHUTDOWN_TIMEOUT
 
     def left() -> float:
@@ -72,23 +81,26 @@ async def drain(engine: Any, tasks: set[asyncio.Future]) -> None:
             if not task.cancelled():
                 task.exception()
         if pending:
-            raise ShutdownTimeout("turns")
+            raise ShutdownTimeout("turns", errors)
     # Direct embedded Loop.send callers need not be in engine._tasks. Their
     # session state remains running until their final hooks and writes finish.
     while any(state.running for loop in _loops(engine) for state in loop._state.values()):
         if time.monotonic() >= deadline:
-            raise ShutdownTimeout("turns")
+            raise ShutdownTimeout("turns", errors)
         await asyncio.sleep(min(0.01, left()))
     workers = dict(engine.registry.workers)  # stop_admission set each one's cancel event
     if workers:
         _, pending = await asyncio.wait(workers, timeout=left())
         if pending:
-            raise ShutdownTimeout("tool workers")
+            raise ShutdownTimeout("tool workers", errors)
     learner = getattr(engine, "_learn", None)  # reviews read the session store and write the principal store
     if learner is not None:
         reviews = [task for task in learner.tasks.values() if not task.done()]
         for task in reviews:
             task.cancel()
         if reviews and (await asyncio.wait(reviews, timeout=left()))[1]:
-            raise ShutdownTimeout("learning reviews")
-        learner.close()
+            raise ShutdownTimeout("learning reviews", errors)
+        try:
+            learner.close()
+        except BaseException as exc:  # noqa: BLE001 - close() raises it after its final steps
+            errors.append(exc)

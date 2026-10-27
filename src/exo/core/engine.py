@@ -346,14 +346,13 @@ class CoreRuntime:
     async def close(self) -> None:
         from exo.runtime_shutdown import drain, stop_admission
         owned = stop_admission(self)  # no new turn, tool or job wake from here; owned turns are cancelled
-        await self.stop_channels()
-        errors: list[BaseException] = []  # every step runs; the first error is raised at the end
-        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+        errors: list[BaseException] = []  # every step runs, also after a hard stop; the first error is raised last
+        for step in (self.stop_channels, self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
             try:
                 await step()  # jobs end with exod, also when a sync tool outlives the drain below
             except BaseException as exc:  # noqa: BLE001 - re-raised below
                 errors.append(exc)
-        await drain(self, owned)  # ShutdownTimeout keeps plugin resources, the store and the writer claim for a retry
+        await drain(self, owned, errors)  # ShutdownTimeout keeps plugin resources, the store and the writer claim
         for final in (self.plugins.close, lambda: trace.remove_sink(self._on_harness_error),
                       lambda: agentlog.release_writer(self._writer), self.store.close):  # the store last
             try:

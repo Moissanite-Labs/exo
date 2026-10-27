@@ -376,8 +376,9 @@ class JobManager:
                 self.live.clear()
             for h in handles:
                 h.reason, h.kill_by = "killed", "exod shutting down"
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(kill_process_group, h.proc)
+            await asyncio.shield(asyncio.gather(*(asyncio.to_thread(kill_process_group, h.proc) for h in handles),
+                                                return_exceptions=True))  # all at once; a hard stop here still ends each
+            for h in handles:
                 if h.timer:
                     h.timer.cancel()
                 masked_note(h.side)  # removes the side file, as _finish would

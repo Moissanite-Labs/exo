@@ -562,3 +562,118 @@ def test_a_learning_review_that_ignores_cancellation_keeps_the_store_until_retry
         assert closed == [True] and engine.store._conn is None
 
     asyncio.run(run())
+
+
+# ---- a failing or interrupted step still ends jobs and runs the final steps (checker round on #500) ----
+
+def _ended(proc, within=10.0):
+    deadline = time.monotonic() + within
+    while proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return proc.poll() is not None
+
+
+def test_a_learner_that_fails_to_close_still_lets_close_release_everything(tmp_path):
+    engine, order = _engine(tmp_path, lambda args, **kw: "unused")
+    engine.claim_writer()
+
+    class Learner:
+        tasks = {}
+
+        def close(self):
+            raise RuntimeError("learner close failed")
+
+    async def run():
+        engine._learn = Learner()
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        proc = engine.jobs.live[engine.jobs.start("sleep 120", str(tmp_path), session.id)["id"]].proc
+        with pytest.raises(RuntimeError, match="learner close failed"):
+            await CoreRuntime.close(engine)
+        assert _ended(proc)
+        assert order == ["cleanup"] and engine._writer is None and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_a_step_that_fails_before_the_bound_is_named_by_the_timeout(tmp_path, monkeypatch, caplog):
+    hold, started, release = _held()
+    engine, order = _engine(tmp_path, hold)
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 0.2)
+    close_jobs, failed = engine.jobs.close, OSError("could not stop a job")
+
+    async def fails_once():
+        engine.jobs.close = close_jobs  # the retry's step passes, so only the timeout can carry this error
+        raise failed
+
+    engine.jobs.close = fails_once
+
+    async def run():
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        engine.start_turn(session.id, "hold")
+        assert await asyncio.to_thread(started.wait, 5)
+        try:
+            with pytest.raises(ShutdownTimeout, match="could not stop a job") as timed_out:
+                await CoreRuntime.close(engine)
+            assert timed_out.value.errors == [failed] and timed_out.value.__cause__ is failed
+        finally:
+            release.set()
+        with caplog.at_level(logging.WARNING, logger="exo.application"):
+            await engine.close()  # the owner's retry completes
+        assert order == ["cleanup"] and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_a_hard_stop_while_channels_stop_still_ends_jobs_and_releases_everything(tmp_path):
+    """A second SIGTERM cancels close() while a channel stops: jobs still end, and so does the rest of close."""
+    engine, order = _engine(tmp_path, lambda args, **kw: "unused")
+    engine.claim_writer()
+    stopping = asyncio.Event()
+
+    class SlowChannel:
+        async def stop(self):
+            stopping.set()
+            await asyncio.sleep(5)
+
+    async def run():
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        proc = engine.jobs.live[engine.jobs.start("sleep 120", str(tmp_path), session.id)["id"]].proc
+        engine.channels["slow"] = SlowChannel()
+        closing = asyncio.create_task(CoreRuntime.close(engine))
+        await asyncio.wait_for(stopping.wait(), 5)
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert _ended(proc) and engine.jobs.target.closed and not engine.jobs.live
+        assert order == ["cleanup"] and engine._writer is None and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_a_hard_stop_while_jobs_are_killed_still_ends_every_job(tmp_path, monkeypatch):
+    import exo.core.jobs as jobs_mod
+
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})
+    killing = threading.Event()
+
+    def slow_kill(proc, grace=1.0):  # a job that ignores SIGTERM keeps its kill in the grace wait
+        killing.set()
+        time.sleep(0.3)
+        kill_process_group(proc, grace)
+
+    from exo.core.tools.builtin.shell import kill_process_group
+    monkeypatch.setattr(jobs_mod, "kill_process_group", slow_kill)
+
+    async def run():
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        procs = [engine.jobs.live[engine.jobs.start("sleep 120", str(tmp_path), session.id)["id"]].proc
+                 for _ in range(3)]
+        closing = asyncio.create_task(engine.close())
+        assert await asyncio.to_thread(killing.wait, 5)
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert all(await asyncio.to_thread(lambda: [_ended(p) for p in procs]))
+        assert not engine.jobs.live and engine.store._conn is None
+
+    asyncio.run(run())

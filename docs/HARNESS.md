@@ -176,10 +176,18 @@ Engine shutdown runs in this order:
 4. It closes plugin resources, removes the trace sink, releases the writer claim and
    closes the session store last.
 
+When a step in 2 fails, the steps after it still run. They also run after a hard stop
+there, such as a second Ctrl-C. Background jobs are killed all at once, so a hard stop
+during the kills still ends every job. A learner that fails to close still lets step 4
+run. `close()` raises the first error at the end. A hard stop during the wait in step 3
+ends `close()` at once. Jobs and transports are stopped by then, and the rest stays as
+after a timeout.
+
 Python cannot stop a worker thread. If a synchronous tool is still running at step 3,
 `CoreRuntime.close()` raises `ShutdownTimeout`. By then jobs and transports are stopped.
 It keeps only what that tool can still touch: plugin resources, the session store and
-the writer claim. A later `close()` finishes the job once the tool returns. The engine
+the writer claim. If a step in 2 also failed, `ShutdownTimeout` names that error and lists
+it in `errors`. A later `close()` finishes the job once the tool returns. The engine
 that `exo serve` and the terminal build (`exo.application.CoreEngine`) logs a warning and
 closes again until it does. Its plugin cleanups then run once and exod exits normally.
 No detached cleanup watcher is created.

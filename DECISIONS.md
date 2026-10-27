@@ -6330,3 +6330,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   under that number. #601 then merged a second D-082, which #725 moved to D-087, and #613 merged D-083. #510
   holds D-084 on #508's branch, open PR #511 holds D-085 and #512 merged D-086. So this decision is D-088. The
   messages of #500's first two commits still say D-082.
+- **Amendment 2026-10-27 (checker round on #500):** four more routes past the shutdown steps, each now tested.
+  A learner that failed to close skipped plugin cleanup, the writer release and the store close. It is now
+  recorded like a failed step. A step that failed before the bound was lost when the drain timed out, so a job
+  that could not be stopped went unreported. `ShutdownTimeout` now names it and carries it in `errors`. A hard
+  stop (a second Ctrl-C) while channels stopped skipped every later step and left jobs running. Channels now
+  stop inside the step loop. A hard stop while jobs were killed one by one left the later jobs running. They are
+  now killed all at once, under a shield. A hard stop during the wait itself still ends `close()` at once, with
+  jobs and transports already stopped. The last two gaps were on main too. The count does not change: the
+  channel step takes one line out of `close()`, and `JobManager.close` gains one.
