@@ -409,8 +409,11 @@ class WebServer:
         origin, host = headers.get("origin"), headers.get("host", "")
         if origin and urlsplit(origin).netloc != host:
             return await self._json(writer, 403, {"error": "cross-origin request refused"})
-        n = int(headers.get("content-length", "0"))
-        if n > MAX_BODY:
+        try:
+            n = int(headers.get("content-length", "0"))
+        except ValueError:
+            n = -1
+        if n < 0 or n > MAX_BODY:
             return await self._json(writer, 400, {"error": "body too large"})
         try:
             body = json.loads(await reader.readexactly(n)) if n else {}
