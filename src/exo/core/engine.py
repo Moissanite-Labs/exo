@@ -280,7 +280,18 @@ class CoreRuntime:
             self._started = asyncio.ensure_future(self._start_runtime())
             if self._schedule and self.scheduler is not None:
                 self.scheduler.start()
-        await asyncio.shield(self._started)
+        try:
+            await asyncio.shield(self._started)
+        except BaseException:
+            # A failed start (e.g. a transient MCP/peer outage) must not permanently
+            # disable the engine: if the start task actually ended in failure (raised or
+            # was cancelled), clear the flag so the next command retries instead of
+            # re-awaiting the same terminal future. A plain cancellation of the awaiter
+            # leaves the (still-running) task in place, so we don't reset then.
+            task = self._started
+            if task is not None and task.done() and (task.cancelled() or task.exception() is not None):
+                self._started = None
+            raise
 
     async def _main_status(self, table: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         from exo import providers_setup
