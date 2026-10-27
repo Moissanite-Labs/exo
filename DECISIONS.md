@@ -3871,6 +3871,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   recursion errors as input errors. Arrays and objects beyond the decoder nesting limit, within the body-size
   limit, receive the readers' existing 400 JSON errors without a core command or provider dispatch. Token checks
   keep their existing order. `docs/ui/WEB.md` "Opening the page and the page token".
+  *Amendment 2026-10-28 (exo-desktop #55):* `GET /api/chat/sessions` takes a `limit` from 1 to 500, 100 when none
+  is given. A larger limit is cut to 500, as before. A limit below 1 gets a 400 JSON error and sends no
+  `session.list` to the core, as a limit that is not a number already did. Before, only the top was cut, and
+  SQLite reads a negative `LIMIT` as no limit, so `limit=-1` returned every session. A 400, not a cut to 0,
+  names the caller's mistake. `docs/ui/WEB.md` "What is where".
   *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
   was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
   `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
