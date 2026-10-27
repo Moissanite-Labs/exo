@@ -6355,3 +6355,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     `peers` command handled while close killed jobs started the peer service again, and close returned with
     it running. Main does the same. `start()` now fails with `CommandFailed` `closed` once close has begun,
     so every command is refused.
+  - *Smaller items.* An unknown `EXO_PROFILE` was reported as a bad `harness.profile`. The error now names
+    the variable that held it. Five guards survived deletion with every test passing. Tests now pin four: a
+    steer sent after close began is refused, `run_turn` refuses before its turn hooks fire, the owner check
+    runs again on the opened file, and a file below a secret-store folder is skipped. The fifth, the closing
+    check before the peer start, is gone, because `start()` now refuses first.

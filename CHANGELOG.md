@@ -80,7 +80,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
   The approval gate and required executor constraints remain enforced. Existing configurations
   without a profile retain legacy behavior (`docs/HARNESS.md`, D-088). `exo harness enable` and `disable` need a
-  saved profile, and `show` and `use` name each discovered plugin that a profile will not load.
+  saved profile, and `show` and `use` name each discovered plugin that a profile will not load. An unknown
+  preset names its source, `EXO_PROFILE` or `harness.profile`.
 - Dependency-aware plugin composition and synchronous resource cleanup on failed registration or
   final shutdown. Folder requirements are validated before import. Entry-point requirements before registration.
 - Optional scoped `AGENTS.md`/`AGENTS.override.md` workspace guidance, with bounded reads and independent

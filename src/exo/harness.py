@@ -129,7 +129,7 @@ def resolve(data: dict[str, Any], *, env: Mapping[str, str] | None = None) -> Ha
         raise ConfigError(f'unknown harness settings: {", ".join(unknown)}')
     profile = override or raw.get('profile', 'full')
     if not isinstance(profile, str) or profile not in PROFILES:
-        raise ConfigError('harness.profile must be lean, coding or full')
+        raise ConfigError(f'{"EXO_PROFILE" if override else "harness.profile"} must be lean, coding or full')
     enable = set(_names(raw.get('enable', []), 'harness.enable'))
     disable = set(_names(raw.get('disable', []), 'harness.disable'))
     if both := sorted(enable & disable):

@@ -452,10 +452,11 @@ def test_close_drains_accepted_turn_before_plugin_cleanup(tmp_path):
         assert exited.is_set() and not engine._tasks
         assert order == ["turn end", "cleanup"]
         assert engine.store._conn is None
-        with pytest.raises(Exception, match="closing"):
+        with pytest.raises(CommandFailed, match="closing"):
             engine.start_turn(session.id, "late")
-        with pytest.raises(Exception, match="closing"):
+        with pytest.raises(CommandFailed, match="closing"):  # refused before its turn hooks fire
             await engine.run_turn(s.TurnSend(session=session.id, text="late"))
+        assert order == ["turn end", "cleanup"]
 
     asyncio.run(run())
 

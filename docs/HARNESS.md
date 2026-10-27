@@ -83,7 +83,8 @@ the seat's `plugins`). Otherwise startup stops and names the plugin.
 
 ## Precedence and runtime behavior
 
-1. `EXO_PROFILE`, if set, chooses the preset. Otherwise `harness.profile` does.
+1. `EXO_PROFILE`, if set, chooses the preset. Otherwise `harness.profile` does. An
+   unknown preset stops startup, and the error names the one that was set.
 2. Apply explicit capability enables/disables and required dependencies.
 3. The profile selects built-in plugins. Explicit third-party names from `core_plugins`
    remain selected. Profiles do not implicitly discover other third-party plugins.

@@ -87,8 +87,10 @@ def test_environment_overrides_profile_but_not_capability_overrides():
     assert plan.profile == 'lean' and plan.capabilities == ('gate', 'skills')
     assert data['harness']['profile'] == 'full'
     assert resolve({}, env={'EXO_PROFILE': 'coding'}).profile == 'coding'
-    with pytest.raises(ConfigError, match='must be lean'):
-        resolve({}, env={'EXO_PROFILE': 'oops'})
+    with pytest.raises(ConfigError, match='^EXO_PROFILE must be lean'):  # the error names where the value came from
+        resolve({'harness': {'profile': 'full'}}, env={'EXO_PROFILE': 'oops'})
+    with pytest.raises(ConfigError, match='^harness.profile must be lean'):
+        resolve({'harness': {'profile': 'oops'}}, env={})
 
 
 def test_summary_never_contains_subsystem_or_provider_settings():

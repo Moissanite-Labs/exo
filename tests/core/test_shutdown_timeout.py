@@ -722,6 +722,25 @@ def test_a_hard_stop_while_peers_stop_is_raised_after_the_bounded_attempt(tmp_pa
     asyncio.run(run())
 
 
+def test_a_steer_that_arrives_after_close_began_is_refused_not_queued(tmp_path):
+    """A turn still takes steers until its cancellation runs. A steer sent in that window is refused, so it is not
+    accepted and then lost with the turn."""
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})
+
+    async def run():
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        state = engine.loop.state(session.id)
+        state.accepting_steers = True  # as while a turn runs its tools
+        engine.loop.closing = True  # close() sets it first
+        with pytest.raises(RuntimeError, match="loop is closing"):
+            await engine.loop.send(session.id, "late", mode="steer")
+        assert not state.steer
+        state.accepting_steers = False
+        await engine.close()
+
+    asyncio.run(run())
+
+
 def test_a_peers_command_while_close_kills_jobs_is_refused_and_starts_nothing(tmp_path, monkeypatch):
     """The review's probe: a command handled after close() stopped peers restarted the peer service, and close()
     returned with it running. Once close() has begun, every command is refused."""
