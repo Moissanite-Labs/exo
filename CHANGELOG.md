@@ -15,6 +15,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   across module boundaries, so the coupling is now counted where the split is going.
 
 ### Fixed
+- A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
+  string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
+  so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
+  'id'; echo ${p@P}` runs `id`, and a value a command the gate does not read as an assignment sets (`printf -v`,
+  `read`) rebuilds a form the gate reads only as written — a `/` substitution of a store variable (#342) — so
+  `read -r p <<< '${HOME/%//.kube}/config'; cat ${p@P}` read `$HOME/.kube/config` as an allowed read. Now any
+  `${..@P}` the line expands (also in double quotes, a here-string, a here-document body or a redirection
+  target) is `opaque_exec` and asks, beside the line's other parts, so a deny on them still wins. One exception:
+  a variable the line assigns a literal value with no `$`, backtick or backslash prompt-expands to itself, so
+  `p=x; echo ${p@P}` stays a read. The other `@` operators run nothing and keep their reading. Tests:
+  `tests/security/test_gate_prompt_expansion.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
 - A `$` form a `\<newline>` splits is read by the lexer itself now, as bash reads it (#585). #584 read such a line
   joined beside itself, but the line as written still read a `$` and then a backslash as a literal `$`, so its
   words were plain text and the decision leaned on the joined reading alone: `hash "$\<newline>@"; ls`,
@@ -51,6 +62,25 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   config-only venv or Hermes plugin home asks as `store_write` on the floor, a `cd` into it counts, a delete or
   move of it counts, reads stay reads. The differential against main d4cc7ea3 found nothing lowered. Tests:
   `tests/security/test_gate_code_writes.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
+- A pending undo of a host's `/undo N` waits for the session's next turn under its session, not in the engine that
+  heard the notice (#580). Hermes's `/undo N` takes N turns with one notice: exo-context dropped the last turn's
+  pins at once and the earlier turns' on the session's next turn, in the engine that heard the notice, so a new
+  agent Hermes built before that turn (a `/reasoning`, `/fast` or `/personality` rebuild) never read the pending
+  undo and the earlier turns' pins stayed, with the per-turn block putting the undone ruling back. The engine that
+  hears the notice now records it with `exo.host_undo.pend(session, window)`, beside the window the notice left,
+  and the engine that runs the session's next turn takes it from there with `exo.host_undo.take(session)` and
+  drops the pins the window showed that the transcript no longer holds, whichever agent that engine belongs to. A
+  second notice before that turn keeps the first record's window, a compression move carries the record into the
+  child session, and a compaction that folds the window's first row ties its block to the record while it waits,
+  in whichever engine compacts. The record never outlives the session's next turn, which settles it whatever it
+  finds, a transcript cut short included, and it can drop only the pins its own window showed, so a stale record
+  never drops a pin taken after it. An `/undo` in the no-agent gap still reaches no provider: the CLI would have
+  to report `exo.host_undo.report(session)` itself, one call, which reaches the engines still registered for the
+  session and lets the rebuilt agent's turn finish the undo. With no engine registered any more, nothing holds the
+  window, and that part waits on the CLI change. Tests: `plugins/exo-context/tests/test_context_provenance.py`
+  (a rebuilt agent's turn, the gap report, the pins taken while the record waited, a rebind while it pends),
+  `tests/test_host_undo.py`. **Docs:** `docs/MEMORY-MODEL.md`, `docs/DEVELOPER-GUIDE.md`, `docs/HANDOFF.md`,
+  `docs/DOCS-MAP.md`, `DECISIONS.md` (D-041).
 - A leading assignment quoted whole in an `env -S` text no longer hides the command after it (#591). GNU env splits
   the `-S` text into words and reads them as its own argv, so a word quoted whole with the form `NAME=value` is an
   assignment there — `env -S "'X=a b' printenv X"` prints `a b` — but the gate read the text as one shell line
@@ -133,6 +163,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   part with that path as its target, as beside a secret (#447), so the entry matches whichever path it names. The
   first path still leads the line, `rm` of both paths was denied already (its `delete` part names the last path),
   reads keep their class, and the first path alone decides as before.
+- A shell call's own folder read is no longer lifted by an allow rule that names only the line's text (#516). The
+  `credentials` part the folder argument adds (`cwd`, or `workdir` for Hermes' terminal and Codex's exec_command)
+  had no own text, so a line of one command beside it was one text for the #394 own-text test and a rule keyed on
+  `command` decided the line as before, over the part's matrix cell: `git push --force origin main` with `~/.ssh`
+  or `~/.exo/keys` as `cwd` asked under `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
+  where its `cd` form was denied, since the rule does not name the `cd`. The part keeps no own text, as a `cd`
+  form's parts have, and now carries a `cd <folder>` stand-in among its setters, the folder as the call spells it
+  and the `cd` said once (the relative read's first spelled `cd cd <folder>`), so the line is not one text and a
+  rule that names only the line is passed over, as for any part it does not name.
+  A rule that names everything lifts nothing, as before, the weight a heavier command adds beside the part (#468)
+  is never lifted by a command rule, and a line of two commands, a policy with no rule and no matrix deny decide as
+  before. Nothing is lowered.
 - A glob in a secret store's folder asks (#594). `cat ~/.ss?/*`, `cat ~/.aw?/*` and `cat ~/.exo/key?/*` read as ordinary reads because `_glob_word` gave up whenever the folder part held a glob; the globbed folder is now tested against each sample's folder, with the same three-literal discipline the file side keeps and bash's rule that only a literal dot matches a leading dot, so `cat ~/*/*` stays a read.
 - An ssh or mosh hop keeps its host among the line's other targets when the remote command names a target of its
   own (#493). The hop gave the host as the line's target only when the remote command's dominant part had none, so
