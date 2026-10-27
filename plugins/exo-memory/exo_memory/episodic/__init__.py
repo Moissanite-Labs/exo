@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import itertools
 import math
 import os
 import threading
@@ -114,7 +115,7 @@ class EpisodicLayer:
             self.view.fold_to(len(self.log))
         self.view.save(self.view_path)
         self.node_bytes = node_bytes
-        self._docs: list[tuple[int, str, str, Counter, str]] = []
+        self._docs: list[tuple[int, str, str, Counter, str, str]] = []
         self._df: Counter = Counter()
         self._index_existing()
         self.compactor: Optional[Compactor] = None
@@ -126,9 +127,9 @@ class EpisodicLayer:
 
     # -- search index ------------------------------------------------------------
 
-    def _index_one(self, i: int, kind: str, text: str, date: str) -> None:
+    def _index_one(self, i: int, kind: str, text: str, date: str, session: str = "") -> None:
         toks = Counter(self._tokens(text[:INDEX_CHARS]))
-        self._docs.append((i, kind, date, toks, " ".join(text.split())[:SNIPPET_CHARS]))
+        self._docs.append((i, kind, date, toks, " ".join(text.split())[:SNIPPET_CHARS], session))
         self._df.update(toks.keys())
 
     def _index_existing(self) -> None:
@@ -137,7 +138,7 @@ class EpisodicLayer:
                 for raw in fh:
                     try:
                         m = json.loads(raw)
-                        self._index_one(int(m["i"]), m.get("kind", ""), m.get("text", ""), m.get("date", ""))
+                        self._index_one(int(m["i"]), m.get("kind", ""), m.get("text", ""), m.get("date", ""), m.get("session", ""))
                     except (ValueError, KeyError, TypeError):
                         continue
         self._docs.sort(key=lambda d: d[0])
@@ -147,7 +148,7 @@ class EpisodicLayer:
     def append(self, kind: str, text: str, session: str = "") -> int:
         with self.lock:
             i = self.log.append(kind, text, session=session)
-            self._index_one(i, kind, text, self.log.read(i).get("date", ""))
+            self._index_one(i, kind, text, self.log.read(i).get("date", ""), session)
         return i
 
     def append_many(self, entries: Iterable[tuple[str, str]], session: str = "") -> int:
@@ -164,17 +165,20 @@ class EpisodicLayer:
 
     # -- reading -----------------------------------------------------------------
 
-    def search(self, query: str, n: int = 5, skip_recent: int = 0) -> list[dict]:
-        """Messages that share words with `query`, best first. The newest `skip_recent`
-        messages are left out (they are still in the live context)."""
+    def search(self, query: str, n: int = 5, skip_recent: int = 0, session_id: str = "") -> list[dict]:
+        """Messages that share words with `query`, best first. Skip the session's newest `skip_recent`
+        entries when `session_id` is given; without one, retain the global recent-entry exclusion."""
         q = set(self._tokens(query))
         if not q:
             return []
         with self.lock:
-            docs = self._docs[: max(0, len(self._docs) - skip_recent)]
+            recent = {d[0] for d in itertools.islice((x for x in reversed(self._docs) if x[5] == session_id), skip_recent)} if session_id and skip_recent > 0 else set()
+            docs = self._docs if session_id else self._docs[: max(0, len(self._docs) - skip_recent)]
             N = max(len(self._docs), 1)
             scored = []
-            for i, kind, date, toks, snip in docs:
+            for i, kind, date, toks, snip, _session in docs:
+                if i in recent:
+                    continue
                 s = sum(math.log(1 + N / (1 + self._df[w])) * (1 + math.log(toks[w])) for w in q if w in toks)
                 if s:
                     scored.append((s, i, kind, date, snip))

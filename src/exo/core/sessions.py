@@ -391,17 +391,20 @@ class SessionStore:
         return self.get_session(child.id)  # type: ignore[return-value]
 
     def search(self, query: str, limit: int = 20, session: str | None = None,
-               agent: str | None = None) -> list[dict[str, Any]]:
+               agent: str | None = None, before_pos: int = 2**62, exclude_session: str = "") -> list[dict[str, Any]]:
         """FTS5 search over message text. Plain words are quoted, so any input is safe. ``agent`` searches that
-        agent's log (private threads left out) and adds each hit's ``pos``."""
+        agent's log, excluding private ancestry and positions >= ``before_pos`` (only in ``exclude_session`` if set)."""
         terms = " ".join('"' + w.replace('"', '""') + '"' for w in query.split())
         if not terms:
             return []
         if agent:
-            rows = self._q("SELECT f.msg_id, f.session, snippet(messages_fts, 0, '[', ']', '...', 12) AS snip, m.pos,"
+            rows = self._q("WITH RECURSIVE private(id) AS (SELECT id FROM sessions WHERE kind='private' UNION"
+                           " SELECT s.id FROM sessions s JOIN private p ON s.parent=p.id)"
+                           " SELECT f.msg_id, f.session, snippet(messages_fts, 0, '[', ']', '...', 12) AS snip, m.pos,"
                            " m.created FROM messages_fts f JOIN messages m ON m.id=f.msg_id JOIN sessions s ON"
                            " s.id=m.session WHERE messages_fts MATCH ? AND m.agent=? AND m.pos IS NOT NULL AND"
-                           " m.hidden=0 AND s.kind!='private' ORDER BY rank LIMIT ?", (terms, agent, limit))
+                           " m.hidden=0 AND s.id NOT IN private AND (m.pos<? OR (?!='' AND m.session!=?)) ORDER BY rank LIMIT ?",
+                           (terms, agent, before_pos, exclude_session, exclude_session, limit))
             return [{"message_id": r["msg_id"], "session": r["session"], "snippet": r["snip"], "pos": r["pos"],
                      "created": r["created"]} for r in rows]
         sql = ("SELECT msg_id, session, snippet(messages_fts, 0, '[', ']', '...', 12) AS snip"
