@@ -13,6 +13,7 @@ import pytest
 from exo.core.engine import CoreEngine
 from exo.model_spend.journal import SpendJournal
 from exo.scheduler import Scheduler
+from exo.server.engine import CommandFailed
 
 MODELS = {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
 needs_fd_dir = pytest.mark.skipif(not os.path.isdir("/dev/fd"), reason="counts handles through /dev/fd")
@@ -683,7 +684,7 @@ def test_direct_tool_dispatch_drains_and_late_tools_or_start_cannot_reopen_resou
         assert task.cancelled() and exited.is_set() and order == ["cleanup"]
         late = await asyncio.wait_for(engine.run_tool(call, {}), 2)  # a lost closing guard fails, never hangs
         assert late.is_error and "closing" in late.text()
-        with pytest.raises(RuntimeError, match="closing"):
+        with pytest.raises(CommandFailed, match="closing"):
             await engine.start()
         assert invocations == ["called"] and engine.store._conn is None
 

@@ -168,7 +168,8 @@ engine. The engine owns shutdown ordering and startup rollback.
 
 Engine shutdown runs in this order:
 
-1. It refuses new turns, tools and background jobs. A job that ends from here on is
+1. It refuses new commands, turns, tools and background jobs. A command fails with
+   `closed`, so it cannot start a service again. A job that ends from here on is
    recorded for its thread and never starts a turn. Active turns are cancelled.
 2. It stops channels, peers, background jobs (their process groups), the scheduler and MCP.
 3. It waits up to five seconds for turns, synchronous tool workers and learning reviews.

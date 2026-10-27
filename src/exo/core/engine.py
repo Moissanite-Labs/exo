@@ -275,13 +275,16 @@ class CoreRuntime:
                 or sp.toolset in ("skills", "harness", "peers") or sp.name == agentlog.ZOOM.name]
 
     async def start(self) -> None:
-        """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
+        """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start).
+        Refused once close() has begun, so a start that close() cancelled is not retried."""
+        if getattr(self, "_closing", False):
+            raise CommandFailed("closed", "the engine is closing")
         if self._started is None:
-            if self.peers is not None and self.peers.autostart and not getattr(self, "_closing", False):
+            if self.peers is not None and self.peers.autostart:
                 await self.peers.start()
-            if getattr(self, "_closing", False):  # also after that await: a close() meanwhile missed what it opened
+            if getattr(self, "_closing", False):  # close() began during that await and missed what it opened
                 await self._stop_peers()
-                raise RuntimeError("the engine is closing")
+                raise CommandFailed("closed", "the engine is closing")
             if self._writer is not None:  # only the one writer may call a running job lost
                 await self.jobs.recover()
             self._started = asyncio.ensure_future(self._start_runtime())

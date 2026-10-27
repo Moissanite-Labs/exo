@@ -417,6 +417,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   arguments), follows argparse's abbreviated long flags, and the client posts one warning naming the
   flags it dropped and where the core's mode stands. Warning only: the flags are still dropped, which
   stays the safe default.
+- A command that reaches the engine after `close()` has begun fails with `closed`. Before, a `peers` command
+  handled while close killed background jobs started the peer service again, and close returned with it
+  running (D-088, `docs/HARNESS.md`).
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.

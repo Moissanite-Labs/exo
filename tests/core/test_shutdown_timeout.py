@@ -24,6 +24,7 @@ from exo.core.tools.registry import ToolError
 from exo.plugin_lifecycle import Resources
 from exo.runtime_shutdown import ShutdownTimeout
 from exo.scheduler import Scheduler
+from exo.server.engine import CommandFailed
 
 MODELS = {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
 
@@ -250,7 +251,7 @@ def test_close_during_start_stops_the_peer_service_start_was_opening(tmp_path):
         await asyncio.sleep(0.01)
         await engine.close()
         engine.peers.opened.set()
-        with pytest.raises(RuntimeError, match="closing"):
+        with pytest.raises(CommandFailed, match="closing"):
             await asyncio.wait_for(starting, 5)
         assert not engine.peers.running and engine._started is None
 
@@ -717,5 +718,63 @@ def test_a_hard_stop_while_peers_stop_is_raised_after_the_bounded_attempt(tmp_pa
         await asyncio.gather(*list(engine.registry.workers))
         await engine.close()  # a later close completes
         assert order == ["cleanup"] and engine._writer is None and engine.store._conn is None
+
+    asyncio.run(run())
+
+
+def test_a_peers_command_while_close_kills_jobs_is_refused_and_starts_nothing(tmp_path, monkeypatch):
+    """The review's probe: a command handled after close() stopped peers restarted the peer service, and close()
+    returned with it running. Once close() has begun, every command is refused."""
+    import exo.core.jobs as jobs_mod
+    from exo.core.tools.builtin.shell import kill_process_group
+    from exo.protocol import schema as s
+
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})
+    killing = threading.Event()
+
+    def slow_kill(proc, grace=1.0):  # a job that ignores SIGTERM keeps close in its kill step a while
+        killing.set()
+        time.sleep(0.3)
+        kill_process_group(proc, grace)
+
+    class Peers(_Peers):
+        autostart = True
+
+        def __init__(self):
+            super().__init__()
+            self.node, self.starts = None, 0
+
+        async def start(self, *args):
+            self.starts += 1
+            self.node = "running"
+
+        async def stop(self):
+            await super().stop()
+            self.node = None
+
+        async def ready(self):  # as PeerService.ready: started on demand while autostart is on
+            if self.node is None and self.autostart:
+                await self.start()
+            return self.node is not None
+
+        async def command(self, body, via):
+            return {"peers": []}
+
+    monkeypatch.setattr(jobs_mod, "kill_process_group", slow_kill)
+
+    async def run():
+        engine.peers = Peers()
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        peers_list = s.Command.of(s.Peers(action="list", session=session.id))
+        assert await engine.handle(peers_list, engine.hub) == {"peers": []}
+        engine.jobs.start("sleep 120", str(tmp_path), session.id)
+        closing = asyncio.create_task(engine.close())
+        assert await asyncio.to_thread(killing.wait, 5)
+        assert engine.peers.node is None  # close() has stopped peers and is killing the job
+        with pytest.raises(CommandFailed, match="closing") as refused:
+            await engine.handle(peers_list, engine.hub)
+        assert refused.value.code == "closed"
+        await closing
+        assert engine.peers.node is None and engine.peers.starts == 1 and engine.peers.stops == 1
 
     asyncio.run(run())

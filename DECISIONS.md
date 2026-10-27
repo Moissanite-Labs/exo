@@ -6351,3 +6351,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     from a stop step. So a second SIGTERM while peers stopped, with a sync tool past the bound, was lost:
     `close()` returned normally once the tool did. A `CancelledError`, `KeyboardInterrupt` or `SystemExit` in
     `errors` is now raised after the bounded attempt, and the rest stays as after a timeout.
+  - *Commands during close.* `handle()` awaits `start()`, which returned at once while MCP was still up. So a
+    `peers` command handled while close killed jobs started the peer service again, and close returned with
+    it running. Main does the same. `start()` now fails with `CommandFailed` `closed` once close has begun,
+    so every command is refused.

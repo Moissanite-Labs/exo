@@ -116,7 +116,7 @@ commands. Its collaborators have small interfaces:
   `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`. `stop()` keeps it restartable;
   `close()` closes schedule.sqlite and is final.
 - `await engine.close()` stops jobs, peers, channels and the scheduler, then closes schedule.sqlite and the
-  session store. The store is not final: a later read or write reopens sessions.sqlite (#281). Errors reported while
+  session store. Once it has begun, `start()`, and so every command, fails with `CommandFailed` `closed`. The store is not final: a later read or write reopens sessions.sqlite (#281). Errors reported while
   it stops them are still recorded as `harness.error` events. The engine drops its trace sink just before the
   session store closes.
 - `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core
