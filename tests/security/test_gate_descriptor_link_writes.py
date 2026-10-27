@@ -133,10 +133,87 @@ def test_a_named_descriptor_assigning_a_listed_variable_asks(cmd):
     assert _decided(_sh(cmd))[:2] == ("opaque_exec", "ask"), cmd
 
 
-def test_a_link_straight_to_stdin_is_not_a_store_word(tmp_path):
-    # A link to the caller's stdin names what a reader is fed, not a descriptor held on a store
-    # file: a post's body file there is the unseen case (#208), not a store write.
+def test_a_link_straight_to_stdin_is_a_store_word(tmp_path):
+    # A link to the caller's stdin reads as the direct spelling does (#324): the old exemption
+    # let a write through it pass while `> /dev/stdin` asked.
     link = tmp_path / "body.md"
     os.symlink("/dev/stdin", link)
-    assert not gate._store_word(str(link))
-    assert gate.classify(_sh(f"gh pr comment 5 --body-file {link}")).category == "github_post"
+    assert gate._store_word(str(link))
+    assert gate.classify(_sh(f"gh pr comment 5 --body-file {link}")).category == "store_write"
+    assert gate.classify(_sh("gh pr comment 5 --body-file /dev/stdin")).category == "store_write"
+
+
+# --- the repair: routes the first pass left open --------------------------------
+
+
+@pytest.mark.parametrize("n", [9, 10, 11])
+def test_a_link_chain_past_eight_still_reaches_the_descriptor(n, _rig):
+    # The kernel follows up to 40 links; the old walk gave up past 8 (#324).
+    prev = "/dev"
+    for i in range(n + 1):
+        link = _rig / f"ch{i}"
+        os.symlink(prev, link)
+        prev = str(link)
+    assert _decided(_sh(f"printf FORGED > {_rig}/ch{n}/fd/3"))[:2] == ("store_write", "ask")
+
+
+def test_a_file_tool_write_through_a_long_link_chain_asks(_rig):
+    prev = "/dev"
+    for i in range(11):
+        link = _rig / f"ch{i}"
+        os.symlink(prev, link)
+        prev = str(link)
+    action = {"tool": "write_file", "args": {"path": str(_rig / "ch10/fd/3"), "content": "x"}}
+    assert _decided(action)[:2] == ("store_write", "ask")
+
+
+def test_a_dotdot_after_a_link_follows_the_link_first(_rig):
+    # `z -> s/../fd/3` with `s -> /dev/shm` reaches /dev/fd/3: the `..` pops the link's
+    # target, not the spelling before it (#324).
+    os.symlink("/dev/shm", _rig / "s")
+    os.symlink("s/../fd/3", _rig / "z")
+    assert _decided(_sh(f"printf FORGED > {_rig}/z"))[:2] == ("store_write", "ask")
+
+
+def test_a_link_loop_resolves_nowhere(_rig):
+    # A loop gives up at the kernel's link limit instead of hanging or counting as a path (#324).
+    os.symlink("b", _rig / "a")
+    os.symlink("a", _rig / "b")
+    assert _decided(_sh(f"printf FORGED > {_rig}/a/fd/3"))[:2] == ("local_write", "allow")
+
+
+@pytest.mark.parametrize("target", ["/dev/stdin", "/proc/self/fd/0"])
+def test_a_write_through_a_link_to_stdin_asks(target, _rig):
+    # A link to the caller's stdin used as a write target asks, as the direct spelling does (#324).
+    os.symlink(target, _rig / "stdin")
+    assert _decided(_sh(f"printf FORGED > {_rig}/stdin"))[:2] == ("store_write", "ask")
+
+
+@pytest.mark.parametrize("cmd", [
+    "cp @L@/plain.txt @L@/h",
+    "tee @L@/h < @L@/plain.txt",
+])
+def test_a_hardlink_written_by_a_command_asks(cmd, _rig):
+    # The file being written is the same store file a redirection would name (#324).
+    assert _decided(_sh(cmd.replace("@L@", str(_rig))))[:2] == ("store_write", "ask")
+
+
+def test_a_hardlink_written_by_a_file_tool_asks(_rig):
+    # write_file names the path itself; copy_file names it as its destination (#324).
+    assert _decided({"tool": "write_file", "args": {"path": str(_rig / "h"), "content": "x"}})[:2] == (
+        "store_write", "ask")
+    assert _decided({"tool": "copy_file", "args": {"source": str(_rig / "plain.txt"),
+                                                    "destination": str(_rig / "h")}})[:2] == (
+        "store_write", "ask")
+    # a move onto the hardlink leaves the store file itself untouched, so it stays a local write
+    assert _decided({"tool": "move_file", "args": {"source": str(_rig / "plain.txt"),
+                                                    "destination": str(_rig / "h")}})[:2] == (
+        "local_write", "allow")
+
+
+def test_a_relative_descriptor_link_from_the_session_folder_asks(_rig):
+    # `d/fd/3` with `d` a link to /dev in the working folder, as the absolute spelling is (#324).
+    c = gate.classify(_sh("printf FORGED > d/fd/3"), cwd=str(_rig))
+    assert (c.category, gate.decide(c).outcome) == ("store_write", "ask")
+    c = gate.classify(_sh("printf FORGED > real/fd/3"), cwd=str(_rig))
+    assert (c.category, gate.decide(c).outcome) == ("local_write", "allow")
