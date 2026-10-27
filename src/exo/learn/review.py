@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -62,8 +61,17 @@ def _today() -> str:
 
 
 def parse_json(text: str) -> Any:
-    m = re.search(r"\{.*\}|\[.*\]", text or "", re.S)
-    return json.loads(m.group(0) if m else text)
+    """Decode the first JSON value in model output, ignoring anything after it.
+
+    The old greedy match ran to the last brace in the text, so a trailing
+    brace in prose after the value dropped valid output. Decoding from the
+    first brace or bracket keeps the value and ignores the tail.
+    """
+    raw = text or ""
+    starts = [i for i in (raw.find("{"), raw.find("[")) if i >= 0]
+    if starts:
+        return json.JSONDecoder().raw_decode(raw[min(starts):])[0]
+    return json.loads(raw)
 
 
 def watermark(ledger: Any) -> int:

@@ -454,6 +454,13 @@ def test_model_reflector_seam_and_fallback(template_store, led, corrections):
     ctx = C.ReflectContext(["mind"], C.DEFAULT_POLICY, "2026-10-11")
     assert bad.reflect(obs, ctx).reflector == "rules"
     assert C.ModelReflector(lambda p: "not json").reflect(obs, ctx).reflector == "rules"
+    trailing = C.ModelReflector(lambda p: json.dumps({"wants": "unsigned comments", "avoid": None,
+                                                     "because": "agent names leak the team",
+                                                     "implication": "All public text.",
+                                                     "domain": "mind", "type": "preference",
+                                                     "title": "Unsigned"}) + " } trailing brace in prose }")
+    got = trailing.reflect(obs, ctx)
+    assert got.reflector == "model" and got.wants == "unsigned comments"
     assert isinstance(C.RuleReflector(), C.Reflector) and res.proposals
 
 

@@ -523,6 +523,18 @@ Reply with one JSON object and nothing else:
  "domain": "one of the allowed domains", "type": "preference or rule", "title": "short title"}}"""
 
 
+def _decode_model_json(raw: str) -> Any:
+    """Decode the first JSON value in model output, ignoring anything after it.
+
+    The old greedy match ran to the last brace in the text, so a trailing
+    brace in prose after the value dropped valid output.
+    """
+    starts = [i for i in (raw.find("{"), raw.find("[")) if i >= 0]
+    if starts:
+        return json.JSONDecoder().raw_decode(raw[min(starts):])[0]
+    return json.loads(raw)
+
+
 class ModelReflector:
     """Adapter seam for a model call. `complete(prompt) -> str` is any function the host supplies
     (Hermes auxiliary model, a local model, a test double). Bad output falls back to the rules."""
@@ -537,8 +549,7 @@ class ModelReflector:
         try:
             raw = self.complete(MODEL_PROMPT.format(text=obs.text, rejected=obs.rejected or "",
                                                     reason=obs.reason or "", domains=", ".join(ctx.domains)))
-            m = re.search(r"\{.*\}", raw, re.S)
-            data = json.loads(m.group(0) if m else raw)
+            data = _decode_model_json(raw)
             wants = _tidy(str(data["wants"]))
             if not wants or re.match(r"^(not|no|don'?t|never)\b", wants, re.I):
                 raise ValueError("wants must be positive")
