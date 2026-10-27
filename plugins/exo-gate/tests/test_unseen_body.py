@@ -243,6 +243,32 @@ def test_a_body_file_stays_unread_under_each_newer_reading(store, work, tmp_path
     assert gate.UNSEEN_ON_LINE in r["message"] and gate.UNSEEN_BODY not in r["message"], r
 
 
+# D-074 (#125): a line where the home's config.json counts is also read as before D-074 (`ordinary`), and the hook
+# reads that reading too (gate.readings): the body file stays unread, the post asks once and only the principal answers,
+# as on main for the same line with another store write, and a required executor refuses the line.
+CONFIG_WRITES = ["cp /tmp/x ~/.exo/config.json && " + P, "cp /tmp/x ~/.exo/policies/gates.yaml && " + P]
+
+
+@pytest.mark.parametrize("line", CONFIG_WRITES)
+def test_a_body_file_beside_a_config_json_write_stays_unread(store, work, tmp_path, monkeypatch, line):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("EXO_HOME", raising=False)
+    line = line.format(work=work)
+    c = gate.classify({"tool": "terminal", "args": {"command": line}})
+    assert c.category == "store_write", c
+    if "config.json" in line:
+        assert c.ordinary is not None and c.ordinary in gate.readings(c), c
+        assert c.ordinary.category == "github_post" and c.ordinary.text_file, c.ordinary   # main's reading
+        assert {id(p) for p in hook._every_part(c.ordinary)} <= {id(p) for p in hook._every_part(c)}
+    g, ctx = make_gate(store)
+    r = call(ctx, line)
+    assert r["action"] == "approve" and r.get("once") is True and r["approvers"] == ["principal"], r
+    assert gate.UNSEEN_ON_LINE in r["message"] and gate.UNSEEN_BODY not in r["message"], r
+    g.required_getter = lambda: True
+    r = call(ctx, line)
+    assert r["action"] == "block" and "required executor" in r["message"], r
+
+
 def test_the_card_says_the_file_was_not_read(store, work):
     # The file is not read, so the card names no word it holds now: gh may post another text. It says the file was
     # not read and why. Alone on its line, the same post is read and checked. A second post's file is left unread for

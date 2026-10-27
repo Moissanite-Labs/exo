@@ -784,17 +784,19 @@ def test_after_a_hop_an_empty_other_target_names_the_first_host(command):
     assert ("shell", "buildhost") in gate.decide(c, {"gates": {"reserved": ["target:buildhost"]}}).reserved
 
 
-@pytest.mark.parametrize("command", [
-    f"ssh buildhost '{GH_WR}' < cmds.sh",
-    f"{{ ssh buildhost '{GH_WR}'; }} < cmds.sh",
-    f"echo x > >(ssh buildhost '{GH_WR}')",
-    f"echo 'rm -rf /data' | ssh jump ssh buildhost '{GH_WR}'",
+@pytest.mark.parametrize("command, hops", [
+    (f"ssh buildhost '{GH_WR}' < cmds.sh", []),
+    (f"{{ ssh buildhost '{GH_WR}'; }} < cmds.sh", []),
+    (f"echo x > >(ssh buildhost '{GH_WR}')", []),
+    (f"echo 'rm -rf /data' | ssh jump ssh buildhost '{GH_WR}'", ["jump"]),
 ])
-def test_ssh_s_own_part_keeps_main_s_fill_beside_a_stdin_it_reads(command):
+def test_ssh_s_own_part_keeps_main_s_fill_beside_a_stdin_it_reads(command, hops):
     """ssh's own part, its remote command, keeps main's #399 fill where #316 reads a stdin beside it: the remote gh
-    runs on the host, so its empty other target is the host's current repo there."""
+    runs on the host, so its empty other target is the host's current repo there. #493 keeps each hop's own host
+    beside it too, so a rule on a hop reaches the line as the hop's part does."""
     c = gate.classify_shell(command)
-    assert (c.category, c.target, c.alt_targets) == ("github_post", "myorg/app", ["buildhost"]), c
+    assert (c.category, c.target, c.alt_targets) == ("github_post", "myorg/app",
+                                                     ["buildhost", *hops]), c
     assert gate.decide(c, _post_denied_on("buildhost")).outcome == "deny"
     assert ("github_post", "buildhost") in gate.decide(c, {"gates": {"reserved": ["target:buildhost"]}}).reserved
 
