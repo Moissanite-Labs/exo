@@ -3785,6 +3785,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27 (#708):** Command refreshes its snapshot on every current stream open, using the
+  existing event debounce. A quiet reopen no longer waits for another event. Superseded or disposed stream
+  handles cannot schedule the refresh, and unmount cancels a queued refresh. No user or extension step changes.
 - **Amendment 2026-10-20 (#361):** terminal steer lines explicitly show sending, queued and delivered. A send reply
   alone never proves delivery: the matching user `message.completed` does, including when it arrives before the
   reply; the existing successful `unsteer` acknowledgement can also confirm it already left the queue. Such early

@@ -230,7 +230,8 @@ export function mount(app) {
       return;
     }
     var connection = es;
-    es.onopen = function () { if (es !== connection || disposed) return; retry = 0; };
+    // A reopened stream can stay quiet after changes made while disconnected.
+    es.onopen = function () { if (es !== connection || disposed) return; retry = 0; later(); };
     es.onmessage = function () { if (es !== connection || disposed) return; later(); };
     es.onerror = function () {
       if (es !== connection || disposed) return;
