@@ -6329,7 +6329,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-27 (number):** this decision was D-082 until #235 merged its canary operating decisions
   under that number. #601 then merged a second D-082, which #725 moved to D-087, and #613 merged D-083. #510
   holds D-084 on #508's branch, open PR #511 holds D-085 and #512 merged D-086. So this decision is D-088. The
-  messages of #500's first two commits still say D-082.
+  messages of #500's first two commits still say D-082. #508's text, taken in later, is renumbered the same way.
 - **Amendment 2026-10-27 (checker round on #500):** four more routes past the shutdown steps, each now tested.
   A learner that failed to close skipped plugin cleanup, the writer release and the store close. It is now
   recorded like a failed step. A step that failed before the bound was lost when the drain timed out, so a job
@@ -6368,3 +6368,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   extraction: no approval policy, binding, private-thread rule or protocol contract changed.
   Broader private-state query cleanup remains open.
   User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
+- **Amendment 2026-10-27 (#508 taken in):** #508 merged into this PR's branch on 2026-10-27. Its two commits
+  now follow the review commits, so the bridge carries the shutdown work: sync plugin handlers stay sync, and
+  the registry still tracks their workers. Main added the turn's author to the hook keywords (#598) after
+  #508 was written. The bridge's `hook_kw` keeps it, so the gate still lowers only for the principal's turn.

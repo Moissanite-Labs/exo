@@ -101,7 +101,7 @@ and reject direct execution attempts. Test seat overrides and alternate executor
 Profiles are runtime selection, not an OS sandbox or separate installation distributions.
 See [HARNESS.md](HARNESS.md) and the sourced [landscape/roadmap](HARNESS-LANDSCAPE.md).
 
-**Plugin runtime binding (D-082).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
+**Plugin runtime binding (D-088).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
 private=..., approvals=..., required=...)` binds the existing tool and slot interfaces through
 `exo.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback.
 Metadata is resolved for each call. The bridge translates existing plugin approval verdicts through
