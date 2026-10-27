@@ -2964,9 +2964,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line under the same key as a fed `bash`. A stdin it cannot read asks, and so does a bare `sudo -s`, since a command
   around the line may feed it. sudo's and doas's options are read as getopt reads them (`_sudo_shells`): clusters,
   values attached or not, unique prefixes of sudo's long options, `--`, then sudo's `NAME=VALUE` words, for each
-  sudo or doas the prefix reader passes (`env`, `nice`, `timeout`, `command`, another sudo); an option word with an
-  expansion or an unquoted glob (`sudo -"$X"`, `sudo -?`) counts as a shell option, since it may come to `-s`
-  (review of #491: `sudo -$(printf s) <<< 'rm -rf x'` was allowed under `deny: [delete]`). With a command, sudo
+  sudo or doas the prefix reader passes (`env`, `nice`, `timeout`, `command`, another sudo). A word the gate cannot
+  read that may come to `-s` counts as a shell option (`_sudo_unread`): an option word with an expansion or an
+  unquoted glob (`sudo -"$X"`, `sudo -?`; review of #491: `sudo -$(printf s) <<< 'rm -rf x'` was allowed under
+  `deny: [delete]`), unless it cannot split and the expansion comes after a letter or `=` that takes a value
+  (`sudo -u"$U" -l` stays a read; an empty `$U` there makes `-u` take the next word, which starts no shell); an
+  option's value that may split into several words (`sudo -u $U`, `sudo -u $(id -un)`; round 2 of the review:
+  `sudo -u {root,-s} <<< 'rm -rf x'` was allowed under `deny: [delete]`), whose brace set is expanded with
+  `_brace_words` and read as option words; and an operand that may expand to an option (`sudo "$X"`, `sudo ?s`,
+  `sudo {-s,}`), which main read as an unknown program that asks, so a deny on the fed text only asked. Such a word
+  may take the next word as its value (`sudo -$X root` may be `sudo -iu root`), so when the line feeds the command a
+  stdin, the shell is also read with no command. This tightens a few lines that start no shell when the words
+  expand otherwise (`sudo -u $U` alone asks as `bash` alone does, `echo hi | sudo -u $U tee /tmp/x` asks), and
+  never lowers one: each such reading only adds parts. With a command, sudo
   runs `$SHELL -c` on its words joined with spaces, each character but a letter, a digit, `_`, `-` and `$` escaped
   with a backslash. Where that text may not be the words the line's own reading took (a `$`, a newline the shell
   drops as a line continuation, an empty word, or `-iu root` and `--user root`, which the prefix reader takes for a
@@ -2985,12 +2995,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line, as for `echo 'rm -rf x' | bash`. Known limits, not filed here: `su` with no `-c` and `sudo su` with a stdin
   ask as an unknown program and the fed text is not read, so a deny on what it carries asks rather than denies; the
   files a login shell reads first and a `SHELL` that names another program are not read; an ambiguous long option
-  is taken for a shell option when it may be one. The differential against main dcab371a (scripts/gate_diff.py,
-  `--jobs 2`) lowers no pair: the built-in corpus without variants (11,088 actions x 87 policies) tightens 6,170
-  pairs on 91 actions, and an aimed corpus of 3,236 lines (the new tests' lines, each shell spelling, feed, payload
-  and wrapper, option words with an expansion or a glob, and nested sudo shells) under the 87 built-in policies and
-  37 more deny, category and reserved policies on `delete`, `force_push`, `web_post`, `store_write`,
-  `credentials`, `opaque_exec` and `github_post` tightens 205,461 pairs on 2,267 actions.
+  is taken for a shell option when it may be one. The differential against main 15e60ddb (scripts/gate_diff.py,
+  `--jobs 2`) lowers no pair: the built-in corpus without variants (11,728 actions x 88 policies) tightens 9,041
+  pairs on 144 actions, and an aimed corpus of 5,332 lines (the new tests' lines, each shell spelling, feed, payload
+  and wrapper, option words with an expansion or a glob, option values that may split, brace sets in values,
+  operands that may expand to an option, and nested sudo shells) under the 88 built-in policies and 37 more deny,
+  category and reserved policies on `delete`, `force_push`, `web_post`, `store_write`, `credentials`,
+  `opaque_exec` and `github_post` tightens 272,081 pairs on 3,406 actions.
 
   *Amendment 2026-10-26 (issue #584):* a backslash-newline inside a `$` form is joined before the form is read, as
   bash joins it. Outside single quotes bash drops each `\<newline>` before it expands a word, so

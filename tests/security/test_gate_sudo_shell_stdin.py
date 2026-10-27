@@ -1,6 +1,6 @@
 """#491: `sudo -s` and `sudo -i` (--shell, --login) start the target user's shell, which runs its stdin.
 
-With no command, the shell sudo starts reads its commands from stdin. On main dcab371a the gate read such a line as
+With no command, the shell sudo starts reads its commands from stdin. On main 15e60ddb the gate read such a line as
 `read` (sudo's options left no program, a bare assignment) and allowed it, even under `deny: [delete]`, while `sudo
 bash` with the same stdin was read. The gate now reads a sudo shell with no command as it reads `bash` with no
 operand: an opaque part that runs its stdin, and the parts of each text the line feeds it (a pipe, a here-string, a
@@ -86,6 +86,34 @@ def test_an_option_word_the_gate_cannot_read_may_start_the_shell(line):
     assert c.category == "delete", (line, c)
     assert decide(c, DEFAULT).outcome == "ask"
     assert decide(c, DENY_DELETE).outcome == "deny", line
+
+
+@pytest.mark.parametrize("line", [
+    # an option's value that may make several words: `-u {root,-s}` is `-u root -s`, and `$U` may be `root -s`
+    f"sudo -u $U <<< {RM}", f"echo {RM} | sudo -u $U", f"sudo -u {{root,-s}} <<< {RM}",
+    f"sudo -u {{root,-i}} <<< {RM}", f"echo {RM} | sudo -u $(id -un)", f"sudo -u ${{U}} <<< {RM}",
+    f"sudo -g $G <<< {RM}", f"sudo -D $D <<< {RM}", f"sudo --user $U <<< {RM}", f"sudo -u * <<< {RM}",
+    f"sudo -E -u $U <<< {RM}", f"sudo -u $U -E <<< {RM}", f"doas -u $U <<< {RM}", f"env sudo -u $U <<< {RM}",
+    f"sudo -u bob sudo -u $U <<< {RM}",
+    # an operand that may expand to a shell option
+    f'sudo "$X" <<< {RM}', f"sudo $(printf -- -s) <<< {RM}", f"sudo [-]s <<< {RM}", f"sudo ?s <<< {RM}",
+    f"sudo {{-s,}} <<< {RM}", f'sudo -u root "$X" <<< {RM}', f"sudo -u root {{-i,}} <<< {RM}",
+    f'doas "$X" <<< {RM}',
+    # an option word the gate cannot read may take the next word as its value (`-$X root` may be `-iu root`)
+    f"sudo -$X root <<< {RM}", f'sudo -"$X" ls <<< {RM}',
+])
+def test_a_value_or_operand_the_gate_cannot_read_may_start_the_shell(line):
+    c = sh(line)
+    assert c.category == "delete", (line, c)
+    assert any(p.category == "opaque_exec" and "runs its stdin" in p.summary for p in gate._each_part(c)), line
+    assert decide(c, DEFAULT).outcome == "ask"
+    assert decide(c, DENY_DELETE).outcome == "deny", line
+
+
+def test_a_store_write_behind_a_value_that_may_start_the_shell_is_denied():
+    c = sh("sudo -u {root,-s} <<< 'cp /tmp/x ~/.exo/policies/x'")
+    assert c.category == "store_write", c
+    assert decide(c, DENY_STORE).outcome == "deny" and gate.no_grant(c)
 
 
 @pytest.mark.parametrize("tail", ["echo '$x'", 'echo "$x"', "echo 'a\nb'", "rm -rf '$x'"])
@@ -193,6 +221,10 @@ def test_the_controls_are_unchanged(line):
     ("sudo -s echo hi > /tmp/f", "local_write", "allow"),        # #454: as on main
     (f"sudo -s cat <<< {RM}", "read", "allow"),                  # the command, not the shell, reads the stdin
     ("sudo -s gh pr comment 1 --body 'hi there'", "github_post", "ask"),
+    # a value that may make several words, with a command and no stdin fed; an expansion that is the value
+    ("sudo -u $U ls", "read", "allow"), ("sudo -u {alice,bob} ls", "read", "allow"),
+    ('sudo -u"$U" -l', "read", "allow"), ('sudo -u"$U" -v', "read", "allow"), ('sudo --user="$U" -v', "read", "allow"),
+    ('sudo -D"$D"', "read", "allow"), ("sudo -u\"$U\" echo '$HOME'", "read", "allow"),
 ])
 def test_lines_with_no_shell_stdin_are_unchanged(line, category, outcome):
     c = sh(line)
@@ -201,7 +233,7 @@ def test_lines_with_no_shell_stdin_are_unchanged(line, category, outcome):
     assert not any("runs its stdin" in p.summary for p in gate._each_part(c)), line
 
 
-@pytest.mark.parametrize("line", ["sudo -s", "sudo -i", "sudo --login", "sudo -s > /tmp/f"])
+@pytest.mark.parametrize("line", ["sudo -s", "sudo -i", "sudo --login", "sudo -s > /tmp/f", "sudo -u $U"])
 def test_a_sudo_shell_with_no_feed_asks_like_bash(line):
     # Main allowed these (`read`; #454 made the last a local_write). The shell runs whatever stdin reaches it, which a
     # command around the line may give (`bash -c 'sudo -s' <<< ...`), so it asks as `bash` alone does.
