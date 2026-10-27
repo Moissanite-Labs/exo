@@ -7763,8 +7763,8 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
     first reading reads each `env -S` text, beside the text as a shell line, as the line env runs (#591 follow-up to
     #634, _env_split_lines), and a spelling main missed (`--split`, `-i0vS`) as `-S TEXT` (_env_s_text). Where it
     read a line or such a spelling, the call is read again with each text a shell line only: as before #634 (mode
-    0), and with every spelling read as `-S TEXT` (mode 3); and where #634's reading of the text's leading words
-    (_env_split_argv) found a command, once more with that reading, as main read it (mode 1). Each is a call of its
+    0), and with every spelling read as `-S TEXT` (mode 3); and once more as main reads it (mode 1), with #634's
+    reading of the text's leading words (_env_split_argv). Each is a call of its
     own, in ``split_readings``, so a part that leads one reading or takes an ssh hop's host there keeps it (review
     of #634), and decide keeps the strictest."""
     if _env_split_mode.get() is not None:      # a reading inside a reading (D-074's ordinary): the same mode
@@ -7775,6 +7775,8 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         c = _classify_reading(action, cwd)
     finally:
         _env_split_mode.reset(token)
+    if mark[0] & 1:                            # main's own reading too, whenever any split reading is taken
+        mark[0] |= 2
     for mode in (0, 1, 3):
         if mark[0] & (1 << mode):
             token = _env_split_mode.set((mode, [0]))
