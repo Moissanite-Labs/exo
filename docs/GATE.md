@@ -1499,6 +1499,9 @@ gate does not read:
   split, and a glob keeps a slash it has (`hash -p /tmp/x*`), so these stay `read`. A
   double-quoted `${!n}` is not one word: with `n=@` bash splits it as it splits `"$@"`, so
   `hash "${!n}"` and `hash -p "${!n}"` are opaque, while `hash "$cmd"` stays `read`.
+  A `$` form a `\<newline>` splits reads as its plain spelling does (#585): `hash "$\<newline>@"; ls`,
+  `hash "${\<newline>!n}"; ls` and `hash -p $\<newline>P; ls` are opaque as their plain spellings are, while
+  `hash "$cmd"`, `hash -p "$P"` and `hash "$r"` through a nameref stay `read`.
   A word that starts with an unquoted `[` is a glob too, also after a `\<newline>`. With files
   named `-p`, `as` and `ls` in the folder, bash runs `hash [-]p /tmp/x ls` as
   `hash -p /tmp/x ls` and `hash -p [al]s` as `hash -p as ls`, so both are opaque. So is
