@@ -1543,7 +1543,12 @@ gate does not read:
   it can turn `x.path` into `include.path`. A key the gate cannot read, a `--config-env` value
   (it comes from a variable) for an exec key, and `git clone --template` or `git init
   --template` are opaque. `env` and `sudo` read `NAME=VALUE` from their
-  own argv, so a quoted one after them (`env 'LD_PRELOAD=x' ls`) is an assignment. `IFS` is left
+  own argv, so a quoted one after them (`env 'LD_PRELOAD=x' ls`) is an assignment. A `-S` text is
+  read the same way (#591): env splits it into words and reads them as its own argv, so a word
+  quoted whole with the form `NAME=value` (`env -S "'X=a b' rm -rf /srv/data"`) is an assignment
+  there too, and the first word that is neither an env option nor an assignment starts the command.
+  After `--`, or where a shell operator would sit, a `NAME=value` word is a command or a word of
+  argv to env, not an assignment. `IFS` is left
   out: it does not change how literal words split, and `while IFS= read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
