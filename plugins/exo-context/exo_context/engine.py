@@ -14,10 +14,12 @@ On the Exo core loop (``select_context`` on every turn):
 The session id comes with every core hook (``session_id=``), so nothing is tracked by hand.
 
 On a host that reports an undo only to its memory provider (Hermes), exo-memory passes the notice on through
-``exo.host_undo``, and ``on_host_undo`` drops the pins that only the undone turn held (#389). The next turn's
-transcript shows any earlier turn the same undo took. A pin whose message a compaction folded stays while the
-host's transcript still holds that summary row, before the undo as after it: a compress that folded the window's
-first row notes the fold with the pins, and an undo after it counts that row as reaching back (#581).
+``exo.host_undo``, and ``on_host_undo`` drops the pins that only the undone turn held (#389). The pending undo
+waits for the session's next turn in ``exo.host_undo``, not in one engine (#580), so the engine that runs that
+turn, whichever agent Hermes built it on, drops the earlier turns' pins from the turn's transcript. A pin whose
+message a compaction folded stays while the host's transcript still holds that summary row, before the undo as
+after it: a compress that folded the window's first row notes the fold with the pins, and an undo after it counts
+that row as reaching back (#581).
 
 On a flat message list (``compress``, used by hosts and tools):
 1. extracts the signals, 2. calls the inner compressor (the core's default summarizer by default),
@@ -352,9 +354,10 @@ class ExoContextEngine(ContextEngine):
         old = kwargs.get('old_session_id')
         if kwargs.get('boundary_reason') == 'compression' and old and str(old) != str(session_id):
             self._carry_pins(str(old), str(session_id))  # in_place false: the pins follow the child (#391)
+            host_undo.move(str(old), str(session_id))  # the pending undo follows the window into the child (#580)
             if self._x_window_sid == str(old):  # the child goes on from that window's last turns: an undo reads it
                 self._saw(str(session_id))
-                if self._x_undo and self._x_undo[0] == str(old):
+                if self._x_undo and self._x_undo[0] == str(old):  # the engine's own record re-sids as well
                     self._x_undo = (str(session_id), *self._x_undo[1:])
         if self.inner is not None and hasattr(self.inner, 'on_session_start'):
             self.inner.on_session_start(session_id, **kwargs)
@@ -490,9 +493,10 @@ class ExoContextEngine(ContextEngine):
         them. A compress before the undo that folded the window's first row has noted the fold with the pins; when
         that row is still this window's first row, its summary blocks seed the pending undo, so the next turn
         counts the row as reaching back (#581). Then the window, the handoffs and the link are cleaned as after
-        the core's undo, and the session's next turn drops the pins of any earlier turn the same undo took
-        (``_after_undo``). A second undo before that turn keeps the window the first one left, so the rows the
-        second one took still show there."""
+        the core's undo, and the undo is recorded for the session's next turn (``_after_undo``), which drops the
+        pins of any earlier turn the same undo took: the record waits in ``exo.host_undo``, so the engine that
+        runs that turn resolves it, whichever agent Hermes built that engine on (#580). A second undo before that
+        turn keeps the window the first one left, so the rows the second one took still show there."""
         sid = str(session_id or '')
         if not sid or sid != self._x_window_sid or self._x_turn != host_undo.latest(sid):
             return  # another session's window, or a later turn of it ran in another engine: nothing shows the undo
@@ -513,21 +517,41 @@ class ExoContextEngine(ContextEngine):
         if not self._x_undo or self._x_undo[0] != sid:
             first = next((hf.message_text(m) for m in rest if m.get('role') != 'system'), None)
             noted = self._x_firstrow.get(sid, {})  # a compress before the undo folded that row; its summary stands
-            self._x_undo = (sid, rest, set(noted.pop(_digest(first), ())) if first is not None else set())
+            seeds = set(noted.pop(_digest(first), ())) if first is not None else set()
+            self._x_undo = (sid, rest, seeds)
+            host_undo.pend(sid, rest, seeds)  # the same record waits under the session, for any engine's turn (#580)
         self._rewound(sid, pins, kept, rest, set())
 
     def _after_undo(self, kwargs: dict[str, Any]) -> None:
-        """The first turn of the session after a host's undo. Hermes's /undo N takes N turns with one notice, so the
+        """The first turn of the session after a host's undo, in whichever engine runs it (#580): the pending undo
+        waits in ``exo.host_undo`` for the session's next turn, so the agent Hermes rebuilt picks it up too, and the
+        record this engine heard settles here beside it. Hermes's /undo N takes N turns with one notice, so the
         host's whole transcript (``conversation_messages``) shows what went. A pin the window showed goes when that
-        transcript shows it no longer. A message shows its pin, and so does a summary row that folded the pin's message,
-        so a folded pin goes once the undo took every such row too. A request for another session, or one that names
-        no session and carries no user message (Hermes sends the turn's as ``incoming_message``), leaves the undo
-        pending. A host that sends no transcript keeps those pins. So does one whose transcript does not reach back to
-        where the window started: it was cut short, not undone."""
-        sid, before, anchors = self._x_undo
-        if sid != self._x_session_id or not (kwargs.get('session_id') or kwargs.get('incoming_message') is not None):
-            return
-        self._x_undo = None
+        transcript shows it no longer. A message shows its pin, and so does a summary row that folded the pin's
+        message, so a folded pin goes once the undo took every such row too. A request for another session, or one
+        that names no session and carries no user message (Hermes sends the turn's as ``incoming_message``), leaves
+        the undo pending. A host that sends no transcript keeps those pins. So does one whose transcript does not
+        reach back to where the window started: it was cut short, not undone. A window settled twice drops twice
+        to nothing: each pass reads the pins file again fresh, so what the first pass dropped the second finds
+        gone."""
+        if not (kwargs.get('session_id') or kwargs.get('incoming_message') is not None):
+            return  # a request that is no turn leaves the undo for the session's next one
+        record = host_undo.take(self._x_session_id)  # the record any engine holds: this turn settles it (#580)
+        if record is not None:
+            self._undo_drop(self._x_session_id, *record, kwargs)
+        if self._x_undo:  # the record this engine heard, the way main keeps it (its #581 seeds included)
+            sid, before, anchors = self._x_undo
+            if sid != self._x_session_id:
+                return  # another session's undo waits for that session's turn in this engine
+            self._x_undo = None
+            if record is None or record[0] != before:  # the same window is settled by the first pass already
+                self._undo_drop(sid, before, anchors, kwargs)
+
+    def _undo_drop(self, sid: str, before: list[dict[str, Any]], anchors: set[str],
+                   kwargs: dict[str, Any]) -> None:
+        """The drop of one settled undo record, the engine's own or the session's registry one (#580). Hermes's
+        transcript decides; the pins are read again from disk first, since another engine on the session may have
+        written or dropped them, so a second pass over the same window finds nothing left to drop."""
         live = [m for m in kwargs.get('conversation_messages') or () if isinstance(m, dict)]
         last = max((i for i, m in enumerate(live) if m.get('role') == 'user'), default=-1)
         if last < 0:
@@ -589,8 +613,7 @@ class ExoContextEngine(ContextEngine):
 
     def select_context(self, request_messages: list[dict[str, Any]], **kwargs: Any):
         self._bind(kwargs.get('session_id'))
-        if self._x_undo:
-            self._after_undo(kwargs)
+        self._after_undo(kwargs)  # a pending undo waits in exo.host_undo for this session's next turn (#580)
         selected = None
         if self.inner is not None and hasattr(self.inner, 'select_context'):
             selected = self.inner.select_context(request_messages, **kwargs)
@@ -799,7 +822,9 @@ class ExoContextEngine(ContextEngine):
         With no pending undo for this session and the window last seen its own, a fold that covers the window's
         first row (or what Hermes kept of it), or a row already noted for it, is noted with the pins: the row's
         digest and this summary's block, so an undo after the compress counts the row as reaching back (#581). A
-        pending undo takes the block into its own list of such rows, also when the fold covers a row already there."""
+        pending undo takes the block into its own list of such rows, also when the fold covers a row already there,
+        and so does the record the session keeps in ``exo.host_undo``, so a fold reached in one engine is seen by
+        another engine's resolution too (#580)."""
         try:
             gone = _gone(messages, result, idx)
             if (gone and gone[-1].get('role') == result[idx].get('role')
@@ -824,6 +849,10 @@ class ExoContextEngine(ContextEngine):
                 d = _digest(row) if row is not None else ''
                 if d and (any(_part_of(row, m) for m in gone) or not set(old.get(d, ())).isdisjoint(carried)):
                     self._x_firstrow[self._x_session_id] = {d: [x for x in old.get(d, []) if x != tie][-7:] + [tie]}
+            held = host_undo.pending(self._x_session_id)  # the same fold noted in the record the session keeps, so
+            first = next((hf.message_text(m) for m in held[0] if m.get('role') != 'system'), None) if held else None
+            if first is not None and (any(_part_of(first, m) for m in gone) or not held[1].isdisjoint(carried)):
+                held[1].add(tie)  # a fold reached in one engine is seen by another engine's resolution (#580)
             self._save_pins(pins)
         except Exception as e:  # never block compaction on it
             logger.warning('exo-context: folded pins not noted (%s)', type(e).__name__)
