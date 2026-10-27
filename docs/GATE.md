@@ -2714,7 +2714,19 @@ path as its target, not only the first one the scan meets, which is still the ca
 So `cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from
 `a.yaml` to `gates.yaml` and `delete_file` on both paths are denied under
 `deny: ["target:*/gates.yaml"]`, where they asked before; `rm` of both was denied already, as its
-`delete` part names the last path.
+`delete` part names the last path. So are `apply_patch` and `write_file` with two store files, and
+under a `{category: store_write, target: "*/gates.yaml"}` deny or reserved entry too. A later
+command that repeats a braced store path keeps its own part (#611 follow-up): the store check
+expands and checks each brace spelling once per line and gives each command that repeats it the
+same hits, so `cp ~/.exo/policies/a.yaml ~/.exo/policies/{g,h}.yaml; printf x >
+~/.exo/policies/{g,h}.yaml` is denied under `categories: {store_write: deny}` beside an allow rule
+on `^cp `, as the unbraced line is. The hits a repeat gives again come from a budget of their own
+(4,096 per call), so a line of many repeats stays bounded; past it a repeat is one hit on the word
+as written, as a word past the brace cap is. Limits: a relative path read from a `cd` into the
+store, from `tar -C` or `git -C`, or from the call's own folder is no target, so a `target:` entry
+on it does not match. `cd ~/.exo/policies && cp a.yaml gates.yaml` and `tar -C ~/.exo/policies -xf
+/var/tmp/x.tar gates.yaml` ask the principal alone under `deny: ["target:*/gates.yaml"]`, and
+`cp a.yaml gates.yaml` with `~/.exo/policies` as `cwd` is allowed, as on main (#453, #527).
 After `cd /dev` or `cd /proc/self/fd`, a line naming a store path (`printf x > update/allowed_signers`)
 has that path as its target, and the descriptor folder is a second store-write part (#464), so a
 `target:/dev*` or `target:/proc*` deny still denies it. On a store-write line, a relative key read after `tar -C` into
