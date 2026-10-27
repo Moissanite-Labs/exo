@@ -41,6 +41,7 @@ export function emit(e){seq=e.seq;listener(e);} export function recover(){stateL
 ''')
     (tmp_path / "panels.mjs").write_text('export const renderPanel=()=>null;')
     (tmp_path / "permissions.mjs").write_text('export const set=async()=>"",refresh=async()=>({}),current=()=>({}),describe=()=>"";')
+    (tmp_path / "pane_layout.mjs").write_text('export const attachPaneLayout=()=>()=>{};')
     (tmp_path / "hero.mjs").write_text('export const createHero=()=>({start(){},stop(){}});')
     (tmp_path / "composer.mjs").write_text('''import {h} from "./dom.mjs";
 export const attachComposer=()=>({guideEl:h("div"),menuEl:h("div"),note(){},sent(){},stop(){},ready:()=>globalThis.namesLoaded!==false,

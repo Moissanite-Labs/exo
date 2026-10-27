@@ -12,6 +12,7 @@ import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOU
 
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 import * as permissions from "./permissions.js";
+import { attachPaneLayout } from "./pane_layout.js";
 
 export function mount(root) {
   let maxRounds = null; // this mounted window only; never persisted or shared between tabs
@@ -71,10 +72,11 @@ export function mount(root) {
     layout = v; setLayout(v); arrange(); drawLog();
   }
   arrange();
-  root.replaceChildren(h("div", { class: "xc-chat" },
-    h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl, layoutBtn),
-    mainEl,
-    sideEl));
+  const threadsEl = h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl, layoutBtn);
+  const paneControls = h("nav", { "aria-label": "Pane layout" });
+  const chatPanes = h("div", { class: "xc-chat" }, threadsEl, mainEl, sideEl);
+  root.replaceChildren(h("section", { class: "xc-pane-workspace", "aria-label": "Conversation workspace" }, paneControls, chatPanes));
+  const stopPaneLayout = attachPaneLayout(chatPanes, { threads: threadsEl, conversation: mainEl, details: sideEl }, paneControls);
 
   if (sessionStorage.getItem("xc-token")) {   // quiet check: skipped on any error
     api("GET", "/api/providers").then((d) => { if (d && d.ready === false) setupBanner.hidden = false; }).catch(() => {});
@@ -798,7 +800,7 @@ export function mount(root) {
     const restored = coreUsable && !wasUsable && st.synced > 0;
     if (st.synced !== synced || restored) { synced = st.synced; recover(); }
   });
-  const off = () => { ++pickerGeneration; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { stopPaneLayout(); ++pickerGeneration; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
