@@ -2775,6 +2775,22 @@ place in the line decides, not its text, and one in a here-doc body counts as af
 One in the redirections of a compound that holds the `cd` (`done < <(sort list)`) runs before it. A subshell
 `cd`, a later `cd` out and a `cd` in a function body fail closed. A loop that enters the store is not followed
 (#480).
+A folder of the
+`.exo` home that is not itself part of the store (`~/.exo/handoffs`, a principal's
+unprotected subfolder) counts as the store for this rule too, with one narrowing: a program whose writes the
+gate can see (`cp`, `mv`, `install`, `tee`, `touch`, `mkdir`, `sed -i`, `printf`, `echo`), spelt
+with nothing before it and with every word and redirection target a plain relative name (no `..`,
+expansion, glob or brace), writes only inside the folder it stands in and is ordinary there
+(#203). The folders Exo loads code from are store folders now (#435, #459), so a write after a
+`cd` into `~/.exo/plugins/<name>`, `venv/` or `src/` still asks. Only a `cd` the gate can prove
+moves the shell it stands in moves the folder the line stands in: a bare top-level `cd` with one
+target and no option. A `cd` in a subshell, a branch, a pipeline, a background job, a `&&`/`||`
+chain, with a prefix or an extra operand never does, and once the line has stood in a store
+folder no later home `cd` re-opens the carve-out. A `.git` folder is never a home folder, since
+its hooks run code. Any other write from such a folder still asks, and a read of a store file name there
+still asks under the relative-name rule (#192). Known limit: a `cd` to a folder that does not
+exist reads the same as one to a folder that does, so a lone `cd` into a nonexistent home
+folder still clears a plain write there; the gate cannot stat the shell's filesystem.
 `rm -rf ~/.exo` counts (an ancestor). A `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. When the decision fails on a call the gate reads as a store write or secret for a
