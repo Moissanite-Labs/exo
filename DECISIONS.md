@@ -1230,6 +1230,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-26 (issue #579):* a prompt-string transformation is code the gate cannot see, unless the
+  line assigns the variable a literal value. `${name@P}` expands the value as a prompt string, and with
+  `promptvars` on, the default, that runs its command substitutions and expands its parameters, so the gate
+  read such a word as the parameter's ordinary expansion and allowed it: `printf -v p '%s(%s)' '$' 'id';
+  echo ${p@P}` runs `id`, `p='$(id)'; echo ${p@P}` ran it where the gate's ask came only from the assignment
+  it read, and a value a command the gate does not read as an assignment sets (`printf -v`, `read`) rebuilds
+  a form the gate reads only as written — a `/` substitution of a store variable (#342) — so
+  `read -r p <<< '${HOME/%//.kube}/config'; cat ${p@P}` read `$HOME/.kube/config` as an allowed read. Now any
+  `${..@P}` the line expands (a parameter, an array element, the positional parameters and their ranges,
+  also in double quotes, a here-string, a here-document body or a redirection target, and nested in a word
+  bash expands) is an `opaque_exec` part that asks, beside the line's other parts (D-075), so a deny on them
+  still wins. One exception keeps the everyday lines: a variable the line assigns a literal value with no
+  `$`, backtick or backslash prompt-expands to itself, so `p=x; echo ${p@P}` stays a read; the last assignment
+  wins, so a literal keeps the line a read while a value the gate cannot read makes the parameter unknown
+  again (`p=x; p=$y`, an append onto it too, `p=x; p+=$y`), an exporter's assignment counts, a literal
+  appended to a literal is still one, and after an `unset` the value is empty. An exporter's arguments
+  expand before any of its assignments applies, so a `${..@P}` in one reads the value from before it
+  (`export p=x q=${p@P}` asks). A prefix assignment sets the command's own environment, which bash expands
+  the words before, so it is no source, and a value `printf -v` or `read` fills is never one the line
+  spells, so either clears the literal the line set for the name. The
+  other `@` operators decode or spell the value and run nothing, so they keep their reading, and the
+  operator is read only where the parameter ends, so `echo ${x:-foo@P}` stays a default word. Chosen over
+  reading the value's own substitutions (the gate cannot know where the value's text ends or what a prompt
+  escape spells — `p='\u'` is the username) and over asking on every transformation (the inert ones run
+  nothing). No decision is lower: each new part only adds an ask. Tests:
+  `tests/security/test_gate_prompt_expansion.py`.
 - *Amendment 2026-10-26 (issue #466):* a pattern a decision runs that does not compile is refused when the policy
   loads, not when `decide` first reaches it. `normalize_policies` checked types and outcome names but compiled
   nothing, so a rule's `match.command`, a `command:<regex>` entry or a mapping's `command` in `deny:` and
@@ -1276,6 +1302,25 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `rm` of both paths was denied already (its `delete` part names the last path), reads keep their class, and the
   first path alone decides as before. Each new part only adds a match, so no decision is lower; gate_diff ran
   main 5a5a535d against this change and found 0 lowered.
+- *Amendment 2026-10-26 (issue #516):* an allow rule keyed on `command` that would lower the line over the matrix
+  deny of the part a shell call's own folder read adds (#311) must name the folder, as it names the `cd` in the cd
+  form; naming the folder never lifts that deny. The part had no own text, so a line of
+  one command beside it was one text for the #394 own-text test (`_one_text`) and the rule decided the line as
+  before, over the part's cell: `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir`
+  asked under `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`, where its `cd` form was
+  denied, since the rule does not name the `cd`. Now the part carries a `_StandIn` for `cd <folder>` among its
+  setters, the folder as the call spells it (`~/.ssh`, or a relative `keys` when the call gives one), so the line
+  is not one text and the #394 pass runs: a rule that names the line's text but not the folder is passed over, for
+  the part as for any part it does not name, and the part's cell stands, as the cd form's parts' cells do. The
+  part itself keeps no own text, so no rule lifts its deny — not one that names everything either, as before, and
+  not one that lifts the weight a heavier command adds beside the part (#468), which has no own text. A line of
+  two or more commands, a policy with no rule and no matrix deny decide as before. Chosen over keying the part on
+  the line's own command scope: the stand-in keeps the part weighed as the `cd` form's is and rules matched against
+  what a `cd` on the line would read as, so the two spellings agree. *Differential against main 6054da56*
+  (`scripts/gate_diff.py --no-variants --jobs 4`): 11,406 actions x 88 policies, 1,003,728 pairs, none lowered
+  (outcome, reserved or posting violation), 728 pairs tightened on 361 actions — a folder part's matrix or category
+  deny standing where an allow rule on the line lifted it, this amendment's rows among them. Tests:
+  `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
 - *Amendment 2026-10-26 (issue #461):* a gh download or clone writes the store the way `curl -o` and
   `git clone` do. gh's download and clone subcommands read on GitHub, so the store check took a line whose
   every part reads as a read for a read and never looked at their output paths: `gh release download -O
@@ -1322,6 +1367,36 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   every tightening) and over the other sections alone (lower than after #542 for a section looser than the defaults);
   a malformed list's names count, tighten only; merging the old and new decisions of two valid files is a separate
   issue.
+- *Amendment 2026-10-26 (issue #586):* the D-038 old/new merge covers two valid files now, not only a session with
+  a policy error (#557). The changed file used to win only with a strictly higher outcome; at an equal outcome the
+  pinned decision stood with its own violations and exposure, and a standing grant was looked up against that one
+  decision. Two grant behaviours then ran a call lower than either file alone: an unbound grant on the changed
+  file's `reserved` hit ran a call the pinned file logs (`git push origin main` logs under
+  `escalate: {categories: [payment]}`; the changed file adds `reserved: [vcs_push]`, and a standing `vcs_push`
+  grant on `origin` runs it), and a grant bound to the exact line ran a call the pinned policy asks for without
+  that binding (a pinned `categories: {local_write: ask}` asks for `sudo echo hi > /tmp/f` unbound; the changed
+  file names `read` in a valid escalate, the displaced part asks, the line binds, and the grant runs it). Now the
+  old and new decisions merge as one stricter reading (`gate.stricter`, as #557 merges them beside a policy
+  error): the widest exposure, a third party if either has one, every violation, every reserved part, and the same
+  tie order — the other side stands at an equal outcome only when it lists a violation the standing one lacks.
+  A standing grant applies only where each side's own decision (with the decision model's verdict) also asks and
+  finds one, each side by its own lookup, as #557 found: an unbound and a bound grant for one line are found by
+  different lookups, so requiring one grant of both would run the call lower than main where one side binds and
+  the other does not. So the merged ask runs only where both sides would run it, and a change that only binds the
+  line (a wider exposure, a displaced part that asks) cannot let a grant cover a call the pinned policy asks for.
+  Decisions that change for valid policies: at an equal outcome the changed side's violations stand on the card
+  and the exposure is the widest of the two, so an ask can bind to the exact line where the pinned decision alone
+  did not, and list a posting or scrub finding it did not; no outcome is lower than either side's, and a single
+  valid file decides as before, grants included. Ruled in review 5644671413 on #569 (point 3): two valid files
+  stayed out of that PR because they change decisions for valid policies and needed their own differential and
+  probe. The differential against main 3bf26afc (11,440 pairs, no variants) found nothing lowered — it cannot see
+  this branch; the hook probe (the real Gate of both trees, 800 cells: 10 valid file pairs x 10 lines x no,
+  unbound, bound and both grants, with and without a decision-model ask) found 0 lower than main, and 6 pairs that
+  take the wider exposure at an equal outcome (`gh pr close 5 -R acme-org/app` beside a scope that no longer holds
+  asks with the wider exposure). Tests: `plugins/exo-gate/tests/test_hook.py`
+  (`test_valid_files_grant_*`, `test_a_single_valid_file_still_decides_alone`,
+  `test_two_valid_files_keep_the_changed_violation_at_an_equal_outcome`,
+  `test_two_valid_files_take_the_widest_exposure_and_keep_a_reserved_part`).
 - *Amendment 2026-10-26 (issue #494):* a file tool's store path is read under every key it names a path by, and a
   move of a folder that holds the store is a store write with no secret beside it, as `mv` is. The generic
   file-tool branch read a store path only under `path` and the other `_PATH_ARG_KEYS` names, and passed
@@ -1355,6 +1430,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `store_write` ask, and to `credentials` ask where the new keys name a secret), 409 pairs reworded in detail.
   Tests beside the #489 rows (`plugins/exo-gate/tests/test_store_floor_any_part.py`) and in the D-074 file
   (`tests/security/test_gate_config_store.py`).
+- *Amendment 2026-10-26 (issue #651):* a read-verb name that says it replaces the file its path names runs the
+  store scan as a write's, as the #494 fetch words do: the name's replace, substitute, patch, edit, update and
+  sed words join `_FETCH_WRITE_WORDS`, and arguments that carry the old text and the new beside the path they
+  name are the replace signal of a name that does not say so. `mcp__fs__search_replace
+  {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}` was a `read` in every
+  permission mode, so the seat file's default could be made bypass with no ask, which the seat's bypass reading
+  (D-065) does not allow a non-principal hand to reach; the policy files and config.json were as bare. The
+  replace is a `store_write` now, the principal alone answers it as `write_file`'s, and a plain read of the
+  store stays a read. The differential against main fa5dfcd8 (`scripts/gate_diff.py --no-variants --jobs 4`,
+  base main, head this branch) finds 0 lowered pairs: 11,868 actions, 2,040 pairs tightened on 24 actions (read
+  allow to `store_write` ask, 72 of them to deny under a store_write deny policy), 1,616 pairs reworded in
+  detail. Tests: `tests/security/test_gate_file_tool_replace_writes.py` (6 rows fail on main fa5dfcd8), the
+  #651 rows in `plugins/exo-gate/tests/test_hook.py` (7 of 8 fail on main) and `test_bypass.py` (5 of 9 fail on
+  main).
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
   `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
   grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on
@@ -1682,6 +1771,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   into a project or scratch venv), and `exo update`, `exo` venv inspections, which are reads and stay reads.
   The gate differential against main dcab371a (#423) ran the built-in corpus and the #435 review corpora,
   then the new writes of this change as rows, and lowered nothing.
+  *Amendment 2026-10-26 (issue #612):* a venv or Hermes home the home's config.json records alone joins the
+  protected list, which this amendment left out when it said the gate reads no config.json content (D-074) and
+  told an install to write the locations into the environment. Nothing does: `scripts/install.sh` takes the venv
+  from `EXO_VENV` at install time, writes that path back into config.json (`venv`, and `hermes_home` beside it),
+  and nothing exports the variables when the daemon runs, so a supported custom install spells its code folders in
+  the file alone, where the gate could not see them — `Config.load` resolved the recorded folder as the venv while
+  a write into it classified `local_write` and was allowed. Since then the gate does read config content:
+  `_store_roots` takes the store roots recorded in `principals` through `store.explicit_roots`, and `_code_paths`
+  now takes the recorded `venv` and `hermes_home` the same way — a missing or unreadable file, or a value that is
+  not an absolute path once ~ is expanded, adds nothing. The environment still takes precedence, as `Config.get`
+  resolves it: a folder the file records joins the protected list beside what `EXO_VENV` or `EXO_HERMES_HOME`
+  names, it never replaces one, so a decision main made stays made and only new folders are asked for. Everything
+  else this amendment gave a code folder the venv keeps: a write in it asks as `store_write` on the floor, a `cd`
+  into it makes the relative names after it count, a delete or move of it or of a folder above that holds it
+  counts, and reads stay reads. The gate differential against main d4cc7ea3 (#423) ran the built-in corpus, then
+  the new writes of this change as rows, and lowered nothing.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -2439,6 +2544,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   against c833d5b0 with the same 95 policies, the built-in corpus, the check's corpus of 3,287 lines and 490 lines of
   double-quoted indirect words under seven wrappers. It runs 83,465 actions, and 1,231 pairs on 241 actions are lower.
   Each is a line with `${!`, in group (2) 89, (3) 60 or (4) 1,082.
+  *Note 2026-10-26 (issue #585).* A `$` form a `\<newline>` splits is read as its plain spelling is now (#585): the
+  lexer skips each `\<newline>` after the `$`, and `lone()` tests `${!` with them dropped, so
+  `hash "$\<newline>@"; ls`, `hash "${\<newline>!n}"; ls` and `hash -p "${\<newline>!n}"; ls` are opaque as
+  `hash "$@"`, `hash "${!n}"` and `hash -p "${!n}"` are, while `hash "$cmd"`, `hash -p "$P"` and `hash "$r"`
+  through a nameref stay `read`.
   *Amendment 2026-10-22 (issue #311):* a shell call runs in its own folder argument (`cwd` for Exo's bash tool,
   `workdir` for Hermes' terminal and Codex's exec_command). The gate read that folder only through #209: a relative
   word that resolves into a store from `cwd` made the whole call `credentials`. A store read by a plain name was
@@ -3311,8 +3421,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a path only the reading on one line found (`deny: [target:notes.txt]` after a bare `*** Move to:`), and any later
   file of a well-formed patch. The call keeps main's target, the first path read as before, so an entry that matched
   it still does; after a bare header that target is the swallowed header text, and the card shows it. The reading
-  across a line stays because dropping it would lower a line under an entry that matches what it reads. Main's
-  `scripts/gate_diff.py` reports nothing lowered against edeb4f89, 2cc0c32f and f10a7489 (counts in the PR).
+  across a line stays because dropping it would lower a line under an entry that matches what it reads. Against
+  main 2923f8b9, `scripts/gate_diff.py` reports nothing lowered (counts in the PR). Against edeb4f89, 2cc0c32f
+  and f10a7489 it counts 58 lowered pairs on 55 actions, and main 2923f8b9 counts the same 58 pairs, with the
+  same split, against each of those bases. Every lowered example in those runs is a `hash -p` line, from the
+  reading #409 added after those bases. No patch action is lowered in any of them.
   *Revisit if:* the gate parses patches with the patch tool's own header grammar.
 
   Relative aliases into non-secret stores still need #340's resolution. Relative
@@ -3345,7 +3458,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   as does `echo "$\<newline>{x:-$(git push ...)}"`, whose joined form main reads only in part (#143). Limits: only
   shell calls are read again (not `execute_code`); text the gate reads without `classify_shell`, such as the folder
   walk of `cd` targets, is not joined; a joined form is read as the gate reads its plain form, so `$\<newline>[..]`
-  is as unread as `$[..]` is (#588). A `${..}` is joined to its own `}`, past a `${..}` nested in it
+  is read as the `$[..]` it joins to, which #588's amendment reads as the arithmetic `$((..))` it stands for. A
+   `${..}` is joined to its own `}`, past a `${..}` nested in it
   (`${a[${b}0,PA\<newline>TH=5]}`). #517 and #518 (here-document delimiters and backquoted bodies) are unchanged.
 
   The #423 differential against main 7785ffbb, each tree in its own process, `--jobs 2`: the built-in corpus with
@@ -3374,6 +3488,87 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   rules, explicit unknown-category policies, and leading-separator MCP names.
   *Revisit if:* acronym boundaries need separate recognition (`HTTPDelete`, `getHTTPResponse`),
   or fully camel MCP prefixes need alignment (`mcpCreateFile`). The unsplit policy floor still applies.
+- *Amendment 2026-10-26 (issue #591):* a leading assignment quoted whole in an `env -S` text no longer hides the
+  command after it. GNU env splits the `-S` text into words and reads them as its own argv, so a word quoted whole
+  with the form `NAME=value` is an assignment there too — `env -S "'X=a b' printenv X"` prints `a b` — but the
+  gate read the text as one shell line, whose first word was an unknown program, so the command behind it was
+  never read: `env -S "'X=a b' rm -rf /srv/data"` was `opaque_exec` and asked under `deny: [delete]`, where
+  `env 'X=a b' rm -rf /srv/data` is `delete` and denies, and under `categories: {opaque_exec: allow}` it was
+  allowed. The gate now reads the leading words of the split text as env's own argv, as env's own arguments
+  already are: the first word that is neither an env option nor an assignment starts the command, and the text
+  from it on is classified beside the shell line's reading, so the hidden command's category reaches the decision
+  the way the spelling without `-S` does. After `--` a quoted `NAME=value` word is the command, a word an operator
+  would separate stays with the line's own reading (a word of argv to env), and a split inside the split is not
+  followed — each reads as before, so nothing lowers; an unknown program first is still the command and its
+  arguments run nothing. The differential against main 3bf26afc (11438 actions, 88 policies) found nothing
+  lowered. Tests: `tests/security/test_gate_category_deny_parts.py`.
+- *Amendment 2026-10-26 (issue #585):* the lexer reads the `$` form after a `\<newline>` itself now, as bash reads
+  it. #584 read such a line joined beside itself, but the line as written still read a `$` and then a backslash as
+  a literal `$`, so its words were plain text and the decision leaned on the joined reading alone.
+  `_Lexer._dollar` (which `_dquote`'s `$` path calls, so double-quoted forms too) skips each `\<newline>` after
+  the `$` before it reads the next character: the substitutions, `$@`, `${..}`, `$'..'`, `$".."` and plain names.
+  `_dollar_brace` skips them before the `{` and blanks them in its visible text, and a `${..}` the `\<newline>`
+  splits still has the `$( )` and backticks inside it classified, as the word-walk it replaced did.
+  `_nest_end`'s twin skips them too, so the two readers still end together. `_hash_rebind`'s `lone()` tests
+  `"${!"` on the word with the `\<newline>`s dropped, as `glob()` and `tilde()` already do, so
+  `hash -p "${\<newline>!n}"` asks as `hash -p "${!n}"` does, while `hash "$cmd"`, `hash -p "$P"`, `hash "$r"`
+  through a nameref (bash prints `"${r}"` of `r='a[@]'` as one word) and a `\\<newline>` after a `$` (an escaped
+  backslash, not a continuation of the form) stay `read`. Each line of the issue decides as its plain spelling
+  does: the hash rows opaque (`hash "$\<newline>@"; ls`, `hash -p "$\<newline>@"; ls`,
+  `hash "$\<newline>{!n}"; ls`, `hash $\<newline>O /tmp/x ls; ls`, `hash -p $\<newline>P; ls`), the POST row
+  `web_post` and the plain push row `vcs_push`.
+  The #423 differential against main c6b24779 (11564 actions, 88 policies) lowers 9 pairs in two groups, each the
+  misparse's artifact going away, each deciding as its plain spelling does on main. `matrix_ask_log_then_allow`
+  (6 pairs): `echo $\<newline>(git push --force origin main)`, its doubled `\<newline>` and `x=$(..)` forms — the
+  misparse split the line into `echo $` and a subshell, so the `allow git` rule could not name the echo command's
+  own text (#394); the plain spelling `echo "$(git push --force origin main)"` allows on main.
+  `reserved_tool_terminal` (3 pairs): `git push $\<newline>'--force' origin main` and the ssh forms — the ask
+  stands; the dropped second reserved hit was the misparse's phantom `$--force` push target, which bash does not
+  read (the quoted `'--force'` is the flag). Tests: `tests/security/test_gate_dollar_line_continuation.py`.
+  *Revisit if:* a `${..}` the `\<newline>` splits should read its operator in the line as written too — the
+  scan's visible text blanks the `{`, so `_hidden_sets` sees an assignment in it only on the joined reading,
+  which still decides the line.
+  *Amendment 2026-10-26 (issue #588):* bash's legacy arithmetic `$[expr]`, which bash still accepts, is read as the
+  `$((expr))` it stands for, so the assignment check, a nested `$( )` and the quoting of that reading apply to it.
+  The lexer read `$[..]` as plain text, so an assignment in it went unseen where the same line written with
+  `$((..))` asked (#341/#409): `echo $[PATH=5]; ls` and `echo "$[PATH=5]"; ls` were allowed `read`s, and so were
+  `echo $[BASH_ENV=5]; ls` and `echo $[a[PATH=5]]; ls`, a subscript whose evaluation assigns. The word keeps `$[..]`
+  as written, so its readings beside the arithmetic one are as they were. An element the body sets is read too
+  (`echo $[BASH_CMDS[ls]=1]; ls` rebinds a program name, as `hash -p` does), also through `$((..))`, where main
+  allowed it. The `${..}` word reading takes the legacy body through the expansion it is in
+  (`echo ${a:-$[PATH=5]}; ls` asks), as its `$((..))` spelling does. The #584 join of `$\<newline>[..]` lands on
+  this reading, so the joined line decides as its plain one. A `$[..]` in a write's target keeps main's
+  `local_write` of the path as written beside the dynamic reading, so a deny on the write still reaches the line.
+  The #588 differential against main d800f33c, each tree in its own process, `--jobs 4`: the built-in corpus with
+  `--no-variants`, 11,470 actions under the 88 policies, lowers 0 pairs and tightens 2,016 pairs on 28 actions,
+  mostly `read allow` to the arithmetic's `opaque_exec ask`. No classify or decide errors.
+  *Revisit if:* the card for an element set in arithmetic names the array (`BASH_CMDS`), not the element's key.
+  *Amendment 2026-10-26 (issue #553):* a `$((` bash reads as a command substitution is read as one. bash closes the
+  `$( ` at the first `)` outside quotes, backquotes, `$( )` bodies and comments, and reads the span as arithmetic
+  only when the text between the parens, quoted spans skipped, holds balanced parens (its chk_arithsub); else it
+  re-reads the span as `$( ( )`, a subshell, and the commands in it run. The gate matched `$((` against `))` without
+  counting quotes, so a `((` in a quoted word made it read the whole span as arithmetic text and it never read the
+  commands: `echo $((echo '((' ; git push --force origin main) )` was an allowed `read` under `deny: [force_push]`,
+  where the same line written `echo $( (echo '((' ; git push --force origin main) )` denied, and so were the
+  double-quoted and `$'..'` forms, a hidden `git push origin :main` or `rm -rf x` in the same shape (both deny under
+  `deny: [delete]`), and `echo $(( 1 + '(' )); git push --force origin main`, where a quoted paren made the span run
+  to the end of the line, so the push after `;` was never read — bash discards the rest of its line after that
+  arithmetic error, but runs it on the next line, in a script, and other shells may run it on the same line. The
+  gate now finds the `))` with quotes and nesting counted, applies the paren balance to what is between the parens,
+  reads a span that fails either as the `$( ( )` it runs as, and reads the arithmetic span only as far as bash
+  extracts it, so what follows is read when bash's line would end. An unclosed `$((` bash cannot parse and runs
+  nothing, and the span stays arithmetic text to the end of the line, as before, so the deep-nest readings stay
+  linear. Plain arithmetic decides as it did (`$((1+2))`, `$((PATH=5))`, `$[PATH=5]`, a ternary, a `$( )` or a
+  backquote inside the body, a `$((echo hi) )` subshell), and `_nest_end` ends a cut at the same span.
+  The #553 differential against main fa5dfcd8, each tree in its own process, `--jobs 4`: the built-in corpus with
+  `--no-variants`, 11,855 actions under the 88 policies, lowers 0 pairs and tightens 1,290 pairs on 18 actions,
+  mostly `read allow` to the hidden commands' asks and denies (932 to `force_push ask`, 258 to `delete ask`, 42 to
+  `force_push deny`, 18 to `delete deny`). Of the corpus's 69 `$((` rows, 3 decide differently: the issue's own two
+  shapes and `echo $((echo hi) ; git push --force origin main )`. No classify or decide errors.
+  Tests: `tests/security/test_gate_dollar_paren_cmdsub.py`.
+  *Revisit if:* a `${x:-$((cmd))}` should read the commands in its default word — a `$((` inside a `${..}` body is
+  still read as the brace's visible text, as the same line with a plain `$( )` there is (both were `allow` on main
+  and stay so), which is the `${..}` default word's own gap, not this one.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -3679,6 +3874,19 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   read as the section. `resume_text` folds the header to one line too, so a header value no longer reaches the
   system message as a section. An older file's path and launch lines, title, list fields and summary still reach
   it as that writer left them.
+- *Amendment 2026-10-26 (#540):* after #395 the rest of an older file still reached `resume_text` as written. A path
+  or launch line from main's writer before #395 (a handoff folder name that spans lines in the operator's config), a
+  title from before #353, a list field from before #353 or a summary from before #349 could stand a forged `## Decisions
+  made` or `## Open decisions` section in the system message next to the principal's real one, and a title could put a
+  forged `## Open decisions` section first, which `load_handoff` read. `resume_text` now demotes every `## ` heading
+  line the reader does not read as the section, so only the reader's copies stand and the forged ones reach the model
+  as `### ` data, quotes included. `load_handoff` reads no section out of a title that does not say what the header's
+  recovered topic says: the title must be the topic value's footprint, line for line, or its lines are data. In a
+  pre-#353 file whose title carried a forged Decisions copy, the real one reads again where the file read as undecided,
+  and a forged `## Open decisions` first loads none; a title edited by hand demotes nothing. A header value's `-->` is
+  written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
+  older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
+  file's path or launch line still reads, as on main, for the reader has no value to check a path line against.
 - *Amendment 2026-10-24 (#317):* two follow-ups to #296. First, a reader opened through a symlink to a closed ledger
   held an `immutable=1` connection to the target. A writer that appended and checkpointed changed the file under it, so
   the reader stayed stale and then raised `database disk image is malformed`. Such a target is now copied at open, and
@@ -3793,6 +4001,49 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of that session since it started finds no window. After `/undo N`, the earlier turns' pins go only when a next
   turn comes in the same agent, and a `/compress` between the last turn and the undo can keep them too. A summary
   row and a handoff file written before the drop keep the ruling as written until the next compaction.
+  *2026-10-26 note (#592):* a rebind could put an undone pin back. `bind_session_state` merges the parent's pins
+  into the child's on every bind (a new agent after a `/model`, `/reasoning` or `/fast` change, a restart,
+  `/resume`), so a `/branch` or compression child that had undone a ruling held it again, and the next turn's
+  block or compaction wrote it back. The pins file now keeps, beside the folded pins' ties, the digests of what
+  an undo dropped, and a pin carry skips a parent pin whose digest is there. The carry also reads the target's
+  file again, since another engine may have dropped pins since it last cached them, as on an undo. A first bind
+  still inherits, because the file holds no digests yet; a pin the child still holds carries as before; and a
+  ruling said again after the undo is pinned again: its digest leaves the list while it is live, and returns if
+  a later undo drops it again, so the next rebind still carries nothing.
+  *2026-10-26 note (#581):* a `/compress` between the last turn and the undo could keep the earlier undone
+  turns' pins, as the 2026-10-25 note's list said. The compaction folds the window's first row and the window
+  is not updated, so the next turn's transcript held neither that row nor its summary part, and no summary row
+  stood for it: the undo read as cut short and skipped. A compress now notes the fold with the pins, with or
+  without a pending undo: the digest of the window's first row with the digests of the summary blocks written
+  as the compaction folded that row or what Hermes kept of it, one note per session, and a compaction that
+  folds a row already noted hands the note to its own block. A notice seeds the pending undo's summary-row
+  anchors from the note when the noted row is still the window's first row, so the next turn counts that row
+  as reaching back. A compress that folded only rows the window never held notes nothing, and a transcript cut
+  short below the window's first row still drops nothing. The note follows the pins into a compression child
+  and a `/branch` child.
+  *2026-10-26 note (#580):* the pending undo waits under its session in `exo.host_undo`, not in the engine that
+  heard the notice. The engine that acts on a notice records it with `pend`, holding the window the notice left,
+  and the engine that runs the session's next turn takes it with `take` and drops the earlier turns' pins from the
+  transcript, whichever agent Hermes built that engine on: a `/reasoning`, `/fast` or `/personality` rebuild
+  between an `/undo N` and the next turn no longer keeps them. A second notice before that turn keeps the first
+  record's window, and a compression move carries the record into the child session, as before. A compaction that
+  folds the window's first row ties its block to the record while it waits, in the engine that compacts or in a
+  rebuilt one. Expiry: the record never outlives the session's next turn, which settles it whatever it finds, a
+  transcript cut short included. A request that names no session and carries no user message leaves it for the
+  real turn. It can drop only the pins the window it holds showed, and only when the transcript reaches back to
+  where that window started, so a stale record never reaches a pin taken after it. Case 1 of the issue, an
+  `/undo` in the no-agent gap, still needs the CLI: with no agent there is no memory provider to pass the notice
+  on. The exo side is ready: `exo.host_undo.report(session)` from the `/undo` handler, one call beside the
+  provider notice, reaches the engines still registered for the session, which the registry holds weakly, and the
+  pending undo then waits for the rebuilt agent's turn. When no engine is registered any more, nothing holds the
+  window, so nothing can tell which pins the undone turns held, and that part waits on the CLI change. Not covered
+  now, six cases. Hermes's messaging gateway sends no notice (#537). Neither does the CLI while it has no agent,
+  from a command such as `/reasoning`, `/fast` or `/personality` to the next turn, until it reports
+  `exo.host_undo.report(session)` itself. Once no engine is registered any more, the gap-undo stays unheard for
+  good. A host without exo-memory as its memory provider never passes the notice on. An undo before the engine has
+  seen a turn of that session since it started finds no window. A `/compress` between the last turn and the undo
+  can keep the earlier undone turns' pins (#581). A summary row and a handoff file written before the drop keep
+  the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
@@ -4456,6 +4707,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   auto-approving the floor like Claude Code's protected paths (the ledger is the audit of the bypass session
   itself); per-thread scope (plugin commands get no session, and two windows on one core would disagree about
   what the gate does).
+- **Amendment 2026-10-26 (#598):** lowering reaches only a turn the principal started. The core passes the turn's
+  author (D-040) into every tool hook; the gate lowers an ask only when that author is the principal, so a turn a
+  local caller, a peer, a bus wake or a job notice started in the same core keeps its card. A non-principal steer
+  stops the lowering for the rest of the turn. The bypass ledger row names the turn author.
 - **Numbering:** D-057 to D-061 are on main or open PRs, D-062 and D-063 on local exosphere branches, and one more
   is held by `fix/update-and-rounds`, so this is D-065.
 - **Docs:** `docs/GATE.md` "Bypass mode (D-065)", `docs/USER-GUIDE.md` §3 and §6, `docs/COMMANDS.md`,
@@ -4631,8 +4886,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Limits:** as for the other store files: a glob in the file's own name (`~/.exo/config.js?`), a path in a variable
   or one a command builds from pieces (`F=~/.exo/config.json; cp x "$F"`), a write through a hard link made earlier,
   the bash tool's `cwd` argument and `python -mexo.config` written as one word, which keep main's `opaque_exec`
-  ask. Names are matched case-sensitively, so on a case-insensitive filesystem `~/.exo/CONFIG.JSON` keeps its class,
-  as `~/.exo/POLICIES/gates.yaml` does. A symlink is not a limit: one made earlier is resolved (`_path_forms`), and
+  ask. Names matched case-sensitively here — on a case-insensitive filesystem `~/.exo/CONFIG.JSON` kept its
+  class, as `~/.exo/POLICIES/gates.yaml` did — until #601 (D-082) made the names match in any case, so these
+  ask now. A symlink is not a limit: one made earlier is resolved (`_path_forms`), and
   one made on the same line (`ln -s ~/.exo/config.json /tmp/l && cp x /tmp/l`) names the file in its `ln`, which is
   the store write, as for `policies/gates.yaml` on main. A copy or extraction whose destination is a folder that
   holds the file (`cp -t ~/.exo`, `cp /tmp/x/config.json ~/.exo/`, `tar -C ~/.exo -xf`, `unzip -d ~/.exo`) is #483.
@@ -4915,6 +5171,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-19 (reduction, #332):** a no-behavior-change reduction (dead code, merged duplicates, shorter equivalent forms) took the counted core from 15,870 on main to 15,776 (94 lines; it was 15,800 before #314). `CORE_FLOOR` stays 14,813: the count was already above the floor, and the floor never goes up, so setting it to the new count would have lifted the ceiling by about 960 lines. `CORE_HEADROOM` is back at 1,000 after #314's temporary raise to 1,058, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 37.
 - *2026-10-20 (#346, follow-up to #321):* CORE_HEADROOM raised by 29 to 1,029 for the job notice fixes (key redaction and event loop robustness). The lead schedules a reduction this week.
 - **Amendment 2026-10-20 (reduction, #373):** a no-behaviour-change reduction (dead overrides, merged duplicates, an exception clause the following handler could never reach, shorter equivalent forms) took the counted core from 15,841 on main to 15,801 (40 lines). `CORE_FLOOR` stays 14,813: the count is above the floor, and the floor never goes up. `CORE_HEADROOM` is back at 1,000 after #346's temporary raise to 1,029, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 12.
+- *2026-10-26 (#598):* CORE_HEADROOM raised by 11 to 1,011 for the turn-author plumbing into hooks, a security fix: the gate can now tell who started a turn and lowers bypass only for the principal's.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
 
@@ -5040,3 +5297,37 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   here under a new number, recovered during the
   2026-10-18 exo-live update. Team operating record, not product behaviour.
 - **Docs:** this entry.
+
+## D-082 (2026-10-26) A store or secret name matches in any case (issue #601)
+- **Status:** Accepted 2026-10-26 (gate security; strictness only grows). It amends the case-sensitive note in
+  D-074's limits and the same limits in `docs/GATE.md`.
+- **Why:** on a case-insensitive file system (default APFS) `.exO/config.json` IS `.exo/config.json`, but every
+  store and secret name check read the spelling as written, so a case variant walked past: on main a8a4ffbd,
+  `cp /tmp/x ~/.exO/config.json` and `cp /tmp/x $HOME/.EXO/config.json` were `shell`/allow where the plain
+  spelling is a `store_write` ask, `echo x > ~/.KUBE/config` a `local_write`/allow where `~/.kube/config` is
+  `credentials`, and `cat ~/.SSH/config` a read where `~/.ssh/config` asks. `realpath` does not canonicalise
+  case, so the resolved spelling kept the variant (`_path_forms`). The `id_rsa` name in `cat ~/.SSH/id_rsa`
+  asked already, matched anywhere.
+- **Decision:** every store and secret name matches in any case. The name regexes (`_STORE_NAMES`,
+  `_CONFIG_NAME`, `_RUN_DIR`, `_SENSITIVE_PATH`) are searched on the folded text (`_fold`), the list itself
+  compiled twice (`_SENSITIVE_PATH_F`) because `Netlify` in it is mixed-case, which a lowered text would not
+  meet; the plain compares (store roots and code folders, protected parts, the `cd`-store hints, `_could_be`,
+  the glob samplings) fold through `_fold`. A glob part folds when it holds no wildcard — a folder the file
+  system opens (`~/.EXO/*`, `~/*/RUN/x`) — and stays as written when it holds one, as bash matches it against
+  the entries case-sensitively (`[HOME=x]*`, `~/.e*O/*`; `_fold_glob`). `EXO_GATE_CASE_SENSITIVE=1` reads main
+  d800f33c's case-sensitive names instead, for a file system whose `.exO` is a different folder; the tests pin
+  both readings. An ssh hop whose remote command names a case-variant store path keeps the host beside the
+  line's own action in the reserved parts (`_fold_made`), as main listed it while the path read as an ordinary
+  one.
+- **Cost:** on a case-sensitive file system a distinct `.exO` folder asks, and `cert.PEM` or `NOTES.ENV` count
+  as keys and env files — the fail-closed side, as for a glob that could name one. A case variant of a store
+  folder before a wildcard asks as a `cd` into it does (`ls ~/.EXO/*`).
+- **Limits:** descriptor and process folders (`/dev/fd/3`, `/proc/self/environ`) still match as written, as do
+  every env-spelled path beside its own spelling (`EXO_HOME`'s own case); a glob part that holds a wildcard is
+  bash's matching, not the file system's (`~/.e*O`, `[HOME=x]*`).
+- **Validation:** `tests/security/test_gate_store_name_forms.py` ("a case variant of a store or secret name
+  asks", both readings), `tests/security/test_gate_config_store.py`, `tests/test_gate_diff.py` (the loosening
+  patches re-anchored), and `scripts/gate_diff.py --base main --head .` printing `nothing lowered` with the
+  issue's five rows added to the corpus as tightened pairs.
+- **Docs:** `docs/GATE.md` "Store-path checks", "Secret-store paths", "Search tools", "Change limits",
+  `CHANGELOG.md`.

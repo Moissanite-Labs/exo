@@ -250,13 +250,21 @@ new agent on the same session (after `/reasoning` or `/fast`, say), and the old 
 window, so `exo.host_undo` numbers each session's turns. The engine reads the pins file again, then the window it
 saw last. Hermes's `/undo N` removes the last N user turns with one notice, so the window's last user message opens
 an undone turn. A pin goes when that turn holds it and no message left in the window does. A pinned block holds
-nothing in this test, since it is the engine's own copy of the pins. The session's next turn reads the host's whole
-transcript, and a pin the window showed goes when that transcript shows it no longer. So `/undo 3` drops the pins
-of all three turns. A turn of another session in between leaves the undo pending, and a second undo before the next
-turn keeps the window the first one left. A transcript that does not reach back to where the window started was cut
-short, not undone, so it drops nothing. When `/undo N` cuts at a row Hermes merged its summary into, Hermes keeps
+nothing in this test, since it is the engine's own copy of the pins. The undo then waits in `exo.host_undo`, under
+its session, with the window the notice left. The session's next turn reads the host's whole transcript and takes
+the record from there, whichever engine runs that turn, so an agent Hermes built in between resolves it too
+(#580): a pin the window showed goes when that transcript shows it no longer, so `/undo 3` drops the pins of all
+three turns. A request that is no turn, or a turn of another session, leaves the undo pending, and a second undo
+before the next turn keeps the window the first one left. A transcript that does not reach back to where the
+window started was cut short, not undone, so it drops nothing, and the turn settles the record all the same. When
+`/undo N` cuts at a row Hermes merged its summary into, Hermes keeps
 only that row's summary part, and that part reaches back too. A compaction since the undo reaches back when its
-summary row folded the window's first row or that part.
+summary row folded the window's first row or that part, whether the compaction ran in the engine that pended the
+undo or in a rebuilt one, and so does one before the undo: it notes the fold with the pins (the row's digest and
+the summary blocks written for it), the undo seeds its reach from that note, and a compaction that folds a row
+already noted hands the note on. One that folded only rows the window never held notes nothing, so a transcript
+cut short below the window's first row still drops nothing. The note follows the pins into a compression child
+and a `/branch` child.
 
 Each compaction ties the pins whose message it folded to the block it writes into its summary row, and the pins
 file keeps those ties. A summary row shows the pins tied to its block. So a folded pin stays while a summary row
@@ -270,12 +278,21 @@ stays: compaction never drops a pin. A compression child takes over its parent's
 to a handoff a compaction wrote before the undo goes, as on the core. Each drop is logged as counts per kind and
 the session id, and a transcript cut short is logged with the session id.
 
+A rebind puts an undone pin back no more (#592). Hermes builds a new agent on a `/model`, `/reasoning` or `/fast`
+change and on `/resume`, and every such bind merges the parent session's pins into the child's, so a `/branch` or
+compression child that had undone a ruling held it again, and the next turn's block or compaction wrote it back.
+The pins file now keeps the digests of what an undo dropped beside the folded pins' ties, and a pin carry skips a
+parent pin whose digest is there. A first bind still inherits, a pin the child still holds carries as before, and
+a ruling said again after the undo is pinned again, so only its undone copy stays out.
+
 Some cases are not covered. Hermes's messaging gateway tells no one about `/undo`. Nor does the CLI while it has no
-agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. A host that runs exo-context
+agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. Its `/undo` would reach the
+engines still registered for the session through `exo.host_undo.report(session)`, one call the CLI does not make
+yet (#580). Once no engine is registered any more, nothing holds the window, so nothing can tell which pins the
+undone turns held. A host that runs exo-context
 without exo-memory never passes the notice on. An undo before the engine has seen a turn of that session since it
-started finds no window. After `/undo N`, the earlier turns' pins go only when a next turn comes in the same agent,
-and a `/compress` between the last turn and the undo can keep them too. A summary row or handoff file written
-before the drop keeps the ruling until the next compaction.
+started finds no window. A `/compress` between the last turn and the undo can keep the earlier undone turns' pins.
+A summary row or handoff file written before the drop keeps the ruling until the next compaction.
 
 ## Who wrote it: every message has an author (D-040)
 
