@@ -4798,6 +4798,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:** keeping the wall and raising it by a step each time (the count chases the work, with no pressure to
   cut); retiring the count (ENGINE-SPLIT asks for import-direction checks first, and none exist); excluding modules
   or moving code to dodge the count.
+- **Amendment (2026-10-26, #624):** private-descendant recall filtering raises headroom by the minimum three lines to 1,003 (15,815 counted, strict ceiling 15,816); #46's structural reduction is due within one week of merge.
 - **Numbering:** D-074 and D-075 are held by open PRs (#125, #126) and D-076 by a parallel reduction PR, so this is D-077.
 - **Numbers:** floor 14,813 is the count at the merge of #124 (D-067 recorded 14,812 on the branch before its last
   merge from main). Main (859fbcc) is at 14,999, so 814 lines are left. No source changed.

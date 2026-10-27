@@ -71,25 +71,25 @@ class AgentLogView:
     def __len__(self) -> int:
         return self.store.last_pos(self.agent)
 
-    def search(self, query: str, n: int = 5, skip_recent: int = 0) -> list[dict[str, Any]]:
-        last = len(self)
+    def search(self, query: str, n: int = 5, skip_recent: int = 0, session_id: str = "") -> list[dict[str, Any]]:
+        cutoff = len(self) - max(0, skip_recent) + 1
+        if session_id:
+            cutoff = self.store._q("SELECT COALESCE(MIN(pos), 0) FROM (SELECT pos FROM messages WHERE agent=? AND session=? "
+                                   "AND hidden=0 AND pos IS NOT NULL ORDER BY pos DESC LIMIT ?)",
+                                   (self.agent, session_id, skip_recent))[0][0] if skip_recent > 0 else 2**62
         out = []
-        for hit in self.store.search(query, limit=n * 3, agent=self.agent):
-            if skip_recent and hit["pos"] > last - skip_recent:
-                continue
+        for hit in self.store.search(query, limit=max(0, n), agent=self.agent, before_pos=cutoff, exclude_session=session_id):
             entry = self.store.log(self.agent, hit["pos"] - 1, hit["pos"])
             role = entry[0].message.role if entry else "user"
             out.append({"id": hit["pos"], "kind": {"assistant": "talk"}.get(role, role), "date": hit["created"],
                         "text": hit["snippet"], "session": hit["session"]})
-            if len(out) >= n:
-                break
         return out
 
     def zoom(self, start: int, n: int = 1, page: int = 1) -> str:
         """Entries ``start`` .. ``start + n - 1`` in full (one long entry is paged)."""
         n = max(1, min(int(n), 64))
         entries = [e for e in self.store.log(self.agent, int(start) - 1, int(start) - 1 + n)
-                   if not e.hidden and e.kind != "private"]
+                   if not e.hidden and not self.store.private(e.session)]
         if not entries:
             return f"no log entries {start}-{int(start) + n - 1}"
         if n == 1:
