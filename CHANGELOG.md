@@ -182,6 +182,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`escalate: [read]`, `escalate: read`) only add escalation, and `/gate` shows a standing policy error. Other
   policy errors still use the defaults alone. `normalize_policies` and `load_policies` take an optional error
   list; without it they raise as before.
+- Two valid policy files (a file changed mid-session, before `/gate accept`) decide as one stricter reading in the
+  exo-gate plugin (#586, after #557 for a policy error). The changed file used to win only with a strictly higher
+  outcome: at an equal outcome the pinned decision stood with its own violations and exposure, and a standing grant
+  was looked up against that one decision, so an unbound grant on the changed file's `reserved` entry ran a call
+  the pinned file logs, and a grant bound to the exact line ran a call the pinned policy asks for without that
+  binding (a sudo write line the changed files bind). The old and new decisions now merge as the gate merges a
+  line's readings: the widest exposure, a third party if either has one, every violation and reserved part, and at
+  an equal outcome the other side stands only when it lists a violation the standing one lacks. A standing grant
+  applies only where each side's own decision (with the decision model's verdict) also asks and finds one, each
+  side by its own lookup. No outcome is lower than either side's; a single valid file decides as before, grants
+  included.
 - The gate reads Codex `apply_patch` move destinations (`*** Move to:`) as file-write paths (#528).
   A move into a protected store or secret folder now asks, as an Add or Update header on that path does.
   Absolute links, home and environment spellings, distinctive relative names and braces use the existing checks.
