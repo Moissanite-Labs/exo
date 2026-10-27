@@ -469,7 +469,10 @@ folder that holds the store counts too, as `mv` and `rm` do (`move_file` from `~
 only `path` and `source`: `to`, `target`, `new_path`, `old_path`, `from` and `dst` among the others
 (#494). A tool named with a read verb that writes what it took where its path arguments say
 (`download_file`, `export_report`) reads the store as a write's, so a download into the policy
-files asks; a plain read of the store stays a read. A relative destination is read from the
+files asks; so does a name that says it replaces, patches, edits or updates the file it names
+(`search_replace`, `find_and_replace`, #651), or a call whose arguments carry the old text and
+the new beside the path, so a replace of the seat file, a policy file or config.json asks as
+`write_file` does, in every permission mode; a plain read of the store stays a read. A relative destination is read from the
 session's folder, as a secret name is (#209): `move_file` to `policies/default.yaml` from a session
 folder in `~/.exo` asks, and beside a secret the store file is a part, so only the principal
 answers. A shell line still reads its store writes from its own words, so `echo x > gates.yaml`
@@ -638,8 +641,9 @@ asks: `cd ~/.exo/run/jobs && grep -r secret ../..`); a wildcard in a folder name
 (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for the folder itself (`grep -r .
 ~/.exo/ru?`, `ru[n]`: the last part needs three literal characters, the same as for `~/.ss?`, while
 `~/.exo/r*` asks, and so does `ru?` relative to a `cd` on the line: `cd ~/.exo && grep -r . ru?`);
-an upper-case spelling on a
-case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); a wildcard that spells part of an agent's name that is not sampled
+a case variant inside a glob's own wildcard part (`~/.e*O/run/*`: bash matches a glob part that holds a
+wildcard against the entries case-sensitively, #601 — a part with no wildcard is a folder the file
+system opens, and folds, so `~/.exo/RUN/*`, `~/*/RUN/x` and `~/.SSH/*` ask); a wildcard that spells part of an agent's name that is not sampled
 (`run/agent-scout*` when `scout` is neither `$EXO_SEAT` nor among the 64 sampled seats); the
 built-in `glob` with the folder in `pattern` rather than `path` (it lists names; the same for
 `~/.ssh`); and a key beside a custom `--socket`, which is caught by name only
@@ -652,7 +656,12 @@ the process-tree check are the guard.
 
 A path names a secret store (`credentials`, always asks) when it matches the store list in `exo.gate`
 (`~/.ssh`, `~/.aws`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `.env`, `*.key`,
-token files, Exo's `keys/`...), or when it is a glob that could match one of the sample store paths. This holds
+token files, Exo's `keys/`...), or when it is a glob that could match one of the sample store paths. The
+names match in any case (#601, D-082): on a case-insensitive filesystem `~/.SSH/config` and `~/.KUBE/config`
+are `~/.ssh/config` and `~/.kube/config`, and they ask as the plain spellings do. The descriptor folders
+are the exception, matched as written: `printf x > /DEV/FD/3` writes an ordinary file where `> /dev/fd/3`
+writes one the gate cannot resolve, and only the lower-case spelling asks. The process folders do fold:
+`/PROC/self/environ` asks as `/proc/self/environ` does. This holds
 for shell words, redirection targets, `bash -c` and `$( )` text, string literals in code, and the path arguments
 of file tools. Brace sets are expanded as bash does before matching (issue #184). In a shell word the gate
 expands the source text, quotes kept, and then removes the quotes from each word, so only unquoted braces
@@ -884,8 +893,8 @@ shell and `code_find` still treat every `.claude` path as a store. `code_find` h
 cannot leave Exo's stores out, so it refuses a folder that is or holds a known store (the home folder, `$EXO_HOME`,
 `~/.config`, `/`). With these, the D-038 guarantee that a store read asks holds for `read_file`, the shell and the
 search tools alike. The cost is one `lstat` and one match per entry, plus a few cached existence checks per `.claude`
-folder: about 0.2 to 0.5 s of CPU on a 20,000-file tree (calling `is_sensitive_path` per entry would take about 3.5 s). Known limits: a hard link to a store file and a
-store spelt in another case on a case-insensitive filesystem are not seen, as for the other path checks. A store
+folder: about 0.2 to 0.5 s of CPU on a 20,000-file tree (calling `is_sensitive_path` per entry would take about 3.5 s). Known limits: a hard link to a store file is not seen. A store
+spelt in another case asks now (#601, D-082), as the other path checks read it. A store
 folder that is itself a link to an ordinary folder (`~/.aws` pointing into a dotfiles repo) is a store as named but
 not as resolved, so a search naming it asks and then returns nothing (fail closed); read its files by name
 (`read_file ~/.aws/credentials`, which asks). The reverse is not seen: with `~/.kube` pointing to `~/dotfiles/kube`,
@@ -1129,6 +1138,22 @@ is joined to its own `}`, past a `${..}` nested in it. Limits: only shell calls 
 (not `execute_code`), the folder walk of `cd` targets is not joined, and a joined form is read as
 its plain form is, so `$\<newline>[..]` is read as the `$[..]` it joins to, and that is read as the
 arithmetic `$((..))` it stands for (#588).
+
+A `$((` is read the way bash reads it (#553). bash closes the `$( ` at the first `)` outside quotes,
+backquotes, `$( )` bodies and comments, and reads the span as arithmetic only when the text between the
+parens, quoted spans skipped, holds balanced parens (its chk_arithsub); else it re-reads the span as
+`$( ( )`, a subshell, and the commands in it run. The gate matched `$((` against `))` without counting
+quotes, so a `((` in a quoted word made it read the whole span as arithmetic and it never read the
+commands: `echo $((echo '((' ; git push --force origin main) )` was an allowed `read` under
+`deny: [force_push]`, where the same line written `echo $( (echo '((' ; git push --force origin main) )`
+denied. The span is now found with quotes and nesting counted and bash's paren balance applied, and a
+span that fails it is read as the `$( ( )` it runs as, so the commands in it classify (`git push origin
+:main` and `rm -rf x` in one deny under their own policies). A quoted paren moves the span too:
+`$(( 1 + '(' ))` was read to the end of the line, so a push after `;` was never read, where bash discards
+the rest of its line after the arithmetic error but runs it on the next line, in a script and in other
+shells. An unclosed `$((` bash cannot parse and runs nothing, and the span stays arithmetic text to the
+end of the line, as before. Plain arithmetic decides as it did (`$((1+2))`, `$((PATH=5))`, a ternary, a
+`$( )` or a backquote inside the body), and `_nest_end` ends a cut at the same span.
 
 A command is meant to be `allow` only when every program in it is known and nothing the gate reads
 is hidden; "Known limits" below names the paths where a known program still runs a command the
@@ -2599,9 +2624,10 @@ itself, which makes a protected folder or `config.json` from its source name
 (`cp -r /tmp/x/update ~/.exo/`, `cp /tmp/x/config.json ~/.exo/`, `cp -t ~/.exo /tmp/x/config.json`,
 `tar -C ~/.exo -xf x.tar`, `unzip -d ~/.exo x.zip`), is not seen either (#483). Nor is a path held in a variable or made by a
 command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
-`cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks are case-sensitive, so a
-case-insensitive filesystem (APFS) accepts `STATE/` for `state/`, and `CONFIG.JSON` for the home's
-`config.json`. A glob spelling
+`cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks match in any case (#601,
+D-082): on a case-insensitive filesystem (APFS) `STATE/` for `state/`, `CONFIG.JSON` for the home's
+`config.json` and a distinct `.exO` folder all ask, as the plain spellings do; `EXO_GATE_CASE_SENSITIVE=1`
+reads main d800f33c's case-sensitive names. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
 followed, and a shell tool's `cwd` or `workdir` argument is not read here (the secret-store checks read
