@@ -3147,7 +3147,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   by its letter case, so main denies `ssh prod 'rm -rf ~/.Kube/config'` under
   `deny: [{category: delete, target: prod}]`. That test read the store names as written, so `~/.Kube//config`, a
   store only in another case and in its lexical form, kept no copy for the host, and the line asked where main denies
-  both it and its plain spelling. The test now reads each spelling in its lexical form too.
+  both it and its plain spelling. The test now reads each spelling in its lexical form too. (y) The check ran main's
+  script (e0968a2b) on main e0968a2b against d6f10f70, under the 87 built-in policies and 336 more: this round's
+  entries on each store folder, file and name, entries on a remote host's actions, and #516's allow rules. The
+  built-in set, 85,852 actions, lowered 81 pairs on 17 actions, all `ssh prod 'rm -rf ~/.kube//config'` in the forms
+  the script makes of this round's test rows. A focused run of 24,438 calls held 16,614 new ones (a store spelt oddly
+  and in another case at once, in lines and in a call's own folders, beside #516's rules), 1,053 remote lines and the
+  7,868 calls of the check's run before. It lowered 38 pairs on 12 actions. The check's earlier corpora lowered none on
+  15,824 actions, and 123 pairs on 122 of 35,329, each a reserved hit. Each lowered pair decides as main decides the
+  plain spelling (group 1). No run had a classify or decide error. The many-short-words cost is now 3.6 to 4.6 times
+  main's CPU time (best of three, main and this branch in turn), against 3.3 to 3.4 before the merge, since #601 folds
+  each name these reads match.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
