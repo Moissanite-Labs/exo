@@ -6645,14 +6645,12 @@ def _glob_hits_secret(tok: str) -> bool:
 
 def _expansion_span(word: str, i: int) -> int | None:
     """The end of the expansion starting at ``i`` (a ``$`` or a backtick) in a plain word, or None when no
-    expansion starts there, or when its opener never closes. Brackets are counted, so a nested ``$( )``
-    or ``${ }`` ends at its own close. An unclosed opener is not an expansion that ends the word: the
-    cd machinery splits words at expansions, so its fragments end in `$(`, and reading those as trailing
-    expansions would double the glob checks on every split word (#310 repair). The scan still passes
-    over an unclosed opener once, never once per opener (#334's linear rule)."""
+    expansion starts there. Brackets are counted, so a nested ``$( )`` or ``${ }`` ends at its own close;
+    an opener with no close runs to the end of the word, so a nest of unclosed openers is read in one
+    pass, never once per opener (#334's linear rule)."""
     if word[i] == "`":
         j = word.find("`", i + 1)
-        return None if j < 0 else j + 1
+        return len(word) if j < 0 else j + 1
     if i + 1 >= len(word):
         return None
     c = word[i + 1]
@@ -6669,7 +6667,7 @@ def _expansion_span(word: str, i: int) -> int | None:
                 if not depth:
                     return j + 1
             j += 1
-        return None
+        return len(word)
     if c.isalpha() or c == "_":
         j = i + 1
         while j < len(word) and (word[j].isalnum() or word[j] == "_"):
@@ -6678,12 +6676,40 @@ def _expansion_span(word: str, i: int) -> int | None:
     return i + 2 if c.isdigit() or c in "@*#?$!-_" else None
 
 
+def _expansion_unclosed(word: str, i: int) -> bool:
+    """True when the expansion starting at ``i`` never closes: an unclosed ``$(``, ``${`` or backtick.
+    A bare ``$NAME``, ``$digit`` or ``$special`` needs no closer. One pass, so the linear rule holds."""
+    if word[i] == "`":
+        return word.find("`", i + 1) < 0
+    if i + 1 >= len(word):
+        return False
+    c = word[i + 1]
+    if c not in "({":
+        return False
+    close = ")" if c == "(" else "}"
+    depth, j = 0, i + 1
+    while j < len(word):
+        if word[j] == "\\":
+            j += 1
+        elif word[j] == c:
+            depth += 1
+        elif word[j] == close:
+            depth -= 1
+            if not depth:
+                return False
+        j += 1
+    return True
+
+
 def _trailing_glob_form(word: str) -> str | None:
     """``word`` with an expansion that ends it read as ``*`` (#310): `.env.$(hostname)`, `.env.${STAGE}` and
     `.env.` + backticks + `hostname` + backticks all name `.env.*` to the glob check. An earlier expansion
     in the word reads as `*` too, a run of them collapsing into one, so `$APP_DIR/.env.$STAGE` names
     `*/.env.*` and `.env.$A$B` names `.env.*`. The expansion must follow literal text: a word that is
-    only an expansion, and one ending in literal text (`build-$(date +%s).log`), get no form."""
+    only an expansion, and one ending in literal text (`build-$(date +%s).log`), get no form. A word
+    ending in an unclosed opener gets no form either: the cd machinery splits words at expansions, so
+    its fragments end in `$(`, and reading those as trailing expansions doubled the glob checks on
+    every split word and broke the linear-work test on long lines."""
     start = None
     i = 0
     while i < len(word):
@@ -6696,6 +6722,8 @@ def _trailing_glob_form(word: str) -> str | None:
                 continue
         i += 1
     if not start:
+        return None
+    if _expansion_unclosed(word, start):
         return None
     head = word[:start]
     out: list[str] = []

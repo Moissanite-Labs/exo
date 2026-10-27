@@ -1242,7 +1242,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and `.env.{a,b}*` (brace-expanded first) ask. An expansion that ends a word reads as `*` even behind
   an earlier expansion (`$APP_DIR/.env.$STAGE` names `*/.env.*`, `.env.$A$B` names `.env.*`), a run
   collapsing into one `*`. A word that is only an expansion, and one ending in literal text
-  (`build-$(date +%s).log`), still get no form. Known fail-closed friction, kept because the
+  (`build-$(date +%s).log`), still get no form, and a word ending in an unclosed opener gets none
+  either, since the cd machinery splits words at expansions and its fragments end in `$(`. Known
+  fail-closed friction, kept because the
   at-any-depth rule pins it: a glob that could name a store sample asks even where the file need not be
   a store (`tail -f logs/server.*`, `cat build/keys.*`, `ls tests/*secret*`, `cat config.$ENV`), and a
   trailing expansion on a host, URL or message word asks as its bare-glob twin does on main
