@@ -12,6 +12,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
   used the public key carried in the signature itself, which whoever made the packet chose, so any packet
   signed by any key passed. With no pinned key it now returns False. No production caller used that path.
+- Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
+  tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
+  `f` prefix preserves the test cases and removes the two findings.
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
