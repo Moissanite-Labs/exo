@@ -20,6 +20,10 @@ On macOS, the default is Keychain. Missing, disabled or refusing Keychain storag
 
 Keychain account names include a hash of the resolved data home, seat and hostname. Binding metadata contains no token. The selected store is authoritative: host environment tokens and stale copies in other stores do not override it.
 
+Token and disabled modes write only a public invalid fallback token to their private 0600 `hosts.yml`. The selected credential remains in its store and child environment. If a command removes the token variables but keeps this configuration directory, ordinary gh lookup fails authentication instead of selecting the machine's OS-keyring identity. An unsafe or unwritable fallback configuration refuses the spawn.
+
+This is not a shell sandbox: replacing `GH_CONFIG_DIR`, explicit secure-storage lookup and other deliberate credential overrides remain outside this boundary.
+
 Replacing a token in the same host and store affects the next tool or job spawn. Existing children retain their original credential until they exit. Changing mode, hostname or store requires removing the existing binding and completing cleanup first. A refused change leaves the current credential intact.
 
 ## Separate gh login
