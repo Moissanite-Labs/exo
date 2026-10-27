@@ -9,6 +9,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
+
+### Changed
+- The core budget prices coupling, not only lines, and its ceiling is dropped (D-083, amending D-077).
+  The line ceiling set on 2026-10-15 was already failing its own test: `main` at `13cea687` counted 15,828
+  against 15,824, 4 over, while the work it blocked was ordinary product work, and each earlier raise
+  (#314, #346, #598, the last by 11 to 1,011) was undone by the reduction it asked for. The principal ruled
+  it "too restrictive" while the codebase is being built out, so `CORE_HEADROOM` is gone and
+  `tests/integration/test_wave1_acceptance.py` reports the count against `CORE_FLOOR = 14,813` and asserts
+  nothing about lines. What stays asserted is what D-077 said the real goal was, the engine split's step 4
+  counts: at most 39 product imports into the core (`INWARD_IMPORTS_MAX`) and at most 8 cross-module
+  private-state reads (`PRIVATE_STATE_MAX`). The floor and both counts keep their rule, they only ratchet
+  down. Docs updated together: `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md`,
+  `docs/CORE.md`, `docs/OPTIMIZATION.md`, `docs/DOCS-MAP.md`, `docs/WHITEPAPER.md` sections 11 and 27.
+
 ### Fixed
 
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
