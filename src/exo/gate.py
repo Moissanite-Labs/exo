@@ -1846,28 +1846,37 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
     return list(dict.fromkeys(out))
 
 
-def _literal_assigns(k: "_Cmd") -> dict[str, str]:
-    """What one command assigns a literal value, as written (#579): `NAME=value` words whose value holds no `$`,
-    backtick or backslash, so a prompt expansion of it expands to itself. A bare assignment's own words, and the
-    arguments of export and its kind; `printf -v` and `read` set values the gate does not see, a for list is data
-    the command runs over, and an append (`p+=x`) adds to a value the line does not know."""
+def _applies_late(k: "_Cmd") -> bool:
+    """True when this command's assignments apply only after its own words have expanded (#579): bash expands
+    every argument of export and its kind before any of the assignments takes effect, so a ${..@P} in one reads
+    the value from before the command."""
     words = k.words
-    if words and not words[0].quoted and not words[0].dynamic and words[0].text in _EXPORTERS:
+    return bool(words) and not words[0].quoted and not words[0].dynamic and words[0].text in _EXPORTERS
+
+
+def _literal_assigns(k: "_Cmd", line: dict) -> dict[str, str | None]:
+    """What one command assigns, as written (#579), and the value each name holds after it: a `NAME=value`
+    word whose value holds no `$`, backtick or backslash gives the literal a prompt expansion of it expands
+    to itself, and a value the gate cannot read gives None — the last assignment wins, literal or not, as does
+    a name the gate cannot name (`p[$i]=x`). A bare assignment's own words, and the arguments of export and its
+    kind; `printf -v` and `read` set values the gate does not see, a for list is data the command runs over, and
+    an append (`p+=x`) joins the value the line knows: a literal onto a literal is one, anything else is None."""
+    words = k.words
+    if _applies_late(k):
         words = words[1:]
-    elif not all(not w.dynamic and _ASSIGN.fullmatch(w.text) for w in words):
+    elif not all(_ASSIGN.fullmatch(w.text) for w in words):
         return {}
-    out: dict[str, str] = {}
+    out: dict[str, str | None] = {}
     for w in words:
         name, eq, value = w.text.partition("=")
         if re.match(r"[A-Za-z_]\w*\+=", w.text):
-            # an append: a literal one keeps a literal the line set, any other leaves the value unknown
-            if name[:-1] in out and not re.search(r"[$`\\]", value):
-                out[name[:-1]] += value
-            else:
-                out.pop(name[:-1], None)
+            name = name[:-1]                          # an append: onto the literal the line knows, or onto None
+            cur = out[name] if name in out else line.get(name)
+            out[name] = cur + value if cur is not None and not re.search(r"[$`\\]", value) else None
             continue
-        if eq and not re.search(r"[$`\\]", value):
-            out[name] = value
+        if not eq:
+            continue                                  # `export p`: it exports a value the line knows or not
+        out[name] = value if not (re.search(r"[$`\\]", value) or re.search(r"[$`]", name)) else None
     return out
 
 
@@ -3577,13 +3586,14 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
 def _runs_prompt(k: "_Cmd", literals: dict) -> str:
     """The parameter of the first `${..@P}` the command expands whose value the gate does not see (#579), ""
     when there is none. One of a variable the line assigns a literal value (no `$`, backtick or backslash, so
-    the prompt expansion of it is the value itself) is known and keeps the line's class. A prefix assignment
+    the prompt expansion of it is the value itself) is known and keeps the line's class: the map holds the
+    literal, or None where the last assignment set a value the gate cannot read. A prefix assignment
     sets the command's own environment, which bash expands the words before, so it is no source."""
     for w in [*k.words, *k.herestrings, *(t for _, t in k.redirs)]:
-        if n := next((p for p in w.prompt if p not in literals), ""):
+        if n := next((p for p in w.prompt if literals.get(p) is None), ""):
             return n
     for hd in k.heredocs:
-        if n := next((p for p in hd.prompt if p not in literals), ""):
+        if n := next((p for p in hd.prompt if literals.get(p) is None), ""):
             return n
     return ""
 
@@ -3601,6 +3611,12 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     before = words
     words, sudo, split = _strip_prefix_words(words)
     parts: list[Classification] = []
+    if words and words[0].text in ("read", "printf"):
+        # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
+        # one is gone from here on (#579)
+        ctx.setdefault("literals", {}).update(
+            {re.split(r"\[|\+?=", w.text, maxsplit=1)[0]: None for w in _filled_words(
+                words[0].text.rsplit("/", 1)[-1], words[1:])})
     if n := _runs_prompt(k, ctx.setdefault("literals", {})):
         # a prompt transformation expands the value as a prompt string, its command substitutions included (#579)
         what = "the positional parameters" if n in ("@", "*") or n[:2] in ("@:", "*:") else n
@@ -4204,17 +4220,11 @@ def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
     return i, flags
 
 
-def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
-    """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
-    `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
-    comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
-    name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
-    _classify_simple with prog "for"."""
-    args, targets, parts = words[1:], [], []
-    if prog == "for":
-        targets = args[:1]
-    elif prog == "read":
-        i = 0
+def _filled_words(prog: str, args: list) -> list:
+    """The name words `read` (also `-a`, which names an array) and `printf -v` fill, which hold a value the
+    gate does not see (#579)."""
+    if prog == "read":
+        targets, i = [], 0
         while i < len(args) and args[i].text.startswith("-") and args[i].text != "-":
             t, i = args[i].text, i + 1
             if t == "--":
@@ -4227,9 +4237,21 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
                     if ch == "a" and val is not None:
                         targets.append(val)
                     break
-        targets += args[i:]
-    elif prog == "printf" and args[:1] and args[0].text.startswith("-v"):
-        targets = [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+        return targets + args[i:]
+    if prog == "printf" and args[:1] and args[0].text.startswith("-v"):
+        return [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+    return []
+
+
+def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
+    """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
+    `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
+    comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
+    name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
+    _classify_simple with prog "for"."""
+    args, targets, parts = words[1:], [], []
+    if prog == "for":
+        targets = args[:1]
     elif prog in _EXPORTERS:
         i, flags = _builtin_options(args, prog in ("declare", "typeset", "local"))
         if "f" in flags or "F" in flags:                  # names functions, not variables
@@ -4247,6 +4269,8 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
                     parts.append(_opaque(f"{prog} -n {name} makes a reference the gate cannot follow"[:120], cmd))
                 else:
                     targets.append(_Word(text=ref, dynamic=w.dynamic))
+    else:
+        targets = _filled_words(prog, args)
     for w in targets:
         name = re.split(r"\[|\+?=", w.text, maxsplit=1)[0]
         if _unreadable_name(w):
@@ -5620,7 +5644,7 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     inherits = stdin_unknown or any(k.piped_in or k.stdin_unknown or (k.fed and bool(k.heredocs or k.herestrings))
                                     for k in cmds)
     ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits,
-                 "literals": {}}     # a literal value each command assigns, what a later ${..@P} reads (#579)
+                 "literals": {}}     # the value each command assigns as written, what the next ${..@P} reads (#579)
     if into := _cd_into.get():            # a $( ) on a line that entered the store runs in it (#465)
         ctx["store_cwd"] = True
         if into[1]:
@@ -5638,8 +5662,13 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
             # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
             ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
             slot[0] = k.own
-            ctx["literals"].update(_literal_assigns(k))    # what this command sets, the next ${..@P} reads (#579)
+            own = _literal_assigns(k, ctx["literals"])
+            late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
+            if not late:
+                ctx["literals"].update(own)    # what this command sets, the next ${..@P} reads (#579)
             got = _classify_simple(k, cmd, depth, ctx, piped)
+            if late:
+                ctx["literals"].update(own)
             if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
                 got = _given_stdin(got, _stdin_own(k), ctx)
             parts += got

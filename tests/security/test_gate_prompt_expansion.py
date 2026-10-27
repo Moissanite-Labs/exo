@@ -50,6 +50,16 @@ ASK = [
     "export p=$(id); echo ${p@P}",
     "read -r p; echo ${p@P}",                       # printf -v is above
     "printf -v p '%s' x; echo ${p@P}",
+    # a later assignment the gate cannot read: the last assignment wins, literal or not
+    "p=x; p=$y; echo ${p@P}",
+    "p=x; p=`id`; echo ${p@P}",
+    "p[0]=x; p[0]=$(id); echo ${p[0]@P}",           # the element's last value is one the gate cannot read
+    "p=x; p+=$y; echo ${p@P}",                      # an append the gate cannot read joins the literal
+    # an exporter's arguments expand before any of its assignments applies
+    "export p=x q=${p@P}",
+    # a command that fills the name with a value the gate does not see clears the literal the line set
+    "p=x; read -r p <<< '$(id)'; echo ${p@P}",
+    "p=x; printf -v p '%s' '$(id)'; echo ${p@P}",
     # a literal that a prompt expansion reads as escapes
     "p='\\u'; echo ${p@P}",                         # the username
     'p="$"; echo ${p@P}',                           # a `$` may open a substitution
