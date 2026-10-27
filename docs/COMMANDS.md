@@ -21,7 +21,7 @@ A client reads the line and decides. Three things can answer:
    unknown name fails with the error code `not_found`.
 
 `commands.list` returns the commands a client may offer: the four core ones below that are listed there (`context`,
-`compact`, `trace`, `findings`) plus every plugin command, each with a name, a description and an argument hint.
+`compact`, `trace`, `findings`), optional `work`, plus every plugin command, each with a name, a description and an argument hint.
 The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+p).
 
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
@@ -123,6 +123,10 @@ through `GET /api/complete/files`, ghost text, history for the page's life and t
 `docs/ui/WEB.md` "The composer".
 
 ### Core built-ins (`command.run`)
+
+`/work [show|history]` reads the current session's saved working notes when
+`work_notes.enabled` is true. It requires a principal connection and passes
+through the tool gate and configured executor. See [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
 
 All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._command_run`).
 

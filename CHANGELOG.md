@@ -5,6 +5,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Optional session working notes with transcript evidence references, revision conflicts, restart
+  recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
+  through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
 ### Fixed
 
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
