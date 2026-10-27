@@ -852,7 +852,8 @@ class _Lexer:
         body = "$((" + self.s[i + 2:j] + "))" if legacy else self.s[i:j]
         sub = None
         if self.nest < _NEST and ("$(" in body[3:] or "`" in body):
-            text = self.s[:max(at, end)]
+            # main reads a legacy body to the end of its span, its `]` too, also when no `]` closes it (#588)
+            text = self.s[:max(at, j if legacy else end)]
             sub = self._part(text, self._deeper() - 1) if word else _Lexer(text, scan=False, nest=self.nest + 1)
         if sub is None and (self.nest >= _NEST or word) and (_SUBST.search(body, 3) or "`" in body):
             self.cuts.append((at, max(at, end), "$(" + _TOO_DEEP + ")"))

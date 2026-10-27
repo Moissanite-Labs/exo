@@ -23,11 +23,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   such a line is bound to its exact text, even where both readings are the same act, as for any line with an `also`
   reading, so a standing grant on its category and target does not cover it. `scripts/gate_diff.py` finds no
   decision lower than before on its built-in corpus (with and without variants) and on an aimed corpus of these
-  forms. Each of the
-  two readings keeps its own #584 joined reading and D-074 `ordinary` reading, and `gate.readings` lists the
-  `ordinary` reading of each. A command in a word keeps the readings it has alone: an ssh host target (#493),
-  each store path a write names (#514), a write into a code-load folder (#459), a gh download into the store
-  (#461), a glob in a secret store's folder (#594) and a here-document's exact delimiter line (#328). `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
+  forms. Each of the two readings keeps its own #584 joined reading and D-074 `ordinary` reading, and
+  `gate.readings` lists the `ordinary` reading of each. A command in a word keeps the readings it has alone: an ssh
+  host target (#493), each store path a write names (#514), a write into a code-load folder (#459), a gh download
+  into the store (#461), a glob in a secret store's folder (#594), a here-document's exact delimiter line (#328),
+  `env -S`'s own argv (#591), a backslash-newline after `$` (#585), a `$((` bash runs as a `$( ( )` (#553), a
+  store name in any letter case (#601), a `${..@P}` (#579) and legacy `$[ ]` (#588). On main 58503282 the reading
+  before is main's own lexer, #553's `$((` reading among them; a `${..@P}` is weighed as #579 weighs it (a literal
+  the line assigns keeps the read), and a `$((` bash never closes asks where main reads it as text.
+  `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.
