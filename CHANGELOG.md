@@ -7,6 +7,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- The Command view reopens its event stream after the browser closes it for good, instead of leaving the last
+  snapshot on screen (#695). The first reopen waits 1 second, repeated drops back off up to 15 seconds, and
+  closing the view stops retries. Where the browser cannot open a stream, the view re-reads the snapshot
+  every 5 seconds.
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.

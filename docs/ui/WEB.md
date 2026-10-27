@@ -181,6 +181,10 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   re-bootstrap after the core's stream drops counts no message, tool call, task update or approval twice. A core
   whose log is behind the page (a new `EXO_HOME`) starts the page over: the old picture goes, and every open stream
   reconnects and gets the reset.
+- **Command view stream.** A stream the browser has closed for good reopens: after 1 second the first time,
+  up to 15 seconds after repeated drops, and a fresh open resets the wait to 1 second. While the browser is
+  still reconnecting on its own, the page leaves it alone. Closing the view stops retries and closes the stream.
+  Where the browser cannot open a stream at all, the view re-reads the snapshot every 5 seconds instead.
 - **Boot.** Four lines go green as real calls answer: core, agent, memory (message count on record), model
   route. A line the server cannot answer stays dim as `unavailable`. Skipped under reduced motion, with
   `?boot=0`, and after the first time in a tab.
