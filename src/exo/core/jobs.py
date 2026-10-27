@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import codecs
 import os
 import re
 import subprocess
@@ -72,7 +73,8 @@ class Handle:
     started: float
     reason: str = ""                  # killed or timeout, set before the process group is signalled
     kill_by: str = ""
-    side: str = ""                    # side file with the final pipeline's PIPESTATUS (see shell.wrap_pipestatus)
+    side: str = ""                    # final pipeline PIPESTATUS side file
+    auth_secrets: tuple[str, ...] = field(default=(), repr=False)
     timer: threading.Timer | None = field(default=None, repr=False)
 
 
@@ -202,12 +204,16 @@ class JobManager:
             job_id = "j_" + new_id("")[1:7]
             while self.log_path(job_id).exists() or job_id in self.live:
                 job_id = "j_" + new_id("")[1:7]
+            env = tool_env(allow=getattr(self.e, "env_allow", ()), deny=getattr(self.e, "env_deny", ()))
+            from exo.core.github_auth import binding, child_env
+            env = child_env(env, self.e.home, self.e.agent, deny=getattr(self.e, "env_deny", ()))
+            auth_secrets = tuple(v for k in ('GH_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_TOKEN', 'GITHUB_ENTERPRISE_TOKEN')
+                                 if (v := env.get(k)) and binding(self.e.home, self.e.agent))
             self.dir.mkdir(parents=True, exist_ok=True)
             log = self.log_path(job_id)
             log.write_bytes(b"")
             os.chmod(log, 0o600)
             side_fd, side = open_side()
-            env = tool_env(allow=getattr(self.e, "env_allow", ()), deny=getattr(self.e, "env_deny", ()))
             try:
                 proc = subprocess.Popen(wrap_pipestatus(command, side_fd, env), cwd=cwd, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
@@ -218,7 +224,8 @@ class JobManager:
                 raise
             finally:
                 os.close(side_fd)
-            h = Handle(job_id, proc, session, command, time.time(), side=side)
+            h = Handle(job_id, proc, session, command, time.time(), side=side,
+                       auth_secrets=auth_secrets)
             self.live[job_id] = h
         self.e.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) "
                         "VALUES (?,?,?,?,?,?,?,?,?)", (job_id, self.e.agent, session, command, cwd, ACTIVE, proc.pid,
@@ -239,7 +246,23 @@ class JobManager:
         """Copy the job's output to its log; past the cap the log rotates (one older file is kept)."""
         cap, size, out = self.cfg.output_cap, 0, open(log, "ab", buffering=0)
         try:
-            for chunk in iter(lambda: h.proc.stdout.read1(65536), b""):  # type: ignore[union-attr]
+            from exo.core.tools.builtin.shell import _safe_cut
+            values = list(h.auth_secrets)
+            decoder, held = codecs.getincrementaldecoder('utf-8')('replace'), ''
+            def safe_chunks():
+                nonlocal held
+                if not values:
+                    yield from iter(lambda: h.proc.stdout.read1(65536), b'')
+                    return
+                while True:
+                    raw = h.proc.stdout.read1(65536)
+                    text = held + decoder.decode(raw, final=not raw)
+                    cut = len(text) if not raw else _safe_cut(text, values)
+                    held = text[cut:]
+                    yield keys.redact_secrets(text[:cut], values).encode('utf-8')
+                    if not raw:
+                        return
+            for chunk in safe_chunks():
                 while chunk:
                     if size >= cap:
                         out.close()
