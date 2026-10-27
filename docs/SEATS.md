@@ -100,12 +100,16 @@ is never replaced: the clash is refused, listed under `refused` in the server's 
 
 ## Config and secrets
 
-`config.get` returns the effective config with secret-looking values masked. `exo config show` and `exo config get`
-print the same values: all three go through one function, `Config.redacted`, which tests the last part of a dotted
-key as the name. `config.set` writes
-`$EXO_HOME/config.json` and refuses secrets: names such as `api_key` or `token` (names ending `_env` are
-fine, they hold an environment variable name), literals under `env` or `headers` (use `"${VAR}"`), and
-values shaped like API keys. Changes apply on the next start.
+`config.set` writes `$EXO_HOME/config.json` and refuses secrets: literals under names such as `api_key` or
+`token` (names ending `_env` are fine, they hold an environment variable name), literals under `env` or `headers`
+(use `"${VAR}"`), and values shaped like API keys. A secret-shaped name guards everything beneath it, as `env` and
+`headers` do, so `{"token": {"a": "x"}}` is refused as `{"token": "x"}` is. Changes apply on the next start.
+
+`config.get` returns the effective config with each value `config.set` would refuse printed as `***`, so a file
+written by hand, or before a check existed, shows no secret either. `exo config show` and `exo config get` print the
+same values: all three go through one function, `Config.redacted`, which reads every part of a dotted key, so
+`exo config get plugin_config.exo-bus.headers.X-Auth` is masked as `show` masks it. A container whose own name looks
+like a secret, such as an MCP server named `github-token`, is masked whole and cannot be set with literals: rename it.
 
 ## Channels
 

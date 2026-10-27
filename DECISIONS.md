@@ -1081,8 +1081,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Amendment 2026-10-27 (#691, exo-desktop #16):** `exo config show`, `exo config get` and `config.get` print
   the config through one function, `Config.redacted`, so the commands mask what the API masks. Before exo-desktop
   #16 the two commands printed raw values. After it, `get` tested a dotted key such as
-  `plugin_config.exo-memory.token` as one name, and the `.` before `token` hid the name. The name test now reads
-  the last part of the key, as `config.get` already did. No command, key or setting changes.
+  `plugin_config.exo-memory.token` as one name, and the `.` before `token` hid the name. Masking and the
+  `config.set` refusal now share one walk over every part of the key and every value beneath it. A string is a
+  secret when it looks like a key, or when it is a literal (not `${VAR}`) under `env`, `headers` or a
+  secret-shaped name at any depth. So `{"token": {"a": "x"}}` is refused and masked, and a header literal in a
+  file written by hand is masked. One test for both means the commands never print a value `config.set` would
+  refuse. Cost: a container whose own name looks like a secret, such as an MCP server named `github-token`, is
+  masked whole and cannot be set with literals. Rejected: testing only the last part of the key, as `config.get`
+  did, which still printed a container under `token` and every literal under `headers`. No command or key changes.
 - **Why:** a new user had no clean way to add a model key. Keys went in by hand (env, `security`, or a 0600
   file), `exo models` only reported, and the web client had no provider settings at all.
 - **Engine:** `exo/providers_setup.py`. `rows` gives every catalog provider with status (key found and where,

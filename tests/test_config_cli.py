@@ -18,6 +18,7 @@ CONFIG = {
     "mcp": {"s": {"command": "srv", "env": {"A": "plain-env-value"}}},
     "models": {"providers": {"p": {"key_env": "MY_KEY"}}},
 }
+SECRETS = ["hunter2", "nested-token-value", "literal-secret", "plain-env-value"]
 KEYS = ["theme", "token", "token.a", "plugin_config", "plugin_config.exo-memory", "plugin_config.exo-memory.token",
         "plugin_config.exo-bus.headers", "plugin_config.exo-bus.headers.X-Auth", "plugin_config.exo-bus.headers.X-Ref",
         "mcp", "mcp.s.env", "mcp.s.env.A", "models.providers.p.key_env"]
@@ -78,3 +79,30 @@ def test_config_cli_prints_what_the_api_returns(tmp_path, monkeypatch, capsys):
         api = _api(tmp_path, key)
         assert _cli(capsys, "get", key) == (api if isinstance(api, str) else json.dumps(api)) + "\n", key
     assert json.loads(_cli(capsys, "show")) == _api(tmp_path)
+
+
+def test_config_masks_everything_beneath_a_secret_name_env_or_headers(tmp_path, monkeypatch, capsys):
+    """A container under a secret-shaped name, and a literal under `env` or `headers`, printed in full (#691)."""
+    _home(tmp_path, monkeypatch, CONFIG)
+    shown = _cli(capsys, "show")
+    assert [x for x in SECRETS if x in shown] == []
+    for x in ["dark", "http://127.0.0.1:1", "${BUS_TOKEN}", "MY_KEY", "srv", "1200"]:
+        assert x in shown
+    for key, want in [("token", {"a": "***"}), ("token.a", "***"), ("mcp.s.env", {"A": "***"}), ("mcp.s.env.A", "***"),
+                      ("plugin_config.exo-bus.headers", {"X-Auth": "***", "X-Ref": "${BUS_TOKEN}"}),
+                      ("plugin_config.exo-bus.headers.X-Auth", "***")]:
+        out = _cli(capsys, "get", key)
+        assert (out.strip() if isinstance(want, str) else json.loads(out)) == want, key
+    for key in KEYS:
+        assert [x for x in SECRETS if x in json.dumps(_api(tmp_path, key))] == [], key
+
+
+def test_config_set_refuses_a_literal_beneath_a_secret_name(tmp_path, monkeypatch, capsys):
+    """`set` refused a literal `token` but stored `{"a": "hunter2"}` under it, which `show` then printed (#691)."""
+    _home(tmp_path, monkeypatch, {"version": 1})
+    assert main(["config", "set", "token", '{"a": "hunter2"}']) == 1
+    assert main(["config", "set", "plugin_config.x.credentials", '{"user": {"b": "hunter2"}}']) == 1
+    assert capsys.readouterr().err.count("refusing to store a secret") == 2
+    assert "hunter2" not in (tmp_path / "config.json").read_text()
+    assert main(["config", "set", "token", '{"a": "${TOK}"}']) == 0
+    assert _cli(capsys, "get", "token.a") == "${TOK}\n"
