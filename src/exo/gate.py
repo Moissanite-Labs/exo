@@ -561,7 +561,7 @@ class _Lexer:
             if start < 0:
                 start = w_at = self.i
             ch, nxt = s[self.i], s[self.i + 1:self.i + 2]
-            if ch in " \t\r":
+            if ch in " \t" or (ch == "\r" and state["delim"] is None):
                 flush()
                 self.i += 1
             elif ch == "\n":
@@ -569,7 +569,7 @@ class _Lexer:
                 toks.append(("op", ";"))
                 mark(self.i, self.i + 1)
                 self.i += 1
-                self._read_heredocs()
+                self._read_heredocs(closer)
             elif ch == "#" and not w.started:
                 j = s.find("\n", self.i)
                 self.i = len(s) if j < 0 else j
@@ -606,8 +606,10 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 op_at = self.i
-                if w.started and w.text.isdigit() and not w.quoted:
-                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text    # an fd number belongs to the operator
+                # an fd number, or `{name}` (bash 4.1+ gives it a new descriptor, #328), belongs to the operator
+                if w.started and not w.quoted and (w.text.isdigit()
+                        or re.fullmatch(r"\{[A-Za-z_]\w*\}", cast(_Word, w).text)):
+                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text
                     op_at = w_at
                 else:
                     flush()
@@ -640,11 +642,11 @@ class _Lexer:
         self.marks, self.met = marks or [], met
         return toks
 
-    def _read_heredocs(self) -> None:
+    def _read_heredocs(self, closer: bool = False) -> None:
         while self.pending:
             hd = self.pending.pop(0)
             first = self.i
-            self.i, last = _heredoc_body(self.s, self.i, hd)
+            self.i, last = _heredoc_body(self.s, self.i, hd, closer)
             if not hd.quoted:
                 sub = _Lexer(hd.body, scan=False, nest=self.nest)
                 sub._dquote(_Word(), until_end=True)
@@ -796,30 +798,40 @@ class _Lexer:
                 self.i = i + 1
 
 
-def _heredoc_body(s: str, i: int, hd: _Heredoc) -> tuple[int, int]:
+def _heredoc_body(s: str, i: int, hd: _Heredoc, closer: bool = False) -> tuple[int, int]:
     """Read the body of ``hd`` from s[i] on, as bash ends it: at a line that is its delimiter. Sets hd.body and
     returns where the lexer goes on and where the line that ended the body starts (len(s) when none did)."""
+    start = len(s)
     lines: list[str] = []
+    found = False
     while i < len(s):
         j = s.find("\n", i)
         end = len(s) if j < 0 else j
         line, start = s[i:end], i
         i = len(s) if j < 0 else j + 1
-        bare = line.lstrip("\t" if hd.strip else "").strip()
-        if bare == hd.delim:
-            # bash ends a heredoc only on the exact line (leading tabs dropped for <<-): `EOF `, ` EOF` or
-            # `EOF` and a CR does not end it, so the body bash reads is not the one read here (#208).
-            hd.ambiguous = hd.ambiguous or (line.lstrip("\t") if hd.strip else line) != hd.delim
+        cand = line.lstrip("\t") if hd.strip else line   # bash drops leading tabs for <<- here too
+        if cand == hd.delim:
+            # bash ends the body on the line that equals the delimiter exactly (#328). The delimiter
+            # is the word after quote removal, so a space, tab or other character in it (`EOF `, ` EOF`,
+            # `EOF\ `, `E"O"F`) is part of it: `cat <<'EOF '` ends on `EOF `, never on bare `EOF`.
+            found = True
             break
-        if bare.startswith(hd.delim) and bare[len(hd.delim):].strip(" )") == "":
-            i = start + line.index(")", line.index(hd.delim))     # `EOF)` closes a $( ) too
+        if closer and cand.startswith(hd.delim) and ")" in cand[len(hd.delim):] \
+                and cand[len(hd.delim):].strip(" )") == "":
+            i = start + line.index(")", line.index(hd.delim))  # `EOF)` closes a $( ) too
+            found = True
             break
+        if cand.strip() == hd.delim.strip():
+            # the line ends the body only once surrounding whitespace is dropped (a trailing CR, stray
+            # spaces, a tab, or dash's rules for a $'..'/$".." delimiter): bash may end elsewhere, so
+            # fail closed -- keep reading to the exact terminator and read the whole body as commands too.
+            hd.ambiguous = True
         lines.append(line.lstrip("\t") if hd.strip else line)
-    else:
-        start = len(s)
     hd.body = "\n".join(lines)
+    if not found:
+        start = len(s)
+        hd.ambiguous = True   # no terminator at all: fail closed and read the body as commands (#328)
     return i, start
-
 
 # For _nest_end: runs of characters an unquoted word and double-quoted text take as they stand, a backquoted body, a
 # variable reference, and the longest here-doc delimiter it keeps (a longer one ends no body, so the rest is unread).
@@ -967,7 +979,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
                 j = max(_match_end(_DQ_RUN, s, i), i + 1)
                 f.owner.add(s, i, j)
                 i = j
-        elif ch in " \t\r":
+        elif ch in " \t" or (ch == "\r" and f.delim is None):
             flush(f)
             i += 1
         elif ch == "\n":
@@ -975,7 +987,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             i += 1
             while pending:
                 hd = pending.pop(0)
-                i = _heredoc_body(s, i, hd)[0]
+                i = _heredoc_body(s, i, hd, closer=True)[0]
                 if id(hd) in before:
                     read.append(hd)
         elif ch == "#" and not f.started:
@@ -1771,6 +1783,9 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
     out += [(n, None, False) for name in names for n in _subscript_sets(name)]
     if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
         out += [(fm.group(1), None, False) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
+    # Named descriptors assign their variable even when the lexer stores it on the redirection.
+    targets = [t for _, t in k.redirs] + list(k.heredocs) + list(k.herestrings)
+    out += [(fm.group(1), None, False) for t in targets if (fm := _FD_VAR.fullmatch(t.fd))]
     return list(dict.fromkeys(out))
 
 
