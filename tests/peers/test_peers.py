@@ -15,7 +15,8 @@ from exo import crypto, gate
 from exo.core.engine import CoreEngine
 from exo.core.ingress import PeerConfig, Target
 from exo.core.models.fake import FakeProvider, tool_turn
-from exo.peers import Directory, PeerNode, Presence, attach, make_envelope, msg_id, pid_alive, verify_envelope
+from exo.peers import Directory, PeerNode, Presence, attach, call_socket, make_envelope, msg_id, pid_alive, verify_envelope
+from exo.peerauth import PidRefused
 from exo.core.seats import Seat, ensure_key, key_path
 from exo.core.types import ToolSpec
 from exo.protocol import schema as s
@@ -475,4 +476,140 @@ async def test_human_peer_send_needs_a_principal_connection(run_dir, caller, tru
         framed = [m.text() for m in b.eng.store.messages(sb) if "ship it" in m.text()]
         assert framed and ("your principal" in framed[0]) is (trust == "principal")
     finally:
+        await a.stop(), await b.stop()
+
+
+# ---------------------------------------------------------------- the pid the signed entry names (#637)
+
+# A relay process on a unix path: it records every byte the client writes and pipes it to the daemon behind it,
+# the way the leak in #637 reads a message whose socket path another process holds.
+_RELAY = """\
+import asyncio, sys
+src, dst, rec = sys.argv[1], sys.argv[2], sys.argv[3]
+log = open(rec, "wb")
+
+
+async def pipe(r, w, record):
+    try:
+        while True:
+            chunk = await r.read(4096)
+            if not chunk:
+                break
+            if record:
+                log.write(chunk)
+                log.flush()
+            w.write(chunk)
+            await w.drain()
+    except OSError:
+        pass
+    finally:
+        try:
+            w.close()
+        except OSError:
+            pass
+
+
+async def handle(client_r, client_w):
+    try:
+        daemon_r, daemon_w = await asyncio.open_unix_connection(dst)
+    except OSError:
+        client_w.close()
+        return
+    await asyncio.gather(pipe(client_r, daemon_w, True), pipe(daemon_r, client_w, False))
+
+
+async def main():
+    server = await asyncio.start_unix_server(handle, path=src)
+    async with server:
+        await asyncio.Event().wait()
+
+
+asyncio.run(main())
+"""
+
+
+@aio
+async def test_a_peer_connection_is_refused_when_the_kernel_names_another_listener(run_dir):
+    """#637: the deliver to a pinned seat rides a connection the kernel must name as the pid the signed entry
+    names, checked before any byte is written on it. The daemon itself answers; a connection the kernel names for
+    another listener — a relay's, or none it can name — is refused."""
+    a, b, sa, sb = await pair(run_dir)
+    try:
+        p = b.eng.peers.node.presence()  # what beta's signed entry says: its socket and its listener's pid
+        out = await call_socket(p.socket, s.Peers(action="list", local_only=True), expect_pid=p.pid)
+        assert [x["id"] for x in out["sessions"]] == [sb]
+        for wrong in (p.pid + 1, 0):  # another process, and the kernel naming no pid at all
+            with pytest.raises(PidRefused):
+                await call_socket(p.socket, s.Peers(action="list", local_only=True), expect_pid=wrong)
+    finally:
+        await a.stop(), await b.stop()
+
+
+@aio
+async def test_a_listener_that_is_not_the_entry_s_pid_gets_no_text(run_dir):
+    """#637, the takeover variant: a daemon stops, its saved signed entry is written back, and another live
+    process listens at its path. The entry still verifies against the pinned key — the signature is real, over
+    the socket path and a pid that is not the listener's — and the send is still refused on the kernel's answer,
+    so the listener reads no text."""
+    node, stub, home = victim_node(run_dir)
+    real = crypto.Signer("alpha", crypto.keygen())
+    pin_peer(home, "alpha", real.pub)
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    sock = str(run_dir / "held.sock")
+    seen: list = []
+
+    async def listener(reader, writer):
+        seen.append(await reader.read(4096))
+        writer.close()
+    server = await asyncio.start_unix_server(listener, path=sock)
+
+    async def rpc(path, body, expect_pid=None):  # alpha's daemon answers lists; the deliver itself is real (#637)
+        if body.action == "list":
+            return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
+        return await call_socket(path, body, expect_pid=expect_pid)
+    node.rpc = rpc
+    try:
+        Directory(run_dir / "peers").write(Presence(
+            seat="alpha", daemon="alpha-7777", pid=other.pid, platform="exo", socket=sock,
+            pub=real.pub, principal="ada").signed(real))  # the pinned key signed an entry whose listener is elsewhere
+        out = await node.send("alpha", "meet at the pier", session="s_me")
+        assert out["state"] == "denied" and "pid" in out["detail"]
+        await asyncio.sleep(0.1)
+        assert seen == [b""]  # the listener accepted the connection and nothing was written on it
+        assert not stub.seen
+    finally:
+        server.close()
+        await server.wait_closed()
+        other.kill()
+        other.wait()
+
+
+@aio
+async def test_a_relay_holding_the_signed_path_reads_no_text(run_dir):
+    """#637, the issue's repro: beta's socket file is renamed aside (its listener keeps serving under the new
+    name) and a relay process binds the old path, piping each connection to beta. The signed entry still names
+    the old path and beta's pid, so every earlier check passes and the send used to say held with the relay
+    reading the text. Now the send is refused — the kernel names the relay's pid — and the relay reads no byte
+    and beta receives nothing."""
+    a, b, sa, sb = await pair(run_dir)
+    aside = str(run_dir / "aside.sock")
+    rec = run_dir / "relay-read"
+    os.rename(b.sock, aside)
+    relay = subprocess.Popen([sys.executable, "-c", _RELAY, b.sock, aside, str(rec)])
+    try:
+        await until(lambda: os.path.exists(b.sock))
+        out = await a.cmd(s.Peers(action="send", to="beta", text="meet at the pier", session=sa, via="agent"))
+        assert out["state"] == "denied" and "pid" in out["detail"]
+        await asyncio.sleep(0.2)
+        saw = rec.read_bytes()
+        # the relay passes the harmless list through (discovery names no text and no trust rides it); the deliver,
+        # the message text and every byte of it, never reaches it, and beta receives nothing
+        assert b'"action":"deliver"' not in saw and b"meet at the pier" not in saw
+        assert b.events(s.PeerMessage) == [] and "meet at the pier" not in b.eng.trace_text(sb)
+    finally:
+        relay.terminate()
+        try:
+            relay.wait(5)
+        except subprocess.TimeoutExpired:
+            relay.kill()
         await a.stop(), await b.stop()
