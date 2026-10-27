@@ -628,6 +628,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and the handoff already kept. This change also corrects the upgrade note in the #385 entry below and in
   the D-040 amendment: a session last compacted on 0.2.0 loses its rulings and corrections as well as its
   open decisions, not the open decisions alone.
+- A write into a trusted bin folder asks, on the store's terms (#331). The gate trusts a program
+  by path in eight system folders (`/bin`, `/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin`,
+  `/sbin`, `/usr/sbin`, `/usr/local/sbin`, `/opt/local/bin`), and a `PATH` naming those folders,
+  but a Homebrew install makes them writable by the user: `cp /tmp/x /opt/homebrew/bin/rg`
+  was `shell` and `echo x > /opt/homebrew/bin/jq` was `local_write`, both allowed, and the planted
+  file then ran as `read`. Such a write is now `bin_write`: it asks every time, only the principal
+  answers, and no standing grant covers it. Only positions the command writes to count, so running,
+  reading or copying out of the folders is unchanged, as is a write to a subfolder, to a bin folder
+  the gate does not trust, or to a virtualenv or `node_modules/.bin` folder. The call's own
+  category stays beside `bin_write`, so a deny on it still denies. A later `cd` elsewhere stops a
+  relative name counting, and an option value attached to its letter, a short option abbreviation,
+  an option after the destination, a `cd` into an ancestor folder, an `env -C`, a tool `cwd`, and
+  a `$HOMEBREW_PREFIX` spelling all count.
 - A reopen's comment and a merge's subject and body are checked by the posting rules (#397).
   `gh issue reopen --comment` and `gh pr reopen -c` post a comment the gate filed as a post but
   never read, and `gh pr merge --body` was read but never checked, with `--subject` not read at

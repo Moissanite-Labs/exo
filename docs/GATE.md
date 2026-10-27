@@ -982,7 +982,8 @@ logged with the grant id.
   unscoped "always" for an outward category. Default expiry 7 days (`always.outward_days`).
 - Other acts: the scope is the category and the exact target. Default expiry 30 days
   (`always.days`).
-- Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`). The same
+- Credentials, store writes and writes into a trusted bin folder never get a grant; they ask every time
+  (`gate.NO_GRANT`). The same
   holds for a call that keeps another category but has such a part (`gate.no_grant`), such as a
   store read in a shell call's own folder (#311, "The working folder").
 - Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
@@ -1222,6 +1223,15 @@ gate does not read:
   ruff...), the tools with their own rules (git, gh, curl, vercel, stripe, ssh, exo...), and
   `TOOL_SUBCOMMANDS` (npm install, cargo test, go build, uv sync...). A program given by path
   runs as itself only from a system bin folder or a virtualenv or `node_modules/.bin` folder.
+  A write into one of the system bin folders is `bin_write` (#331): the folders are
+  user-writable on a Homebrew install, so a write there plants a program under a trusted name.
+  It asks on the store's terms (a floor ask, the principal alone, no standing grant), and the
+  call's own category stays beside it, so a deny on that category still denies. Only positions
+  the command writes to count: running, reading or copying out of a folder is unchanged, and so
+  is a write into a virtualenv or `node_modules/.bin` folder, a subfolder, or a folder the gate
+  does not trust. A relative name counts from the folder the command runs in: a `cd` on the line
+  (a later `cd` elsewhere stops it, `cd -` and a bare `pushd` swap with the previous folder),
+  an `env -C` on the command, or the tool's `cwd`.
 - Everything else is `opaque_exec`, which asks. For example: a variable, `$( )` or a glob in the
   program position; a script file; `bash`/`sh`/`zsh` reading `-c`, a file, a pipe or a heredoc;
   `python -c`, `node -e`, `perl -e`, `ruby -e`, `osascript`; `make`, `npm run`, `npm test`,
@@ -2477,6 +2487,15 @@ it), a brace expansion in a name (`export {PATH,FOO}=x`), indirect expansion (`$
 arithmetic in a substring offset (`${x:PATH=1}`), an integer
 variable (`declare -i x; x=PATH=5`), `wait -p NAME` and `{NAME}<<<x`. This is one more reason
 the sandbox is the real fix.
+
+- **A write into a trusted bin folder by another route (#331).** `bin_write` covers the
+  positions a command writes to, not every route that replaces what a trusted name runs: a
+  write to a Homebrew Cellar target (`cp /tmp/x /opt/homebrew/Cellar/ripgrep/14.1.0/bin/rg`),
+  a package-manager install, a `git clone` into a folder, an `unzip -d` into a folder, and a
+  copied directory that becomes a bin folder (`cp -r /tmp/bin /opt/homebrew/`) still replace
+  it, and a `curl -O` name taken from the URL is not tracked. A `cd` in one call does not carry
+  into the next (the tool's `cwd` covers that instead), and `popd` leaves the entered folder in
+  place, so a later relative write still asks.
 
 ## The store is credentials (D-038)
 
