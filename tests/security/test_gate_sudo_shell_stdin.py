@@ -1,6 +1,6 @@
 """#491: `sudo -s` and `sudo -i` (--shell, --login) start the target user's shell, which runs its stdin.
 
-With no command, the shell sudo starts reads its commands from stdin. On main 54525f73 the gate read such a line as
+With no command, the shell sudo starts reads its commands from stdin. On main dcab371a the gate read such a line as
 `read` (sudo's options left no program, a bare assignment) and allowed it, even under `deny: [delete]`, while `sudo
 bash` with the same stdin was read. The gate now reads a sudo shell with no command as it reads `bash` with no
 operand: an opaque part that runs its stdin, and the parts of each text the line feeds it (a pipe, a here-string, a
@@ -11,6 +11,7 @@ decision is never lower than main's. Classification and decision only; nothing h
 """
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -71,6 +72,31 @@ def test_text_fed_to_a_sudo_shell_is_read(line):
     assert any(p.category == "opaque_exec" and "runs its stdin" in p.summary for p in gate._each_part(c)), line
     assert decide(c, DEFAULT).outcome == "ask"
     assert decide(c, DENY_DELETE).outcome == "deny", line
+
+
+@pytest.mark.parametrize("line", [
+    # an option word with an expansion or an unquoted glob may come to -s, -i, --shell or --login
+    f"sudo -$(printf s) <<< {RM}", f"sudo -`printf s` <<< {RM}", f'X=s; sudo -"$X" <<< {RM}',
+    f'X=i; echo {RM} | sudo -"$X"', f'sudo -u root -"$X" <<< {RM}', f'sudo -E"$X" <<< {RM}',
+    f'sudo --"$L" <<< {RM}', f'sudo "-$X" <<< {RM}', f"sudo -? <<< {RM}", f"sudo -* <<< {RM}",
+    f"touch ./-s; sudo -? <<< {RM}", f'doas -"$X" <<< {RM}',
+])
+def test_an_option_word_the_gate_cannot_read_may_start_the_shell(line):
+    c = sh(line)
+    assert c.category == "delete", (line, c)
+    assert decide(c, DEFAULT).outcome == "ask"
+    assert decide(c, DENY_DELETE).outcome == "deny", line
+
+
+@pytest.mark.parametrize("tail", ["echo '$x'", 'echo "$x"', "echo 'a\nb'", "rm -rf '$x'"])
+def test_nested_sudo_shells_are_read_once_per_level(tail):
+    # Each sudo's command holds the sudos after it: reading each of them again at each level took minutes.
+    line = "sudo -s " * 40 + tail
+    t = time.perf_counter()
+    c = sh(line)
+    assert time.perf_counter() - t < 2, line
+    assert decide(c, DEFAULT).outcome == "ask"
+    assert decide(c, DENY_DELETE).outcome == ("deny" if "rm" in tail else "ask")
 
 
 @pytest.mark.parametrize("spelling", ["sudo -s", "sudo -i", "sudo --login", "sudo -iu root"])
@@ -162,7 +188,7 @@ def test_the_controls_are_unchanged(line):
 
 @pytest.mark.parametrize("line,category,outcome", [
     ("sudo -l", "read", "allow"), ("sudo -v", "read", "allow"), ("sudo -k", "read", "allow"),
-    ("sudo ls", "read", "allow"), ("sudo -u bob ls", "read", "allow"),
+    ("sudo ls", "read", "allow"), ("sudo -u bob ls", "read", "allow"), ('sudo -u "$U" ls', "read", "allow"),
     ("sudo -s ls", "read", "allow"), ("sudo -i ls", "read", "allow"), ("sudo -s -u bob ls", "read", "allow"),
     ("sudo -s echo hi > /tmp/f", "local_write", "allow"),        # #454: as on main
     (f"sudo -s cat <<< {RM}", "read", "allow"),                  # the command, not the shell, reads the stdin

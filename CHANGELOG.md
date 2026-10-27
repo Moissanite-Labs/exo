@@ -423,7 +423,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (a pipe, a here-string, a heredoc), so those lines are `delete` or `store_write` and a deny on them denies. A stdin
   the gate cannot read (`sudo -s < /tmp/script.sh`, a variable) asks, and so does a bare `sudo -s`, as `bash` alone
   does. sudo's options are read as getopt reads them (`-Es`, `-iu root`, `--user=root`, `--user root`, `--`), behind
-  `env`, `nice`, `timeout`, `command` or another sudo too. With a command, sudo runs `$SHELL -c` on its words joined
+  `env`, `nice`, `timeout`, `command` or another sudo too, and an option word with an expansion or an unquoted glob
+  (`sudo -"$X"`, `sudo -?`) counts as a shell option. With a command, sudo runs `$SHELL -c` on its words joined
   with the shell's metacharacters escaped, and that text is read too where it may differ from the words (a `$`, a
   newline, an empty word, an option the prefix reader misread: `sudo -iu root rm -rf /srv/data` is `delete`), and such
   a line still asks as code the gate cannot fully see, as it did as an unknown program; a word the gate cannot read
