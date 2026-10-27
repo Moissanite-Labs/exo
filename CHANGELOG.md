@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Optional local skill discovery with a hard prompt character budget, deterministic ranking,
+  bounded per-turn metadata reads, metadata refresh and explicit access to enabled skills outside
+  the shortlist. Default catalogs remain unchanged (`docs/SKILL-DISCOVERY.md`, D-083, #504, #599).
 - Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
   explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
   The approval gate and required executor constraints remain enforced. Existing configurations

@@ -2929,7 +2929,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.
 
 ## D-082 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
-- **Status:** Implemented for review ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
+- **Status:** In progress, implemented for review ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
   letting users choose how lean or capable Exo should be. Comparative performance is not yet established.
 - **Evidence:** `docs/HARNESS-LANDSCAPE.md` records the current Pi, Codex, Hermes, OpenCode, DeepSeek Harness,
   Claude Code, Aider and Goose sources, concrete user requests, licenses and remaining work. The strongest
@@ -2977,3 +2977,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   extraction: no approval policy, binding, private-thread rule or protocol contract changed. It restores
   the standard core allowance (D-077 amendment above). Broader private-state query cleanup remains open.
   User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
+
+## D-083 (2026-10-23) Optional skill discovery within a prompt budget
+- **Status:** In progress, implemented for review, [#504](https://github.com/aska-digital/exo/issues/504).
+- **Decision:** Opt-in `skill_discovery` replaces the full prompt catalog with local, deterministic
+  ranking over the enabled skill index. Exact names precede BM25 matches. `max_chars` bounds the whole
+  contribution, including its heading and separator. `top_k` limits rows. Neither setting restricts
+  explicit access through the existing skill loader. Default behavior remains unchanged.
+- **Why:** Large skill collections can consume prompt space before a task needs their instructions.
+  Local selection makes that cost controllable without another provider call or installation dependency.
+- **Boundaries:** Composition owns the optional selector. The runtime offers `skills_prompt` and typed
+  `Loop.turn_extra(session, query)` seams. Scheduled loops copy the callback. Delegated children retain
+  their existing exclusion of skills. Seat allowlists and folder/plugin precedence remain authoritative.
+  Metadata is reread under a 16 KiB per-file limit, with no query cache or shared selection state.
+  Required-executor mode refuses enabled discovery until metadata reads can use that executor.
+- **Rejected:** Enabling ranking in existing profiles. Rediscovering disabled skills. A global mutable
+  shortlist. An unbounded names-only catalog. Calling character counts exact tokens. Claiming coding
+  quality improvements from prompt reduction alone. Reranking in response to every tool result.
+- **Revisit if:** Held-out tasks show missed skills, first-turn metadata reads become material overhead,
+  or executor-backed metadata access becomes available. Same-round steering currently retains the
+  starting query's shortlist. The loader remains available for explicit skill requests.
+- **Validation:** Real composition with fake models, bounded prompts, explicit loading, concurrent and
+  scheduled turns, SOUL refresh, metadata edits, allowlists, source precedence and invalid settings.
+- **Docs:** `docs/SKILL-DISCOVERY.md`, user guide §1, developer guide §6, harness reference, docs map
+  and changelog. Whitepaper coverage is deferred to its next batch.
+*Amendment 2026-10-26 (issue #599):* metadata reads are also bounded per turn. At most `max_files`
+(default 256, range 0–4096) indexed files are read per selection, in sorted name order; later names
+are unavailable for that turn, and the block notes the cap when the character budget has room.
+Rejected a path+mtime+size metadata cache: rereading each turn is what makes same-stat edits take
+effect, and a shared cache would add mutable state behind concurrent session and scheduled turns.

@@ -374,13 +374,26 @@ loader does not read are ignored, so check the spelling.
 ## 6. Add a skill
 
 A skill is a folder `skills/<name>/` with a `SKILL.md`. The frontmatter needs `name` and `description`. The
-description says when to use it. The system prompt carries one line per skill, and the `skill` tool loads the body.
+description says when to use it. By default, the system prompt carries one line per skill, and the `skill` tool loads the body.
 Search order, first name wins: the seat's folders, `$EXO_HOME/skills`, the Exo pack (`skills/`), then skills that
 plugins register.
 
 Add the skill to `skills/MANIFEST.json`. Each entry has `name`, `path`, `description`, `source` (where it came from),
 `generalized` (what you removed to make it generic) and `scripts` (paths under the skill folder). The skill pack is
 generic. Nothing about one person or one team goes in it. Their rules live in their store.
+
+### Budgeted discovery
+
+Optional `skill_discovery` selects descriptions from the runtime's enabled index using local ranking.
+It respects seat allowlists and source precedence. Descriptions refresh each turn without a shared
+query cache; reads are bounded per file and per turn (`max_files`, sorted name order). Full
+instructions still use `skill`, including explicit names outside the shortlist.
+The character budget includes headings and separators. See [SKILL-DISCOVERY.md](SKILL-DISCOVERY.md).
+
+Composition sets `skills_prompt=False` and supplies the typed `Loop.turn_extra(session, query)`
+callback. It runs after stable system text at the start of each turn's tool loop. The scheduler
+copies the callback, while delegated children retain their existing exclusion of skills.
+Callbacks must stay bounded and cannot alter approval or spend decisions.
 
 ## 7. Tests
 
