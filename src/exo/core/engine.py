@@ -551,8 +551,8 @@ class CoreRuntime:
         info = self.store.get_session(sid)
         if info is None:
             raise CommandFailed("not_found", f"no session {sid}")
-        st = self.loop._state.get(sid)  # session.get and session.resume show a running turn, as session.list does
-        info.status = "live" if st is not None and st.running else "idle"
+        info.cwd = info.cwd or self.cwd  # report the same fallback used by tools for older sessions
+        info.status = "live" if (st := self.loop._state.get(sid)) is not None and st.running else "idle"
         return info
 
     async def _session_create(self, b: s.SessionCreate) -> dict[str, Any]:
