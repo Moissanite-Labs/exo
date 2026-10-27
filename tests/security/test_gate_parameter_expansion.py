@@ -432,6 +432,91 @@ def test_parts_past_the_calls_budget_are_cut_and_ask():
     assert _out(early, _FORCE_DENY) == _out(early, _FORCE_LIST) == "deny"
 
 
+# --- each mark that fails closed, on a line with nothing else to ask about -----------------------------------------
+# Each row asks only because of one mark in the lexer (an odd part, a quote or word left open, a $(( never closed, a
+# part cut past _WORD_NEST, past the _NEST cap or past _WORD_PARTS), so a change that drops that mark fails a row here
+# even where a deny on a command after it would still hold through the reading before.
+
+def _benign(line: str) -> str:
+    """A _PART_LEVELS line with an echo for each command: nothing on it asks but the part past the depth."""
+    return line.replace(PUSH, "echo hi").replace("a ", "echo ")
+
+
+@pytest.mark.parametrize("kind", [k for k in _PART_LEVELS if k != "funsub"])
+def test_a_benign_part_past_three_levels_asks(kind):
+    """Each kind of part only bash's reading opens is read three levels deep (_WORD_NEST): the fourth is cut."""
+    third, fourth = _benign(_PART_LEVELS[kind](3)), _benign(_PART_LEVELS[kind](4))
+    assert _out(third) == "allow"
+    assert "unread nest" in _signals(fourth)
+    assert _out(fourth) == "ask"
+
+
+def _budget() -> str:
+    """_WORD_PARTS words, each holding one part: all of them are read."""
+    return " ".join("${x%d:-$(echo %d)}" % (i, i) for i in range(gate._WORD_PARTS))
+
+
+@pytest.mark.parametrize("part", [
+    "${y:-$(echo y)}", "${y:-<(echo y)}", "${y:-`echo $(echo y)`}", "\"${y:+'$(echo y)'}\"", "${y:-$(( $(echo 1) ))}",
+    "$((echo '))' ; echo y) )", "${ echo y; }",
+], ids=["cmd-word", "procsub", "backquote", "span", "arith-word", "subshell", "funsub"])
+def test_a_benign_part_past_the_calls_budget_asks(part):
+    """_WORD_PARTS parts are read; each kind of part past them is cut and asks with the unread-nest signal."""
+    assert _out(f"echo {_budget()}") == "allow"
+    line = f"echo {_budget()} {part}"
+    assert "unread nest" in _signals(line)
+    assert _out(line) == "ask"
+
+
+@pytest.mark.parametrize("line, signal", [
+    # a quote left open (run, _dquote, _dollar; _parse_line makes it an odd part)
+    ("echo 'unclosed", "indirection"), ('echo "unclosed', "indirection"), ("echo $'unclosed", "indirection"),
+    # a ${..} word bash never closes, or a part in it that runs out (_param)
+    ("echo ${X:-'unclosed}", "indirection"), ("echo ${x:-$(echo hi}", "indirection"),
+    ("echo ${x:-`echo hi}", "indirection"), ("echo ${x:-<(echo hi}", "indirection"),
+    # a $(( bash never closes (_arith), on the line and in a word
+    ("echo $(( (1)", "indirection"), ("echo ${x:-$(( 1}", "indirection"),
+    # a ${ that runs a value, and bash 5.3's ${ cmd; } (_param_open)
+    ("echo ${!x}", "indirection"), ("echo ${x@P}", "indirection"), ("echo ${ echo hi; }", "indirection"),
+    # a part in a word, past the _NEST cap (_part): the fourth level, in a word in the third
+    ("echo ${x:-$(echo $(echo $(echo ${y:-$(echo hi)})))}", "unread nest"),
+    ("echo ${x:-$(echo $(echo $(echo ${y:-<(echo hi)})))}", "unread nest"),
+])
+def test_each_mark_that_fails_closed_asks_on_a_benign_line(line, signal):
+    assert signal in _signals(line)
+    assert _out(line) == "ask"
+
+
+@pytest.mark.parametrize("line", ["echo ${x:-$(echo hi} $(echo yo)", "echo ${x:-<(echo hi} $(echo yo)",
+                                  "echo ${x:-$(( 1} $(echo yo)", "echo $(( 1 $(echo yo)"])
+def test_a_word_or_arithmetic_bash_never_closes_takes_the_rest_of_the_line(line):
+    """One odd part that asks (bash rejects the line): the text after it is no source of its own, so the parts left
+    open do not stack up, and the line asks through that part alone."""
+    assert _parse(line)[1] == [gate._ODD_WORD]
+    assert _out(line) == "ask"
+
+
+@pytest.mark.parametrize("part", ["${y:-$(echo hi}", "${y:-<(echo hi}"])
+def test_a_part_past_the_budget_that_never_closes_is_one_odd_part(part):
+    """A part past _WORD_PARTS that runs out takes the rest of the text, as one inside them does: the word never
+    closes and the line asks as bash rejects it, with no cut part standing in for the text after it."""
+    line = f"echo {_budget()} {part}"
+    assert "indirection" in _signals(line) and "unread nest" not in _signals(line)
+    assert _out(line) == "ask"
+
+
+@pytest.mark.parametrize("text", ["echo $(( 1 ) ; echo after", "echo ${x:-$(( 1 }) ; echo after", "echo ${x:-\\"])
+def test_an_over_deep_part_left_open_takes_the_rest_of_the_line(text):
+    """Past the cap _nest_end ends a $(( or a ${..} word bash never closes at the end of the text, where the lexer
+    ends it, so the text after it is not read as commands of the line."""
+    lx = gate._Lexer(text, scan=False, nest=-10**6)             # never cut
+    lx.run(closer=True)
+    assert gate._nest_end(text, 0, [])[0] == lx.i == len(text)
+    line = "echo " + "$(" * (gate._NEST + 1) + text
+    assert "unread nest" in _signals(line)
+    assert _out(line) == "ask"
+
+
 @pytest.mark.parametrize("k", [15, 16, 17, 18, 20])
 @pytest.mark.parametrize("action, policy", [(PUSH, _FORCE_LIST), (PUSH, _FORCE_DENY),
                                              ("rm -rf ./work", _DELETE_LIST), ("rm -rf ./work", _DELETE_DENY)],
@@ -694,6 +779,59 @@ def test_hidden_push_beside_a_visible_delete_decides_as_the_line_written_out():
     assert {"force_push", "delete"} <= _categories(hidden)
     assert _out(hidden, _DELETE_LIST) == _out(shown, _DELETE_LIST) == "deny"
     assert _out(hidden, _FORCE_LIST) == _out(shown, _FORCE_LIST) == "deny"
+
+
+def test_a_sudo_write_keeps_its_lead_in_each_reading():
+    """#454: a sudo write leads a line whose other part is a read, in the reading before as on main; bash's reading
+    adds the command in the word beside it, and a part past the budget asks with the write still on the line."""
+    line = f"sudo echo ${{x:-$({PUSH})}} > /tmp/f"
+    assert [(r.category, r.target) for r in readings(_c(line))] == [("force_push", "origin"), ("local_write", "/tmp/f")]
+    assert _out(line, _FORCE_DENY) == "deny"
+    assert {(r.category, r.target) for r in readings(_c("sudo echo ${x:-$(echo hi)} > /tmp/f"))} == {
+        ("local_write", "/tmp/f")}
+    late = f"sudo echo {_budget()} ${{y:-$(echo y)}} > /tmp/f"
+    assert "unread nest" in _signals(late) and "local_write" in _categories(late)
+    assert _out(late) == "ask"
+
+
+@pytest.mark.parametrize("line", [f'echo ${{x:-$(echo hi)}} "$\\\n({PUSH})"', f'echo "$\\\n{{x:-$({PUSH})}}"',
+                                  f"echo ${{y:-$\\\n({PUSH})}} {{budget}}"], ids=["beside", "in-word", "budget"])
+def test_a_joined_reading_keeps_the_two_readings_and_a_budget_of_its_own(line):
+    """#584: a $ form split by a backslash-newline is also read joined, with budgets of its own; each of those
+    readings is read both ways here, and each reaches decide (readings)."""
+    line = line.replace("{budget}", _budget())
+    assert "force_push" in _categories(line)
+    assert _out(line, _FORCE_DENY) == _out(line, _FORCE_LIST) == "deny"
+    late = f"echo {_budget()} ${{y:-$\\\n(echo hi)}}"
+    assert "unread nest" in _signals(late)
+    assert _out(late) == "ask"
+
+
+def test_an_ordinary_reading_is_kept_for_each_reading(tmp_path, monkeypatch):
+    """D-074: a line that writes the Exo home's config.json is also read as before D-074 (``ordinary``); the reading
+    before #143 has an ordinary reading of its own, and readings lists each, so a push in a word still denies."""
+    (tmp_path / ".exo").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("EXO_HOME", raising=False)
+    line = f"cp /tmp/x ~/.exo/config.json ; echo ${{x:-$({PUSH})}}"
+    c = _c(line)
+    rs = readings(c)
+    assert c.ordinary is not None and len([r for r in rs if r.ordinary is not None]) >= 2
+    assert all(any(r.ordinary is e for e in rs) for r in rs if r.ordinary is not None)
+    assert {"store_write", "force_push"} <= _categories(line)
+    assert _out(line, _FORCE_DENY) == _out(line, _FORCE_LIST) == "deny"
+
+
+def test_a_line_read_two_ways_binds_to_its_text_even_as_one_act():
+    """The reading before #143 ends the call's ``also`` chain, and binds_exact binds a line with an ``also`` reading
+    as main does (#311, #584): a grant on the write's category and target does not cover a line read two ways, even
+    where both readings are that write. A line read one way keeps its grant."""
+    two = gate.classify(("terminal", {"command": "echo hi > /tmp/f ${x:-$(echo hi)}"}))
+    assert [(r.category, r.target) for r in readings(two)] == [("local_write", "/tmp/f")] * 2
+    assert two.also is not None and gate.binds_exact(two)
+    for line in ("echo hi > /tmp/f ${x:-hi}", "echo hi > /tmp/f"):
+        one = gate.classify(("terminal", {"command": line}))
+        assert len(readings(one)) == 1 and not gate.binds_exact(one), line
 
 
 @pytest.mark.parametrize("line", [

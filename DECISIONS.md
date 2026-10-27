@@ -2861,6 +2861,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   call's 24, is not read: it asks, also under a deny on it, and a rule allowing `opaque_exec` allows it, as main
   does; dash's other differences and bash 3.2's pairing are not modelled; a word bash never closes asks, and what
   follows it is read only the way before.
+  *Re-checked 2026-10-26 (review 5652171811, on the merge of main dcab371a):* each mark in this lexer code that makes
+  a line or part fail closed (an odd part: a value that runs, `${ cmd; }`, a word, `$((` or quote left open; an unread
+  part: past `_WORD_NEST`, the `_NEST` cap or `_WORD_PARTS`; a part that takes the rest of the text, in `_Lexer` and
+  in `_nest_end`) was neutralized alone in a copy of the tree, 28 marks, and each copy fails a row of
+  `tests/security/test_gate_parameter_expansion.py` whose line asks for that mark alone or pins where it ends (a plain
+  `echo`; the table is in the PR). With main's #584 and D-074, each of classify's two readings keeps its joined
+  reading and its `ordinary` reading, with budgets of their own (`_classify_read`); `readings` lists the `ordinary`
+  reading of each reading, not only the call's, and `binds_exact` keeps main's rule that a line with an `also` or
+  `ordinary` reading binds. Since the reading before #143 ends the `also` chain, every line read both ways now
+  binds its approval to the exact text, also where both readings are one act (`echo hi > /tmp/f ${x:-$(echo hi)}`):
+  a standing grant on that category and target no longer covers it (main reads such a line one way and does not
+  bind it). This tightens and lowers nothing; a line read one way keeps its grants
+  (`test_a_line_read_two_ways_binds_to_its_text_even_as_one_act`). This PR's own join of a backslash-newline after
+  `$` in `_parse_line` gave way to #584's joined reading, which keeps the line as written beside it and leads with
+  the more severe, so `: # $\<newline>(git push ...)` (bash runs the next line) leads its card with the push, as on
+  main. A command past the depth or the budget still asks under a deny on it, and a rule allowing `opaque_exec`
+  allows it, as main allows the line (main reads none of the word); a deny there is follow-up work.
 
   *Amendment 2026-10-26 (issue #584):* a backslash-newline inside a `$` form is joined before the form is read, as
   bash joins it. Outside single quotes bash drops each `\<newline>` before it expands a word, so

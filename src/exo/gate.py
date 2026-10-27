@@ -8799,8 +8799,8 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
     with a ``floor``, whose stricter reading may be another act, with ``also`` readings (#311, #584) or an
     ``ordinary`` reading (D-074). A sudo write also binds when its displaced part names a target or asks with that
-    part leading (#454). Each reading counts (``readings``), and a line whose readings are different acts binds too:
-    a grant keyed on its first reading would cover the others (#143)."""
+    part leading (#454). Each reading counts (``readings``). A line also read as before #143 binds, whether its
+    readings are one act or not: that reading ends its ``also`` chain, and no grant on one reading covers another."""
     def one(r: Classification) -> bool:
         q = r.displaced
         return (r.category == "opaque_exec" or "indirection" in r.signals or bool(r.alt_targets) or r.floor is not None
