@@ -797,12 +797,12 @@ body { margin: 0; background: #08090a; }
 /* Searchable model routes: full route remains visible even when names overlap. */
 .xc-search-model-picker { width: 100%; min-width: 0; display: grid; gap: 8px; }
 .xc-search-model-picker label { display: grid; gap: 6px; }
-.xc-model-options { max-height: 260px; overflow-y: auto; border: 1px solid var(--line, #444); }
+.xc-model-options { max-height: 260px; overflow-y: auto; border: 1px solid var(--line); }
 .xc-model-options:empty { display: none; }
-.xc-model-option { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line, #444); background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.xc-model-option.active, .xc-model-option:hover { background: var(--surface-2, #252b33); outline: 1px solid currentColor; outline-offset: -1px; }
+.xc-model-option { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.xc-model-option.active, .xc-model-option:hover { background: var(--xc-raise); outline: 1px solid currentColor; outline-offset: -1px; }
 .xc-model-name { font-weight: 600; }
-.xc-model-route { font: 12px var(--mono, monospace); opacity: .8; overflow-wrap: anywhere; }
+.xc-model-route { font: 12px var(--xc-mono); opacity: .8; overflow-wrap: anywhere; }
 .xc-model-status, .xc-model-note { margin: 0; font-size: 12px; opacity: .8; }
 .xc-prov-def > .xc-search-model-picker { flex: 1; }
 
