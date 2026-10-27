@@ -3753,13 +3753,15 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         # the bare host, and the destination as written when it carries a user, a scheme or a port.
         c.parts += [_make("shell", summary=f"ssh {dest}", target=t, command=cmd, signals=["remote host"])
                     for t in dict.fromkeys(dests) if t]
-        if not here:                          # parts can be shared with a stored result (_own_copy): mark a copy
-            c = copy.deepcopy(c)
+        c = copy.deepcopy(c)                  # parts can be shared with a stored result (_own_copy): mark a copy
         for p in _each_part(c) if not here else ():   # every part runs on the remote host (D-075)
             if EXPOSURE.index(p.exposure) < 1:
                 p.exposure = "internal"
+        _hop_fill(c, dest)
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
+            # A helper names the host as when it led the line, also where the remote line's store write leads (#461)
+            c.parts += [_host_copy(h, dest) for h in local if h is not c and not h.target]
         if not lead:                          # ssh's own part names the host, as when it led before #316
             c.target = dest if "unread hops" in c.signals else (c.target or dest)
         # #399: the host stands for an empty other target too, as for an empty target, so a rule on it sees each.
@@ -3791,6 +3793,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # h`). After a hop that is the first host, where the line hands the stdin over, as for the target.
             stdin.alt_targets = [t for t in dict.fromkeys(t or dest for t in stdin.alt_targets) if t != stdin.target]
             stdin.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in stdin.parts]
+            _hop_fill(stdin, dest)
+        else:                                 # the remote line leads, as a store write (#461) where its read did not
+            _hop_fill(stdin, dest, whole=True)
         stdin.signals.append("remote host")
         # The line keeps the first of equal parts. Both parts now run on the remote host, so they can be equal where
         # the part that runs the stdin led before: it comes first then, and the line is decided as before.
@@ -4269,6 +4274,11 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             elif key in _SSH_EXEC_SETTINGS:
                 c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
                 if c is not None and key == "remotecommand":
+                    # Every part runs on the remote host, as for the hop (D-075): a part the store write it makes
+                    # leads now (#461) is still raised. Parts can be shared with a stored result, so a copy.
+                    c = parts[-1] = copy.deepcopy(c)
+                    for p in _each_part(c):
+                        p.exposure = max(p.exposure, "internal", key=EXPOSURE.index)
                     _raise_axes(c, exposure="internal")
                     c.signals.append("remote host")
             elif key in _SSH_LIB_SETTINGS and value.strip().lower() != "internal":
@@ -4617,6 +4627,28 @@ def _displace_with(c: Classification, **changes) -> None:
         return
     lead = replace(old, **changes)
     c.parts, c.displaced = [lead if q is old else q for q in c.parts], lead
+
+
+def _host_copy(p: Classification, dest: str) -> Classification:
+    """A copy of p on the hop's host, with no parts and no post (as #320's), so the posting checks read each post
+    once."""
+    return replace(p, target=dest, parts=[], text="", title="", text_file="", own_signals=[
+        s for s in (p.signals if p.own_signals is None else p.own_signals) if s != "unseen_body"])
+
+
+def _hop_fill(c: Classification, dest: str, whole: bool = False) -> None:
+    """#399 below an ssh or mosh hop's line (the hop's own copy): the host joins each nested part's empty other
+    target, and a nested part with an empty target gets a copy on the host among the line's parts (_host_copy).
+    Each part keeps its own reading, so a gh read nested under the store write it makes (#461) is still seen by a
+    deny, reserved or rule entry on the host, as when it led the line. The copies of a gh action on its other targets
+    among the line's own parts take the host in place, as before. With whole, the line and those copies are filled
+    the same way: the part that runs ssh's stdin, which named the host when it led before #461."""
+    own = set() if whole else {id(p) for p in c.parts if p.alt_copy}
+    nested = [p for p in list(_each_part(c))[0 if whole else 1:] if id(p) not in own]
+    for p in nested:
+        if "" in p.alt_targets and p.target != dest:
+            p.alt_targets = list(dict.fromkeys([*p.alt_targets, dest]))
+    c.parts += [_host_copy(p, dest) for p in nested if not p.target]
 
 
 def _write_summary(lead: Classification, write: Classification) -> str:

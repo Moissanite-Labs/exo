@@ -1307,7 +1307,8 @@ gate does not read:
   `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
   --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and `sftp -S`,
   `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`,
-  `LocalCommand`, `RemoteCommand` (with the `remote host` exposure) and `KnownHostsCommand`; `git
+  `LocalCommand`, `RemoteCommand` (with the `remote host` exposure, each of its parts `internal`
+  as for the hop) and `KnownHostsCommand`; `git
   rebase -x`/`--exec`, `git bisect run`, `git submodule foreach` (also after `-q`, `--quiet`),
   `--upload-pack` (`clone`, `fetch`, `pull`, `ls-remote`, and its hidden synonym `git ls-remote
   --exec`, #230), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`; `zip -TT`;
@@ -2165,7 +2166,11 @@ into one still leads on equal parts and takes the host, so that form decides and
 hits as before #316. A gh post in a known text keeps its other targets ("Where a gh command
 lands"): where the part that runs the stdin names the host for an empty target, it names it for an
 empty other target too. So `echo 'gh pr comment -wR myorg/app -b hi' | ssh buildhost` may land on
-the current repo on `buildhost`, and a `github_post` deny on `buildhost` denies it. After a hop that
+the current repo on `buildhost`, and a `github_post` deny on `buildhost` denies it. A part nested
+below the one that leads (the gh read below the store write of `gh release download
+-O ~/.exo/policies/gates.yaml`, #461), keeps its own target and, where that or another of its targets
+is empty, has a copy on the host beside it (#461 follow-up), so an entry on the host still sees it as
+when it led. After a hop that
 host is the first one, where the line hands the stdin over, as for the part's own target; ssh's own
 part names the inner host. So `deny` and `reserved` entries, category lines that deny and rules that deny
 a part still see every part they saw: under `{match: {category: [shell, read], reversibility:
@@ -2231,7 +2236,9 @@ itself once a host is read, are read as the host and command. The value of `mosh
 `--client` or `--server` is a command that runs, so the gate reads it as one: `mosh --serv='rm -rf
 /data' host` denies under `deny: [delete]`, and any such line asks. The `--ssh` and `--client`
 helpers run on this machine, so they keep their own exposure; `--server` runs on the remote host
-and is `internal` like the inner command. With `--local`, mosh runs the server and the command on
+and is `internal` like the inner command. A helper that does not lead the line, as below a store
+write the remote command makes (#461), has a copy on the host, so an entry on `{category:
+opaque_exec, target: host}` still reaches it as when it led. With `--local`, mosh runs the server and the command on
 this machine, so nothing on the line is marked `internal`. Another option's value that itself
 reads as `--server`, `--ssh` or `--client` (`mosh --port '--server=rm -rf /data' host`) is taken
 by mosh as that value and never run, but the gate used to read it as the command, so it still
@@ -2496,11 +2503,19 @@ path is one the gate cannot resolve, not that the command writes it. A body file
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
 `sqlite3`, `touch`, `ln`), a gh download or clone into it (#461): `gh release download` with `-O`
-or `--output` (also `=`-attached), `gh run download` and `gh attestation download` with `-D` or
-`--dir`, and `gh repo clone` and `gh gist clone` into their directory word, with or without `--`
-before it. These read on GitHub, so the store check took the line for a read and never looked at
-the paths before; now it does, under `sudo`, in `bash -c` and a `$( )`, and past a `-R` before the
-subcommand. `-O -` prints to stdout and stays a read, and so does a path outside the store. Also
+or `--output` (also `=`-attached) or `-D`/`--dir`, `gh run download` with `-D` or `--dir`, `gh
+attestation download` after a `cd` into the store (it has no such option and writes into the
+current folder), and `gh repo clone` and `gh gist clone` into their directory word, with or without
+`--` before it. These read on GitHub, so the store check took the line for a read and never looked
+at the paths before; now it does, under `sudo`, in a `$( )`, and past a `-R` before the subcommand
+(in `bash -c` the line already asked, as opaque code). `-O -` prints to stdout and stays a read, and
+so does a path outside the store. The gh read stays a part of the line, so a deny, reserved entry or
+rule on it still applies. Over an ssh or mosh hop each part below the store write that has an empty
+target also has a copy on the host (#461 follow-up), so an entry on `{category: read, target: host}`
+or `{category: opaque_exec, target: host}` still reaches the gh read or the `eval` and stdin forms,
+as it did when the read led the line; so does the part that runs ssh's stdin beside such a line
+(`echo x | ssh $H gh release download ..`), and every part of an `ssh -o RemoteCommand=` line is
+`internal`, so a matrix cell on an internal action still reaches the read. Also
 a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
 `unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and
