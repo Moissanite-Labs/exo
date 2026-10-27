@@ -3853,6 +3853,46 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
                 ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
+        # #337: the folder each cd reaches is kept for the next one, so a relative target joins onto it
+        # (`cd / && cd dev` lands in /dev). The order and success of the cds are not followed, as in
+        # _cd_store_read. The kept folder is capped at 64 parts, counted on the NORMALISED path: counting raw
+        # slashes let `./` padding (or `x/../` padding) push the count past the cap, stop the tracking, and
+        # let a following descriptor write escape. A glob target counts when it could name a descriptor
+        # folder (`cd /de?`), as a glob path does elsewhere.
+        base = ctx.get("line_cwd")
+        if target:
+            into = _expand_text(dest).strip()
+            src = target.raw.replace("\\\n", "")
+            if "{" in src:
+                entry = seen.get(src)
+                spellings = None if entry is None or entry[0] is None else entry[0]
+            else:
+                spellings = [dest]
+            hit = ""
+            if spellings is not None:
+                for s in spellings:
+                    if _fd_dir_glob(s):
+                        hit = s
+                        break
+                    if base is not None and not s.startswith(("/", "~")):
+                        joined = os.path.normpath(os.path.join(base, s))
+                        if len([c for c in joined.split("/") if c]) <= 64 and (
+                                _fd_path(joined) or _fd_dir_glob(joined) or _FD_DIR.fullmatch(joined)):
+                            hit = joined
+                            break
+            if hit:
+                ctx["store_cwd"] = True
+                ctx.setdefault("fd_cwd", hit)
+            if into == "-":
+                ctx["line_cwd"] = None           # the previous folder, which the gate does not track
+            elif into.startswith("/") or into.startswith("~") or base is None:
+                norm = os.path.normpath(into)
+                ctx["line_cwd"] = norm if len([c for c in norm.split("/") if c]) <= 64 else None
+            else:
+                landed = os.path.normpath(os.path.join(base, into))
+                ctx["line_cwd"] = landed if len([c for c in landed.split("/") if c]) <= 64 else None
+        elif dest == "":
+            ctx["line_cwd"] = "~"                # a bare cd goes home
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -6890,11 +6930,125 @@ def _code_forms() -> list[str]:
     return [f for d in _code_paths() for f in _path_forms(d)]
 
 
+_FD_PID = object()       # a pid part in a descriptor form: digits or a $ form, as _FD_PATH has it
+
+
+def _fd_glob_part(part: str, name: str) -> bool:
+    """Could bash's expansion of one path part ``part`` (a glob, or the literal text) be ``name``? Case-sensitive,
+    as _FD_PATH is: a glob that could match anything (a long run of `[`, on which fnmatch is quadratic) counts."""
+    if not _GLOBBY.search(part):
+        return part == name
+    pat = _fn_glob(part)
+    return True if pat is None else fnmatch.fnmatchcase(name, pat)
+
+
+def _fd_glob_proc_part(part: str) -> bool:
+    """Could one path part be a pid (digits or a $ form, as _FD_PATH has it)?"""
+    if not _GLOBBY.search(part):
+        return part.isdigit() or part.startswith("$")
+    return _fd_glob_part(part, "1234") or _fd_glob_part(part, "$x")
+
+
+def _fd_form_at(comps: list[str], i: int, form: tuple) -> int:
+    """The end index when comps[i:] could spell ``form`` — a name, _FD_PID for a pid part, None for any one part
+    (a task id, which _FD_PATH spells [^/]+) — else 0. Linear: indexed, never sliced, so a long glob chain costs
+    one first-part check per position, not a copy of the rest (#337 review)."""
+    if i + len(form) > len(comps):
+        return 0
+    for k, t in enumerate(form):
+        if t is None:
+            continue
+        if t is _FD_PID:
+            if not _fd_glob_proc_part(comps[i + k]):
+                return 0
+        elif not _fd_glob_part(comps[i + k], t):
+            return 0
+    return i + len(form)
+
+
+_FD_FORMS = (("dev", "fd"), ("dev", "stdin")) + tuple(
+    ("proc", who) + mid + (tail,) for who in ("self", "thread-self", _FD_PID)
+    for mid in ((), ("task", None)) for tail in ("fd", "cwd", "root", "map_files"))
+_FD_DEV_FORMS = tuple(f for f in _FD_FORMS if f[0] == "dev")
+_FD_PROC_FORMS = tuple(f for f in _FD_FORMS if f[0] == "proc")
+
+
+def _fd_number_std_only(part: str) -> bool:
+    """A glob part for the descriptor number below an fd folder names only the writer's stdout or stderr."""
+    return not any(_fd_glob_part(part, n) for n in ("0", "3", "10")) and \
+        any(_fd_glob_part(part, n) for n in ("1", "2", "01", "02"))
+
+
+def _fd_glob_comps(comps: list[str]) -> bool:
+    """Could the parts ``comps`` spell a descriptor path _FD_PATH accepts, read part by part at any depth, as
+    _FD_PATH searches the text as written? A spelling that could name only the writer's stdout or stderr does
+    not count, as a plain one does not."""
+    for i, g in enumerate(comps):
+        if g == "dev":
+            forms = _FD_DEV_FORMS
+        elif g == "proc":
+            forms = _FD_PROC_FORMS
+        elif not _GLOBBY.search(g):
+            continue
+        else:
+            dev = _fd_glob_part(g, "dev")
+            proc = _fd_glob_part(g, "proc")
+            if dev and proc:
+                forms = _FD_FORMS
+            elif dev:
+                forms = _FD_DEV_FORMS
+            elif proc:
+                forms = _FD_PROC_FORMS
+            else:
+                continue
+        for form in forms:
+            end = _fd_form_at(comps, i, form)
+            if not end:
+                continue
+            if form[-1] != "fd" or end == len(comps) or len(comps) - end > 1:
+                return True                      # stdin, cwd, root, map_files, the fd folder, or a path below a number
+            if form[0] != "dev" and form[1] is _FD_PID:
+                return True                      # another process's stdout is a store write, as spelt plainly
+            if not _fd_number_std_only(comps[end]):
+                return True
+    return False
+
+
+def _fd_glob(p: str) -> bool:
+    """#337: could bash's expansion of the glob ``p`` name a descriptor path _FD_PATH accepts? Both the spelling
+    as written and its normpath form: the kernel resolves `..` after the glob expands, and main reads a literal
+    path both ways, so a glob through `..` (`/dev/s?m/../fd/3`) counts the way the plain one does. When the two
+    spellings are the same, one pass is enough."""
+    norm = os.path.normpath(p)
+    for q in {p, norm} if norm != p else (p,):
+        if _fd_glob_comps([c for c in q.split("/") if c not in ("", ".")]):
+            return True
+    return False
+
+
+_FD_DIR_FORMS = (("dev",), ("proc",), ("proc", None), ("proc", None, "task"), ("proc", None, "task", None))
+
+
+def _fd_dir_glob(p: str) -> bool:
+    """#337: could bash's expansion of the glob ``p`` be a folder _FD_DIR names (/dev, /proc, /proc/<pid>,
+    .../task/<tid>)? Absolute spellings only, as _FD_DIR is anchored at the root."""
+    if not p.startswith("/"):
+        return False
+    comps = [c for c in p.split("/") if c not in ("", ".")]
+    return any(len(form) == len(comps) and _fd_form_at(comps, 0, form) for form in _FD_DIR_FORMS)
+
+
 def _fd_path(p: str) -> bool:
     """A descriptor or process-folder path (_FD_PATH), as written or normalised, other than stdout or stderr spelt
-    plainly. As written counts too: the kernel resolves `/dev/fd/3/../..` from descriptor 3's folder."""
-    return bool(p) and any(_FD_PATH.search(f) for f in (p, os.path.normpath(p))) and \
-        not _STD_FD.search(p.rstrip("/") or p)
+    plainly. As written counts too: the kernel resolves `/dev/fd/3/../..` from descriptor 3's folder. A glob
+    spelling is read as bash expands it (#337): one that could name a descriptor path counts. The literal check
+    runs first, so a spelling main already reads (including one through `..`) keeps exactly main's answer."""
+    if not p:
+        return False
+    if any(_FD_PATH.search(f) for f in (p, os.path.normpath(p))) and \
+            not _STD_FD.search(p.rstrip("/") or p):
+        return True
+    return _GLOBBY.search(p) is not None and _fd_glob(p)
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
@@ -6963,6 +7117,8 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
     `cp x out/$(date).json` does not. A file name must have them itself: its folder alone does not make
     `cp x src/state/$(date +%F).json` a write to `state/approval-grants.json`. Linear in the parts."""
     p = _expand_text(glob).strip().replace("\\", "/")
+    if ancestors and _fd_dir_glob(p):
+        return True                      # `ln -s /de? x` makes x/fd/3 a descriptor path, as /dev does (#337)
 
     def could(g: str, s: str) -> bool:
         """Can glob part g be the sample part s? A NUL in s is any text, which g's own text does not fill: it must
@@ -7003,7 +7159,7 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
             return True
         named = own(gs[-1])                 # a store file's folder alone (`src/state/$(..)`) is not its name
         for j in range(1 if form.startswith("/") else 0, len(gs)):
-            if any(fits(gs, j, d) and _counts(d) for d in dirs) or \
+            if could(gs[j], ".exo") and any(fits(gs, j, d) and _counts(d) for d in dirs) or \
                     named and any(fits(gs, j, f, whole=True) for f in files):
                 return True
     return False
@@ -7016,6 +7172,9 @@ def _store_word(path: str, ancestors: bool = False, from_cwd: bool = False) -> b
         return False
     if _STORE_NAMES.search(_fold(p)) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
         return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
+    if _GLOBBY.search(p) and p.count("[") <= 32 and _store_glob(p, ancestors):
+        return True                      # a glob spelling bash expands onto the store (#337); past 32 `[`
+        # fnmatch is quadratic on a `[` that opens no set (#307), so such a word keeps main's answer
     if not p.startswith("/"):            # relative: a name the store knows, or, for a file tool's write (#494),
         return bool(_CONFIG_NAME.search(_fold(os.path.normpath(p)))) and _config_on() or \
             from_cwd and _store_from_cwd(p, ancestors)      # one read from the session folder
