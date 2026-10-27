@@ -252,3 +252,28 @@ def test_full_all_requires_principal_and_audit_and_rechecks_each_call(keyed_stor
     as_caller('local')
     hook.permissions_command(g, 'ask')
     assert g.permissions.mode == 'ask'
+
+
+def test_full_redacts_escaped_known_secrets_before_serialization(keyed_store, as_caller):
+    g, store = full_gate(keyed_store, as_caller)
+    secret = 'synthetic-quoted-"-slash-\\-not-real-12345'
+    remember_secret(secret)
+    args = {'text': secret, 'nested': [{secret: secret}], 'ordinary': 'kept'}
+    assert invoke(g, args=args) is None
+    [row] = rows(store)
+    recorded = json.loads(row['call']['args'])
+    assert recorded['text'] != secret
+    assert secret not in recorded['nested'][0]
+    assert secret not in recorded['nested'][0].values()
+    assert recorded['ordinary'] == 'kept'
+    assert row['args_sha256'] == hashlib.sha256(json.dumps(args, sort_keys=True).encode()).hexdigest()
+
+
+def test_full_string_redaction_failure_blocks_without_audit(keyed_store, as_caller, monkeypatch):
+    from exo.core.models import keys
+    g, store = full_gate(keyed_store, as_caller)
+    def unavailable(*a, **kw):
+        raise RuntimeError('synthetic redaction failure')
+    monkeypatch.setattr(keys, 'redact_secrets', unavailable)
+    assert invoke(g, args={'text': 'fixture'})['action'] == 'block'
+    assert rows(store) == [] and g.permissions.full_auto_approved == 0

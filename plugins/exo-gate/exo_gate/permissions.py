@@ -119,24 +119,33 @@ def full_recorded_call(tool: str, args: Mapping) -> tuple[dict, str]:
     import hashlib
     from exo.ingest.common import redact
     from exo.envscrub import is_secret_name
-    from exo.core.models.keys import redact_secrets
+    from exo.core.models.keys import known_secret_values, redact_secrets
     text = json.dumps(args, sort_keys=True, allow_nan=False)
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    known = known_secret_values()
     masked = 0
+    def scrub_text(value):
+        nonlocal masked
+        clean = redact_secrets(value, values=known)
+        masked += int(clean != value)
+        return clean
     def scrub(value):
         nonlocal masked
         if isinstance(value, dict):
             out = {}
             for key, item in value.items():
+                clean_key = scrub_text(key)
                 if is_secret_name(key) or key.lower() in {"authorization", "cookie"}:
-                    out[key] = "[redacted]"
+                    out[clean_key] = "[redacted]"
                     masked += 1
                 else:
-                    out[key] = scrub(item)
+                    out[clean_key] = scrub(item)
             return out
+        if isinstance(value, str):
+            return scrub_text(value)
         return [scrub(item) for item in value] if isinstance(value, list) else value
     text = json.dumps(scrub(json.loads(text)), sort_keys=True, allow_nan=False)
-    text, count = redact(redact_secrets(text))
+    text, count = redact(redact_secrets(text, values=known))
     return {"tool": tool, "args": text, "redacted": count + masked}, digest
 
 
