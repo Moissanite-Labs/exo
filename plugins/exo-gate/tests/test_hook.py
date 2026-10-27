@@ -100,6 +100,24 @@ def test_a_bare_patch_header_does_not_hide_the_next_write(keyed_store, tmp_path,
     assert target.read_bytes() == b"before\n"
 
 
+@pytest.mark.parametrize("bare", ["*** Move to:", "*** Add File:", "*** Move File: a ->"])
+def test_a_bare_patch_header_does_not_hide_a_store_write(keyed_store, tmp_path, monkeypatch, bare):
+    """#548 follow-up: a bare header before a store path asks as a store write through the hook, and the
+    target file is not written."""
+    store, key = keyed_store
+    monkeypatch.chdir(tmp_path)
+    path = ".exo/policies/default.yaml"
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"before\n")
+    _, ctx = make_gate(store, key)
+    result = call(ctx, "apply_patch", {"patch": f"*** Begin Patch\n{bare}\n*** Add File: {path}\n+x\n*** End Patch\n"})
+    assert result["action"] == "approve"
+    [ev] = events(store)
+    assert ev["body"]["outcome"] == "ask" and ev["body"]["classification"]["category"] == "store_write"
+    assert target.read_bytes() == b"before\n"
+
+
 def test_ask_returns_approve_with_summary_link_default(keyed_store):
     store, key = keyed_store
     _, ctx = make_gate(store, key)
