@@ -103,7 +103,10 @@ def test_behind_a_hop_a_reserved_entry_keeps_each_hit():
     d = decide(term(line), norm(HOP_POLICIES["reserved_terminal"]))
     assert ("opaque_exec", "me@host") in [tuple(r) for r in d.reserved], d.reserved
     plain = decide(term(line.replace(f"{Q}X=a b{Q} ", "")), norm(HOP_POLICIES["reserved_terminal"]))
-    assert {tuple(r) for r in plain.reserved} <= {tuple(r) for r in d.reserved}, (d.reserved, plain.reserved)
+
+    def hits(x, drop=""):   # a hit named after the env -S text names the assignment too, so it is dropped
+        return {(a, b.replace(drop, "")) for a, b in (tuple(r) for r in x.reserved)}
+    assert hits(plain) <= hits(d, "'X=a b' "), (d.reserved, plain.reserved)
 
 
 def _hops(inner):

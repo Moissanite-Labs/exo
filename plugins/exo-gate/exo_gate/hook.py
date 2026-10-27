@@ -384,14 +384,16 @@ class Gate:
         """What bypass does with an ask in a turn the principal started: ``allow``, ``hold`` (a post that breaks
         the posting rules goes back to the agent with the fixes) or ``floor`` (store writes and secrets still ask).
         None when bypass is off, or the turn was started by anyone else (#598): a peer, bus wake, job notice or
-        local caller keeps its card, as when bypass was off."""
+        local caller keeps its card, as when bypass was off. The floor counts each reading and part (``gate.no_grant``):
+        a camelCase tool leads with its hump word, and its store write or secret is in its ``floor`` reading (#602);
+        a post that breaks the posting rules with such a reading only is held, as before."""
         if d.outcome != "ask" or not self.bypass_on or not is_principal(author):
             return None
         if _floor(c, main=True):                 # #591: main's order for main's reading, so main's holds stay
             return "floor"
         if d.violations:
             return "hold"
-        return "floor" if _floor(c) else "allow"
+        return "floor" if _floor(c) or gate.no_grant(c) else "allow"
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -667,8 +669,11 @@ class Gate:
                 d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
                 d.displaced_asks = d.displaced_asks or d2.displaced_asks
             d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
-        if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
-            d.reason += f" (registry risk is high and {tool} is not a known tool)"
+        # Any reading counts: a camelCase MCP tool leads with its hump word and is `unknown` in its floor (#602).
+        unknown = any(r.category == "unknown" for r in gate.readings(c))
+        if risk == "high" and unknown and _RANK[d.outcome] < _RANK["ask"]:
+            known = "is not a known tool" if c.category == "unknown" else "is known only by its hump words"
+            d.reason += f" (registry risk is high and {tool} {known})"
             d.outcome = "ask"
         # #454: a sudo write line carries the body file of the part it displaced there (`sudo gh ... -F /tmp/b > f`)
         if self.executor_required and d.outcome != "deny" and any(
@@ -752,8 +757,9 @@ class Gate:
             body["turn_author"] = author  # the turn the bypass served (#598)
             if bypass == "allow":
                 body["bypass"] = asked
-        elif bypass == "floor":
-            body["bypass"] = {"floor": _floor(c, main=True) or _floor(c)}
+        elif bypass == "floor":   # main's reading's floor, a split reading's, or the first a part has (#591, #602)
+            body["bypass"] = {"floor": _floor(c, main=True) or _floor(c) or next(
+                (x.category for x in _every_part(c) if x.category in perm.FLOOR), c.category)}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}

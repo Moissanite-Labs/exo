@@ -34,6 +34,13 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 
 ## 1. Repo layout
 
+**Session working notes (D-086).** `exo.work_notebook` owns optional revisioned
+state in `sessions.sqlite`. Composition validates `work_notes` before opening
+runtime resources, then attaches the gated tool, per-session prompt and handoff
+source. Updates compare revisions inside one transaction. Keep note authorship
+as `agent`, preserve session scope, and use existing gate and executor dispatch.
+The adapter and limits are documented in [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
+
 | Path | What lives there |
 |---|---|
 | `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, approvals, ingress, jobs, plugin loader. Small on purpose. |
@@ -205,7 +212,9 @@ Then do the next three steps.
 
 **Classify it in the gate.** The gate decides allow, log, ask or deny by category. Add the tool to `TOOLS` in
 `src/exo/gate.py`, mapped to a category such as `read`, `local_write`, `shell`, `delegate`, `credentials`,
-`message_send`. A tool the classifier does not know and the registry calls high risk is an ask, never an allow.
+`message_send`. A tool the classifier does not know and the registry calls high risk is an ask, never an allow,
+also when the gate reads a known word in its camelCase name (`mcp__fs__writeFile`): the unsplit name is still read
+as `unknown` beside it, and any reading counts.
 If the tool sends something outward, its category must be one the gate treats as outward, so approvals bind to the
 exact text (`docs/GATE.md`).
 
