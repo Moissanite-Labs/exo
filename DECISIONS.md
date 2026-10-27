@@ -1349,10 +1349,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   that does not lead, and the part that runs ssh's stdin where the remote line leads (`echo x | ssh $H gh
   release download ..`, the whole part and its own copies). `ssh -o RemoteCommand=` raised only the remote
   line's lead to internal, so the gh read below the store write stayed private: every part of that line is
-  raised now, as for the hop's own command (D-075), on a copy. So the deny, rule, reserved entry or matrix
-  cell on the gh reading, including a host target on a hop, holds as before #461 or stricter (gate_diff:
-  0 pairs lowered against main before #461 on the review's corpus and on the follow-up's hop forms). The
-  remote line is always copied before (also with `mosh --local`), so a stored result is never changed.
+  raised now, as for the hop's own command (D-075), on a copy, and each nested part keeps its private
+  reading as a copy beside it (no parts, no post): the raise alone took the gh read away from an entry
+  keyed on `exposure: private`, and `{match: {category: read, exposure: private}, decision: deny}` asked
+  at the store floor where main denied (24 pairs). So the deny, rule, reserved entry or matrix cell on the
+  gh reading, including a host target on a hop, holds as before #461 or stricter (gate_diff: 0 pairs
+  lowered against main before #461, against main at 15e60ddb, which has #493's host among the hop's other
+  targets, and against main at fa5dfcd8, on the review's corpus, the follow-up's hop forms and the
+  `exposure: private` forms). The remote line is always copied before (also with `mosh --local`), so a
+  stored result is never changed.
 - *Amendment 2026-10-24 (issue #542):* an explicit `gates.escalate` must be a mapping, and its `categories`, when
   present, must be a list. A malformed value raises `PolicyError` during normalization and store policy loading,
   rather than silently retaining defaults or using substring membership on a string. Omitted settings, an empty

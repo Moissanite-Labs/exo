@@ -3938,7 +3938,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
             # A helper names the host as when it led the line, also where the remote line's store write leads (#461)
-            c.parts += [_host_copy(h, dest) for h in local if h is not c and not h.target]
+            c.parts += [_bare_copy(h, target=dest) for h in local if h is not c and not h.target]
         if not lead:                          # ssh's own part names the host, as when it led before #316
             c.target = dest if "unread hops" in c.signals else (c.target or dest)
         # #399: the host stands for an empty other target too, as for an empty target, so a rule on it sees each.
@@ -4464,10 +4464,13 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                 c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
                 if c is not None and key == "remotecommand":
                     # Every part runs on the remote host, as for the hop (D-075): a part the store write it makes
-                    # leads now (#461) is still raised. Parts can be shared with a stored result, so a copy.
+                    # leads now (#461) is still raised. Parts can be shared with a stored result, so a copy. A nested
+                    # part keeps its private reading as a copy too, so an entry on `exposure: private` meets it as before.
                     c = parts[-1] = copy.deepcopy(c)
+                    private = [_bare_copy(p) for p in list(_each_part(c))[1:] if EXPOSURE.index(p.exposure) < 1]
                     for p in _each_part(c):
                         p.exposure = max(p.exposure, "internal", key=EXPOSURE.index)
+                    c.parts += private
                     _raise_axes(c, exposure="internal")
                     c.signals.append("remote host")
             elif key in _SSH_LIB_SETTINGS and value.strip().lower() != "internal":
@@ -4724,8 +4727,9 @@ def _unknown_store(w: _Word, seen: dict, ancestors: bool = False, inside: bool =
                "*" in p and _store_glob(p, ancestors, inside) for p in pieces)
 
 
-# gh subcommands that write the paths on their line (#461): release, run and attestation download into
-# `-O`/`--output` or `-D`/`--dir`, and repo and gist clone into their directory word. The gate read them as
+# gh subcommands that write the paths on their line (#461): release download into `-O`/`--output` or `-D`/`--dir`,
+# run download into `-D`/`--dir`, attestation download into the current folder (a `cd` into the store before it),
+# and repo and gist clone into their directory word. The gate read them as
 # reads on GitHub, so the store check never looked at the paths, and `gh release download -O
 # ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, or the signed-update trust pin (#133).
 _GH_STORE_WRITES = (("release", "download"), ("run", "download"), ("attestation", "download"),
@@ -4821,16 +4825,16 @@ def _displace_with(c: Classification, **changes) -> None:
     c.parts, c.displaced = [lead if q is old else q for q in c.parts], lead
 
 
-def _host_copy(p: Classification, dest: str) -> Classification:
-    """A copy of p on the hop's host, with no parts and no post (as #320's), so the posting checks read each post
-    once."""
-    return replace(p, target=dest, parts=[], text="", title="", text_file="", own_signals=[
+def _bare_copy(p: Classification, **changes) -> Classification:
+    """A copy of p with these changes (the hop's host as its target), with no parts and no post (as #320's), so the
+    posting checks read each post once."""
+    return replace(p, **changes, parts=[], text="", title="", text_file="", own_signals=[
         s for s in (p.signals if p.own_signals is None else p.own_signals) if s != "unseen_body"])
 
 
 def _hop_fill(c: Classification, dest: str, whole: bool = False) -> None:
     """#399 below an ssh or mosh hop's line (the hop's own copy): the host joins each nested part's empty other
-    target, and a nested part with an empty target gets a copy on the host among the line's parts (_host_copy).
+    target, and a nested part with an empty target gets a copy on the host among the line's parts (_bare_copy).
     Each part keeps its own reading, so a gh read nested under the store write it makes (#461) is still seen by a
     deny, reserved or rule entry on the host, as when it led the line. The copies of a gh action on its other targets
     among the line's own parts take the host in place, as before. With whole, the line and those copies are filled
@@ -4840,7 +4844,7 @@ def _hop_fill(c: Classification, dest: str, whole: bool = False) -> None:
     for p in nested:
         if "" in p.alt_targets and p.target != dest:
             p.alt_targets = list(dict.fromkeys([*p.alt_targets, dest]))
-    c.parts += [_host_copy(p, dest) for p in nested if not p.target]
+    c.parts += [_bare_copy(p, target=dest) for p in nested if not p.target]
 
 
 def _write_summary(lead: Classification, write: Classification) -> str:

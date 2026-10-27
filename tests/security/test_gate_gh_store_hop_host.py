@@ -7,8 +7,9 @@ reserved entry on `{read, target: host}` no longer saw it and the line asked whe
 same held for the opaque part of an `eval` or a stdin form under `{opaque_exec, target: host}`, for mosh's local
 helpers and the part that runs ssh's stdin, which led over the read and took the host. Each such part with an empty
 target now has a copy on the host, and keeps its own reading. Under `ssh -o RemoteCommand` only the line's lead was
-raised to internal, so the read below the store write stayed private: every part is raised now. Every command string
-here is data for exo.gate.classify/decide; none is run.
+raised to internal, so the read below the store write stayed private: every part is raised now, and a nested part
+keeps its private reading as a copy beside it. Every command string here is data for exo.gate.classify/decide; none
+is run.
 """
 import pytest
 
@@ -136,14 +137,31 @@ SCOPED_MATRIX = {"gates": {"scopes": {"private": ["host"]}, "matrix": {
     "irreversible": {"private": "allow", "internal": "deny", "public": "deny"}}}}
 
 
-@pytest.mark.parametrize("line", [
+REMOTE_COMMANDS = [
     "ssh -o RemoteCommand='gh release download v1 -R pub/x -O ~/.exo/policies/gates.yaml' host",
     "ssh -o RemoteCommand='gh repo clone pub/x ~/.exo/update' host",
     "ssh -oRemoteCommand='gh run download 1 -R pub/x -D ~/.exo/state' host",
-])
+]
+
+
+@pytest.mark.parametrize("line", REMOTE_COMMANDS)
 def test_a_remote_command_still_meets_the_internal_matrix_cell(line):
     c, d = run(line, SCOPED_MATRIX)
     assert (d.outcome, d.rule) == ("deny", "matrix"), (line, c, d)
+
+
+# Guard, as on main: each raised part keeps its private reading as a copy, so an entry keyed on `exposure: private`
+# still meets the gh read, also in an `eval` (a raise alone made these ask at the store floor).
+READ_PRIVATE_RULE = {"gates": {"rules": [{"match": {"category": "read", "exposure": "private"}, "decision": "deny"}]}}
+
+
+@pytest.mark.parametrize("line", REMOTE_COMMANDS + [
+    "ssh -o RemoteCommand='gh release download v1 -O ~/.exo/policies/gates.yaml' host",
+    "ssh -oRemoteCommand='eval gh release download v1 -R pub/x -O ~/.exo/policies/gates.yaml' host",
+])
+def test_a_remote_command_keeps_the_private_reading(line):
+    c, d = run(line, READ_PRIVATE_RULE)
+    assert (d.outcome, d.rule) == ("deny", "rule"), (line, c, d)
 
 
 # Guards, as on main: the line is still the principal-only store write, the read keeps its repo, a gist clone

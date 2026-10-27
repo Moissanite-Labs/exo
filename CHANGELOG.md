@@ -192,8 +192,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   stdin (`echo x | ssh $H gh release download ..`), whose `(opaque_exec, $H)` hit a `reserved: [tool:terminal]`
   entry had lost. `ssh -o RemoteCommand='gh release download ..'` raised only the line's lead to internal, so
   the read below the store write stayed private and a matrix that denies an internal action asked: every part
-  of the remote line is internal now, as for the hop's own command (D-075). So each of these lines decides as
-  before #461 or stricter under each of these policies.
+  of the remote line is internal now, as for the hop's own command (D-075), and a nested part keeps its private
+  reading as a copy beside it, so a rule on `{category: read, exposure: private}` still denies. So each of these
+  lines decides as before #461 or stricter under each of these policies.
 - A gh download or clone into the Exo store is a store write, as `curl -o` and `git clone` already are (#461).
   gh release download writes what it fetches into `-O`/`--output` or `-D`/`--dir`, gh run download into
   `-D`/`--dir`, gh attestation download into the current folder, and gh repo clone and gh gist clone into their
