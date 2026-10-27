@@ -3008,6 +3008,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   fewer. Where the call's reading has no credentials part main read, the folder pass now takes main's read of the
   line, with no target for a bare word, so its path is the folder as written, as on main. It held at 0b35021a too.
   Group 2 again holds only the `dd` operand, which #568 tracks.
+  *2026-10-27 (#513, sixth round, the merges of main 6054da56 and 15e60ddb):* (t) Main merged #514 (#611), which makes
+  each store path a write names a part of its own, with the path alone. So the `dd` operand now decides as main
+  decides it: `dd if=/tmp/a of=~/.exo/./plugins/p/x.py` and `dd if=~/.exo//keys/seat.key of=/tmp/a` are denied under
+  `deny: [target:~/.exo/*]`, here and on main, and a `reserved:` entry like it counts a hit. Main now denies the plain
+  lines #568 tracks too, so group 2 is empty. The folder pass of (s) now reads main's line again only where the call's
+  reading has a credentials part. #446 only adds reads, so a line with no secret read here had none on main either,
+  and the decisions do not change. A call such as `cat` with 2,000 file names and `cwd: ~/.ssh` no longer parses its
+  line a second time: it takes 0.101 s, against 0.092 s on main and 0.146 s before.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
