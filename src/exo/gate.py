@@ -140,6 +140,9 @@ class Classification:
     # True on the copy of a secret line's heaviest other command that _shell_call adds beside the folder's read (#320):
     # on main that command is the line, whose own violations are listed outside the cap, so the copy's are too.
     line_copy: bool = field(default=False, repr=False, compare=False)
+    # True on the part that keeps main's target where the line's own is a spelling only #446 reads (_plain_part): main
+    # had that target on the line itself, not on a part, so the ssh hop's copy for the host passes over it (#513).
+    main_target: bool = field(default=False, repr=False, compare=False)
     # The source text of the one simple command this part stands for, with its redirections (#394): a rule that
     # would lower a compound line must match it too (_line_own_test). None where no such text exists (a part the
     # gate made up, an unread nest, a string literal in code), and then no such rule matches.
@@ -173,6 +176,7 @@ class Classification:
         d.pop("floor")
         d.pop("alt_copy")
         d.pop("line_copy")
+        d.pop("main_target")
         d.pop("_command_views")
         d.pop("own")
         d.pop("setters")
@@ -3920,9 +3924,12 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # #320: where an expansion form makes the remote line a secret or store line, the part that decided it
             # before keeps the host as its target, as the remote line itself did (`ssh host 'cat ~/.exo/$(printf
             # ledger.sqlite)'` was a read of host), so a reserved or rule entry on it still lists it. A copy with no
-            # parts and no post, so the posting checks read each post once.
-            top = (next((p for cat in ("credentials", "store_write") for p in c.parts if p.category == cat), None) or
-                   _most_severe(c.parts)) if c.category in ("credentials", "store_write") else None
+            # parts and no post, so the posting checks read each post once. A part that keeps main's target beside a
+            # target only #446 reads is passed over (_plain_part): main had it on the line, and made the copy as here
+            # (`ssh host 'cat ~/.kube//config ~/.ssh/id_rsa'`, #513)
+            mine = [p for p in c.parts if not p.main_target]
+            top = (next((p for cat in ("credentials", "store_write") for p in mine if p.category == cat), None) or
+                   _most_severe(mine)) if c.category in ("credentials", "store_write") else None
             if top is not None and not top.target:
                 c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
@@ -6645,7 +6652,7 @@ def _plain_part(c: Classification, target: str, summary: str, cmd: str = "") -> 
     if not (target and target != c.target):
         return None
     part = _make("credentials", summary=f"{summary} {target}"[:120], target=target, command=cmd,
-                 reversibility=c.reversibility, own=None, signals=["secret store"])
+                 reversibility=c.reversibility, own=None, signals=["secret store"], main_target=True)
     c.parts = [*c.parts, part]
     return part
 
