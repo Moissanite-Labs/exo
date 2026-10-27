@@ -25,6 +25,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- The core coupling counter counts relative imports such as `from .. import envscrub` like their absolute forms. Existing exclusions, duplicate handling and caps are unchanged.
+
+- `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last
+  segment of a dotted key. Both now mask a secret at any level of the key path (a secret-shaped name, a container
+  under one, and a literal under `env` or `headers`), and `config set` refuses the same shapes. `${VAR}` references
+  and `*_env` names are still shown and accepted (#691).
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
@@ -235,7 +241,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
   older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
   file's path or launch line still reads as on main, for the reader has no value to check a path line against.
-- A store or secret name matches in any case (#601, D-082). On a case-insensitive file system (default APFS)
+- A store or secret name matches in any case (#601, D-087). On a case-insensitive file system (default APFS)
   `.exO/config.json` IS `.exo/config.json`, but every store and secret name check read the spelling as written, so
   a case variant walked past: `cp /tmp/x ~/.exO/config.json` and `cp /tmp/x $HOME/.EXO/config.json` were
   `shell`/allow where the plain spelling is a `store_write` ask, `echo x > ~/.KUBE/config` a `local_write`/allow
