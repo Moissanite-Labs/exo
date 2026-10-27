@@ -1053,6 +1053,17 @@ def test_main_s_read_of_the_folder_stays_a_part_beside_a_later_part_main_read(to
     assert (outcome, "credentials" in hits) == ("ask" if reserved else "deny", reserved)
 
 
+@pytest.mark.parametrize("line", ["cat ~/.kube//config keys", "cat ~/.kube//config; ls keys",
+                                  "cp /pro?/self/environ keys"])
+@pytest.mark.parametrize("in_args", [True, False])
+def test_a_bare_word_main_read_first_gets_no_part_of_its_own(line, in_args):
+    # main's line had no target for `keys`, and neither its part nor its folder read is `keys` alone, so an entry for
+    # that name asks, here and on main, with `~/.exo` as the call's folder or the session's
+    args = {"command": line, "cwd": "~/.exo"} if in_args else {"command": line}
+    c = gate.classify({"tool": "bash", "args": args}, cwd=None if in_args else "~/.exo")
+    assert gate.decide(c, gate.normalize_policies({"gates": {"deny": ["target:keys"]}})).outcome == "ask"
+
+
 @pytest.mark.parametrize("line", ["cat ~/.kube/config; cd ~/.docker && cat conf*",
                                   "cat ~/.docker/config.json; cd ~/.exo && rm keys"])
 def test_no_folder_part_beside_a_later_part_where_main_read_the_store_first(line):
