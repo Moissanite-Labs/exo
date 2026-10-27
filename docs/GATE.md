@@ -2727,18 +2727,20 @@ Known limits. A descriptor path is matched as written, not resolved (the gate's 
 through its own descriptors). A link to one, or to `/dev` or `/proc/self`, is a store write when a shell
 line makes it (`ln -s /dev x`), as is code that names a descriptor path, but one made where the gate
 does not see it (code linking to `/dev` is `code`, which policy may lower), or already there, is
-followed by nothing: a store file opened on descriptor 3 or above through a spelling the gate cannot
-read (a variable, a glob in a folder part, a named `{fd}`) and written back through that link passes
-(`exec 3< "$f"; printf X > /tmp/link-to-dev/fd/3`). So does a store file reached through a hardlink and
-opened on stdout (`exec 1< /tmp/hardlink; printf X > /dev/stdout`), as for any hardlink above. Both are
-tracked in #324. Known friction (fails closed, no grant): a descriptor path used as an input of a command that
+followed one component at a time, up to 40 links, stopping as soon as the spelling is a descriptor
+path, so a store file opened on descriptor 3 or above and written back through that link asks
+(`exec 3< "$f"; printf X > /tmp/link-to-dev/fd/3`), as does a write through a link chain, a `..`
+after a link, or a relative link from the session folder (#324). A store file reached through a
+hardlink and opened on stdout still reads as a read on the open, but the write back asks, as for any
+hardlink above (#324). A store file opened through a spelling the gate cannot read (a variable, a
+glob in a folder part, a named `{fd}`) still passes on the open; what is caught is the write back. Known friction (fails closed, no grant): a descriptor path used as an input of a command that
 writes asks too, since the words of a writing command are not told apart (`jq . /dev/stdin > out.json`,
 `cat /dev/stdin > f`, `patch -i /dev/stdin`, `diff /proc/self/fd/3 x > out`); `jq . < /dev/stdin >
 out.json` does not. So does a post whose body file is a descriptor path written out
 (`gh pr comment 5 --body-file /dev/stdin`): it is this store write, which only the principal answers, never
 granted, rather than the unseen-body ask of a post (#208), which a seat may answer; its card says the
 path is one the gate cannot resolve, not that the command writes it. A body file that only links to one
-(`--body-file notes.md`, a link to `/dev/stdin`) keeps the unseen-body ask.
+(`--body-file notes.md`, a link to `/dev/stdin`) is this store write too, as the direct spelling is.
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
