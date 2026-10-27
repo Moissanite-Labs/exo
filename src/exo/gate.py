@@ -620,8 +620,9 @@ class _Lexer:
                 op_at = self.i
                 # an fd number, or `{name}` (bash 4.1+ gives it a new descriptor, #328), belongs to the operator --
                 # unless it is the target of the redirection just read (`1<&0>/dev/stdout`: the 0 is the copy's
-                # source, not the fd of the `>` that follows it)
-                if w.started and not w.quoted and not after_redir and (w.text.isdigit()
+                # source, not the fd of the `>` that follows it). While a heredoc delimiter is still pending
+                # the old reading wins even there, because _nest_end resolves delimiters under it.
+                if w.started and not w.quoted and (not after_redir or state["delim"] is not None) and (w.text.isdigit()
                         or re.fullmatch(r"\{[A-Za-z_]\w*\}", cast(_Word, w).text)):
                     state["w"], start, fd = _Word(), -1, cast(_Word, w).text
                     op_at = w_at
@@ -631,10 +632,15 @@ class _Lexer:
                 self.i += len(op)
                 if op in ("<<", "<<-"):
                     state["delim"], hd_at = op == "<<-", op_at
+                    after_redir = False   # the word after a heredoc operator is its delimiter, and the
+                                          # delimiter's digits keep the old reading _nest_end agrees with
                 else:
                     toks.append(("redir", op))
                     mark(op_at, self.i)
-                    after_redir = True
+                    # Only a descriptor-copy operator's word is a descriptor, not the next operator's fd:
+                    # after any other operator a digit word keeps the old reading, which _nest_end agrees
+                    # with (`<2>file` steals the 2 as the `>` fd; `<<<2>file` the same)
+                    after_redir = op in ("<&", ">&")
             elif ch in ";&|()":
                 after_redir = False       # a separator ends any redirection's target word
                 flush()
