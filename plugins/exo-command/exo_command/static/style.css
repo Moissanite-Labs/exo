@@ -818,3 +818,13 @@ body { margin: 0; background: #08090a; }
 .xc-credential-section > label { display: grid; gap: 6px; }
 .xc-credential-consumer { display: inline-flex; gap: 6px; margin-right: 18px; }
 .xc-credential-row { padding: 12px 0; border-top: 1px solid var(--line); }
+
+/* Keep rename controls outside the thread-selection button. */
+.xc-session-row { display: flex; align-items: center; min-width: 0; }
+.xc-session-row .xc-sess { flex: 1; min-width: 0; }
+.xc-rename { flex-shrink: 0; padding: 5px; font-size: 11px; }
+.xc-rename-editor { padding: 8px; border: 1px solid var(--line-2); }
+.xc-rename-editor[hidden] { display: none; }
+.xc-rename-editor label { display: flex; flex-direction: column; gap: 4px; }
+.xc-rename-editor input { min-width: 0; width: 100%; box-sizing: border-box; }
+.xc-rename-error { color: var(--fg-2); font-size: 12px; overflow-wrap: anywhere; }

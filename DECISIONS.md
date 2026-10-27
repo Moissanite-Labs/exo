@@ -4458,6 +4458,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   whole, which the next turn's call can cut.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
+- **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
+  editor with Save, Cancel, Enter and Escape. This uses the existing principal-only rename command without
+  selecting that thread or replacing the current composer draft. Native JavaScript prompts are not required.
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
   calls `update_session(title=...)` and announces the change with the existing `session.updated` event. The protocol
   stays at its cap of 30 commands and 30 events. Only the principal may rename (D-052); anyone else gets `forbidden`.
