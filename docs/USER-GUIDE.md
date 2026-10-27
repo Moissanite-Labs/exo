@@ -126,10 +126,24 @@ It shows approvals, decisions waiting on you, live sessions, tasks, projects and
 `docs/media/web-*.png`, and the Providers tab is `docs/ui/web-providers.png`. Details are in `docs/ui/WEB.md` and
 `plugins/exo-command/README.md`.
 
+In Chat, a busy thread says `waiting for approval` while its approval card, or a global approval card,
+needs an answer. Other threads' cards do not change its phase. When the core or activity state is unavailable,
+the label says `last known`. Stop and Send keep their existing behavior. Answer through the approval card.
+
 The web page has its own sub-pages for Tasks, Schedule, Command and Providers. Its composer runs `/context`,
 `/findings`, `/trace`, `/new`, `/rename` and `/layout`. Type `/` for the menu. The Layout button in the page does what
 `/layout` does. Double-click a thread in the list to rename it. Anything else you type there goes to the agent as a
 message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
+
+On the web, a connected page can still show that its core is unavailable. Chat labels last known activity
+and keeps your draft while it reconnects. If the activity refresh fails, choose Retry activity. Send waits
+for a fresh session snapshot. Try stop can request an interrupt when only the web feed or snapshot is
+unavailable. Confirmed core loss disables it. Reconnecting does not send your draft.
+
+The web Chat pane toolbar can hide or show Threads and Details. Use each pane's arrow buttons to change
+its position, and the side sliders to adjust width. The conversation always stays visible. Reset panes
+restores defaults. Narrow windows stack panes in your chosen order and hide width sliders. The browser saves
+this layout. Desktop builds with pane preferences retain it across ports and relaunches.
 
 ## 3. Slash commands
 
@@ -318,8 +332,10 @@ Both clients use `o` to allow once, `a` to choose always, and `d` to deny with a
 including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
 it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
 even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
-`ctrl+f` to move to it. In the terminal, the card leads with `Ctrl+F, then [o] once [a, Enter] always [d, Enter] deny`:
-press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
+`ctrl+f` to move to it. Both clients show the answer sequence: `Ctrl+F`, then `o` once, `a` followed by Enter
+for always, or `d` followed by Enter to deny. The web card lists its available choices and changes its help during
+confirmation or note entry. Press Ctrl+F from the composer, then the answer keys, with no click. Your draft stays
+in place. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 

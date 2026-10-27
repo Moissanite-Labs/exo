@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -33,9 +34,53 @@ def test_the_chat_view_uses_the_layout_module_and_has_a_switch_and_a_command():
     assert "columnOrder(layout)" in src and "ordered(items, layout)" in src
 
 
+def _missing_css_tokens(stylesheets, runtime=()):
+    # A small lexical check for our stylesheets, not a CSS parser. Ignore comments and
+    # quoted content so examples and generated text cannot declare or reference tokens.
+    clean = "\n".join(re.sub(r'/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', "", css, flags=re.S)
+                      for css in stylesheets)
+    declared = set(re.findall(r"(--[\w-]+)\s*:", clean)) | set(runtime)
+    # A fallback makes an optional token valid; nested var() fallbacks are checked too.
+    required = {name for name, delimiter in re.findall(r"var\(\s*(--[\w-]+)\s*([,)])", clean)
+                if delimiter == ")"}
+    return required - declared
+
+
 def test_the_layout_styles_use_the_site_tokens_only():
     block = text("style.css").split("layout experiment (D-046)")[1]
-    assert "xc-inverse" in block and not __import__("re").search(r"#[0-9a-fA-F]{3,6}\b", block)
+    assert "xc-inverse" in block and not re.search(r"#[0-9a-fA-F]{3,6}\b", block)
+    # Board column counts come from these renderers, rather than a site-wide CSS token.
+    for producer in ("command.js", "tasks.js"):
+        assert re.search(r"\bstyle\s*:\s*[\"']--n:", text(producer)), producer
+    missing = _missing_css_tokens([text(path.name) for path in STATIC.glob("*.css")], runtime={"--n"})
+    assert not missing, "Undefined CSS tokens: " + ", ".join(sorted(missing))
+
+
+@pytest.mark.parametrize("token", ["--surface-2", "--mono", "--no-such-token"])
+def test_style_token_contract_rejects_undefined_picker_tokens(monkeypatch, token):
+    original = text
+    monkeypatch.setitem(globals(), "text", lambda name: original(name) + (
+        "\n.xc-model-row { color: var(" + token + "); }" if name == "style.css" else ""))
+    with pytest.raises(AssertionError, match=re.escape(token)):
+        test_the_layout_styles_use_the_site_tokens_only()
+
+
+@pytest.mark.parametrize("producer", ["command.js", "tasks.js"])
+def test_style_token_contract_requires_the_runtime_column_producer(monkeypatch, producer):
+    original = text
+    monkeypatch.setitem(globals(), "text", lambda name: "" if name == producer else original(name))
+    with pytest.raises(AssertionError, match=re.escape(producer)):
+        test_the_layout_styles_use_the_site_tokens_only()
+
+
+def test_style_token_check_handles_comments_strings_fallbacks_and_shared_declarations():
+    assert not _missing_css_tokens([
+        ':root { --fg: black; } /* var(--comment-only) */',
+        '.row { color: var(--fg); padding: var(--optional, 20px); content: "var(--quoted)"; }',
+    ])
+    assert _missing_css_tokens([
+        '/* --fake: black; */ .row { color: var(--fake); background: var(--optional, var(--missing)); }',
+    ]) == {"--fake", "--missing"}
 
 
 def test_the_chat_box_has_a_definite_height_so_the_log_scrolls_inside_it():

@@ -212,11 +212,47 @@ export function mount(app) {
   }
   function later() { clearTimeout(timer); timer = setTimeout(function () { load(false); }, 150); }
 
-  var es = null, poll = null;
+  var es = null, poll = null, retry = 0, retryTimer = null, disposed = false;
   load(false);
-  try {
-    es = stream("/api/stream");
-    es.onmessage = later;
-  } catch (e) { poll = setInterval(function () { if (!document.hidden) load(false); }, 5000); }
-  return function unmount() { clearTimeout(timer); clearInterval(poll); if (es) es.close(); };
+  function clearRetry() { if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; } }
+  function connectStream() {
+    if (disposed) return;
+    clearRetry();
+    if (es) { try { es.close(); } catch (e) {} }
+    es = null;
+    if (typeof EventSource === "undefined") {
+      if (!poll) poll = setInterval(function () { if (!document.hidden) load(false); }, 5000);
+      return;
+    }
+    try { es = stream("/api/stream"); }
+    catch (e) {
+      if (!poll) poll = setInterval(function () { if (!document.hidden) load(false); }, 5000);
+      return;
+    }
+    var connection = es;
+    // A reopened stream can stay quiet after changes made while disconnected.
+    es.onopen = function () { if (es !== connection || disposed) return; retry = 0; later(); };
+    es.onmessage = function () { if (es !== connection || disposed) return; later(); };
+    es.onerror = function () {
+      if (es !== connection || disposed) return;
+      if (es && es.readyState === 2) {   // CLOSED: the browser will not retry
+        retry += 1;
+        clearRetry();
+        retryTimer = setTimeout(function () {
+          if (disposed || es !== connection) return;
+          connectStream();
+        }, Math.min(15000, 500 * 2 ** Math.min(retry, 5)));
+      }
+    };
+  }
+  connectStream();
+  return function unmount() {
+    disposed = true;
+    clearTimeout(timer);
+    clearRetry();
+    clearInterval(poll);
+    poll = null;
+    if (es) { try { es.close(); } catch (e) {} }
+    es = null;
+  };
 }
