@@ -80,6 +80,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   configured principal. Originals stay in the transcript. Earlier tool caps are not recoverable
   (`docs/TOOL-OUTPUT.md`, D-084, #501 stage 1; in progress).
   Expansion refuses a reference to a result that the view would not excerpt.
+  A test keeps the gate's page limit at the top of the `page_chars` range.
 - Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
   explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
   The approval gate and required executor constraints remain enforced. Existing configurations

@@ -63,7 +63,10 @@ control characters and Unicode cannot make the registry truncate the JSON envelo
 
 The runtime supplies the session. The tool accepts no session or file path. Normal
 gate and executor dispatch still apply. The gate classifies supported `tool_output` calls as `read`,
-so an explicit read-deny policy blocks them. Unsupported argument shapes retain generic gate
+so an explicit read-deny policy blocks them. The gate cannot see the configured `page_chars`.
+It reads a `limit` up to 24,000, the top of the allowed range. The tool refuses a limit above the
+configured value, and the call stays a read either way. A test keeps the gate's ceiling at the top
+of that range. Unsupported argument shapes retain generic gate
 classification and fail schema validation before execution. An executor may refuse this tool. Expansion
 does not read arbitrary host files or bypass the selected executor.
 

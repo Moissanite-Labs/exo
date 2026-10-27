@@ -6462,3 +6462,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   result without its source call is refused, even when its digest matches. Before, such a digest needed
   the exact text, so no access was gained. The check keeps it that way if a later caller can get a digest
   some other way. The feature module is outside the counted core.
+- **Amendment 2026-10-27 (#510 review, page limit):** The gate reads a `tool_output` page as `read` for a
+  `limit` up to the top of the `page_chars` range, 24,000. It cannot see the configured value. The tool
+  refuses a limit above that value, so the category is `read` on both paths and no policy result changes.
+  `exo.tool_evidence.PAGE_CHARS` holds the range, and a test fails if the gate's ceiling and its top differ.

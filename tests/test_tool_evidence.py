@@ -628,6 +628,19 @@ def test_malformed_tool_output_arguments_keep_generic_gate_classification(args):
     assert gate.classify((TOOL, args)).category == "unknown"
 
 
+def test_gate_page_limit_ceiling_is_the_top_of_the_page_chars_range():
+    """The gate cannot see the configured page_chars, so it reads a page up to the top of the allowed range."""
+    from exo import gate
+    from exo.tool_evidence import PAGE_CHARS
+    low, top = PAGE_CHARS
+    assert Options.parse({"page_chars": low}).page_chars == low and Options.parse({"page_chars": top}).page_chars == top
+    for bad in (low - 1, top + 1):
+        with pytest.raises(ConfigError):
+            Options.parse({"page_chars": bad})
+    assert gate.classify((TOOL, {"reference": "ref", "limit": top})).category == "read"
+    assert gate.classify((TOOL, {"reference": "ref", "limit": top + 1})).category == "unknown"
+
+
 @pytest.mark.parametrize("category", ["credentials", "store_write"])
 @pytest.mark.parametrize("key", ["path", "file_path"])
 @pytest.mark.parametrize("reference_arg", [{}, {"reference": "ref", "limit": 512}])
