@@ -785,7 +785,8 @@ system or bash will.
   `.config/gh/hosts.yml`, `.docker/config.json`, `.config/gcloud`, `.unii/<account>/token`,
   `/proc/<pid>/environ` and its thread form) is matched in that lexical form too, after `~` and `$HOME` are spelt
   out. So `cat ~/.kube//config`, `cat ~/.kube/./config`, `cat ~/.kube/x/../config`, `sudo cat ~/.kube//config`,
-  `bash -c 'cat ~/.kube//config'` and `read_file ~/.kube//config` ask, as `cat ~/.kube/config` does. Single-folder
+  `bash -c 'cat ~/.kube//config'` and `read_file ~/.kube//config` ask, as `cat ~/.kube/config` does. The lexical
+  form is matched in any letter case, as the form as written is (#601), so `cat ~/.KUBE//config` asks. Single-folder
   stores (`~/.ssh//id_rsa`) already asked. Both forms count, so the form as written still asks where the lexical
   one leaves the store (`cat ~/.ssh/../notes`, as before). The lexical form follows no link. When `x` in
   `~/.kube/x/../config` is a link to another folder, the kernel reads a file beside that folder, and the line asks
@@ -820,10 +821,12 @@ So under a deny entry for a `local_write` on `*/.ssh/*`, `write_file` with `path
 is denied, as on main. The part has no own text, so it only raises, and the target stays the
 first store. It weighs as main's line did: a heavier command deeper in the line is a part with that weight beside it
 (#468), so `cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'` is denied under a deny rule on `*/.ssh/*`
-and `irreversible`, as on main. A line main read the same way gets no part: under that entry
-`cat ~/.kube/config ~/.ssh/id_rsa` asks, here and on main. A shell call's own folders work the same way (#311, "The
-tool's own folder"). The read's target is the first folder that names a store, and that can be a spelling main did
-not read. Main's folder then stays a part too (#513 review). So `bash` with `cwd: ~/.config//gcloud` and
+and `irreversible`, as on main. On a remote line, ssh gives the host a copy of the line's first part that has no
+target (#320), and main's target part does not take its place. So `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'` is
+denied under `deny: [{category: read, target: prod}]`, as on main. A line main read the same way gets no part: under
+that entry `cat ~/.kube/config ~/.ssh/id_rsa` asks, here and on main. A shell call's own folders work the same way
+(#311, "The tool's own folder"). The read's target is the first folder that names a store, and that can be a
+spelling main did not read. Main's folder then stays a part too (#513 review). So `bash` with `cwd: ~/.config//gcloud` and
 `workdir: ~/.ssh` is denied under `deny: [target:*/.ssh*]`, as on main, while `cwd: ~/.config/gcloud` there asks,
 here and on main.
 A call also reads its folders beside a line that reads a store, and each read is a part (#320). So

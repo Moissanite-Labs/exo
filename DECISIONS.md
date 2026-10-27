@@ -3134,6 +3134,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   under `deny: [target:*/.exo]`, where main denies it, and a `reserved:` entry like it listed one hit fewer. Where
   main read a secret on the line and the call's first credentials part is one main did not read, the folder pass now
   takes main's read of the line, as main made it. It held at 0b35021a too.
+  *2026-10-27 (#513, sixth round, the merge of main e0968a2b):* (v) Main merged #635 (#601), which matches the store
+  names in any letter case, and #620 (#516), whose part for a shell call's own folder names the `cd` it stands for.
+  The lexical form folds case too, so `cat ~/.KUBE//config` asks. The reading as main read it (``plain``) is main's
+  own, so it folds case as well, and the folder pass's parts name their `cd` as main's do. (w) The check found one
+  more shape of (k). On a remote line, ssh gives the host a copy of the line's first part when that part has no target
+  (#320), so an entry on the host's read sees it. Main's target part has a target, and the hop took that part, so it
+  made no copy. `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'` asked under `deny: [{category: read, target: prod}]`,
+  where main denies it, and `reserved: [target:prod]` listed one hit fewer. mosh, a `$( )` and a second hop did the
+  same. The hop now passes over main's target part. It held at 0b35021a too.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

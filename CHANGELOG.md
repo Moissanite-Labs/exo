@@ -747,8 +747,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `deny: [target:config]`), and for the first store beside a `$( )` that reads a store through a redirection with a
   backslash (`cat ~/.ssh/id_rsa $(cat < ~/.kube/\config)` under `deny: [target:*/.ssh/*]`). Main's target weighs as
   main's line did, so a rule on it and `irreversible` still denies
-  `cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'`. Such a line now takes the store's class, and a few
-  lines decide as main decides the plain spelling, lower than before. The D-038 amendment lists the groups.
+  `cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'`. On a remote line the host keeps its copy of the
+  line's read, so `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'` is denied under
+  `deny: [{category: read, target: prod}]`, as on main. The lexical form is matched in any letter case too (#601), so
+  `cat ~/.KUBE//config` asks. Such a line now takes the store's class, and a few lines decide as main decides the
+  plain spelling, lower than before. The D-038 amendment lists the groups.
 - Gate (#328, D-038): a quoted heredoc delimiter with a space hid the commands after the heredoc. The lexer ended a
   body at the first line that equalled the delimiter once its surrounding whitespace was stripped, so a delimiter such
   as `<<'EOF '`, `<<"EOF "`, `<<' EOF'` or `<<EOF\ ` never matched and every later line, the real terminator included,
