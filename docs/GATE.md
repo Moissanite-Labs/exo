@@ -746,7 +746,10 @@ system or bash will.
   read as `.*` too, so `cat ${x}rc` and `cat ~/${name}rc` ask (`.*rc` could be `.netrc`). A substitution that
   ends a word is `*`, so a read of a folder that holds a secret store by its name made by output asks, as
   `cat /tmp/*` and `ls ~/.config/*` do on main: `cat /tmp/$(cat last)`, `ls /tmp/$(whoami)`,
-  `ls ~/.config/$(whoami)` and `cat ~/.config/$(ls ~/.config | head -1)`. A quoted tilde in a default word is
+  `ls ~/.config/$(whoami)` and `cat ~/.config/$(ls ~/.config | head -1)`. A `.env.<suffix>` read asks in
+  every spelling (#310): the samples hold `.env.local`, a glob in another folder is judged by its last
+  component, and an expansion ending the word reads as `*` even behind an earlier expansion
+  (`$APP_DIR/.env.$STAGE` names `*/.env.*`). A quoted tilde in a default word is
   read as the home folder, though bash leaves it as written (`cat ${x:-'~/.kube'}/config` asks).
 - **Bash glob syntax (#199).** A glob is matched as bash reads it (`_fn_glob`, which the `cd` checks already
   use): `[^x]` is `[!x]`, a `]` first in a set is a member, and a POSIX class is spelt out (`[[:alpha:]]` is
@@ -777,12 +780,11 @@ than a sample, split by a substitution that prints text (`cat server.k$(printf e
 subscript with an expansion in braces (`cat ${!x:-~/.kube}/config`, `cat ${!x[0]:-.env}`,
 `cp x ${x[${i}]:-$HOME/.exo}/policies/a`), nor when the word is a substitution
 (`cat ${x:-$(printf ~/.kube)}/config`). Open issues:
-  - #310: a substitution at the end of a store name is read as empty and as `*`, so `cat .env.$(hostname)` is
-    read as the glob `cat .env.*`, which stays a read (the glob samples have no `.env.<suffix>`);
   - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved.
 
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
-`test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`, and
+`test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`,
+`test_gate_env_file_globs.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
 ### A glob in a store's folder (#594, #609)

@@ -6100,9 +6100,24 @@ _RUN_DIR = re.compile(r"(^|/)\.exo/(principals/[^/]+/)?run$")
 # Concrete examples a shell glob is tested against ("could this glob match a secret store?").
 _SENSITIVE_SAMPLES = ("keys.env", ".exo/keys", ".config/exo/keys.env", ".divan/seat.key", "auth.json",
                       "google_token.json", ".unii/acct/token", "client_secret_1.json", ".hermes/p/.env",
-                      ".netrc", ".env", ".npmrc", ".pypirc", ".ssh/id_rsa", ".ssh/id_ed25519", ".aws/credentials",
+                      ".netrc", ".env", ".env.local", ".npmrc", ".pypirc", ".ssh/id_rsa", ".ssh/id_ed25519", ".aws/credentials",
                       ".gnupg/pubring.kbx", "credentials.json", "server.pem",
                       ".config/gh/hosts.yml", ".git-credentials", ".docker/config.json", ".kube/config")
+
+
+_SAMPLE_BASES: dict[bool, tuple[str, ...]] = {}
+
+
+def _store_name_bases() -> tuple[str, ...]:
+    """The glob samples' basenames that are themselves store names, folded (#310): the last-component
+    rule tests a glob's base against these, computed once per case mode, instead of folding every
+    sample's basename for every word (which broke the linear-work test on long lines)."""
+    sensitive = os.environ.get("EXO_GATE_CASE_SENSITIVE", "") == "1"
+    if sensitive not in _SAMPLE_BASES:
+        rx = _SENSITIVE_PATH if sensitive else _SENSITIVE_PATH_F
+        _SAMPLE_BASES[sensitive] = tuple(dict.fromkeys(
+            _fold(os.path.basename(x)) for x in _SENSITIVE_SAMPLES if rx.search(_fold(os.path.basename(x)))))
+    return _SAMPLE_BASES[sensitive]
 
 
 def _home() -> str:
@@ -6628,9 +6643,115 @@ def _glob_hits_secret(tok: str) -> bool:
     return words is None or _glob_words(words)
 
 
+def _expansion_span(word: str, i: int) -> int | None:
+    """The end of the expansion starting at ``i`` (a ``$`` or a backtick) in a plain word, or None when no
+    expansion starts there. Brackets are counted, so a nested ``$( )`` or ``${ }`` ends at its own close;
+    an opener with no close runs to the end of the word, so a nest of unclosed openers is read in one
+    pass, never once per opener (#334's linear rule)."""
+    if word[i] == "`":
+        j = word.find("`", i + 1)
+        return len(word) if j < 0 else j + 1
+    if i + 1 >= len(word):
+        return None
+    c = word[i + 1]
+    if c in "({":
+        close = ")" if c == "(" else "}"
+        depth, j = 0, i + 1
+        while j < len(word):
+            if word[j] == "\\":
+                j += 1
+            elif word[j] == c:
+                depth += 1
+            elif word[j] == close:
+                depth -= 1
+                if not depth:
+                    return j + 1
+            j += 1
+        return len(word)
+    if c.isalpha() or c == "_":
+        j = i + 1
+        while j < len(word) and (word[j].isalnum() or word[j] == "_"):
+            j += 1
+        return j
+    return i + 2 if c.isdigit() or c in "@*#?$!-_" else None
+
+
+def _expansion_unclosed(word: str, i: int) -> bool:
+    """True when the expansion starting at ``i`` never closes: an unclosed ``$(``, ``${`` or backtick.
+    A bare ``$NAME``, ``$digit`` or ``$special`` needs no closer. One pass, so the linear rule holds."""
+    if word[i] == "`":
+        return word.find("`", i + 1) < 0
+    if i + 1 >= len(word):
+        return False
+    c = word[i + 1]
+    if c not in "({":
+        return False
+    close = ")" if c == "(" else "}"
+    depth, j = 0, i + 1
+    while j < len(word):
+        if word[j] == "\\":
+            j += 1
+        elif word[j] == c:
+            depth += 1
+        elif word[j] == close:
+            depth -= 1
+            if not depth:
+                return False
+        j += 1
+    return True
+
+
+def _trailing_glob_form(word: str) -> str | None:
+    """``word`` with an expansion that ends it read as ``*`` (#310): `.env.$(hostname)`, `.env.${STAGE}` and
+    `.env.` + backticks + `hostname` + backticks all name `.env.*` to the glob check. An earlier expansion
+    in the word reads as `*` too, a run of them collapsing into one, so `$APP_DIR/.env.$STAGE` names
+    `*/.env.*` and `.env.$A$B` names `.env.*`. The expansion must follow literal text: a word that is
+    only an expansion, and one ending in literal text (`build-$(date +%s).log`), get no form. A word
+    ending in an unclosed opener gets no form either: the cd machinery splits words at expansions, so
+    its fragments end in `$(`, and reading those as trailing expansions doubled the glob checks on
+    every split word and broke the linear-work test on long lines."""
+    start = None
+    i = 0
+    while i < len(word):
+        if word[i] in "$`":
+            end = _expansion_span(word, i)
+            if end is not None:
+                if end == len(word):
+                    start = i
+                i = end
+                continue
+        i += 1
+    if not start:
+        return None
+    if _expansion_unclosed(word, start):
+        return None
+    head = word[:start]
+    out: list[str] = []
+    i = 0
+    while i < len(head):
+        if head[i] in "$`":
+            end = _expansion_span(head, i)
+            if end is None:
+                out.append(head[i])
+                i += 1
+            else:
+                if not out or out[-1] != "*":
+                    out.append("*")
+                i = end
+        else:
+            out.append(head[i])
+            i += 1
+    form = "".join(out)
+    if not form.endswith("*"):
+        form += "*"
+    return form if any(ch not in "*`$" for ch in "".join(out)) else None
+
+
 def _glob_words(words: list[str]) -> bool:
     """_glob_hits_secret for any of ``words``, which are already brace-expanded."""
-    words = [w for w in _expand_words(words) if re.search(r"[*?\[]", w)]
+    expanded = _expand_words(words)
+    words = [w for w in expanded if re.search(r"[*?\[]", w)]
+    words += [f for w in expanded if (f := _trailing_glob_form(w)) and f not in words]
     if not words:
         return False
     home = _home()
@@ -6638,7 +6759,11 @@ def _glob_words(words: list[str]) -> bool:
                                                                        _dynamic_secret_paths()[1]]
     secrets = _run_secrets()
     runs = [os.path.join(_exo_home(), "run"), os.path.join(home, ".exo", "run"), ".exo/run"]
-    return any(_glob_word(w, home, samples, secrets, runs) for w in words)
+    bases = _store_name_bases()
+    known = set(bases)
+    extra = tuple(b for b in (_fold(os.path.basename(x)) for x in samples)
+                  if b not in known and _sensitive_re().search(b))
+    return any(_glob_word(w, home, samples, secrets, runs, (*bases, *extra)) for w in words)
 
 
 _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
@@ -6711,7 +6836,83 @@ def _glob_folder_hit(d: str, home: str, samples: tuple[str, ...]) -> tuple[bool,
     return hit, False
 
 
-def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
+def _glob_spells_secret(base: str) -> bool:
+    """Whether a glob's last component names a secret store once its wildcards are instantiated (#310):
+    `.env.prod*`, `.env.???`, `.env.[pd]rod` and `.env.a*` (from `.env.{a,b}*`, brace-expanded before
+    this point) all spell `.env` with a suffix, which the sensitive-name list names, while `server.*`,
+    `keys.*` and `config.*` spell names it does not. `*` spells '' and 'x', `?` spells 'x', a class
+    spells one member (the low end of a range, or a letter the class excludes when negated); anything
+    else spells itself. A handful of candidates, one precompiled sensitive-name test per word, replaces
+    a per-word glob compile, so long lines of such words stay linear."""
+    cands = [""]
+    i = 0
+    while i < len(base):
+        c = base[i]
+        if c == "*":
+            cands = [p + s for p in cands for s in ("", "x")]
+            i += 1
+        elif c == "?":
+            cands = [p + "x" for p in cands]
+            i += 1
+        elif c == "[":
+            j = i + 1
+            if j < len(base) and base[j] in "!^":
+                j += 1
+            if j < len(base) and base[j] == "]":
+                j += 1
+            if base[j:j + 2] == "[:":                       # a POSIX class spells 'x'
+                k = base.find(":]", j + 2)
+                if k >= 0:
+                    cands = [p + "x" for p in cands]
+                    i = k + 3 if k + 2 < len(base) and base[k + 2] == "]" else k + 2
+                    continue
+            while j < len(base) and base[j] != "]":
+                j += 1
+            if j >= len(base):                               # an unclosed class spells itself
+                cands = [p + "[" for p in cands]
+                i += 1
+                continue
+            inner = base[i + 1:j]
+            neg = inner[:1] in "!^"
+            if neg:
+                inner = inner[1:]
+            members: set[str] = set()
+            k = 0
+            while k < len(inner):
+                if inner[k] == "\\" and k + 1 < len(inner):
+                    members.add(inner[k + 1])
+                    k += 2
+                elif k + 2 < len(inner) and inner[k + 1] == "-":
+                    members.update(chr(n) for n in range(ord(inner[k]), ord(inner[k + 2]) + 1))
+                    k += 3
+                else:
+                    members.add(inner[k])
+                    k += 1
+            if neg:
+                pick = next((ch for ch in ("x", "q", "w", "z") if ch not in members), "x")
+            elif inner[:1] == "\\" and len(inner) > 1:
+                pick = inner[1]
+            else:
+                pick = inner[0] if inner else "x"
+            cands = [p + pick for p in cands]
+            i = j + 1
+        elif c == "\\" and i + 1 < len(base):
+            cands = [p + base[i + 1] for p in cands]
+            i += 2
+        else:
+            cands = [p + c for p in cands]
+            i += 1
+        if len(cands) > 32:
+            cands = cands[:32]
+    rx = _sensitive_re()
+    return any(rx.search(_fold(c)) for c in dict.fromkeys(cands))
+
+
+def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str],
+               store_bases: tuple[str, ...] = ()) -> bool:
+    """``store_bases`` is the folded store-name basenames _glob_words computed once for this samples
+    list (#310): the last-component rule tests the glob's base against them, plus the instantiation
+    check, instead of folding every sample per word."""
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
     proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ, or a thread's (#199, #313)
@@ -6758,10 +6959,22 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     tail = re.split(r"[*?\[\]]", ftok)[-1]   # literal: narrow first; a wildcard part's own tail as bash reads it
     xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
           if _fold(x).endswith(tail) and (_fold(x).startswith(fhead) if fhead.startswith("/") else fhead in _fold(x))]
-    if not xs:
-        return False
-    rx = _glob_rx(ftok)
-    return any(rx.match(_fold(x)) for x in xs)
+    if xs and any(_glob_rx(ftok).match(_fold(x)) for x in xs):
+        return True
+    fbase = ftok.rpartition("/")[2]
+    if re.search(r"[*?\[]", fbase):
+        # The samples live in known folders, so a glob in another folder matches none of them by its
+        # head. Judge it by its last component, as a literal name is judged at any depth (#310):
+        # proj/.env.* names what .env.* names. Only a sample whose name is itself a store name counts,
+        # so proj/config.* does not borrow .docker/config.json's. Fall through here whenever the
+        # sample match above gives nothing, not only when it finds no candidates: a HOME-anchored
+        # glob's head passes every home sample, then matches none of them (`~/*/.env.*`).
+        if "/" in ftok:
+            rx = _glob_rx(fbase)
+            if any(rx.match(bx) for bx in store_bases):
+                return True
+        return _glob_spells_secret(fbase)
+    return False
 
 
 @functools.lru_cache(maxsize=4096)
