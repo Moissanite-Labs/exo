@@ -24,7 +24,7 @@ from exo.core import trace
 from exo.core.hooks import HookRegistry, accepted
 from exo.core.slots import Slots
 from exo.core.types import Risk, ToolSpec
-from exo.plugin_lifecycle import PluginToolBridge, Resources, dependency_error
+from exo.core.plugin_lifecycle import PluginToolBridge, Resources, dependency_error
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +362,11 @@ class PluginManager:
         # A manager already attached to a required engine cannot downgrade its security hooks.
         self._executor_required = self._executor_required or bool(value)
 
+    @property
+    def closed(self) -> bool:
+        """True once close() has run. A closed manager loads no plugin."""
+        return self._resources.closed
+
     def _run_register(self, manifest: Manifest, source: str, register: Any) -> LoadedPlugin:
         rec = LoadedPlugin(manifest, source)
         if manifest.name in self.plugins:
@@ -403,13 +408,13 @@ class PluginManager:
 
     def load_entry_points(self, group: str = ENTRY_POINT_GROUP,
                           allow: Callable[[str], bool] = lambda n: True) -> list[LoadedPlugin]:
-        from exo.plugin_lifecycle import load_entry_points
+        from exo.core.plugin_lifecycle import load_entry_points
         return load_entry_points(self, group, allow)
 
     def load_all(self, dirs: Iterable[str | Path] | None = None, enabled: Iterable[str] | None = None,
                  disabled: Iterable[str] = (), entry_points: bool = True) -> list[LoadedPlugin]:
         """Load selected plugins in dependency order; excluded dependencies stay disabled."""
-        from exo.plugin_lifecycle import load_all
+        from exo.core.plugin_lifecycle import load_all
         return load_all(self, dirs, enabled, disabled, entry_points)
 
     def bind_tools(self, registry: Any, *, home: Path, agent_log: Any,

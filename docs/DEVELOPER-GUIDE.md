@@ -103,7 +103,7 @@ See [HARNESS.md](HARNESS.md) and the sourced [landscape/roadmap](HARNESS-LANDSCA
 
 **Plugin runtime binding (D-088).** `PluginManager.bind_tools(registry, home=..., agent_log=...,
 private=..., approvals=..., required=...)` binds the existing tool and slot interfaces through
-`exo.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback.
+`exo.core.plugin_lifecycle.PluginToolBridge`. Pass the live privacy predicate and required-mode callback.
 Metadata is resolved for each call. The bridge translates existing plugin approval verdicts through
 `ApprovalDesk`, preserving bindings, approvers and standing-grant behavior. It does not change the
 execution broker or gate policy. `CoreRuntime` retains its compatibility helper methods and direct
@@ -122,9 +122,11 @@ commands. Its collaborators have small interfaces:
   `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
 - `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes
   `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`. `stop()` keeps it restartable;
-  `close()` closes schedule.sqlite and is final.
+  `close()` closes schedule.sqlite and is final. `tasks()` lists its loop and running jobs, which the engine's
+  close cancels first.
 - `await engine.close()` stops jobs, peers, channels and the scheduler, then closes schedule.sqlite and the
-  session store. Once it has begun, `start()`, and so every command, fails with `CommandFailed` `closed`. The store is not final: a later read or write reopens sessions.sqlite (#281). Errors reported while
+  session store. Once it has begun, `start()`, and so every command, fails with `CommandFailed` `closed`. The
+  store is not final: a later read or write reopens sessions.sqlite (#281). Errors reported while
   it stops them are still recorded as `harness.error` events. The engine drops its trace sink just before the
   session store closes.
 - `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core

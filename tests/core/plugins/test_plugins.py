@@ -301,7 +301,7 @@ def test_custom_hook_registry_can_supply_its_own_fire_site():
 
 def test_default_supported_hooks_match_runtime_fire_sites():
     trees = [ast.parse((REPO / path).read_text(encoding="utf-8"))
-             for path in ("src/exo/core/engine.py", "src/exo/plugin_lifecycle.py")]
+             for path in ("src/exo/core/engine.py", "src/exo/core/plugin_lifecycle.py")]
     fired = {
         call.args[0].value
         for tree in trees for call in ast.walk(tree)

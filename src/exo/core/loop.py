@@ -151,6 +151,15 @@ class Loop:
             st.interrupt.set()
         return st.running
 
+    def interrupt_all(self) -> None:
+        """Interrupt every running turn (the engine's close)."""
+        for session in tuple(self._state):
+            self.interrupt(session)
+
+    def busy(self) -> bool:
+        """True while a turn still runs, its final hooks and writes included."""
+        return any(state.running for state in self._state.values())
+
     def steer(self, session: str, msg: Message) -> bool:
         """Put a message into the running turn at its next tool round. False when no round can take it (no turn runs,
         or the running one is finishing): the caller queues it. Unlike ``send(mode="steer")`` this never starts a turn."""

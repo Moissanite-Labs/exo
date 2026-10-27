@@ -118,6 +118,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   is not retried away: exod and the terminal raise it once the wait ends.
 - A failed startup releases what it opened: the writer lock, the stores, the job worker pool, the scheduler, the
   learner and plugin resources.
+- The harness work's plugin lifecycle and shutdown helpers live in the counted core, as `exo.core.plugin_lifecycle`
+  and `exo.core.shutdown`. As product modules the core imported them, which D-083's cap of 39 product imports
+  does not allow. They read no other module's private state (D-088, `docs/ENGINE-SPLIT.md`).
 
 ### Fixed
 - The gate reads `${...}` words and `$((` as bash's parser reads them (#143, #553, #554, PR #158). The lexer ended a

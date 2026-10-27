@@ -205,11 +205,13 @@ shutdown from owned work is rejected before anything is stopped.
 ## Architecture and evidence
 
 `exo.harness` resolves a plan without runtime side effects. `exo.compose` applies it.
-`exo.harness_runtime` supplies inert optional services. `exo.runtime_shutdown` holds the
+`exo.harness_runtime` supplies inert optional services. `exo.core.shutdown` holds the
 shutdown steps around the core's transport and job steps (`stop_admission` and `drain`).
 The runtime accepts injected job and delegation factories and a skills switch. Workspace prompt injection is per session
 and reused by child loops. Plugin graph/resource ownership lives in
-`exo.plugin_lifecycle`. `PluginManager.bind_tools` also binds tool/slot adapters and
+`exo.core.plugin_lifecycle`. Both modules are part of the counted core, so the core imports
+no product module for them, and they read no other module's private state (D-083's step 4
+caps). `PluginManager.bind_tools` also binds tool/slot adapters and
 translates lifecycle verdicts through the existing registry and approval desk. Its explicit
 collaborators keep plugin compatibility independent of the engine's private state. Direct
 `CoreRuntime` construction retains plugin support and the former helper methods remain shims.

@@ -1,8 +1,10 @@
 """Quiesce application work around the engine's transport and job steps, before plugin resources and stores go.
 
-``CoreRuntime.close`` runs in three parts. ``stop_admission`` refuses new turns, tools and job notices and cancels
-owned work, without waiting. The engine then stops channels, peers, background jobs, the scheduler and MCP.
-``drain`` waits, within one bound, for turns, actual synchronous tool workers and learning reviews.
+``CoreRuntime.close`` runs in three parts. It refuses new work, and ``stop_admission`` keeps job notices from
+starting turns and cancels owned work, without waiting. The engine then stops channels, peers, background jobs, the scheduler and MCP.
+``drain`` waits, within one bound, for turns, actual synchronous tool workers and learning reviews. The engine
+passes its own tasks in, and loops and the scheduler answer through public methods, so this module reads no other
+module's private state.
 
 Python cannot kill a worker thread. A drain that reaches its bound raises ``ShutdownTimeout``. By then jobs and
 transports are stopped. The engine keeps only what a stuck worker can still touch: plugin resources, the session
@@ -13,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 SHUTDOWN_TIMEOUT = 5.0
 
@@ -38,34 +40,31 @@ def _loops(engine: Any) -> list[Any]:
     return [engine.loop, *engine.agents.loops.values(), *(scheduler.loops.values() if scheduler is not None else ())]
 
 
-def stop_admission(engine: Any) -> set[asyncio.Future]:
-    """Refuse new work, keep job notices from starting turns, and cancel owned turns. Returns what ``drain`` awaits."""
+def stop_admission(engine: Any, owned: Iterable[asyncio.Task], started: asyncio.Future | None) -> set[asyncio.Future]:
+    """Keep job notices from starting turns and cancel owned turns. Returns what ``drain`` awaits.
+
+    The engine has already checked that its owner calls close and set its closing flag, so it refuses new work.
+    ``owned`` are its turn and tool tasks, ``started`` its start task."""
     current = asyncio.current_task()
-    if current in engine._tasks:
-        raise RuntimeError("close must be called by the engine owner, outside a running turn or tool")
-    engine._closing = True
     engine.jobs.target.closed = True  # a job that ends from here on is recorded for its thread and never wakes it
     scheduler = engine.scheduler
-    scheduled = []
-    if scheduler is not None:  # its loop must not claim a slot that comes due while transports stop
-        scheduled = [task for task in [scheduler._main, *scheduler.running.values()] if task is not None]
+    scheduled = scheduler.tasks() if scheduler is not None else ()  # no slot is claimed while transports stop
     for loop in _loops(engine):
         loop.closing = True
-        for session in tuple(loop._state):
-            loop.interrupt(session)
+        loop.interrupt_all()
     for context in engine.registry.workers.values():
         context.cancel.set()  # also a worker whose caller close does not own; none starts after this
-    tasks = {task for task in [*engine._tasks, *scheduled] if task is not current and not task.done()}
-    if engine._started is not None and not engine._started.done():
-        tasks.add(engine._started)
+    tasks = {task for task in [*owned, *scheduled] if task is not current and not task.done()}
+    if started is not None and not started.done():
+        tasks.add(started)
     for task in tasks:
         task.cancel()
     return tasks
 
 
-async def drain(engine: Any, tasks: set[asyncio.Future], errors: list[BaseException]) -> None:
+async def drain(engine: Any, tasks: set[asyncio.Future], errors: list[BaseException], learner: Any = None) -> None:
     """Wait for cancelled turns, direct ``Loop.send`` callers, sync tool workers and learning reviews, then close the
-    learner.
+    learner (the application's, which the engine passes in).
 
     ``errors`` holds the close steps that failed so far. A learner that fails to close is added to it, so close()
     still runs its final steps. Raises ``ShutdownTimeout``, carrying ``errors``, when work is still running at
@@ -84,7 +83,7 @@ async def drain(engine: Any, tasks: set[asyncio.Future], errors: list[BaseExcept
             raise ShutdownTimeout("turns", errors)
     # Direct embedded Loop.send callers need not be in engine._tasks. Their
     # session state remains running until their final hooks and writes finish.
-    while any(state.running for loop in _loops(engine) for state in loop._state.values()):
+    while any(loop.busy() for loop in _loops(engine)):
         if time.monotonic() >= deadline:
             raise ShutdownTimeout("turns", errors)
         await asyncio.sleep(min(0.01, left()))
@@ -93,8 +92,7 @@ async def drain(engine: Any, tasks: set[asyncio.Future], errors: list[BaseExcept
         _, pending = await asyncio.wait(workers, timeout=left())
         if pending:
             raise ShutdownTimeout("tool workers", errors)
-    learner = getattr(engine, "_learn", None)  # reviews read the session store and write the principal store
-    if learner is not None:
+    if learner is not None:  # reviews read the session store and write the principal store
         reviews = [task for task in learner.tasks.values() if not task.done()]
         for task in reviews:
             task.cancel()

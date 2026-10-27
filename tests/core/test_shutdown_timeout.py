@@ -16,13 +16,13 @@ from pathlib import Path
 
 import pytest
 
-import exo.runtime_shutdown as shutdown
+import exo.core.shutdown as shutdown
 from exo.core.engine import CoreEngine, CoreRuntime
 from exo.core.models.fake import FakeProvider, tool_turn
 from exo.core.plugins import Manifest, PluginManager
 from exo.core.tools.registry import ToolError
-from exo.plugin_lifecycle import Resources
-from exo.runtime_shutdown import ShutdownTimeout
+from exo.core.plugin_lifecycle import Resources
+from exo.core.shutdown import ShutdownTimeout
 from exo.scheduler import Scheduler
 from exo.server.engine import CommandFailed
 

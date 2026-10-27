@@ -47,7 +47,7 @@ class CoreEngine(CoreRuntime):
         ``KeyboardInterrupt`` or ``SystemExit``), that error is raised once the bounded attempt ends, and the rest
         stays as after a timeout.
         """
-        from exo.runtime_shutdown import ShutdownTimeout
+        from exo.core.shutdown import ShutdownTimeout
         while True:
             try:
                 return await super().close()
@@ -71,7 +71,7 @@ class CoreEngine(CoreRuntime):
         if (getattr(self, "_started", None) is not None or bool(getattr(self, "_tasks", None))
                 or jobs is not None and jobs.loop is not None
                 or registry is not None and registry.workers
-                or loop is not None and any(state.running for state in loop._state.values())):
+                or loop is not None and loop.busy()):
             raise RuntimeError("abort_startup requires an unstarted engine; use await close()")
         steps = []
         scheduler = getattr(self, "scheduler", None)

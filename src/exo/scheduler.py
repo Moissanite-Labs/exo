@@ -298,6 +298,10 @@ class Scheduler:
         self.engine.hub.publish(s.Notice(text="The scheduler stopped; scheduled jobs will not run until restart.",
                                          level="warn"))
 
+    def tasks(self) -> tuple[asyncio.Future[Any], ...]:
+        """The scheduler's own loop and the jobs it runs, for an owner that cancels them (the engine's close)."""
+        return tuple(t for t in (self._main, *self.running.values()) if t is not None)
+
     async def stop(self) -> None:
         main, self._main = self._main, None
         tasks = [t for t in [main, *self.running.values()] if t is not None]

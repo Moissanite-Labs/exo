@@ -6375,3 +6375,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   this PR's `Loop.workspace_extra` hook and a copy of the plugin binding paragraph above under D-087 (#601).
   The copy is removed there. compose attaches workspace instructions before the notebook, so the notebook's
   prompt callback keeps the instructions in the prompt. The notebook test that waited for this PR runs again.
+- **Amendment 2026-10-27 (rebased onto #613):** D-083 dropped the line ceiling and caps two step 4 counts in
+  `src/exo/core` instead: 39 imports of a product module and 8 reads of another module's private state. This PR
+  kept its lifecycle helpers out of the count as `exo.plugin_lifecycle` and `exo.runtime_shutdown`, and the core
+  imported both, so the rebased tree counted 42 imports. They now live in the core as
+  `exo.core.plugin_lifecycle` and `exo.core.shutdown`. They read no other module's private state: the engine
+  passes its own tasks and the learner, and `Loop.interrupt_all`, `Loop.busy`, `Scheduler.tasks` and
+  `PluginManager.closed` are public. The counts are 39 and 8 again. The counted lines rise to 16,252 (main
+  15,833), which D-083 reports and does not assert. Behaviour is unchanged.

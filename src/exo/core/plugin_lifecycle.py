@@ -74,7 +74,7 @@ def requirements(manifest: Manifest) -> tuple[str, ...]:
 
 def dependency_error(manager: PluginManager, manifest: Manifest) -> str | None:
     """Direct loads require prerequisites already loaded; load_all orders them first."""
-    if manager._resources.closed:
+    if manager.closed:
         return "plugin manager is closed"
     try:
         needed = requirements(manifest)
@@ -129,7 +129,7 @@ def _load(manager: PluginManager, candidates: dict[str, _Candidate],
             out.append(rec)
             complete.add(name)
             return manager.plugins[name].ok
-        if manager._resources.closed:
+        if manager.closed:
             failed(name, "plugin manager is closed")
             return False
         if candidate.source == "entry_point" and not candidate.prepared:

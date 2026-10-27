@@ -498,7 +498,7 @@ def test_close_waits_for_actual_sync_plugin_worker_after_turn_cancellation(tmp_p
 def test_shutdown_timeout_retains_resources_and_writer_until_retry(tmp_path, monkeypatch):
     import threading
     from exo.core.models.fake import FakeProvider, tool_turn
-    import exo.runtime_shutdown as shutdown
+    import exo.core.shutdown as shutdown
     started, release = threading.Event(), threading.Event()
 
     def hold(args, **kwargs):

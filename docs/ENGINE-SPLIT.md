@@ -80,13 +80,15 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
     read `loop._state`, `store._q` or tree `_view`/`_agent_key`. Inward imports left in the engine: `exo.principal`,
     `exo.config`, `exo.provenance`, `exo.diagnostics` and lazy `exo.learn` and `exo.models_cmd` (the `exo.gate`
     approver checks moved with the desk to `exo.core.approvals`).
-  - **Added by D-088 (2026-10-23, reviewed 2026-10-26), also open for #46 and #498.** `exo.core.plugins` imports
-    `exo.plugin_lifecycle` at module level (`PluginToolBridge`, `Resources`, `dependency_error`), and its `load_all` and
-    `load_entry_points` call into it. `CoreRuntime.close` imports `exo.runtime_shutdown` lazily. Those uncounted
-    modules read core private state: `stop_admission` and `drain` read `engine._tasks`, `engine._started`,
-    `loop._state` and `scheduler._main` (and the application's `engine._learn`), and `CoreEngine.abort_startup`
-    reads `loop._state`. The counted lines they moved out are real, but the coupling is not gone. #498 replaces
-    these reads with public lifecycle queries.
+  - **Added by D-088 (2026-10-23, reviewed 2026-10-26, moved into the core 2026-10-27), also open for #498.**
+    Two core modules hold the harness lifecycle: `exo.core.plugin_lifecycle` (plugin plans, cleanups and the tool
+    bridge) and `exo.core.shutdown` (`stop_admission` and `drain`). They were product modules at first, to keep
+    their lines out of the count, and the core imported them. D-083 caps those imports instead of lines, so they
+    moved in. Neither imports a product module. Neither reads another module's private state: the engine passes
+    its own tasks to `stop_admission`, and `Loop.interrupt_all`, `Loop.busy`, `Scheduler.tasks` and
+    `PluginManager.closed` answer the rest. `CoreEngine.abort_startup` in `exo.application` uses `Loop.busy` too.
+    The step 4 counts stay at 39 and 8. The learner that `exo.learn` hangs on the engine as `_learn` is still
+    read by name: the engine passes it to `drain`, and #498 replaces that with a public lifecycle query.
 - 2026-10-15, budget policy (D-077): the hard 15,000-line ceiling became a ratchet with headroom (see "Budget
   policy"). No code changed. Counted core lines: 14,999 before and after, against the floor of 14,813 and a ceiling
   of 15,813 (that ceiling is off since 2026-10-27, D-083).
@@ -102,6 +104,8 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
   runtime gets the same plugin behavior without importing application/context composition.
   This consolidates the existing plugin lifecycle boundary. No counted module was excluded.
   Private-state queries and other inward imports listed above remain separate follow-up work.
+  On 2026-10-27 the bridge moved into the core with the rest of `exo.core.plugin_lifecycle` (D-083 caps
+  product imports into the core, not lines), so its lines count again. The explicit collaborators stay.
 
 ## Budget policy
 

@@ -38,6 +38,8 @@ from exo.core import jobs as jobs_mod
 from exo.core.peer_target import EngineTarget
 from exo.core.ingress import STANDING_LINE, PeerConfig
 from exo.core.plugins import PluginManager, call_plugin as call_plugin, safe_plugin_call as safe_plugin_call
+from exo.core.plugin_lifecycle import plugin_handler
+from exo.core.shutdown import drain, stop_admission
 from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.principal import CHANNEL, current_caller, ingress_author, is_principal, require_principal
 from exo.core.approvals import ApprovalDesk
@@ -346,15 +348,17 @@ class CoreRuntime:
             self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
-        from exo.runtime_shutdown import drain, stop_admission
-        owned = stop_admission(self)  # no new turn, tool or job wake from here; owned turns are cancelled
+        if asyncio.current_task() in self._tasks:
+            raise RuntimeError("close must be called by the engine owner, outside a running turn or tool")
+        self._closing = True  # no new command, turn, tool or job from here
+        owned = stop_admission(self, self._tasks, self._started)  # no job wake either; owned turns are cancelled
         errors: list[BaseException] = []  # every step runs, also after a hard stop; the first error is raised last
         for step in (self.stop_channels, self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
             try:
                 await step()  # jobs end with exod, also when a sync tool outlives the drain below
             except BaseException as exc:  # noqa: BLE001 - re-raised below
                 errors.append(exc)
-        await drain(self, owned, errors)  # ShutdownTimeout keeps plugin resources, the store and the writer claim
+        await drain(self, owned, errors, getattr(self, "_learn", None))  # a timeout keeps resources, store, writer
         for final in (self.plugins.close, lambda: trace.remove_sink(self._on_harness_error),
                       lambda: agentlog.release_writer(self._writer), self.store.close):  # the store last
             try:
@@ -398,7 +402,6 @@ class CoreRuntime:
 
     @staticmethod
     def _plugin_handler(fn: Any) -> Any:
-        from exo.plugin_lifecycle import plugin_handler
         return plugin_handler(fn)
 
     def _hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
