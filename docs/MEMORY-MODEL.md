@@ -270,6 +270,13 @@ stays: compaction never drops a pin. A compression child takes over its parent's
 to a handoff a compaction wrote before the undo goes, as on the core. Each drop is logged as counts per kind and
 the session id, and a transcript cut short is logged with the session id.
 
+A rebind puts an undone pin back no more (#592). Hermes builds a new agent on a `/model`, `/reasoning` or `/fast`
+change and on `/resume`, and every such bind merges the parent session's pins into the child's, so a `/branch` or
+compression child that had undone a ruling held it again, and the next turn's block or compaction wrote it back.
+The pins file now keeps the digests of what an undo dropped beside the folded pins' ties, and a pin carry skips a
+parent pin whose digest is there. A first bind still inherits, a pin the child still holds carries as before, and
+a ruling said again after the undo is pinned again, so only its undone copy stays out.
+
 Some cases are not covered. Hermes's messaging gateway tells no one about `/undo`. Nor does the CLI while it has no
 agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. A host that runs exo-context
 without exo-memory never passes the notice on. An undo before the engine has seen a turn of that session since it

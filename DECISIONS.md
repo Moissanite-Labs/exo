@@ -3429,6 +3429,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   of that session since it started finds no window. After `/undo N`, the earlier turns' pins go only when a next
   turn comes in the same agent, and a `/compress` between the last turn and the undo can keep them too. A summary
   row and a handoff file written before the drop keep the ruling as written until the next compaction.
+  *2026-10-26 note (#592):* a rebind could put an undone pin back. `bind_session_state` merges the parent's pins
+  into the child's on every bind (a new agent after a `/model`, `/reasoning` or `/fast` change, a restart,
+  `/resume`), so a `/branch` or compression child that had undone a ruling held it again, and the next turn's
+  block or compaction wrote it back. The pins file now keeps, beside the folded pins' ties, the digests of what
+  an undo dropped, and a pin carry skips a parent pin whose digest is there. The carry also reads the target's
+  file again, since another engine may have dropped pins since it last cached them, as on an undo. A first bind
+  still inherits, because the file holds no digests yet; a pin the child still holds carries as before; and a
+  ruling said again after the undo is pinned again: its digest leaves the list while it is live, and returns if
+  a later undo drops it again, so the next rebind still carries nothing.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
