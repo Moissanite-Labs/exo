@@ -436,13 +436,17 @@ was raised to 16,000 during the security wave, then set back to 15,000 when step
 the count by 1,174 lines, to about 14,800, by deleting unused code and moving the peer transport and the scheduler
 out of the core.
 
-Since then the budget is a ratchet with headroom (D-077), not a fixed cap. The test records a *floor*, the count
-right after the last real reduction, and fails when the count reaches the floor plus a fixed headroom of 1,000
-lines. A reduction that ends below the floor sets the floor to its new count, and the floor never rises, so such
-a reduction lowers the ceiling. When this version was written the floor was 14,813, the ceiling 15,813 and the
-count 14,999. Fixes and features fit inside the headroom with no ceremony. A security or robustness fix is never
-blocked: if one would cross the ceiling, it raises the headroom by the least it needs and a reduction follows. A
-feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+Since then the budget is a reported number with a floor under it (D-077), not a fixed cap. The test records a
+*floor*, the count right after the last real reduction, and prints the count against it. A reduction that ends below
+the floor sets the floor to its new count, and the floor never rises.
+
+The ceiling that D-077 set on top of the floor was dropped on 2026-10-27 (D-083). It had stopped doing its job: `main`
+at `13cea687` counted 15,828 against a 15,824 ceiling, 4 over, so the test failed on `main` while the work it blocked
+was ordinary product work, and each earlier raise of the headroom (#314, #346, #598) was undone by the reduction it
+asked for. The ruling was that the ceiling was "too restrictive" while the codebase is being built out. So the count
+is a report, nothing about lines is asserted, and no feature or fix waits on it. What D-083 did keep as assertions are
+two structure counts, which is where D-077 said the real goal was: imports of a product module from the core, and
+reads of another module's private state, both capped at their measured number and both ratcheting down.
 
 The reason is a ruling that the core should be lean and optimized, but not at the cost of functionality, robustness
 and product-market fit. The count is only a signal. The goal is structure: no module reads another's private state,
@@ -2082,8 +2086,9 @@ store and grows with them. The near-term design rules that keep that path open:
 
 - **The store is one folder.** Pack, nodes, items, ledger and indexes are plain files and SQLite. Copy the
   folder and the person moves.
-- **The core stays small.** About 15,000 counted lines today (14,999 when this version was written), under a
-  ceiling of a recorded floor plus 1,000 lines (section 11). Two runtime dependencies.
+- **The core stays small.** About 15,800 counted lines today, reported against a recorded floor of 14,813 and not
+  capped (section 11, D-083), with two step 4 coupling counts (inward product imports, cross-module private-state
+  reads) asserted and ratcheted beside it. Two runtime dependencies.
   The terminal client is Python too, so the core and its main client need no Node, no browser
   engine and no containers. One optional tool, `code_find`, needs Node and hides itself when Node is
   missing. The planned idle memory target is under 80 MB **[not measured]**.
@@ -2318,8 +2323,8 @@ dropped from tool environments (#168, for #135); the built-in `grep` and `glob` 
 environment dumps (#288, for #230 and #232); head anchors written after each append is committed (#221); and the
 first-run fixes of #213: the installer copies the skill pack into `$EXO_HOME/skills`, the terminal client no
 longer freezes on the boot screen, `exo --resume` continues the newest thread with messages, and on the Claude
-Code route the system message names the thread's working folder. The core budget is now a ratchet with headroom
-(D-077).
+Code route the system message names the thread's working folder. The core budget is a reported count over a floor,
+with no ceiling (D-077, D-083).
 
 The items below have an open pull request, or an open issue for the permissionless mode. None is part of Exo
 yet, and none of the sections above relies on them. They are listed so the reader knows where the work is going,
