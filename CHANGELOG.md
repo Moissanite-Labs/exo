@@ -31,6 +31,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   segment of a dotted key. Both now mask a secret at any level of the key path (a secret-shaped name, a container
   under one, and a literal under `env` or `headers`), and `config set` refuses the same shapes. `${VAR}` references
   and `*_env` names are still shown and accepted (#691).
+
+- A link into a secret store is judged by where it leads when it is reached through a folder the line enters,
+  the current folder spelled out, or a glob (#312). A relative name resolves from every folder the line enters
+  (`cd`, `pushd`, `git -C`, `tar -C`, `env -C`), chained, and a glob in a target or a folder part expands one
+  level at a time in those folders; `$PWD`, `$(pwd)` and `~+` read from the tool's folder. Only globs bash
+  would expand are expanded, so quoted or escaped globs stay reads. The expansion shares one 65,536-entry
+  budget per classify call, and past 128 link targets the line counts too — both caps fail closed, where the
+  first version of this change cut them silently. The rework also checks each expanded match by its resolved
+  folder once instead of through the full name check, so a 64-folder line with 19,200 entries takes ~3s
+  instead of ~24s of CPU.
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
