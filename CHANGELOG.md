@@ -41,6 +41,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   row now denies; the post row uses `posting.forbid_words` and asserts `forbidden word: Zork`),
   `plugins/exo-gate/tests/test_bypass.py`.
   **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038), `docs/DOCS-MAP.md`.
+- Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
+  tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
+  `f` prefix preserves the test cases and removes the two findings.
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
