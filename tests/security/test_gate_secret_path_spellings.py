@@ -1231,3 +1231,23 @@ def test_main_s_target_keeps_the_weight_of_a_heavier_command_deeper_in_the_line(
 def test_main_s_target_gets_no_weight_main_did_not_give_it(line):
     # main's target is the kube config on the plain line, and `ssh prod ls` is no heavier command: both ask, as on main
     assert full(line, SSH_IRREVERSIBLE)[1] == "ask"
+
+
+# A remote line that is a secret line through a part with no target gives the host a copy of that part (#320), so an
+# entry on the host's read sees it. Main's target, a part beside an odd first store, has a target, and the ssh hop
+# took it for that part, so the copy was lost: the read on the host asked where main denies it (#513 checker)
+HOST_READ = [{"gates": {"deny": [{"category": "read", "target": "prod"}]}},
+             {"gates": {"rules": [{"match": {"category": "read", "target": "prod"}, "decision": "deny", "reason": "r"}]}}]
+
+
+@pytest.mark.parametrize("policy", HOST_READ)
+@pytest.mark.parametrize("hop", ["ssh prod '{}'", "mosh prod -- {}", "ssh prod 'echo $({})'", "ssh a ssh prod '{}'"])
+@pytest.mark.parametrize("odd", ["~/.kube//config", "~/.KUBE//config", "/pro?/self/environ", "~/.docker/./config.json"])
+def test_an_entry_on_the_host_s_read_still_matches_beside_an_odd_first_store(odd, hop, policy):
+    assert full(hop.format(f"cat {odd} ~/.ssh/id_rsa"), policy)[:2] == ("credentials", "deny")
+
+
+@pytest.mark.parametrize("line", ["ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'", "ssh prod 'cat ~/.kube/config'",
+                                  "ssh prod 'cat ~/.kube/config ~/.ssh/id_rsa'"])
+def test_the_host_keeps_every_reserved_hit_main_lists(line):
+    assert sorted(full(line, {"gates": {"reserved": ["target:prod"]}})[2]) == ["credentials", "read", "shell"]
