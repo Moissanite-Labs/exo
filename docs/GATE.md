@@ -790,7 +790,19 @@ Earlier built-in differential counts covered the pre-review implementation only 
 these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
 rules, explicit unknown-category policies, and leading-separator MCP names.
 
-Tests: `tests/security/test_gate_store_top_parts.py`, `plugins/exo-gate/tests/test_store_floor_any_part.py`.
+The call leads with its hump-word category, and the unsplit reading is its `floor`, so every check past `decide`
+must read each reading too. Two did not on main fa5dfcd8, and in the hook alone (review 5662071801): bypass kept
+its floor only for a lead `store_write` or `credentials`, so `mcp__fs__searchReplace` on a seat file,
+`readFile` on `~/.exo/policies/gates.yaml` and `mcp__slack__postMessage` naming `~/.aws/credentials` ran in
+bypass; and the registry's high-risk ask fired only for a lead `unknown`, so `mcp__fs__writeFile` with risk
+`high` ran. Both read every reading now (`gate.no_grant`, `gate.readings`), so the floor holds in bypass as
+well (see "Bypass mode (D-065)"). A camelCase call with a `floor` also binds an `always` answer and a standing
+grant to its exact arguments (`gate.binds_exact`): `getApiKey`, `execCommand` or `mcp__github__getIssue` no
+longer share a grant across arguments, and a grant stored as `exo-gate:unknown:<tool>` before #515 no longer
+matches. This only tightens.
+
+Tests: `tests/security/test_gate_store_top_parts.py`, `plugins/exo-gate/tests/test_store_floor_any_part.py`,
+`plugins/exo-gate/tests/test_camel_floor_hook.py`.
 
 ### A thread's environment file (#313)
 
@@ -2841,6 +2853,14 @@ default, and no policy file turns it on.
 | A `deny` rule, or a decision-model deny | blocks | blocks |
 | A public post that breaks the posting rules (an internal name, a home path, a missing footer) | asks, with the fixes | held: the call fails with the fixes, so the agent rewrites the text and calls again |
 | A standing grant, `allow` or `log` | runs | runs |
+
+**Every reading counts.** A call is on the floor when any way the gate reads it is `store_write` or `credentials`
+(`gate.no_grant`): a part of a compound line, or the unsplit reading of a camelCase tool name (#515). So
+`mcp__fs__searchReplace` or `findAndReplace` on a seat file, `readFile` on a policy file and
+`mcp__slack__postMessage` naming `~/.aws/credentials` ask in bypass, though their names lead with `read` or
+`message_send`. The ledger row's `bypass.floor` names the floor category. A post that breaks the posting rules and
+has its floor only in such a reading is held first, as before; once rewritten, it asks. Until review 5662071801
+bypass checked only the category a call led with, so on main fa5dfcd8 those calls ran.
 
 **Whose turn.** Lowering reaches only a turn the principal started. The core passes the turn's author (D-040) into
 every tool hook, and the gate lowers an ask only when that author is the principal: a turn a local caller, a peer,

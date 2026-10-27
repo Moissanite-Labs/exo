@@ -6,6 +6,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
+  (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
+  that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
+  checks past the decision read only the lead category, so on main fa5dfcd8 bypass ran `mcp__fs__searchReplace`
+  or `findAndReplace` on `~/.exo/seats/principal.toml` (bypass could make itself the seat default), `readFile`
+  and `getOrCreateFile` on `~/.exo/policies/gates.yaml`, `mcp__fs__readFile` on `~/.exo/config.json`,
+  `mergeGithub` naming `~/.ssh/id_rsa` and `mcp__slack__postMessage` naming `~/.aws/credentials`, and a tool the
+  registry calls high risk ran in every mode (`mcp__fs__writeFile`, `mcp__fs__uploadFile`, `mcp__gh__listIssues`).
+  Bypass now keeps the floor when any reading or part is `store_write` or `credentials` (`gate.no_grant`), and the
+  high-risk ask fires when any reading is `unknown`. A post held for its posting fixes stays held. Snake names and
+  camelCase calls with no floor reading decide as before. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`.
+  **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-065, D-038), `docs/DEVELOPER-GUIDE.md` §3.
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
