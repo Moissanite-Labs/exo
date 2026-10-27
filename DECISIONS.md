@@ -169,6 +169,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `events.subscribe` command keeps its typed `internal` reply for such a `since`: `GET /events` has no reply
   envelope, so the bound is checked before the stream opens. A malformed request line still closes the
   connection with no reply.
+- **Amendment 2026-10-27 (exo-desktop #14, orda-aska; fork issue 2):** a failed core start no longer fails every
+  later command. The core starts its runtime once, at the first command: the provider readiness probe
+  (`_main_status`, run when no main role is configured), then the MCP servers. When that start raised, the engine
+  kept the failed task, and every later command awaited it again and got the same `internal` error until exod
+  restarted. A cancelled start task raised `CancelledError` the same way. Now a start task that raised or was
+  cancelled is cleared, and the next command starts again. Every command waiting on the failed start gets its
+  error, and commands that retry at the same time share one new start. A command cancelled while it waits leaves
+  a running start in place, so the runtime never starts twice. An MCP server that fails is still recorded in
+  `status()` and skipped, and `peers.start()` runs before the start task exists, so neither fails the start. The
+  steps that run again on a retry are guarded: `jobs.recover` returns after its first run, `PeerService.start`
+  once its node is set, `Scheduler.start` once its loop runs. A start cut short inside the MCP step can leave
+  server tasks running, so `McpManager.start` first stops the servers it already holds, and engine close
+  always closes MCP (it skipped that when no start task was kept). Core: 15,839 counted lines, 7 more than main
+  cd371aed; D-083 has no line ceiling, and the import and private-read caps are unchanged. Tests:
+  `tests/integration/test_engine_start_retry.py`.
 
 ## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
 - **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari

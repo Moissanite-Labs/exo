@@ -271,7 +271,7 @@ class CoreRuntime:
                 or sp.toolset in ("skills", "harness", "peers") or sp.name == agentlog.ZOOM.name]
 
     async def start(self) -> None:
-        """Connect MCP servers once (idempotent; the first command triggers it)."""
+        """Connect MCP servers once (idempotent; the first command triggers it, the next retries a failed start)."""
         if self._started is None:
             if self.peers is not None and self.peers.autostart:
                 await self.peers.start()
@@ -283,11 +283,7 @@ class CoreRuntime:
         try:
             await asyncio.shield(self._started)
         except BaseException:
-            # A failed start (e.g. a transient MCP/peer outage) must not permanently
-            # disable the engine: if the start task actually ended in failure (raised or
-            # was cancelled), clear the flag so the next command retries instead of
-            # re-awaiting the same terminal future. A plain cancellation of the awaiter
-            # leaves the (still-running) task in place, so we don't reset then.
+            # A start that raised (the _main_status provider probe, any error) or was cancelled is cleared to retry.
             task = self._started
             if task is not None and task.done() and (task.cancelled() or task.exception() is not None):
                 self._started = None
@@ -371,9 +367,8 @@ class CoreRuntime:
                 self.scheduler.close()
 
     async def _close_mcp(self) -> None:
-        if self._started is not None:
-            await self.mcp.close()
-            self._started = None
+        await self.mcp.close()  # always: a start cleared after failing may have left servers running
+        self._started = None
 
     def _main_ref(self) -> str:
         chain = self.router.chain("main")
