@@ -5008,7 +5008,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `hub._subs` in `jobs.py` and in `peer_target.py`, `loop._state` 2 in `peer_target.py`, `loop._state` 1 in
   `agents/delegate.py`).
 - **Revisit if:** the two step 4 caps stay still for a long stretch, or the headroom is raised again.
-- **Validation:** after merging main `00e2840e` (`c4b451fd`), `tests/integration` with `tests/docs` and `tests/core`
-  gave 1,314 passed and 1 skipped, including the six `test_core_line_budget` cases.
+- **Validation:** at head `c834a7af`, after merging main `58503282`, `tests/integration` with `tests/docs` and
+  `tests/core` gave 1,315 passed and 1 skipped, including the six `test_core_line_budget` cases.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md` §27,
   `docs/DOCS-MAP.md`, `CHANGELOG.md`.
