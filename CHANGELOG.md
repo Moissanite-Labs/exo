@@ -87,7 +87,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Optional scoped `AGENTS.md`/`AGENTS.override.md` workspace guidance, with bounded reads and independent
   main/child session scope. `CLAUDE.md` fallback is configurable (`docs/WORKSPACE-INSTRUCTIONS.md`). Exo reads a
   `.git` marker or a guidance file only when the user or root owns it and its folder, and nobody else can write
-  them, also when it runs as root. It bounds the whole rendered block, and refuses secret-store filenames.
+  them, also when it runs as root. Group write counts only for the user's private group, and not when an ACL
+  could lend those bits to someone else. It bounds the whole rendered block, and refuses secret-store filenames.
 - A sourced harness landscape comparison and phased roadmap with evaluation gates (`docs/HARNESS-LANDSCAPE.md`).
 
 ### Changed

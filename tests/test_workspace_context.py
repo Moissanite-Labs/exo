@@ -578,3 +578,83 @@ def test_required_executor_refuses_profile_selected_instructions_before_plugins(
     monkeypatch.setattr(compose, "CoreEngine", forbidden)
     with pytest.raises(ExecutorConfigurationError, match="instructions"):
         compose.create()
+
+
+# ---- checker round of 2026-10-27: an ACL can lend the private group's write bits to someone else ----
+# With an extended POSIX ACL, the mode's group bits are the ACL mask. A named-user entry that grants write then
+# shows as group write, and the group is still the user's private group.
+
+def _private_group(monkeypatch, gid):
+    """Make the loader see ``gid`` as the session user's private group, as in a umask 002 setup."""
+    import exo.workspace_context as wc
+    monkeypatch.setattr(wc.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_name="me", pw_gid=gid))
+    monkeypatch.setattr(wc.grp, "getgrgid", lambda g: SimpleNamespace(gr_name="me", gr_mem=[]))
+
+
+def _acl_on(monkeypatch, *paths):
+    """Report an extended ACL on each of ``paths`` (by inode), and none elsewhere."""
+    import errno
+    marked = {(os.lstat(p).st_dev, os.lstat(p).st_ino) for p in paths}
+
+    def getxattr(at, name, *, follow_symlinks=True):
+        info = os.fstat(at) if isinstance(at, int) else os.lstat(at)
+        if name == "system.posix_acl_access" and (info.st_dev, info.st_ino) in marked:
+            return b"\x02\x00\x00\x00"
+        raise OSError(errno.ENODATA, "No data available")
+
+    monkeypatch.setattr(os, "getxattr", getxattr, raising=False)
+
+
+@pytest.mark.parametrize("target", ["file", "folder", "marker", "none"])
+def test_an_acl_on_a_private_group_entry_counts_as_someone_else(tmp_path, monkeypatch, target):
+    repo, work = _repo(tmp_path)
+    for path in (repo, repo / ".git", work):
+        path.chmod(0o775)
+    (work / "AGENTS.md").chmod(0o664)
+    (repo / "AGENTS.md").chmod(0o664)
+    _as(monkeypatch, ME)
+    _private_group(monkeypatch, (work / "AGENTS.md").stat().st_gid)
+    _acl_on(monkeypatch, *{"file": [work / "AGENTS.md"], "folder": [work], "marker": [repo / ".git"],
+                           "none": []}[target])
+    guidance = WorkspaceInstructions({"enabled": True})
+    text = guidance.render(work)
+    assert ("WORK GUIDANCE" in text) is (target in ("marker", "none"))
+    assert ("REPO GUIDANCE" in text) is (target in ("file", "none"))
+    assert guidance.inspect(work)["root"] == str(work if target in ("folder", "marker") else repo)
+
+
+def test_where_acls_cannot_be_read_group_write_is_never_eased(tmp_path, monkeypatch):
+    repo, work = _repo(tmp_path)
+    (work / "AGENTS.md").chmod(0o664)
+    _as(monkeypatch, ME)
+    _private_group(monkeypatch, (work / "AGENTS.md").stat().st_gid)
+    monkeypatch.delattr(os, "getxattr", raising=False)
+    text = WorkspaceInstructions({"enabled": True}).render(work)
+    assert "REPO GUIDANCE" in text and "WORK GUIDANCE" not in text
+
+
+def test_a_real_acl_that_lets_another_user_write_is_refused(tmp_path, monkeypatch):
+    """The ACL itself, written as the kernel stores it: version 2, then (tag, permissions, id) entries."""
+    import errno
+    import struct
+    if not hasattr(os, "setxattr"):
+        pytest.skip("no extended attributes on this platform")
+    repo, work = _repo(tmp_path)
+    agents = work / "AGENTS.md"
+    entries = [(0x01, 6, 0xFFFFFFFF), (0x02, 6, OTHER), (0x04, 4, 0xFFFFFFFF), (0x10, 6, 0xFFFFFFFF),
+               (0x20, 4, 0xFFFFFFFF)]  # owner rw, user OTHER rw, group r, mask rw, others r
+    try:
+        os.setxattr(agents, "system.posix_acl_access",
+                    struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *e) for e in entries))
+    except OSError as exc:
+        if exc.errno in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM):
+            pytest.skip(f"this file system takes no POSIX ACL: {exc}")
+        raise
+    assert agents.stat().st_mode & 0o777 == 0o664  # the mask shows as group write
+    _as(monkeypatch, ME)
+    _private_group(monkeypatch, agents.stat().st_gid)
+    text = WorkspaceInstructions({"enabled": True}).render(work)
+    assert "WORK GUIDANCE" not in text and "another user owns or can write it" in text
+    os.removexattr(agents, "system.posix_acl_access")
+    agents.chmod(0o664)
+    assert "WORK GUIDANCE" in WorkspaceInstructions({"enabled": True}).render(work)

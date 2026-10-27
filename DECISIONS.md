@@ -6360,6 +6360,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     steer sent after close began is refused, `run_turn` refuses before its turn hooks fire, the owner check
     runs again on the opened file, and a file below a secret-store folder is skipped. The fifth, the closing
     check before the peer start, is gone, because `start()` now refuses first.
+- **Amendment 2026-10-27 (second checker round on #500):** the private-group exception read only the mode.
+  With an extended POSIX ACL, the group bits are the ACL mask. An entry that lets another user write, as a
+  shared folder's default ACL does for each new file, then looked like private group write, and its text was
+  read. An entry with an ACL now gets no exception. Exo checks the open file and folder by descriptor. Where
+  it cannot read ACLs, it makes no exception at all. Accounts whose primary group is the private group are
+  not looked up: that takes a full account listing, which can be slow on directory-backed systems.
 
 - **Plugin binding follow-up (2026-10-23, #498):** `exo.plugin_lifecycle.PluginToolBridge` now owns the
   Hermes-compatible tool/slot adapters and lifecycle-verdict translation previously inside `CoreRuntime`.

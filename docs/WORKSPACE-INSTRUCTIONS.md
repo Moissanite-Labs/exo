@@ -99,7 +99,11 @@ Exo reads a `.git` marker or an instruction file only when the user or root
 owns it and its folder, and nobody else can write either of them. Group write
 counts as someone else, except for the user's private group. That group is
 named after the user, is the user's primary group and has no other member. It
-is the usual setup with umask 002. The upward search stops at the first folder
+is the usual setup with umask 002. An extended POSIX ACL can grant other users
+write through the group bits, so an entry with one gets no such exception. Where
+Exo cannot read ACLs, group write always counts as someone else. Exo reads the
+group's member list. It does not look for other accounts whose primary group it
+is. The upward search stops at the first folder
 that fails this test, such as a shared `/tmp`. Exo then reads only the
 session's directory, and skips files there that fail it. A repository that
 another user owns is not read, also when Exo runs as root. Git refuses such a

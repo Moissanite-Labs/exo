@@ -6,6 +6,7 @@ does not change tool permissions. The loop only needs the injected
 """
 from __future__ import annotations
 
+import errno
 import grp
 import os
 import pwd
@@ -22,9 +23,23 @@ RENDER_ROOM = 8 * 1024  # characters for the intro, source headings and warnings
 DEFAULT_FILENAMES = ("AGENTS.override.md", "AGENTS.md")
 
 
-def _others_can_write(info: os.stat_result) -> bool:
+def _has_acl(at: int | str) -> bool:
+    """Whether ``at`` (an open fd, or a path whose last part is not followed) has an extended POSIX ACL. Its group
+    bits are then the ACL mask, which also covers named users and groups. Where ACLs cannot be read, assume one."""
+    getxattr = getattr(os, "getxattr", None)
+    if getxattr is None:
+        return True
+    try:
+        getxattr(at, "system.posix_acl_access", **({} if isinstance(at, int) else {"follow_symlinks": False}))
+    except OSError as exc:
+        return exc.errno not in (errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP)
+    return True
+
+
+def _others_can_write(info: os.stat_result, at: int | str) -> bool:
     """World write, or group write for a group that may hold someone else. The user's private group (named after
-    the user, its primary group, no other listed member: the usual umask 002 setup) holds only the user."""
+    the user, its primary group, no other listed member: the usual umask 002 setup) holds only the user, as long
+    as no ACL lends its group bits to others."""
     if info.st_mode & stat.S_IWOTH:
         return True
     if not info.st_mode & stat.S_IWGRP:
@@ -33,18 +48,19 @@ def _others_can_write(info: os.stat_result) -> bool:
         user, group = pwd.getpwuid(os.geteuid()), grp.getgrgid(info.st_gid)
     except KeyError:
         return True
-    return not (info.st_gid == user.pw_gid and group.gr_name == user.pw_name and set(group.gr_mem) <= {user.pw_name})
+    private = info.st_gid == user.pw_gid and group.gr_name == user.pw_name and set(group.gr_mem) <= {user.pw_name}
+    return not private or _has_acl(at)
 
 
-def _controlled(info: os.stat_result) -> bool:
-    """The user or root owns it, and nobody else can write it."""
-    return info.st_uid in (os.geteuid(), 0) and not _others_can_write(info)
+def _controlled(info: os.stat_result, at: int | str) -> bool:
+    """The user or root owns it, and nobody else can write it. ``at`` is where ``info`` came from."""
+    return info.st_uid in (os.geteuid(), 0) and not _others_can_write(info, at)
 
 
-def _trusted(entry: os.stat_result, folder: os.stat_result) -> bool:
+def _trusted(entry: os.stat_result, entry_at: int | str, folder: os.stat_result, folder_at: int | str) -> bool:
     """An instruction file or ``.git`` marker counts only when it and its folder are each controlled: owned by the
     user or root, and writable by nobody else. Another user's file is refused, also for root."""
-    return _controlled(entry) and _controlled(folder)
+    return _controlled(entry, entry_at) and _controlled(folder, folder_at)
 
 
 def _warn(report: dict[str, Any], text: str) -> None:
@@ -99,7 +115,7 @@ class WorkspaceInstructions:
         for folder in (cwd, *cwd.parents):
             try:
                 here = folder.stat()
-                if not _controlled(here):
+                if not _controlled(here, str(folder)):
                     return cwd
                 marker = (folder / ".git").lstat()
             except FileNotFoundError:
@@ -107,7 +123,7 @@ class WorkspaceInstructions:
             except OSError:
                 return cwd
             if stat.S_ISREG(marker.st_mode) or stat.S_ISDIR(marker.st_mode):
-                return folder if _trusted(marker, here) else cwd
+                return folder if _controlled(marker, str(folder / ".git")) else cwd  # the folder passed above
         return cwd
 
     def _snapshot(self, cwd: str | os.PathLike[str] | None) -> tuple[dict[str, Any], list[str]]:
@@ -160,7 +176,7 @@ class WorkspaceInstructions:
             if not stat.S_ISREG(mode.st_mode):
                 _warn(report, f"Skipped {path}: instruction files must be regular files, not symlinks")
                 return
-            if not _trusted(mode, here):
+            if not _trusted(mode, str(path), here, directory):
                 _warn(report, f"Skipped {path}: another user owns or can write it or its folder")
                 return
             if is_sensitive_path(str(path)):
@@ -175,7 +191,7 @@ class WorkspaceInstructions:
                 fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
                 with os.fdopen(fd, "rb") as stream:
                     metadata = os.fstat(stream.fileno())
-                    if not stat.S_ISREG(metadata.st_mode) or not _trusted(metadata, here):
+                    if not stat.S_ISREG(metadata.st_mode) or not _trusted(metadata, stream.fileno(), here, directory):
                         _warn(report, f"Skipped {path}: instruction file changed after it was checked")
                         return
                     raw = stream.read(room)
