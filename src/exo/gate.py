@@ -4078,7 +4078,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                     todo.extend(reversed(p.parts))
         else:
             c = copy.deepcopy(c)              # as main: the copy stays private for _hop_fill below
-        _hop_fill(c, dest)
+        _hop_fill(c, dest, memo=ctx.setdefault("hop_fill", {}), shared=ctx.get("remote_ids") or {}, filled=ctx.setdefault("hop_filled", set()))
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
             # A helper names the host as when it led the line, also where the remote line's store write leads (#461)
@@ -4127,9 +4127,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # h`). After a hop that is the first host, where the line hands the stdin over, as for the target.
             stdin.alt_targets = [t for t in dict.fromkeys(t or dest for t in stdin.alt_targets) if t != stdin.target]
             stdin.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in stdin.parts]
-            _hop_fill(stdin, dest)
+            _hop_fill(stdin, dest, memo=ctx.setdefault("hop_fill", {}), shared=ctx.get("remote_ids") or {}, filled=ctx.setdefault("hop_filled", set()))
         else:                                 # the remote line leads, as a store write (#461) where its read did not
-            _hop_fill(stdin, dest, whole=True)
+            _hop_fill(stdin, dest, whole=True, memo=ctx.setdefault("hop_fill", {}), shared=ctx.get("remote_ids") or {}, filled=ctx.setdefault("hop_filled", set()))
         stdin.signals.append("remote host")
         # The line keeps the first of equal parts. Both parts now run on the remote host, so they can be equal where
         # the part that runs the stdin led before: it comes first then, and the line is decided as before.
@@ -5003,19 +5003,51 @@ def _bare_copy(p: Classification, **changes) -> Classification:
         s for s in (p.signals if p.own_signals is None else p.own_signals) if s != "unseen_body"])
 
 
-def _hop_fill(c: Classification, dest: str, whole: bool = False) -> None:
+def _hop_fill(c: Classification, dest: str, whole: bool = False, memo: dict | None = None,
+              shared: dict | None = None, filled: set | None = None) -> None:
     """#399 below an ssh or mosh hop's line (the hop's own copy): the host joins each nested part's empty other
     target, and a nested part with an empty target gets a copy on the host among the line's parts (_bare_copy).
     Each part keeps its own reading, so a gh read nested under the store write it makes (#461) is still seen by a
     deny, reserved or rule entry on the host, as when it led the line. The copies of a gh action on its other targets
     among the line's own parts take the host in place, as before. With whole, the line and those copies are filled
-    the same way: the part that runs ssh's stdin, which named the host when it led before #461."""
+    the same way: the part that runs ssh's stdin, which named the host when it led before #461. A memo shared
+    across a line's hops keeps one copy per (part, host): a text fed to many ssh on one host gets one copy, not
+    one per ssh, or decide would scope every fed part once per ssh again (#327). A shared subtree already filled
+    for this host is skipped whole: its copies sit on the filling hop's parts, which decide still reads, so a later
+    hop neither walks it again nor lists its copies again."""
     own = set() if whole else {id(p) for p in c.parts if p.alt_copy}
-    nested = [p for p in list(_each_part(c))[0 if whole else 1:] if id(p) not in own]
+    if memo is None:
+        memo = {}
+    if shared is None:
+        shared = {}
+    if filled is None:
+        filled = set()
+    nested = []
+    seen: set[int] = set()
+    todo = [c]
+    while todo:
+        p = todo.pop()
+        if id(p) in seen:
+            continue
+        seen.add(id(p))
+        if id(p) in shared and (id(p), dest) in filled:
+            continue
+        if id(p) in shared:
+            filled.add((id(p), dest))
+        if not (p is c and not whole) and id(p) not in own:
+            nested.append(p)
+        todo.extend(reversed(p.parts))
     for p in nested:
         if "" in p.alt_targets and p.target != dest:
             p.alt_targets = list(dict.fromkeys([*p.alt_targets, dest]))
-    c.parts += [_bare_copy(p, target=dest) for p in nested if not p.target]
+    appended = []
+    for p in nested:
+        if not p.target:
+            key = (id(p), dest)
+            if key not in memo:
+                memo[key] = _bare_copy(p, target=dest)
+            appended.append(memo[key])
+    c.parts += appended
 
 
 def _write_summary(lead: Classification, write: Classification) -> str:
