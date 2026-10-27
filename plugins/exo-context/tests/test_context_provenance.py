@@ -1821,6 +1821,24 @@ def test_a_pending_undo_waits_for_the_next_turn_of_a_rebuilt_agent(tmp_path):
     assert block_of(built.compress())["ruling"] == [NOTE]  # the per-turn block and the later summary keep it out
 
 
+def test_a_rebuilt_engines_compression_moves_the_pending_undo_into_the_child(tmp_path):
+    """The rebuilt engine has seen no turn of the session, so it holds no window of the parent. When it compresses
+    the history that is left and the compression child starts, the record follows the child anyway (#642 review),
+    and the child's first turn drops the earlier undone turn's pin."""
+    a = Hermes(tmp_path, "r7")
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        a.turn(text)
+    a.undo(2)
+    assert pins(tmp_path, "r7")["ruling"] == [NOTE, MINE]  # one notice: only the last turn is known yet
+    b = Hermes(tmp_path, "r7")  # the rebuilt agent: same session, no turn of it seen
+    b.history = list(a.history)
+    child = b.eng.compress(list(b.history), force=True)
+    b.eng.on_session_start("r7c", boundary_reason="compression", old_session_id="r7")
+    b.sid, b.history = "r7c", child
+    out = b.turn("next step")
+    assert pins(tmp_path, "r7c")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+
+
 def test_a_rebuilt_agents_compaction_ties_its_block_to_the_pending_undo(tmp_path):
     """A compaction between the notice and the turn folds the window's first row. In the rebuilt agent's engine it
     ties its block to the pending record in exo.host_undo, so the turn's transcript still reaches back and drops
