@@ -824,7 +824,7 @@ class CoreRuntime:
         value = cfg.get(b.key, _MISSING)
         if value is _MISSING:
             raise CommandFailed("not_found", f"{b.key} is not set")
-        return {"key": b.key, "value": redact(value, b.key.split(".")[-1])}
+        return {"key": b.key, "value": redact(value, b.key.split("."))}
 
     async def _config_set(self, b: s.ConfigSet) -> dict[str, Any]:
         require_principal("change settings")
