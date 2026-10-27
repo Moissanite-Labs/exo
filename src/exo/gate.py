@@ -140,6 +140,9 @@ class Classification:
     # True on the copy of a secret line's heaviest other command that _shell_call adds beside the folder's read (#320):
     # on main that command is the line, whose own violations are listed outside the cap, so the copy's are too.
     line_copy: bool = field(default=False, repr=False, compare=False)
+    # True on the credentials part for each store a secret line names past its first (#609 follow-up): it only adds
+    # a target for `target:` entries to match, so the checks that ask which part read the line on main pass it over.
+    other_store: bool = field(default=False, repr=False, compare=False)
     # The source text of the one simple command this part stands for, with its redirections (#394): a rule that
     # would lower a compound line must match it too (_line_own_test). None where no such text exists (a part the
     # gate made up, an unread nest, a string literal in code), and then no such rule matches.
@@ -173,6 +176,7 @@ class Classification:
         d.pop("floor")
         d.pop("alt_copy")
         d.pop("line_copy")
+        d.pop("other_store")
         d.pop("_command_views")
         d.pop("own")
         d.pop("setters")
@@ -3844,7 +3848,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         target = next((w for w in words[1:] if not w.text.startswith("-")), None)
         dest = target.text if target else ""
         seen = ctx.setdefault("store_braces", {})
-        if target and (_in_store_dir_words(_shell_words(target, seen, "dir")) or _unknown_store(target, seen, inside=True)):
+        if target and (_shell_hits(target, seen, "dir", _store_dir_hit) != [] or _unknown_store(target, seen, inside=True)):
             ctx["store_cwd"] = True
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
@@ -3921,8 +3925,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # before keeps the host as its target, as the remote line itself did (`ssh host 'cat ~/.exo/$(printf
             # ledger.sqlite)'` was a read of host), so a reserved or rule entry on it still lists it. A copy with no
             # parts and no post, so the posting checks read each post once.
-            top = (next((p for cat in ("credentials", "store_write") for p in c.parts if p.category == cat), None) or
-                   _most_severe(c.parts)) if c.category in ("credentials", "store_write") else None
+            kept = [p for p in c.parts if not p.other_store]
+            top = (next((p for cat in ("credentials", "store_write") for p in kept if p.category == cat), None) or
+                   _most_severe(kept)) if c.category in ("credentials", "store_write") else None
             if top is not None and not top.target:
                 c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
@@ -3993,13 +3998,15 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         # the bare host, and the destination as written when it carries a user, a scheme or a port.
         c.parts += [_make("shell", summary=f"ssh {dest}", target=t, command=cmd, signals=["remote host"])
                     for t in dict.fromkeys(dests) if t]
-        if not here:                          # parts can be shared with a stored result (_own_copy): mark a copy
-            c = copy.deepcopy(c)
+        c = copy.deepcopy(c)                  # parts can be shared with a stored result (_own_copy): mark a copy
         for p in _each_part(c) if not here else ():   # every part runs on the remote host (D-075)
             if EXPOSURE.index(p.exposure) < 1:
                 p.exposure = "internal"
+        _hop_fill(c, dest)
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
+            # A helper names the host as when it led the line, also where the remote line's store write leads (#461)
+            c.parts += [_bare_copy(h, target=dest) for h in local if h is not c and not h.target]
         if not lead:                          # ssh's own part names the host, as when it led before #316
             c.target = dest if "unread hops" in c.signals else (c.target or dest)
         # #399: the host stands for an empty other target too, as for an empty target, so a rule on it sees each.
@@ -4035,6 +4042,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # h`). After a hop that is the first host, where the line hands the stdin over, as for the target.
             stdin.alt_targets = [t for t in dict.fromkeys(t or dest for t in stdin.alt_targets) if t != stdin.target]
             stdin.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in stdin.parts]
+            _hop_fill(stdin, dest)
+        else:                                 # the remote line leads, as a store write (#461) where its read did not
+            _hop_fill(stdin, dest, whole=True)
         stdin.signals.append("remote host")
         # The line keeps the first of equal parts. Both parts now run on the remote host, so they can be equal where
         # the part that runs the stdin led before: it comes first then, and the line is decided as before.
@@ -4521,6 +4531,14 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             elif key in _SSH_EXEC_SETTINGS:
                 c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
                 if c is not None and key == "remotecommand":
+                    # Every part runs on the remote host, as for the hop (D-075): a part the store write it makes
+                    # leads now (#461) is still raised. Parts can be shared with a stored result, so a copy. A nested
+                    # part keeps its private reading as a copy too, so an entry on `exposure: private` meets it as before.
+                    c = parts[-1] = copy.deepcopy(c)
+                    private = [_bare_copy(p) for p in list(_each_part(c))[1:] if EXPOSURE.index(p.exposure) < 1]
+                    for p in _each_part(c):
+                        p.exposure = max(p.exposure, "internal", key=EXPOSURE.index)
+                    c.parts += private
                     _raise_axes(c, exposure="internal")
                     c.signals.append("remote host")
             elif key in _SSH_LIB_SETTINGS and value.strip().lower() != "internal":
@@ -4727,33 +4745,52 @@ def _ln_targets(argv: list[str]) -> list[str]:
     bases = [d for d in dict.fromkeys(map(_expand_text, dirs)) if d.startswith("/")]
     return [os.path.join(b, t) for t in dict.fromkeys(operands + values) if not _expand_text(t).startswith("/")
             for b in bases]
-# A store check on a spelling makes the checks it covers redundant: a word checked with its ancestors and pieces
-# ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check ("target").
+# A store check on a spelling that found nothing makes the checks it covers redundant: a word checked with its
+# ancestors and pieces ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check
+# ("target").
 _COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
 
 
-def _shell_words(w: _Word, seen: dict, check: str) -> list[str] | None:
-    """The words bash makes of shell word ``w`` for a store check (#224): its text, plus its source spelling
-    brace-expanded and then dequoted, as _shell_credential_hit reads it. A word the gate built (an `ln` target) has
-    no source spelling and keeps its text. ``seen`` keeps each spelling's words for the line, so a spelling is
-    expanded and charged once; [] when a check covering ``check`` already ran on it. None past the cap."""
+def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str]]) -> list[str] | None:
+    """What ``find`` gives on the words bash makes of shell word ``w`` for a store check (#224): its text, plus its
+    source spelling brace-expanded and then dequoted, as _shell_credential_hit reads it. A word the gate built (an
+    `ln` target) has no source spelling and keeps its text. ``seen`` keeps each spelling's words and each check's
+    hits on it for the line, so a spelling is expanded and charged once and each check runs once on it. A later
+    command that repeats the spelling gets the same hits, so its own store part stays (#611 follow-up: [] there
+    gave its write to the first command's text). [] when a check covering ``check`` found none; None past the cap,
+    which callers count as a hit."""
     src = w.raw.replace("\\\n", "")
     if "{" not in src:
-        return [w.text]
+        return find(w.text)
     if src not in seen:
         words = _brace_words(src, pool=1)
         seen[src] = (None if words is None else list(dict.fromkeys([w.text] + [d for e in words[1:] for d in _dequote(e)])),
-                     set())
+                     {})
     words, done = seen[src]
-    if done & _COVERS[check]:
-        return []
-    done.add(check)
-    return words
+    if check not in done:
+        if any(done.get(c, 0) == [] for c in _COVERS[check]):
+            return []
+        found = None if words is None else (h for x in words for h in find(x))
+        # a redirect target or a folder check asks only whether there is a hit, so it stops at the first, as any() did
+        done[check] = None if found is None else list(itertools.islice(found, 1) if check in ("target", "dir") else
+                                                      dict.fromkeys(found))
+        return done[check]
+    hits, left = done[check], _brace_left.get()
+    if hits and left is not None:   # each repeat's hits come from a budget of their own, so a line of many repeats
+        left[2] -= len(hits)        # makes a bounded number of parts; past it a repeat is one hit, as past the cap
+        if left[2] < 0:
+            return None
+    return hits
 
 
-def _in_store_dir_words(words: list[str] | None) -> bool:
-    """_in_store_dir for any of a word's _shell_words; past the cap counts."""
-    return words is None or any(_in_store_dir(x) for x in words)
+def _store_word_hit(x: str) -> list[str]:
+    """[x] when x is a store path (_shell_hits' find for a redirect target)."""
+    return [x] if _store_word(x) else []
+
+
+def _store_dir_hit(x: str) -> list[str]:
+    """[x] when x is in a store folder (_shell_hits' find for cd, pushd and git -C targets)."""
+    return [x] if _in_store_dir(x) else []
 
 
 def _unknown_store(w: _Word, seen: dict, ancestors: bool = False, inside: bool = False) -> bool:
@@ -4777,10 +4814,11 @@ def _unknown_store(w: _Word, seen: dict, ancestors: bool = False, inside: bool =
                "*" in p and _store_glob(p, ancestors, inside) for p in pieces)
 
 
-# gh subcommands that write the paths on their line (#461): release, run and attestation download into
-# `-O`/`--output` or `-D`/`--dir`, and repo and gist clone into their directory word. The gate read them as
-# reads on GitHub, so the store check never looked at the paths, and `gh release download -O
-# ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, or the signed-update trust pin (#133).
+# gh subcommands that write the paths on their line (#461): release download into `-O`/`--output` or `-D`/`--dir`,
+# run download into `-D`/`--dir`, attestation download into the current folder (a `cd` into the store before it),
+# and repo and gist clone into their directory word. The gate read them as reads on GitHub, so the store check never
+# looked at the paths, and `gh release download -O ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy,
+# or the signed-update trust pin (#133).
 _GH_STORE_WRITES = (("release", "download"), ("run", "download"), ("attestation", "download"),
                     ("repo", "clone"), ("gist", "clone"))
 
@@ -4814,8 +4852,7 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         n = t.fd.lstrip("0") if t.fd.isascii() else ""     # compared as text: any length, never int()
         held = op == "<" and n != ""
         if op in _WRITE_REDIRS or held:
-            targets = _shell_words(t, seen, "target")
-            if targets is None or any(_store_word(x) for x in targets) or _unknown_store(t, seen) or \
+            if _shell_hits(t, seen, "target", _store_word_hit) != [] or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 hits.append(t.text)
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
@@ -4831,18 +4868,18 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             len(a) > 2 and ("--symbolic-link".startswith(a) or "--link".startswith(a)) for a in argv)))  # --sym, --li
     if prog == "ln":
         words = words + [_Word(t) for t in _ln_targets(argv)]
+    def pieces(e: str) -> list[str]:
+        return [p for p in dict.fromkeys([e] + re.split(r"[:=,]", e)) if p and _store_word(p, ancestors=wide)]
     for i, w in enumerate(words):
-        expanded = _shell_words(w, seen, "wide" if wide else "narrow")   # braces first: `of=x{a,b}` is `of=xa of=xb`
-        if expanded is None:
+        got = _shell_hits(w, seen, "wide" if wide else "narrow", pieces)   # braces first: `of=x{a,b}` is `of=xa of=xb`
+        if got is None:
             hits.append(w.text)
             continue
-        for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
-            if piece and _store_word(piece, ancestors=wide):
-                hits.append(piece)
+        hits += got
         if _unknown_store(w, seen, ancestors=wide):    # `cp x ~/.exo/polic$(:)ies/`, `polic${u}ies` (#309)
             hits.append(w.text)
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and (
-                _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")) or
+                _shell_hits(words[i + 1], seen, "dir", _store_dir_hit) != [] or
                 _unknown_store(words[i + 1], seen, inside=True)):
             hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
@@ -4872,6 +4909,28 @@ def _displace_with(c: Classification, **changes) -> None:
         return
     lead = replace(old, **changes)
     c.parts, c.displaced = [lead if q is old else q for q in c.parts], lead
+
+
+def _bare_copy(p: Classification, **changes) -> Classification:
+    """A copy of p with these changes (the hop's host as its target), with no parts and no post (as #320's), so the
+    posting checks read each post once."""
+    return replace(p, **changes, parts=[], text="", title="", text_file="", own_signals=[
+        s for s in (p.signals if p.own_signals is None else p.own_signals) if s != "unseen_body"])
+
+
+def _hop_fill(c: Classification, dest: str, whole: bool = False) -> None:
+    """#399 below an ssh or mosh hop's line (the hop's own copy): the host joins each nested part's empty other
+    target, and a nested part with an empty target gets a copy on the host among the line's parts (_bare_copy).
+    Each part keeps its own reading, so a gh read nested under the store write it makes (#461) is still seen by a
+    deny, reserved or rule entry on the host, as when it led the line. The copies of a gh action on its other targets
+    among the line's own parts take the host in place, as before. With whole, the line and those copies are filled
+    the same way: the part that runs ssh's stdin, which named the host when it led before #461."""
+    own = set() if whole else {id(p) for p in c.parts if p.alt_copy}
+    nested = [p for p in list(_each_part(c))[0 if whole else 1:] if id(p) not in own]
+    for p in nested:
+        if "" in p.alt_targets and p.target != dest:
+            p.alt_targets = list(dict.fromkeys([*p.alt_targets, dest]))
+    c.parts += [_bare_copy(p, target=dest) for p in nested if not p.target]
 
 
 def _write_summary(lead: Classification, write: Classification) -> str:
@@ -5812,13 +5871,28 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         out.signals = line.signals + ["secret store"]
         out.parts = list(parts)
         return _weigh(out, combined, cmd)
-    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
+    every: list[str] = []
+    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], every)
     named = hit if "/" in hit or "." in hit else ""
     # #320: on a line that is already a secret line (an expansion form read as a secret in a nested line, such as an
     # ssh remote command, decides it), the secret the line names is a part beside it when it is another target, as
     # it was the line's target where nothing else read a secret
     if hit and (c.category != "credentials" or named != c.target):
         c = secret(c, hit, named, c.category == "credentials")
+    # #609 follow-up: the line's target is the first store it names. Each other store it names is a credentials part
+    # with that store as its target, so a `target:` deny, reserved entry or rule on any of them matches, as it does
+    # when that store comes first (`cat ~/.ss?/* ~/.aws/credentials` under `target:*/.aws/*`). One weighed part
+    # stands for all; the others are copies of it on their own targets (``other_store``).
+    if hit:
+        have = {p.target for p in _each_part(c) if p.category == "credentials"}
+        others = [w for w in dict.fromkeys(every) if w not in have]
+        if others:
+            c = secret(c, others[0], others[0], True)
+            seat = c.parts[-1]
+            seat.other_store = True
+            c.parts = [*c.parts, *(replace(seat, summary=f"shell touching {w}"[:120], target=w,
+                                           signals=list(seat.signals), parts=[replace(q, target=w) for q in seat.parts])
+                                   for w in others[1:])]
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
@@ -6155,7 +6229,8 @@ def _run_secrets() -> list[str]:
 
 _BRACE_CAP = 1024
 _BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost), once for the secret-store checks
-                       # and once for the Exo-store checks (#224)
+                       # and once for the Exo-store checks (#224); and the hits a repeated store spelling gives again
+                       # (_shell_hits)
 _BRACE_SEQ = re.compile(r"([-+]?\d+)\.\.([-+]?\d+)(?:\.\.([-+]?\d+))?|([A-Za-z])\.\.([A-Za-z])(?:\.\.([-+]?\d+))?")
 _brace_left: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_brace_left", default=None)
 _call_memo: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_call_memo", default=None)
@@ -6178,7 +6253,7 @@ def _brace_budget(fn: _F) -> _F:
     def run(*a: Any, **kw: Any) -> Any:
         if _brace_left.get() is not None:
             return fn(*a, **kw)
-        token, memo = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET]), _call_memo.set({})
+        token, memo = _brace_left.set([_BRACE_BUDGET] * 3), _call_memo.set({})
         try:
             return fn(*a, **kw)
         finally:
@@ -6581,40 +6656,59 @@ def _glob_part(g: str, s: str) -> bool:
     return True if pat is None else fnmatch.fnmatchcase(s, pat)
 
 
-def _glob_folder_hit(d: str, home: str, folders: list[str]) -> tuple[bool, bool]:
-    """(hit, secret_folder): could the glob folder d name one of ``folders`` (the folders of the samples
+def _home_form(p: str, home: str) -> str:
+    """One form of ``p`` only, so the home path's own literal characters never count toward the
+    three-literal discipline: a folder under home is read home-relative, anything else as is."""
+    p = os.path.normpath(p)
+    root = home.rstrip("/") + "/"
+    return p[len(root):] if p.startswith(root) else "" if p == home else p
+
+
+@functools.lru_cache(maxsize=256)
+def _glob_folders(samples: tuple[str, ...], home: str, fold: tuple[bool, bool]) -> tuple[tuple[tuple[str, ...], bool], ...]:
+    """The folders _glob_folder_hit tries, built once per set of samples (#609 review): each sample's
+    folder, and a sample another sample sits below (`.exo/keys` below `.exo/keys/seat.key`); a sample
+    file (`auth.json`) is never a folder, or `~/*/*` would hit it. Each as its parts (_home_form), with
+    whether it is itself a secret store by name (_sensitive_re on the folded name, #601). ``fold`` keys
+    the cache on the fold state those two read."""
+    above: set[str] = set()
+    for x in samples:
+        while (x := os.path.dirname(x)) and x not in above:
+            above.add(x)
+    out = []
+    for f in dict.fromkeys([os.path.dirname(x) for x in samples] + [x for x in samples if x in above]):
+        ff = _home_form(f, home)
+        out.append((tuple(ff.split("/")), bool(_sensitive_re().search(_fold(ff.replace("\\", "/"))))))
+    return tuple(out)
+
+
+def _glob_folder_hit(d: str, home: str, samples: tuple[str, ...]) -> tuple[bool, bool]:
+    """(hit, secret_folder): could the glob folder d name one of the folders of ``samples`` (the samples
     _glob_word is tried against, and the samples themselves, so `.exo/keys` counts as a folder)? The
     parts must match one by one, and the match needs discipline: a part that starts with a literal dot,
     or three literal characters across the matched parts (`.ss?`, `.aw?`, `.exo/key?` qualify; a bare
     `*` does not, so `src/*` and `~/*` stay ordinary). ``secret_folder`` is True when the matched
     folder is itself a secret store by name (_SENSITIVE_PATH: `.ssh`, `.aws`, `.exo/keys`), so any file
-    below it counts, as a literal folder does (`~/.ssh/xyz*` already asks)."""
+    below it counts, as a literal folder does (`~/.ssh/xyz*` already asks). Below such a folder d may
+    go deeper than it: its leading parts must match the folder, with the same discipline over them
+    (`~/.gnup?/private-keys-v1.d`, `~/.exo/key?/old`), as a literal folder below a store is a store
+    too. A secret folder that matches wins over an ordinary one."""
     if not d or not re.search(r"[*?\[]", d):
         return False, False
-
-    def forms(p: str) -> set[str]:
-        # One form only, so the home path's own literal characters never count toward the
-        # three-literal discipline: a folder under home is read home-relative, anything else as is.
-        p = os.path.normpath(p)
-        root = home.rstrip("/") + "/"
-        if p.startswith(root):
-            return {p[len(root):]}
-        if p == home:
-            return {""}
-        return {p}
-
-    dforms = forms(d)
-    for folder in folders:
-        for ff in forms(folder):
-            for df in dforms:
-                gp, fp = df.split("/"), ff.split("/")
-                if len(gp) != len(fp) or not all(_glob_part(g, s) for g, s in zip(gp, fp)):
-                    continue
-                lits = sum(len(re.sub(r"[*?\[\]]", "", g)) for g in gp)
-                if not any(g.startswith(".") for g in gp) and lits < 3:
-                    continue
-                return True, bool(_sensitive_re().search(_fold(ff.replace("\\", "/"))))
-    return False, False
+    parts, hit = _home_form(d, home).split("/"), False
+    for fp, secret in _glob_folders(samples, home, (_fold("A") == "a", _sensitive_re() is _SENSITIVE_PATH)):
+        if len(parts) < len(fp) or len(parts) > len(fp) and not secret:
+            continue
+        gp = parts[:len(fp)]
+        if not all(_glob_part(g, s) for g, s in zip(gp, fp)):
+            continue
+        lits = sum(len(re.sub(r"[*?\[\]]", "", g)) for g in gp)
+        if not any(g.startswith(".") for g in gp) and lits < 3:
+            continue
+        if secret:
+            return True, True
+        hit = True
+    return hit, False
 
 
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
@@ -6648,10 +6742,7 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     # is store_write, not credentials). A `.pub` file part stays out, as for a literal folder.
     # A sample counts as a folder only when another sample sits below it (`.exo/keys` below
     # `.exo/keys/seat.key`); a sample file (`auth.json`) is never a folder, or `~/*/*` would hit it.
-    all_samples = list(samples) + list(_SENSITIVE_SAMPLES)
-    folder_samples = [x for x in all_samples if any(y != x and y.startswith(x + "/") for y in all_samples)]
-    folders = [os.path.dirname(x) for x in all_samples] + folder_samples
-    folder_hit, secret_folder = _glob_folder_hit(d, home, folders)
+    folder_hit, secret_folder = _glob_folder_hit(d, home, (*samples, *_SENSITIVE_SAMPLES))
     in_store_dir = linked or folder_hit or bool(d_abs) and _fold(d_abs) != _fold(home) and any(
         _fold(x).startswith(_fold(d_abs) + "/") for x in samples)
     if secret_folder and re.search(r"[*?\[]", base) and not _fold(base).endswith(".pub"):
@@ -7078,35 +7169,47 @@ def _env_dump(argv: list[str]) -> bool:
     return False
 
 
-def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None) -> str:
+def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None,
+                          every: list[str] | None = None) -> str:
     """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a brace set
     in the source text ``raws`` of a word or redirection target, or a quoted `bash -c` string), the Keychain,
-    or a bare environment dump. '' if nothing."""
+    or a bare environment dump. '' if nothing. With ``every``, each path, and each word of a brace set, that
+    touches a store is added to it, the first one too; the result stays the first, a Keychain or environment
+    dump hit too, and the paths after such a hit are still listed (#609 follow-up)."""
     text = _expand_text(cmd)
-    if _KEYCHAIN.search(text):
-        return "keychain access"
-    if _PROVIDER_ROUTE.search(text):
-        return "provider key route"
-    if _SECRET_VAR.search(text):
-        return "secret environment variable"
+    first = ("keychain access" if _KEYCHAIN.search(text) else "provider key route" if _PROVIDER_ROUTE.search(text)
+             else "secret environment variable" if _SECRET_VAR.search(text) else "")
+    if first and every is None:
+        return first
     pieces = [p for p in _PIECE_SPLIT.split(text) if p]
     for seg in segs:
         pieces += [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)", "", t) for t in seg]
+        if first:
+            continue
         flat, _ = _strip_prefixes_keep_env(seg)
         if _env_dump(flat):
-            return "environment dump"
-        if flat and flat[0].rsplit("/", 1)[-1] == "security" and any(
+            first = "environment dump"
+        elif flat and flat[0].rsplit("/", 1)[-1] == "security" and any(
                 a in ("-w", "-g", "-gs", "-wg") for a in flat[1:]) and len(flat) > 1 and flat[1].startswith("find"):
-            return "keychain access"
-    for p in pieces:
+            first = "keychain access"
+        if first and every is None:
+            return first
+    for p in pieces if every is None else dict.fromkeys(pieces):     # each word once when every one is listed
         p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
         if p and (_sensitive_words([p]) or _glob_words([p])):
-            return p
+            if every is None:
+                return p
+            first = first or p
+            every.append(_expand_text(p))           # a word of a segment as the text spells it: `~` read
     groups: dict[str, list[str]] = {}         # bash expands only unquoted braces: expand, then dequote
     for raw in dict.fromkeys(raws or []):
         words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
         if words is None:
-            return raw
+            if every is None:
+                return raw
+            first = first or raw
+            every.append(raw)
+            continue
         alts = words[1:] or words
         found = [d for w in alts for d in _dequote(w)] if len(words) > 1 or '$"' in raw else []
         found += [d for w in alts for d in _unknown_words(w)]   # what an expansion may print
@@ -7114,8 +7217,12 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
             groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for d in found]
     words = [w for ws in groups.values() for w in ws]
     if words and (_sensitive_words(words) or _glob_words(words)):
-        return next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
-    return ""
+        hit = next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
+        if every is None:
+            return hit
+        every += [_expand_text(w) for w in words if _sensitive_words([w]) or _glob_words([w])]
+        return first or hit
+    return first
 
 
 _PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
@@ -7367,7 +7474,8 @@ def _shell_call(cmd: str) -> Classification:
     # own text, so no rule on `command` lifts that command's deny, as on main where it decides the line (#394). The
     # copy keeps its body, so a post main checks as the line's own and as its part is checked twice here too. Its
     # entries are listed outside the cap, as main lists the line's own (``line_copy``).
-    new = [f for f in found if f[1] not in {p.target for p in _each_part(c) if p.category == "credentials"}]
+    new = [f for f in found if f[1] not in {p.target for p in _each_part(c)
+                                            if p.category == "credentials" and not p.other_store}]
     top = _most_severe(p for p in _each_part(c) if p.category != "credentials") if c.category == "credentials" else None
     if new and top is not None:                 # first, as main reads the line before its parts
         c.parts = [replace(top, parts=[], own=None, line_copy=True), *c.parts]
@@ -7565,6 +7673,12 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         c = _shell_call(str(args.get("command") or args.get("cmd") or ""))
     elif tool == "execute_code":
         c = classify_code(str(args.get("code") or ""))
+    elif (tool == "work_notes" and args.get("action") in ("read", "history", "update")
+          and set(args) <= {"read": {"action", "revision"}, "history": {"action", "limit"},
+                            "update": {"action", "expected_revision", "document"}}[args["action"]]):
+        operation = args.get("action")
+        category = "local_write" if operation == "update" else "read"
+        c = _make(category, summary=f"session working notes: {operation}")
     elif tool in ("write_file", "patch", "edit_file", "apply_patch"):
         paths = [_first(args, ("path", "file_path"))] + _patch_paths(str(args.get("patch") or ""))
         paths = [p for p in paths if p]
@@ -7582,8 +7696,11 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         if cat != "local_write" or len(set(paths)) > 1:
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
-        if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
-            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p, from_cwd=True)]
+        # #447: a store file it writes beside a secret is a part, so only the principal answers. #514: so is each store
+        # file past the first, so a target entry on any of them matches, as for the other file tools.
+        if cat != "local_write":
+            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths)
+                        if (cat == "credentials" or p != path) and is_store_path(p, from_cwd=True)]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)
