@@ -19,6 +19,14 @@ from pathlib import Path
 
 Runner = Callable[[list[str]], Any]
 
+PERMISSION_FLAGS = ("--skip-permissions", "--dangerously-skip-permissions")
+
+
+def dropped_permission_flags(argv: list[str] | None = None) -> list[str]:
+    """Permission flags present in ``argv`` (default ``sys.argv``) that ``new_command`` strips."""
+    argv = sys.argv if argv is None else argv
+    return [flag for flag in PERMISSION_FLAGS if flag in argv]
+
 
 def _launch_command(env: dict[str, str], argv: list[str] | None) -> list[str]:
     base = shlex.split(env.get("EXO_RESTART_CMD", ""))
@@ -58,7 +66,7 @@ def new_command(cwd: str, env: dict[str, str] | None = None, argv: list[str] | N
     """Open a fresh session without inheriting a title, resume or permission flag."""
     env = os.environ if env is None else env
     base = _without_options(_launch_command(env, argv), ("--session", "--cwd", "--title"),
-                            ("--resume", "--skip-permissions", "--dangerously-skip-permissions"))
+                            ("--resume", *PERMISSION_FLAGS))
     # The machine launchers and ``exo resume`` also accept a positional resume subcommand.
     for i, arg in enumerate(base[:-1]):
         if Path(arg).name in ("exo", "exo-canary", "exo-projects") and base[i + 1] == "resume":
