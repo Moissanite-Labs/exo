@@ -397,7 +397,12 @@ What the gate asks about, and why:
   code from too (#459): the venv `${EXO_VENV:-$EXO_HOME/venv}` that holds the `exo` package and the gate itself,
   Hermes' plugin home (`${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}/plugins`, loaded with `--with-hermes`), the source
   copy `$EXO_HOME/src`, and every folder `EXO_PLUGIN_DIRS` names. A `pip install` into the venv Exo itself runs from
-  now asks; everyday work installs into a project or scratch venv instead. To work on a plugin, leave
+  now asks; everyday work installs into a project or scratch venv instead. A write into a trusted bin
+  folder asks you every time too (#331): the gate trusts the programs in eight system folders (`/bin`,
+  `/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, `/sbin`, `/usr/sbin`, `/usr/local/sbin`, `/opt/local/bin`),
+  and on a Homebrew install those folders are writable by you, so a write there plants a program under a trusted
+  name. Only the positions a command writes to count, so running, reading or copying out of a folder is unchanged.
+  To work on a plugin, leave
   `EXO_PLUGIN_DIRS` unset while you edit, or point it at your copy only for sessions that must load it. Only you can
   answer such a write, whatever `approvals.yaml` says, also
   when the same command or file tool names a secret that a seat may approve (#447). Reading your policies or plugins

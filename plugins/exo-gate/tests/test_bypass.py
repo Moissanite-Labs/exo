@@ -178,7 +178,7 @@ def test_status_counts_the_calls_bypass_auto_approved(keyed_store, as_caller):
     assert "except changes to Exo's own records and reading secrets" in text
     snap = hook.permissions_command(g, "json")
     assert snap["mode"] == "bypass" and snap["auto_approved"] == 3 and snap["floor_asks"] == 1
-    assert snap["via"] == "/permissions" and snap["floor"] == ["credentials", "store_write"]
+    assert snap["via"] == "/permissions" and snap["floor"] == ["credentials", "store_write", "bin_write"]
 
 
 def test_launch_flag_is_recorded_as_such(keyed_store, as_caller):
