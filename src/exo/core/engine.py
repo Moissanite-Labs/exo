@@ -528,14 +528,14 @@ class CoreRuntime:
     def _owned(self) -> Iterator[None]:
         """The running task joins ``_tasks`` while it runs, so close() drains direct callers as it drains turns."""
         task = asyncio.current_task()
-        owned = task is not None and task not in self._tasks
-        if owned:
-            self._tasks.add(task)
+        owned = task if task is not None and task not in self._tasks else None
+        if owned is not None:
+            self._tasks.add(owned)
         try:
             yield
         finally:
-            if owned:
-                self._tasks.discard(task)
+            if owned is not None:
+                self._tasks.discard(owned)
 
     def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:
         """Running background jobs of this agent (jobs belong to the agent, not one thread), for /handoff."""
