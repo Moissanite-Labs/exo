@@ -5,6 +5,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Added
+- Optional session working notes with transcript evidence references, revision conflicts, restart
+  recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
+  through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).
+
 ### Changed
 - The core budget prices coupling, not only lines, and its ceiling is dropped (D-083, amending D-077).
   The line ceiling set on 2026-10-15 was already failing its own test: `main` at `13cea687` counted 15,828
@@ -20,6 +25,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
+  (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
+  that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
+  checks past the decision read only the lead category. #659 (#651) since made a replace of a store file lead with
+  `store_write` (`mcp__fs__searchReplace`, `findAndReplace` on `~/.exo/seats/principal.toml`), but on main
+  e0968a2b bypass still ran `readFile` and `getOrCreateFile` on `~/.exo/policies/gates.yaml`, `readFile` on the
+  seat file, `mcp__fs__readFile` on `~/.exo/config.json`, `mergeGithub` and `mcp__github__mergePullRequest`
+  naming `~/.ssh/id_rsa` and `mcp__slack__postMessage` naming `~/.aws/credentials`, and a tool the registry calls
+  high risk ran in every mode (`mcp__fs__writeFile`, `mcp__fs__uploadFile`, `mcp__fs__searchReplace` on a plain
+  path, `mcp__gh__listIssues`). Bypass now keeps the floor when any reading or part is `store_write` or
+  `credentials` (`gate.no_grant`), and the high-risk ask fires when any reading is `unknown`. A post held for its
+  posting fixes stays held. Snake names and camelCase calls with no floor reading decide as before. Hook probe
+  against main e0968a2b: 1360 lines, 164 changed, 0 lowered. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`.
+  **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-065, D-038), `docs/DEVELOPER-GUIDE.md` §3.
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.
