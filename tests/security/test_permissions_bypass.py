@@ -63,11 +63,13 @@ def test_principal_turns_it_on_and_the_gate_stops_asking(engine):
 
 
 @pytest.mark.parametrize("transport", ["tcp", "stdio", "unix"])
-def test_transports_override_a_principal_dispatcher(engine, transport):
+@pytest.mark.parametrize("permission_args", ["bypass", "full all"])
+def test_transports_override_a_principal_dispatcher(engine, transport, permission_args):
+    on = s.CommandRun(name="permissions", args=permission_args)
     async def main():
         d = Dispatcher(engine, caller="principal:tui")
         if transport == "stdio":
-            lines, written = [s.Command.of(ON, id="1").to_json()], []
+            lines, written = [s.Command.of(on, id="1").to_json()], []
 
             async def read():
                 return lines.pop(0) if lines else None
@@ -88,7 +90,7 @@ def test_transports_override_a_principal_dispatcher(engine, transport):
             client.headers.update({"Authorization": "Bearer test-token", "X-Exo-Principal": "principal",
                                    "X-Exo-Client": "tui"})
             async with client as c:
-                return [(await c.post("/command", content=s.Command.of(ON).to_json())).json()]
+                return [(await c.post("/command", content=s.Command.of(on).to_json())).json()]
         finally:
             await srv.close()
             if sock_dir:
@@ -229,3 +231,55 @@ def test_bypass_lowers_only_turns_the_principal_started(tmp_path, template_store
             assert len(opened) == 1 and auto == 0
     finally:
         asyncio.run(eng.close())
+
+
+@pytest.mark.parametrize('caller', ['local', 'unknown', 'peer:other', 'bus:fixture', 'seat:helper'])
+def test_full_dispatch_requires_live_principal(engine, caller):
+    command = s.Command.of(s.CommandRun(name='permissions', args='full s_fixture'))
+    result = asyncio.run(Dispatcher(engine, caller=caller).run(command))
+    assert not result.ok and result.error.code == 'forbidden'
+    assert mode(engine) == 'ask'
+
+
+def test_full_dispatch_scopes_all_turn_authors_to_one_session_and_local_ask_revokes(engine):
+    async def main():
+        sid = (await engine.loop.create_session(title='full fixture')).id
+        command = s.Command.of(s.CommandRun(name='permissions', args='full ' + sid))
+        on = await Dispatcher(engine, caller='principal:tui').run(command)
+        assert on.ok and on.result['output'].startswith('permissions: full')
+        for author in ('principal:tui', 'job', 'peer:fixture', ''):
+            results = await engine.plugins.hooks.afire('pre_tool_call', tool_name='bash',
+                args={'command': 'cat ~/.exo/keys/fixture.key'}, session_id=sid, author=author)
+            assert results == []  # no tool is executed: only the real registered gate is consulted
+        for other in ('s_other', ''):
+            results = await engine.plugins.hooks.afire('pre_tool_call', tool_name='bash',
+                args={'command': 'cat ~/.exo/keys/fixture.key'}, session_id=other, author='principal:tui')
+            assert results[0]['action'] == 'approve'
+        off = await Dispatcher(engine, caller='local').run(s.Command.of(s.CommandRun(name='permissions', args='ask')))
+        assert off.ok and mode(engine) == 'ask'
+        results = await engine.plugins.hooks.afire('pre_tool_call', tool_name='bash',
+            args={'command': 'cat ~/.exo/keys/fixture.key'}, session_id=sid, author='principal:tui')
+        assert results[0]['action'] == 'approve'
+    asyncio.run(main())
+
+
+
+def test_full_all_existing_command_protocol_covers_new_and_child_sessions(engine):
+    async def main():
+        # The existing command.run envelope carries the new argument; no protocol type is added.
+        old_wire = json.dumps({'type': 'command.run', 'id': 'full-fixture',
+                               'body': {'name': 'permissions', 'args': 'full all'}})
+        result = await Dispatcher(engine, caller='principal:tui').run(s.Command.from_json(old_wire))
+        decoded = s.Response.from_json(result.to_json())
+        assert decoded.ok and decoded.result['output'].startswith('permissions: full for all sessions')
+        parent = (await engine.loop.create_session(title='parent')).id
+        child = (await engine.loop.create_session(title='child', parent=parent, kind='subagent', agent='fixture')).id
+        for sid in (parent, child):
+            assert await engine.plugins.hooks.afire('pre_tool_call', tool_name='bash', session_id=sid,
+                args={'command': 'cat ~/.exo/keys/fixture.key'}, author='job') == []
+        status = await Dispatcher(engine, caller='local').run(s.Command.of(s.CommandRun(name='permissions', args='json')))
+        snap = s.Response.from_json(status.to_json()).result['output']
+        assert snap['supports_full_all'] and snap['full_session'] == '*' and snap['scope'] == 'core-all-sessions'
+        await Dispatcher(engine, caller='local').run(s.Command.of(s.CommandRun(name='permissions', args='ask')))
+        assert mode(engine) == 'ask'
+    asyncio.run(main())
