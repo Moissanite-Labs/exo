@@ -298,6 +298,8 @@ class WebServer:
             if method != "POST":
                 return await self._json(writer, 405, {"error": "POST only"})
             return await self._launch(reader, writer, headers)
+        if path == "/api/reasoning":
+            return await self._reasoning(reader, writer, headers, method)
         if path == "/api/providers" or path.startswith("/api/providers/"):
             return await self._providers(reader, writer, headers, method, path)
         if path == "/api/complete/files":   # file names: same guard as the key routes (loopback, Host, token)
@@ -316,6 +318,20 @@ class WebServer:
             if reply is not None:
                 return await self._json(writer, reply[0], reply[1])
         return await self._json(writer, 404, {"error": "not found"})
+
+    async def _reasoning(self, reader, writer, headers, method):
+        from . import reasoning
+        peer = writer.get_extra_info("peername")
+        refused = prov.guard(headers, peer[0] if isinstance(peer, (tuple, list)) and peer else None, self.token)
+        if refused is not None:
+            return await self._json(writer, *refused)
+        body = {}
+        if method == "POST":
+            body = await self._body(reader, writer, headers)
+            if body is None:
+                return
+        status, data = await reasoning.handle(self.centre, method, body)
+        return await self._json(writer, status, data)
 
     async def _providers(self, reader, writer, headers: Dict[str, str], method: str, path: str) -> None:
         """Provider setup (D-034). The guard runs before the body is read; the body (which may hold a key) is
