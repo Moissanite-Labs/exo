@@ -237,7 +237,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
   older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
   file's path or launch line still reads as on main, for the reader has no value to check a path line against.
-- A store or secret name matches in any case (#601, D-082). On a case-insensitive file system (default APFS)
+- A store or secret name matches in any case (#601, D-087). On a case-insensitive file system (default APFS)
   `.exO/config.json` IS `.exo/config.json`, but every store and secret name check read the spelling as written, so
   a case variant walked past: `cp /tmp/x ~/.exO/config.json` and `cp /tmp/x $HOME/.EXO/config.json` were
   `shell`/allow where the plain spelling is a `store_write` ask, `echo x > ~/.KUBE/config` a `local_write`/allow
