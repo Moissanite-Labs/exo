@@ -117,7 +117,7 @@ async def sent_to_alpha(run_dir, node, presence_key):
     daemon there signs its first reply with that key, as every daemon answers since #523."""
     announce(run_dir, "alpha", "alpha-7777", presence_key, "ada")
 
-    async def rpc(path, body):  # alpha's daemon: lists one session, holds the message
+    async def rpc(path, body, expect_pid=None):  # alpha's daemon: lists one session, holds the message
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
         return crypto.sign_doc({"v": 1, "msg_id": msg_id(body.envelope), "state": "held",

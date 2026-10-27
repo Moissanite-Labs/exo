@@ -6,6 +6,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A relay on a peer's signed socket path read the message text (#637). The presence entry signs itself with the
+  seat's key (#523), but the send shipped the text to whatever process held the path the verified entry named:
+  a daemon's socket file renamed aside (its listener keeps serving under the new name) with a relay bound on the
+  old path passed every check and read the message both ways, and so did a saved signed entry written back with
+  another process listening at its path. The entry's pid was already signed; the send now demands it on the
+  connection the text rides: the deliver and the receipt to a pinned seat open the connection themselves, ask
+  the kernel who serves it (`LOCAL_PEERPID` on macOS, `SO_PEERCRED` on Linux) and write nothing until it names
+  the pid the signed entry names, so a relay presents its own pid and is refused with no byte of the message
+  behind it — the same shape the principal client's transport has (D-060), no check-one-socket, send-on-another.
+  The socket path stays routing and the listener's pid is the trust anchor; a name no key is pinned for is
+  unchanged, and a platform the kernel names no pid for refuses the send. Tests:
+  `tests/peers/test_peers.py` (the transport probe, a listener that is not the entry's pid, the rename-and-relay
+  repro), `tests/peers/test_send_presence_523.py` (the demand follows the verified entry, none for an unpinned
+  name). **Docs:** `docs/PEERS.md`, `DECISIONS.md` (D-026).
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
