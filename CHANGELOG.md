@@ -42,6 +42,25 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   config-only venv or Hermes plugin home asks as `store_write` on the floor, a `cd` into it counts, a delete or
   move of it counts, reads stay reads. The differential against main d4cc7ea3 found nothing lowered. Tests:
   `tests/security/test_gate_code_writes.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
+- A pending undo of a host's `/undo N` waits for the session's next turn under its session, not in the engine that
+  heard the notice (#580). Hermes's `/undo N` takes N turns with one notice: exo-context dropped the last turn's
+  pins at once and the earlier turns' on the session's next turn, in the engine that heard the notice, so a new
+  agent Hermes built before that turn (a `/reasoning`, `/fast` or `/personality` rebuild) never read the pending
+  undo and the earlier turns' pins stayed, with the per-turn block putting the undone ruling back. The engine that
+  hears the notice now records it with `exo.host_undo.pend(session, window)`, beside the window the notice left,
+  and the engine that runs the session's next turn takes it from there with `exo.host_undo.take(session)` and
+  drops the pins the window showed that the transcript no longer holds, whichever agent that engine belongs to. A
+  second notice before that turn keeps the first record's window, a compression move carries the record into the
+  child session, and a compaction that folds the window's first row ties its block to the record while it waits,
+  in whichever engine compacts. The record never outlives the session's next turn, which settles it whatever it
+  finds, a transcript cut short included, and it can drop only the pins its own window showed, so a stale record
+  never drops a pin taken after it. An `/undo` in the no-agent gap still reaches no provider: the CLI would have
+  to report `exo.host_undo.report(session)` itself, one call, which reaches the engines still registered for the
+  session and lets the rebuilt agent's turn finish the undo. With no engine registered any more, nothing holds the
+  window, and that part waits on the CLI change. Tests: `plugins/exo-context/tests/test_context_provenance.py`
+  (a rebuilt agent's turn, the gap report, the pins taken while the record waited, a rebind while it pends),
+  `tests/test_host_undo.py`. **Docs:** `docs/MEMORY-MODEL.md`, `docs/DEVELOPER-GUIDE.md`, `docs/HANDOFF.md`,
+  `docs/DOCS-MAP.md`, `DECISIONS.md` (D-041).
 - A leading assignment quoted whole in an `env -S` text no longer hides the command after it (#591). GNU env splits
   the `-S` text into words and reads them as its own argv, so a word quoted whole with the form `NAME=value` is an
   assignment there — `env -S "'X=a b' printenv X"` prints `a b` — but the gate read the text as one shell line

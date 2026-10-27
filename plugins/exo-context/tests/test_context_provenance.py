@@ -1800,3 +1800,101 @@ def test_a_request_that_is_no_turn_leaves_an_undo_pending(tmp_path):
     assert pins(tmp_path, "q1")["ruling"] == [MINE, NOTE]
     h.turn("next step")
     assert pins(tmp_path, "q1")["ruling"] == [MINE]
+
+
+def test_a_pending_undo_waits_for_the_next_turn_of_a_rebuilt_agent(tmp_path):
+    """#580: /undo 2 takes two turns with one notice, and Hermes builds a new agent before the session's next
+    turn. The pending undo waits in exo.host_undo, under its session, so the rebuilt agent's engine takes it
+    there and drops the earlier undone turn's pin. A request that is no turn leaves it for the real one."""
+    a = Hermes(tmp_path, "n3")
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        a.turn(text)
+    a.undo(2)
+    assert pins(tmp_path, "n3")["ruling"] == [NOTE, MINE]  # one notice: only the last turn is known yet
+    built = Hermes(tmp_path, "n3")  # the agent the rebuild builds: same session, same transcript
+    built.history = list(a.history)
+    assert a.eng._x_window_sid == "n3"  # the old engine is still registered, and stays out of it
+    built.eng.select_context([SYS, mine("hello")])  # a host request that is no turn leaves the undo pending
+    assert pins(tmp_path, "n3")["ruling"] == [NOTE, MINE]
+    out = built.turn("next step")
+    assert pins(tmp_path, "n3")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+    assert block_of(built.compress())["ruling"] == [NOTE]  # the per-turn block and the later summary keep it out
+
+
+def test_a_rebuilt_agents_compaction_ties_its_block_to_the_pending_undo(tmp_path):
+    """A compaction between the notice and the turn folds the window's first row. In the rebuilt agent's engine it
+    ties its block to the pending record in exo.host_undo, so the turn's transcript still reaches back and drops
+    the earlier undone turn's pin, and keeps the ruling the compaction folded."""
+    a = Hermes(tmp_path, "z2")
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        a.turn(text)
+    a.undo(2)
+    assert pins(tmp_path, "z2")["ruling"] == [NOTE, MINE]
+    built = Hermes(tmp_path, "z2", inner=NoHead())  # the rebuilt agent's compressor keeps no first rows
+    built.history = list(a.history) + [mine("next step")]
+    built.history = built.eng.compress(list(built.history), force=True)
+    assert built.history[0].get("_compressed_summary")
+    built.eng.select_context([SYS, *built.history], conversation_messages=list(built.history),
+                             incoming_message=built.history[-1])
+    assert pins(tmp_path, "z2")["ruling"] == [NOTE]
+
+
+def test_an_undo_in_the_rebuild_gap_waits_for_the_rebuilt_agent(tmp_path):
+    """#580: /reasoning, /fast or /personality retire the CLI's agent, and an /undo in that gap reaches no memory
+    provider. The host's own report (`exo.host_undo.report`, the one call the D-041 amendment asks of Hermes)
+    reaches the engine the retire left registered, and the pending undo waits for the turn of the agent the
+    rebuild builds. The report drops the last window turn's pins, the rebuilt turn the earlier ones."""
+    retired = Hermes(tmp_path, "h2")
+    for text in ("start the importer", "now the parser", NOTE, MINE):
+        retired.turn(text)
+    retired.history = retired.history[:4]  # /undo 2 in the gap: the CLI cuts the transcript with no agent to tell
+    host_undo(retired.sid)  # exo.host_undo.report(session): the engine the retire left registered hears it
+    assert pins(tmp_path, "h2")["ruling"] == [NOTE] and retired.eng._x_window_sid == "h2"
+    built = Hermes(tmp_path, "h2")  # the agent the rebuild builds
+    built.history = list(retired.history)
+    out = built.turn("next step")
+    assert pins(tmp_path, "h2")["ruling"] == [] and (out is None or NOTE not in hf.message_text(out[0]))
+    assert block_of(built.compress())["ruling"] == []
+
+
+def test_a_pending_undo_leaves_the_pins_taken_while_it_waited(tmp_path):
+    """#580: no turn comes for the session while an undo pends, and fresh pins land in its file from another
+    engine's compaction. Other sessions turn and another undo is reported; the record stays for its own
+    session's turn, and drops only what its window showed, so the fresh pin and the surviving one stay."""
+    h = Hermes(tmp_path, "e3")
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.undo(2)  # the record waits: only the last turn is known yet
+    assert pins(tmp_path, "e3")["ruling"] == [NOTE, MINE]
+    other = ExoContextEngine(inner=Paraphrase(), handoff_dir=tmp_path / "h")
+    other.on_session_start("e3")
+    other.compress([mine("start"), mine(PEER), mine("go on")], force=True)  # fresh pins, no turn of the session
+    assert pins(tmp_path, "e3")["ruling"] == [NOTE, MINE, PEER]
+    stray = Hermes(tmp_path, "e4")  # another session turns, and another undo is reported
+    stray.turn("hello")
+    host_undo("e4")
+    assert pins(tmp_path, "e3")["ruling"] == [NOTE, MINE, PEER]
+    built = Hermes(tmp_path, "e3")  # the agent the rebuild builds, after all that waiting
+    built.history = list(h.history)
+    out = built.turn("next step")
+    assert pins(tmp_path, "e3")["ruling"] == [NOTE, PEER] and (out is None or MINE not in hf.message_text(out[0]))
+    assert block_of(built.compress())["ruling"] == [NOTE, PEER]
+
+
+def test_a_rebind_while_an_undo_pends_leaves_the_record_its_session(tmp_path):
+    """A /branch while an undo pends carries the pins to the child and consumes nothing of the parent's record;
+    the rebuilt agent's turn finishes the undo in its own file, and the child's copy stays the child's."""
+    h = Hermes(tmp_path, "b3")
+    for text in ("start the importer", "now the parser", MINE, NOTE):
+        h.turn(text)
+    h.undo(2)  # one notice: only NOTE's turn is known yet; MINE's waits in exo.host_undo
+    assert pins(tmp_path, "b3")["ruling"] == [MINE]
+    h.eng.bind_session_state(FakeSessionDB({"b4": "b3"}), "b4")  # /branch b4 while the undo pends
+    assert pins(tmp_path, "b4")["ruling"] == [MINE]
+    h.eng.select_context([SYS, mine("hello")], conversation_messages=[mine("hello")], incoming_message=mine("hello"))
+    assert pins(tmp_path, "b3")["ruling"] == [MINE]  # the child's turn takes nothing of its parent's undo
+    built = Hermes(tmp_path, "b3")  # the agent Hermes rebuilds for b3
+    built.history = list(h.history)
+    out = built.turn("next step")
+    assert pins(tmp_path, "b3")["ruling"] == [] and (out is None or MINE not in hf.message_text(out[0]))
+    assert pins(tmp_path, "b4")["ruling"] == [MINE]  # the child's copy stays its own, as main keeps it
