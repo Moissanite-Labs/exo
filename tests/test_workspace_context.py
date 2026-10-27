@@ -417,17 +417,19 @@ def test_the_walk_stops_at_a_folder_someone_else_can_write(tmp_path, monkeypatch
     assert WorkspaceInstructions({"enabled": True}).inspect(deeper)["root"] == str(deeper)
 
 
-@pytest.mark.parametrize("name,members,loads", [
-    ("me", [], True), ("me", ["me"], True), ("me", ["me", "bob"], False), ("staff", [], False)])
+@pytest.mark.parametrize("name,members,primary,loads", [
+    ("me", [], True, True), ("me", ["me"], True, True), ("me", ["me", "bob"], True, False),
+    ("staff", [], True, False), ("me", [], False, False)])
 def test_group_write_counts_as_nobody_else_only_for_the_users_private_group(tmp_path, monkeypatch, name, members,
-                                                                            loads):
-    """A umask 002 setup: each user has a group named after them, with nobody else in it."""
+                                                                            primary, loads):
+    """A umask 002 setup: each user's primary group is named after them, with nobody else in it."""
     import exo.workspace_context as wc
     repo, work = _repo(tmp_path)
     (work / "AGENTS.md").chmod(0o664)
     gid = (work / "AGENTS.md").stat().st_gid
     _as(monkeypatch, ME)
-    monkeypatch.setattr(wc.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_name="me", pw_gid=gid))
+    monkeypatch.setattr(wc.pwd, "getpwuid",
+                        lambda uid: SimpleNamespace(pw_name="me", pw_gid=gid if primary else gid + 1))
     monkeypatch.setattr(wc.grp, "getgrgid", lambda g: SimpleNamespace(gr_name=name, gr_mem=members))
     assert ("WORK GUIDANCE" in WorkspaceInstructions({"enabled": True}).render(work)) is loads
 
