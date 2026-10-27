@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 FIX_SWEEP = ROOT / "docs" / "FIX-SWEEP.md"
 DECISIONS = ROOT / "DECISIONS.md"
 
-# The list's own sentence shape: "D-078 and D-082 are free."
+# The list's own sentence shape: "D-078 is free." (D-082 landed with #235; when the
+# shape or the numbers move again, this fixture fails first, before the disjoint check.)
 FREE_RE = re.compile(r"(D-\d{3}(?:(?:, | and )D-\d{3})*) (?:is|are) free")
 
 
@@ -27,7 +28,7 @@ def _used_numbers() -> set:
 
 def test_the_free_list_parses():
     free = _free_numbers()
-    assert free == {"D-078", "D-082"}, (
+    assert free == {"D-078"}, (
         "docs/FIX-SWEEP.md's free list is not the known sentence any more; reword FREE_RE and this "
         f"fixture to the new list (parsed {sorted(free)})"
     )
