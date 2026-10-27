@@ -405,12 +405,18 @@ _PART_LEVELS = {
 @pytest.mark.parametrize("kind", list(_PART_LEVELS))
 def test_a_part_only_bash_opens_is_read_three_levels_deep(kind, policy):
     """Every kind of part only bash's reading opens is read _WORD_NEST + 1 = 3 levels deep, counted alike: a push at
-    level 3 is denied, and one at level 4 is not read and asks (the reading before reads none of them)."""
+    level 3 is denied, and one at level 4 is not read and asks (the reading before reads none of them). The one
+    exception is a $(( bash runs as a subshell: main 58503282 reads it too, as the $( ) it is (#553, #652), every
+    level to the _NEST cap, so bash's reading stops at level 3 and main's reading, kept beside it, denies level 4."""
     third, fourth = _PART_LEVELS[kind](3), _PART_LEVELS[kind](4)
     assert "force_push" in _categories(third)
     assert _out(third, policy) == "deny"
-    assert "force_push" not in _categories(fourth)
     assert "unread nest" in _signals(fourth)
+    if kind == "subshell":
+        assert len(readings(_c(fourth))) > 1
+        assert _out(fourth, policy) == "deny"
+        return
+    assert "force_push" not in _categories(fourth)
     assert _out(fourth, policy) == "ask"
 
 
@@ -747,10 +753,10 @@ def test_word_closed_past_its_first_brace_is_also_read_as_before(line, category)
 
 
 @pytest.mark.parametrize("line, policy", [
-    # read as before it is one opaque_exec part, which asks under an allow-everything rule; bash's reading adds a
-    # push that outranks it, and the rule would allow that line
+    # main 58503282 reads the span as arithmetic text (#553 pairs `'\''` with no $'..' escape), a read line a rule
+    # allowing reads allows; bash's reading ends the $'..' at its escaped quote and adds the push
     ("echo $(( $'\\'' ) ; git push --force origin main ; echo ' ))' ) ; echo \\'",
-     {"gates": {"rules": [{"match": {"command": ""}, "decision": "allow"}]}}),
+     {"gates": {"rules": [{"match": {"command": ".", "category": "read"}, "decision": "allow"}]}}),
     # read as before it is a `$".."` read line, which asks; bash's reading makes it opaque_exec, and a rule
     # allowing opaque_exec would allow that line
     ('echo $"x${ `$(${x%${x/)]& && git push --force origin main',
@@ -897,8 +903,17 @@ def test_heredoc_left_open_in_a_substitution_does_not_take_the_following_lines(l
     assert _out(line, _FORCE_DENY) == "deny"
 
 
+def test_a_quoted_close_in_an_arithmetic_word_runs_nothing():
+    """bash and dash both step over the quoted `))` and fail the arithmetic, running nothing (a probe with printf in
+    place of the push, bash 5.2.21 and dash). Main 58503282 skips the quote too (#553), and so does bash's reading:
+    the line is the read main makes of it. Before main's #553 the reading before counted every parenthesis, ended
+    the $(( at the quoted `))` and read the push."""
+    line = "echo $(( ${x:-'))\ngit push --force origin main\n'} ))"
+    assert "force_push" not in _categories(line)
+    assert _out(line, _FORCE_DENY) == "allow"
+
+
 @pytest.mark.parametrize("line", [
-    "echo $(( ${x:-'))\ngit push --force origin main\n'} ))",
     "echo $(( ) #( )) ; git push --force origin main\n) ))",
     # a newline inside $( ) while the outer heredoc waits: bash starts the body after the outer line, the reading
     # before at that newline; both are read, and the push the reading before sees is denied
@@ -1092,10 +1107,12 @@ def test_a_nest_only_bash_reads_costs_what_a_short_nest_costs(make):
     """The reading before reads no nest that a part only bash's reading opens holds; bash's reading reads
     _WORD_NEST + 1 levels of it and no deeper, so what it adds to the reading before costs at 32 levels what it
     costs at 8, with the text four times as long. (The reading before is main's, whose own cost grows with the text:
-    #320 reads each $(( in a word to its end, counting its parentheses, six times the steps on the group form.)"""
+    #320 reads each $(( in a word to its end, counting its parentheses, six times the steps on the group form; and
+    since #553 it reads a $(( bash runs as a subshell as the $( ) it is, each level to the _NEST cap, so on the arith
+    and group forms its own parses grow with the nest up to that cap. The parses bash's reading adds do not.)"""
     def added(k: int) -> int:
         return _steps(lambda: _c(make(k))) - _steps(lambda: _before(make(k)))
-    assert _parses(make(32)) == _parses(make(8))
+    assert _parses(make(32)) - _parses_before(make(32)) == _parses(make(8)) - _parses_before(make(8))
     assert added(32) < 3 * added(8)
 
 
@@ -1104,6 +1121,15 @@ def _before(line: str) -> gate.Classification:
     token = gate._flat_words.set(True)
     try:
         return _c(line)
+    finally:
+        gate._flat_words.reset(token)
+
+
+def _parses_before(line: str, cap: int = 100) -> int:
+    """_parses for the line read only as before #143: main's own reading."""
+    token = gate._flat_words.set(True)
+    try:
+        return _parses(line, cap)
     finally:
         gate._flat_words.reset(token)
 
@@ -1159,6 +1185,9 @@ _FUZZ_LINE = "\n".join([
 
 
 def test_a_fuzzed_line_is_parsed_a_bounded_number_of_times():
-    """Four copies of the line cost as many parses as one: a word or part that runs out lists no source for the
-    rest of the text (it asks), so the parts left open do not stack up from copy to copy."""
-    assert _parses(_FUZZ_LINE) == _parses("\n".join([_FUZZ_LINE] * 4))
+    """Four copies of the line cost bash's reading as many parses as one: a word or part that runs out lists no
+    source for the rest of the text (it asks), so the parts left open do not stack up from copy to copy. (Main's own
+    reading, since #553, parses one line more for the four copies; what bash's reading adds stays the same.)"""
+    four = "\n".join([_FUZZ_LINE] * 4)
+    assert _parses(_FUZZ_LINE) - _parses_before(_FUZZ_LINE) == _parses(four) - _parses_before(four)
+    assert _parses(four) <= _parses(_FUZZ_LINE) + 1

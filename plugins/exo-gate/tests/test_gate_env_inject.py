@@ -378,6 +378,11 @@ def test_export_minus_p_with_a_literal_name_still_asks():
     (": $((HOME=1)); git log", "HOME"),
     ("a[PATH=10]=1; ls", "PATH"),                        # an indexed-array subscript is arithmetic
     ("echo ${a[PATH=10]}; ls", "PATH"),
+    (": $[PATH=10]; ls", "PATH"),                        # bash's legacy arithmetic, read as the $((..)) (#588)
+    ("echo $[PATH=10]; ls", "PATH"),
+    ("echo $[BASH_ENV=10]; ls", "BASH_ENV"),
+    ("echo $[BASH_CMDS[ls]=1]; ls", "BASH_CMDS"),        # an element the arithmetic sets rebinds a name
+    ("echo $[a[PATH=10]]; ls", "PATH"),                  # the subscript is arithmetic
     ("true {PATH}>/dev/null; ls", "PATH"),               # the fd number lands in PATH
     (": {CDPATH}>/dev/null; cd memory", "CDPATH"),
 ])
