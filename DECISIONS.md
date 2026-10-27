@@ -260,6 +260,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   (terms); Perplexity's 27B open model as the shipped default (needs about 49 GB of GPU memory, no device path).
 
 ## D-016 (2026-10-12) Agent wire: SYM-2P lines for machines, English for models and people
+- **Amendment 2026-10-27 (exo-desktop #5 and #17, ported in #674):** `exo.wire.verify(line, sig, trusted_pub)`
+  checks a detached signature only against the key the caller pins, and returns False when none is given. Before,
+  it fell back to the `pub` the signature carries. Whoever made the packet chose that key, so any packet signed by
+  any key passed. No production caller used that path, and `delegate`'s receipt test already pinned the key. A
+  caller with no pinned key for the signer cannot verify a line. Docs: `docs/AGENT-WIRE.md` §4.2.
 - **A's ask:** "project exo should integrate this tech, or a better implementation of its concept, in its
   backend systems for interagent communcation, delegation, and wherever else appropriate/relevant"
   (aska-digital/protean-sym2p).
