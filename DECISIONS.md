@@ -3835,6 +3835,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Focus (terminal):** a click on the transcript or any plain surface returns focus to the composer, and a printable key
   that reaches the app with focus on the transcript (or nowhere) is typed into the composer. A focused panel, the
   completion menu, an input field and the approval card keep their own keys.
+- **Web focus amendment (2026-10-27):** background turn events redraw the thread list only when its visible
+  status changes. List refreshes restore keyboard focus by thread ID without moving focus from the composer.
+  Turn events for a thread arriving during a list request are kept until that response can merge them.
 - **Composer pane (terminal only):** the same composer widget grows to most of the screen, so the D-037 menu, `@` files and
   ghost text work unchanged and the draft is just the composer text: closing the pane cannot lose it. Open with `ctrl+g`
   (ctrl+e was taken by "edit the last answer", and is cursor-to-end in a text area) or `/compose`. Enter adds a line,

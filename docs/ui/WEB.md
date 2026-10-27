@@ -128,6 +128,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 
 - **Brand bar.** `E X O`, the agent and thread, the tabs, the connection led. The square dot before `E X O`
   pulses orange while a turn runs and is hollow when idle.
+- **Thread list.** Background turn updates and list refreshes keep keyboard focus on the same thread.
+  Repeated status events leave its button in place. Returning to a thread reads its fresh running status,
+  so a running turn restores the working indicators and enables Stop.
 - **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
   that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
   against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured

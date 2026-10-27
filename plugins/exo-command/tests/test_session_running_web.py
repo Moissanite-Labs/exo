@@ -52,6 +52,7 @@ def page():
     with Browser() as browser:
         browser.goto(srv.url())
         browser.wait('document.querySelectorAll(".xc-sess").length === 2 && !!document.querySelector(".xc-msg")')
+        browser.eval('window.thread = id => Array.from(document.querySelectorAll(".xc-sess")).find(e => e.querySelector(".xc-sess-title").textContent === id)')
         yield src, srv, browser
     srv.close()
 
@@ -204,3 +205,71 @@ def test_running_snapshot_with_pending_approval_keeps_working_indicators(page):
     click(browser, 's1')
     expect(browser, 's1', True)
     browser.wait('!!document.querySelector("[data-approval=a_fixture]")')
+
+
+def test_background_status_changes_preserve_focused_thread_and_keyboard_navigation(page):
+    _, srv, browser = page
+    browser.eval('window.thread("s1").focus()')
+    emit(srv, 1, 's2', 'turn.started')
+    browser.wait('window.thread("s2").querySelector(".xc-dim").textContent.includes("running")')
+    assert browser.eval('document.activeElement.matches(".xc-sess") ? document.activeElement.querySelector(".xc-sess-title").textContent : null') == 's1'
+    emit(srv, 2, 's2', 'turn.completed')
+    browser.wait('!window.thread("s2").querySelector(".xc-dim").textContent.includes("running")')
+    assert browser.eval('document.activeElement.matches(".xc-sess") ? document.activeElement.querySelector(".xc-sess-title").textContent : null') == 's1'
+    browser.press('Tab')
+    assert browser.eval('document.activeElement.matches(".xc-sess") ? document.activeElement.querySelector(".xc-sess-title").textContent : null') == 's2'
+    browser.press(' ')
+    expect(browser, 's2', False)
+
+
+def test_repeated_or_unlisted_turn_events_do_not_rebuild_list_or_steal_composer_focus(page):
+    _, srv, browser = page
+    browser.eval('window.originalThread = window.thread("s1"); document.querySelector("textarea").focus(); document.querySelector("textarea").value="draft stays"')
+    emit(srv, 1, 's2', 'turn.completed')
+    emit(srv, 2, 's9', 'turn.started')
+    browser.wait('(async()=> (await import("/static/bus.js")).lastSeq() >= 2)()')
+    assert browser.eval('window.originalThread === window.thread("s1")')
+    emit(srv, 3, 's1', 'turn.started')
+    expect(browser, 's1', True)
+    assert browser.eval('document.activeElement.tagName') == 'TEXTAREA'
+    assert browser.eval('document.activeElement.value') == 'draft stays'
+    # Current-thread status changed, so capture again before a duplicate event.
+    browser.eval('window.originalThread = window.thread("s1")')
+    emit(srv, 4, 's1', 'turn.started')
+    browser.wait('(async()=> (await import("/static/bus.js")).lastSeq() >= 4)()')
+    assert browser.eval('window.originalThread === window.thread("s1")')
+
+
+def test_session_refresh_preserves_focus_by_id_after_reordering(page):
+    src, srv, browser = page
+    browser.eval('window.thread("s2").focus()')
+    src.status = dict(reversed(list(src.status.items())))
+    emit(srv, 1, 's2', 'session.updated')
+    browser.wait('document.querySelector(".xc-sess .xc-sess-title").textContent === "s2"')
+    assert browser.eval('document.activeElement.matches(".xc-sess") ? document.activeElement.querySelector(".xc-sess-title").textContent : null') == 's2'
+
+
+def test_unknown_thread_event_during_list_request_is_merged(page):
+    src, srv, browser = page
+    original = src.call
+    entered = threading.Event()
+    release = None
+    src.status['s3'] = 'idle'
+    async def delayed_list(body):
+        result = await original(body)
+        if type(body).TYPE == 'session.list':
+            entered.set()
+            await release.wait()
+        return result
+    def delay():
+        nonlocal release
+        release = asyncio.Event()
+        src.call = delayed_list
+    srv.call(delay)
+    emit(srv, 1, 's3', 'session.updated')
+    assert entered.wait(2)
+    emit(srv, 2, 's3', 'turn.started')
+    emit(srv, 3, 's1', 'turn.started')
+    expect(browser, 's1', True)
+    srv.call(release.set)
+    browser.wait('window.thread("s3").querySelector(".xc-dim").textContent.includes("running")')
