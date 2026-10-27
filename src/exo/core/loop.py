@@ -274,10 +274,15 @@ class Loop:
                 await self._emit(trace.error_body("turn observer", exc), session)
         return result
 
-    async def _drain_steer(self, session: str, turn_id: str, st: _SessionState) -> None:
+    async def _drain_steer(self, session: str, turn_id: str, st: _SessionState) -> str:
+        """Add the queued steers as context. Returns the newest author drained ("" when none), so the rounds
+        after a steer run for the steer's author (#598): bypass stops lowering once the turn takes anyone else's."""
+        out = ""
         for m in st.steer:
             await self._add(session, m, turn_id)
+            out = provenance.author_of(m)
         st.steer.clear()
+        return out
 
     def _takes_recall(self) -> bool:
         """True when the context engine places per-turn recall itself (AgentContext, D-028), so the system
@@ -311,6 +316,7 @@ class Loop:
                       result: TurnResult) -> None:
         system, recall = await self._system(session, user.text())
         extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
+        author = provenance.author_of(user)  # who the turn is for; a steer takes over (#598)
         for _ in range(self.max_iterations):
             if hasattr(self.context, "note"):
                 await maybe_await(self.context.note(session))
@@ -327,7 +333,7 @@ class Loop:
                 if result.stop_reason == "tool_use":
                     result.stop_reason = "end"
                 if st.steer and result.stop_reason == "end":  # a message came in during this call: answer it now
-                    await self._drain_steer(session, turn_id, st)
+                    author = await self._drain_steer(session, turn_id, st) or author
                     continue
                 return
             spend = getattr(getattr(self.provider, "router", None), "spend", None)
@@ -338,8 +344,8 @@ class Loop:
                     result.stop_reason, result.error = "error", "Model spend stopped; ask the principal to review the journal"
                     await self._emit(ev.Error(code="model_spend_stopped", message=result.error, retryable=False), session)
                     return
-            await self._tools(session, turn_id, reply.tool_calls, st)
-            await self._drain_steer(session, turn_id, st)
+            await self._tools(session, turn_id, reply.tool_calls, st, author)
+            author = await self._drain_steer(session, turn_id, st) or author
         result.stop_reason = "max_iterations"
         await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
                                    level="warn"), session)
@@ -537,7 +543,8 @@ class Loop:
 
     # ---------------------------------------------------------------- tools
 
-    async def _tools(self, session: str, turn_id: str, calls: list[ToolCall], st: _SessionState) -> None:
+    async def _tools(self, session: str, turn_id: str, calls: list[ToolCall], st: _SessionState,
+                     author: str = "") -> None:
         risks = {s.name: s.risk for s in self._specs()}
         results: list[ToolResult] = []
         try:
@@ -545,7 +552,7 @@ class Loop:
                 await self._emit(ev.ToolStarted(call=call, risk=risks.get(call.name, "low")), session)
                 t0 = time.monotonic()
                 try:
-                    res = await self._interruptible(self._run_one(session, turn_id, call), st)
+                    res = await self._interruptible(self._run_one(session, turn_id, call, author), st)
                 except _Interrupted:  # a tool cut short still spent the time up to the interrupt (f_8e7f52cd)
                     st.stats["tool_ms"] += int((time.monotonic() - t0) * 1000)
                     st.stats["interrupted_tool"] = call.name
@@ -561,7 +568,7 @@ class Loop:
                         for c in calls if c.id not in done]
             await self._add(session, Message.tool(results), turn_id)
 
-    async def _run_one(self, session: str, turn_id: str, call: ToolCall) -> ToolResult:
+    async def _run_one(self, session: str, turn_id: str, call: ToolCall, author: str = "") -> ToolResult:
         spend = getattr(getattr(self.provider, "router", None), "spend", None)
         if spend is not None:
             try:
@@ -574,7 +581,8 @@ class Loop:
         async def output(text: str) -> None:
             await self._emit(ev.ToolOutput(call_id=call.id, text=text), session)
 
-        ctx = {"session": session, "turn_id": turn_id, "emit_output": output, "store": self.store}
+        # author: who started the turn (D-040); hooks read it, the gate lowers bypass only for the principal (#598)
+        ctx = {"session": session, "turn_id": turn_id, "author": author, "emit_output": output, "store": self.store}
         try:
             res = await maybe_await(self.run_tool(call, ctx))
         except asyncio.CancelledError:
