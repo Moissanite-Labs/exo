@@ -462,6 +462,7 @@ export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove()
                                       'export const restart=async()=>{globalThis.restarted++;};')
     for name in ("chat", "tasks", "schedule", "command", "providers"):
         (tmp_path / f"{name}.mjs").write_text('export const mount=()=>{globalThis.mounted++;return ()=>{};};')
+    (tmp_path / "permissions.mjs").write_text('export const banner=()=>({hidden:true});export const start=()=>{};')
     (tmp_path / "test.mjs").write_text(r'''
 import assert from "node:assert/strict";
 let stored={};globalThis.sessionStorage={getItem:k=>stored[k],setItem:(k,v)=>stored[k]=v};
@@ -475,7 +476,7 @@ assert.deepEqual(sent,[["good","#tasks"]]);              // out of the address b
 assert.equal(stored["xc-token"],"the-token");assert.equal(location.hash,"#tasks");assert.equal(mounted,1);
 stored={};location.hash="#code=used&chat";await handlers.hashchange();
 assert.deepEqual(sent.at(-1),["used","#chat"]);assert.equal(stored["xc-token"],undefined);assert.equal(restarted,0);
-const main=app.children[1];assert.match(main.children[0].children.join(""),/already used or has expired\. Paste the link/);
+const main=app.children.at(-1);assert.match(main.children[0].children.join(""),/already used or has expired\. Paste the link/);
 location.hash="#code=host&chat";await handlers.hashchange();   // a refusal that is not about the code names its reason
 assert.match(main.children[0].children.join(""),/refused \(bad Host header/);assert.equal(stored["xc-token"],undefined);
 location.hash="#token=fresh&chat";await handlers.hashchange();
