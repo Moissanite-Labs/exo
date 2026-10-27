@@ -346,13 +346,13 @@ def main(argv: list[str] | None = None) -> int:
             for role, refs in build_router().resolved_roles().items():
                 print(f"{role:<9} {' > '.join(refs) or '-'}")
         elif a.op == 'show':
-            print(json.dumps(cfg.resolved(), indent=2, sort_keys=True))
+            print(json.dumps(redact(cfg.resolved()), indent=2, sort_keys=True))
         elif a.op == 'get':
             v = cfg.get(a.key, _MISSING)
             if v is _MISSING:
                 print(f'exo config: {a.key} is not set', file=sys.stderr)
                 return 1
-            print(v if isinstance(v, str) else json.dumps(v))
+            print(redact(v, a.key) if isinstance(v, str) else json.dumps(redact(v, a.key)))
         elif a.op == 'set':
             cfg.set(a.key, _parse_value(a.value))
             cfg.save()
