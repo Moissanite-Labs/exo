@@ -122,6 +122,11 @@ The web page has its own sub-pages for Tasks, Schedule, Command and Providers. I
 `/layout` does. Double-click a thread in the list to rename it. Anything else you type there goes to the agent as a
 message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
 
+The web Chat pane toolbar can hide or show Threads and Details. Use each pane's arrow buttons to change
+its position, and the side sliders to adjust width. The conversation always stays visible. Reset panes
+restores defaults. Narrow windows stack panes in your chosen order and hide width sliders. The browser saves
+this layout. Desktop builds with pane preferences retain it across ports and relaunches.
+
 ## 3. Slash commands
 
 Type `/help` in the terminal client for the live list. This table is the same list.
