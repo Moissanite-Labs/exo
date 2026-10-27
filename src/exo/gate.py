@@ -720,15 +720,20 @@ class _Lexer:
         nxt = s[k:k + 1]
         w.started = True
         legacy = s.startswith("$[", i)     # bash's legacy arithmetic (#588): read it as the $((..)) it stands for
-        if s.startswith("$((", i) or legacy:
+        if legacy:
             depth, j = 0, i + 1
-            pair = ({"[": 1, "]": -1} if legacy else {"(": 1, ")": -1}).get
+            pair = {"[": 1, "]": -1}.get
             while j < len(s):
                 depth += pair(s[j], 0)
                 j += 1
                 if depth == 0:
                     break
-            body = "$((" + s[i + 2:j] + "))" if legacy else s[i:j]
+        elif s.startswith("$((", i):
+            j = _dollar_paren(s, i)        # 0 when bash runs the span as a $( ( ) command substitution (#553)
+        else:
+            j = 0
+        if j:
+            body = "$((" + s[i + 2:j] + "))" if legacy else s[i:j]   # the span to what bash's own scan finds (#553)
             at, end = (i + 2, j - 1) if legacy else (i + 3, j - 2)   # where the body bash reads starts and ends
             if legacy:
                 w.legacy = True
@@ -859,8 +864,8 @@ _WORD_RUN = re.compile(r"[^ \t\r\n\\'\"`$<>&;|()#]+")
 _DQ_RUN = re.compile(r"[^\"\\$`]+")
 _BT_BODY = re.compile(r"(?:[^`\\]|\\.)*", re.S)
 _ANSI_BODY = re.compile(r"(?:[^'\\]|\\.)*", re.S)
-_PARENS = re.compile(r"[()]")
 _BRACKETS = re.compile(r"[\[\]]")
+_VAR_REF = re.compile(r"\$(?:[A-Za-z_]\w*|[0-9@*#?$!-])")
 _SUBST = re.compile(r"\$\((?!\()")          # a $( that is not $((
 _DELIM_MAX = 1024
 
@@ -931,13 +936,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
         k = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads what follows the $ (#585)
         nxt = s[k:k + 1]
         w.started, w.digits = True, False
-        if s.startswith("$((", i):
-            depth, j = 0, n
-            for m in _PARENS.finditer(s, i + 1):
-                depth += 1 if m.group() == "(" else -1
-                if depth == 0:
-                    j = m.end()
-                    break
+        if s.startswith("$((", i) and (j := _dollar_paren(s, i)):
             w.add(s, i, j)
             return j
         if nxt == "[":                         # bash's legacy arithmetic (#588), read to its `]` as $(( )) to `))`
@@ -1085,6 +1084,57 @@ def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
     while k < len(s) and s[k] != closer:
         k += 2 if escapes and s[k] == "\\" else 1
     return min(k + 1, len(s))
+
+
+def _arith_body(s: str, a: int, b: int) -> bool:
+    """chk_arithsub, bash's test of the text between a `$((` and its `))` as an arithmetic string (#553):
+    with single-quoted, double-quoted and backslash-hidden spans skipped, the unquoted parens balance and
+    no `)` comes before a `(`. Backquoted bodies are read as text, parens in them count."""
+    depth, j = 0, a
+    while j < b:
+        ch = s[j]
+        if ch == "\\":
+            j += 2
+        elif ch in "'\"":
+            j = min(_skip(s, j + 1, ch, ch == '"'), b)
+        else:
+            depth += (ch == "(") - (ch == ")")
+            if depth < 0:
+                return False
+            j += 1
+    return depth == 0
+
+
+def _dollar_paren(s: str, i: int) -> int:
+    """Where the `$((` at s[i] ends when bash reads it as arithmetic, 0 when bash runs the span as a command
+    substitution instead (#553): bash closes the `$( ` at the first `)` outside single-quoted, double-quoted,
+    backquoted and backslash-hidden text, a `#` after a blank starting a comment, and reads the span as
+    arithmetic only when the text between the parens, quoted spans skipped, holds balanced parens; else it
+    runs it as `$( ( )`, a subshell whose commands run. When no `)` closes the `$( ` at all, bash cannot
+    parse the line and runs nothing, and the span is read as arithmetic text to the end of the line, as
+    before."""
+    n, depth, j = len(s), 1, i + 2
+    while j < n:
+        ch = s[j]
+        if ch == "\\":
+            j += 2
+        elif ch in "'\"":
+            j = _skip(s, j + 1, ch, ch == '"')
+        elif ch == "`":
+            j = _skip(s, j + 1, "`", True)
+        elif ch == "#" and s[j - 1] in " \t\n":
+            k = s.find("\n", j)
+            j = n if k < 0 else k
+        else:
+            depth += (ch == "(") - (ch == ")")
+            j += 1
+            if depth == 0:
+                break
+    if depth:
+        return n
+    if s[j - 2:j - 1] != ")" or not _arith_body(s, i + 3, j - 2):
+        return 0
+    return j
 
 
 # The operators after which bash quotes single-quoted text even inside double quotes (a pattern, a case

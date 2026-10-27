@@ -1118,6 +1118,22 @@ is joined to its own `}`, past a `${..}` nested in it. Limits: only shell calls 
 its plain form is, so `$\<newline>[..]` is read as the `$[..]` it joins to, and that is read as the
 arithmetic `$((..))` it stands for (#588).
 
+A `$((` is read the way bash reads it (#553). bash closes the `$( ` at the first `)` outside quotes,
+backquotes, `$( )` bodies and comments, and reads the span as arithmetic only when the text between the
+parens, quoted spans skipped, holds balanced parens (its chk_arithsub); else it re-reads the span as
+`$( ( )`, a subshell, and the commands in it run. The gate matched `$((` against `))` without counting
+quotes, so a `((` in a quoted word made it read the whole span as arithmetic and it never read the
+commands: `echo $((echo '((' ; git push --force origin main) )` was an allowed `read` under
+`deny: [force_push]`, where the same line written `echo $( (echo '((' ; git push --force origin main) )`
+denied. The span is now found with quotes and nesting counted and bash's paren balance applied, and a
+span that fails it is read as the `$( ( )` it runs as, so the commands in it classify (`git push origin
+:main` and `rm -rf x` in one deny under their own policies). A quoted paren moves the span too:
+`$(( 1 + '(' ))` was read to the end of the line, so a push after `;` was never read, where bash discards
+the rest of its line after the arithmetic error but runs it on the next line, in a script and in other
+shells. An unclosed `$((` bash cannot parse and runs nothing, and the span stays arithmetic text to the
+end of the line, as before. Plain arithmetic decides as it did (`$((1+2))`, `$((PATH=5))`, a ternary, a
+`$( )` or a backquote inside the body), and `_nest_end` ends a cut at the same span.
+
 A command is meant to be `allow` only when every program in it is known and nothing the gate reads
 is hidden; "Known limits" below names the paths where a known program still runs a command the
 gate does not read:
