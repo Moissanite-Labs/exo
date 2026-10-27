@@ -2298,15 +2298,15 @@ lands"): where the part that runs the stdin names the host for an empty target, 
 empty other target too. So `echo 'gh pr comment -wR myorg/app -b hi' | ssh buildhost` may land on
 the current repo on `buildhost`, and a `github_post` deny on `buildhost` denies it. After a hop that
 host is the first one, where the line hands the stdin over, as for the part's own target; ssh's own
-part names the inner host. A part nested below the one that leads (the gh read below the store write
-of `gh release download -O ~/.exo/policies/gates.yaml`, #461) keeps its own target and, where that or
-another of its targets is empty, has a copy on the host beside it (#461 follow-up), so an entry on
-the host still sees it as when it led. So `deny` and `reserved` entries, category lines that deny and rules that deny
-a part still see every part they saw: under `{match: {category: [shell, read], reversibility:
-costly}, decision: deny}`, `{ sudo ssh host; } < cmds.sh` is denied as before, and `sudo ssh host <
-cmds.sh`, which asked, is denied too. The new `opaque_exec` part can be the part that decides the
-line. The policy steps that read only that part then read it, so some lines decide lower than before
-(D-038 amendment for #316):
+part names the inner host. A part nested below the one that leads (#461: the gh read below the store
+write of `gh release download -O ~/.exo/policies/gates.yaml`) keeps its own target; where that
+target is empty it has a copy on the host beside it, and the host joins an empty other target (#461
+follow-up), so an entry on the host still sees it as when it led. So `deny` and `reserved` entries,
+category lines that deny and rules that deny a part still see every part they saw: under `{match:
+{category: [shell, read], reversibility: costly}, decision: deny}`, `{ sudo ssh host; } < cmds.sh`
+is denied as before, and `sudo ssh host < cmds.sh`, which asked, is denied too. The new
+`opaque_exec` part can be the part that decides the line. The policy steps that read only that part
+then read it, so some lines decide lower than before (D-038 amendment for #316):
 
 - Under a policy that allows or logs `opaque_exec` (a category line or a rule), or the category
   of a known text a hop reads (`delete`), a line where the new part displaces one the matrix logs,
@@ -2367,11 +2367,11 @@ itself once a host is read, are read as the host and command. The value of `mosh
 helpers run on this machine, so they keep their own exposure; `--server` runs on the remote host
 and is `internal` like the inner command. A helper that does not lead the line, as below a store
 write the remote command makes (#461), has a copy on the host, so an entry on `{category:
-opaque_exec, target: host}` still reaches it as when it led. With `--local`, mosh runs the server and the command on
-this machine, so nothing on the line is marked `internal`. Another option's value that itself
-reads as `--server`, `--ssh` or `--client` (`mosh --port '--server=rm -rf /data' host`) is taken
-by mosh as that value and never run, but the gate used to read it as the command, so it still
-does and the line asks. Words after the host that mosh takes as its options or their values
+opaque_exec, target: host}` still reaches it as when it led. With `--local`, mosh runs the server
+and the command on this machine, so nothing on the line is marked `internal`. Another option's value
+that itself reads as `--server`, `--ssh` or `--client` (`mosh --port '--server=rm -rf /data' host`)
+is taken by mosh as that value and never run, but the gate used to read it as the command, so it
+still does and the line asks. Words after the host that mosh takes as its options or their values
 (`mosh host ls --port 'x; rm -rf /data'`) are read both ways: with `POSIXLY_CORRECT` set,
 Getopt::Long stops at the host and mosh runs them as the command, so their parts are matched as
 that command too and the line asks. The same holds where the gate used to read another word as the
@@ -2685,7 +2685,9 @@ or `{category: opaque_exec, target: host}` still reaches the gh read or the `eva
 as it did when the read led the line; so does the part that runs ssh's stdin beside such a line
 (`echo x | ssh $H gh release download ..`), and every part of an `ssh -o RemoteCommand=` line is
 `internal`, so a matrix cell on an internal action still reaches the read, while a nested part keeps
-its `private` reading as a copy, so a rule on `exposure: private` still reaches it as before. Also
+its `private` reading as a copy, so a rule on `exposure: private` still reaches it as before. The
+hop does the same where a later reading makes the store write: a store path in another letter case
+(`~/.EXO/policies/gates.yaml`), a `$((` read as a command substitution and an `env -S` text. Also
 a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
 `unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and

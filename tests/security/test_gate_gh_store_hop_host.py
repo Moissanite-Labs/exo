@@ -8,8 +8,9 @@ same held for the opaque part of an `eval` or a stdin form under `{opaque_exec, 
 helpers and the part that runs ssh's stdin, which led over the read and took the host. Each such part with an empty
 target now has a copy on the host, and keeps its own reading. Under `ssh -o RemoteCommand` only the line's lead was
 raised to internal, so the read below the store write stayed private: every part is raised now, and a nested part
-keeps its private reading as a copy beside it. Every command string here is data for exo.gate.classify/decide; none
-is run.
+keeps its private reading as a copy beside it. The same holds where main's newer readings make the store write: a
+store path in another letter case (#635), a `$((` read as a command substitution (#652) and an `env -S` text (#634).
+Every command string here is data for exo.gate.classify/decide; none is run.
 """
 import pytest
 
@@ -29,7 +30,8 @@ def home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    for k in ("EXO_HOME", "EXO_KEYS_FILE", "EXO_PRINCIPAL_STORE", "EXO_SEAT", "CLAUDE_CONFIG_DIR"):
+    for k in ("EXO_HOME", "EXO_KEYS_FILE", "EXO_PRINCIPAL_STORE", "EXO_SEAT", "CLAUDE_CONFIG_DIR",
+              "EXO_GATE_CASE_SENSITIVE"):
         monkeypatch.delenv(k, raising=False)
     for name in ("state", "policies", "update"):
         (home / ".exo" / name).mkdir(parents=True)
@@ -217,3 +219,61 @@ def test_the_nested_parts_keep_their_own_targets():
     c, _ = run("ssh host gh release download v1 -R pub/x -O ~/.exo/policies/gates.yaml", READ_ALLOW)
     reads = {(p.target, p.alt_copy) for p in gate._each_part(c) if p.category == "read"}
     assert {("pub/x", False), ("", True), ("host", True)} <= reads, reads
+
+
+# Main's newer readings make the same store write below the hop: a store path in another letter case (#635), a `$((`
+# that bash reads as a command substitution (#652) and an `env -S` text (#634). The gh read, or the opaque part above
+# it, keeps the host there too.
+NEWER = [
+    "ssh host gh release download v1 -R pub/x -O ~/.EXO/policies/gates.yaml",
+    "ssh host gh repo clone pub/x ~/.Exo/Update",
+    "mosh host -- gh repo clone pub/x ~/.Exo/Update",
+    "ssh host 'echo $((gh release download v1 -R pub/x -O ~/.exo/policies/gates.yaml) )'",
+    "ssh host 'x=$((gh repo clone pub/x ~/.exo/update) )'",
+    "mosh host -- 'echo $((gh repo clone pub/x ~/.exo/update) )'",
+]
+NEWER_OPAQUE = [
+    "ssh host 'eval gh release download v1 -R pub/x -O ~/.EXO/policies/gates.yaml'",
+    "echo 'gh release download v1 -R pub/x -O ~/.EXO/policies/gates.yaml' | ssh host",
+    "echo 'echo $((gh release download v1 -R pub/x -O ~/.exo/policies/gates.yaml) )' | ssh host",
+    "ssh host env -S 'A=1 gh release download v1 -R pub/x -O ~/.exo/policies/gates.yaml'",
+]
+
+
+@pytest.mark.parametrize("policy", [READ_HOST_DENY, READ_HOST_RULE], ids=["deny", "rule"])
+@pytest.mark.parametrize("line", NEWER + NEWER_OPAQUE)
+def test_mains_newer_readings_keep_the_hosts_read(line, policy):
+    c, d = run(line, policy)
+    assert d.outcome == "deny", (line, c, d)
+
+
+@pytest.mark.parametrize("line", NEWER)
+def test_mains_newer_readings_keep_the_hosts_reserved_read(line):
+    c, d = run(line, READ_HOST_RESERVED)
+    assert d.outcome == "ask" and ("read", "host") in d.reserved, (line, c, d)
+
+
+@pytest.mark.parametrize("line", NEWER_OPAQUE)
+def test_mains_newer_readings_keep_the_hosts_opaque_code(line):
+    c, d = run(line, OPAQUE_HOST_DENY)
+    assert d.outcome == "deny", (line, c, d)
+
+
+# Guards, as on main: those lines still ask as the store write, the case-variant delete keeps #601's host entry, and a
+# replace tool on a store file (#659) is still the store write it is on main.
+@pytest.mark.parametrize("line", NEWER)
+def test_mains_newer_readings_still_ask_as_a_store_write(line):
+    c, d = run(line, READ_ALLOW)
+    assert (c.category, d.outcome, d.rule) == ("store_write", "ask", "floor"), (line, c, d)
+
+
+def test_a_case_variant_delete_on_the_host_keeps_its_reserved_hit():
+    c, d = run("ssh host 'rm -rf ~/.EXO/policies'", {"gates": {"reserved": [{"category": "delete", "target": "host"}]}})
+    assert d.outcome == "ask" and ("delete", "host") in d.reserved, (c, d)
+
+
+def test_a_replace_tool_on_a_store_file_still_asks():
+    c = gate.classify({"tool": "mcp__fs__search_replace", "args": {
+        "path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}})
+    d = gate.decide(c, READ_ALLOW)
+    assert (c.category, d.outcome, d.rule) == ("store_write", "ask", "floor"), (c, d)
