@@ -3828,6 +3828,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
 
 ## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Amendment 2026-10-27:** a separate Chat pane toolbar controls order, side widths and side visibility. The
+  conversation stays visible and its existing nodes are retained. Persistence accepts only validated layout
+  fields, with a native bridge for desktop builds and a browser fallback. Reset restores defaults.
 - **Why (A, verbatim):** "for the cli the user shouldnt have to click exactly inside the tiny text bar for them to start
   prompting." And: "something like a composer built into the cli so write longer more structured prompts." And on a chat
   that opened at its top: "instead of fixing it and flipping it, lets be creative. lets experiment with an inverse ui where
