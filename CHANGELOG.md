@@ -11,8 +11,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   running on the remote host, so the result held a copy of every fed part per ssh, and decide
   scoped and matched each copy. The fed parts are now marked once, when the text is first read
   for the line, and shared by every ssh it is fed to; a hop still weighs the parts as _once read
-  them and marks its own copy, so the decisions are the ones the copies gave (a battery of fed
-  lines under ten policies decides exactly as on main). The shape joins the linear-work tests at
+  them and marks its own copy. Outcomes match main, but the wording is not exact equality: a part
+  the hop never retargets can make a decision stricter than main's, and a post's violations can
+  name it twice. The ledger view no longer walks the shared parts, so the hook's per-decision
+  view stays linear too. The shape joins the linear-work tests at
   20 KB and 80 KB. Two #303 test gaps are closed: a stdin the gate cannot read on a descriptor
   (`ssh host <&3`, `ssh host 0<&3`, `ssh host <> file`) and the flag words after the host
   (`ssh -- host -T`, `ssh host -n`, `ssh host -- -T`) have rows now.

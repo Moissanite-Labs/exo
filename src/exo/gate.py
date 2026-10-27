@@ -169,7 +169,9 @@ class Classification:
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
-        d = asdict(self)
+        # Parts are popped below anyway, and asdict would recurse into them: a text fed to many ssh shares
+        # one marked subtree per ssh, so the plain call expands it once per ssh (#327). Skip that walk.
+        d = asdict(replace(self, parts=[]))
         d.pop("parts", None)
         d.pop("displaced")
         d.pop("ordinary")
@@ -4102,10 +4104,19 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c.signals.append("remote host")
         if stdin is None:
             return [c]
-        stdin = copy.deepcopy(stdin)          # as for c: the stdin runs on the remote host (ssh, never mosh)
-        for p in _each_part(stdin):
+        shared = ctx.get("remote_ids") or {}
+        stdin = _hop_copy(stdin, shared)      # as for c: the stdin runs on the remote host (ssh, never mosh),
+                                              # and the fed parts stay shared instead of one copy per ssh (#327)
+        todo, seen = [stdin], set()
+        while todo:
+            p = todo.pop()
+            if id(p) in seen or id(p) in shared:
+                continue
+            seen.add(id(p))
             if EXPOSURE.index(p.exposure) < 1:
                 p.exposure = "internal"
+            if id(p.parts) not in shared:
+                todo.extend(reversed(p.parts))
         if lead:
             stdin.target = dest if "unread hops" in c.signals else (stdin.target or dest)
         elif not direct:                      # the part #316 adds names the host
