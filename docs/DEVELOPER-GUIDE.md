@@ -65,7 +65,7 @@ some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the 
 in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
 protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
 `CORE_HEADROOM`. Today that is 14,813 plus 2,000, a ceiling of 16,813. The test prints the current count and the headroom left (run it
-with `-s`). The same test asserts two step 4 structure counts, which ratchet down as well: `INWARD_IMPORTS_MAX = 36`
+with `-s`). The same test asserts two step 4 structure counts, which ratchet down as well: `INWARD_IMPORTS_MAX = 39`
 imports of a product module from the core, and `PRIVATE_STATE_MAX = 7` cross-module private-state reads. A real
 reduction lowers the floor, and the floor never rises. Section 7 has the rules
 (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on the

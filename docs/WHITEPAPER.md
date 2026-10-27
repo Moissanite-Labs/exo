@@ -2085,7 +2085,8 @@ store and grows with them. The near-term design rules that keep that path open:
 - **The store is one folder.** Pack, nodes, items, ledger and indexes are plain files and SQLite. Copy the
   folder and the person moves.
 - **The core stays small.** About 15,000 counted lines today (14,999 when this version was written), under a
-  ceiling of a recorded floor plus 1,000 lines (section 11). Two runtime dependencies.
+  ceiling of a recorded floor plus 2,000 lines (section 11), with two step 4 coupling counts (inward product
+  imports, cross-module private-state reads) asserted and ratcheted beside it. Two runtime dependencies.
   The terminal client is Python too, so the core and its main client need no Node, no browser
   engine and no containers. One optional tool, `code_find`, needs Node and hides itself when Node is
   missing. The planned idle memory target is under 80 MB **[not measured]**.
