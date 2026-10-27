@@ -759,7 +759,9 @@ system or bash will.
 Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
 each folder's resolution) across all the line's words. Before, each word looked them up again. On three 10 KB
 shell lines (plain commands, expansions, globs; CPU time, median of 25 runs) classify took 30 to 82 ms, against 212
-to 312 ms before.
+to 312 ms before. Each distinct word's file-system verdict is also kept on the call's scope and read once per
+call (#293). A bare word skips the file-system walk only when it is not a link in a folder, not a store's name
+from the folder above it, not `run`, and the folders are outside the stores and not spelled with a leading `//`.
 
 Known limits. A link made on the same line (`tar xf v.tar && cat notes.txt`) does not exist yet when the gate
 classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the store. Programs that follow links

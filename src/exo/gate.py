@@ -6272,6 +6272,8 @@ class _Scope:
     here: str | None = None                      # the gate's own folder; "" when it cannot be read
     roots: set[str] | None = None
     real: dict[str, str] = field(default_factory=dict)
+    seen: dict[str, bool] = field(default_factory=dict, init=False)   # an expanded word's file-system verdict (#293)
+    bare: tuple[bool, frozenset] | None = field(default=None, init=False)  # what a bare word can still reach (#293, _bare_forms)
 
 
 _scope: contextvars.ContextVar[_Scope | None] = contextvars.ContextVar("exo_gate_scope", default=None)
@@ -6512,22 +6514,73 @@ def _sensitive_words(words: list[str]) -> bool:
             scope.here = os.getcwd()
         except OSError:
             scope.here = ""
-    roots, memo = scope.roots, scope.real
-    for base in dict.fromkeys(("", *scope.cwds)):       # "": the gate's own folder
-        for w in words:
-            p = os.path.join(base, w)                    # an absolute word stays as it is
+    return any(_sensitive_word(w, scope) for w in words)
+
+
+_BARE_WORD = re.compile(r"[^/~$*?\[\]{}\\]+")   # a word holding no path spelling: no separator, expansion,
+                                                # glob or brace set in it (#293)
+
+
+def _sensitive_word(w: str, scope: _Scope) -> bool:
+    """One expanded word against the dynamic stores, the file-system half of _sensitive_words. The verdict
+    is kept on the scope, so a word a long line repeats is read from the file system once per call (#293):
+    a 100 KB line of short words met the full check about twice a word."""
+    if w not in scope.seen:
+        scope.seen[w] = _sensitive_word_fs(w, scope)
+    return scope.seen[w]
+
+
+def _bare_forms(scope: _Scope) -> tuple[bool, frozenset]:
+    """What a bare word can still reach from the call's folders (#293), read once per call: whether a folder
+    (as spelled, or as resolved) sits in a dynamic store, and the stores' own names, which a word spelled
+    from the folder above a store reaches (``keys`` from EXO_HOME reaches EXO_HOME/keys)."""
+    roots = scope.roots or set()
+    forms: set[str] = set()
+    failed = False
+    for base in (scope.here, *scope.cwds):
+        if base:
             try:
-                a = os.path.normpath(os.path.join(scope.here, p)) if scope.here else os.path.abspath(p)
-                real = os.path.realpath(p) if ".." in p.split(os.sep) or a.startswith("//") else _real(a, memo)
-                cands = {a, real}
-            except (OSError, ValueError):
-                real, cands = "", {p}
-            cands = {c for c in cands if not _fold(c).endswith(".pub")}
-            if any(_fold(c) == _fold(r) or _fold(c).startswith(_fold(r) + os.sep) for c in cands for r in roots) \
-                    or _is_run_dir(p, real):
-                return True
-            if real in cands and real != a and _sensitive_re().search(_fold(_below(real, base or scope.here, w, memo))):
-                return True
+                forms.update((os.path.abspath(base), os.path.realpath(base)))
+            except (OSError, ValueError):   # a gone folder, or a NUL in it: the full check reads it instead
+                failed = True
+    inside = failed or any(f == r or f.startswith(r + os.sep) for f in forms for r in roots)
+    names = frozenset(os.path.basename(r) for r in roots if os.path.dirname(r) in forms)
+    return inside, names
+
+
+def _linked_word(w: str, scope: _Scope) -> bool:
+    """The bare word ``w`` is a link in the gate's own folder or in one of the tool's: where it leads decides,
+    so the full check reads it."""
+    return any(os.path.islink(os.path.join(base, w))
+               for base in dict.fromkeys((scope.here, *scope.cwds)) if base)
+
+
+def _sensitive_word_fs(w: str, scope: _Scope) -> bool:
+    if scope.bare is None:
+        scope.bare = _bare_forms(scope)
+    inside, names = scope.bare
+    double_slash = any(b.startswith("//") for b in (scope.here, *scope.cwds) if b)
+    if (not inside and not double_slash and w not in names and w not in (".", "..", "run")
+            and _BARE_WORD.fullmatch(w) and scope.here and not _linked_word(w, scope)):
+        return False   # a bare name that is not a link, read from folders outside the stores: only its name
+                       # can name a store, and _sensitive_words has read that already. `run` keeps the full
+                       # check: joined to a tool folder it can be a run folder (#293). A folder spelled with a
+                       # leading `//` keeps it too, since main matches such a path whole (#293).
+    roots, memo = scope.roots or set(), scope.real   # roots are read once per call, before any word (#293)
+    for base in dict.fromkeys(("", *scope.cwds)):       # "": the gate's own folder
+        p = os.path.join(base, w)                        # an absolute word stays as it is
+        try:
+            a = os.path.normpath(os.path.join(scope.here, p)) if scope.here else os.path.abspath(p)
+            real = os.path.realpath(p) if ".." in p.split(os.sep) or a.startswith("//") else _real(a, memo)
+            cands = {a, real}
+        except (OSError, ValueError):
+            real, cands = "", {p}
+        cands = {c for c in cands if not _fold(c).endswith(".pub")}
+        if any(_fold(c) == _fold(r) or _fold(c).startswith(_fold(r) + os.sep) for c in cands for r in roots) \
+                or _is_run_dir(p, real):
+            return True
+        if real in cands and real != a and _sensitive_re().search(_fold(_below(real, base or scope.here, w, memo))):
+            return True
     return False
 
 
@@ -6628,8 +6681,13 @@ def _glob_hits_secret(tok: str) -> bool:
     return words is None or _glob_words(words)
 
 
+_GLOB_SPELL = re.compile(r"[*?\[$~{\\]")   # what can make a word spell a glob, before or after expansion (#293)
+
+
 def _glob_words(words: list[str]) -> bool:
     """_glob_hits_secret for any of ``words``, which are already brace-expanded."""
+    if not any(_GLOB_SPELL.search(w) for w in words):
+        return False   # no word spells a glob, and expansion cannot put one in (#293)
     words = [w for w in _expand_words(words) if re.search(r"[*?\[]", w)]
     if not words:
         return False
@@ -7194,13 +7252,16 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
             first = "keychain access"
         if first and every is None:
             return first
+    checked: set[str] = set()         # the text's words and the segments' tokens name most words twice (#293)
     for p in pieces if every is None else dict.fromkeys(pieces):     # each word once when every one is listed
         p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
-        if p and (_sensitive_words([p]) or _glob_words([p])):
-            if every is None:
-                return p
-            first = first or p
-            every.append(_expand_text(p))           # a word of a segment as the text spells it: `~` read
+        if p and p not in checked:
+            checked.add(p)
+            if _sensitive_words([p]) or _glob_words([p]):
+                if every is None:
+                    return p
+                first = first or p
+                every.append(_expand_text(p))           # a word of a segment as the text spells it: `~` read
     groups: dict[str, list[str]] = {}         # bash expands only unquoted braces: expand, then dequote
     for raw in dict.fromkeys(raws or []):
         words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
