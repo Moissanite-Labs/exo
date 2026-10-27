@@ -1,4 +1,4 @@
-from exo_tui.restart import has_opener, open_tab, restart_command
+from exo_tui.restart import dropped_permission_flags, has_opener, new_command, open_tab, restart_command
 
 
 def test_command_from_env_and_fallback():
@@ -46,6 +46,15 @@ def test_linux_openers_and_manual_fallback():
     line = open_tab(["exo", "--session", "s 1"], {}, "linux", got.append, lambda n: None)
     assert line.endswith("exo --session 's 1'") and "cd " in line
     assert not has_opener({}, "linux", lambda n: None) and has_opener({}, "darwin")
+
+
+def test_new_command_strips_permission_flags_but_they_are_detected():
+    argv = ["exo", "tui", "--skip-permissions", "--seat", "c"]
+    assert dropped_permission_flags(argv) == ["--skip-permissions"]
+    assert dropped_permission_flags(["exo", "tui", "--seat", "c"]) == []
+    assert "--skip-permissions" not in new_command("/w", {}, argv)
+    assert "--dangerously-skip-permissions" not in new_command("/w", {}, ["exo", "--dangerously-skip-permissions"])
+    assert dropped_permission_flags(["--dangerously-skip-permissions"]) == ["--dangerously-skip-permissions"]
 
 
 def test_fallback_carries_exo_env_but_not_secrets():
