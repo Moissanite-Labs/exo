@@ -193,8 +193,8 @@ CORE_HEADROOM = 2000  # room for shipping. A security or robustness fix may rais
 BIG_FILE = 1000  # the report flags counted files above this many lines. Information, not an assertion.
 
 # Step 4 of the engine split is asserted, not only printed. Both numbers come from ``_scorecard`` below and only
-# go down, like CORE_FLOOR (D-082, docs/ENGINE-SPLIT.md "Budget policy"). They cover src/exo/core.
-INWARD_IMPORTS_MAX = 36  # imports of a product module (a non-core exo module) from the core
+# go down, like CORE_FLOOR (D-083, docs/ENGINE-SPLIT.md "Budget policy"). They cover src/exo/core.
+INWARD_IMPORTS_MAX = 39  # imports of a product module (a non-core exo module) from the core
 PRIVATE_STATE_MAX = 7  # reads of another module's private state: no call, not the reader's own state
 
 
@@ -205,7 +205,7 @@ def test_core_line_budget():
     "important to be lean and optimized but not at the cost of functionality and robustness and product-market fit".
 
     1. Two recorded numbers, CORE_FLOOR and CORE_HEADROOM. `total < CORE_FLOOR + CORE_HEADROOM` is asserted, and
-       the same run asserts the two step 4 structure caps below (D-082).
+       the same run asserts the two step 4 structure caps below (D-083).
     2. The floor ratchets down. Every real reduction PR (deletions, simplification, real seams per ENGINE-SPLIT)
        sets CORE_FLOOR to its post-merge count in the same PR. The floor never goes up.
     3. Headroom is for shipping. Fixes and features land inside it with no ceremony. The test prints the count,
@@ -225,7 +225,7 @@ def test_core_line_budget():
     wave (D-038..D-042). Engine split step 4 (D-067, #124) brought the count to 14,813, and the cap went back to
     15k on 2026-10-13 as a hard wall. On 2026-10-15 the wall became this ratchet (D-077): floor 14,813, headroom
     1,000, ceiling 15,813. On 2026-10-26 #598 (a security fix) raised headroom by 11 to 1,011 for the turn-author
-    plumbing into hooks, which left 1 line of it free at 15,823 counted lines. D-082 then raised the headroom to
+    plumbing into hooks, which left 1 line of it free at 15,823 counted lines. D-083 then raised the headroom to
     2,000 (ceiling 16,813) and capped the step 4 structure at its measured count: the ratchet now prices lines and
     coupling instead of lines alone. Issue #46 tracks the rest of the split."""
     files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
@@ -273,28 +273,46 @@ class _Score:
         return f"{self.total} {self.title} (cap {self.cap})"
 
 
+def _inward_modules(node: ast.AST, package: tuple[str, ...]) -> list[str]:
+    """The absolute modules an import statement names, with relative imports resolved against ``package``.
+
+    ``from exo import b`` names a module only when ``b`` is one; a name imported from the ``exo`` package itself is
+    otherwise a symbol and is not counted here.
+    """
+    if isinstance(node, ast.Import):
+        return [a.name for a in node.names]
+    if not isinstance(node, ast.ImportFrom):
+        return []
+    if node.level:  # relative: this file's package, up (level - 1), then the written module
+        parts = list(package[: len(package) - node.level + 1])
+        return [".".join(parts + (node.module.split(".") if node.module else []))]
+    if node.module != "exo":
+        return [node.module or ""]
+    base = REPO / "src" / "exo"
+    return [f"exo.{a.name}" for a in node.names
+            if (base / a.name).is_dir() or (base / f"{a.name}.py").exists()]
+
+
 def _scorecard(root: Path) -> tuple[_Score, _Score]:
     """Measure ENGINE-SPLIT step 4 over ``src/exo/core``: inward product imports, cross-module private reads.
 
-    An inward import is an ``exo`` module outside the core (core, protocol, server, cli_chat, upstream). A
+    An inward import is an ``exo`` module outside the core (core, protocol, server, cli_chat, upstream), counted
+    wherever the statement puts it (``import a.b``, ``from a.b import c``, ``from exo import b``, ``from ..b``). A
     private-state read is a ``_name`` attribute read that is not part of a call and is not a ``_name`` the reader
-    module defines itself. Parse errors fail the caller; a false positive is fixed by renaming the reader's own
-    name or by ``atest`` the same PR, not by raising the cap.
+    module defines itself or assigns on ``self``. Parse errors fail the caller; a false positive is fixed by
+    renaming the reader's own name or by adjusting the test in the same PR, not by raising the cap.
     """
-    hits: dict[str, list[tuple[str, str]]] = {"import": [], "read": []}
+    imports: set[tuple[str, str]] = set()
+    reads: list[tuple[str, str]] = []
     for path in sorted(root.rglob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
         where = path.relative_to(REPO).as_posix()
+        package = path.relative_to(REPO / "src").parts[:-1]
         for node in ast.walk(tree):
-            modules = []
-            if isinstance(node, ast.ImportFrom) and not node.level and node.module:
-                modules = [node.module]
-            elif isinstance(node, ast.Import):
-                modules = [a.name for a in node.names]
-            for module in modules:
+            for module in _inward_modules(node, package):
                 parts = module.split(".")
                 if parts[0] == "exo" and len(parts) > 1 and parts[1] not in {"core", "protocol", "server"}:
-                    hits["import"].append((where, parts[1]))
+                    imports.add((where, parts[1]))  # one dependency per file and module, counted once
         defined, own, called = set(), set(), set()
         for node in ast.walk(tree):
             if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)) or (
@@ -317,9 +335,9 @@ def _scorecard(root: Path) -> tuple[_Score, _Score]:
             if isinstance(node.value, ast.Name) and node.value.id in {"self", "cls"}:
                 continue  # the reader's own state, inherited or not (a provider's own timeout, say)
             if node.attr not in own and node.attr not in defined and id(node) not in called:
-                hits["read"].append((where, node.attr))
-    return _Score("inward product imports", INWARD_IMPORTS_MAX, hits["import"]), _Score(
-        "cross-module private-state reads", PRIVATE_STATE_MAX, hits["read"])
+                reads.append((where, node.attr))
+    return _Score("inward product imports", INWARD_IMPORTS_MAX, sorted(imports)), _Score(
+        "cross-module private-state reads", PRIVATE_STATE_MAX, reads)
 
 
 def test_dependencies_are_listed():

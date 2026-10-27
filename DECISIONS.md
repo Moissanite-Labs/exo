@@ -4832,14 +4832,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   fix would have had to wait for a cut, which is the one thing rule 4 says the budget must never do. The count was also
   pricing size alone, while D-077's point 5 names structure as the real goal, and structure was only printed.
 - **Decision:** `tests/integration/test_wave1_acceptance.py` records `CORE_HEADROOM = 2000`, so the ceiling is
-  16,813 and 1,001 lines were free at 15,812. It also records `INWARD_IMPORTS_MAX = 36` and
+  16,813 and 1,001 lines were free at 15,812. It also records `INWARD_IMPORTS_MAX = 39` and
   `PRIVATE_STATE_MAX = 7` and asserts them in the same test, from a `_scorecard` helper that walks `src/exo/core`
   with `ast`:
   - *inward product imports* count every import of a non-core `exo` module from the core (`exo.model_spend`,
-    `exo.bus`, `exo.gate`, `exo.envscrub`, `exo.wire`, and so on). This is the import direction ENGINE-SPLIT step 4
+    `exo.bus`, `exo.gate`, `exo.envscrub`, `exo.wire`, and so on), in every form the statement can take: `import a.b`,
+    `from a.b import c`, `from exo import b`, and the relative form. This is the import direction ENGINE-SPLIT step 4
     asks for.
   - *cross-module private-state reads* count reads of another module's private state: a `_name` attribute read that
-    is not a call, is not `self` or `cls`, and is not a name the reader's own class body assigns.
+    is not a call and is not reached through `self` or `cls`, where `_name` is not a name the reader module defines
+    or assigns itself (a module-level name, a function or argument name, or the reader's own attribute). The
+    exemption is the reader's own names, not its class body only, which is what the helper measures.
   - Both numbers ratchet down like `CORE_FLOOR`: a reduction sets the constant to its new, lower count. Neither may be
     raised to make a false positive pass; fix the reader instead.
 - **Rejected:**
@@ -4851,11 +4854,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     reason.
   - Allow-lists by name. They hide the reads instead of counting them, and they rot.
 - **Numbers:** measured 2026-10-26 on the branch after merging main `dcab371a` (`0d680b83`): 15,812 counted lines in
-  58 files, floor 14,813, headroom 2,000, 1,001 left. Step 4: 36 inward imports (by module `exo.model_spend` 10,
-  `exo.bus` 4, `exo.gate` 4, `exo.envscrub` 4, `exo.wire` 2) and 7 private-state reads (`loop._state` 3 in
-  `engine.py`, `hub._subs` in `jobs.py` and in `peer_target.py`, `loop._state` 2 in `peer_target.py`).
+  58 files, floor 14,813, headroom 2,000, 1,001 left. Step 4, counted over every import form: 39 inward imports (by
+  module `exo.bus` 4, `exo.gate` 4, `exo.provenance` 4, `exo.model_spend` 4, `exo.crypto` 3, `exo.config` 3,
+  `exo.envscrub` 3, `exo.principal` 2, and 1 each for `exo.application`, `exo.capture`, `exo.compose`,
+  `exo.diagnostics`, `exo.learn`, `exo.models_cmd`, `exo.plugin_context`, `exo.providers_setup`, `exo.search_worker`,
+  `exo.store`, `exo.turn_settle`, `exo.wire`) and 7 private-state reads (`loop._state` 3 in `engine.py`,
+  `hub._subs` in `jobs.py` and in `peer_target.py`, `loop._state` 2 in `peer_target.py`).
 - **Revisit if:** the two step 4 caps stay still for a long stretch, or the headroom is raised again.
-- **Validation:** `tests/integration/test_wave1_acceptance.py -k line_budget` (1 passed) and the whole of
-  `tests/integration` with `tests/docs` (10 passed).
+- **Validation:** `tests/integration/test_wave1_acceptance.py` (6 passed) and the whole of `tests/integration` with
+  `tests/docs` (`tests/integration` 146 passed, 2 skipped; `tests/docs` 5 passed).
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md` §27,
   `docs/DOCS-MAP.md`, `CHANGELOG.md`.
