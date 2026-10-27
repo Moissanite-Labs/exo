@@ -6445,7 +6445,7 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # launch script's target folder, a live Hermes's state) is not the code. Absolute paths are also checked
 # against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
 # `principals` (`exo init --root`, `exo import-store --root`), the bus folder and files (_bus_paths) and the
-# code folders.
+# code folders, among them the venv and Hermes home the home's config.json records (#612).
 # $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
 # The file names that end a path, one string per name ("\0": any text), which _STORE_NAMES and _store_glob share.
 _EXO_STORE_FILES = (
@@ -6503,6 +6503,27 @@ def _bus_paths() -> list[tuple[str, tuple]]:
     return out
 
 
+def _config_code_paths() -> list[str]:
+    """The venv and Hermes' plugin home the home's config.json records (`venv`, `hermes_home`): scripts/install.sh
+    writes both (its set_cfg lines, #612) and nothing exports EXO_VENV or EXO_HERMES_HOME when the daemon runs, so a
+    supported custom install spells its code folders in the file alone. Read like store.explicit_roots reads the
+    config's `principals`: a missing or unreadable file, or a value that is not an absolute path once ~ is expanded,
+    adds nothing. The environment still takes precedence (Config.get resolves it), so a folder named here joins the
+    code paths beside what EXO_VENV or EXO_HERMES_HOME names, it never replaces one."""
+    try:
+        data = json.loads((Path(_exo_home()) / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):            # a missing file, a stale or bad one: the default spellings stand
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for key, tail in (("venv", ""), ("hermes_home", "plugins")):
+        p = os.path.expanduser(data[key]) if isinstance(data.get(key), str) else ""
+        if p.startswith("/"):
+            out.append(os.path.join(p, tail) if tail else p)
+    return out
+
+
 def _code_paths() -> list[str]:
     """The folders Exo loads code from (#459), each the environment this gate sees spells, as it does EXO_HOME: the
     venv `scripts/install.sh` puts the `exo` package and this gate in (EXO_VENV, else the home's own `venv`; a
@@ -6510,9 +6531,11 @@ def _code_paths() -> list[str]:
     (EXO_HERMES_HOME, else the home's own `hermes-home/plugins`: with --with-hermes the core loads exo-gate from
     there), the source copy it clones a git URL into and `exo update` refreshes from (`$EXO_HOME/src`; `exo web`
     reads plugins on `<package>/../../plugins` of the copy too) and every folder EXO_PLUGIN_DIRS names, which
-    default_dirs searches first and where a duplicate plugin name keeps the first found. Non-absolute spellings are
-    not read: a relative EXO_VENV or dir is a constant of the tool's working folder, which the gate cannot see; a
-    `.venv` name is not Exo's (no install script makes one, EXO_VENV is the only override)."""
+    default_dirs searches first and where a duplicate plugin name keeps the first found. The home's config.json
+    records a venv and Hermes home of its own (`venv`, `hermes_home`, #612): those join, read as _config_code_paths
+    reads them. Non-absolute spellings are not read: a relative EXO_VENV or dir is a constant of the tool's working
+    folder, which the gate cannot see; a `.venv` name is not Exo's (no install script makes one, EXO_VENV is the
+    only override)."""
     home = _exo_home()
     out = []
     venv = os.path.expanduser(os.environ.get("EXO_VENV") or "")   # install.sh: ${EXO_VENV:-$EXO_HOME/venv}
@@ -6523,7 +6546,7 @@ def _code_paths() -> list[str]:
     out.append(os.path.join(home, "src"))
     out += [d for d in (os.path.expanduser(p) for p in
                         filter(None, os.environ.get("EXO_PLUGIN_DIRS", "").split(os.pathsep))) if d.startswith("/")]
-    return out
+    return out + [p for p in _config_code_paths() if p not in out]
 
 
 def _code_forms() -> list[str]:
@@ -6579,7 +6602,8 @@ def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) ->
 
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
 # counts too) and file names that end a path. The code folders (_code_paths, #459) join: the home's own `venv` and
-# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles. The home's config.json comes
+# `src`, and `hermes-home/plugins`, whose every other spelling the environment or the home's config.json settles
+# (#612). The home's config.json comes
 # from _HOME_PROTECTED; _store_glob counts it only while it counts (_config_on, D-074), so the call is marked and its
 # reading as before is main's.
 _STORE_GLOB_DIRS = tuple([".exo", *p, n] for p in ((), ("principals", "\0")) for n in _HOME_PROTECTED +

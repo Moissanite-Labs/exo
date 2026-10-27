@@ -2350,7 +2350,7 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 that signed seat answers and the relay trust, the relay database and its `-wal`, `-shm` and
 `-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435) and the other folders Exo loads
 code from (#459, below: the venv, Hermes' plugin home, the source copy and the folders
-`$EXO_PLUGIN_DIRS` name), `$EXO_HOME/update`
+`$EXO_PLUGIN_DIRS` name, also the two config.json records, #612), `$EXO_HOME/update`
 (`allowed_signers`, the signed-update trust pin of D-073, #133), `$EXO_HOME/config.json` (D-074,
 #125: the plugins the core loads, this gate among them, as `core_plugins`, their config, the `venv`
 that runs Hermes and Exo, each provider's `base_url` and headers, and the `principal` a peer key
@@ -2400,13 +2400,20 @@ home, `${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}/plugins`, which the core loads 
 `--with-hermes`. The source copy, `$EXO_HOME/src`, which the installer clones a git URL into and `exo
 update` refreshes, and whose copy `exo web` reads plugins under `<package>/../../plugins` of.
 And the folders `$EXO_PLUGIN_DIRS` names (`default_dirs` searches them first and keeps the first plugin
-found of a name, so a plugin of a core name there takes the real one's place). Each absolute spelling is
+found of a name, so a plugin of a core name there takes the real one's place). And the two the home's
+config.json records (#612): `venv`, the venv the installer put the package in, and `hermes_home`, the
+Hermes home its plugins went to — `scripts/install.sh` writes both and nothing exports the matching
+environment when the daemon runs, so a custom install spells its code folders in the file alone. The gate
+reads them there as it reads the config's `principals` for store roots: a missing, stale or unreadable
+file, or a value that is no absolute path, adds nothing, and the environment still leads — a folder the
+file records joins the protected list beside what `EXO_VENV` or `EXO_HERMES_HOME` names, it does not
+replace one. Each absolute spelling is
 checked against the folder's own, so a link into or out of it counts both ways, and a `cd` into one, or a
 `git -C` on it, makes the relative names after it count. Not code, and not protected: a `.venv` folder
 under the home (no install script makes one, EXO_VENV is the only override), the rest of
 `hermes-home` (Hermes' own state, its database and registry, not the code), a relative `EXO_VENV` or
 `EXO_PLUGIN_DIRS` value (a constant of the tool's working folder, which the gate cannot see), and a
-Hermes home that only config.json names (D-074: the gate reads no config.json content). The cost: a `pip
+relative `venv` or `hermes_home` value in config.json (the same working-folder constant). The cost: a `pip
 install` into the venv Exo itself runs from now asks; everyday work installs into a project or scratch
 venv, not into `$EXO_HOME/venv`, so the ask is rare. Editing a checkout named in `$EXO_PLUGIN_DIRS`
 now asks on every write, so leave the variable unset while the principal edits, or point it at the

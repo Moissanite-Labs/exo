@@ -1712,6 +1712,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   into a project or scratch venv), and `exo update`, `exo` venv inspections, which are reads and stay reads.
   The gate differential against main dcab371a (#423) ran the built-in corpus and the #435 review corpora,
   then the new writes of this change as rows, and lowered nothing.
+  *Amendment 2026-10-26 (issue #612):* a venv or Hermes home the home's config.json records alone joins the
+  protected list, which this amendment left out when it said the gate reads no config.json content (D-074) and
+  told an install to write the locations into the environment. Nothing does: `scripts/install.sh` takes the venv
+  from `EXO_VENV` at install time, writes that path back into config.json (`venv`, and `hermes_home` beside it),
+  and nothing exports the variables when the daemon runs, so a supported custom install spells its code folders in
+  the file alone, where the gate could not see them — `Config.load` resolved the recorded folder as the venv while
+  a write into it classified `local_write` and was allowed. Since then the gate does read config content:
+  `_store_roots` takes the store roots recorded in `principals` through `store.explicit_roots`, and `_code_paths`
+  now takes the recorded `venv` and `hermes_home` the same way — a missing or unreadable file, or a value that is
+  not an absolute path once ~ is expanded, adds nothing. The environment still takes precedence, as `Config.get`
+  resolves it: a folder the file records joins the protected list beside what `EXO_VENV` or `EXO_HERMES_HOME`
+  names, it never replaces one, so a decision main made stays made and only new folders are asked for. Everything
+  else this amendment gave a code folder the venv keeps: a write in it asks as `store_write` on the floor, a `cd`
+  into it makes the relative names after it count, a delete or move of it or of a folder above that holds it
+  counts, and reads stay reads. The gate differential against main d4cc7ea3 (#423) ran the built-in corpus, then
+  the new writes of this change as rows, and lowered nothing.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
