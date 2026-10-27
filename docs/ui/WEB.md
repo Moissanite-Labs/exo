@@ -129,9 +129,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 - **Brand bar.** `E X O`, the agent and thread, the tabs, the connection led. The square dot before `E X O`
   pulses orange while a turn runs and is hollow when idle.
 - **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
-  that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
-  against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
-  `/context` reports), cache share of that call, session cost. While busy a
+  that served differs from the one asked, from `model.call`), memory gauge (the last next-call estimate and capacity from structured `/context`,
+  with an unknown capacity kept unknown), separately labelled last-call input tokens from
+  `model.call`, cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed; click
   to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded · 1781 → 153 tok`
@@ -195,7 +195,7 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   time with motion, 0.0 percent with reduced motion.
 - With no panel open, the right column is a quiet instrument column: memory (tokens on the next call split into
   system, tree, other threads and tail, tree nodes, log and fold frontier) and the last calls (served route,
-  ttft, cache share, fallback). It is hidden under 1100 px. The memory numbers come from `/context`, read
+  ttft, cache share, fallback). It is hidden under 1100 px. The memory numbers are labelled as the last estimate and come from `/context`, read
   after a thread opens, after each turn and after a memory event. The last calls come from `model.call`
   events, so they start empty when a thread is opened.
 - Typing `/context`, `/findings` or `/trace` in the composer runs that report and shows it in the transcript.

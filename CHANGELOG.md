@@ -1,5 +1,7 @@
 # Changelog
 
+- Web: keep last-call usage separate from the labelled last next-call context estimate (#732).
+
 All notable changes to Exo. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions
 follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJOR (0.x is egg).
 
