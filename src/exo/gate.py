@@ -711,7 +711,8 @@ class _Lexer:
 
     def _dollar(self, w: _Word, double: bool = False) -> None:
         s, i = self.s, self.i
-        nxt = s[i + 1:i + 2]
+        k = _joins_past(s, i + 1)   # bash drops a \<newline> before it reads what follows the $ (#585)
+        nxt = s[k:k + 1]
         w.started = True
         if s.startswith("$((", i):
             depth, j = 0, i + 1
@@ -739,7 +740,7 @@ class _Lexer:
             if self.nest >= _NEST:
                 self._cut(w, i)
                 return
-            self.i = i + 2
+            self.i = k + 1
             start = self.i
             self.nest += 1
             toks = self.run(closer=True)
@@ -756,6 +757,10 @@ class _Lexer:
         elif nxt == "{":
             j = s.find("}", i)
             j = len(s) - 1 if j < 0 else j
+            if k > i + 1:                  # a ${ the \<newline> splits: bash still runs the $( ) and ` ` in it (#585)
+                sub = _Lexer(s[k:j + 1], scan=False, nest=self.nest)
+                sub._dquote(_Word(), until_end=True)
+                self.subs += sub.subs
             if self.scan and i >= self.covered:    # what bash reads: it may run past this first }
                 vis, close, frames = _dollar_brace(s, i, double, self.nest)
                 w.exps.append((vis, s[i:close + 1], {at - i: [end - i, None if up is None else up - i]
@@ -768,7 +773,7 @@ class _Lexer:
             w.split = w.split or not double or "@" in s[i:j + 1] or bool(re.search(r"[\"'`\\]|\$\(", s[i + 2:j]))
             self.i = j + 1
         elif nxt == "'":                       # $'..' (ANSI-C quoting): decode the escapes
-            j, out = i + 2, []
+            j, out = k + 1, []
             while j < len(s) and s[j] != "'":
                 step = 2 if s[j] == "\\" else 1
                 out.append(s[j:j + step])
@@ -782,17 +787,17 @@ class _Lexer:
             w.quoted = w.dollar_quote = True
             self.i = j + 1
         elif nxt == '"' and not double:        # $".." (locale quoting): the string itself, without the $
-            self.i = i + 2
-            w.locale = w.locale or s[i + 2:i + 3] != '"'     # bash never translates an empty $""
+            self.i = k + 1
+            w.locale = w.locale or s[k + 1:k + 2] != '"'     # bash never translates an empty $""
             w.dollar_quote = True
             self._dquote(w)
         else:
-            m = re.match(r"\$([A-Za-z_]\w*|[0-9@*#?$!-])", s[i:])
+            m = re.match(r"([A-Za-z_]\w*|[0-9@*#?$!-])", s[k:])
             if m:
-                w.text += m.group(0)
+                w.text += "$" + m.group(1)
                 w.dynamic = True
                 w.split = w.split or not double or m.group(1) == "@"
-                self.i = i + len(m.group(0))
+                self.i = k + len(m.group(1))
             else:
                 w.text += "$"
                 self.i = i + 1
@@ -839,7 +844,6 @@ _WORD_RUN = re.compile(r"[^ \t\r\n\\'\"`$<>&;|()#]+")
 _DQ_RUN = re.compile(r"[^\"\\$`]+")
 _BT_BODY = re.compile(r"(?:[^`\\]|\\.)*", re.S)
 _ANSI_BODY = re.compile(r"(?:[^'\\]|\\.)*", re.S)
-_VAR_REF = re.compile(r"\$(?:[A-Za-z_]\w*|[0-9@*#?$!-])")
 _PARENS = re.compile(r"[()]")
 _SUBST = re.compile(r"\$\((?!\()")          # a $( that is not $((
 _DELIM_MAX = 1024
@@ -908,7 +912,8 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
                 w.add(s, f.start, max(f.start, i - 1), "$()")
 
     def dollar(w: _Open, i: int, double: bool) -> int:     # as _Lexer._dollar
-        nxt = s[i + 1:i + 2]
+        k = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads what follows the $ (#585)
+        nxt = s[k:k + 1]
         w.started, w.digits = True, False
         if s.startswith("$((", i):
             depth, j = 0, n
@@ -920,30 +925,35 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             w.add(s, i, j)
             return j
         if nxt == "(":
-            stack.append(_Open("$", i + 2))
-            return i + 2
+            stack.append(_Open("$", k + 1))
+            return k + 1
         if nxt == "{":
             j = s.find("}", i)
             j = n - 1 if j < 0 else j
             w.add(s, i, j + 1)
             return j + 1
         if nxt == "'":
-            j = _match_end(_ANSI_BODY, s, i + 2)
+            j = _match_end(_ANSI_BODY, s, k + 1)
             j = n + 1 if j < n and s[j] == "\\" else j          # a backslash that ends s takes one more step
             w.quoted = w.dollar = True
             if w.text is not None:
                 try:
-                    text = _ansi_c(s[i + 2:j])
+                    text = _ansi_c(s[k + 1:j])
                 except (UnicodeError, ValueError):
-                    text = s[i + 2:j]
+                    text = s[k + 1:j]
                 w.add(text, 0, len(text))
             return j + 1
         if nxt == '"' and not double:
             w.quoted = w.dollar = True
             stack.append(_Open('"', owner=w))
-            return i + 2
-        j = max(_match_end(_VAR_REF, s, i), i + 1)
-        w.add(s, i, j)
+            return k + 1
+        m = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
+        if m:
+            j = k + len(m.group(0))
+            w.add("$" + m.group(0), 0, 1 + len(m.group(0)))
+        else:
+            j = i + 1
+            w.add(s, i, j)
         return j
 
     def backtick(w: _Open, i: int) -> int:       # as _Lexer._backtick
@@ -1070,9 +1080,10 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
     (classify runs inside the gate hook). `nest` is the lexer's (_NEST)."""
     frames: dict[int, list] = {}
 
-    def open_(at: int, dq: bool, parent: int | None) -> list:   # [in a "..." inside it, sq expands, dq, start]
+    def open_(at: int, brace: int, dq: bool, parent: int | None) -> list:
+        # [in a "..." inside it, sq expands, dq, start]
         frames[at] = [len(s), parent]
-        return [False, dq and not _DQ_QUOTING_OP.match(s, at + 2), dq, at]
+        return [False, dq and not _DQ_QUOTING_OP.match(s, brace + 1), dq, at]
 
     def quoted_text(a: int, b: int, parent: int) -> str:
         # single-quoted text bash expands: the visible text, and the frames of the ${ in it, read within it
@@ -1086,7 +1097,9 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
             p = vis.find("${", close + 1)
         return vis
 
-    out, stack, j = ["${"], [open_(i, dq, None)], i + 2   # one entry per ${ still open, no recursion
+    b = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads the { (#585)
+    # one entry per ${ still open, no recursion
+    out, stack, j = ["${", " " * (b - i - 1)], [open_(i, b, dq, None)], b + 1
     while j < len(s):
         inq, sq, fdq, start = stack[-1]
         ch, k = s[j], j + 1
@@ -1111,7 +1124,7 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
                 k = lx.i
             out.append(" " * (k - j))
         elif s.startswith("${", j):
-            stack.append(open_(j, fdq or inq, start))
+            stack.append(open_(j, j + 1, fdq or inq, start))
             out.append("${")
             k = j + 2
         elif ch == "}" and not inq:
@@ -1959,7 +1972,7 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
         return bool(re.match(r"~(?:[+-]\d*|\d+)(?:/|$)", w.raw.replace("\\\n", "")))
 
     def lone(w: _Word) -> bool:     # one double-quoted word stays one word, but "${!n}" with n=@ splits as "$@"
-        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw
+        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw.replace("\\\n", "")
 
     args, path, at, i = words[1:], None, 0, 0
     while i < len(args):
