@@ -4975,6 +4975,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   grid and cards; Command and Providers like an instrument panel. The lattice egg (`site/brand/egg.js`, copied
   byte for byte to `static/egg.js`) appears once, in the Tasks empty state. Presentation only: no route, protocol,
   token (D-039), approval (D-045), layout (D-046) or completion (D-037) behaviour changes; element ids stay.
+- **Amendment 2026-10-27 (exo-desktop #55):** Schedule's remove has no undo, so it waits for a separate Confirm
+  remove click on that card, as Allow always does on the Command card. The step is drawn in the page. Rejected:
+  `window.confirm`, as Providers uses for a key, since a desktop web view with no confirm handler answers it with
+  Cancel and remove would never run there.
 - **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root

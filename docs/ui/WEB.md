@@ -359,6 +359,10 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
 - **Schedule** shows each job as a card in a hairline grid: the clock line in mono, the title, the prompt, then next,
   last and tier as a readout (local date and time plus "in 2h"), and the actions. A paused job's top rule is dashed.
   The form sits beside the list, with labelled fields; under 1100px it follows the list.
+  Remove has no undo, so it waits for a separate Confirm remove click on that card (exo-desktop #55). The step is
+  drawn in the page, not with `window.confirm`: a desktop web view with no confirm handler answers that with Cancel.
+  Cancel or any other job action drops it, and the second click of a double click does not confirm. Pause, resume
+  and run now act at once.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
   An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with
