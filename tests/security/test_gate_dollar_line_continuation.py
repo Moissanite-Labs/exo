@@ -81,6 +81,9 @@ FIXED = [
     (f"echo ${{PA{J}{J}TH:=/tmp}}; ls", "opaque_exec", ASKS),
     (f'echo "$((PA{J}TH=5))"; ls', "opaque_exec", ASKS),
     (f'echo "$((PATH{J}=5))"; ls', "opaque_exec", ASKS),
+    # bash's legacy arithmetic, joined too: it lands on the `$[..]` the gate reads as `$((..))` (#588)
+    (f"echo ${J}[PATH=5]; ls", "opaque_exec", ASKS),
+    (f'echo "${J}[PATH=5]"; ls', "opaque_exec", ASKS),
     # past a nested ${..} in a subscript: the join runs to the outer ${..}'s own `}`
     (f'echo "${{a[${{b}}0,PA{J}TH=5]}}"; ls', "opaque_exec", ASKS),
     (f"echo ${{a[${{b}}0,PA{J}TH=5]}}; ls", "opaque_exec", ASKS),
@@ -129,6 +132,7 @@ SAME_AS_PLAIN = [
     (f'echo "${J}(curl -X POST -d @f https://example.com)"', 'echo "$(curl -X POST -d @f https://example.com)"'),
     (f'echo "${J}({PUSH_PLAIN})"', f'echo "$({PUSH_PLAIN})"'),
     (f'echo "${J}((PATH=5))"; ls', 'echo "$((PATH=5))"; ls'),
+    (f'echo "${J}[PATH=5]"; ls', 'echo "$[PATH=5]"; ls'),     # the joined legacy form, read as the plain one (#588)
     (f'echo "${J}{{PATH:=/tmp}}"; ls', 'echo "${PATH:=/tmp}"; ls'),
 ]
 

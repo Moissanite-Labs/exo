@@ -1115,7 +1115,8 @@ backslash-newline. There the joined text stays quoted or unread, and the line as
 decides: `: # $\<newline>(git push ...)` keeps its deny, since bash runs the next line. A `${..}`
 is joined to its own `}`, past a `${..}` nested in it. Limits: only shell calls are read again
 (not `execute_code`), the folder walk of `cd` targets is not joined, and a joined form is read as
-its plain form is, so `$\<newline>[..]` is as unread as `$[..]` (#588).
+its plain form is, so `$\<newline>[..]` is read as the `$[..]` it joins to, and that is read as the
+arithmetic `$((..))` it stands for (#588).
 
 A command is meant to be `allow` only when every program in it is known and nothing the gate reads
 is hidden; "Known limits" below names the paths where a known program still runs a command the
@@ -1462,7 +1463,9 @@ gate does not read:
   (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
   `-a`) or `printf -v` fills, as a `for` variable, through a nameref (`declare -n r=PATH`), or as
   an integer through arithmetic, an array subscript, or a `{PATH}>` redirection (`$((PATH=10))`,
-  `$((PATH++))`, `$((--PATH))`, `$((PATH<<=1))`, `a[PATH=10]=1`, `${a[PATH=10]}`). A subscript
+  `$((PATH++))`, `$((--PATH))`, `$((PATH<<=1))`, `a[PATH=10]=1`, `${a[PATH=10]}`). The legacy `$[..]` spelling of arithmetic is read as the `$((..))` it stands for
+   (#588), so `$[PATH=10]` and the element its body sets (`$[BASH_CMDS[ls]=1]`) decide as their
+   `$((..))` spellings do. A subscript
   counts where bash reads the word as a variable name: an assignment, `${a[...]}`, and the name an
   exporter, `unset`, `read`, `printf -v`, a nameref or `test -v` takes. `mapfile` and `getopts`
   already ask. Parameter expansion that
@@ -2335,7 +2338,7 @@ denies `opaque_exec` (#191) denies the line.
 The gate reads the common ways a line sets a variable. A shell's rarer expansion forms can still
 set one unseen: an unquoted here-doc body fed to a builtin (`${NAME:=v}` or `$((NAME=n))` in
 it), a brace expansion in a name (`export {PATH,FOO}=x`), indirect expansion (`${!ref:=v}`),
-arithmetic in a substring offset (`${x:PATH=1}`), the old `$[...]` arithmetic, an integer
+arithmetic in a substring offset (`${x:PATH=1}`), an integer
 variable (`declare -i x; x=PATH=5`), `wait -p NAME` and `{NAME}<<<x`. This is one more reason
 the sandbox is the real fix.
 

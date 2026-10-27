@@ -427,6 +427,7 @@ class _Word:
     redir_after: bool = False  # a redirection, heredoc or here-string follows it before the next word (#207)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
     split: bool = False        # bash may make several words of it, or none: an expansion outside "..", or "$@" (#399)
+    legacy: bool = False       # holds bash's legacy arithmetic `$[ ]`, which main read as plain text (#588)
     exps: list = field(default_factory=list)  # (scan text, source, ${ frames) per ${..} and $((..)) bash expands
     fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
 
@@ -714,25 +715,30 @@ class _Lexer:
         k = _joins_past(s, i + 1)   # bash drops a \<newline> before it reads what follows the $ (#585)
         nxt = s[k:k + 1]
         w.started = True
-        if s.startswith("$((", i):
+        legacy = s.startswith("$[", i)     # bash's legacy arithmetic (#588): read it as the $((..)) it stands for
+        if s.startswith("$((", i) or legacy:
             depth, j = 0, i + 1
+            pair = ({"[": 1, "]": -1} if legacy else {"(": 1, ")": -1}).get
             while j < len(s):
-                depth += {"(": 1, ")": -1}.get(s[j], 0)
+                depth += pair(s[j], 0)
                 j += 1
                 if depth == 0:
                     break
-            body = s[i:j]
+            body = "$((" + s[i + 2:j] + "))" if legacy else s[i:j]
+            at, end = (i + 2, j - 1) if legacy else (i + 3, j - 2)   # where the body bash reads starts and ends
+            if legacy:
+                w.legacy = True
             if self.nest >= _NEST and (_SUBST.search(body, 3) or "`" in body):
-                self.cuts.append((i + 3, max(i + 3, j - 2), "$(" + _TOO_DEEP + ")"))
+                self.cuts.append((at, max(at, end), "$(" + _TOO_DEEP + ")"))
                 self.subs.append(_TOO_DEEP)
             elif self.nest < _NEST and ("$(" in body[3:] or "`" in body):
                 sub = _Lexer(body[3:-2], scan=False, nest=self.nest + 1)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
-                self.cuts += [(x + i + 3, y + i + 3, stand_in) for x, y, stand_in in sub.cuts]
+                self.cuts += [(x + at, y + at, stand_in) for x, y, stand_in in sub.cuts]
             if self.scan and i >= self.covered:
                 w.exps.append((body, body, None))
-            w.text += body
+            w.text += s[i:j]               # as written, `$[..]`, so the word keeps its own spelling
             w.dynamic = True
             w.split = w.split or not double
             self.i = j
@@ -845,6 +851,7 @@ _DQ_RUN = re.compile(r"[^\"\\$`]+")
 _BT_BODY = re.compile(r"(?:[^`\\]|\\.)*", re.S)
 _ANSI_BODY = re.compile(r"(?:[^'\\]|\\.)*", re.S)
 _PARENS = re.compile(r"[()]")
+_BRACKETS = re.compile(r"[\[\]]")
 _SUBST = re.compile(r"\$\((?!\()")          # a $( that is not $((
 _DELIM_MAX = 1024
 
@@ -919,6 +926,15 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             depth, j = 0, n
             for m in _PARENS.finditer(s, i + 1):
                 depth += 1 if m.group() == "(" else -1
+                if depth == 0:
+                    j = m.end()
+                    break
+            w.add(s, i, j)
+            return j
+        if nxt == "[":                         # bash's legacy arithmetic (#588), read to its `]` as $(( )) to `))`
+            depth, j = 0, n
+            for m in _BRACKETS.finditer(s, i + 1):
+                depth += 1 if m.group() == "[" else -1
                 if depth == 0:
                     j = m.end()
                     break
@@ -1673,14 +1689,16 @@ def _env_hazard(name: str, value: str | None = None, literal: bool = False) -> s
 
 
 # A variable the gate assigns without a plain NAME=value word. Parameter expansion assigns with `:=` or
-# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`) and an array subscript (`a[NAME=n]`,
-# itself arithmetic) assign an integer; a `{NAME}>` redirection drops the fd number into NAME. Each sets the
+# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`, and bash's legacy `$[NAME=n]` #588)
+# and an array subscript (`a[NAME=n]`, itself arithmetic) assign an integer, and so sets an element of an
+# array (`BASH_CMDS[ls]=1`); a `{NAME}>` redirection drops the fd number into NAME. Each sets the
 # variable as a side effect, whatever the program is, so a listed variable set this way must be read too.
 # Only what bash expands counts: the ${..} and $((..)) the lexer met outside single quotes (_Word.exps), each
 # read to the } bash closes it with and with quoted text blanked (_dollar_brace), and a bracket only as the
 # subscript of a name (`echo [HOME=x]` is a glob, `'${PATH:=.}'` and `${a:-'${PATH:=.}'}` are text).
 _PARAM_NAME = re.compile(r"\$\{([A-Za-z_]\w*)")            # then a subscript, and `:=` or `=` to assign
 _ARITH_SET = re.compile(r"\b([A-Za-z_]\w*)\s*(?:(?:<<|>>|[-+*/%&|^])?=(?!=)|\+\+|--)|(?:\+\+|--)\s*([A-Za-z_]\w*)")
+_ARITH_ELEM = re.compile(r"\b([A-Za-z_]\w*)\s*\[[^\][]*\]\s*=(?!=)")   # an element set inside the arithmetic
 _SUBSCRIPT = re.compile(r"[A-Za-z_]\w*\[([^\]]*)\]")
 _EXP_SUBSCRIPT = re.compile(r"\$\{[#!]?[A-Za-z_]\w*\[")
 _FD_VAR = re.compile(r"\{([A-Za-z_]\w*)\}")
@@ -1701,15 +1719,23 @@ def _pairs(text: str, opener: str, closer: str) -> dict[int, int]:
 
 
 def _spans(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` not inside
-    another, and the subscript of each `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare
-    `NAME=n` assigns."""
+    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` and of bash's
+    legacy `$[ ]` (#588), read as the `$((..))` it stands for, not inside another, and the subscript of each
+    `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare `NAME=n` assigns."""
     parens, brackets = _pairs(text, "(", ")"), _pairs(text, "[", "]")
     arith, i = [], 0
-    while (j := text.find("$((", i)) >= 0:
-        end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
-        arith.append((j + 3, end))
-        i = max(end, j + 3)
+    while True:
+        j, k = text.find("$((", i), text.find("$[", i)
+        if j >= 0 and (k < 0 or j < k):                   # the earlier form is read, to its own close
+            end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
+            arith.append((j + 3, end))
+            i = max(end, j + 3)
+        elif k >= 0:
+            end = brackets[k + 1]
+            arith.append((k + 2, end))
+            i = max(end, k + 2)
+        else:
+            break
     return arith, [(m.end(), brackets[m.end() - 1]) for m in _EXP_SUBSCRIPT.finditer(text)]
 
 
@@ -1793,6 +1819,7 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
             for region in (arith, subs):
                 for a, b in _covered(region):
                     out += [(m.group(1) or m.group(2), None, False) for m in _ARITH_SET.finditer(vis, a, b)]
+                    out += [(m.group(1), None, False) for m in _ARITH_ELEM.finditer(vis, a, b)]
     out += [(n, None, False) for name in names for n in _subscript_sets(name)]
     if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
         out += [(fm.group(1), None, False) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
@@ -3556,6 +3583,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             continue
         if t.dynamic and "$" in dest:
             parts.append(_opaque(f"writes to a path from a variable ({t.text[:60]})", cmd))
+            if t.legacy:                       # main read a legacy `$[ ]` here as text; keep that write beside (#588)
+                parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text,
+                                   command=cmd))
+                if sudo:
+                    ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
             if sudo:

@@ -3016,7 +3016,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   as does `echo "$\<newline>{x:-$(git push ...)}"`, whose joined form main reads only in part (#143). Limits: only
   shell calls are read again (not `execute_code`); text the gate reads without `classify_shell`, such as the folder
   walk of `cd` targets, is not joined; a joined form is read as the gate reads its plain form, so `$\<newline>[..]`
-  is as unread as `$[..]` is (#588). A `${..}` is joined to its own `}`, past a `${..}` nested in it
+  is read as the `$[..]` it joins to, which #588's amendment reads as the arithmetic `$((..))` it stands for. A
+   `${..}` is joined to its own `}`, past a `${..}` nested in it
   (`${a[${b}0,PA\<newline>TH=5]}`). #517 and #518 (here-document delimiters and backquoted bodies) are unchanged.
 
   The #423 differential against main 7785ffbb, each tree in its own process, `--jobs 2`: the built-in corpus with
@@ -3085,6 +3086,21 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* a `${..}` the `\<newline>` splits should read its operator in the line as written too — the
   scan's visible text blanks the `{`, so `_hidden_sets` sees an assignment in it only on the joined reading,
   which still decides the line.
+  *Amendment 2026-10-26 (issue #588):* bash's legacy arithmetic `$[expr]`, which bash still accepts, is read as the
+  `$((expr))` it stands for, so the assignment check, a nested `$( )` and the quoting of that reading apply to it.
+  The lexer read `$[..]` as plain text, so an assignment in it went unseen where the same line written with
+  `$((..))` asked (#341/#409): `echo $[PATH=5]; ls` and `echo "$[PATH=5]"; ls` were allowed `read`s, and so were
+  `echo $[BASH_ENV=5]; ls` and `echo $[a[PATH=5]]; ls`, a subscript whose evaluation assigns. The word keeps `$[..]`
+  as written, so its readings beside the arithmetic one are as they were. An element the body sets is read too
+  (`echo $[BASH_CMDS[ls]=1]; ls` rebinds a program name, as `hash -p` does), also through `$((..))`, where main
+  allowed it. The `${..}` word reading takes the legacy body through the expansion it is in
+  (`echo ${a:-$[PATH=5]}; ls` asks), as its `$((..))` spelling does. The #584 join of `$\<newline>[..]` lands on
+  this reading, so the joined line decides as its plain one. A `$[..]` in a write's target keeps main's
+  `local_write` of the path as written beside the dynamic reading, so a deny on the write still reaches the line.
+  The #588 differential against main d800f33c, each tree in its own process, `--jobs 4`: the built-in corpus with
+  `--no-variants`, 11,470 actions under the 88 policies, lowers 0 pairs and tightens 2,016 pairs on 28 actions,
+  mostly `read allow` to the arithmetic's `opaque_exec ask`. No classify or decide errors.
+  *Revisit if:* the card for an element set in arithmetic names the array (`BASH_CMDS`), not the element's key.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
