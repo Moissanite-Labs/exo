@@ -3160,10 +3160,36 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   path a write names (#514), a code-load folder (#459), a gh download into the store (#461), a glob in a secret
   store's folder (#594) and a here-document's exact delimiter line (#328)
   (`test_a_command_in_a_word_keeps_mains_newer_readings`). `scripts/gate_diff.py` of main 15e60ddb against this
-  tree lowers nothing: the built-in corpus (12,029 actions x 88 policies, no variants, 19,138 pairs tightened on
-  323 actions) and the aimed corpus regenerated from this tree's tests plus 228 calls that put each of main's newer
-  readings in, beside and past a word (12,035 actions x 112 policies: the 88 built in, the 19 aimed ones and 5 on
-  `store_write` and `credentials`; 245,982 pairs tightened on 4,879 actions).
+  tree lowered nothing on the built-in corpus and on an aimed corpus (the counts measured then came from a corpus
+  harvested before the last test edit; the re-check below gives counts measured on its final tree).
+  *Re-checked 2026-10-27 (reviews 5661670054 and 5652171811, on the merge of main 58503282):* the reading before
+  #143 (`_flat_words`) is main's own lexer, whose newer readings it takes whole: #553's `$((` (`_dollar_paren`: a
+  `$((` bash runs as a `$( ( )` is read as one; one never closed stays arithmetic text), #585's backslash-newline
+  after `$`, #588's `$[ ]` and #579's `${..@P}`. bash's reading keeps #588 and #579 as main reads them, and is
+  read beside main's wherever they may differ: a `$((` main's `_dollar_paren` ends elsewhere or reads as the other
+  form, and a `${` a backslash-newline splits, which main reads to its first `}` as text bash runs. A `${..@P}`
+  the word lists is weighed as #579 weighs it (a parameter the line assigns a literal keeps the read); one only
+  bash's reading opens asks. Two rows of this PR change with main: a `$((` main reads as a subshell is read by
+  main every level to the `_NEST` cap, so a push four levels deep there denies, and `echo $(( ${x:-'))`, a push
+  line, `'} ))` reads as main reads it, a read (bash and dash run nothing there, checked with a printf probe);
+  main's own `echo $((echo hi; echo HIDDEN` row asks here, as a `$((` bash never closes does. A command in a word
+  keeps main's newer readings, each pinned by the outcome the main PR added (the PR's first parent decides the
+  command alone lower: #611 under `deny: [target:*/gates.yaml]`, #604 and #609 under a store deny, #328's `EOF `
+  delimiter under a push deny), and by its part targets: also #634, #643, #652, #635, #641 and #633. Rows pin a
+  word with each of the joined reading (#584), the config-store `ordinary` reading (D-074) and the camelCase floor
+  (#515, #602: set only for a generic tool, whose arguments are never read as a shell line, so no call holds both
+  it and the reading before #143), each with its outcome and exact binding. The 28 fail-closed marks were each
+  neutralized alone in a copy of the merged tree, and each copy fails a row whose line is a benign `echo` (the
+  reading before, mark m27, through `test_a_benign_line_only_the_reading_before_asks_about`). `scripts/gate_diff.py`
+  of main 58503282 against this tree lowers nothing: the built-in corpus (12,515 actions x 88 policies, no
+  variants, 17,602 pairs tightened on 296 actions) and an aimed corpus regenerated from this tree's tests and
+  main's new lexer tests, with 239 calls that put each of main's newer readings in, beside and past a word and
+  the composition calls (15,117 actions x 116 policies: the 88 built in, the 19 aimed ones, 5 on `store_write`
+  and `credentials` and 4 on targets and allow rules; 257,162 pairs tightened on 4,766 actions). Its first run
+  found 4 pairs on 2 lines lowered by the merge itself (`echo $[$(`: a `$[` no `]` closes lost its last
+  character, so the `shell` part main reads was gone under a category deny); the port now reads that span to its
+  end as main does (`test_a_legacy_arithmetic_span_left_open_keeps_mains_reading`). The level-4 and budget limit
+  under a rule allowing `opaque_exec` stays a documented limit (`docs/GATE.md` "Known limits"), no lower than main.
 
   *Amendment 2026-10-26 (issue #584):* a backslash-newline inside a `$` form is joined before the form is read, as
   bash joins it. Outside single quotes bash drops each `\<newline>` before it expands a word, so

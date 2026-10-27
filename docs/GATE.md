@@ -1147,7 +1147,9 @@ span that fails it is read as the `$( ( )` it runs as, so the commands in it cla
 `$(( 1 + '(' ))` was read to the end of the line, so a push after `;` was never read, where bash discards
 the rest of its line after the arithmetic error but runs it on the next line, in a script and in other
 shells. An unclosed `$((` bash cannot parse and runs nothing, and the span stays arithmetic text to the
-end of the line, as before. Plain arithmetic decides as it did (`$((1+2))`, `$((PATH=5))`, a ternary, a
+end of the line, as before; since #158 that is the reading before, kept beside bash's reading, which
+lists the `$((` bash never closes as an opaque part, so the line asks ("Shell parameter expansion"). Plain
+arithmetic decides as it did (`$((1+2))`, `$((PATH=5))`, a ternary, a
 `$( )` or a backquote inside the body), and `_nest_end` ends a cut at the same span.
 
 A command is meant to be `allow` only when every program in it is known and nothing the gate reads
@@ -2458,6 +2460,9 @@ first `}` and read nothing in it, so `echo ${X:-$(git push --force origin main)}
   `${arr[0]@P}`, `${@@P}`, `${*@P}` and `${@:2@P}` expand a value as a prompt, whose `$( )` runs.
   These ask, also under a deny on the hidden command's category, since the gate does not see the
   value: `set -- '$(git push --force origin main)'; echo ${@@P}` asks under `deny: [force_push]`.
+  A `${..@P}` the word itself lists is weighed as main weighs it (#579, above): it asks unless the
+  line assigns its parameter a literal value (`p=x; echo ${p@P}` stays a read). One only bash's
+  reading of the word opens (in quoted text it expands, or nested past the first `}`) asks.
   The listing forms `${!prefix*}`, `${!prefix@}`, `${!arr[@]}` and `${!arr[*]}` do not ask, and
   neither does `${!#}`. bash 5.3 runs `${ cmd; }` and `${| cmd; }` in the current shell (bash 5.2
   rejects them): the text up to the first `}` is read as commands, as the text of a `$( )` in the
@@ -2474,7 +2479,11 @@ first `}` and read nothing in it, so `echo ${X:-$(git push --force origin main)}
   levels deep, its `$(` level 1 ("Depth" above). A group whose nested `$( )` holds a comment or a
   here-document, which bash checks as it prints it back, is read as a `$( )` (stricter than
   bash). A `$((` that never closes, which
-  bash rejects, asks, also under a deny on a command in it: nothing on the line runs.
+  bash rejects, asks, also under a deny on a command in it: nothing on the line runs. The reading
+  before is main's own since #553 (above): where it ends a `$((` elsewhere, or reads it as the
+  other form, the call is read both ways, so a `$((` main reads as a `$( ( )` keeps main's reading
+  of every level of it (16, where bash's reading here stops at three). Bash's legacy `$[ ]` (#588)
+  is read as main reads it in both readings.
 - **Other spellings.** A backslash-newline right after a `$` is joined as bash and dash join it,
   in the line's joined reading (#584: `"$\`, a newline and `(cmd)"` runs `cmd`), and in double quotes `$'` is a
   `$` and a quote, not ANSI-C quoting (`echo "$'" ; rm -rf ./work # '"` is a delete). A `$( )` or
@@ -2491,9 +2500,13 @@ budgets of its own, and `gate.readings` lists every one. The gate's other readin
 command bash runs from a word as for the command alone: an ssh host stays a target beside the
 remote command's path (#493), each store path a write names is a target (#514), a write into a
 folder Exo loads code from (#459), a gh download into the store (#461) and a glob in a secret
-store's folder (#594) ask, and a here-document body in the line ends only on its exact delimiter
-line (#328), so `cat <<EOF`, a line `${v:-$(git push --force origin main)}` and a line `EOF` is
-denied under a push deny. A part bash's reading adds can lead the
+store's folder (#594) ask, a here-document body in the line ends only on its exact delimiter
+line (#328), and since main 58503282 also `env -S`'s own argv (#591), a backslash-newline after a
+`$` (#585), a `$((` bash runs as a `$( ( )` (#553), a store name in any letter case (#601), a
+`${..@P}` (#579) and legacy arithmetic `$[ ]` (#588) read in a word as alone. So
+`echo ${v:-$(cat <<'EOF '`, a line `hi`, a line `EOF ` (with its space), a push and a line `)}` is
+denied under a push deny: the body ends on `EOF ` and the push after it runs, where before #333 the
+body ran on to the end of the text and hid it. A part bash's reading adds can lead the
 line and turn a category line or the opaque floor (a push a word hid outranks a visible delete
 beside it; `deny: [delete]` still denies the line, as a deny matches any part, D-075). The second
 reading keeps such a line at its decision before, and it reads the words dash (the `/bin/sh`
@@ -2520,10 +2533,13 @@ Known limits. Arithmetic on a bare name (`$((x))`, `${s:x}`) evaluates a value t
 see. A command more than three levels deep in a part only bash's reading opens, or in a part past
 a call's 24, is not read: the line asks, also under a deny on that command (a force push four
 levels deep in a `${...}` word asks rather than denies), and a rule that allows `opaque_exec`
-allows it, as main allows the line. dash's other differences, and bash 3.2's pairing inside
-`"${...}"`, are not modelled; a line both shells close, at different places, is decided on both
-readings. A `${...}` word bash never closes asks, and a command after it is read only by the
-reading before, which ends the word at its first `}`.
+allows it, as main allows the line (main reads none of the word, so no decision there is lower than
+main's; a `$((` bash runs as a subshell is the exception, which main's own reading reads to the
+16-level cap and so denies). This is a documented limit, not a lowering: a deny for the unread part
+under such a rule would need the gate to name a category it has not read. dash's other
+differences, and bash 3.2's pairing inside `"${...}"`, are not modelled; a line both shells close,
+at different places, is decided on both readings. A `${...}` word bash never closes asks, and a
+command after it is read only by the reading before, which ends the word at its first `}`.
 
 Each mark in the lexer that makes a line ask here (an odd part: a value that runs, `${ cmd; }`, a
 word or `$((` bash never closes, a line left inside a quote; and an unread part: past the three

@@ -493,6 +493,15 @@ def test_each_mark_that_fails_closed_asks_on_a_benign_line(line, signal):
     assert _out(line) == "ask"
 
 
+@pytest.mark.parametrize("line", ['echo ${x:-${x}&eval "$y"}', "echo \"${x:-'}\" ; eval \"$y\" ; echo \"'}\""])
+def test_a_benign_line_only_the_reading_before_asks_about(line):
+    """The reading before #143 is itself a mark (classify adds it where the readings may differ): bash's reading of
+    each line is one `echo` word, and only the reading before reads an `eval` of a value it cannot see, which asks.
+    A change that drops the reading before allows the line."""
+    assert [r.category for r in readings(_c(line))] == ["read", "opaque_exec"]
+    assert _out(line) == "ask"
+
+
 @pytest.mark.parametrize("line", ["echo ${x:-$(echo hi} $(echo yo)", "echo ${x:-<(echo hi} $(echo yo)",
                                   "echo ${x:-$(( 1} $(echo yo)", "echo $(( 1 $(echo yo)"])
 def test_a_word_or_arithmetic_bash_never_closes_takes_the_rest_of_the_line(line):
@@ -840,53 +849,137 @@ def test_a_line_read_two_ways_binds_to_its_text_even_as_one_act():
         assert len(readings(one)) == 1 and not gate.binds_exact(one), line
 
 
-_MAIN_READS = [
-    "ssh myhost rm -rf ./work",                                 # #610: the host stays a target beside the path
-    "cat ~/.ssh/*",                                             # #609: a glob in a secret store's folder
-    "tee ~/.exo/policies/a.yaml ~/.exo/policies/b.yaml",        # #611: every store path a write names
-    "cp /tmp/evil.py ~/.exo/plugins/x.py",                      # #604: a folder Exo loads code from
-    "gh release download v1 -R o/r -D ~/.exo/policies",         # #606: a gh download into the store
-    "cp /tmp/c ~/.exo/config.json",                             # D-074, #607: read as before D-074 too
-    f"echo $\\\n({PUSH})",                                      # #584: read joined and as written
-]
+def _grant_covers(c: gate.Classification, category: str, target: str) -> bool:
+    """Whether a standing grant on (category, target) would cover the call: only a call that binds to nothing more
+    exact, whose every reading is that act, as approval_binding reads it."""
+    return not gate.binds_exact(c) and all((r.category, r.target) == (category, target) for r in readings(c))
+
+
+def test_a_parameter_word_composes_with_the_joined_reading(tmp_path):
+    """Review 5661670054: a ${..} word on a line main also reads joined (#584). The push only the joined line shows
+    is in the word, so only bash's reading of the joined line reads it: each of the four readings (as written and
+    joined, each both ways) is listed, the deny holds, and the approval binds to the exact text."""
+    line = f"echo ${{x:-$\\\n({PUSH})}} > /tmp/f"
+    c = _c(line)
+    rs = readings(c)
+    assert len(rs) >= 3 and "force_push" in {r.category for r in rs} and "local_write" in {r.category for r in rs}
+    assert _out(line, _FORCE_DENY) == _out(line, _FORCE_LIST) == "deny"
+    assert gate.binds_exact(c) and not _grant_covers(c, "local_write", "/tmp/f")
+
+
+def test_a_parameter_word_composes_with_the_config_store_ordinary_reading(tmp_path, monkeypatch):
+    """Review 5661670054: a ${..} word on a line that writes the home's config.json, which main also reads as before
+    D-074 (``ordinary``). Every reading keeps its own ``ordinary``, the store write and the push in the word both
+    decide, and the approval binds to the exact text."""
+    (tmp_path / ".exo").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("EXO_HOME", raising=False)
+    line = f"cp /tmp/x ~/.exo/config.json ${{x:-$({PUSH})}}"
+    c = _c(line)
+    rs = readings(c)
+    assert len([r for r in rs if r.ordinary is not None]) >= 2
+    assert {"store_write", "force_push"} <= _categories(line)
+    assert _out(line) == "ask"
+    assert _out(line, _FORCE_DENY) == _out(line, _STORE_DENY) == "deny"
+    assert gate.binds_exact(c) and not _grant_covers(c, "store_write", "~/.exo/config.json")
+
+
+def test_a_parameter_word_composes_with_the_camelcase_floor():
+    """Review 5661670054: main's camelCase floor (#515, #602) is set in _classify_call for a generic tool, whose
+    arguments are never read as a shell line, so a call never holds both that floor and this PR's reading before
+    #143: a camelCase tool whose `command` holds a ${..} word keeps its floor, its store reading and its binding
+    exactly as main gives them, and a shell tool's line is read both ways with no floor (main's shape too)."""
+    call = {"tool": "deleteFile", "args": {"path": "~/.exo", "command": f"echo ${{x:-$({PUSH})}}"}}
+    c = gate.classify(call)
+    assert c.floor is not None and c.category == "store_write"
+    assert decide(c, _STORE_DENY).outcome == decide(c, _DELETE_DENY).outcome == "deny"
+    assert decide(c).outcome == "ask" and gate.binds_exact(c)
+    shell = gate.classify({"tool": "bash", "args": {"command": f"echo ${{x:-$({PUSH})}}"}})
+    assert shell.floor is None and len(readings(shell)) == 2 and gate.binds_exact(shell)
+    assert decide(shell, _FORCE_DENY).outcome == "deny"
+
+
 _STORE_DENY = {"gates": {"categories": {"store_write": "deny", "credentials": "deny"}}}
 _ALL_LIST = {"gates": {"deny": ["force_push", "delete", "store_write", "credentials"]}}
+_GATES_TARGET = {"gates": {"deny": ["target:*/gates.yaml"]}}
+_HOST_TARGET = {"gates": {"deny": ["target:myhost"]}}
+# Main's readings since dcab371a, each as (the command alone, a policy, the outcome main's reading gives it there).
+# The outcome is the one the main PR added: the parent of that PR decides the command alone lower under the policy
+# (checked for #611, #604, #609 and #328 on the first parent of each merge; a probe, not a test), so a word that
+# lost the reading fails the row even where the other fields match.
+_MAIN_READS = [
+    ("ssh myhost rm -rf ./work", _HOST_TARGET, "deny"),               # #610: the host stays a target
+    ("cat ~/.ss?/*", _STORE_DENY, "deny"),                             # #609: a glob in a secret store's folder
+    ("tee ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml", _GATES_TARGET, "deny"),   # #611: every store path
+    ("cp /tmp/evil.py ~/.exo/venv/lib/python3.13/site-packages/exo/gate.py", _STORE_DENY, "deny"),  # #604: venv
+    ("gh release download v1 -R o/r -D ~/.exo/policies", _STORE_DENY, "deny"),  # #606: a gh download into the store
+    ("cp /tmp/c ~/.exo/config.json", _STORE_DENY, "deny"),              # D-074, #607: read as before D-074 too
+    (f"echo $\\\n({PUSH})", _FORCE_DENY, "deny"),                       # #584: read joined and as written
+    (f"env -S \"'X=a b' {PUSH}\"", _FORCE_DENY, "deny"),                # #634: env -S's own argv
+    (f'echo "$\\\n({PUSH})"', _FORCE_DENY, "deny"),                     # #643: a \<newline> after the $
+    (f"echo $((echo '((' ; {PUSH}) )", _FORCE_DENY, "deny"),            # #652: a $(( bash runs as a $( ( ) )
+    ("echo x > ~/.KUBE/config", _STORE_DENY, "deny"),                   # #635: a store name in any case
+    ("printf -v p '%s(%s)' '$' 'id'; echo ${p@P}", None, "ask"),        # #641: a prompt expansion runs its value
+    ("echo $[PATH=5]", None, "ask"),                                    # #633: legacy arithmetic sets PATH
+    (f"cat <<'EOF '\nhi\nEOF \n{PUSH}\n", _FORCE_DENY, "deny"),         # #328: only `EOF ` ends the body
+]
+_MAIN_IDS = ["610-ssh-host", "609-glob-folder", "611-every-store-path", "604-venv", "606-gh-download",
+             "d074-config", "584-joined", "634-env-s", "643-dollar-newline", "652-dollar-paren", "635-case",
+             "641-prompt", "633-legacy-arith", "328-delimiter"]
 
 
-def _keeps_mains_reading(line: str, alone: str) -> None:
-    """``line`` reads the command ``alone`` with main's readings: its categories, other targets and ``ordinary``
-    reading, no lower decision under any policy here, and an approval bound to the exact text."""
+def _part_targets(line: str) -> set[str]:
+    return {p.target for r in readings(_c(line)) for p in [r, *gate._each_part(r)] if p.target}
+
+
+def _keeps_mains_reading(line: str, alone: str, policy, out: str) -> None:
+    """``line`` reads the command ``alone`` with main's readings: the outcome the reading gives under ``policy``,
+    its categories, each part's target and other targets, its ``ordinary`` reading, no lower decision under any
+    policy here, and an approval bound to the exact text."""
     rs, ra = readings(_c(line)), readings(_c(alone))
+    assert _out(alone, policy) == out
+    assert _out(line, policy) == out
     assert _categories(alone) <= _categories(line)
+    assert _part_targets(alone) <= _part_targets(line)
     assert {t for r in ra for t in r.alt_targets} <= {t for r in rs for t in r.alt_targets}
     assert any(r.ordinary for r in rs) >= any(r.ordinary for r in ra)
-    for p in (None, _FORCE_DENY, _DELETE_DENY, _STORE_DENY, _ALL_LIST):
+    for p in (None, _FORCE_DENY, _DELETE_DENY, _STORE_DENY, _ALL_LIST, _GATES_TARGET, _HOST_TARGET):
         assert gate.OUTCOMES.index(_out(line, p)) >= gate.OUTCOMES.index(_out(alone, p)), p
     assert gate.binds_exact(_c(line))
 
 
-@pytest.mark.parametrize("alone", _MAIN_READS)
-def test_a_command_in_a_word_keeps_mains_newer_readings(alone):
-    """Main's readings since dcab371a (#604, #606, #609, #610, #611, D-074 with #607, #584) hold for a command bash
-    runs from a ${..} word as for the command alone (review 5659098661). Main reads none of the word, except the
-    glob in a secret store's folder, which its store check finds in the raw text."""
-    _keeps_mains_reading("echo ${v:-$(" + alone + ")}", alone)
+@pytest.mark.parametrize("alone, policy, out", _MAIN_READS, ids=_MAIN_IDS)
+def test_a_command_in_a_word_keeps_mains_newer_readings(alone, policy, out):
+    """Main's readings since dcab371a (#604, #606, #609, #610, #611, D-074 with #607, #584) and since 15e60ddb
+    (#634, #643, #652, #635, #641, #633, #328 through #333) hold for a command bash runs from a ${..} word as for the
+    command alone (reviews 5659098661, 5661670054). Main 58503282 reads none of the word, except the glob in a
+    secret store's folder and a store name in any case, which its store check finds in the raw text."""
+    _keeps_mains_reading("echo ${v:-$(" + alone + ")}", alone, policy, out)
 
 
-@pytest.mark.parametrize("alone", _MAIN_READS)
-def test_a_command_main_reads_past_a_word_keeps_mains_newer_readings(alone):
+@pytest.mark.parametrize("alone, policy, out", _MAIN_READS, ids=_MAIN_IDS)
+def test_a_command_main_reads_past_a_word_keeps_mains_newer_readings(alone, policy, out):
     """Guard: past a word the two readings end apart, main reads the command, and so does each reading here."""
-    _keeps_mains_reading("echo \"${v:-'}\" ; " + alone + " ; echo \"'}\"", alone)
+    _keeps_mains_reading("echo \"${v:-'}\" ; " + alone + " ; echo \"'}\"", alone, policy, out)
 
 
 @pytest.mark.parametrize("line,out", [
     (f"cat <<EOF\n${{v:-$({PUSH})}}\nEOF\n", "deny"),            # an unquoted body expands the word
     (f"cat <<EOF\n${{v:-$(echo hi)}}\n EOF\nEOF\n{PUSH}\n", "deny"),  # #333: only the exact line ends the body
     (f"cat <<'EOF'\n${{v:-$({PUSH})}}\nEOF\n", "allow"),          # a quoted body is text
+    # #328's own form, in a word: the delimiter `EOF ` holds a space, so the body ends on `EOF ` and the push after
+    # it runs; read loosely (before #333) the body ran to the end and hid the push
+    (f"echo ${{v:-$(cat <<'EOF '\nhi\nEOF \n{PUSH}\n)}}", "deny"),
+    (f"echo ${{v:-$(cat <<\"EOF \"\nhi\nEOF \n{PUSH}\n)}}", "deny"),
+    (f"echo ${{v:-$(cat <<EOF\\ \nhi\nEOF \n{PUSH}\n)}}", "deny"),
+    # a bare `EOF` line only differs from `EOF ` by a space: bash keeps it in the body, and main's #333 reads the
+    # body also as ended there, as a shell that drops the blank would (fail closed), so the push after it denies
+    (f"echo ${{v:-$(cat <<'EOF '\nEOF\n{PUSH}\nEOF \n)}}", "deny"),
 ])
 def test_a_word_in_a_here_document_body_ends_on_mains_delimiter(line, out):
-    """#333 (main's exact delimiter line) with a ${..} word in the body: the first row fails on main, which reads
-    nothing in the word; the other two are guards that hold on main."""
+    """#333 (main's exact delimiter line, #328) with a ${..} word around or in the here-document: the first row, the
+    three rows of #328's own form (a delimiter with a space) and the near-miss row fail on main, which reads nothing
+    in the word; the second and third rows are guards that hold on main."""
     assert _out(line, _FORCE_DENY) == out
 
 
@@ -911,6 +1004,15 @@ def test_a_quoted_close_in_an_arithmetic_word_runs_nothing():
     line = "echo $(( ${x:-'))\ngit push --force origin main\n'} ))"
     assert "force_push" not in _categories(line)
     assert _out(line, _FORCE_DENY) == "allow"
+
+
+@pytest.mark.parametrize("line", ["echo $[$(", "echo echo $[$("])
+def test_a_legacy_arithmetic_span_left_open_keeps_mains_reading(line):
+    """#588: main reads a `$[` no `]` closes to the end of the line, its last character too, so the `$(` left open
+    in it is a `shell` part, which a deny on that category denies. Both readings here read it so (gate_diff against
+    58503282 found the merge first dropped that character: allow where main denies)."""
+    assert "shell" in _categories(line)
+    assert _out(line, {"gates": {"categories": {"shell": "deny"}}}) == "deny"
 
 
 @pytest.mark.parametrize("line", [
