@@ -7072,8 +7072,9 @@ def _shell_call(cmd: str) -> Classification:
     its own classification: category, target, axes, text and parts. When it reads a secret store from that folder
     (_tool_folder_read), a credentials part is added for the read, weighed as a `cd` form's (_weigh). It keeps no
     own text, and carries a `_StandIn` for `cd <folder>` among its setters (#516), so a rule keyed on `command`
-    that would lower the line or lift the part's deny names the folder, as it names the `cd` in the cd form.
-    decide's credentials floor then asks, and no_grant keeps a standing grant off the call, while the line's own
+    that would lower the line names the folder, as it names the `cd` in the cd form; naming the folder lifts no
+    deny of the part's. decide's credentials floor then asks, and no_grant keeps a standing grant off the call,
+    while the line's own
     deny entries, rules, matrix cell, posting checks and reserved entries still apply. Before #311 a relative word
     that resolves into a store from the folder made the whole call credentials (#209); that reading is kept beside
     the line (``also``), and decide keeps the stricter of the two. One check per call, on the whole line: a nested
@@ -7112,7 +7113,7 @@ def _shell_call(cmd: str) -> Classification:
     top = _most_severe(p for p in _each_part(c) if p.category != "credentials") if c.category == "credentials" else None
     if new and top is not None:                 # first, as main reads the line before its parts
         c.parts = [replace(top, parts=[], own=None, line_copy=True), *c.parts]
-    for summary, target, folder in new:
+    for summary, target, cd in new:
         # The part keeps no own text, as a `cd` form's parts have (#394), so no rule keyed on `command` lifts its
         # deny: _override_deny passes every such rule over for it. It carries a `_StandIn` for `cd <folder>` (#516)
         # among its setters, the folder as the call spells it, so the line is not one text for _one_text and the
@@ -7121,7 +7122,7 @@ def _shell_call(cmd: str) -> Classification:
         # command on the line is a credentials part with that weight beside it, as beside a secret line (#468). So
         # each matrix cell or rule the cd form's parts meet is met.
         part = _make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
-                     setters=[_StandIn(f"cd {folder}")], signals=["secret store"])
+                     setters=[_StandIn(cd)], signals=["secret store"])
         c.parts = [*c.parts, _weigh(part, c, cmd)]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     return c
@@ -7148,7 +7149,8 @@ def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...],
     line reads a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192): the words as written
     first, then with #320's forms, whose name is a second read when it is another target, as on a cd line. The
     target is the folder, or the folder joined with the name. ``folders`` holds each folder as the call spells it
-    beside its joined path, and the third word is that spelling: the `cd` the part's stand-in setter names (#516).
+    beside its joined path, and the third word is the `cd` the part's stand-in setter names (#516): `cd <folder>`,
+    the folder as the call spells it, said once.
     A folder in a repo's own .claude worktrees, commands, agents or skills is the repo's, not a store (_repo_claude),
     so only a word that resolves into a store counts there."""
     spell = dict(folders)                       # the folder as the call spells it, for the part's `cd` (#516)
@@ -7165,7 +7167,7 @@ def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...],
         forms += [(f, g) for g in [*linked, f] if not _repo_claude(g)]
     for f, g in forms:
         if is_sensitive_path(g) or _glob_hits_secret(g):
-            return [(f"shell runs in {f}", g, spell[f])]
+            return [(f"shell runs in {f}", g, f"cd {spell[f]}")]
     out: list[tuple[str, str, str]] = []
     if read is not None:                        # the target: the name in the folder it resolves into a store from
         where = folders[0][0] if len(folders) == 1 else " or ".join(f for f, _ in folders)
@@ -7182,7 +7184,7 @@ def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...],
             if found := _cd_store_read(cmds, subs, wide, walked, tools=(g,)):
                 target = _in_folder(_expand_text(g), found)
                 if all(target != t for _, t, *_ in out):
-                    out.append((f"shell touching {found} in {f}", target, spell[f]))
+                    out.append((f"shell touching {found} in {f}", target, f"cd {spell[f]}"))
                 break
     return out
 
@@ -7717,8 +7719,8 @@ def _one_text(c: Classification) -> bool:
     """Whether no two parts of the line have different own texts (#394): a line of one simple command, beside the
     parts the gate made for it with no own text (a secret path it names in `cat ~/.kube/config`, a string literal in
     its code). The part the call's own folder added carries a `_StandIn` for `cd <folder>` among its setters (#516),
-    so a line with it is not one text: the #394 pass runs, and a rule that would lower the line or lift the part's
-    deny names the folder, as it names the `cd` in the cd form."""
+    so a line with it is not one text: the #394 pass runs, and a rule that would lower the line names the folder, as
+    it names the `cd` in the cd form; naming the folder lifts no deny of the part's."""
     texts = {t for p in _each_part(c) for t in (p.own, *p.setters) if t is not None}
     return len(texts) < 2
 

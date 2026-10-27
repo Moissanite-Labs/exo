@@ -112,8 +112,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `command` decided the line as before, over the part's matrix cell: `git push --force origin main` with `~/.ssh`
   or `~/.exo/keys` as `cwd` asked under `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
   where its `cd` form was denied, since the rule does not name the `cd`. The part keeps no own text, as a `cd`
-  form's parts have, and now carries a `cd <folder>` stand-in among its setters, the folder as the call spells it,
-  so the line is not one text and a rule that names only the line is passed over, as for any part it does not name.
+  form's parts have, and now carries a `cd <folder>` stand-in among its setters, the folder as the call spells it
+  and the `cd` said once (the relative read's first spelled `cd cd <folder>`), so the line is not one text and a
+  rule that names only the line is passed over, as for any part it does not name.
   A rule that names everything lifts nothing, as before, the weight a heavier command adds beside the part (#468)
   is never lifted by a command rule, and a line of two commands, a policy with no rule and no matrix deny decide as
   before. Nothing is lowered.
