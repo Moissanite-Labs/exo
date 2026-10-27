@@ -44,6 +44,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `memory_zoom(subagent=)` already walked), so a private hit cannot eat the result limit, a parent loop ends,
   and public threads, hidden-row filtering and the thread's own local search are unchanged.
   Tests: `tests/core/test_agent_log.py::test_shared_search_leaves_out_a_private_threads_descendants`.
+- A `target:` entry matches every store a credentials line names, and a file below a globbed secret folder asks
+  (#609 follow-up, review 5662072421). A credentials line takes the first store it names as its target, and since
+  #609 a secret-folder glob counts as one, so it came first and a `target:` deny, `reserved:` entry or rule on a
+  later store stopped matching: `cat ~/.ss?/* ~/.aws/credentials` under `deny: ["target:*/.aws/*"]` and
+  `cat ~/.aw?/* ~/.ssh/id_rsa` under `deny: ["target:*/.ssh/*"]` went deny -> ask. Each other store the line names
+  is now a `credentials` part with that store as its target, beside the line's own, so these are denied again, and
+  so are the literal forms that asked before #609 too (`cat ~/.aws/* ~/.ssh/id_rsa`, `cat ~/.aws/credentials;
+  cat ~/.ssh/id_rsa`) and a store after a Keychain read or an environment dump (`env; cat ~/.ssh/id_rsa`). A glob
+  folder that goes below a secret folder asks too: `cat ~/.gnup?/private-keys-v1.d/*`, `cat ~/.aw?/sso/cache/*`,
+  `cat ~/.ss?/keys/*`, `cat ~/.exo/key?/old/*`, `cat ~/.gnup?/*/*` and `read_file ~/.gnup?/private-keys-v1.d/*`
+  were read/allow, also under `deny: [credentials]`; a secret folder a glob names wins over an ordinary one, so
+  `ls ~/.*/*.md` asks too. The folders a glob is tested against are built once per set of samples, not per glob
+  word. gate_diff against main e0968a2b: 0 lowered on the built-in corpus (12,065 actions, 698 stricter pairs) and
+  on 1,583 aimed lines under 57 more policies (21,770 stricter pairs). Tests:
+  `tests/security/test_gate_glob_target_second_store_609.py`. **Docs:** `docs/GATE.md` "A glob in a store's
+  folder (#594, #609)", "A thread's environment file (#313)" and the run-folder limits, `DECISIONS.md` (D-038),
+  `docs/DOCS-MAP.md`.
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'

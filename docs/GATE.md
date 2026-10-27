@@ -638,7 +638,7 @@ Limits. No environment variable carries the credential, and `tool_env` drops `EX
 `EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
 by its full path (`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`, though a relative name
 asks: `cd ~/.exo/run/jobs && grep -r secret ../..`); a wildcard in a folder name above a file
-(`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for the folder itself (`grep -r .
+(`principals/*/run/*`); a short wildcard for the folder itself (`grep -r .
 ~/.exo/ru?`, `ru[n]`: the last part needs three literal characters, the same as for `~/.ss?`, while
 `~/.exo/r*` asks, and so does `ru?` relative to a `cd` on the line: `cd ~/.exo && grep -r . ru?`);
 a case variant inside a glob's own wildcard part (`~/.e*O/run/*`: bash matches a glob part that holds a
@@ -785,6 +785,61 @@ Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults
 `test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
+### A glob in a store's folder (#594, #609)
+
+A glob may stand in a store's folder, not only in its file name: `cat ~/.ss?/*`, `cat ~/.aw?/*` and
+`cat ~/.exo/key?/*` read the store as `cat ~/.ssh/*` does. Since #609 the gate tests a globbed folder against the
+folder of each sample store path (and a sample another sample sits below, so `.exo/keys` counts), part by part, as
+bash reads it:
+
+- **A leading dot.** Bash's `*`, `?` and `[..]` never match a leading dot, so a part matches a dot folder only when
+  it starts with a literal dot: `~/.s*/*` and `~/.*/*` can reach `~/.ssh`, `~/[.]ssh/*` and `~/*/*` cannot, and
+  stay reads.
+- **Three literal characters.** A match needs a part that starts with a literal dot, or three literal characters
+  across the matched parts (`.ss?`, `.exo/key?`), so `src/*/*` and `~/*/x` stay ordinary.
+- **A file below a secret folder.** When the folder matched is itself a secret store by name (`.ssh`, `.aws`,
+  `.gnupg`, `.exo/keys`), any glob file part below it asks, as below the literal folder, and so does a glob folder
+  that goes deeper than it (#609 review): `cat ~/.gnup?/private-keys-v1.d/*`, `cat ~/.aw?/sso/cache/*`,
+  `cat ~/.ss?/keys/*`, `cat ~/.exo/key?/old/*`, `cat ~/.gnup?/*/*` and `read_file ~/.gnup?/private-keys-v1.d/*`
+  ask, and deny under `deny: [credentials]`. Its leading parts must match the folder with the same discipline. A
+  folder that is not a secret by name matches at its own depth only, so `cat ~/.config/*/x/*` and
+  `cat ~/.cach?/x/*` stay reads. A secret folder the glob could name wins over an ordinary one it also names, so
+  `ls ~/.*/*.md`, `cat ~/.*/x/*` and `cat ~/.exo/*/old/*` ask (they reach `~/.ssh/a.md` or
+  `~/.exo/keys/old/x` as `cat ~/.ssh/*.md` does), where they read before. This fails closed.
+- **A public key.** A file part that ends in `.pub` stays out, as for a literal folder: `cat ~/.ss?/*.pub` and
+  `cat ~/.ss?/keys/*.pub` are reads, while `cat ~/.ss?/*.pu?` and `cat ~/.ss?/*.pub*` ask.
+
+A line's credentials target is the first store it names. A glob that reaches a store now counts as one, so on
+`cat ~/.ss?/* ~/.aws/credentials` the glob came first, and a `target:` entry on the later literal store stopped
+matching (review 5662072421 of #609). So every other store a shell line names is a `credentials` part with that
+store as its target, beside the line's own target, which stays the first: a `target:` deny, a `reserved:` entry and
+a rule on any store the line names match it. `cat ~/.ss?/* ~/.aws/credentials` under `deny: ["target:*/.aws/*"]`,
+`cat ~/.aw?/* ~/.ssh/id_rsa` under `deny: ["target:*/.ssh/*"]` and a rule on target `*/.aws/*` with decision
+`deny` are denied again, and `reserved: ["target:*/.ssh/*"]` keeps its entry. The same holds for two literal stores,
+which asked before #609 too (#313, below): `cat ~/.aws/* ~/.ssh/id_rsa` and `cat ~/.aws/credentials;
+cat ~/.ssh/id_rsa` are denied under `deny: ["target:*/.ssh/*"]`, and so is a store a brace set names
+(`cat ~/.aws/credentials ~/.{ssh,x}/id_rsa`). So are the stores after a Keychain read, an environment dump or
+a secret variable, which name no store and come first (`security find-generic-password -w -s x; cat ~/.ssh/id_rsa`,
+`env; cat ~/.ssh/id_rsa`, `cat ~/.ssh/id_rsa; env`). Each new part only adds a match. A word the gate reads more
+than one way (a brace word, a quoted `"$HOME"`, a substitution) gives a part for each reading, so a `reserved:`
+entry can list one file twice (`/.ssh/id_rsa` and `~/.ssh/id_rsa` for `"$HOME"/.ssh/id_rsa`), and a line of many
+brace-heavy store words gives up to a few thousand parts (bounded by the brace budget).
+
+Cost. The folders a glob is tested against are built once per set of samples, not once per glob word, so a line
+of 500 ordinary globbed-folder words (`src/*/x1*`) classifies in 0.11s where main e0968a2b takes 0.52s. A line that
+names a store now reads every later word for a store too, where main stopped at the first, so 500 globbed store
+words take 0.15s (main 0.02s); both stay linear.
+
+Known limits. A glob folder is tested against the samples, so a store with no sample stays a read when its folder
+is globbed (`cat ~/.cla*/.cred*`, `cat ~/.config/gclou?/*.json`), and so do a store outside the home folder's
+samples (`cat /home/u/.ss?/*`), a relative glob folder after a `cd` (`cd ~/x && cat ../.ss?/*`), a literal file
+part below a globbed folder (`cat ~/.ss?/config`), and a glob that names the store folder itself
+(`tar cf /tmp/x.tar ~/.ss?`, `grep -r . ~/.ss?`, as for `~/.exo/ru?` above). A `target:` entry is matched against
+the store as the line spells it, so a glob folder matches only an entry written for the glob
+(`cat ~/.ss?/*` under `deny: ["target:*/.ssh/*"]` asks).
+
+Tests: `tests/security/test_gate_glob_store_folder_594.py`, `tests/security/test_gate_glob_target_second_store_609.py`.
+
 ### A camelCase tool name reads its words beside the name's one word (#515)
 
 The name parser adds camelCase words beside each separator part. The complete unsplit call is also
@@ -833,9 +888,12 @@ They fall in four groups, all from how the gate already handles a secret store:
   violations, named after its part. Before #396 they checked the dominant part only, and such a post lost
   them. The line asks either way.
 - **A second store's target.** A line's credentials target is the first store it names, and a `cat` part has no
-  target. So a `target:` entry for a second store on the line no longer matches:
-  `cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
-  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does.
+  target. So a `target:` entry for a second store on the line no longer matched:
+  `cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asked, as
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` and `cat ~/.aws/* ~/.ssh/id_rsa` did, and so did a store after a
+  Keychain read or an environment dump (`env; cat ~/.ssh/id_rsa`). Since the #609 follow-up each other store the
+  line names is a `credentials` part with that store as its target, so all of these are denied again
+  ("A glob in a store's folder" above).
 
 The differential does not count one more change, because the outcome stays an ask. Beside a store write, the
 line is `credentials`, not `store_write`: `cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`.

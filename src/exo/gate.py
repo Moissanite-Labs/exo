@@ -140,6 +140,9 @@ class Classification:
     # True on the copy of a secret line's heaviest other command that _shell_call adds beside the folder's read (#320):
     # on main that command is the line, whose own violations are listed outside the cap, so the copy's are too.
     line_copy: bool = field(default=False, repr=False, compare=False)
+    # True on the credentials part for each store a secret line names past its first (#609 follow-up): it only adds
+    # a target for `target:` entries to match, so the checks that ask which part read the line on main pass it over.
+    other_store: bool = field(default=False, repr=False, compare=False)
     # The source text of the one simple command this part stands for, with its redirections (#394): a rule that
     # would lower a compound line must match it too (_line_own_test). None where no such text exists (a part the
     # gate made up, an unread nest, a string literal in code), and then no such rule matches.
@@ -173,6 +176,7 @@ class Classification:
         d.pop("floor")
         d.pop("alt_copy")
         d.pop("line_copy")
+        d.pop("other_store")
         d.pop("_command_views")
         d.pop("own")
         d.pop("setters")
@@ -3921,8 +3925,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # before keeps the host as its target, as the remote line itself did (`ssh host 'cat ~/.exo/$(printf
             # ledger.sqlite)'` was a read of host), so a reserved or rule entry on it still lists it. A copy with no
             # parts and no post, so the posting checks read each post once.
-            top = (next((p for cat in ("credentials", "store_write") for p in c.parts if p.category == cat), None) or
-                   _most_severe(c.parts)) if c.category in ("credentials", "store_write") else None
+            kept = [p for p in c.parts if not p.other_store]
+            top = (next((p for cat in ("credentials", "store_write") for p in kept if p.category == cat), None) or
+                   _most_severe(kept)) if c.category in ("credentials", "store_write") else None
             if top is not None and not top.target:
                 c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
@@ -5812,13 +5817,28 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         out.signals = line.signals + ["secret store"]
         out.parts = list(parts)
         return _weigh(out, combined, cmd)
-    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
+    every: list[str] = []
+    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], every)
     named = hit if "/" in hit or "." in hit else ""
     # #320: on a line that is already a secret line (an expansion form read as a secret in a nested line, such as an
     # ssh remote command, decides it), the secret the line names is a part beside it when it is another target, as
     # it was the line's target where nothing else read a secret
     if hit and (c.category != "credentials" or named != c.target):
         c = secret(c, hit, named, c.category == "credentials")
+    # #609 follow-up: the line's target is the first store it names. Each other store it names is a credentials part
+    # with that store as its target, so a `target:` deny, reserved entry or rule on any of them matches, as it does
+    # when that store comes first (`cat ~/.ss?/* ~/.aws/credentials` under `target:*/.aws/*`). One weighed part
+    # stands for all; the others are copies of it on their own targets (``other_store``).
+    if hit:
+        have = {p.target for p in _each_part(c) if p.category == "credentials"}
+        others = [w for w in dict.fromkeys(every) if w not in have]
+        if others:
+            c = secret(c, others[0], others[0], True)
+            seat = c.parts[-1]
+            seat.other_store = True
+            c.parts = [*c.parts, *(replace(seat, summary=f"shell touching {w}"[:120], target=w,
+                                           signals=list(seat.signals), parts=[replace(q, target=w) for q in seat.parts])
+                                   for w in others[1:])]
     # D-038: a relative read on a line that enters a store folder may read the store. A store write stays the line's
     # result, and the read is a credentials part beside it, so deny and reserved entries on credentials still see it
     # (#464: `tar -C ~/.exo/policies -czf - ../keys/seat`).
@@ -6581,40 +6601,59 @@ def _glob_part(g: str, s: str) -> bool:
     return True if pat is None else fnmatch.fnmatchcase(s, pat)
 
 
-def _glob_folder_hit(d: str, home: str, folders: list[str]) -> tuple[bool, bool]:
-    """(hit, secret_folder): could the glob folder d name one of ``folders`` (the folders of the samples
+def _home_form(p: str, home: str) -> str:
+    """One form of ``p`` only, so the home path's own literal characters never count toward the
+    three-literal discipline: a folder under home is read home-relative, anything else as is."""
+    p = os.path.normpath(p)
+    root = home.rstrip("/") + "/"
+    return p[len(root):] if p.startswith(root) else "" if p == home else p
+
+
+@functools.lru_cache(maxsize=256)
+def _glob_folders(samples: tuple[str, ...], home: str, fold: tuple[bool, bool]) -> tuple[tuple[tuple[str, ...], bool], ...]:
+    """The folders _glob_folder_hit tries, built once per set of samples (#609 review): each sample's
+    folder, and a sample another sample sits below (`.exo/keys` below `.exo/keys/seat.key`); a sample
+    file (`auth.json`) is never a folder, or `~/*/*` would hit it. Each as its parts (_home_form), with
+    whether it is itself a secret store by name (_sensitive_re on the folded name, #601). ``fold`` keys
+    the cache on the fold state those two read."""
+    above: set[str] = set()
+    for x in samples:
+        while (x := os.path.dirname(x)) and x not in above:
+            above.add(x)
+    out = []
+    for f in dict.fromkeys([os.path.dirname(x) for x in samples] + [x for x in samples if x in above]):
+        ff = _home_form(f, home)
+        out.append((tuple(ff.split("/")), bool(_sensitive_re().search(_fold(ff.replace("\\", "/"))))))
+    return tuple(out)
+
+
+def _glob_folder_hit(d: str, home: str, samples: tuple[str, ...]) -> tuple[bool, bool]:
+    """(hit, secret_folder): could the glob folder d name one of the folders of ``samples`` (the samples
     _glob_word is tried against, and the samples themselves, so `.exo/keys` counts as a folder)? The
     parts must match one by one, and the match needs discipline: a part that starts with a literal dot,
     or three literal characters across the matched parts (`.ss?`, `.aw?`, `.exo/key?` qualify; a bare
     `*` does not, so `src/*` and `~/*` stay ordinary). ``secret_folder`` is True when the matched
     folder is itself a secret store by name (_SENSITIVE_PATH: `.ssh`, `.aws`, `.exo/keys`), so any file
-    below it counts, as a literal folder does (`~/.ssh/xyz*` already asks)."""
+    below it counts, as a literal folder does (`~/.ssh/xyz*` already asks). Below such a folder d may
+    go deeper than it: its leading parts must match the folder, with the same discipline over them
+    (`~/.gnup?/private-keys-v1.d`, `~/.exo/key?/old`), as a literal folder below a store is a store
+    too. A secret folder that matches wins over an ordinary one."""
     if not d or not re.search(r"[*?\[]", d):
         return False, False
-
-    def forms(p: str) -> set[str]:
-        # One form only, so the home path's own literal characters never count toward the
-        # three-literal discipline: a folder under home is read home-relative, anything else as is.
-        p = os.path.normpath(p)
-        root = home.rstrip("/") + "/"
-        if p.startswith(root):
-            return {p[len(root):]}
-        if p == home:
-            return {""}
-        return {p}
-
-    dforms = forms(d)
-    for folder in folders:
-        for ff in forms(folder):
-            for df in dforms:
-                gp, fp = df.split("/"), ff.split("/")
-                if len(gp) != len(fp) or not all(_glob_part(g, s) for g, s in zip(gp, fp)):
-                    continue
-                lits = sum(len(re.sub(r"[*?\[\]]", "", g)) for g in gp)
-                if not any(g.startswith(".") for g in gp) and lits < 3:
-                    continue
-                return True, bool(_sensitive_re().search(_fold(ff.replace("\\", "/"))))
-    return False, False
+    parts, hit = _home_form(d, home).split("/"), False
+    for fp, secret in _glob_folders(samples, home, (_fold("A") == "a", _sensitive_re() is _SENSITIVE_PATH)):
+        if len(parts) < len(fp) or len(parts) > len(fp) and not secret:
+            continue
+        gp = parts[:len(fp)]
+        if not all(_glob_part(g, s) for g, s in zip(gp, fp)):
+            continue
+        lits = sum(len(re.sub(r"[*?\[\]]", "", g)) for g in gp)
+        if not any(g.startswith(".") for g in gp) and lits < 3:
+            continue
+        if secret:
+            return True, True
+        hit = True
+    return hit, False
 
 
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
@@ -6648,10 +6687,7 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     # is store_write, not credentials). A `.pub` file part stays out, as for a literal folder.
     # A sample counts as a folder only when another sample sits below it (`.exo/keys` below
     # `.exo/keys/seat.key`); a sample file (`auth.json`) is never a folder, or `~/*/*` would hit it.
-    all_samples = list(samples) + list(_SENSITIVE_SAMPLES)
-    folder_samples = [x for x in all_samples if any(y != x and y.startswith(x + "/") for y in all_samples)]
-    folders = [os.path.dirname(x) for x in all_samples] + folder_samples
-    folder_hit, secret_folder = _glob_folder_hit(d, home, folders)
+    folder_hit, secret_folder = _glob_folder_hit(d, home, (*samples, *_SENSITIVE_SAMPLES))
     in_store_dir = linked or folder_hit or bool(d_abs) and _fold(d_abs) != _fold(home) and any(
         _fold(x).startswith(_fold(d_abs) + "/") for x in samples)
     if secret_folder and re.search(r"[*?\[]", base) and not _fold(base).endswith(".pub"):
@@ -7078,35 +7114,47 @@ def _env_dump(argv: list[str]) -> bool:
     return False
 
 
-def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None) -> str:
+def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None,
+                          every: list[str] | None = None) -> str:
     """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a brace set
     in the source text ``raws`` of a word or redirection target, or a quoted `bash -c` string), the Keychain,
-    or a bare environment dump. '' if nothing."""
+    or a bare environment dump. '' if nothing. With ``every``, each path, and each word of a brace set, that
+    touches a store is added to it, the first one too; the result stays the first, a Keychain or environment
+    dump hit too, and the paths after such a hit are still listed (#609 follow-up)."""
     text = _expand_text(cmd)
-    if _KEYCHAIN.search(text):
-        return "keychain access"
-    if _PROVIDER_ROUTE.search(text):
-        return "provider key route"
-    if _SECRET_VAR.search(text):
-        return "secret environment variable"
+    first = ("keychain access" if _KEYCHAIN.search(text) else "provider key route" if _PROVIDER_ROUTE.search(text)
+             else "secret environment variable" if _SECRET_VAR.search(text) else "")
+    if first and every is None:
+        return first
     pieces = [p for p in _PIECE_SPLIT.split(text) if p]
     for seg in segs:
         pieces += [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)", "", t) for t in seg]
+        if first:
+            continue
         flat, _ = _strip_prefixes_keep_env(seg)
         if _env_dump(flat):
-            return "environment dump"
-        if flat and flat[0].rsplit("/", 1)[-1] == "security" and any(
+            first = "environment dump"
+        elif flat and flat[0].rsplit("/", 1)[-1] == "security" and any(
                 a in ("-w", "-g", "-gs", "-wg") for a in flat[1:]) and len(flat) > 1 and flat[1].startswith("find"):
-            return "keychain access"
-    for p in pieces:
+            first = "keychain access"
+        if first and every is None:
+            return first
+    for p in pieces if every is None else dict.fromkeys(pieces):     # each word once when every one is listed
         p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
         if p and (_sensitive_words([p]) or _glob_words([p])):
-            return p
+            if every is None:
+                return p
+            first = first or p
+            every.append(_expand_text(p))           # a word of a segment as the text spells it: `~` read
     groups: dict[str, list[str]] = {}         # bash expands only unquoted braces: expand, then dequote
     for raw in dict.fromkeys(raws or []):
         words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
         if words is None:
-            return raw
+            if every is None:
+                return raw
+            first = first or raw
+            every.append(raw)
+            continue
         alts = words[1:] or words
         found = [d for w in alts for d in _dequote(w)] if len(words) > 1 or '$"' in raw else []
         found += [d for w in alts for d in _unknown_words(w)]   # what an expansion may print
@@ -7114,8 +7162,12 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
             groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for d in found]
     words = [w for ws in groups.values() for w in ws]
     if words and (_sensitive_words(words) or _glob_words(words)):
-        return next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
-    return ""
+        hit = next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
+        if every is None:
+            return hit
+        every += [_expand_text(w) for w in words if _sensitive_words([w]) or _glob_words([w])]
+        return first or hit
+    return first
 
 
 _PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
@@ -7367,7 +7419,8 @@ def _shell_call(cmd: str) -> Classification:
     # own text, so no rule on `command` lifts that command's deny, as on main where it decides the line (#394). The
     # copy keeps its body, so a post main checks as the line's own and as its part is checked twice here too. Its
     # entries are listed outside the cap, as main lists the line's own (``line_copy``).
-    new = [f for f in found if f[1] not in {p.target for p in _each_part(c) if p.category == "credentials"}]
+    new = [f for f in found if f[1] not in {p.target for p in _each_part(c)
+                                            if p.category == "credentials" and not p.other_store}]
     top = _most_severe(p for p in _each_part(c) if p.category != "credentials") if c.category == "credentials" else None
     if new and top is not None:                 # first, as main reads the line before its parts
         c.parts = [replace(top, parts=[], own=None, line_copy=True), *c.parts]
