@@ -443,7 +443,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   a post now asks where it logged. An unknown program that names a store path (`bat ~/.exo/plugins/foo/__init__.py`)
   still asks the principal alone, and its decision now names the rule `opaque` where it named `floor`. Main's
   `scripts/gate_diff.py` lowers nothing on its built-in corpus or on aimed lines behind a quoted assignment (runs and
-  counts in #546).
+  counts in #546). With #584 and D-074, the line read as before also gets its own joined reading and its own reading
+  as before D-074, and a store name an expansion hides or quotes (#320, `~/.exo/pol$(:)icies/gates.yaml`,
+  `~/.exo/con$(:)fig.json`) behind a quoted prefix is a store write on every reading.
 - Gate (#584, D-038 amendment): a backslash-newline right after a `$` no longer hides a command substitution, a
   parameter expansion or a `$@` split. Bash drops each `\<newline>` outside single quotes before it reads a word,
   so `echo "$\<newline>(git push --force origin main)"` runs the push, but the gate read the `$` as text and
