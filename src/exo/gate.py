@@ -561,7 +561,7 @@ class _Lexer:
             if start < 0:
                 start = w_at = self.i
             ch, nxt = s[self.i], s[self.i + 1:self.i + 2]
-            if ch in " \t\r":
+            if ch in " \t" or (ch == "\r" and state["delim"] is None):
                 flush()
                 self.i += 1
             elif ch == "\n":
@@ -569,7 +569,7 @@ class _Lexer:
                 toks.append(("op", ";"))
                 mark(self.i, self.i + 1)
                 self.i += 1
-                self._read_heredocs()
+                self._read_heredocs(closer)
             elif ch == "#" and not w.started:
                 j = s.find("\n", self.i)
                 self.i = len(s) if j < 0 else j
@@ -606,8 +606,10 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 op_at = self.i
-                if w.started and w.text.isdigit() and not w.quoted:
-                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text    # an fd number belongs to the operator
+                # an fd number, or `{name}` (bash 4.1+ gives it a new descriptor, #328), belongs to the operator
+                if w.started and not w.quoted and (w.text.isdigit()
+                        or re.fullmatch(r"\{[A-Za-z_]\w*\}", cast(_Word, w).text)):
+                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text
                     op_at = w_at
                 else:
                     flush()
@@ -640,11 +642,11 @@ class _Lexer:
         self.marks, self.met = marks or [], met
         return toks
 
-    def _read_heredocs(self) -> None:
+    def _read_heredocs(self, closer: bool = False) -> None:
         while self.pending:
             hd = self.pending.pop(0)
             first = self.i
-            self.i, last = _heredoc_body(self.s, self.i, hd)
+            self.i, last = _heredoc_body(self.s, self.i, hd, closer)
             if not hd.quoted:
                 sub = _Lexer(hd.body, scan=False, nest=self.nest)
                 sub._dquote(_Word(), until_end=True)
@@ -796,30 +798,40 @@ class _Lexer:
                 self.i = i + 1
 
 
-def _heredoc_body(s: str, i: int, hd: _Heredoc) -> tuple[int, int]:
+def _heredoc_body(s: str, i: int, hd: _Heredoc, closer: bool = False) -> tuple[int, int]:
     """Read the body of ``hd`` from s[i] on, as bash ends it: at a line that is its delimiter. Sets hd.body and
     returns where the lexer goes on and where the line that ended the body starts (len(s) when none did)."""
+    start = len(s)
     lines: list[str] = []
+    found = False
     while i < len(s):
         j = s.find("\n", i)
         end = len(s) if j < 0 else j
         line, start = s[i:end], i
         i = len(s) if j < 0 else j + 1
-        bare = line.lstrip("\t" if hd.strip else "").strip()
-        if bare == hd.delim:
-            # bash ends a heredoc only on the exact line (leading tabs dropped for <<-): `EOF `, ` EOF` or
-            # `EOF` and a CR does not end it, so the body bash reads is not the one read here (#208).
-            hd.ambiguous = hd.ambiguous or (line.lstrip("\t") if hd.strip else line) != hd.delim
+        cand = line.lstrip("\t") if hd.strip else line   # bash drops leading tabs for <<- here too
+        if cand == hd.delim:
+            # bash ends the body on the line that equals the delimiter exactly (#328). The delimiter
+            # is the word after quote removal, so a space, tab or other character in it (`EOF `, ` EOF`,
+            # `EOF\ `, `E"O"F`) is part of it: `cat <<'EOF '` ends on `EOF `, never on bare `EOF`.
+            found = True
             break
-        if bare.startswith(hd.delim) and bare[len(hd.delim):].strip(" )") == "":
-            i = start + line.index(")", line.index(hd.delim))     # `EOF)` closes a $( ) too
+        if closer and cand.startswith(hd.delim) and ")" in cand[len(hd.delim):] \
+                and cand[len(hd.delim):].strip(" )") == "":
+            i = start + line.index(")", line.index(hd.delim))  # `EOF)` closes a $( ) too
+            found = True
             break
+        if cand.strip() == hd.delim.strip():
+            # the line ends the body only once surrounding whitespace is dropped (a trailing CR, stray
+            # spaces, a tab, or dash's rules for a $'..'/$".." delimiter): bash may end elsewhere, so
+            # fail closed -- keep reading to the exact terminator and read the whole body as commands too.
+            hd.ambiguous = True
         lines.append(line.lstrip("\t") if hd.strip else line)
-    else:
-        start = len(s)
     hd.body = "\n".join(lines)
+    if not found:
+        start = len(s)
+        hd.ambiguous = True   # no terminator at all: fail closed and read the body as commands (#328)
     return i, start
-
 
 # For _nest_end: runs of characters an unquoted word and double-quoted text take as they stand, a backquoted body, a
 # variable reference, and the longest here-doc delimiter it keeps (a longer one ends no body, so the rest is unread).
@@ -967,7 +979,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
                 j = max(_match_end(_DQ_RUN, s, i), i + 1)
                 f.owner.add(s, i, j)
                 i = j
-        elif ch in " \t\r":
+        elif ch in " \t" or (ch == "\r" and f.delim is None):
             flush(f)
             i += 1
         elif ch == "\n":
@@ -975,7 +987,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             i += 1
             while pending:
                 hd = pending.pop(0)
-                i = _heredoc_body(s, i, hd)[0]
+                i = _heredoc_body(s, i, hd, closer=True)[0]
                 if id(hd) in before:
                     read.append(hd)
         elif ch == "#" and not f.started:
@@ -1771,6 +1783,9 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
     out += [(n, None, False) for name in names for n in _subscript_sets(name)]
     if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
         out += [(fm.group(1), None, False) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
+    # Named descriptors assign their variable even when the lexer stores it on the redirection.
+    targets = [t for _, t in k.redirs] + list(k.heredocs) + list(k.herestrings)
+    out += [(fm.group(1), None, False) for t in targets if (fm := _FD_VAR.fullmatch(t.fd))]
     return list(dict.fromkeys(out))
 
 
@@ -6635,11 +6650,18 @@ def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) ->
 
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
 # counts too) and file names that end a path. The code folders (_code_paths, #459) join: the home's own `venv` and
-# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles.
+# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles. The home's config.json comes
+# from _HOME_PROTECTED; _store_glob counts it only while it counts (_config_on, D-074), so the call is marked and its
+# reading as before is main's.
 _STORE_GLOB_DIRS = tuple([".exo", *p, n] for p in ((), ("principals", "\0")) for n in _HOME_PROTECTED +
                          ("ledger.sqlite\0",)) + ([".exo", "bus"], [".exo", "venv"], [".exo", "src"],
                                                   [".exo", "hermes-home", "plugins"])
 _STORE_GLOB_FILES = tuple(f.split("/") for f in _EXO_STORE_FILES)
+
+
+def _counts(sample: list) -> bool:
+    """Does a store name _store_glob matched count: every one, but the home's config.json only while it does."""
+    return sample[-1] != "config.json" or _config_on()
 
 
 def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> bool:
@@ -6685,11 +6707,12 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
     dirs, files = ([[".exo"]], ()) if inside else (_STORE_GLOB_DIRS, _STORE_GLOB_FILES)
     for form in _path_forms(p) if p.startswith("/") else [os.path.normpath(p)] if p else []:
         gs = form.split("/")
-        if any(fits(gs, 0, t, short=ancestors) for t in tops):
+        if any(fits(gs, 0, t, short=ancestors) and _counts(t) for t in tops):
             return True
         named = own(gs[-1])                 # a store file's folder alone (`src/state/$(..)`) is not its name
         for j in range(1 if form.startswith("/") else 0, len(gs)):
-            if any(fits(gs, j, d) for d in dirs) or named and any(fits(gs, j, f, whole=True) for f in files):
+            if any(fits(gs, j, d) and _counts(d) for d in dirs) or \
+                    named and any(fits(gs, j, f, whole=True) for f in files):
                 return True
     return False
 
@@ -7525,7 +7548,8 @@ def _norm_outcome(v: Any, where: str) -> str:
 
 def normalize_policies(raw: Mapping | None, errors: list[str] | None = None) -> dict:
     """Fill defaults and check types. Raises PolicyError on a bad value. Given ``errors``, a malformed
-    ``gates.escalate`` is recorded there instead and only that section is repaired (#557)."""
+    ``gates.escalate`` is recorded there instead and only that section is repaired (#557). A pattern a
+    decision runs that does not compile is refused either way (#466, check_patterns)."""
     raw = dict(raw or {})
     pol = json.loads(json.dumps(DEFAULT_POLICIES))
     gates = dict(raw.get("gates") or {})
@@ -7601,6 +7625,7 @@ def normalize_policies(raw: Mapping | None, errors: list[str] | None = None) -> 
     pol["scrub"] = normalize_scrub(pol["posting"].get("scrub"), raw.get("internal_names") or ())  # D-033
     if raw.get("interruptions"):
         pol["interruptions"] = raw["interruptions"]
+    check_patterns(raw)      # a pattern that does not compile refuses the policy here (#466)
     pol["_normalized"] = True
     return pol
 
@@ -7629,6 +7654,56 @@ def _as_list(v: Any) -> list:
 
 
 _MATCH_KEYS = ("category", "tool", "target", "command", "exposure", "reversibility", "third_party")
+
+
+def _check_pattern(pat: str, where: str, flags: int = 0) -> None:
+    try:
+        re.compile(pat, flags)
+    except re.error as e:
+        raise PolicyError(f"{where}: bad pattern {pat!r}: {e}") from None
+
+
+def _check_match_patterns(match: Mapping, where: str) -> None:
+    for p in _as_list(match.get("command", [])):
+        _check_pattern(str(p), f"{where}.command")
+
+
+def check_patterns(raw: Mapping | None) -> None:
+    """Compile every pattern a decision runs, when the policy loads (#466): a rule's ``match.command``, a
+    ``reserved`` or ``deny`` entry's ``command`` (a ``command:<regex>`` string or a mapping like a rule's
+    match) and a ``posting.forbid`` pattern. Raises PolicyError naming the entry. One that does not
+    compile used to raise re.PatternError at decide, where the hook's fallback runs a read call with no
+    ask and its card offers "always"; refused here, the hook loads the defaults on the PolicyError."""
+    gates = (raw or {}).get("gates") or {}
+    rules = gates.get("rules")
+    if isinstance(rules, list):
+        for i, r in enumerate(rules):
+            if not isinstance(r, Mapping):
+                continue
+            match = r.get("match") or {k: v for k, v in r.items() if k not in ("decision", "reason", "name")}
+            if isinstance(match, Mapping):
+                _check_match_patterns(match, f"gates.rules[{i}]")
+    for k in ("reserved", "deny"):
+        entries = gates.get(k)
+        if not isinstance(entries, list):
+            continue
+        for i, e in enumerate(entries):
+            if isinstance(e, Mapping):
+                m = e["match"] if isinstance(e.get("match"), Mapping) else e
+                if isinstance(m, Mapping):
+                    _check_match_patterns({x: v for x, v in m.items() if x in _MATCH_KEYS}, f"gates.{k}[{i}]")
+                continue
+            kind, _, val = str(e).strip().partition(":")
+            if kind == "command" and val.strip():
+                _check_pattern(val.strip(), f"gates.{k}[{i}]")
+    posting = (raw or {}).get("posting")
+    forbid = posting.get("forbid") if isinstance(posting, Mapping) else None
+    if isinstance(forbid, list):
+        for i, f in enumerate(forbid):
+            if isinstance(f, Mapping):
+                pat = str(f.get("pattern", ""))
+                if pat:
+                    _check_pattern(pat, f"posting.forbid[{i}]", bool(f.get("ignore_case")) and re.I)
 
 
 def _policy_command_view(command: str) -> str:
@@ -8593,7 +8668,8 @@ def policy_files(root: str | Path) -> list[Path]:
 def load_policies(root: str | Path | None, errors: list[str] | None = None) -> dict:
     """Read `<root>/policies/` and `<root>/agents/` into normalized policies. A missing root or
     missing files fall back to the defaults (which ask on anything irreversible or public).
-    ``errors`` is passed to normalize_policies."""
+    ``errors`` is passed to normalize_policies. A pattern that does not compile refuses the file's
+    policy with the file named (#466, check_patterns)."""
     if not root:
         return normalize_policies({"internal_names": internal_names(None)})
     root = Path(root)
@@ -8604,16 +8680,24 @@ def load_policies(root: str | Path | None, errors: list[str] | None = None) -> d
         if p.is_file():
             try:
                 raw[key] = parse_yaml(p.read_text(encoding="utf-8")) or {}
+                check_patterns({key: raw[key]})     # a pattern that does not compile refuses here, named with the file (#466)
             except PolicyError as e:
                 raise PolicyError(f"{p}: {e}") from None
     posting: dict = {}
     if (pdir / "posting.md").is_file():
         try:
             posting.update(parse_posting_md((pdir / "posting.md").read_text(encoding="utf-8")))
+            check_patterns({"posting": posting})
         except PolicyError as e:
             raise PolicyError(f"{pdir / 'posting.md'}: {e}") from None
     if (pdir / "posting.yaml").is_file():
-        posting.update(parse_yaml((pdir / "posting.yaml").read_text(encoding="utf-8")) or {})
+        p = pdir / "posting.yaml"
+        val = parse_yaml(p.read_text(encoding="utf-8")) or {}
+        try:
+            check_patterns({"posting": val})
+        except PolicyError as e:
+            raise PolicyError(f"{p}: {e}") from None
+        posting.update(val)
     raw["posting"] = posting
     if posting.get("forbid_agent_names"):
         raw["agents"] = _agent_names(root / "agents")

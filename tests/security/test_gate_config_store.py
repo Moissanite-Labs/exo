@@ -140,6 +140,29 @@ def test_a_destination_a_command_prints_counts_by_name(line, home):
     _assert_store_write(_sh(line))
 
 
+@pytest.mark.parametrize("line", [
+    "cp /tmp/evil.json ~/.exo/con'fig'.json",
+    'cp /tmp/evil.json ~/.exo/"config".json',
+    'cp /tmp/evil.json "$HOME/.exo/config.json"',
+    "echo x > ~/'.exo/config.json'",
+])
+def test_a_quoted_or_split_name_counts_as_the_file(line, home):
+    """The store checks read a shell word unquoted and joined, as they read `~/.exo/pol'icies'/gates.yaml` on main."""
+    _assert_store_write(_sh(line))
+
+
+@pytest.mark.parametrize("name", ["config.json", "policies/gates.yaml"])
+def test_a_symlink_to_config_json_counts_as_for_other_store_files(name, home, tmp_path):
+    """A link made on the line names the file in its `ln`, which is the store write; a link made earlier is resolved
+    (_path_forms). Main read the policies/ rows the same way and the config.json rows as shell or local_write."""
+    link, made = tmp_path / "l", tmp_path / "made"
+    made.symlink_to(home / ".exo" / name)
+    for line in (f"ln -s ~/.exo/{name} {link} && cp /tmp/evil.json {link}",
+                 f"ln -sf ~/.exo/{name} {link}; echo x > {link}",
+                 f"cp /tmp/evil.json {made}"):
+        _assert_store_write(_sh(line))
+
+
 @pytest.mark.parametrize("tool, args", [
     ("write_file", {"path": CONFIG, "content": "{{}}"}),
     ("write_file", {"file_path": CONFIG, "content": "{{}}"}),
@@ -241,6 +264,8 @@ def test_a_file_tool_read_of_config_json_stays_a_read(exo_home):
     ("printf x > {h}/config.jsonl", "local_write"),
     ("cp /tmp/x $(echo ~/.exo/config.json.bak)", "shell"),
     ("cp /tmp/x ~/.exo/config.json-old", "shell"),
+    # names are matched case-sensitively, as `~/.exo/POLICIES/gates.yaml` is on main (a limit in docs/GATE.md)
+    ("cp /tmp/x {h}/CONFIG.JSON", "shell"),
 ])
 def test_other_config_like_paths_keep_their_class(line, category, exo_home):
     c, d = _decide(_sh(line.format(h=exo_home)))
@@ -348,6 +373,48 @@ def test_an_internal_exposure_entry_on_the_remote_command_still_holds(line, home
         assert d.outcome == "deny", (line, gates, c.category, d)
     c, d = _decide(_sh(line), {"reserved": [OPAQUE_INTERNAL]})
     assert d.outcome == "ask" and "opaque_exec" in {r[0] for r in d.reserved}, (line, d)
+
+
+# A config.json name an expansion hides (#225): _store_glob counts it only while config.json counts (_counts), so the
+# call is marked and also read as before D-074, with main's reading of the name. The merge of #320 into #587 matched it
+# with no mark, and in the reading as before too, so these lines lost main's delete or opaque_exec reading.
+HIDDEN = ["~/.exo/con$(:)fig.json", "~/.exo/con$(printf fig).json", "~/.exo/config$(printf .json)",
+          "~/.exo/conf${X}.json"]
+
+
+@pytest.mark.parametrize("name", HIDDEN + ['"$HOME/.exo/conf$(:)ig.json"', "~/.exo/principals/a/con$(:)fig.json"])
+@pytest.mark.parametrize("line, before", [("cp /tmp/evil.json {n}", "shell"), ("echo x > {n}", "opaque_exec"),
+                                          ("git push --force origin main; cp /tmp/x {n}", "force_push")])
+def test_a_name_an_expansion_hides_keeps_its_reading_as_before(line, before, name, home):
+    """The name counts as the store (as on main, a principal store's file too), and the reading as before D-074 is
+    main's. `echo x >` to an unread name is opaque on main, so only the principal answers it there too."""
+    line = line.format(n=name)
+    c = gate.classify(_sh(line))
+    assert c.ordinary is not None and c.ordinary.category == before, (line, c.ordinary)
+    _assert_store_write(_sh(line))
+
+
+@pytest.mark.parametrize("tool", ["bash", "run_command"])
+@pytest.mark.parametrize("line", _remote([f"rm -rf /srv/data; cp /tmp/evil.json {n}" for n in HIDDEN] +
+                                         [f"rm {n}" for n in HIDDEN]))
+def test_a_matrix_deny_still_denies_beside_a_name_an_expansion_hides(line, tool, home):
+    c, d = _decide(_sh(line, tool), MATRIX_DENY_CELLS)
+    assert d.outcome == "deny", (line, c.category, d)
+
+
+@pytest.mark.parametrize("line", [f"rm -rf /srv/data; echo x > {n}" for n in HIDDEN] +
+                                 [f"rm {n} && gh pr comment 5 -R myorg/app --body hi" for n in HIDDEN])
+def test_a_delete_deny_under_an_allow_rule_still_denies_a_name_an_expansion_hides(line, home):
+    """gate_diff's x_delete_deny_allow_rm: delete at deny, with a rule that allows `^rm`; main denied the delete."""
+    gates = {"categories": {"delete": "deny"}, "rules": [{"match": {"command": "^rm"}, "decision": "allow",
+                                                          "reason": "r"}]}
+    c, d = _decide(_sh(line), gates)
+    assert d.outcome == "deny", (line, c.category, d)
+
+
+@pytest.mark.parametrize("line", _remote([f"echo x > {n}" for n in HIDDEN]))
+def test_an_internal_exposure_entry_still_holds_for_a_name_an_expansion_hides(line, home):
+    test_an_internal_exposure_entry_on_the_remote_command_still_holds(line, home)
 
 
 @pytest.mark.parametrize("line", [

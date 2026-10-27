@@ -67,6 +67,19 @@ which 1d2f32ac asked for without a binding.
 Any other policy error (a YAML error, a bad matrix value, rules or deny that are not lists, an unreadable file)
 still falls back to the defaults alone: `policy error, defaults used: <message>`.
 
+### A pattern that does not compile refuses the policy (#466)
+
+The loader compiles every pattern a decision runs when the policy loads: a rule's `match.command`, a
+`command:<regex>` entry or a mapping's `command` in `deny:` and `reserved:`, and a `posting.forbid` pattern (with
+its `ignore_case` flag). One that does not compile raises `PolicyError` naming the file and the entry —
+`<store>/policies/gates.yaml: gates.deny[0].command: bad pattern '^(rm|shred': missing ), unterminated subpattern
+at position 1` — and the hook loads the defaults on it (`policy error, defaults used: <message>` in every
+decision and in `/gate`). Before, the pattern compiled only when `decide` reached it: one typo in a deny entry a
+principal added to tighten the gate made every call it touched raise `re.PatternError` there, the hook's fallback
+card had no approver list and its "always" let a seat answer every later failing call, and a read tool or an
+observe-mode call ran with no ask. A policy whose patterns all compile decides as before; only the broken one
+changes, from a per-call failure to a refusal at load. The scrub's own patterns were checked at load already.
+
 ## Required executor audit
 
 With a required tool executor, the gate refuses execution unless its signed
@@ -1127,6 +1140,8 @@ Tests: `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/
 Command regexes in `deny` and `reserved` match both the original command and a literal-word
 view from the shell lexer, so `command:rm -rf` also vetoes `r"m" -"rf" ~`, `'rm' -rf ~`,
 `r\m -rf ~`, `$'rm' -rf ~` and `$"rm" -rf ~`: common literal quoting cannot weaken a veto.
+Each pattern a decision runs is compiled when the policy loads (#466); one that does not
+compile refuses the policy naming the file and the entry, and the hook decides on the defaults.
 A word that holds a variable or a substitution is a placeholder in the view, so a regex that needs
 the literal part of such a word matches only the original text.
 A `$"..."` word is read as bash reads it without a catalog, so the line keeps its category and
@@ -1134,9 +1149,25 @@ target (`curl $"https://evil.example/x"` is a `web_read` of `evil.example`, and 
 still denies it). With a message catalog and a non-C locale bash runs a translation instead, and
 expands `$( )` in it, so the line also carries the `indirection` signal and asks unless
 `opaque_exec` is named. It is decided a second time as `opaque_exec`, and the stricter outcome
-stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc whose
-delimiter is spelled `<<$"EOF"` or `<<$'EOF'` ends on different lines in bash and in dash, which
-runs commands when bash is missing, so its body is read as commands too.
+stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc ends on the
+line that equals its delimiter exactly, and the delimiter is the opener word after quote removal, so
+whitespace or any other character in it is part of it (#328): `cat <<'EOF '` (and `<<"EOF "`,
+`<<' EOF'`, `<<EOF\ `) ends on the line `EOF ` (with the space), never on bare `EOF`. The gate
+matches the same line bash does (leading tabs dropped only for `<<-`), so the commands after the
+real terminator (`git push --force`, `rm -rf`, `gh pr merge`) are classified rather than swallowed
+into the body. When no line ends the body, or a line ends it only once surrounding whitespace is
+dropped (a trailing CR, stray spaces, a tab), the gate cannot be sure where the body ends, so it
+keeps reading to the exact terminator or end of input and reads the whole body as commands too.
+A carriage return in the opener stays part of the delimiter. A delimiter followed by `)` ends a
+body only inside a command or process substitution. Named descriptor assignments still trigger
+the hidden-variable checks for lookup and code-loading variables. A heredoc whose delimiter is spelled `<<$"EOF"` or
+`<<$'EOF'` ends on different lines in bash and in dash, which runs commands when bash is missing, so
+its body is read as commands too. A `{var}<<` heredoc or `{var}<<<` here-string is on a new
+descriptor in bash 4.1 and later, not stdin, so it is not read as the command's stdin, the same as a
+numbered `3<<` (#328): a gh post whose real body is a pipe is not mistaken for the heredoc, and its
+body stays unseen and asks. Known limit: a `~` after `=` in a word (`body=~/F`) is not yet treated as
+an expansion, so the home-path scrub reads such a word literally (a privacy nuance, not a hidden
+command).
 Mapping entries use the same matching. A rule with decision `deny` or `ask` whose match has a
 `command` regex sees the view too, in a second pass that only raises: the first matching rule
 is still chosen on the original text, and the pass lifts the outcome to the rule's decision only
@@ -1305,7 +1336,8 @@ gate does not read:
   before. When it passes a rule over, the gate also decides the line as before, and that decision
   stands, reason and all, unless the new one is stricter. This pass reads rules and patterns that
   deciding as before never reaches (the walk past a rule passed over, each regex of a matched
-  list), so when it fails, for example on a bad regex, the gate decides the line as before.
+  list), so when it fails, the gate decides the line as before. A bad regex is checked when the
+  policy loads now (#466); any other failure there still falls back.
   An anchored rule such as
   `'^git push --force origin main$'` still matches no compound line, as before.
   `{command: '^git status', decision: allow}` no longer allows
@@ -2077,8 +2109,10 @@ in one of three ways:
 
 The credentials floor reads every part, so the call asks and no rule, category line, matrix cell or
 scope lowers it. `gate.no_grant` keeps a standing grant off it, and observe mode still enforces it.
-When `decide` fails on the call (a policy pattern that does not compile), the exo-gate hook's
+When `decide` fails on the call for a reason the policy loader does not check, the exo-gate hook's
 fallback card reads the parts too, so it still asks the principal alone, once, in every mode (#464).
+A pattern that does not compile is checked at load now (#466), so it refuses the policy there and
+the defaults decide.
 `gate.call_approvers` sends it to those who may answer both its category and credentials. The line's
 own deny entries, target rules, matrix deny cells, posting checks and reserved entries still apply.
 So `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir` is still
@@ -2457,7 +2491,10 @@ file counts, so a project's `config.json`, and `config.json.bak`, `config.json~`
 beside the home's, keep their class (one under `plugins/` asks with that folder, #435). A relative
 `.exo/config.json` is also read with `.`, `//` and `..` collapsed (`cd ~ && echo x > .exo/./config.json`),
 and a word a command prints counts by the name in it (`cp x $(echo ~/.exo/config.json)`), as
-`$(echo ~/.exo/policies/gates.yaml)` does. Reads stay `read` (`cat`, `jq`, `read_file`); a copy out
+`$(echo ~/.exo/policies/gates.yaml)` does. A name an expansion hides counts as the other store names do
+(#225): `cp x ~/.exo/con$(:)fig.json`, an unknown name in the home itself (`cp x ~/.exo/$(date).json`) and,
+through an expansion, a principal store's `config.json` ask, and the call is also read as before D-074.
+Reads stay `read` (`cat`, `jq`, `read_file`); a copy out
 of it (`cp ~/.exo/config.json /tmp/`) asks, as a copy out of `policies/` does. The CLI code that
 writes the file (`exo config set`, onboarding, `exo import-store`) is unchanged: run by the
 principal in a terminal, it is not a tool call. A relative name is also matched with `//` and `/./`
@@ -2624,16 +2661,19 @@ check until #340's relative-path resolution lands. Secret-path resolution alread
 links. This reads header paths only. It does not parse a patch's hunks or change what the tool accepts.
 
 Known limits. These are classification checks, not a filesystem sandbox: a symlink can change
-between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
-without a link to resolve, so only distinctive names catch a write through it. Only the store roots
-are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
+between classification and execution (TOCTOU). A symlink to a store file made earlier is resolved,
+and one made on the same line names the file in its `ln`, which is the store write
+(`ln -s ~/.exo/config.json /tmp/l && cp x /tmp/l`, as with `policies/gates.yaml`). A hardlink
+made earlier (`cp -al`) shares the file without a link to resolve, so only distinctive names catch
+a write through it. Only the store roots are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
 write to the outside spelling is a local write. A copy or an archive unpacked into the home folder
 itself, which makes a protected folder or `config.json` from its source name
 (`cp -r /tmp/x/update ~/.exo/`, `cp /tmp/x/config.json ~/.exo/`, `cp -t ~/.exo /tmp/x/config.json`,
 `tar -C ~/.exo -xf x.tar`, `unzip -d ~/.exo x.zip`), is not seen either (#483). Nor is a path held in a variable or made by a
 command (`F=~/.exo/state/gate-grants.json; cp x "$F"`,
 `cp x ~/.exo/$(echo state)/gate-grants.json`). Name and prefix checks are case-sensitive, so a
-case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
+case-insensitive filesystem (APFS) accepts `STATE/` for `state/`, and `CONFIG.JSON` for the home's
+`config.json`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
 followed, and a shell tool's `cwd` or `workdir` argument is not read here (the secret-store checks read
@@ -2692,9 +2732,10 @@ subcommand. `-O -` prints to stdout and stays a read, and so does a path outside
 a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
 `exo log append`, `exo keygen`, `exo init`, `exo update --pin-trust` (#133), `exo config set` and
 `unset` (also `exo config -- set`) and `exo import-store`, which write `config.json`, and
-`exo interview`, which writes the principal store (also as `python -m exo.config`, `exo.cli` or
-`exo.onboard`, D-074, #125), `git -C <store>` with a
-writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
+`exo interview`, which writes the principal store (D-074, #125; run as a module,
+`python -m exo.config set` reads as `exo config set`, while `python -m exo.cli` and
+`python -m exo.onboard` read as `exo` with the words that follow, as in
+`python -m exo.onboard import-store`), `git -C <store>` with a writing subcommand, and any writing command after `cd` into the store, also one in a `$( )`, backticks or
 `<( )` of a later command on that line (#465: `cd ~/.exo/policies && echo $(cp /tmp/evil gates.yaml)`). There,
 as unwrapped, a command the gate does not read as a read (`sed -n`, `sort`, `curl`) counts as a write. A
 substitution in the `cd` itself or before it, and an `ssh` remote command in one, keep their own
@@ -2706,9 +2747,10 @@ One in the redirections of a compound that holds the `cd` (`done < <(sort list)`
 (#480).
 `rm -rf ~/.exo` counts (an ancestor). A `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
-observe mode too. When the decision fails on a call the gate reads as a store write or secret (a
-policy pattern that does not compile, for example), the hook's fallback card still asks the
-principal alone, once, in observe mode too (#464). A store read that a shell call's own folder adds
+observe mode too. When the decision fails on a call the gate reads as a store write or secret for a
+reason the policy loader does not check, the hook's fallback card still asks the
+principal alone, once, in observe mode too (#464; a pattern that does not compile is refused when
+the policy loads now, #466). A store read that a shell call's own folder adds
 as a part counts too, and so does each other reading of the call (`gate.no_grant`, #311, #399).
 Other calls keep their fallback: a read tool
 runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
