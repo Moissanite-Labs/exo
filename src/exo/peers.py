@@ -9,7 +9,8 @@ Three parts, none of which knows whether it runs in exod or inside a Hermes plug
 
 - ``Directory``: one small presence file per daemon in a shared runtime dir. A daemon writes its file, signed
   with its seat key (#523), when it starts, removes it on exit, and anyone who scans prunes files whose pid is
-  gone.
+  gone. A send to a pinned seat demands that pid on the connection the text rides (#637), so the signed path is
+  routing and the listener's identity is the trust anchor.
 - envelopes: ``make_envelope`` and ``verify_envelope`` use the bus wire format (``exo.bus.wire``), signed
   with the sender seat's key, so a message is the same object on a socket or on the bus.
 - ``PeerNode``: list, send, deliver and receipt for one daemon. Inbound messages become an ``Ingress``
@@ -271,17 +272,22 @@ class BusLink:
 # ---------------------------------------------------------------- the node
 
 
-async def call_socket(path: str, body: Any, timeout: float = ASK_TIMEOUT) -> dict[str, Any]:
-    """One protocol command to another daemon's socket. Raises on failure."""
+async def call_socket(path: str, body: Any, timeout: float = ASK_TIMEOUT,
+                      expect_pid: int | None = None) -> dict[str, Any]:
+    """One protocol command to another daemon's socket. Raises on failure. With ``expect_pid`` (#637), the kernel
+    must name that process on the far end of the very connection the command rides, before any byte of it is
+    written: a relay holding the path presents its own pid and is refused."""
     from exo.protocol.client import Client
-    client = Client(socket=path, timeout=timeout)
+    client = Client(socket=path, timeout=timeout, expect_pid=expect_pid)
     try:
         return await asyncio.wait_for(client.call(body), timeout + 1)
     finally:
         await client.aclose()
 
 
-Rpc = Callable[[str, Any], Awaitable[dict[str, Any]]]
+# ``rpc`` is called with the socket, the body, and the pid a verified presence entry names for the listener the
+# command must reach (#637); None when no verified entry stands and the connection is not checked.
+Rpc = Callable[..., Awaitable[dict[str, Any]]]
 
 
 class PeerNode:
@@ -505,10 +511,15 @@ class PeerNode:
         if row["where"] == "bus":
             return await self._send_bus(row, text, session)
         socket = str(row["socket"])
+        expect: int | None = None
         if row["where"] == "machine":
             # the text never ships to a socket a forged presence file names, and it ships to the socket of the
-            # entry that verified, not the one the scan saw (#523)
-            socket = self._check_presence_key(row)
+            # entry that verified, not the one the scan saw (#523). The entry names its listener's pid, and the
+            # deliver rides a connection the kernel must name that pid on (#637): a relay that holds the path
+            # under another process presents its own pid and is refused before a byte of the text is written.
+            checked = self._check_presence_key(row)
+            if checked is not None:
+                socket, expect = checked.socket, checked.pid
         env = make_envelope(self.signer, to=row["name"], text=text, session=session, daemon=self.daemon,
                             to_session=row["session"], via=via)
         mid = msg_id(env)
@@ -519,7 +530,7 @@ class PeerNode:
             if row["daemon"] == self.daemon:
                 receipt = await self.deliver(env)
             else:
-                receipt = await self.rpc(socket, s.Peers(action="deliver", envelope=env))
+                receipt = await self.rpc(socket, s.Peers(action="deliver", envelope=env), expect_pid=expect)
         except Exception as exc:
             receipt = {"msg_id": mid, "state": "denied", "detail": f"{row['name']} could not be reached ({type(exc).__name__}: {exc})"}
         else:
@@ -528,24 +539,25 @@ class PeerNode:
         await self._publish_out(session, out)
         return out
 
-    def _check_presence_key(self, row: dict[str, Any]) -> str:
-        """The sender's half of #132's key rule (#523): the text ships only when the presence file the row came
-        from holds a key this home pins for that seat and carries that key's signature over the entry, and the
-        socket returned is the one the verified entry names. Any same-user process can write a presence file for
-        a pinned name: with a socket of its own, or with the pinned key's public half copied into it beside that
-        socket. Neither carries a signature the pinned key made, and neither is sent to. The file is re-read here,
-        so the entry checked and the socket shipped to are one, not the entry the scan happened to see. For a name
-        this home holds no key for, the receipt-side trust ladder decides what the receiver makes of the message,
-        as it did before, and the scanned socket stands."""
+    def _check_presence_key(self, row: dict[str, Any]) -> Presence | None:
+        """The sender's half of #132's key rule (#523): the entry the text ships to when this home pins a key for
+        that seat — the file the row came from, re-read, holding a key pinned here and carrying that key's
+        signature. Any same-user process can write a presence file for a pinned name: with a socket of its own, or
+        with the pinned key's public half copied into it beside that socket. Neither carries a signature the pinned
+        key made, and neither is sent to. The file is re-read here, so the entry checked and the socket shipped to
+        are one, not the entry the scan happened to see. ``None`` for a name this home holds no key for: the
+        receipt-side trust ladder decides what the receiver makes of the message, as it did before, and the scanned
+        socket stands. The entry's pid is what the send demands of the connection (#637), so the socket path stays
+        routing and the listener's identity is the trust anchor."""
         here, peer = self._pins(str(row["seat"]))
         if not here and not peer:
-            return str(row["socket"])
+            return None
         p = self.directory.get(str(row["daemon"]))
         if p is None or p.daemon != row["daemon"] or p.seat != row["seat"] or p.pub not in here + peer \
                 or not any(crypto.verify_doc(asdict(p), k) for k in here + peer):
             raise ValueError(f"{row['name']}'s presence file does not verify against a key pinned for "
                              f"{row['seat']} here; not sent")
-        return p.socket
+        return p
 
     def _check_reply(self, receipt: dict[str, Any], mid: str, row: dict[str, Any]) -> None:
         """The first reply to a deliver is signed like a later receipt (#523, with #132's primitives): the
@@ -621,8 +633,8 @@ class PeerNode:
         try:
             if sender.daemon == self.daemon:
                 await self.receipt(doc)
-            else:
-                await self.rpc(sender.socket, s.Peers(action="receipt", envelope=doc))
+            else:  # the receipt is not message text, but it rides the pid-checked connection a deliver would (#637)
+                await self.rpc(sender.socket, s.Peers(action="receipt", envelope=doc), expect_pid=sender.pid)
         except Exception as exc:
             trace.report("peers receipt to sender", exc)
 

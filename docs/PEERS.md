@@ -62,7 +62,8 @@ trusts the key or the principal a presence file names. It checks each message ag
 - **A peer pin.** `exo keys pin --peer SEAT PUB` pins a seat of another home. That key checks the seat's messages
   and receipts, and a send to it: the text leaves only when the peer's presence entry verifies against a key
   pinned for that name — the entry carries the seat key's signature, so a file that copied the pinned key beside
-  a socket of its own is refused — and the first answer, signed by the receiving seat like a later receipt, is
+  a socket of its own is refused, and the connection is refused too unless the kernel names, on it, the pid the
+  entry names (#637) — and the first answer, signed by the receiving seat like a later receipt, is
   verified against it before anything is published (#523, the sender's half of this rule). It never signs a ledger
   (D-040). A key for a name that is no seat of this home counts as a peer pin too: one pinned with a plain
   `exo keys pin NAME PUB`, or a `.pub` copied into `keys/`.
@@ -230,3 +231,11 @@ published and the send fails. Between two current daemons this is invisible; a d
 first receipt is unsigned, as an older `exo`'s are, cannot be sent to while its seat's key is pinned here—and a
 name no key is pinned for still follows the receive side's trust ladder, message and reply alike, on an unsigned
 file like any other (D-026 amendments: #132, then #523).
+
+The signed entry also names the pid of the daemon that listens, and the send demands that pid on the connection
+the text rides: the kernel is asked who serves the connection (`LOCAL_PEERPID` on macOS, `SO_PEERCRED` on Linux)
+and nothing is written until it names the pid the entry names, so a relay holding the path — a daemon's socket
+file renamed aside with a relay bound on the old path, or a saved entry written back under another listener —
+is refused with no byte of the message behind it, though it still passes the signature and the pin (#637). The
+socket path routes and never anchors trust; the listener's pid does. A name no key is pinned for is unchanged,
+and a platform the kernel names no pid for refuses the send rather than fall back.

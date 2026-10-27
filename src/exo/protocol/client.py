@@ -8,7 +8,8 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from exo.peerauth import FrameTooLarge, PrincipalTransport, bounded_lines, sse_frames, stream_info
+from exo.peerauth import (FrameTooLarge, PidCheckedTransport, PrincipalTransport, bounded_lines, sse_frames,
+                          stream_info)
 from exo.protocol import schema as s
 
 log = logging.getLogger(__name__)
@@ -31,12 +32,15 @@ class Client:
     event stream that brings no event or heartbeat for that long."""
 
     def __init__(self, socket: str | None = None, url: str | None = None, token: str | None = None,
-                 timeout: float = 30.0, principal: str | None = None, idle: float | None = 45.0):
+                 timeout: float = 30.0, principal: str | None = None, idle: float | None = 45.0,
+                 expect_pid: int | None = None):
         if not socket and not url:
             raise ValueError("need socket or url")
         transport: httpx.AsyncBaseTransport | None = None
         if socket and principal:
             transport = PrincipalTransport(str(socket), principal)
+        elif socket and expect_pid is not None:
+            transport = PidCheckedTransport(str(socket), expect_pid)
         elif socket:
             transport = httpx.AsyncHTTPTransport(uds=str(socket))
         headers = {"Authorization": f"Bearer {token}"} if token else {}

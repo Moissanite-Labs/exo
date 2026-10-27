@@ -11,6 +11,10 @@ the bound is ``FrameTooLarge`` with the seq the core named for it, so a reader r
 replaying it forever. ``bounded_lines`` splits the stream into lines without holding more than the bound of one
 line, so a frame over it is refused before the rest of it is read (httpx's ``aiter_lines`` holds a whole line).
 
+``PidCheckedTransport`` is the same shape for a peers send (#637): the kernel must name, on the connection the
+message rides, the pid the signed presence entry names, so a relay holding the path is refused with no byte of
+the message behind it.
+
 This module sits outside the counted core folders, as ``exo.principal`` does.
 """
 from __future__ import annotations
@@ -96,6 +100,47 @@ class PrincipalTransport(httpx.AsyncBaseTransport):
         req = httpcore.Request(method=request.method, url=httpcore.URL(
             scheme=request.url.raw_scheme, host=request.url.raw_host, port=request.url.port,
             target=request.url.raw_path), headers=headers, content=request.stream, extensions=request.extensions)
+        try:
+            resp = await conn.handle_async_request(req)
+        except Exception as exc:
+            await conn.aclose()
+            raise _mapped(exc) from exc
+        return httpx.Response(status_code=resp.status, headers=resp.headers, stream=_Body(resp, conn),
+                              extensions=resp.extensions)
+
+
+class PidRefused(httpx.ConnectError):
+    """The kernel named another listener than the signed presence entry names; no byte of the request was written
+    (#637)."""
+
+
+class PidCheckedTransport(httpx.AsyncBaseTransport):
+    """One connection per request to a peer daemon's Unix socket, for a peers send or receipt (#637): the kernel
+    must name, on that connection, the pid the signed presence entry names, and only then is the request written
+    on it. The same shape as ``PrincipalTransport``, so there is no check-one-socket, send-on-another: a relay
+    that holds the path under another process presents its own pid and is refused before a byte goes out."""
+
+    def __init__(self, socket: str, pid: int):
+        self.socket, self.pid = socket, pid
+        self._backend = httpcore.AnyIOBackend()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        timeout: dict[str, Any] = request.extensions.get("timeout", {})
+        try:
+            stream = await self._backend.connect_unix_socket(self.socket, timeout=timeout.get("connect"))
+        except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+            raise _mapped(exc) from exc
+        cred = pr.peer_cred(stream.get_extra_info("socket"))
+        if cred is None or cred[0] != self.pid:
+            await stream.aclose()
+            raise PidRefused(f"peer connection refused: the kernel names pid {cred[0] if cred else 'none'} on "
+                             f"{self.socket}, not the pid {self.pid} the signed presence entry names",
+                             request=request) from None
+        conn = httpcore.AsyncHTTP11Connection(origin=httpcore.Origin(b"http", b"exod", 80), stream=stream)
+        req = httpcore.Request(method=request.method, url=httpcore.URL(
+            scheme=request.url.raw_scheme, host=request.url.raw_host, port=request.url.port,
+            target=request.url.raw_path), headers=request.headers.raw, content=request.stream,
+            extensions=request.extensions)
         try:
             resp = await conn.handle_async_request(req)
         except Exception as exc:

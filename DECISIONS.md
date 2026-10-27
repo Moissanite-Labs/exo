@@ -497,6 +497,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   an older `exo`'s are, cannot be sent to while a key is pinned for its seat; update it, or leave its seat
   unpinned, and the trust ladder applies. Rejected: requiring a pinned key for every name, which breaks messaging
   an unpinned peer of another home until `exo keys pin --peer`, a step the receive side does not ask for either.
+  *Amendment 2026-10-26 (#637, the signed path is routing, the listener is the anchor):* #523's signature covers
+  the whole entry, socket path included, and the send shipped the text to whatever process held that path: a
+  relay bound on a renamed daemon's old path, or a saved signed entry written back beside another listener,
+  read the message with every check passing. The send to a pinned seat now demands the entry's pid on the
+  connection the text rides: the kernel is asked who serves that connection (`LOCAL_PEERPID` on macOS,
+  `SO_PEERCRED` on Linux) and nothing is written until it names the pid the signed entry names, so the socket
+  path routes and never anchors trust. The receipt to a pinned sender rides the same check. A name no key is
+  pinned for is unchanged, and a platform the kernel names no pid for refuses the send rather than fall back.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).

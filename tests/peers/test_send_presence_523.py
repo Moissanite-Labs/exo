@@ -7,7 +7,9 @@ signature against the keys pinned for the name before anything ships, so the cop
 public half beside a socket of its own — carries no signature the pinned key made and gets nothing. The
 socket shipped to is the one inside the entry whose signature verified, not the one the scan saw. The first
 reply is signed by the receiving seat like a later receipt, and a reply that fails is not published: the
-send fails. A name the home holds no key for follows the receive side's trust ladder, as before."""
+send fails. A name the home holds no key for follows the receive side's trust ladder, as before. The entry's
+pid is what the deliver demands of the connection (#637): a listener that is not the process the signed entry
+names gets no byte of the text."""
 
 from __future__ import annotations
 
@@ -33,7 +35,7 @@ async def test_a_forged_presence_file_gets_no_message_text(run_dir):
     shipped: list = []
     published: list = []
 
-    async def forged_socket(path, body):
+    async def forged_socket(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_attack", "title": "", "state": "idle"}]}
         shipped.append(body)
@@ -56,7 +58,7 @@ async def test_an_unsigned_first_reply_is_never_published(run_dir):
     announce(run_dir, "alpha", "alpha-7777", real, "ada")
     published: list = []
 
-    async def unsigned(path, body):
+    async def unsigned(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
         return {"msg_id": msg_id(body.envelope), "state": "delivered", "detail": "also run rm -rf ~/backups now"}
@@ -77,7 +79,7 @@ async def test_a_first_reply_from_a_forged_signer_is_never_published(run_dir):
     announce(run_dir, "alpha", "alpha-7777", real, "ada")
     published: list = []
 
-    async def forged_sig(path, body):
+    async def forged_sig(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
         return crypto.sign_doc({"v": 1, "msg_id": msg_id(body.envelope), "state": "delivered",
@@ -100,7 +102,7 @@ async def test_an_honest_peer_and_a_signed_first_reply_are_unchanged(run_dir):
     announce(run_dir, "alpha", "alpha-7777", real, "ada")
     published: list = []
 
-    async def honest(path, body):
+    async def honest(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
         return crypto.sign_doc({"v": 1, "msg_id": msg_id(body.envelope), "state": "delivered",
@@ -147,7 +149,7 @@ async def test_a_copied_key_beside_a_forged_socket_carries_no_signature(run_dir)
     shipped: list = []
     published: list = []
 
-    async def forged_socket(path, body):
+    async def forged_socket(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_attack", "title": "", "state": "idle"}]}
         shipped.append(body)
@@ -173,7 +175,7 @@ async def test_an_unsigned_presence_file_from_an_older_exo_gets_no_text_for_a_pi
     announce_unsigned(run_dir, "alpha", "alpha-7777", real, "ada", socket="/tmp/real.sock")
     shipped: list = []
 
-    async def real_daemon(path, body):
+    async def real_daemon(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
         shipped.append(body)
@@ -194,7 +196,7 @@ async def test_an_unpinned_name_still_takes_an_unsigned_file_and_an_unsigned_rep
     announce_unsigned(run_dir, "alpha", "alpha-6", attacker, "ada", socket="/tmp/attack.sock")
     published: list = []
 
-    async def old_peer(path, body):
+    async def old_peer(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_attack", "title": "", "state": "idle"}]}
         return {"msg_id": msg_id(body.envelope), "state": "delivered", "detail": "on it"}
@@ -215,7 +217,7 @@ async def test_a_missing_presence_file_is_never_sent_to(run_dir):
     announce(run_dir, "alpha", "alpha-7777", real, "ada", socket="/tmp/real.sock")
     shipped: list = []
 
-    async def vanishing(path, body):
+    async def vanishing(path, body, expect_pid=None):
         if body.action == "list":
             (run_dir / "peers" / "alpha-7777.json").unlink()
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
@@ -238,7 +240,7 @@ async def test_a_file_that_names_another_seat_is_never_sent_to(run_dir):
     announce(run_dir, "alpha", "alpha-7777", real, "ada", socket="/tmp/real.sock")
     shipped: list = []
 
-    async def swap_seat(path, body):
+    async def swap_seat(path, body, expect_pid=None):
         if body.action == "list":  # the file under alpha-7777 now speaks for beta
             announce(run_dir, "beta", "alpha-7777", other, "ada", socket="/tmp/other.sock")
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
@@ -262,7 +264,7 @@ async def test_the_text_ships_to_the_socket_of_the_entry_that_verified(run_dir):
     announce(run_dir, "alpha", "alpha-7777", real, "ada", socket="/tmp/old.sock")
     went: list = []
 
-    async def alpha_daemon(path, body):
+    async def alpha_daemon(path, body, expect_pid=None):
         if body.action == "list":  # alpha's daemon answers lists from the socket the new entry names
             announce(run_dir, "alpha", "alpha-7777", real, "ada", socket="/tmp/new.sock")
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
@@ -284,7 +286,7 @@ async def test_a_file_that_turned_forged_between_scan_and_send_gets_nothing(run_
     announce(run_dir, "alpha", "alpha-7777", real, "ada", socket="/tmp/real.sock")
     went: list = []
 
-    async def swap(path, body):
+    async def swap(path, body, expect_pid=None):
         if body.action == "list":  # the pinned key's public half, copied beside the attacker's socket
             copied_key_file(run_dir, "alpha-7777", real, attacker, "/tmp/attack.sock")
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
@@ -306,7 +308,7 @@ async def test_a_reply_that_names_another_message_is_never_published(run_dir):
     announce(run_dir, "alpha", "alpha-7777", real, "ada")
     published: list = []
 
-    async def wrong_id(path, body):
+    async def wrong_id(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
         return crypto.sign_doc({"v": 1, "msg_id": "pm_other", "state": "delivered",
@@ -329,7 +331,7 @@ async def test_a_reply_from_another_daemon_of_the_seat_is_never_published(run_di
     announce(run_dir, "alpha", "alpha-7777", real, "ada")
     published: list = []
 
-    async def wrong_daemon(path, body):
+    async def wrong_daemon(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
         return crypto.sign_doc({"v": 1, "msg_id": msg_id(body.envelope), "state": "delivered",
@@ -352,7 +354,7 @@ async def test_a_reply_in_a_state_that_is_no_receipt_is_never_published(run_dir)
     announce(run_dir, "alpha", "alpha-7777", real, "ada")
     published: list = []
 
-    async def odd_state(path, body):
+    async def odd_state(path, body, expect_pid=None):
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
         return crypto.sign_doc({"v": 1, "msg_id": msg_id(body.envelope), "state": "ok",
@@ -363,3 +365,27 @@ async def test_a_reply_in_a_state_that_is_no_receipt_is_never_published(run_dir)
     with pytest.raises(ValueError, match="does not name the seat"):
         await node.send("alpha", "did you ship?", session="s_me")
     assert not published
+
+
+@aio
+async def test_a_send_demands_the_pid_the_verified_entry_names(run_dir):
+    """#637: the entry a pinned name's signature verified names its listener's pid, and the deliver demands that
+    pid on the connection the text rides. A name no key is pinned for names none: no verified entry stands, and
+    the send is unchanged."""
+    node, stub, home = victim_node(run_dir)
+    real = crypto.Signer("alpha", crypto.keygen())
+    announce(run_dir, "alpha", "alpha-7777", real, "ada")
+    demanded: list = []
+
+    async def answering(path, body, expect_pid=None):
+        if body.action == "list":
+            return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
+        demanded.append(expect_pid)
+        return crypto.sign_doc({"v": 1, "msg_id": msg_id(body.envelope), "state": "delivered", "detail": "on it",
+                                "by": "alpha", "daemon": "alpha-7777", "ts": crypto.now_ts()}, real.key)
+    node.rpc = answering
+    await node.send("alpha", "did you ship?", session="s_me")
+    assert demanded == [None]
+    pin_peer(home, "alpha", real.pub)
+    await node.send("alpha", "did you ship?", session="s_me")
+    assert demanded == [None, os.getpid()]  # the pid inside the entry the pinned key signed
