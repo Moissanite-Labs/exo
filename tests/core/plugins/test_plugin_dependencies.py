@@ -201,3 +201,19 @@ def test_folder_precedence_does_not_import_duplicate_entry_point(monkeypatch, tm
     monkeypatch.setattr("importlib.metadata.entry_points", lambda **kw: [SimpleNamespace(name="same", load=load)])
     [rec] = PluginManager().load_all([tmp_path])
     assert rec.ok and rec.source == "dir"
+
+
+@pytest.mark.parametrize("via", ["load_all", "load_entry_points"])
+def test_entry_points_register_in_discovery_order_as_before(monkeypatch, tmp_path, via):
+    """Hooks run in registration order, so entry points keep the order importlib lists them in (#500 review)."""
+    def ep(name):
+        return SimpleNamespace(name=name, load=lambda: lambda ctx: ctx.register_hook("pre_tool_call", lambda **kw: None))
+
+    monkeypatch.setattr("importlib.metadata.entry_points", lambda **kw: [ep("zeta"), ep("alpha")])
+    manager = PluginManager()
+    if via == "load_all":
+        manager.load_all([tmp_path / "none"])
+    else:
+        manager.load_entry_points()
+    assert list(manager.plugins) == ["zeta", "alpha"]
+    assert [entry.plugin for entry in manager.hooks.entries("pre_tool_call")] == ["zeta", "alpha"]

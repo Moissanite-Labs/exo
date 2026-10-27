@@ -110,8 +110,9 @@ def create(seat: str | None = None) -> CoreEngine:
             raise ExecutorConfigurationError("executor required_plugins must contain plugin names")
         # The gate supplies the committed decision/approval evidence required mode promises.
         required_plugins = tuple(dict.fromkeys(("exo-gate", *raw_required)))
-        if enabled is not None and not set(required_plugins).issubset(enabled):
-            raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
+        if enabled is not None and (off := [name for name in required_plugins if name not in enabled]):
+            raise ExecutorConfigurationError(f"plugin configuration disables a required executor plugin ({', '.join(off)}); "
+                                             "add it to core_plugins, or to the seat's plugins, to keep it")
     eng = None
     try:
         pm.load_all(dirs=plugin_dirs, enabled=enabled, entry_points=not executor_required)
@@ -129,11 +130,12 @@ def create(seat: str | None = None) -> CoreEngine:
             if pack := pack_dir():
                 folders.append(pack)
         factories: dict[str, Any] = {}
-        if (not plan.enabled("jobs") or (cfg.get("jobs") or {}).get("enabled") is False
-                or st and st.jobs.get("enabled") is False):
+        # Without a profile these keys did nothing before D-082, so legacy installs keep both managers.
+        if not plan.enabled("jobs") or plan.explicit and ((cfg.get("jobs") or {}).get("enabled") is False
+                                                         or st and st.jobs.get("enabled") is False):
             from exo.harness_runtime import DisabledJobs
             factories["attach_jobs"] = DisabledJobs
-        if not plan.enabled("delegation") or (cfg.get("delegation") or {}).get("enabled") is False:
+        if not plan.enabled("delegation") or plan.explicit and (cfg.get("delegation") or {}).get("enabled") is False:
             from exo.harness_runtime import DisabledDelegator
             factories["attach_agents"] = DisabledDelegator
         if plan.enabled("peers"):

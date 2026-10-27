@@ -56,10 +56,11 @@ These commands write only the `harness` object in `$EXO_HOME/config.json`:
 ```
 
 `use` resets capability overrides to the named preset. `enable` and `disable` change
-overrides, retaining unrelated settings. `--dry-run` validates and prints the proposed
-selection without saving it. `EXO_PROFILE=lean exo` overrides the base profile for that
-process. Saved enable/disable overrides still apply. It affects a newly created core,
-not one a client reconnects to. Remove `harness` with `exo config unset harness` and
+overrides on a saved profile, retaining unrelated settings. Without a saved profile they
+refuse and ask for `use` first, so an install never moves off legacy discovery by accident.
+`--dry-run` validates and prints the proposed selection without saving it.
+`EXO_PROFILE=lean exo` overrides the base profile for that process. Saved enable/disable
+overrides still apply. It affects a newly created core, not one a client reconnects to. Remove `harness` with `exo config unset harness` and
 unset `EXO_PROFILE` to return to legacy discovery.
 
 The full capability names are `gate`, `memory`, `context`, `skills`, `instructions`,
@@ -74,8 +75,11 @@ exo harness disable memory context learning
 
 An unknown capability, invalid JSON shape, contradictory override, or disabled required
 dependency fails before a configuration write. Every explicit profile requires a working
-`exo-gate`. A missing/failed gate stops startup. Profiles cannot disable an executor's
-mandatory plugins or bypass its trusted inventory.
+`exo-gate` that registers its `pre_tool_call` hook. A missing or failed gate stops startup,
+even when another plugin registers its own hook. Profiles do not change the gate's mode or
+policy. Profiles cannot disable an executor's mandatory plugins or bypass its trusted
+inventory. When an executor requires a third-party plugin, list it in `core_plugins` (or
+the seat's `plugins`). Otherwise startup stops and names the plugin.
 
 ## Precedence and runtime behavior
 
@@ -83,7 +87,12 @@ mandatory plugins or bypass its trusted inventory.
 2. Apply explicit capability enables/disables and required dependencies.
 3. The profile selects built-in plugins. Explicit third-party names from `core_plugins`
    remain selected. Profiles do not implicitly discover other third-party plugins.
+   `exo harness show` and `exo harness use` name each discovered plugin that the profile
+   will not load (a `Not loaded:` line, and `unselected_plugins` in `--json`). Add it to
+   `core_plugins` to keep it. They read only `plugin.yaml` files and entry-point names.
 4. Existing subsystem settings still apply. A selected capability may be configured off.
+   With a profile, `jobs.enabled: false` or `delegation.enabled: false` omits that manager.
+   Without a profile these two keys change nothing, as before D-082.
 5. A seat may narrow the selection. A seat plugin list must retain the gate and cannot
    name a disabled built-in plugin. Disabled MCP/channels/peers are suppressed even if
    a seat configures them. Disabling jobs in the profile or seat omits its manager.
@@ -97,8 +106,12 @@ task tables, or tools are created for them. Background mode is removed from the 
 schema and rejected before local or broker execution even if a caller supplies it.
 Foreground commands remain available. Disabling skills skips discovery and its tool.
 Disabling MCP avoids configured transport startup. Disabling scheduler avoids its store.
-Disabling peers avoids its service and presence directory. Learning honors profiles even
-when a client sends feedback. All configured channels are governed by `bus`.
+Disabling peers avoids Exo's own peer service and its presence directory. The Hermes peer
+adapter in the exo-bus plugin is separate: it follows `EXO_PEERS`, which stays off under
+Exo (see the exo-bus README). Learning honors profiles even when a client sends feedback.
+All configured channels are governed by `bus`. Disabling `bus` does not stop `delegate`
+from sending a signed directive to another seat that is already set up. That send belongs
+to delegation, so disable `delegation` to stop it.
 The scheduler can be enabled independently of delegation and background jobs. Scheduled
 turns also use workspace instructions when that capability is enabled.
 
@@ -130,6 +143,8 @@ Independent plugins still load. A failed registration rolls back its registratio
 Installed `exo.plugins` entry points can expose `PLUGIN_MANIFEST`. Python must import
 the entry point to read that metadata, so dependency validation prevents registration,
 not its import-time effects. Folder plugins take precedence over duplicate entry points.
+Entry points register in the order Python lists them, as before D-082, so their hooks
+keep that order. A requirement can still move a dependency ahead of its consumer.
 Dependency names do not currently express version constraints.
 
 Resources a plugin creates during `register` can be paired with synchronous cleanup:

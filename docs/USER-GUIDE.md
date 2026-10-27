@@ -42,9 +42,13 @@ are the agent's notes and never grant approval. See [working notes](WORK-NOTEBOO
 Run `exo harness list` to see `lean`, `coding`, and `full`. Preview a change with
 `exo harness use coding --dry-run`, then save it with `exo harness use coding`.
 Run `exo stop` and launch Exo again to apply it. `exo harness show` explains the selection.
-`exo harness enable jobs` adds one capability, and `exo harness disable jobs` removes it.
-The approval gate stays enabled in every profile. Existing installs keep their behavior until
-you select a profile. Profiles retain your saved integration settings and conversation history.
+Once a profile is saved, `exo harness enable jobs` adds one capability, and
+`exo harness disable jobs` removes it. Without a saved profile they ask you to run `use` first.
+The approval gate stays enabled in every profile. Profiles do not change the gate's mode or
+policy. Existing installs keep their behavior until you select a profile. A profile loads only
+the plugins it names and those in `core_plugins`. `show` and `use` list any other plugin
+you installed that it will not load. Profiles retain your saved integration settings and
+conversation history.
 
 `coding` and `full` also read repository `AGENTS.md` guidance for each session's working
 directory. `AGENTS.override.md` takes priority at the same directory. This reads instructions.

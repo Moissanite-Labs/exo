@@ -232,4 +232,47 @@ def test_an_explicit_profile_without_instructions_overrides_the_legacy_setting(t
     asyncio.run(run())
 
 
+def test_a_gate_that_registers_no_hook_is_refused_beside_an_allow_all_hook(tmp_path, monkeypatch):
+    plugins = tmp_path / "stub-plugins"
+    for name, body in (("exo-gate", "def register(ctx):\n    pass\n"),
+                       ("shim", "def register(ctx):\n    ctx.register_hook('pre_tool_call', lambda **kw: None)\n")):
+        (plugins / name).mkdir(parents=True)
+        (plugins / name / "plugin.yaml").write_text(f"name: {name}\n")
+        (plugins / name / "__init__.py").write_text(body)
+    cfg = configured(tmp_path, monkeypatch, core_plugins=["shim"])
+    monkeypatch.setenv("EXO_PLUGIN_DIRS", str(plugins))
+    with pytest.raises(ConfigError, match="working exo-gate"):
+        compose.create()
+    assert not (cfg.home / "sessions.sqlite").exists()
 
+
+def test_legacy_job_and_delegation_switches_stay_inert_as_before(tmp_path, monkeypatch):
+    configured(tmp_path, monkeypatch, None, core_plugins=["exo-gate"], learn={"enabled": False},
+               jobs={"enabled": False}, delegation={"enabled": False})
+    engine = compose.create()
+    try:
+        assert not isinstance(engine.jobs, DisabledJobs) and not isinstance(engine.agents, DisabledDelegator)
+        assert {"delegate", "jobs"} <= set(engine.registry.names())
+    finally:
+        asyncio.run(engine.close())
+
+
+def test_an_explicit_profile_honours_job_and_delegation_switches(tmp_path, monkeypatch):
+    configured(tmp_path, monkeypatch, "coding", learn={"enabled": False},
+               jobs={"enabled": False}, delegation={"enabled": False})
+    engine = compose.create()
+    try:
+        assert isinstance(engine.jobs, DisabledJobs) and isinstance(engine.agents, DisabledDelegator)
+    finally:
+        asyncio.run(engine.close())
+
+
+def test_a_required_executor_plugin_outside_the_profile_names_core_plugins(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from exo.core.tools.executor import ExecutorConfigurationError
+    cfg = configured(tmp_path, monkeypatch)
+    broker = SimpleNamespace(trusted_plugin_dirs=(str(REPO / "plugins"),), required_plugins=("vendor-audit",))
+    monkeypatch.setattr(compose, "load_executor", lambda: (broker, True))
+    with pytest.raises(ExecutorConfigurationError, match=r"disables a required executor plugin \(vendor-audit\).*core_plugins"):
+        compose.create()
+    assert not (cfg.home / "sessions.sqlite").exists()

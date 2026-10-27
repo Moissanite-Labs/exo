@@ -6316,5 +6316,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     in a place others can write, is not read. The rendered block has a total bound and at most 16 warnings.
     Secret-store filenames are refused. A session with no stored cwd reads the engine cwd. `attach()` takes a
     built provider and refuses required executor mode, and compose uses it.
+  - *CLI and composition.* `enable` and `disable` need a saved profile. `show` and `use` name discovered plugins
+    a profile will not load. Without a profile, `jobs.enabled` and `delegation.enabled` stay inert, as before.
+    Entry points keep their discovery order. The executor's plugin refusal names the plugin and `core_plugins`.
   - *Deferred.* Calling the memory provider's `shutdown()` at close is a follow-up. Main never called it, and it
     changes exo-memory's shared runtime lifetime.

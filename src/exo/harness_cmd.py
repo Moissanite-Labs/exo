@@ -27,6 +27,19 @@ def register(sp, common) -> None:
         q.add_argument('--dry-run', action='store_true')
 
 
+def _unselected(plan) -> list[str]:
+    """Discovered third-party plugins that an explicit profile does not load. Only plugin.yaml files and
+    entry-point names are read: no plugin code is imported."""
+    if not plan.explicit:
+        return []
+    import importlib.metadata
+    from .core.plugins import ENTRY_POINT_GROUP, default_dirs, discover
+    builtin = {cap.plugin for cap in CATALOG if cap.plugin}
+    names = [m.name for m in discover(default_dirs())]
+    names += [ep.name for ep in importlib.metadata.entry_points(group=ENTRY_POINT_GROUP)]
+    return sorted({name for name in names if name not in builtin and name not in (plan.plugins or ())})
+
+
 def _render(plan) -> str:
     plugins = ', '.join(plan.plugins) if plan.plugins is not None else 'legacy discovery'
     summary = plan.summary()
@@ -37,7 +50,9 @@ def _render(plan) -> str:
             f'Disabled: {", ".join(summary["disabled"]) or "none"}\n'
             f'Plugins: {plugins or "none"}\n'
             f'Disabled by subsystem settings: {", ".join(disabled_settings) or "none"}\n'
-            'Availability is not probed; services still need their own configuration.')
+            + (f'Not loaded: {", ".join(unselected)}. These discovered plugins are outside the profile; '
+               'list them in core_plugins to keep them.\n' if (unselected := _unselected(plan)) else '')
+            + 'Availability is not probed; services still need their own configuration.')
 
 
 def cmd_harness(a) -> int:
@@ -54,7 +69,8 @@ def cmd_harness(a) -> int:
         cfg = Config.load()
         if action == 'show':
             plan = resolve(cfg.data)
-            print(json.dumps(plan.summary(), indent=2) if getattr(a, 'json', False) else _render(plan))
+            summary = {**plan.summary(), 'unselected_plugins': _unselected(plan)}
+            print(json.dumps(summary, indent=2) if getattr(a, 'json', False) else _render(plan))
             if os.environ.get('EXO_PROFILE') and not getattr(a, 'json', False):
                 print('EXO_PROFILE overrides the saved profile.')
             return 0
@@ -64,8 +80,9 @@ def cmd_harness(a) -> int:
         else:
             # Validate the saved graph before editing it. The environment affects
             # runtime selection, never the persisted profile being edited here.
-            saved = resolve(candidate, env={})
-            raw = candidate.setdefault('harness', {'profile': 'full' if not saved.explicit else saved.profile})
+            if not resolve(candidate, env={}).explicit:  # an override would silently switch legacy to full
+                raise ConfigError('no profile is saved; select one first with exo harness use lean, coding or full')
+            raw = candidate['harness']
             opposite = 'disable' if action == 'enable' else 'enable'
             raw[action] = list(dict.fromkeys([*raw.get(action, []), *a.names]))
             raw[opposite] = [name for name in raw.get(opposite, []) if name not in a.names]

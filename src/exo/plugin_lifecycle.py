@@ -177,7 +177,7 @@ def load_entry_points(manager: PluginManager, group: str,
     from exo.core.plugins import Manifest
 
     candidates: dict[str, _Candidate] = {}
-    for ep in sorted(importlib.metadata.entry_points(group=group), key=lambda ep: ep.name):
+    for ep in importlib.metadata.entry_points(group=group):  # discovery order, as before D-082: hooks keep it
         if allow(ep.name):
             candidates.setdefault(ep.name, _Candidate(Manifest(name=ep.name, kind="entry_point"),
                                                        "entry_point", ep))
@@ -196,7 +196,7 @@ def load_all(manager: PluginManager, dirs: Iterable[str | Path] | None,
 
     candidates = {m.name: _Candidate(m) for m in discover(default_dirs() if dirs is None else dirs) if allow(m.name)}
     if entry_points:
-        for ep in sorted(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP), key=lambda ep: ep.name):
+        for ep in importlib.metadata.entry_points(group=ENTRY_POINT_GROUP):  # discovery order, as load_entry_points
             if allow(ep.name):
                 candidates.setdefault(ep.name, _Candidate(Manifest(name=ep.name, kind="entry_point"),
                                                            "entry_point", ep))
