@@ -14,7 +14,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   decision: deny}]`, `ssh host 'env -S "'"'"'X=a b'"'"' cat ~/.ssh/id_rsa"'` went deny -> ask, below its plain
   `-S` spelling, and the `rm -rf` and `echo '...' | ssh host` forms did too; `reserved: [tool:terminal]` lost the
   `(opaque_exec, me@host)` hit of `ssh -p 22 me@host 'env -S ...'`. Now `classify` reads the call again with each
-  text a shell line only, as before #634, and with #634's reading, each as a call of its own
+  text a shell line only, as before #634, and, whenever any `env -S` text or spelling is read, with #634's
+  reading, as main read it, each as a call of its own
   (`Classification.split_readings`, listed by `gate.readings`), and `decide` keeps the strictest with every
   reserved hit and violation, so each part keeps the host it had. The call's first reading reads the line env
   runs (`_env_split_lines`): the text split by env's own rules (quotes, escapes, `\_`, `#`, `\c`, `${NAME}`; `;`,
@@ -30,13 +31,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   denies under `deny: [delete]` (main: ask); under `categories: {opaque_exec: allow}` the `--split`, `-iS`, `-vS`
   and `;x` rows now ask (main: allow; it asked on the `-S'..'` and `--` rows already). The exo-gate hook's
   bypass floor reads the category of each of these readings, so a line main kept as a credentials or store ask
-  in bypass (`env -S "'X=a b' gh auth token \d"`, `env -- -S "'X=a b' muse login"`) still asks there. A call
-  with an `env -S` text costs up to four readings, still linear in the text. The #423 differential (main's
-  script, `--jobs 2`) lowers 0 pairs against main e0968a2b on the built-in corpus without variants (12,095
-  actions x 88 policies; 345 pairs tightened) and on an aimed corpus of 18,270 `env -S` lines (28 spellings
-  with 12 assignment prefixes before 10 payloads, bare, behind sudo, doas, nice and timeout, and 16 spellings
-  behind ssh, mosh and stdin-fed ssh) under 175 policies (the built-in ones and rules, category lines, deny and
-  reserved entries on the host and on ten categories; 61,328 pairs tightened). Tests:
+  in bypass (`env -S "'X=a b' gh auth token \d"`, `env -- -S "'X=a b' muse login"`) still asks there. Main's
+  reading is taken whenever any `env -S` text or spelling is read (verify 2): taken only where #634's words found
+  a command in the first reading, it was dropped where a spelling main missed, read as `-S TEXT`, hid a nested
+  text main read, and `env -iS'\q' sh -c 'env -S "'"'"'X=a b'"'"' rm -rf /srv/data"'` went deny -> ask under
+  `deny: [delete]` (its `gh auth token` form: deny -> ask under `deny: [credentials]`, `no_grant` lost, and in
+  bypass allowed where main asked at the floor); it decides as on main again. The bypass floor keeps main's order
+  for main's own reading, which classify puts first in `split_readings` (verify 3): the floor when that reading is
+  a floor category, then the hold of a post that breaks the posting rules, then the floor of any other reading.
+  Checked before the hold for every reading, it turned 65 of 1,694 hook lines main held into an ask at the floor
+  (`env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"`); they are held again, as on main. A
+  call with an `env -S` text costs up to four readings, each linear in the text, and a spelling main missed is read
+  in full: `env -S "'X=a b' rm -rf /srv/data"` takes 6 ms (main 58503282: 3 ms), `env --split="..."` with a 40 KB
+  text of 20,000 words 3.7-4.4 s (main: 0.06 s). The #423 differential (main's script, `--jobs 2`) lowers 0 pairs
+  against main 58503282 on the built-in corpus without variants (12,117 actions x 88 policies; 381 pairs tightened)
+  and on an aimed corpus of 20,818 `env -S` lines without variants (28 spellings with 12 assignment prefixes before
+  10 payloads, bare, behind sudo, doas, nice and timeout, 16 spellings behind ssh, mosh and stdin-fed ssh, and 20
+  spellings before `sh -c` and `bash -c` with a nested `env -S` text, bare, behind those wrappers and hops) under
+  180 policies (the built-in ones and rules, category lines, deny and reserved entries on the host and on ten
+  categories; 98,066 pairs tightened). A hook probe of 3,626 lines through `pre_tool_call` (bypass on, and ask
+  mode) lowers none.
+  Tests:
   `tests/security/test_gate_env_split_string.py`, `tests/security/test_gate_category_deny_parts.py` (the `--`
   row now denies; the post row uses `posting.forbid_words` and asserts `forbidden word: Zork`),
   `plugins/exo-gate/tests/test_bypass.py`.
