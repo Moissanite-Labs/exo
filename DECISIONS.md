@@ -4651,3 +4651,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   and a first launch from a clean home with the claude CLI: no approval card for the intro skill, no decision
   call to the CLI, and read-only tool calls at 0.0 s.
 - **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.
+
+## D-082 (2026-10-17) Canary operating decisions: verify first, hold high-exposure posts, finish adjacent work
+- **Scope pending:** The read-back requirement and the corresponding rejected item below conflict
+  with Rule 4 in `skills/choreography/references/anti-loop-discipline.md` for local file changes.
+  Their scope is undecided and should not be treated as a settled instruction until resolved.
+- **Decision:** how agents working on and in Exo operate, from canary use (agent exo-razi):
+  - Verify by read-back before claiming an action is done (re-read the file, grep the result, fetch the
+    record). Never invent a URL or claim a send that was not confirmed.
+  - A failed bus or message send is reported as failed. It is never silently replaced with another
+    channel and described as sent.
+  - High-exposure or external posts wait for the principal's explicit go-ahead.
+  - Inside delegated scope, finish the named work and the adjacent work end to end. Ask only for
+    irreversible or key picks (spend, model, name, price, logins); do not hold deliverables for
+    picks the delegation already covers.
+- **Why:** correction clusters during the canary day: unverified "done" claims, and pick-questions
+  asked inside fully delegated blocks instead of acting.
+- **Rejected:** holding delegated work for confirmation picks; substituting a channel on send
+  failure; posting externally without release; skipping the read-back after a fix.
+- **Revisit if:** the principal resolves the read-back scope or the available verification tools change.
+- **Origin:** local canary notes appended to DECISIONS.md in the live install on 2026-10-17
+  (numbered D-074 and D-075 locally). Those numbers were claimed by unrelated gate PRs
+  (#125, #126); #125 closed without merging, while #126 landed as D-075. The notes are recorded
+  here under a new number, recovered during the
+  2026-10-18 exo-live update. Team operating record, not product behaviour.
+- **Docs:** this entry.
