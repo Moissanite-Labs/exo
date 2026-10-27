@@ -13,7 +13,7 @@ export function mount(root) {
     try {
       const data = await api("GET", "/api/credentials");
       if (!alive) return;
-      info = data; draw();
+      info = data; draw(); show("Credential settings loaded.");
     } catch (e) {
       if (alive) body.replaceChildren(status, h("p", null, "Credential setup is unavailable. The selected core may need an upgrade or principal access."),
         h("button", { class: "xc-btn", type: "button", onclick: load }, "Retry"));

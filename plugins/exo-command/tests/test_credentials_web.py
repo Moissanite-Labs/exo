@@ -169,3 +169,20 @@ def test_successful_save_is_not_denied_when_metadata_refresh_fails():
             assert 'Saved in Keychain' in text and 'not saved' not in text and SECRET not in text
     finally:
         web.close()
+
+
+@needs_browser
+def test_successful_metadata_load_finishes_checking_without_claiming_store_usable():
+    source = CredentialSource()
+    web = Served(source)
+    try:
+        with Browser() as browser:
+            browser.goto(web.url('credentials'))
+            browser.wait('document.querySelector(".xc-credentials [role=status]").textContent === "Credential settings loaded."')
+            text = browser.eval('document.querySelector(".xc-credentials").textContent')
+            assert 'Checking the selected core' not in text
+            assert 'Keychain item is readable' not in text
+            assert browser.eval('!!document.querySelector("input[type=password]")')
+            assert all(request == {'action': 'list'} for request in source.requests)
+    finally:
+        web.close()
