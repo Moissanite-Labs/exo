@@ -75,6 +75,8 @@ LAZY = {
     'serve': ('cli_chat', 'cmd_serve', 'run exod, the core protocol server'),
     'chat': ('cli_chat', 'cmd_chat', 'chat with exod from the terminal'),
     'models': ('models_cmd', 'cmd_models', 'configured providers, keys found, and the route for each role'),
+    'github-auth': ('github_auth_cmd', 'cmd_github_auth',
+                    'per-seat GitHub authentication: configure, login, status, test, remove'),
     'providers': ('providers_cmd', 'cmd_providers',
                   'set up model providers: status, add or remove a key, test, default model'),
     'decide': ('decide_cmd', 'cmd_decide',
@@ -467,6 +469,9 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_update(args[1:])
     if args and args[0] == 'web':  # argparse's REMAINDER drops a leading option such as --help
         return cmd_web(argparse.Namespace(rest=args[1:]))
+    if args and args[0] == 'github-auth':
+        from .github_auth_cmd import main as github_auth_main
+        return github_auth_main(args[1:])
     if args and args[0] == 'providers':  # its own quiet parser: an error must never echo a pasted key
         from .providers_cmd import main as providers_main
         return providers_main(args[1:])
