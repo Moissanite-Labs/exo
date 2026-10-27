@@ -4482,8 +4482,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Limits:** as for the other store files: a glob in the file's own name (`~/.exo/config.js?`), a path in a variable
   or one a command builds from pieces (`F=~/.exo/config.json; cp x "$F"`), a write through a hard link made earlier,
   the bash tool's `cwd` argument and `python -mexo.config` written as one word, which keep main's `opaque_exec`
-  ask. Names are matched case-sensitively, so on a case-insensitive filesystem `~/.exo/CONFIG.JSON` keeps its class,
-  as `~/.exo/POLICIES/gates.yaml` does. A symlink is not a limit: one made earlier is resolved (`_path_forms`), and
+  ask. Names matched case-sensitively here — on a case-insensitive filesystem `~/.exo/CONFIG.JSON` kept its
+  class, as `~/.exo/POLICIES/gates.yaml` did — until #601 (D-082) made the names match in any case, so these
+  ask now. A symlink is not a limit: one made earlier is resolved (`_path_forms`), and
   one made on the same line (`ln -s ~/.exo/config.json /tmp/l && cp x /tmp/l`) names the file in its `ln`, which is
   the store write, as for `policies/gates.yaml` on main. A copy or extraction whose destination is a folder that
   holds the file (`cp -t ~/.exo`, `cp /tmp/x/config.json ~/.exo/`, `tar -C ~/.exo -xf`, `unzip -d ~/.exo`) is #483.
@@ -4892,3 +4893,35 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   here under a new number, recovered during the
   2026-10-18 exo-live update. Team operating record, not product behaviour.
 - **Docs:** this entry.
+
+## D-082 (2026-10-26) A store or secret name matches in any case (issue #601)
+- **Status:** Accepted 2026-10-26 (gate security; strictness only grows). It amends the case-sensitive note in
+  D-074's limits and the same limits in `docs/GATE.md`.
+- **Why:** on a case-insensitive file system (default APFS) `.exO/config.json` IS `.exo/config.json`, but every
+  store and secret name check read the spelling as written, so a case variant walked past: on main a8a4ffbd,
+  `cp /tmp/x ~/.exO/config.json` and `cp /tmp/x $HOME/.EXO/config.json` were `shell`/allow where the plain
+  spelling is a `store_write` ask, `echo x > ~/.KUBE/config` a `local_write`/allow where `~/.kube/config` is
+  `credentials`, and `cat ~/.SSH/config` a read where `~/.ssh/config` asks. `realpath` does not canonicalise
+  case, so the resolved spelling kept the variant (`_path_forms`). The `id_rsa` name in `cat ~/.SSH/id_rsa`
+  asked already, matched anywhere.
+- **Decision:** every store and secret name matches in any case. The name regexes (`_STORE_NAMES`,
+  `_CONFIG_NAME`, `_RUN_DIR`, `_SENSITIVE_PATH`) are searched on the folded text (`_fold`), the list itself
+  compiled twice (`_SENSITIVE_PATH_F`) because `Netlify` in it is mixed-case, which a lowered text would not
+  meet; the plain compares (store roots and code folders, protected parts, the `cd`-store hints, `_could_be`,
+  the glob samplings) fold through `_fold`. A glob part folds when it holds no wildcard — a folder the file
+  system opens (`~/.EXO/*`, `~/*/RUN/x`) — and stays as written when it holds one, as bash matches it against
+  the entries case-sensitively (`[HOME=x]*`, `~/.e*O/*`; `_fold_glob`). `EXO_GATE_CASE_SENSITIVE=1` reads main
+  d800f33c's case-sensitive names instead, for a file system whose `.exO` is a different folder; the tests pin
+  both readings.
+- **Cost:** on a case-sensitive file system a distinct `.exO` folder asks, and `cert.PEM` or `NOTES.ENV` count
+  as keys and env files — the fail-closed side, as for a glob that could name one. A case variant of a store
+  folder before a wildcard asks as a `cd` into it does (`ls ~/.EXO/*`).
+- **Limits:** descriptor and process folders (`/dev/fd/3`, `/proc/self/environ`) still match as written, as do
+  every env-spelled path beside its own spelling (`EXO_HOME`'s own case); a glob part that holds a wildcard is
+  bash's matching, not the file system's (`~/.e*O`, `[HOME=x]*`).
+- **Validation:** `tests/security/test_gate_store_name_forms.py` ("a case variant of a store or secret name
+  asks", both readings), `tests/security/test_gate_config_store.py`, `tests/test_gate_diff.py` (the loosening
+  patches re-anchored), and `scripts/gate_diff.py --base main --head .` printing `nothing lowered` with the
+  issue's five rows added to the corpus as tightened pairs.
+- **Docs:** `docs/GATE.md` "Store-path checks", "Secret-store paths", "Search tools", "Change limits",
+  `CHANGELOG.md`.
