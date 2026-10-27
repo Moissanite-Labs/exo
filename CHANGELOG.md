@@ -31,6 +31,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   segment of a dotted key. Both now mask a secret at any level of the key path (a secret-shaped name, a container
   under one, and a literal under `env` or `headers`), and `config set` refuses the same shapes. `${VAR}` references
   and `*_env` names are still shown and accepted (#691).
+
+- Glob spellings of descriptor and store paths, and chained relative cds, now count as store writes
+  (#337). A glob is read part by part against the descriptor forms and the store's names and roots,
+  so `> /dev/f[d]/3` and `> ~/.exo/sta?e/gate-grants.json` ask, and a relative cd joins onto the
+  folder the line's earlier cds reached (`cd / && cd dev`, `cd /de?`). A spelling that could name
+  only the writer's stdout or stderr stays ordinary. `..` collapses in a glob the way main reads a
+  literal path, and the chained-cd cap counts parts of the normalised path, so `./` or `x/../`
+  padding cannot stop the tracking. The three-literal rule needs literals in the file's own part, so
+  `git add src/state/*` stays ordinary. The matcher is linear in the parts (indexed, never sliced).
+  Tests: `tests/security/test_gate_fd_glob_chain.py`.
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
