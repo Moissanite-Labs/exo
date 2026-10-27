@@ -618,15 +618,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   that way (D-026 and D-040 amendments).
 - A write from a folder of the Exo home that is not itself part of the store no longer asks as a
   store write when it cannot name anything outside that folder (#203). A `cd` into any folder of
-  the home (`~/.exo/plugins/<name>`, `venv/`, a principal's unprotected subfolder) made every
-  writing command on the line a `store_write`, so `cd ~/.exo/plugins/foo && cp x config.json`
-  asked the principal over the plugin's own file. The blanket rule now steps aside for one shape:
+  the home (`~/.exo/handoffs`, a principal's unprotected subfolder) made every
+  writing command on the line a `store_write`, so `cd ~/.exo/handoffs && cp x config.json`
+  asked the principal over the folder's own file. The blanket rule now steps aside for one shape:
   a program whose writes the gate can see (`cp`, `mv`, `install`, `tee`, `touch`, `mkdir`,
   `sed -i`, `printf`, `echo`), with nothing spelt before it and every word and redirection target
   a plain relative name — no `..` segment, expansion, glob or brace — standing in a folder every
-  spelling of which sits inside the home and outside the store. Every other write from such a
+  spelling of which sits inside the home and outside the store. The folders Exo loads code from
+  are store folders now (#435, #459), so `~/.exo/plugins/<name>`, `venv/` and `src/` keep asking.
+  Only a `cd` the gate can prove moves the shell it stands in — a bare top-level `cd` with one
+  target and no option — moves the folder the line stands in; a `cd` in a subshell, a branch, a
+  pipeline, a background job, a `&&`/`||` chain, with a prefix or an extra operand never does.
+  Once the line has stood in a store folder no later home `cd` re-opens the carve-out, and a
+  `.git` folder is never a home folder, since its hooks run code. Every other write from such a
   folder still asks, a word that itself names a store path still asks, and a read of a store
-  file name there still asks as it did (#192).
+  file name there still asks as it did (#192). Known limit: a `cd` to a folder that does not
+  exist reads the same as one to a folder that does, so a lone `cd` into a nonexistent home
+  folder still clears a plain write there; the gate cannot stat the shell's filesystem.
 - Open-decision pins are capped at the newest 12 (#398). A deferral nothing settled stayed pinned for the
   life of the session, so the pins list, the pins file and the per-turn scan over them grew without bound;
   the list is now capped where it is kept, in `_observe` and in a pin carry, at the 12 the compaction block
