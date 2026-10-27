@@ -612,11 +612,13 @@ class Gate:
             return card
 
     def _rules(self, tool: str, args: dict, risk: str, cwd: str = "", c: Optional[gate.Classification] = None,
-               floors: bool = True) -> tuple[gate.Classification, gate.Decision]:
+               floors: bool = True, only: Optional[bool] = None) -> tuple[gate.Classification, gate.Decision]:
         """Classification and the rule outcome (policies, then the registry risk floor). With ``floors`` off, the
-        outcome as before #557: the defaults alone in place of a policy with a malformed escalate. A given ``c`` is a
-        line already read here: its body files are not read again, and none counts as held (#343), since a held file
-        leaves its post unseen and such a line never gets that far (``_pre_tool_call``)."""
+        outcome as before #557: the defaults alone in place of a policy with a malformed escalate. With ``only``, one
+        policy alone decides, the pinned one (False) or the changed one (True), so the #586 grant check can ask each
+        side's own decision. A given ``c`` is a line already read here: its body files are not read again, and none
+        counts as held (#343), since a held file leaves its post unseen and such a line never gets that far
+        (``_pre_tool_call``)."""
         held: list[str] = []
         if c is None:
             action = {"tool": tool, "args": args}
@@ -626,6 +628,9 @@ class Gate:
         ctx = {"spent_today": self._spent.get(today, 0.0), "held_body_files": held}
         pol, changed = self.policies(), self.changed_policies()
         floor, changed_floor = self._floor, self._changed_floor
+        if only is not None:
+            pol, floor = (changed, self._changed_floor) if only else (pol, floor)
+            changed, changed_floor = None, None
         if not floors:
             pol, floor = pol if floor is None else floor, None
             changed, changed_floor = changed if changed_floor is None else changed_floor, None
@@ -635,16 +640,19 @@ class Gate:
         elif self._policy_error:
             d.reason += f" (policy error, defaults used: {self._policy_error[:120]})"
         if changed is not None:
-            # D-038: a policy changed mid-session only tightens. Loosening waits for /gate accept.
+            # D-038: a policy changed mid-session only tightens. Loosening waits for /gate accept. Old and new merge
+            # as one stricter reading (#586), as they do beside a policy error (#557). The #557 grant check keeps the
+            # decision as before #557: the higher outcome of the two sides, so its grant applies where that asks too.
             d2 = _decide(c, changed, changed_floor, ctx)
-            if floor is not None or changed_floor is not None:
-                d = _merge(d, d2)   # #557: either may already be a merge; the other's violations stand at a tie
-            elif _RANK[d2.outcome] > _RANK[d.outcome]:
-                d = d2
-            # A part reserved under either policy keeps its ask from a standing grant (D-075), and so does a sudo write
-            # line whose displaced part asks under either (#454).
-            d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
-            d.displaced_asks = d.displaced_asks or d2.displaced_asks
+            if floors:
+                d = _merge(d, d2)   # either may already be a merge; the other's violations stand at a tie
+            else:
+                if _RANK[d2.outcome] > _RANK[d.outcome]:
+                    d = d2
+                # A part reserved under either policy keeps its ask from a standing grant (D-075), and so does a sudo
+                # write line whose displaced part asks under either (#454).
+                d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
+                d.displaced_asks = d.displaced_asks or d2.displaced_asks
             d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
         if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
             d.reason += f" (registry risk is high and {tool} is not a known tool)"
@@ -687,6 +695,21 @@ class Gate:
                        if m.outcome == "ask" else None)
             if m_grant is None:
                 grant = None
+        elif grant and self._changed is not None and not self._policy_error and not self._changed_error:
+            # #586: with two valid files, a grant applies only where each side's own decision (the model's verdict
+            # in) asks and finds one too, so the merged reading never runs a call one side logs (an unbound grant on
+            # the changed file's reserved hit) or a side asks for without that binding (a bound grant on the line
+            # only the changed file binds).
+            for alone in (False, True):
+                s = self._rules(tool, args, risk, cwd, c=c, only=alone)[1]
+                if s.outcome != "deny":
+                    self._tighten(s, verdict)
+                s_out = gate.binds_exact(c, s)
+                s_grant = (self._grant_for(c, s, gate.approval_binding(c, args) if s_out else "", s_out)
+                           if s.outcome == "ask" else None)
+                if s_grant is None:
+                    grant = None
+                    break
         if grant:
             d.outcome, d.rule = "allow", "grant"
             d.reason += f"; standing grant {grant['id']} (until {_iso(grant['expires'])})"

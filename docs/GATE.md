@@ -2705,6 +2705,26 @@ decides each call under both. The stricter outcome wins. So a change can tighten
 can never loosen until the principal runs `/gate accept` (ledger row `policy_accept`), or the
 core restarts. `/gate` says whether a change is waiting.
 
+With two valid files the old and new decisions merge as one stricter reading (#586), as they do
+beside a policy error (#557): the widest exposure, a third party if either has one, every
+violation and every reserved part, and at an equal outcome the other side stands only when it
+lists a violation the standing one lacks. These are the decisions that change for valid policies:
+at an equal outcome the changed files' posting or scrub findings stay on the card of an ask the
+pinned policy already made, and the ask takes the widest exposure of the two, so it binds to the
+exact line where either decision would bind it. No outcome is lower than either side's, and a
+single valid file decides as before, grants included.
+
+A standing grant applies only where each side's own decision (with the decision model's verdict)
+also asks and finds one, each side by its own lookup, so an unbound and a bound grant for one
+line count separately. The merged ask runs only where both sides would run it: an unbound grant
+does not run a call the pinned file logs (a `reserved` entry the changed files add:
+`git push origin main` logs under `escalate: {categories: [payment]}` and asks once
+`reserved: [vcs_push]` is added), and a grant bound to the exact line does not run a call the
+pinned policy asks for without that binding (a pinned `categories: {local_write: ask}` asks for
+`sudo echo hi > /tmp/f` unbound; changed files that make the displaced part ask, such as a valid
+escalate that names `read`, bind the line). Answering "always" there still writes a grant; it
+covers the line once `/gate accept` adopts files that ask for it and bind it the same way.
+
 The same holds for `approvals.yaml` (#211). An ask lists only the approvers both files allow, in
 the pinned order (`gate.strictest_approvers`, an ordered intersection; the principal is first in
 both, so the list is never empty), and an "always" answer lasts the shorter of the pinned and
@@ -2712,10 +2732,9 @@ changed `always` values, so a 0 in either writes no grant. A seat the principal 
 answer the next ask; a seat they add waits for `/gate accept`. A changed file that does not load
 counts as the defaults: the principal alone, 30 and 7 days. A changed `gates.yaml` whose only
 error is a malformed `escalate` keeps its other sections and is decided beside the defaults, with
-approvers no wider than theirs (#557). When the pinned or the changed file has that error, the
-old and new decisions merge as the readings of a line merge, so at an equal outcome the other's
-violations stay on the card, and a standing grant applies only where the decision with the defaults
-in place of that file also asks and finds it. Limits: an ask already
+approvers no wider than theirs (#557). When the pinned or the changed file has that error, a
+standing grant applies only where the decision with the defaults in place of that file also asks
+and finds it. Limits: an ask already
 open keeps the approvers it was sent with, and grants written before the change still match until
 they expire or `/grants revoke` removes them.
 
