@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- The docs map keeps one base row per decision (#648): a #633 rebase that kept both sides left the pre-stage
+  D-057 row beside its updated row, the shape PR #613's D-077 pair had slipped past the docs tests. A new check
+  in `tests/docs/test_docs_map.py` fails when two rows name the same decision; amendment and stage rows stay.
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
