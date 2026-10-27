@@ -190,12 +190,21 @@ def test_the_stdin_part_stays_the_card_for_a_text_that_reads_as_one_command(comm
     assert gate.decide(c).reason.startswith("runs code the gate cannot fully see (ssh prod-db runs its stdin"), c
 
 
+def test_fed_parts_carry_the_remote_host_exposure():
+    # #327: the exposure marking in _remote_fed is the only thing that sets the fed text's parts to
+    # internal. Without it, a deny on internal deletes misses the fed `rm`, and the line asks.
+    c = gate.classify_shell("ssh prod-db <<< 'git push --force; rm -rf /data'")
+    assert gate.decide(c, {"gates": {"deny": [{"category": "delete", "exposure": "internal"}]}}).outcome == "deny"
+
+
 @pytest.mark.parametrize("size", [20_000, 80_000])
 def test_many_ssh_fed_one_text_stay_linear(size, monkeypatch):
     # #327: the issue's shape. Marking the fed parts per ssh made decide quadratic (22 s at 25 KB on the
     # review's machine): each ssh's result listed every fed part, so decide scoped and walked them all
     # once per ssh. The parts are now marked once and shared, so each distinct part is scoped once:
-    # apply_scopes runs about 2.7 times per command on the line, fed or feeding.
+    # apply_scopes runs about 2.7 times per command on the line, fed or feeding. The ledger view the
+    # hook builds per decision sits inside the timed span too: it used to expand the shared subtree
+    # once per ssh even after classify and decide went linear.
     line = "{ " + "ssh h; " * (size // 14) + "} <<< '" + "echo hi; " * (size // 18) + "'"
     scopes = [0]
     apply_scopes = gate.apply_scopes
@@ -209,5 +218,6 @@ def test_many_ssh_fed_one_text_stay_linear(size, monkeypatch):
     c = gate.classify_shell(line)
     assert c.category == "opaque_exec", c
     assert gate.decide(c, {"gates": {"deny": ["delete", "target:prod-db"]}}).outcome == "ask"
+    assert "parts" not in c.as_dict()
     assert scopes[0] <= 4 * (size // 14 + size // 18), scopes
     assert time.process_time() - start < 60      # the fixed code takes a few seconds; only a hang fails this
