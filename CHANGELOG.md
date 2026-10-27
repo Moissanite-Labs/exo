@@ -747,8 +747,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `~/.exo/con$(:)fig.json`) behind a quoted prefix is a store write on every reading. With #514 and #493, the store
   scan keeps each store path either reading meets, so a target entry on a later one still matches, and an ssh host
   behind a quoted prefix is a target of the line (`X='a b' ssh buildhost gh pr view 5` under a rule on `buildhost`).
-  With #591, the text of `env -S` is read as env's argv beside the quoted prefix readings, so `X='a b' env -S
-  "'Y=c d' rm -rf /srv/data"` is a delete that `deny: [delete]` denies, where main asks as an unknown program.
+  With #634 (#591), the text of `env -S` is read as env's argv beside the quoted prefix readings, so `X='a b' env
+  -S "'Y=c d' rm -rf /srv/data"` is a delete that `deny: [delete]` denies, where main asks as an unknown program;
+  a spelling #634 does not read yet (`env -iS`, `--split-s=`) decides as on main (#707). With main 58503282 (#635,
+  #652, #659), a store name split by quotes, a backslash or a backslash-newline, or in another letter case, behind
+  a quoted prefix is a store write on every reading, and so is a write by a relative name after a `cd` into such a
+  folder there: `X='a b' cd ~/.E''XO && cp /tmp/x config.json` is a store write that `deny: [store_write]` denies,
+  where main read it as `credentials` and asked. A camelCase tool the gate reads by its name and arguments keeps
+  its floor (#515) and gets no reading as before. A line with a quoted prefix assignment is read
+  again as before #471, with each of main's readings (5 call readings where main makes 2 for `X='a b' cp /tmp/x
+  ~/.exo/config.json`); a line without one costs what it did.
 - Gate (#328, D-038): a quoted heredoc delimiter with a space hid the commands after the heredoc. The lexer ended a
   body at the first line that equalled the delimiter once its surrounding whitespace was stripped, so a delimiter such
   as `<<'EOF '`, `<<"EOF "`, `<<' EOF'` or `<<EOF\ ` never matched and every later line, the real terminator included,

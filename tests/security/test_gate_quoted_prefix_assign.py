@@ -462,9 +462,10 @@ def test_mains_later_targets_reach_the_command_behind_a_quoted_assignment(home, 
 
 
 # --- with main fa5dfcd8's readings -----------------------------------------------------------------------------------
-# The text of `env -S` is read as env's own argv too (#591), so a word quoted whole there is an assignment. Behind a
-# quoted prefix both readings meet: main read the quoted word before `env` as the program and never read the text, so
-# the delete asked as an unknown program, or logged beside a push.
+# The text of `env -S` is read as env's own argv too (#591, #634), so a word quoted whole there is an assignment.
+# Behind a quoted prefix both readings meet: main read the quoted word before `env` as the program and never read the
+# text, so the delete asked as an unknown program, or logged beside a push. The spellings #634 does not read yet
+# decide as on main (#707): `env -iS` asks as an unknown program, `--split-s=` is read as an env listing.
 ENV_S = "env -S \"'Y=c d' rm -rf /srv/data\""
 OPAQUE_ALLOW_DENY = normalize_policies({"gates": {"deny": ["delete"], "categories": {"opaque_exec": "allow"}}})
 
@@ -493,3 +494,94 @@ def test_mains_dollar_forms_behind_a_quoted_assignment_decide_as_on_main(home, s
     assert d.outcome == "deny" and binds_exact(c, d), (line, d)
     if getattr(c, "before", None) is not None:
         _kept(d, decide(c.before, pol))
+
+
+# --- with main 58503282's readings (review 5661669883 of #546) ------------------------------------------------------
+# A store name split by quotes, a backslash or a backslash-newline, or written in another letter case (#601), behind a
+# quoted prefix. Guard rows: main 58503282 reads the quoted word as the program and still scans its arguments for
+# store paths, so it counts each of these writes too; here each reading counts it, the new one alone too.
+NL = "\\\n"
+SPLIT_NAMES = ["~/.e''xo/policies/gates.yaml", '~/.e""xo/policies/gates.yaml', "~/'.exo'/policies/gates.yaml",
+               f"~/.e{NL}xo/policies/gates.yaml", f"~/.exo/poli{NL}cies/gates.yaml", "~/.exo/con''fig.json",
+               f"~/.exo/con{NL}fig.json", "~/.EXO/policies/gates.yaml", "~/.E''XO/config.json",
+               f"~/.Ex{NL}o/config.json"]
+SPLIT_FORMS = ["{} cp /tmp/x {}", f"{PUSH} && {{}} cp /tmp/x {{}}"]
+
+
+@pytest.mark.parametrize("form", SPLIT_FORMS)
+@pytest.mark.parametrize("name", SPLIT_NAMES)
+@pytest.mark.parametrize("style", PREFIXES)
+def test_a_split_store_name_behind_a_quoted_prefix_is_a_store_write(home, style, name, form):
+    c = classify(sh(form.format(style, name)))
+    for x in (c, replace(c, before=None) if getattr(c, "before", None) is not None else c):
+        d = decide(x, STORE_DENY)
+        assert d.outcome == "deny" and binds_exact(x, d) and no_grant(x), (x, d)
+    assert decide(c, DEFAULT).outcome == "ask" and call_approvers(c, DELEGATED) == ["principal"], c
+
+
+# Fix rows: a `cd` behind a quoted prefix into the store folder, its name split by quotes, a backslash or a
+# backslash-newline or in another letter case, then a write there by a relative name. Main 58503282 reads the quoted
+# word as the program and never moves the folder, so the write is `cp` to a `config.json` of the session's folder,
+# the line is `credentials` (the store folder is read as an argument) and `deny: [store_write]` asks. Bash runs the
+# `cd`, so the write lands on the home's config.json: a store write here, which that entry denies.
+SPLIT_DIRS = ["~/.e''xo", '~/.e""xo', "~/'.exo'", "~/.e\\xo", f"~/.e{NL}xo", "~/.EXO", f"~/.Ex{NL}o"]
+CD_WRITE = "cd {} && cp /tmp/x config.json"
+
+
+@pytest.mark.parametrize("form", ["{} " + CD_WRITE, f"{PUSH} && {{}} {CD_WRITE}"])
+@pytest.mark.parametrize("folder", SPLIT_DIRS)
+@pytest.mark.parametrize("style", PREFIXES)
+def test_a_cd_into_a_split_store_folder_behind_a_quoted_prefix_keeps_its_store_write(home, style, folder, form):
+    c = classify(sh(form.format(style, folder)))
+    d = decide(c, STORE_DENY)
+    assert d.outcome == "deny" and binds_exact(c, d) and no_grant(c), (c, d)
+    assert call_approvers(c, DELEGATED) == ["principal"], c
+    if getattr(c, "before", None) is not None:
+        _kept(d, decide(c.before, STORE_DENY))
+
+
+# Guard rows: main's other readings behind a quoted prefix. A `$((` bash reads as a command substitution (#553), a
+# secret name in another letter case (#601) and a glob in a secret store's folder (#594) decide as on main, no lower
+# than the line read as before, and bind an "always" to the exact line.
+CRED_DENY = normalize_policies({"gates": {"deny": ["credentials"]}})
+
+
+@pytest.mark.parametrize("form", ["{} {}", f"{PUSH} && {{}} {{}}"])
+@pytest.mark.parametrize("body, pol", [
+    ("echo $((echo '((' ; git push --force origin main) )", PUSH_DENY),
+    ("echo $((echo '((' ; rm -rf /srv/data) )", DENY),
+    ("echo x > ~/.KUBE/config", CRED_DENY),
+    ("cat ~/.SSH/config", CRED_DENY),
+    ("cat ~/.ss?/*", CRED_DENY),
+])
+@pytest.mark.parametrize("style", PREFIXES)
+def test_mains_later_readings_behind_a_quoted_prefix_decide_and_bind_as_on_main(home, style, body, pol, form):
+    c = classify(sh(form.format(style, body)))
+    d = decide(c, pol)
+    assert d.outcome == "deny" and binds_exact(c, d), (c, d)
+    assert decide(c, DEFAULT).outcome == "ask" and binds_exact(c, decide(c, DEFAULT)), c
+    if getattr(c, "before", None) is not None:
+        _kept(d, decide(c.before, pol))
+
+
+# A camelCase tool keeps its unsplit name's reading as its ``floor`` (#515). That reading is made only for a tool the
+# gate reads by its name and arguments, and the reading as before #471 only for a line the gate reads as a shell line,
+# so no call has both: a quoted prefix line in such a tool's arguments is no shell line, and the call keeps main's
+# floor, its decision and its binding. Guard rows: the same on main 58503282.
+UNKNOWN_DENY = normalize_policies({"gates": {"categories": {"unknown": "deny"}}})
+UNKNOWN_ASK = normalize_policies({"gates": {"categories": {"unknown": "ask"}}})
+
+
+@pytest.mark.parametrize("tool, args, pols", [
+    ("writeFile", {"path": "~/.exo/config.json", "content": f"X='a b' {RM}"}, (DEFAULT, STORE_DENY)),
+    ("searchReplace", {"path": "~/.exo/policies/gates.yaml", "search": "X='a b'", "replace": RM},
+     (DEFAULT, STORE_DENY)),
+    ("runShellCommand", {"command": f"X='a b' {RM}"}, (UNKNOWN_ASK, UNKNOWN_DENY)),
+    ("execCommand", {"command": "X='a b' cp /tmp/x ~/.exo/config.json"}, (UNKNOWN_ASK, UNKNOWN_DENY)),
+])
+def test_a_camelcase_tool_with_a_quoted_prefix_line_keeps_its_floor_and_binding(home, tool, args, pols):
+    c = classify({"tool": tool, "args": args})
+    assert c.floor is not None and getattr(c, "before", None) is None, c
+    assert [decide(c, p).outcome for p in pols] == ["ask", "deny"], c
+    assert all(binds_exact(c, decide(c, p)) for p in pols), c
+    assert no_grant(c) == (tool in ("writeFile", "searchReplace")), c

@@ -1112,10 +1112,12 @@ kept when an `env -S` or `--split-string` follows too, so the quoted word is sti
 store paths first and its value still reaches the env-inject check: `X="$HOME/.exo/state/notes.md"
 ls` and `X="$HOME/.exo/state/notes.md" env -S 'ls'` stay store_write, and `GIT_SSH_COMMAND='rm -rf
 /srv/data' env -S 'git fetch'` is still denied under `deny: [delete]`. The `-S` text itself is
-read as env's argv too (#591, below), so `X='a b' env -S "'Y=c d' rm -rf /srv/data"` is a delete
-as well. The setter check of a
-`command` rule (#394, below) counts a setter under either reading, so `X="$Y" ls` (a program from a
-variable, before) is still one. A line continuation in the name (`X\<newline>='a b' cmd`) is no
+read as env's argv too (#591, fixed on main by #634, below), so `X='a b' env -S "'Y=c d' rm -rf
+/srv/data"` is a delete as well. A spelling #634 does not read yet decides as on main (#707):
+`env -iS` asks as an unknown program, and `--split-s=` is read as an env listing
+(`credentials`). The setter check of a `command` rule (#394, below)
+counts a setter under either reading, so `X="$Y" ls` (a program from a variable, before) is
+still one. A line continuation in the name (`X\<newline>='a b' cmd`) is no
 quoting: bash drops it first, and so does this check. The parts read from the command behind such
 a word carry the signal `quoted assignment`, and `decide` also decides the line with the part
 `_combine` would put on top without them, keeping the stricter outcome. So a command read there
@@ -1130,18 +1132,23 @@ exo-gate hook reads that reading, and its floor, wherever it reads a gh line's f
 file, the required executor's body check, who may answer, "once" and the categories that never get
 a grant. `gate.readings` lists it, with its own floor, its reading from before #311 and its joined
 reading (#584), after the line's own and those of the line as read before D-074 (which has its own
-reading as before #471 too), so `no_grant`, `call_approvers` and `body_unseen` read its parts too: a store write
-part only that reading has keeps the answer with the principal, once (#447), and a sudo write it
-reads keeps its displaced part's approvers (#454). The store scan of the simple command keeps
-each store path either reading meets (#514), the quoted word's first, and the command behind the
-word gets each reading the gate makes of a command (an ssh host for an empty target, #493). An
-"always" binds to the exact line when that reading would, and a reserved hit there that is not
-that reading's own act keeps the ask from a grant, as on main ("Standing grants"). That covers
-what a quoted word changes for the commands after it. A `cd` behind one (`X='a b' cd /dev && yarn publish`) moves their
-folder, as bash runs it, so their store write may outrank the publish that a matrix cell denied;
-read as before, the `cd` was an unknown program and the publish still decides. A reserved word
-after one (`X='a b' coproc env | cat`) is read as after an unquoted assignment, a coprocess, where
-bash runs a program named `coproc`; read as before, the environment dump is still a secret read.
+reading as before #471 too), so `no_grant`, `call_approvers` and `body_unseen` read its parts
+too: a store write part only that reading has keeps the answer with the principal, once (#447),
+and a sudo write it reads keeps its displaced part's approvers (#454). The store scan of the
+simple command keeps each store path either reading meets (#514), the quoted word's first, and
+the command behind the word gets each reading the gate makes of a command (an ssh host for an
+empty target, #493). A store name split by quotes, a backslash or a backslash-newline, or written
+in another letter case (#601), is a store write behind a quoted prefix on every reading, and so is
+a write by a relative name after a `cd` there into such a folder (`X='a b' cd ~/.E''XO && cp
+/tmp/x config.json`), which the line read as before reads as a store read. An "always" binds to
+the exact line when that reading would, and a reserved hit there that is not that reading's own
+act keeps the ask from a grant, as on main ("Standing grants"). That covers what a quoted word
+changes for the commands after it. A `cd` behind one (`X='a b' cd /dev && yarn publish`) moves
+their folder, as bash runs it, so their store write may outrank the publish that a matrix cell
+denied; read as before, the `cd` was an unknown program and the publish still decides. A reserved
+word after one (`X='a b' coproc env | cat`) is read as after an unquoted assignment, a coprocess,
+where bash runs a program named `coproc`; read as before, the environment dump is still a secret
+read.
 A loop body starts where bash starts it (#436). Bash and POSIX take `do` as the reserved word right
 after the name in `for NAME do` and `select NAME do`, with no `in` list and no `;` or newline before
 it, and run the loop over the positional parameters. So the gate reads
