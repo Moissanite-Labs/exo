@@ -7,6 +7,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- `exo config show` and `exo config get` mask secret values, as the core API already did (exo-desktop #4,
+  #16). Both printed the raw value, so a key stored in config reached the terminal and any log of it.
+- `exo.wire.verify` checks a signature only against a key the caller pins (exo-desktop #5, #17). Without one it
+  used the public key carried in the signature itself, which whoever made the packet chose, so any packet
+  signed by any key passed. With no pinned key it now returns False. No production caller used that path.
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
