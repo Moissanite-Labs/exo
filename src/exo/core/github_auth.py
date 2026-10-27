@@ -11,11 +11,20 @@ import json
 import os
 import re
 import shutil
+import shlex
+import sys
+import subprocess
+import selectors
+import time
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlsplit
 
 from exo.core.models import keys
 from exo.core.private import atomic_write, private_dir
+
+
+DISABLED_TOKEN = "exo-disabled-no-github-credentials"  # public invalid sentinel, never a saved credential
 
 
 class AuthError(ValueError):
@@ -59,6 +68,13 @@ def binding(home: str | Path, seat: str) -> dict:
     _identity(home, seat, data.get('host', ''))
     if data['mode'] == 'token' and data.get('store') not in ('keychain', 'secret-service', 'file'):
         raise AuthError('GitHub authentication store is invalid')
+    pending = data.get('cleanup_pending', [])
+    if not isinstance(pending, list):
+        raise AuthError('GitHub cleanup metadata is invalid')
+    for item in pending:
+        if not isinstance(item, dict) or item.get('store') not in ('keychain', 'secret-service', 'file', 'gh-config'):
+            raise AuthError('GitHub cleanup metadata is invalid')
+        _identity(home, seat, item.get('host', ''))
     return data
 
 
@@ -68,12 +84,25 @@ def configure(home: str | Path, seat: str, mode: str, host: str = 'github.com',
     home, seat, host = _identity(home, seat, host)
     if mode not in ('token', 'gh-login', 'host'):
         raise AuthError('Choose token, gh-login or host authentication')
-    old = binding(home, seat)
-    meta = {'mode': mode, 'host': host}
     if mode == 'token':
         value = ps.check_key(token or '')
         keys.remember_secret(value)
-        store = store or ps.default_store()
+        store = store or ('keychain' if sys.platform == 'darwin' else ps.default_store())
+        if store not in ('keychain', 'secret-service', 'file'):
+            raise AuthError('Choose keychain, secret-service or file storage')
+        if store == 'keychain' and (sys.platform != 'darwin' or os.environ.get('EXO_NO_KEYCHAIN')):
+            raise AuthError('macOS Keychain is unavailable; no fallback storage was used')
+    old = binding(home, seat)
+    changing = (old.get('mode') in ('token', 'gh-login') and
+                (old.get('mode') != mode or old.get('host') != host or
+                 (mode == 'token' and old.get('store') != store)))
+    if changing:
+        raise AuthError('Remove the previous GitHub binding before changing its mode, hostname or store')
+    if old.get('cleanup_pending'):
+        if remove(home, seat).get('cleanup_pending'):
+            raise AuthError('Previous GitHub credential cleanup is incomplete; retry remove before configuring')
+    meta = {'mode': mode, 'host': host}
+    if mode == 'token':
         name = account(home, seat, host)
         if store == 'keychain':
             ps._keychain_set(name, value)
@@ -84,8 +113,6 @@ def configure(home: str | Path, seat: str, mode: str, host: str = 'github.com',
         else:
             raise AuthError('Choose keychain, secret-service or file storage')
         meta['store'] = store
-    if old.get('mode') == 'token' and (mode != 'token' or old.get('host') != host):
-        _remove_saved_token(home, seat, old)
     path, ghdir = paths(home, seat)
     private_dir(path.parent)
     if mode == 'gh-login':
@@ -139,16 +166,16 @@ def status(home: str | Path, seat: str) -> dict:
     available = True if meta['mode'] == 'host' else bool(_token(home, seat, meta))
     return {'seat': seat, 'configured': True, 'mode': meta['mode'], 'host': meta['host'],
             'store': meta.get('store', 'gh-config' if meta['mode'] == 'gh-login' else 'host'),
-            'available': available}
+            'available': available, 'cleanup_pending': bool(meta.get('cleanup_pending'))}
 
 
 def child_env(env: dict[str, str], home: str | Path, seat: str,
-              deny: Iterable[str] = ()) -> dict[str, str]:
+              deny: Iterable[str] = (), *, cwd: str | Path | None = None) -> dict[str, str]:
     """Apply an explicit binding after the common scrub; deny always wins."""
     meta = binding(home, seat)
     if not meta:
         return dict(env)
-    names = ('GH_TOKEN', 'GH_CONFIG_DIR', 'GH_HOST')
+    names = ('GH_TOKEN', 'GH_CONFIG_DIR', 'GH_HOST', 'GH_PROMPT_DISABLED')
     if any(fnmatch.fnmatchcase(name, pattern) for name in names for pattern in deny):
         raise AuthError('Seat GitHub authentication is blocked by tools.env_deny')
     if meta['mode'] == 'host':
@@ -158,42 +185,143 @@ def child_env(env: dict[str, str], home: str | Path, seat: str,
                 out[name] = os.environ[name]
         out['GH_HOST'] = meta['host']
         return out
-    if meta['mode'] == 'disabled':
-        raise AuthError('Seat GitHub authentication is disabled; configure authentication explicitly')
-    value = _token(home, seat, meta)
+    disabled = meta['mode'] == 'disabled'
+    value = DISABLED_TOKEN if disabled else _token(home, seat, meta)
     if not value:
         raise AuthError('Seat GitHub authentication is unavailable; configure or log in before running tools')
     out = dict(env)
     for name in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN', 'GH_CONFIG_DIR'):
         out.pop(name, None)
     _, ghdir = paths(home, seat)
-    if meta['mode'] == 'token':
-        ghdir = ghdir / 'token'  # no prior gh-login accounts in token-mode config
+    if meta['mode'] in ('token', 'disabled'):
+        ghdir = ghdir / ('disabled' if disabled else 'token')  # no prior gh-login accounts in token-mode config
     private_dir(ghdir)
     out.update(GH_CONFIG_DIR=str(ghdir), GH_HOST=meta['host'], GH_PROMPT_DISABLED='1')
-    if meta['host'] == 'github.com' or meta['host'].endswith('.ghe.com'):
+    if disabled:
+        if any(fnmatch.fnmatchcase('GH_ENTERPRISE_TOKEN', pattern) for pattern in deny):
+            raise AuthError('Seat GitHub authentication is blocked by tools.env_deny')
+        out.update(GH_TOKEN=DISABLED_TOKEN, GH_ENTERPRISE_TOKEN=DISABLED_TOKEN)
+    elif meta['host'] == 'github.com' or meta['host'].endswith('.ghe.com'):
         out['GH_TOKEN'] = value
     else:
         if any(fnmatch.fnmatchcase('GH_ENTERPRISE_TOKEN', pattern) for pattern in deny):
             raise AuthError('Seat GitHub authentication is blocked by tools.env_deny')
         out['GH_ENTERPRISE_TOKEN'] = value
+    return _git_env(out, meta['host'], deny, cwd)
+
+
+def _git_env(env: dict[str, str], host: str, deny: Iterable[str],
+             cwd: str | Path | None = None) -> dict[str, str]:
+    """Child-only equivalent of gh auth setup-git, without editing host Git configuration.
+
+    Trusted shell commands may override this with git -c, embedded URL credentials or SSH.
+    """
+    out = {k: v for k, v in env.items() if not k.startswith(('GIT_CONFIG', 'GIT_TRACE')) and
+           k not in ('GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_CURL_VERBOSE', 'GH_DEBUG', 'DEBUG', 'GH_BROWSER')}
+    gh = shutil.which('gh', path=out.get('PATH')) or 'gh'
+    entries = [('http.extraHeader', ''), (f'http.https://{host}/.extraHeader', ''),
+               (f'credential.https://{host}.helper', ''),
+               (f'credential.https://{host}.helper', '!' + shlex.quote(gh) + ' auth git-credential'),
+               (f'credential.https://{host}.username', 'x-access-token'), ('core.askPass', '')]
+    # More-specific URL headers beat a host-only reset even at command scope.
+    # Read names only, then override matching host keys without reading their values.
+    git = shutil.which('git', path=out.get('PATH'))
+    if not git:
+        raise AuthError('Git is unavailable; HTTPS credential configuration cannot be checked')
+    for key in _git_header_names(git, out, cwd):
+        if not key.startswith('http.') or not key.lower().endswith('.extraheader'):
+            continue
+        url = key[5:-12]
+        try:
+            selected = urlsplit(url)
+            matches = selected.scheme == 'https' and selected.hostname == host
+        except ValueError:
+            matches = False
+        if matches:
+            if selected.username is not None or selected.password is not None or selected.query or selected.fragment:
+                raise AuthError('GitHub HTTPS configuration contains a credential-bearing URL; remove it before using the seat binding')
+            entries.append((key, ''))
+    additions = {'GIT_CONFIG_COUNT': str(len(entries)), 'GIT_TERMINAL_PROMPT': '0'}
+    for i, (key, value) in enumerate(entries):
+        additions[f'GIT_CONFIG_KEY_{i}'] = key
+        additions[f'GIT_CONFIG_VALUE_{i}'] = value
+    if any(fnmatch.fnmatchcase(name, pattern) for name in additions for pattern in deny):
+        raise AuthError('Seat GitHub authentication is blocked by tools.env_deny')
+    out.update(additions)
     return out
 
 
-def _remove_saved_token(home: str | Path, seat: str, meta: dict) -> None:
+def _git_header_names(git: str, env: dict[str, str], cwd) -> list[str]:
+    """Read bounded names only, never config values or unbounded subprocess diagnostics."""
+    proc = None
+    try:
+        proc = subprocess.Popen([git, 'config', '--name-only', '--get-regexp', r'^http\..*extraheader$'],
+                                cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        deadline, data = time.monotonic() + 3, bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(proc.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise AuthError('GitHub HTTPS configuration inspection timed out')
+                chunk = os.read(proc.stdout.fileno(), min(8192, 65537 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+                if len(data) > 65536:
+                    raise AuthError('GitHub HTTPS configuration exceeds the inspection limit')
+        code = proc.wait(timeout=max(0.001, deadline - time.monotonic()))
+        names = bytes(data).decode('utf-8').splitlines()
+        if code not in (0, 1) or len(names) > 256:
+            raise AuthError('GitHub HTTPS configuration could not be checked')
+        return list(dict.fromkeys(names))
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        raise AuthError('GitHub HTTPS credential configuration could not be checked') from None
+    finally:
+        if proc is not None:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if proc.stdout is not None:
+                proc.stdout.close()
+
+
+def _remove_saved_token(home: str | Path, seat: str, meta: dict) -> bool:
+    """Delete only the selected store. False means cleanup was not confirmed."""
     from exo import providers_setup as ps
     name = account(home, seat, meta['host'])
-    ps._keychain_delete(name)
-    ps._secret_tool_delete(name)
-    ps.remove_from_keys_file(name)
+    try:
+        if meta['store'] == 'keychain':
+            if sys.platform != 'darwin' or os.environ.get('EXO_NO_KEYCHAIN'):
+                return False
+            result = ps._run(['security', 'delete-generic-password', '-s', keys.KEYCHAIN_SERVICE, '-a', name])
+            return result.returncode in (0, 44)  # errSecItemNotFound (-25300 modulo 256) is already absent.
+        if meta['store'] == 'secret-service':
+            return ps._secret_tool_delete(name)
+        ps.remove_from_keys_file(name)  # False means the file already has no matching key.
+        return True
+    except (OSError, ps.SetupError, subprocess.SubprocessError):
+        return False
 
 
 def remove(home: str | Path, seat: str) -> dict:
     meta = binding(home, seat)
-    if meta and meta['mode'] == 'token':
-        _remove_saved_token(home, seat, meta)
     path, ghdir = paths(home, seat)
-    shutil.rmtree(ghdir, ignore_errors=True)
     private_dir(path.parent)
-    atomic_write(path, json.dumps({'mode': 'disabled', 'host': meta.get('host', 'github.com')}) + '\n')
-    return {'seat': seat, 'configured': True, 'mode': 'disabled', 'available': False}
+    cleanup = meta.get('cleanup_pending') or ([{'host': meta['host'], 'store': meta['store']}]
+                                               if meta.get('mode') == 'token' else [])
+    disabled = {'mode': 'disabled', 'host': meta.get('host', 'github.com'), 'cleanup_pending': cleanup}
+    # Stop future authenticated spawns before attempting fallible store cleanup.
+    atomic_write(path, json.dumps(disabled) + '\n')
+    remaining = [item for item in cleanup if item.get('store') != 'gh-config' and
+                 not _remove_saved_token(home, seat, item)]
+    try:
+        if ghdir.exists():
+            shutil.rmtree(ghdir)
+    except OSError:
+        remaining.append({'host': disabled['host'], 'store': 'gh-config'})
+    disabled['cleanup_pending'] = remaining
+    atomic_write(path, json.dumps(disabled) + '\n')
+    return {'seat': seat, 'configured': True, 'mode': 'disabled', 'available': False,
+            'cleanup_pending': bool(remaining), 'removed': not bool(remaining)}

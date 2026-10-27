@@ -251,7 +251,7 @@ export const redeem=async()=>{throw Error("bare URL must not make requests");};
 export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove(){}},replaceChildren(...c){this.children=c;}});
 ''')
     (tmp_path / "bus.mjs").write_text('''export const onState=f=>{globalThis.state=f;f({connected:false});};export const start=async()=>{globalThis.started++;};export const restart=async()=>{globalThis.restarted++;};''')
-    for name in ("chat", "tasks", "schedule", "command", "providers"):
+    for name in ("chat", "tasks", "schedule", "command", "providers", "credentials"):
         (tmp_path / f"{name}.mjs").write_text('export const mount=()=>{globalThis.mounted++;return ()=>{};};')
     (tmp_path / "permissions.mjs").write_text('export const banner=()=>({hidden:true});export const start=()=>{globalThis.permStarted++;};')
     (tmp_path / "test.mjs").write_text('''

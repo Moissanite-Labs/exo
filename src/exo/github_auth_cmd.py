@@ -10,6 +10,7 @@ import sys
 
 from exo.core import github_auth as auth
 from exo.core.models import keys
+from exo import providers_setup
 from exo.envscrub import scrub_env
 from exo.store import exo_home
 
@@ -51,6 +52,11 @@ def main(argv=None) -> int:
             # Force private on-disk storage; gh's shared OS keychain must not
             # associate this seat's login with a host-machine account.
             auth._identity(home, a.seat, a.host)
+            old = auth.binding(home, a.seat)
+            if old.get('mode') in ('token', 'gh-login') and (old.get('mode') != 'gh-login' or old.get('host') != a.host):
+                raise auth.AuthError('Remove the previous binding before changing login mode or hostname')
+            if old.get('cleanup_pending'):
+                raise auth.AuthError('Complete previous credential cleanup before logging in')
             _, ghdir = auth.paths(home, a.seat)
             from exo.core.private import private_dir
             private_dir(ghdir)
@@ -76,7 +82,7 @@ def main(argv=None) -> int:
         print(json.dumps(result))
         if a.action in ('configure', 'login') and not result.get('available', True):
             return 1
-        return 0 if result.get('ok', True) else 1
-    except (auth.AuthError, ValueError, OSError, subprocess.SubprocessError, EOFError):
+        return 0 if result.get('ok', True) and not result.get('cleanup_pending') else 1
+    except (auth.AuthError, providers_setup.SetupError, ValueError, OSError, subprocess.SubprocessError, EOFError):
         print('GitHub authentication could not be configured or used; check settings and secret-store availability.', file=sys.stderr)
         return 1

@@ -7,9 +7,10 @@ import * as tasks from "./tasks.js";
 import * as schedule from "./schedule.js";
 import * as command from "./command.js";
 import * as providers from "./providers.js";
+import * as credentials from "./credentials.js";
 import * as permissions from "./permissions.js";
 
-const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers]];
+const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers], ["credentials", "Credentials", credentials]];
 
 // The page token arrives in the URL fragment of the link `exo web` prints; every request needs it (D-039). Keep it in this tab's
 // sessionStorage only, then take it out of the address bar and history.
