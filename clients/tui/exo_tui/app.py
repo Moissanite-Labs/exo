@@ -218,6 +218,7 @@ class ExoApp(App):
         self.ready = asyncio.Event()
         self.cur: Block | None = None
         self.cur_id: str | None = None
+        self.reasoning_blocks: dict[str, Block] = {}
         self.last_answer: tuple[str | None, str] = (None, "")
         self.tools: dict[str, ToolBlock] = {}
         self.approvals: list[s.ApprovalRequested] = []
@@ -461,6 +462,10 @@ class ExoApp(App):
 
     def flush(self) -> None:
         self._dirty = False
+        for block in self.reasoning_blocks.values():
+            if block.is_mounted:
+                block.flush()
+                self.to_latest()
         if self.cur is not None and self.cur.is_mounted:
             self.cur.flush()
             self.to_latest()
@@ -607,6 +612,14 @@ class ExoApp(App):
             self.update_guidance()
         elif isinstance(b, s.ReasoningDelta):
             self.turn_t0 = 0.0
+            if b.text:
+                if b.message_id not in self.reasoning_blocks:
+                    self.close_cur()
+                    block = Block("", "reasoning")
+                    self.reasoning_blocks[b.message_id] = block
+                    self.add(block)
+                self.reasoning_blocks[b.message_id].text += b.text
+                self.mark_dirty()
         elif isinstance(b, s.MessageDelta):
             self.turn_t0 = 0.0
             if self.cur is None or self.cur_id != b.message_id:
@@ -633,6 +646,21 @@ class ExoApp(App):
             if m.role == "user" and m.id:
                 self.steer_landed(m.id)
             if m.role == "assistant":
+                reasoning = "".join(p.text or "" for p in m.content if p.type == "reasoning")
+                block = self.reasoning_blocks.pop(m.id, None)
+                if reasoning:
+                    if block is None:
+                        block = Block(reasoning, "reasoning")
+                        if self.cur is not None and self.cur_id == m.id and self.cur.is_mounted:
+                            if self.inverse:
+                                self.transcript.mount(block, after=self.cur)
+                            else:
+                                self.transcript.mount(block, before=self.cur)
+                        else:
+                            self.add(block)
+                    block.text = reasoning
+                if block is not None and block.is_mounted:
+                    block.flush()
                 text = m.text()
                 if text:
                     if self.cur is None or self.cur_id != m.id:
@@ -763,6 +791,7 @@ class ExoApp(App):
     def clear_transcript(self) -> None:
         self.transcript.remove_children()
         self.tools.clear()
+        self.reasoning_blocks.clear()
         self.cur = None
         self.older = []
         self.earlier_row = None
@@ -780,6 +809,7 @@ class ExoApp(App):
                 self.card = None
             self.approvals = [a for a in self.approvals if a.request_id in self.threadless]
         self.busy, self.turn_t0, self.running_tools, self.cur_id, self.question = False, 0.0, 0, None, None
+        self.reasoning_blocks.clear()
         self.pending_steers.clear()
         self.sending_messages.clear()
         self.agents.clear()
@@ -801,6 +831,10 @@ class ExoApp(App):
                 peer = (m.get("meta") or {}).get("peer") or (m.get("meta") or {}).get("job")
                 out.append(("block", "peer" if peer else "user", text))
             elif m["role"] == "assistant":
+                reasoning = "".join(p.get("text", "") or "" for p in m.get("content", [])
+                                    if p.get("type") == "reasoning")
+                if reasoning:
+                    out.append(("block", "reasoning", reasoning))
                 if text:
                     out.append(("block", "assistant", text))
                     self.last_answer = (m.get("id"), text)

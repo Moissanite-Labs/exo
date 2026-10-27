@@ -100,6 +100,9 @@ class Block(Static):
             self.paint(Padding(Text(self.text, style=rich_style("fg2")), (0, 0, 0, 2)))
         elif k == "assistant":
             self.paint(Padding(Markdown(self.text, style=rich_style("fg2")), (0, 0, 0, 2)))
+        elif k == "reasoning":
+            self.paint(Padding(Group(Text("reasoning", style=rich_style("cold")),
+                                     Text(self.text, style=rich_style("fg3"))), (0, 0, 0, 2)))
         elif k == "user":
             row = Table.grid(padding=(0, 1))
             lead = Text()
