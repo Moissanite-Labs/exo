@@ -25,6 +25,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   posting fixes stays held. Snake names and camelCase calls with no floor reading decide as before. Hook probe
   against main e0968a2b: 1360 lines, 164 changed, 0 lowered. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`.
   **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-065, D-038), `docs/DEVELOPER-GUIDE.md` §3.
+- A long line of short words no longer pays the full secret-store check about twice a word (#293). A
+  shell line's words reached the check once as the expanded text's words and once as the segments'
+  tokens, and each meeting re-ran everything — expansion, a realpath (an lstat per path part), the
+  dynamic stores — so a 100 KB line of repeated words took 10.9 s to classify where the issue measured
+  it, in a hook that runs on the core's event loop. Each distinct expanded word's file-system verdict
+  is now kept on the call's scope and read once per classify call, the caller checks each distinct
+  piece once, and a bare word that cannot name a path into a store (no separator, expansion, glob or
+  brace set in it, not a link, read from folders outside the stores) skips the file system — only its
+  name can name a store, and that is read without it. Two cases keep the full check: the bare word
+  `run`, which joined to a tool folder can be a run folder, and any word read from a folder spelled
+  with a leading `//`, which main matches whole. No classification changes: a battery of store
+  paths, globs, brace sets, links and bare names across six policies decides exactly as before.
+
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.
