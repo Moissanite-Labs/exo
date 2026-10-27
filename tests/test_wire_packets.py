@@ -8,15 +8,13 @@ def _signed(line: str) -> dict:
 
 
 def test_verify_refuses_without_trusted_key():
-    # The public key embedded in the envelope is attacker-controlled; never trust it.
-    assert verify("hello", {"by": "attacker", "pub": "ATTACKERPUB", "sig": "deadbeef"}) is False
+    # A real signature by the key the envelope carries. Whoever made the packet chose that key, so it proves nothing.
+    assert verify("hello", _signed("hello")) is False
 
 
 def test_verify_roundtrip_with_trusted_key():
     signed = _signed("hello")
     assert verify("hello", signed, trusted_pub=signed["pub"]) is True
-    assert verify("hello", signed, trusted_pub="WRONGPUB") is False
-    # Omitting the trusted key must fail even when the embedded pub is genuine.
-    assert verify("hello", signed) is False
+    assert verify("hello", signed, trusted_pub=crypto.pubkey_b64(crypto.keygen())) is False
     # Tampered line must fail.
     assert verify("goodbye", signed, trusted_pub=signed["pub"]) is False
