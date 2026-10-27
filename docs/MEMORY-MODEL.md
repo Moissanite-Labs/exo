@@ -256,7 +256,11 @@ of all three turns. A turn of another session in between leaves the undo pending
 turn keeps the window the first one left. A transcript that does not reach back to where the window started was cut
 short, not undone, so it drops nothing. When `/undo N` cuts at a row Hermes merged its summary into, Hermes keeps
 only that row's summary part, and that part reaches back too. A compaction since the undo reaches back when its
-summary row folded the window's first row or that part.
+summary row folded the window's first row or that part, and so does one before the undo: it notes the fold with
+the pins (the row's digest and the summary blocks written for it), the undo seeds its reach from that note, and a
+compaction that folds a row already noted hands the note on. One that folded only rows the window never held notes
+nothing, so a transcript cut short below the window's first row still drops nothing. The note follows the pins into
+a compression child and a `/branch` child.
 
 Each compaction ties the pins whose message it folded to the block it writes into its summary row, and the pins
 file keeps those ties. A summary row shows the pins tied to its block. So a folded pin stays while a summary row
@@ -269,6 +273,13 @@ turn keeps only the summary part. A pin whose message sits in a tail that `/comp
 stays: compaction never drops a pin. A compression child takes over its parent's window and pending undo. The link
 to a handoff a compaction wrote before the undo goes, as on the core. Each drop is logged as counts per kind and
 the session id, and a transcript cut short is logged with the session id.
+
+A rebind puts an undone pin back no more (#592). Hermes builds a new agent on a `/model`, `/reasoning` or `/fast`
+change and on `/resume`, and every such bind merges the parent session's pins into the child's, so a `/branch` or
+compression child that had undone a ruling held it again, and the next turn's block or compaction wrote it back.
+The pins file now keeps the digests of what an undo dropped beside the folded pins' ties, and a pin carry skips a
+parent pin whose digest is there. A first bind still inherits, a pin the child still holds carries as before, and
+a ruling said again after the undo is pinned again, so only its undone copy stays out.
 
 Some cases are not covered. Hermes's messaging gateway tells no one about `/undo`. Nor does the CLI while it has no
 agent, from a command such as `/reasoning`, `/fast` or `/personality` to the next turn. A host that runs exo-context

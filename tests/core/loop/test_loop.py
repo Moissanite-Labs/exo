@@ -327,6 +327,50 @@ def test_steer_injects_between_tool_rounds(tmp_path):
     assert "also this" in texts
 
 
+def test_run_tool_sees_who_started_the_turn(tmp_path):
+    """The turn's author (D-040) rides with every tool call, so a hook can read it (#598)."""
+    authors: list[str | None] = []
+
+    async def tool(call, ctx):
+        authors.append(ctx.get("author"))
+        return ToolResult.of_text(call.id, "ok")
+
+    prov = Script(reply("", [ToolCall(id="c1", name="t")]), reply("", [ToolCall(id="c2", name="t")]), reply("done"))
+    store, loop, _ = make(tmp_path, prov, run_tool=tool)
+
+    async def go():
+        s = await loop.create_session()
+        return await loop.send(s.id, "hi", meta={"author": "peer:mallory"})
+
+    run(go())
+    assert authors == ["peer:mallory", "peer:mallory"]
+
+
+def test_a_steer_reauthors_the_rounds_after_it(tmp_path):
+    """A steer answers within the turn; the rounds after it run for the steer's author (#598), so bypass stops
+    lowering once the turn takes a message from anyone else."""
+    authors: list[str | None] = []
+
+    async def held(call, ctx):
+        authors.append(ctx.get("author"))
+        await asyncio.sleep(0.05)
+        return ToolResult.of_text(call.id, "ok")
+
+    prov = Script(reply("", [ToolCall(id="c1", name="t")]), reply("", [ToolCall(id="c2", name="t")]), reply("done"))
+    store, loop, seen = make(tmp_path, prov, run_tool=held)
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "start", meta={"author": "principal:tui"}))
+        while not any(e.type == "tool.started" for e in seen):
+            await asyncio.sleep(0.005)
+        await loop.send(s.id, "also this", mode="steer", meta={"author": "peer:mallory"})
+        return await task
+
+    run(go())
+    assert authors == ["principal:tui", "peer:mallory"]
+
+
 def test_resume_after_restart_and_repair(tmp_path):
     prov = Script(reply("first"))
     store, loop, _ = make(tmp_path, prov)

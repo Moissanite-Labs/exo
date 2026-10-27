@@ -427,6 +427,7 @@ class _Word:
     redir_after: bool = False  # a redirection, heredoc or here-string follows it before the next word (#207)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
     split: bool = False        # bash may make several words of it, or none: an expansion outside "..", or "$@" (#399)
+    legacy: bool = False       # holds bash's legacy arithmetic `$[ ]`, which main read as plain text (#588)
     exps: list = field(default_factory=list)  # (scan text, source, ${ frames) per ${..} and $((..)) bash expands
     fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
 
@@ -561,7 +562,7 @@ class _Lexer:
             if start < 0:
                 start = w_at = self.i
             ch, nxt = s[self.i], s[self.i + 1:self.i + 2]
-            if ch in " \t\r":
+            if ch in " \t" or (ch == "\r" and state["delim"] is None):
                 flush()
                 self.i += 1
             elif ch == "\n":
@@ -569,7 +570,7 @@ class _Lexer:
                 toks.append(("op", ";"))
                 mark(self.i, self.i + 1)
                 self.i += 1
-                self._read_heredocs()
+                self._read_heredocs(closer)
             elif ch == "#" and not w.started:
                 j = s.find("\n", self.i)
                 self.i = len(s) if j < 0 else j
@@ -606,8 +607,10 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 op_at = self.i
-                if w.started and w.text.isdigit() and not w.quoted:
-                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text    # an fd number belongs to the operator
+                # an fd number, or `{name}` (bash 4.1+ gives it a new descriptor, #328), belongs to the operator
+                if w.started and not w.quoted and (w.text.isdigit()
+                        or re.fullmatch(r"\{[A-Za-z_]\w*\}", cast(_Word, w).text)):
+                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text
                     op_at = w_at
                 else:
                     flush()
@@ -640,11 +643,11 @@ class _Lexer:
         self.marks, self.met = marks or [], met
         return toks
 
-    def _read_heredocs(self) -> None:
+    def _read_heredocs(self, closer: bool = False) -> None:
         while self.pending:
             hd = self.pending.pop(0)
             first = self.i
-            self.i, last = _heredoc_body(self.s, self.i, hd)
+            self.i, last = _heredoc_body(self.s, self.i, hd, closer)
             if not hd.quoted:
                 sub = _Lexer(hd.body, scan=False, nest=self.nest)
                 sub._dquote(_Word(), until_end=True)
@@ -709,27 +712,33 @@ class _Lexer:
 
     def _dollar(self, w: _Word, double: bool = False) -> None:
         s, i = self.s, self.i
-        nxt = s[i + 1:i + 2]
+        k = _joins_past(s, i + 1)   # bash drops a \<newline> before it reads what follows the $ (#585)
+        nxt = s[k:k + 1]
         w.started = True
-        if s.startswith("$((", i):
+        legacy = s.startswith("$[", i)     # bash's legacy arithmetic (#588): read it as the $((..)) it stands for
+        if s.startswith("$((", i) or legacy:
             depth, j = 0, i + 1
+            pair = ({"[": 1, "]": -1} if legacy else {"(": 1, ")": -1}).get
             while j < len(s):
-                depth += {"(": 1, ")": -1}.get(s[j], 0)
+                depth += pair(s[j], 0)
                 j += 1
                 if depth == 0:
                     break
-            body = s[i:j]
+            body = "$((" + s[i + 2:j] + "))" if legacy else s[i:j]
+            at, end = (i + 2, j - 1) if legacy else (i + 3, j - 2)   # where the body bash reads starts and ends
+            if legacy:
+                w.legacy = True
             if self.nest >= _NEST and (_SUBST.search(body, 3) or "`" in body):
-                self.cuts.append((i + 3, max(i + 3, j - 2), "$(" + _TOO_DEEP + ")"))
+                self.cuts.append((at, max(at, end), "$(" + _TOO_DEEP + ")"))
                 self.subs.append(_TOO_DEEP)
             elif self.nest < _NEST and ("$(" in body[3:] or "`" in body):
                 sub = _Lexer(body[3:-2], scan=False, nest=self.nest + 1)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
-                self.cuts += [(x + i + 3, y + i + 3, stand_in) for x, y, stand_in in sub.cuts]
+                self.cuts += [(x + at, y + at, stand_in) for x, y, stand_in in sub.cuts]
             if self.scan and i >= self.covered:
                 w.exps.append((body, body, None))
-            w.text += body
+            w.text += s[i:j]               # as written, `$[..]`, so the word keeps its own spelling
             w.dynamic = True
             w.split = w.split or not double
             self.i = j
@@ -737,7 +746,7 @@ class _Lexer:
             if self.nest >= _NEST:
                 self._cut(w, i)
                 return
-            self.i = i + 2
+            self.i = k + 1
             start = self.i
             self.nest += 1
             toks = self.run(closer=True)
@@ -754,6 +763,10 @@ class _Lexer:
         elif nxt == "{":
             j = s.find("}", i)
             j = len(s) - 1 if j < 0 else j
+            if k > i + 1:                  # a ${ the \<newline> splits: bash still runs the $( ) and ` ` in it (#585)
+                sub = _Lexer(s[k:j + 1], scan=False, nest=self.nest)
+                sub._dquote(_Word(), until_end=True)
+                self.subs += sub.subs
             if self.scan and i >= self.covered:    # what bash reads: it may run past this first }
                 vis, close, frames = _dollar_brace(s, i, double, self.nest)
                 w.exps.append((vis, s[i:close + 1], {at - i: [end - i, None if up is None else up - i]
@@ -766,7 +779,7 @@ class _Lexer:
             w.split = w.split or not double or "@" in s[i:j + 1] or bool(re.search(r"[\"'`\\]|\$\(", s[i + 2:j]))
             self.i = j + 1
         elif nxt == "'":                       # $'..' (ANSI-C quoting): decode the escapes
-            j, out = i + 2, []
+            j, out = k + 1, []
             while j < len(s) and s[j] != "'":
                 step = 2 if s[j] == "\\" else 1
                 out.append(s[j:j + step])
@@ -780,46 +793,56 @@ class _Lexer:
             w.quoted = w.dollar_quote = True
             self.i = j + 1
         elif nxt == '"' and not double:        # $".." (locale quoting): the string itself, without the $
-            self.i = i + 2
-            w.locale = w.locale or s[i + 2:i + 3] != '"'     # bash never translates an empty $""
+            self.i = k + 1
+            w.locale = w.locale or s[k + 1:k + 2] != '"'     # bash never translates an empty $""
             w.dollar_quote = True
             self._dquote(w)
         else:
-            m = re.match(r"\$([A-Za-z_]\w*|[0-9@*#?$!-])", s[i:])
+            m = re.match(r"([A-Za-z_]\w*|[0-9@*#?$!-])", s[k:])
             if m:
-                w.text += m.group(0)
+                w.text += "$" + m.group(1)
                 w.dynamic = True
                 w.split = w.split or not double or m.group(1) == "@"
-                self.i = i + len(m.group(0))
+                self.i = k + len(m.group(1))
             else:
                 w.text += "$"
                 self.i = i + 1
 
 
-def _heredoc_body(s: str, i: int, hd: _Heredoc) -> tuple[int, int]:
+def _heredoc_body(s: str, i: int, hd: _Heredoc, closer: bool = False) -> tuple[int, int]:
     """Read the body of ``hd`` from s[i] on, as bash ends it: at a line that is its delimiter. Sets hd.body and
     returns where the lexer goes on and where the line that ended the body starts (len(s) when none did)."""
+    start = len(s)
     lines: list[str] = []
+    found = False
     while i < len(s):
         j = s.find("\n", i)
         end = len(s) if j < 0 else j
         line, start = s[i:end], i
         i = len(s) if j < 0 else j + 1
-        bare = line.lstrip("\t" if hd.strip else "").strip()
-        if bare == hd.delim:
-            # bash ends a heredoc only on the exact line (leading tabs dropped for <<-): `EOF `, ` EOF` or
-            # `EOF` and a CR does not end it, so the body bash reads is not the one read here (#208).
-            hd.ambiguous = hd.ambiguous or (line.lstrip("\t") if hd.strip else line) != hd.delim
+        cand = line.lstrip("\t") if hd.strip else line   # bash drops leading tabs for <<- here too
+        if cand == hd.delim:
+            # bash ends the body on the line that equals the delimiter exactly (#328). The delimiter
+            # is the word after quote removal, so a space, tab or other character in it (`EOF `, ` EOF`,
+            # `EOF\ `, `E"O"F`) is part of it: `cat <<'EOF '` ends on `EOF `, never on bare `EOF`.
+            found = True
             break
-        if bare.startswith(hd.delim) and bare[len(hd.delim):].strip(" )") == "":
-            i = start + line.index(")", line.index(hd.delim))     # `EOF)` closes a $( ) too
+        if closer and cand.startswith(hd.delim) and ")" in cand[len(hd.delim):] \
+                and cand[len(hd.delim):].strip(" )") == "":
+            i = start + line.index(")", line.index(hd.delim))  # `EOF)` closes a $( ) too
+            found = True
             break
+        if cand.strip() == hd.delim.strip():
+            # the line ends the body only once surrounding whitespace is dropped (a trailing CR, stray
+            # spaces, a tab, or dash's rules for a $'..'/$".." delimiter): bash may end elsewhere, so
+            # fail closed -- keep reading to the exact terminator and read the whole body as commands too.
+            hd.ambiguous = True
         lines.append(line.lstrip("\t") if hd.strip else line)
-    else:
-        start = len(s)
     hd.body = "\n".join(lines)
+    if not found:
+        start = len(s)
+        hd.ambiguous = True   # no terminator at all: fail closed and read the body as commands (#328)
     return i, start
-
 
 # For _nest_end: runs of characters an unquoted word and double-quoted text take as they stand, a backquoted body, a
 # variable reference, and the longest here-doc delimiter it keeps (a longer one ends no body, so the rest is unread).
@@ -827,8 +850,8 @@ _WORD_RUN = re.compile(r"[^ \t\r\n\\'\"`$<>&;|()#]+")
 _DQ_RUN = re.compile(r"[^\"\\$`]+")
 _BT_BODY = re.compile(r"(?:[^`\\]|\\.)*", re.S)
 _ANSI_BODY = re.compile(r"(?:[^'\\]|\\.)*", re.S)
-_VAR_REF = re.compile(r"\$(?:[A-Za-z_]\w*|[0-9@*#?$!-])")
 _PARENS = re.compile(r"[()]")
+_BRACKETS = re.compile(r"[\[\]]")
 _SUBST = re.compile(r"\$\((?!\()")          # a $( that is not $((
 _DELIM_MAX = 1024
 
@@ -896,7 +919,8 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
                 w.add(s, f.start, max(f.start, i - 1), "$()")
 
     def dollar(w: _Open, i: int, double: bool) -> int:     # as _Lexer._dollar
-        nxt = s[i + 1:i + 2]
+        k = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads what follows the $ (#585)
+        nxt = s[k:k + 1]
         w.started, w.digits = True, False
         if s.startswith("$((", i):
             depth, j = 0, n
@@ -907,31 +931,45 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
                     break
             w.add(s, i, j)
             return j
+        if nxt == "[":                         # bash's legacy arithmetic (#588), read to its `]` as $(( )) to `))`
+            depth, j = 0, n
+            for m in _BRACKETS.finditer(s, i + 1):
+                depth += 1 if m.group() == "[" else -1
+                if depth == 0:
+                    j = m.end()
+                    break
+            w.add(s, i, j)
+            return j
         if nxt == "(":
-            stack.append(_Open("$", i + 2))
-            return i + 2
+            stack.append(_Open("$", k + 1))
+            return k + 1
         if nxt == "{":
             j = s.find("}", i)
             j = n - 1 if j < 0 else j
             w.add(s, i, j + 1)
             return j + 1
         if nxt == "'":
-            j = _match_end(_ANSI_BODY, s, i + 2)
+            j = _match_end(_ANSI_BODY, s, k + 1)
             j = n + 1 if j < n and s[j] == "\\" else j          # a backslash that ends s takes one more step
             w.quoted = w.dollar = True
             if w.text is not None:
                 try:
-                    text = _ansi_c(s[i + 2:j])
+                    text = _ansi_c(s[k + 1:j])
                 except (UnicodeError, ValueError):
-                    text = s[i + 2:j]
+                    text = s[k + 1:j]
                 w.add(text, 0, len(text))
             return j + 1
         if nxt == '"' and not double:
             w.quoted = w.dollar = True
             stack.append(_Open('"', owner=w))
-            return i + 2
-        j = max(_match_end(_VAR_REF, s, i), i + 1)
-        w.add(s, i, j)
+            return k + 1
+        m = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
+        if m:
+            j = k + len(m.group(0))
+            w.add("$" + m.group(0), 0, 1 + len(m.group(0)))
+        else:
+            j = i + 1
+            w.add(s, i, j)
         return j
 
     def backtick(w: _Open, i: int) -> int:       # as _Lexer._backtick
@@ -967,7 +1005,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
                 j = max(_match_end(_DQ_RUN, s, i), i + 1)
                 f.owner.add(s, i, j)
                 i = j
-        elif ch in " \t\r":
+        elif ch in " \t" or (ch == "\r" and f.delim is None):
             flush(f)
             i += 1
         elif ch == "\n":
@@ -975,7 +1013,7 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             i += 1
             while pending:
                 hd = pending.pop(0)
-                i = _heredoc_body(s, i, hd)[0]
+                i = _heredoc_body(s, i, hd, closer=True)[0]
                 if id(hd) in before:
                     read.append(hd)
         elif ch == "#" and not f.started:
@@ -1058,9 +1096,10 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
     (classify runs inside the gate hook). `nest` is the lexer's (_NEST)."""
     frames: dict[int, list] = {}
 
-    def open_(at: int, dq: bool, parent: int | None) -> list:   # [in a "..." inside it, sq expands, dq, start]
+    def open_(at: int, brace: int, dq: bool, parent: int | None) -> list:
+        # [in a "..." inside it, sq expands, dq, start]
         frames[at] = [len(s), parent]
-        return [False, dq and not _DQ_QUOTING_OP.match(s, at + 2), dq, at]
+        return [False, dq and not _DQ_QUOTING_OP.match(s, brace + 1), dq, at]
 
     def quoted_text(a: int, b: int, parent: int) -> str:
         # single-quoted text bash expands: the visible text, and the frames of the ${ in it, read within it
@@ -1074,7 +1113,9 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
             p = vis.find("${", close + 1)
         return vis
 
-    out, stack, j = ["${"], [open_(i, dq, None)], i + 2   # one entry per ${ still open, no recursion
+    b = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads the { (#585)
+    # one entry per ${ still open, no recursion
+    out, stack, j = ["${", " " * (b - i - 1)], [open_(i, b, dq, None)], b + 1
     while j < len(s):
         inq, sq, fdq, start = stack[-1]
         ch, k = s[j], j + 1
@@ -1099,7 +1140,7 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
                 k = lx.i
             out.append(" " * (k - j))
         elif s.startswith("${", j):
-            stack.append(open_(j, fdq or inq, start))
+            stack.append(open_(j, j + 1, fdq or inq, start))
             out.append("${")
             k = j + 2
         elif ch == "}" and not inq:
@@ -1648,14 +1689,16 @@ def _env_hazard(name: str, value: str | None = None, literal: bool = False) -> s
 
 
 # A variable the gate assigns without a plain NAME=value word. Parameter expansion assigns with `:=` or
-# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`) and an array subscript (`a[NAME=n]`,
-# itself arithmetic) assign an integer; a `{NAME}>` redirection drops the fd number into NAME. Each sets the
+# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`, and bash's legacy `$[NAME=n]` #588)
+# and an array subscript (`a[NAME=n]`, itself arithmetic) assign an integer, and so sets an element of an
+# array (`BASH_CMDS[ls]=1`); a `{NAME}>` redirection drops the fd number into NAME. Each sets the
 # variable as a side effect, whatever the program is, so a listed variable set this way must be read too.
 # Only what bash expands counts: the ${..} and $((..)) the lexer met outside single quotes (_Word.exps), each
 # read to the } bash closes it with and with quoted text blanked (_dollar_brace), and a bracket only as the
 # subscript of a name (`echo [HOME=x]` is a glob, `'${PATH:=.}'` and `${a:-'${PATH:=.}'}` are text).
 _PARAM_NAME = re.compile(r"\$\{([A-Za-z_]\w*)")            # then a subscript, and `:=` or `=` to assign
 _ARITH_SET = re.compile(r"\b([A-Za-z_]\w*)\s*(?:(?:<<|>>|[-+*/%&|^])?=(?!=)|\+\+|--)|(?:\+\+|--)\s*([A-Za-z_]\w*)")
+_ARITH_ELEM = re.compile(r"\b([A-Za-z_]\w*)\s*\[[^\][]*\]\s*=(?!=)")   # an element set inside the arithmetic
 _SUBSCRIPT = re.compile(r"[A-Za-z_]\w*\[([^\]]*)\]")
 _EXP_SUBSCRIPT = re.compile(r"\$\{[#!]?[A-Za-z_]\w*\[")
 _FD_VAR = re.compile(r"\{([A-Za-z_]\w*)\}")
@@ -1676,15 +1719,23 @@ def _pairs(text: str, opener: str, closer: str) -> dict[int, int]:
 
 
 def _spans(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` not inside
-    another, and the subscript of each `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare
-    `NAME=n` assigns."""
+    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` and of bash's
+    legacy `$[ ]` (#588), read as the `$((..))` it stands for, not inside another, and the subscript of each
+    `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare `NAME=n` assigns."""
     parens, brackets = _pairs(text, "(", ")"), _pairs(text, "[", "]")
     arith, i = [], 0
-    while (j := text.find("$((", i)) >= 0:
-        end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
-        arith.append((j + 3, end))
-        i = max(end, j + 3)
+    while True:
+        j, k = text.find("$((", i), text.find("$[", i)
+        if j >= 0 and (k < 0 or j < k):                   # the earlier form is read, to its own close
+            end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
+            arith.append((j + 3, end))
+            i = max(end, j + 3)
+        elif k >= 0:
+            end = brackets[k + 1]
+            arith.append((k + 2, end))
+            i = max(end, k + 2)
+        else:
+            break
     return arith, [(m.end(), brackets[m.end() - 1]) for m in _EXP_SUBSCRIPT.finditer(text)]
 
 
@@ -1768,9 +1819,13 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
             for region in (arith, subs):
                 for a, b in _covered(region):
                     out += [(m.group(1) or m.group(2), None, False) for m in _ARITH_SET.finditer(vis, a, b)]
+                    out += [(m.group(1), None, False) for m in _ARITH_ELEM.finditer(vis, a, b)]
     out += [(n, None, False) for name in names for n in _subscript_sets(name)]
     if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
         out += [(fm.group(1), None, False) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
+    # Named descriptors assign their variable even when the lexer stores it on the redirection.
+    targets = [t for _, t in k.redirs] + list(k.heredocs) + list(k.herestrings)
+    out += [(fm.group(1), None, False) for t in targets if (fm := _FD_VAR.fullmatch(t.fd))]
     return list(dict.fromkeys(out))
 
 
@@ -1944,7 +1999,7 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
         return bool(re.match(r"~(?:[+-]\d*|\d+)(?:/|$)", w.raw.replace("\\\n", "")))
 
     def lone(w: _Word) -> bool:     # one double-quoted word stays one word, but "${!n}" with n=@ splits as "$@"
-        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw
+        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw.replace("\\\n", "")
 
     args, path, at, i = words[1:], None, 0, 0
     while i < len(args):
@@ -2898,6 +2953,46 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
     return words, sudo, None
 
 
+def _env_split_argv(split: str) -> str | None:
+    """The command a -S text's leading words name, read as env reads them, as its own argv (#591): env splits the
+    text into words and reads them itself, so a word quoted whole with the form NAME=value is an assignment, and
+    the first word that is neither an option nor an assignment starts the command. Returns the text from that word
+    on, or None when the shell line over the text already reads it: no leading word consumed, no command at all, a
+    split inside the split (env reads it again, the gate does not follow), or a shell operator before the command
+    (a word to env, but the line's own reading covers what follows it)."""
+    toks = _Lexer(split or "", scan=False).run()
+    words = [t for k, t in toks if k == "w"]
+    n, i = -1, 0
+    while i < len(words):
+        t = words[i].text
+        if _ASSIGN.fullmatch(t):          # env reads its own argv, so a quoted NAME=value is an assignment too
+            i += 1
+            continue
+        if not t.startswith("-") or t == "-":
+            n = i
+            break
+        f, i = t, i + 1
+        if f in ("-S", "--split-string") or f.startswith(("--split-string=", "-S")):
+            return None
+        if f == "--":
+            n = i                         # the options end: the next word is the command, assignments included
+            break
+        if f in _PREFIXES["env"] and i < len(words):
+            i += 1                        # a value of its own (`-u NAME`, `--chdir DIR`)
+    if n <= 0 or n >= len(words):
+        return None
+    # an operator before the command word is a word of argv to env, and the shell line over the text
+    # covers the commands after it
+    seen = 0
+    for k, _ in toks:
+        if k != "w":
+            if seen <= n:
+                return None
+            break
+        seen += 1
+    return " ".join(w.raw for w in words[n:])
+
+
 def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) -> tuple[int, list]:
     """Read a wrapper's options from argv[i] as getopt does: up to the first operand (past it with `permute`)
     or `--`, `--opt=value` or `--opt value` (an unambiguous prefix of four letters or more counts), short
@@ -3454,6 +3549,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts.append(_opaque("env -S runs a command line", cmd))
         if depth < _DEPTH:
             parts.append(classify_shell(split, depth + 1))
+            if rest := _env_split_argv(split):   # #591: the leading words are env's own argv, not a shell line
+                parts.append(classify_shell(rest, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
@@ -3486,15 +3583,19 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             continue
         if t.dynamic and "$" in dest:
             parts.append(_opaque(f"writes to a path from a variable ({t.text[:60]})", cmd))
+            if t.legacy:                       # main read a legacy `$[ ]` here as text; keep that write beside (#588)
+                parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text,
+                                   command=cmd))
+                if sudo:
+                    ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
             if sudo:
                 ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
-    hit = _store_touch(k, words, parts, ctx)
-    hits = [hit] if hit else []
-    if hit and ctx.get("fd_cwd") not in (None, hit):
-        # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
-        # so a `target:/dev*` entry still matches it, as it matches any other write there
+    hits = _store_touch(k, words, parts, ctx)
+    # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
+    # so a `target:/dev*` entry still matches it, as it matches any other write there
+    if hits and ctx.get("fd_cwd") and ctx["fd_cwd"] not in hits:
         hits.append(ctx["fd_cwd"])
     for t in hits:
         # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
@@ -3764,8 +3865,12 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c.target = dest if "unread hops" in c.signals else (c.target or dest)
         # #399: the host stands for an empty other target too, as for an empty target, so a rule on it sees each.
         # The copy of the action on it among the parts gets the host as well: a deny, reserved or rule entry on the
-        # host's category sees it also when another part of the line outranks this one.
-        c.alt_targets = [t for t in dict.fromkeys(t or dest for t in c.alt_targets) if t != c.target]
+        # host's category sees it also when another part of the line outranks this one. Where the remote command's
+        # own part takes the target (#493), the hop's host stays among the other targets, so a rule on the host
+        # reaches the line as a deny or reserved entry reaches the hop's part (D-075), and a scope or a standing
+        # grant keyed on a local path cannot cover the hop through the remote path alone.
+        c.alt_targets = [t for t in dict.fromkeys([t or dest for t in c.alt_targets] + [host, dest])
+                         if t != c.target]
         c.parts = [replace(p, target=dest) if p.alt_copy and not p.target else p for p in c.parts]
         if c.displaced is not None:           # #454: the part a sudo write displaced gets the host, as it did
             q = c.displaced                   # and so do its other targets and their copies (#399)
@@ -4549,9 +4654,11 @@ def _gh_writes_store(words: list) -> bool:
     return (group, verb) in _GH_STORE_WRITES
 
 
-def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
-    """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
+def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> list[str]:
+    """Each store path in a simple command that a write reaches, in the order the scan meets them (#514), or [].
+    Reads of the store are fine."""
     seen = ctx.setdefault("store_braces", {})
+    hits: list[str] = []
     for op, t in k.redirs:
         # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
         # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. A
@@ -4563,13 +4670,13 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             targets = _shell_words(t, seen, "target")
             if targets is None or any(_store_word(x) for x in targets) or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
-                return t.text
+                hits.append(t.text)
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
     # or descriptor path in their words is no store write that outranks a post on the line, whatever runs or sets
     # them (ssh, mosh, man -P, printf -v). A redirect is still checked, also after a cd into the store, and so is a
     # program named hash run by path (./hash), which is no builtin and rebinds nothing.
     if all(_store_quiet(p) for p in parts) and not _gh_writes_store(words):
-        return ""
+        return hits
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
@@ -4580,19 +4687,20 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     for i, w in enumerate(words):
         expanded = _shell_words(w, seen, "wide" if wide else "narrow")   # braces first: `of=x{a,b}` is `of=xa of=xb`
         if expanded is None:
-            return w.text
+            hits.append(w.text)
+            continue
         for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
             if piece and _store_word(piece, ancestors=wide):
-                return piece
+                hits.append(piece)
         if _unknown_store(w, seen, ancestors=wide):    # `cp x ~/.exo/polic$(:)ies/`, `polic${u}ies` (#309)
-            return w.text
+            hits.append(w.text)
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and (
                 _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")) or
                 _unknown_store(words[i + 1], seen, inside=True)):
-            return words[i + 1].text            # git checkout, reset or commit inside the store
+            hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
-        return ctx.get("fd_cwd") or "a path inside the store (after cd)"
-    return ""
+        hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
+    return list(dict.fromkeys(hits))
 
 
 def _store_quiet(p: Classification) -> bool:
@@ -6337,7 +6445,7 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # launch script's target folder, a live Hermes's state) is not the code. Absolute paths are also checked
 # against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
 # `principals` (`exo init --root`, `exo import-store --root`), the bus folder and files (_bus_paths) and the
-# code folders.
+# code folders, among them the venv and Hermes home the home's config.json records (#612).
 # $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
 # The file names that end a path, one string per name ("\0": any text), which _STORE_NAMES and _store_glob share.
 _EXO_STORE_FILES = (
@@ -6395,6 +6503,27 @@ def _bus_paths() -> list[tuple[str, tuple]]:
     return out
 
 
+def _config_code_paths() -> list[str]:
+    """The venv and Hermes' plugin home the home's config.json records (`venv`, `hermes_home`): scripts/install.sh
+    writes both (its set_cfg lines, #612) and nothing exports EXO_VENV or EXO_HERMES_HOME when the daemon runs, so a
+    supported custom install spells its code folders in the file alone. Read like store.explicit_roots reads the
+    config's `principals`: a missing or unreadable file, or a value that is not an absolute path once ~ is expanded,
+    adds nothing. The environment still takes precedence (Config.get resolves it), so a folder named here joins the
+    code paths beside what EXO_VENV or EXO_HERMES_HOME names, it never replaces one."""
+    try:
+        data = json.loads((Path(_exo_home()) / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):            # a missing file, a stale or bad one: the default spellings stand
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for key, tail in (("venv", ""), ("hermes_home", "plugins")):
+        p = os.path.expanduser(data[key]) if isinstance(data.get(key), str) else ""
+        if p.startswith("/"):
+            out.append(os.path.join(p, tail) if tail else p)
+    return out
+
+
 def _code_paths() -> list[str]:
     """The folders Exo loads code from (#459), each the environment this gate sees spells, as it does EXO_HOME: the
     venv `scripts/install.sh` puts the `exo` package and this gate in (EXO_VENV, else the home's own `venv`; a
@@ -6402,9 +6531,11 @@ def _code_paths() -> list[str]:
     (EXO_HERMES_HOME, else the home's own `hermes-home/plugins`: with --with-hermes the core loads exo-gate from
     there), the source copy it clones a git URL into and `exo update` refreshes from (`$EXO_HOME/src`; `exo web`
     reads plugins on `<package>/../../plugins` of the copy too) and every folder EXO_PLUGIN_DIRS names, which
-    default_dirs searches first and where a duplicate plugin name keeps the first found. Non-absolute spellings are
-    not read: a relative EXO_VENV or dir is a constant of the tool's working folder, which the gate cannot see; a
-    `.venv` name is not Exo's (no install script makes one, EXO_VENV is the only override)."""
+    default_dirs searches first and where a duplicate plugin name keeps the first found. The home's config.json
+    records a venv and Hermes home of its own (`venv`, `hermes_home`, #612): those join, read as _config_code_paths
+    reads them. Non-absolute spellings are not read: a relative EXO_VENV or dir is a constant of the tool's working
+    folder, which the gate cannot see; a `.venv` name is not Exo's (no install script makes one, EXO_VENV is the
+    only override)."""
     home = _exo_home()
     out = []
     venv = os.path.expanduser(os.environ.get("EXO_VENV") or "")   # install.sh: ${EXO_VENV:-$EXO_HOME/venv}
@@ -6415,7 +6546,7 @@ def _code_paths() -> list[str]:
     out.append(os.path.join(home, "src"))
     out += [d for d in (os.path.expanduser(p) for p in
                         filter(None, os.environ.get("EXO_PLUGIN_DIRS", "").split(os.pathsep))) if d.startswith("/")]
-    return out
+    return out + [p for p in _config_code_paths() if p not in out]
 
 
 def _code_forms() -> list[str]:
@@ -6471,11 +6602,19 @@ def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) ->
 
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
 # counts too) and file names that end a path. The code folders (_code_paths, #459) join: the home's own `venv` and
-# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles.
+# `src`, and `hermes-home/plugins`, whose every other spelling the environment or the home's config.json settles
+# (#612). The home's config.json comes
+# from _HOME_PROTECTED; _store_glob counts it only while it counts (_config_on, D-074), so the call is marked and its
+# reading as before is main's.
 _STORE_GLOB_DIRS = tuple([".exo", *p, n] for p in ((), ("principals", "\0")) for n in _HOME_PROTECTED +
                          ("ledger.sqlite\0",)) + ([".exo", "bus"], [".exo", "venv"], [".exo", "src"],
                                                   [".exo", "hermes-home", "plugins"])
 _STORE_GLOB_FILES = tuple(f.split("/") for f in _EXO_STORE_FILES)
+
+
+def _counts(sample: list) -> bool:
+    """Does a store name _store_glob matched count: every one, but the home's config.json only while it does."""
+    return sample[-1] != "config.json" or _config_on()
 
 
 def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> bool:
@@ -6521,11 +6660,12 @@ def _store_glob(glob: str, ancestors: bool = False, inside: bool = False) -> boo
     dirs, files = ([[".exo"]], ()) if inside else (_STORE_GLOB_DIRS, _STORE_GLOB_FILES)
     for form in _path_forms(p) if p.startswith("/") else [os.path.normpath(p)] if p else []:
         gs = form.split("/")
-        if any(fits(gs, 0, t, short=ancestors) for t in tops):
+        if any(fits(gs, 0, t, short=ancestors) and _counts(t) for t in tops):
             return True
         named = own(gs[-1])                 # a store file's folder alone (`src/state/$(..)`) is not its name
         for j in range(1 if form.startswith("/") else 0, len(gs)):
-            if any(fits(gs, j, d) for d in dirs) or named and any(fits(gs, j, f, whole=True) for f in files):
+            if any(fits(gs, j, d) and _counts(d) for d in dirs) or \
+                    named and any(fits(gs, j, f, whole=True) for f in files):
                 return True
     return False
 
@@ -6624,7 +6764,7 @@ def _patch_paths(text: str) -> list[str]:
 _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "new_path", "paths", "files", "directory", "dir", "root",
                   "source", "src", "from", "old_path", "dest", "dst", "destination", "to", "target")
 # Name words of a file tool that moves or renames what it names, as `mv` does, or deletes it, as `rm` does (#447).
-# They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` keeps as one word.
+# They are read in a camelCase name too (`moveFile`, `deleteFile`), which `_name_tokens` reads beside the name's word.
 _WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
                          "revoke", "trash"))
 # Name words of a tool whose name reads as a read but that writes what it took where its path arguments say
@@ -6878,11 +7018,18 @@ NAME_HINTS: list[tuple[set[str], set[str] | None, str]] = [
 
 
 def _name_tokens(name: str) -> list[str]:
-    return [t for t in re.split(r"[_\-.:/]+|(?<=[a-z])(?=[A-Z])", name.lower()) if t]
+    """Read separator parts and camel words together; the call also retains its unsplit reading (#515)."""
+    whole = [p.lower() for p in re.split(r"[_\-.:/]+", name) if p]
+    if _CAMEL.search(name):
+        whole += [p for p in re.split(r"[_\-.:/]+", _CAMEL.sub("_", name).lower()) if p]
+    return list(dict.fromkeys(whole))
 
 
 def classify_by_name(tool: str) -> str:
-    toks = _name_tokens(tool)
+    return _classify_name_tokens(_name_tokens(tool))
+
+
+def _classify_name_tokens(toks: list[str]) -> str:
     is_mcp = bool(toks) and toks[0] == "mcp"
     words = toks[1:] if is_mcp else toks
     joined = "_".join(words)
@@ -7079,6 +7226,7 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
     reading and the line as read before leads, and the other ends its ``also`` readings, so decide keeps the
     stricter. When the Exo home's config.json counted as the store, or an exo command that writes it ran (D-074),
     the call is also read as before D-074, as a call of its own, and that reading is its ``ordinary``.
+    A generic camelCase tool also keeps its complete unsplit-name classification as a ``floor`` (#515).
     ``cwd`` is the folder the tool runs in, when the caller knows it: relative paths are resolved from there too
     (_in_tool_folder sets it)."""
     call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
@@ -7131,7 +7279,7 @@ def _read_core(action: Any, cwd: str | None = None) -> Classification:
     return c
 
 
-def _classify_call(action: Any) -> Classification:
+def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
     tool, args = _args_of(action)
     if _runs_shell(tool, args):
         c = _shell_call(str(args.get("command") or args.get("cmd") or ""))
@@ -7175,7 +7323,8 @@ def _classify_call(action: Any) -> Classification:
             c = _opaque(f"cronjob_manage mutation: {action}", operation)
             c.tool = tool
     else:
-        cat = own = TOOLS.get(tool) or classify_by_name(tool)
+        old_tokens = [p for p in re.split(r"[_\-.:/]+", tool.lower()) if p]
+        cat = own = TOOLS.get(tool) or (_classify_name_tokens(old_tokens) if legacy_name else classify_by_name(tool))
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
         if secret:
             cat = "credentials"
@@ -7226,8 +7375,14 @@ def _classify_call(action: Any) -> Classification:
             out = own in OUTBOUND
             c.parts = [_make(own, summary=f"{tool} {target}".strip()[:120], target=target, link=link,
                              text=_first(args, _TEXT_KEYS) if out else "", title=_first(args, _TITLE_KEYS) if out else "")]
-        if secret:      # #447: each store path beside a secret is a part, so only the principal answers
-            c.parts += [_store_part(p, f"{tool} {p}") for p in stores]
+        # #514: the store paths the tool names beyond the first are store write parts, each with its path as
+        # target, as they all are beside a secret (#447): a target entry on any of them matches, whatever path
+        # the scan met first. The first path is the call's own target, as before.
+        c.parts += [_store_part(p, f"{tool} {p}") for p in (stores if secret else stores[1:])]
+        # Keep the complete unsplit reading, including argument checks and outbound metadata. New name words
+        # must not lower an old secret/store floor, category policy or posting rule (#515).
+        if not legacy_name and tool not in TOOLS and _CAMEL.search(tool):
+            c.floor = _classify_call(action, legacy_name=True)
     for r in readings(c):
         r.tool = tool
         _local_post(r)
@@ -7270,7 +7425,8 @@ def _norm_outcome(v: Any, where: str) -> str:
 
 def normalize_policies(raw: Mapping | None, errors: list[str] | None = None) -> dict:
     """Fill defaults and check types. Raises PolicyError on a bad value. Given ``errors``, a malformed
-    ``gates.escalate`` is recorded there instead and only that section is repaired (#557)."""
+    ``gates.escalate`` is recorded there instead and only that section is repaired (#557). A pattern a
+    decision runs that does not compile is refused either way (#466, check_patterns)."""
     raw = dict(raw or {})
     pol = json.loads(json.dumps(DEFAULT_POLICIES))
     gates = dict(raw.get("gates") or {})
@@ -7346,6 +7502,7 @@ def normalize_policies(raw: Mapping | None, errors: list[str] | None = None) -> 
     pol["scrub"] = normalize_scrub(pol["posting"].get("scrub"), raw.get("internal_names") or ())  # D-033
     if raw.get("interruptions"):
         pol["interruptions"] = raw["interruptions"]
+    check_patterns(raw)      # a pattern that does not compile refuses the policy here (#466)
     pol["_normalized"] = True
     return pol
 
@@ -7360,6 +7517,56 @@ def _as_list(v: Any) -> list:
 
 
 _MATCH_KEYS = ("category", "tool", "target", "command", "exposure", "reversibility", "third_party")
+
+
+def _check_pattern(pat: str, where: str, flags: int = 0) -> None:
+    try:
+        re.compile(pat, flags)
+    except re.error as e:
+        raise PolicyError(f"{where}: bad pattern {pat!r}: {e}") from None
+
+
+def _check_match_patterns(match: Mapping, where: str) -> None:
+    for p in _as_list(match.get("command", [])):
+        _check_pattern(str(p), f"{where}.command")
+
+
+def check_patterns(raw: Mapping | None) -> None:
+    """Compile every pattern a decision runs, when the policy loads (#466): a rule's ``match.command``, a
+    ``reserved`` or ``deny`` entry's ``command`` (a ``command:<regex>`` string or a mapping like a rule's
+    match) and a ``posting.forbid`` pattern. Raises PolicyError naming the entry. One that does not
+    compile used to raise re.PatternError at decide, where the hook's fallback runs a read call with no
+    ask and its card offers "always"; refused here, the hook loads the defaults on the PolicyError."""
+    gates = (raw or {}).get("gates") or {}
+    rules = gates.get("rules")
+    if isinstance(rules, list):
+        for i, r in enumerate(rules):
+            if not isinstance(r, Mapping):
+                continue
+            match = r.get("match") or {k: v for k, v in r.items() if k not in ("decision", "reason", "name")}
+            if isinstance(match, Mapping):
+                _check_match_patterns(match, f"gates.rules[{i}]")
+    for k in ("reserved", "deny"):
+        entries = gates.get(k)
+        if not isinstance(entries, list):
+            continue
+        for i, e in enumerate(entries):
+            if isinstance(e, Mapping):
+                m = e["match"] if isinstance(e.get("match"), Mapping) else e
+                if isinstance(m, Mapping):
+                    _check_match_patterns({x: v for x, v in m.items() if x in _MATCH_KEYS}, f"gates.{k}[{i}]")
+                continue
+            kind, _, val = str(e).strip().partition(":")
+            if kind == "command" and val.strip():
+                _check_pattern(val.strip(), f"gates.{k}[{i}]")
+    posting = (raw or {}).get("posting")
+    forbid = posting.get("forbid") if isinstance(posting, Mapping) else None
+    if isinstance(forbid, list):
+        for i, f in enumerate(forbid):
+            if isinstance(f, Mapping):
+                pat = str(f.get("pattern", ""))
+                if pat:
+                    _check_pattern(pat, f"posting.forbid[{i}]", bool(f.get("ignore_case")) and re.I)
 
 
 def _policy_command_view(command: str) -> str:
@@ -8324,7 +8531,8 @@ def policy_files(root: str | Path) -> list[Path]:
 def load_policies(root: str | Path | None, errors: list[str] | None = None) -> dict:
     """Read `<root>/policies/` and `<root>/agents/` into normalized policies. A missing root or
     missing files fall back to the defaults (which ask on anything irreversible or public).
-    ``errors`` is passed to normalize_policies."""
+    ``errors`` is passed to normalize_policies. A pattern that does not compile refuses the file's
+    policy with the file named (#466, check_patterns)."""
     if not root:
         return normalize_policies({"internal_names": internal_names(None)})
     root = Path(root)
@@ -8335,16 +8543,24 @@ def load_policies(root: str | Path | None, errors: list[str] | None = None) -> d
         if p.is_file():
             try:
                 raw[key] = parse_yaml(p.read_text(encoding="utf-8")) or {}
+                check_patterns({key: raw[key]})     # a pattern that does not compile refuses here, named with the file (#466)
             except PolicyError as e:
                 raise PolicyError(f"{p}: {e}") from None
     posting: dict = {}
     if (pdir / "posting.md").is_file():
         try:
             posting.update(parse_posting_md((pdir / "posting.md").read_text(encoding="utf-8")))
+            check_patterns({"posting": posting})
         except PolicyError as e:
             raise PolicyError(f"{pdir / 'posting.md'}: {e}") from None
     if (pdir / "posting.yaml").is_file():
-        posting.update(parse_yaml((pdir / "posting.yaml").read_text(encoding="utf-8")) or {})
+        p = pdir / "posting.yaml"
+        val = parse_yaml(p.read_text(encoding="utf-8")) or {}
+        try:
+            check_patterns({"posting": val})
+        except PolicyError as e:
+            raise PolicyError(f"{p}: {e}") from None
+        posting.update(val)
     raw["posting"] = posting
     if posting.get("forbid_agent_names"):
         raw["agents"] = _agent_names(root / "agents")

