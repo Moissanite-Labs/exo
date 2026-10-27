@@ -813,14 +813,17 @@ def _standing(text: str, end: int) -> str:
     """The file from the header end with every `## ` heading line the reader does not read as the
     section demoted to a `### ` line (#540): an older writer's path, launch, title, list or summary
     line could carry a forged section into the system message next to the principal's real one. The
-    copies the reader reads stand."""
+    copies the reader reads stand. The match takes the spellings a markdown reader takes as the
+    heading (#540): up to three leading spaces, and after the `##` a space, a tab or the line's end.
+    A fourth leading space is an indented code block, not a heading, and the line stands as
+    written. Fenced code blocks are not skipped, as before."""
     read = _read_heads(text)
     out, pos = [], end
-    for m in re.finditer(r'^## [^\n]*', text, re.M):
+    for m in re.finditer(r'^ {0,3}##(?:[ \t][^\n]*)?$', text, re.M):
         if m.start() < end:
             continue
         out.append(text[pos:m.start()])
-        out.append(m.group(0) if m.start() in read else '###' + m.group(0)[2:])
+        out.append(m.group(0) if m.start() in read else m.group(0).replace('##', '###', 1))
         pos = m.end()
     out.append(text[pos:])
     return ''.join(out)
