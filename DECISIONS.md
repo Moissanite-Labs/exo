@@ -1230,6 +1230,53 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
+  the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
+  globbed folder against the folder of each glob sample (`_glob_folder_hit`), so `cat ~/.ss?/*`, `cat ~/.aw?/*`
+  and `cat ~/.exo/key?/*` ask where they read with no ask. Its rules: (1) bash's `*`, `?` and `[..]` never match a
+  leading dot, so a part matches a dot folder only when it starts with a literal dot (`~/.s*/*` and `~/.*/*` can
+  reach `~/.ssh`; `~/[.]ssh/*` and `~/*/*` cannot, and stay reads); (2) a match needs a part that starts with a
+  literal dot or three literal characters across the matched parts, so `src/*/*` stays ordinary; (3) when the
+  folder matched is a secret store by name (`_SENSITIVE_PATH`: `.ssh`, `.aws`, `.gnupg`, `.exo/keys`), any glob
+  file part below it asks, as below the literal folder; (4) a file part that ends in `.pub` stays out, as for a
+  literal folder (`cat ~/.ss?/*.pub` is a read, `cat ~/.ss?/*.pu?` asks). The follow-up adds: (5) a glob folder
+  that goes deeper than a secret folder asks too, its leading parts matched with the same discipline, since a
+  folder below a store is a store (`cat ~/.gnup?/private-keys-v1.d/*`, `cat ~/.aw?/sso/cache/*`,
+  `cat ~/.ss?/keys/*`, `cat ~/.exo/key?/old/*`, `cat ~/.gnup?/*/*` and `read_file ~/.gnup?/private-keys-v1.d/*`
+  were read/allow, also under `deny: [credentials]`); a folder that is not a secret by name still matches at its
+  own depth only (`cat ~/.config/*/x/*` stays a read), and a secret folder that matches wins over an ordinary one.
+  (6) The regression review 5662072421 found: a credentials line takes the first store-naming word as its target,
+  and since #609 a secret-folder glob counts as one, so it came first and a `target:` deny, `reserved:` entry or
+  rule on a later literal store stopped matching. `cat ~/.ss?/* ~/.aws/credentials` under
+  `deny: ["target:*/.aws/*"]`, `cat ~/.aw?/* ~/.ssh/id_rsa` under `deny: ["target:*/.ssh/*"]` and a rule on
+  target `*/.aws/*` with decision `deny` went deny -> ask, and `reserved: ["target:*/.ssh/*"]` lost its entry (717
+  lowered pairs on 270 actions in the review's run). Now every other store the line names (each word or brace word
+  `_shell_credential_hit` finds, not only the first) is a `credentials` part with that store as its target
+  (`other_store`), beside the line's own target, which stays the first. The deny, reserved and rule entries read
+  every part (D-075, #191), so they match any store on the line. This also lifts #313 group 4 below for literal
+  stores: `cat ~/.aws/* ~/.ssh/id_rsa` and `cat ~/.aws/credentials; cat ~/.ssh/id_rsa`, which asked under
+  `deny: ["target:*/.ssh/*"]` on main and before #609, are denied. Where a Keychain read, an environment dump or a
+  secret variable is the line's first hit, the stores after it are listed as well, so
+  `security find-generic-password -w -s x; cat ~/.ssh/id_rsa`, `env; cat ~/.ssh/id_rsa` and
+  `cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` are denied there too. The ssh hop's host copy (#320) and a shell
+  call's folder read (#311) pass these parts over, so each reads the line as main does. Each part only adds a match.
+  Where a glob below a secret folder comes first it is the line's target now
+  (`cat ~/.gnup?/private-keys-v1.d/* ~/.ssh/id_rsa`), with the store after it a part, so the decisions stay.
+  gate_diff (main's script) ran main e0968a2b against this change: the built-in corpus (12,065 actions x 88
+  policies, 1,061,720 pairs) 0 lowered, 698 stricter pairs on 27 actions; 1,583 aimed lines and calls under the
+  built-in policies and 57 target, reserved, rule, scope, category and matrix policies (229,535 pairs) 0 lowered,
+  21,770 stricter pairs on 915 actions. The hook, in enforce, observe and bypass under six policies, decides none
+  of 360 probe calls lower. The folders a glob is tested against are built once per set of samples
+  (`_glob_folders`), not once per glob word, so a line of 500 ordinary globbed-folder words (`src/*/x1*`)
+  classifies in 0.11s where main takes 0.52s. A line that names a store now reads every later word for a store
+  too, where main stopped at the first: 500 globbed store words take 0.15s (main 0.02s), still linear.
+  Rejected: deciding the line again on each other store as an `alt_target` (#399), which would also bind every
+  approval of the line to its exact text and word the card "it may land on". Limits: the samples bound what a glob
+  folder reaches, so a store with no sample (`cat ~/.cla*/.cred*`, `cat ~/.config/gclou?/*.json`), one outside the
+  home folder (`cat /home/u/.ss?/*`), a relative glob folder after `cd` (`cd ~/x && cat ../.ss?/*`), a literal file
+  part below a glob folder (`cat ~/.ss?/config`) and a glob that names the store folder itself
+  (`tar cf /tmp/x.tar ~/.ss?`) still read, as on main; `$EXO_HOME/principals/*/run/*` still reads. Tests:
+  `tests/security/test_gate_glob_store_folder_594.py`, `tests/security/test_gate_glob_target_second_store_609.py`.
 - *Amendment 2026-10-26 (issue #579):* a prompt-string transformation is code the gate cannot see, unless the
   line assigns the variable a literal value. `${name@P}` expands the value as a prompt string, and with
   `promptvars` on, the default, that runs its command substitutions and expands its parameters, so the gate
@@ -1300,8 +1347,36 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The scan now keeps each store path a shell line or file tool writes, in the order it meets them, and each is a
   `store_write` part with that path as its target, as beside a secret (#447). The first path still leads the line,
   `rm` of both paths was denied already (its `delete` part names the last path), reads keep their class, and the
-  first path alone decides as before. Each new part only adds a match, so no decision is lower; gate_diff ran
-  main 5a5a535d against this change and found 0 lowered.
+  first path alone decides as before. gate_diff against the merge parent 1c3d4322 found 0 lowered on the
+  built-in corpus, but the scan of every word lowered a later command's braced store write (the #611 follow-up
+  amendment below), and `apply_patch` and `write_file` kept a later store path a `local_write` part.
+- *Amendment 2026-10-27 (#611 follow-up, review 5662072103):* a later command that repeats a braced store path keeps
+  its own `store_write` part. The store check expands and checks each brace spelling once per line, and marked a
+  spelling checked for the whole line; once #514 scanned every word, the first command marked each spelling it
+  met, and a later command that wrote the same spelling got no part, so its write had the first command's own
+  text (#394). Under `{categories: {store_write: deny}, rules: [{match: {command: '^cp '}, decision: allow}]}`,
+  `cp ~/.exo/policies/a.yaml ~/.exo/policies/{g,h}.yaml; printf x > ~/.exo/policies/{g,h}.yaml` was denied on
+  1c3d4322 and asked on main e0968a2b, and so did a matrix deny, a `log` or `ask` rule, and `tee`, `sudo tee`,
+  `truncate` or `scp` in place of `printf`; with `cp /var/tmp/a` first, the line asked on 1c3d4322 too. Each
+  check's hits on a spelling are now kept with it (`_shell_hits`), and a command that repeats the spelling gets
+  them for its own part; only a check that found nothing still covers a narrower one. The braced line decides as
+  the unbraced one does. The hits a repeat gives again come from a third 4,096 budget per call (`_BRACE_BUDGET`),
+  so a line of many repeats makes a bounded number of parts (40 `cp` commands that repeat a 676-path spelling make
+  4,772 store parts, each command with its own, where 27,080 without the budget; main made 677, all the first
+  command's); past it a repeat is one hit on the word as written, as a word past the brace cap is. The extra parts
+  cost time: that line classifies and decides in about 0.3 s, where main took 0.1 s. A redirect target or folder
+  check (`>`, `cd`, `git -C`) keeps only its first hit, as main's `any()` stopped at it. `apply_patch`
+  and `write_file` that write more than one store file make each store path past the first a `store_write` part
+  too, as `copy_file` does, so a `{category: store_write, target}` deny or reserved entry on a later file matches.
+  A case variant the store reads since #635 (`~/.EXO/policies/{g,h}.yaml`) keeps its part the same way.
+  Parts are only added; gate_diff against main e0968a2b lowered 0 of 1,053,712 pairs on the built-in corpus
+  (`--no-variants`, 0 tightened) and, on an aimed corpus (614 actions: the review's lines and their unbraced and
+  case-variant controls under each writer, `cd`, `pushd`, `-C` and file tool forms, the #651 replace tools, and
+  lines of many repeats, redirect and folder ones too; 135 policies, the built-in ones and 47 on targets, rules on
+  `^cp `, matrix cells and reserved entries), 0 of 82,890 pairs, with 485 tightened. Not covered, as before: a relative path read from a `cd` into the store, from
+  `tar -C` or `git -C`, or from the call's own folder (#453, #527) is no target, so a `target:` entry on it does
+  not match (`cd ~/.exo/policies && cp a.yaml gates.yaml` asks under `deny: ["target:*/gates.yaml"]`). The `cd`
+  and `-C` lines still ask the principal alone; the own-folder line is allowed, as #453 records.
 - *Amendment 2026-10-26 (issue #516):* an allow rule keyed on `command` that would lower the line over the matrix
   deny of the part a shell call's own folder read adds (#311) must name the folder, as it names the `cd` in the cd
   form; naming the folder never lifts that deny. The part had no own text, so a line of
@@ -1325,15 +1400,44 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `git clone` do. gh's download and clone subcommands read on GitHub, so the store check took a line whose
   every part reads as a read for a read and never looked at their output paths: `gh release download -O
   ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, `-O ~/.exo/update/allowed_signers`
-  replaced the signed-update trust pin (#133), `gh run download` and `gh attestation download` with
-  `-D`/`--dir` filled `state/`, and `gh repo clone` or `gh gist clone` with a store directory filled it too,
-  where `curl -o` and `git clone` on the same paths ask. Now the store check reads their output paths as
-  writes — `-O`/`--output` and `-D`/`--dir` in every spelling, the clone's directory word, also with `--`
-  before it — wherever the line stands: under `sudo`, in `bash -c` or a `$( )`, and past a `-R` before the
-  subcommand (#399). The line grows a `store_write` part and keeps the gh read as its other part (D-075), so
-  a deny, `reserved:` entry, rule or matrix cell on the gh reading still holds, and the decision is the
-  principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store and
-  every other gh read.
+  replaced the signed-update trust pin (#133), `gh run download` with `-D`/`--dir` filled `state/`, `gh
+  attestation download` (which has no such option) filled the current folder after a `cd` into the store,
+  and `gh repo clone` or `gh gist clone` with a store directory filled it too, where `curl -o` and `git
+  clone` on the same paths ask. Now the store check reads their output paths as writes — `-O`/`--output`
+  and `-D`/`--dir` in every spelling, the clone's directory word, also with `--` before it, and the current
+  folder after a `cd` — wherever the line stands: under `sudo`, in a `$( )`, and past a `-R` before the
+  subcommand (#399). In `bash -c` the line already asked before, as opaque code with a store write. The
+  line grows a `store_write` part and keeps the gh read as its other part (D-075), so a deny, `reserved:`
+  entry, rule or matrix cell on the gh reading still holds, and the decision is the principal-only floor.
+  `-O -` prints to stdout and stays a read, and so does a path outside the store and every other gh read.
+  Amended the same day (review 5658467251, the #461 follow-up): over an ssh or mosh hop the store write now
+  leads the remote line and the gh read is a part below it, and the hop gave the host (#399) only to the
+  line's own parts, so the read lost the host its empty other target took when it led. A deny or rule on
+  `{category: read, target: host}` asked where it denied before (`ssh host gh release download v1 -R pub/x
+  -O ~/.exo/policies/gates.yaml`, `gh repo clone` and `gh run download` into the store, the `sudo` and
+  `mosh` forms), and a deny on `{category: opaque_exec, target: host}` asked on the `eval` and stdin forms;
+  the review's gate_diff counted 421 pairs on 150 actions, and on main at e0968a2b the follow-up's aimed
+  corpus (242 actions, 169 policies) counts 499 pairs on 81 actions lowered against main before #461
+  (dcab371a), all on ssh, mosh or `scp -o RemoteCommand` hops. Each part nested below a hop with an empty target
+  now has a copy on the host among the line's parts (as #320's: no parts, no post), and the host joins a
+  nested part's empty other target. Every part keeps its own target, so each entry that matched before still
+  matches and the host's entries match too. A part that led over the gh read and took the host has a copy
+  on the host the same way: each of mosh's local helpers (`--ssh`, `--client`, `--server` with `--local`)
+  that does not lead, and the part that runs ssh's stdin where the remote line leads (`echo x | ssh $H gh
+  release download ..`, the whole part and its own copies). `ssh -o RemoteCommand=` raised only the remote
+  line's lead to internal, so the gh read below the store write stayed private: every part of that line is
+  raised now, as for the hop's own command (D-075), on a copy, and each nested part keeps its private
+  reading as a copy beside it (no parts, no post): the raise alone took the gh read away from an entry
+  keyed on `exposure: private`, and `{match: {category: read, exposure: private}, decision: deny}` asked
+  at the store floor where main denied. The same holds where main's later readings make the store write
+  below the hop: a store path in another letter case (#635), a `$((` read as a command substitution (#652)
+  and an `env -S` text (#634), so `ssh host gh release download v1 -R pub/x -O ~/.EXO/policies/gates.yaml`
+  and `ssh host 'echo $((gh release download ..) )'` deny under `{category: read, target: host}` as the
+  plain spelling does. So the deny, rule, reserved entry or matrix cell on the gh reading, including a host
+  target on a hop, holds as before #461 or stricter (gate_diff on the aimed corpus, which holds the
+  review's lines, the follow-up's hop forms, the `exposure: private` forms and those later readings: 0
+  pairs lowered against main at e0968a2b and 0 against dcab371a; built-in corpus: 0 against e0968a2b).
+  The remote line is always copied before (also with `mosh --local`), so a stored result is never changed.
 - *Amendment 2026-10-24 (issue #542):* an explicit `gates.escalate` must be a mapping, and its `categories`, when
   present, must be a list. A malformed value raises `PolicyError` during normalization and store policy loading,
   rather than silently retaining defaults or using substring membership on a string. Omitted settings, an empty
@@ -2723,7 +2827,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line asks either way. (4) A line's credentials target is the first store it names and a `cat` part has no target, so a
   `target:` entry for a second store on the line no longer matches
   (`cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
-  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does). The differential does not count a fifth change,
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does; since the #609 follow-up of 2026-10-27 each other store
+  on the line is a `credentials` part with its own target, so both are denied again). The differential does not count a fifth change,
   because the outcome stays an ask. (5) Beside a store write the line is `credentials`, not `store_write`. A seat
   that `approvals.yaml` delegates `credentials` to may then answer what only the principal answered
   (`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`). Main does the same for any secret on
@@ -4754,8 +4859,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   another command, a store write or a secret, a file tool's own category or file, a `/dev` or `/proc` target, or a
   key read after `tar -C`.
   Not done: an allow, log or ask cell, third-party escalation and the floors on a part (#437), a `target:` entry
-  for a second store on a credentials line (#313 group 4), and checking policy patterns when the policy loads
-  (#466).
+  for a second store on a credentials line (#313 group 4, done by the D-038 amendment of 2026-10-27 for #609),
+  and checking policy patterns when the policy loads (#466).
   A relative key read keeps the name as written as its target, as `tar -C ~/.exo -czf - keys/seat` already does,
   so `target:*/.exo/keys/*` matches neither.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into

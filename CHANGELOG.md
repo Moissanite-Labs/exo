@@ -56,6 +56,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `memory_zoom(subagent=)` already walked), so a private hit cannot eat the result limit, a parent loop ends,
   and public threads, hidden-row filtering and the thread's own local search are unchanged.
   Tests: `tests/core/test_agent_log.py::test_shared_search_leaves_out_a_private_threads_descendants`.
+- A `target:` entry matches every store a credentials line names, and a file below a globbed secret folder asks
+  (#609 follow-up, review 5662072421). A credentials line takes the first store it names as its target, and since
+  #609 a secret-folder glob counts as one, so it came first and a `target:` deny, `reserved:` entry or rule on a
+  later store stopped matching: `cat ~/.ss?/* ~/.aws/credentials` under `deny: ["target:*/.aws/*"]` and
+  `cat ~/.aw?/* ~/.ssh/id_rsa` under `deny: ["target:*/.ssh/*"]` went deny -> ask. Each other store the line names
+  is now a `credentials` part with that store as its target, beside the line's own, so these are denied again, and
+  so are the literal forms that asked before #609 too (`cat ~/.aws/* ~/.ssh/id_rsa`, `cat ~/.aws/credentials;
+  cat ~/.ssh/id_rsa`) and a store after a Keychain read or an environment dump (`env; cat ~/.ssh/id_rsa`). A glob
+  folder that goes below a secret folder asks too: `cat ~/.gnup?/private-keys-v1.d/*`, `cat ~/.aw?/sso/cache/*`,
+  `cat ~/.ss?/keys/*`, `cat ~/.exo/key?/old/*`, `cat ~/.gnup?/*/*` and `read_file ~/.gnup?/private-keys-v1.d/*`
+  were read/allow, also under `deny: [credentials]`; a secret folder a glob names wins over an ordinary one, so
+  `ls ~/.*/*.md` asks too. The folders a glob is tested against are built once per set of samples, not per glob
+  word. gate_diff against main e0968a2b: 0 lowered on the built-in corpus (12,065 actions, 698 stricter pairs) and
+  on 1,583 aimed lines under 57 more policies (21,770 stricter pairs). Tests:
+  `tests/security/test_gate_glob_target_second_store_609.py`. **Docs:** `docs/GATE.md` "A glob in a store's
+  folder (#594, #609)", "A thread's environment file (#313)" and the run-folder limits, `DECISIONS.md` (D-038),
+  `docs/DOCS-MAP.md`.
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
@@ -219,6 +236,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   part with that path as its target, as beside a secret (#447), so the entry matches whichever path it names. The
   first path still leads the line, `rm` of both paths was denied already (its `delete` part names the last path),
   reads keep their class, and the first path alone decides as before.
+- A later command that repeats a braced store path keeps its own store write part (#611 follow-up, review
+  5662072103). The store check marked each brace spelling checked for the whole line, and once #514 scanned every
+  word, the first command marked each spelling it met, so a later command writing the same spelling got no part
+  and its write carried the first command's text: under `categories: {store_write: deny}` and an allow rule on
+  `^cp `, `cp ~/.exo/policies/a.yaml ~/.exo/policies/{g,h}.yaml; printf x > ~/.exo/policies/{g,h}.yaml` was
+  denied before #514 and asked after it, and so did a matrix deny, a `log` or `ask` rule, and `tee`, `sudo tee`,
+  `truncate` or `scp`. With `cp /var/tmp/a` first, the line asked before #514 too. Each check's hits on a spelling
+  are kept with it now, and each command that repeats the spelling gets them for its own part, so the braced line
+  decides as the unbraced one, and so does a case variant the store reads since #635 (`~/.EXO/policies/{g,h}.yaml`).
+  `apply_patch` and `write_file` that write two store files make the second a
+  `store_write` part too, as `copy_file` does, so a `{category: store_write, target}` deny or reserved entry on it
+  matches. Tests: `plugins/exo-gate/tests/test_store_floor_any_part.py`. **Docs:** `docs/GATE.md`, `DECISIONS.md`
+  (D-038).
 - A shell call's own folder read is no longer lifted by an allow rule that names only the line's text (#516). The
   `credentials` part the folder argument adds (`cwd`, or `workdir` for Hermes' terminal and Codex's exec_command)
   had no own text, so a line of one command beside it was one text for the #394 own-text test and a rule keyed on
@@ -243,17 +273,40 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   keeps the exposure the hop gives the line, and the other targets bind the call to the exact command, so no grant
   for a local write runs the hop. The written path stays the line's target, so a rule on it still matches as
   before, and a rule on the bare host reaches a `user@host` destination too.
+- An ssh or mosh hop keeps its host on a gh download or clone into the store (#461 follow-up). After #461 the
+  store write leads the remote line and the gh read is a part below it, and the hop gave the host only to the
+  line's own parts, so the read lost the host its empty other target took when it led:
+  `ssh host gh release download v1 -R pub/x -O ~/.exo/policies/gates.yaml` asked under a deny or rule on
+  `{category: read, target: host}` where it was denied before, and so did `gh repo clone` and `gh run download`
+  into the store, `sudo` and `mosh` forms; the `eval` and stdin forms (`echo '..' | ssh host`) asked under a deny
+  on `{category: opaque_exec, target: host}`, and a `reserved:` entry on the host's read or on `tool:terminal`
+  lost its hit. Each part nested below the hop with an empty target now has a copy on the host, and the host
+  joins its empty other targets; every part keeps its own reading. The parts that led over the gh read and took
+  the host keep a copy on it too: mosh's local helpers (`mosh --ssh=.. host -- gh release download ..`,
+  `--client`, `--local --server`) under `{category: opaque_exec, target: host}`, and the part that runs ssh's
+  stdin (`echo x | ssh $H gh release download ..`), whose `(opaque_exec, $H)` hit a `reserved: [tool:terminal]`
+  entry had lost. `ssh -o RemoteCommand='gh release download ..'` raised only the line's lead to internal, so
+  the read below the store write stayed private and a matrix that denies an internal action asked: every part
+  of the remote line is internal now, as for the hop's own command (D-075), and a nested part keeps its private
+  reading as a copy beside it, so a rule on `{category: read, exposure: private}` still denies. The same holds
+  where main's later readings make the store write below the hop: a store path in another letter case (#635,
+  `ssh host gh release download v1 -R pub/x -O ~/.EXO/policies/gates.yaml`), a `$((` read as a command
+  substitution (#652) and an `env -S` text (#634). So each of these lines decides as before #461 or stricter
+  under each of these policies: on main at e0968a2b gate_diff's aimed corpus counted 499 pairs on 81 actions
+  lowered against dcab371a (main before #461), and 0 with this change.
 - A gh download or clone into the Exo store is a store write, as `curl -o` and `git clone` already are (#461).
-  gh release download, gh run download and gh attestation download write what they fetch into `-O`/`--output`
-  or `-D`/`--dir`, and gh repo clone and gh gist clone into their directory word, but they read as reads on
-  GitHub, so the gate's store check took the line for a read and never looked at the paths:
-  `gh release download -O ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy itself, and `-O
-  ~/.exo/update/allowed_signers` replaced the signed-update trust pin (#133), where `curl -o` and `git clone`
-  on the same paths ask. The store check now reads their output paths in every spelling (`-O`, `--output=`,
-  `-D`, `--dir`, the clone's directory operand, with `--` before it), wherever the line stands: under `sudo`,
-  in `bash -c` or a `$( )`, and past a `-R` before the subcommand (#399). The line keeps the gh read as a part
-  (D-075), so a deny, reserved entry, rule or matrix cell on it still applies, and the decision is the
-  principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store.
+  gh release download writes what it fetches into `-O`/`--output` or `-D`/`--dir`, gh run download into
+  `-D`/`--dir`, gh attestation download into the current folder, and gh repo clone and gh gist clone into their
+  directory word, but they read as reads on GitHub, so the gate's store check took the line for a read and never
+  looked at the paths: `gh release download -O ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy
+  itself, and `-O ~/.exo/update/allowed_signers` replaced the signed-update trust pin (#133), where `curl -o` and
+  `git clone` on the same paths ask. The store check now reads their output paths in every spelling (`-O`,
+  `--output=`, `-D`, `--dir`, the clone's directory operand, with `--` before it) and a `cd` into the store
+  before gh attestation download, wherever the line stands: under `sudo`, in a `$( )`, and past a `-R` before
+  the subcommand (#399). In `bash -c` the line already asked, as opaque code. The line keeps the gh read as a
+  part (D-075), so a deny, reserved entry, rule or matrix cell on it still applies, also on the host of an ssh
+  or mosh hop (with the follow-up above), and the decision is the principal-only floor. `-O -` prints to stdout
+  and stays a read, and so does a path outside the store.
 - Gate (#587 follow-up, D-074): a `config.json` name an expansion hides keeps main's reading again. The merge of
   #320 into #587 let #320's store glob count the home's `config.json` without marking the call, so the line kept no
   reading as before D-074, or that reading counted the file too. Under `matrix_deny_cells`,
