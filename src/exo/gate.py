@@ -4792,9 +4792,9 @@ def _unknown_store(w: _Word, seen: dict, ancestors: bool = False, inside: bool =
 
 # gh subcommands that write the paths on their line (#461): release download into `-O`/`--output` or `-D`/`--dir`,
 # run download into `-D`/`--dir`, attestation download into the current folder (a `cd` into the store before it),
-# and repo and gist clone into their directory word. The gate read them as
-# reads on GitHub, so the store check never looked at the paths, and `gh release download -O
-# ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, or the signed-update trust pin (#133).
+# and repo and gist clone into their directory word. The gate read them as reads on GitHub, so the store check never
+# looked at the paths, and `gh release download -O ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy,
+# or the signed-update trust pin (#133).
 _GH_STORE_WRITES = (("release", "download"), ("run", "download"), ("attestation", "download"),
                     ("repo", "clone"), ("gist", "clone"))
 

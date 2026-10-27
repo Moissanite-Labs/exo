@@ -1341,7 +1341,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `{category: read, target: host}` asked where it denied before (`ssh host gh release download v1 -R pub/x
   -O ~/.exo/policies/gates.yaml`, `gh repo clone` and `gh run download` into the store, the `sudo` and
   `mosh` forms), and a deny on `{category: opaque_exec, target: host}` asked on the `eval` and stdin forms;
-  gate_diff counted 421 pairs on 150 actions, all on hops. Each part nested below a hop with an empty target
+  the review's gate_diff counted 421 pairs on 150 actions, and on main at e0968a2b the follow-up's aimed
+  corpus (242 actions, 169 policies) counts 499 pairs on 81 actions lowered against main before #461
+  (dcab371a), all on ssh, mosh or `scp -o RemoteCommand` hops. Each part nested below a hop with an empty target
   now has a copy on the host among the line's parts (as #320's: no parts, no post), and the host joins a
   nested part's empty other target. Every part keeps its own target, so each entry that matched before still
   matches and the host's entries match too. A part that led over the gh read and took the host has a copy
@@ -1352,12 +1354,15 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   raised now, as for the hop's own command (D-075), on a copy, and each nested part keeps its private
   reading as a copy beside it (no parts, no post): the raise alone took the gh read away from an entry
   keyed on `exposure: private`, and `{match: {category: read, exposure: private}, decision: deny}` asked
-  at the store floor where main denied (24 pairs). So the deny, rule, reserved entry or matrix cell on the
-  gh reading, including a host target on a hop, holds as before #461 or stricter (gate_diff: 0 pairs
-  lowered against main before #461, against main at 15e60ddb, which has #493's host among the hop's other
-  targets, and against main at fa5dfcd8, on the review's corpus, the follow-up's hop forms and the
-  `exposure: private` forms). The remote line is always copied before (also with `mosh --local`), so a
-  stored result is never changed.
+  at the store floor where main denied. The same holds where main's later readings make the store write
+  below the hop: a store path in another letter case (#635), a `$((` read as a command substitution (#652)
+  and an `env -S` text (#634), so `ssh host gh release download v1 -R pub/x -O ~/.EXO/policies/gates.yaml`
+  and `ssh host 'echo $((gh release download ..) )'` deny under `{category: read, target: host}` as the
+  plain spelling does. So the deny, rule, reserved entry or matrix cell on the gh reading, including a host
+  target on a hop, holds as before #461 or stricter (gate_diff on the aimed corpus, which holds the
+  review's lines, the follow-up's hop forms, the `exposure: private` forms and those later readings: 0
+  pairs lowered against main at e0968a2b and 0 against dcab371a; built-in corpus: 0 against e0968a2b).
+  The remote line is always copied before (also with `mosh --local`), so a stored result is never changed.
 - *Amendment 2026-10-24 (issue #542):* an explicit `gates.escalate` must be a mapping, and its `categories`, when
   present, must be a list. A malformed value raises `PolicyError` during normalization and store policy loading,
   rather than silently retaining defaults or using substring membership on a string. Omitted settings, an empty

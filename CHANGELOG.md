@@ -246,8 +246,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   entry had lost. `ssh -o RemoteCommand='gh release download ..'` raised only the line's lead to internal, so
   the read below the store write stayed private and a matrix that denies an internal action asked: every part
   of the remote line is internal now, as for the hop's own command (D-075), and a nested part keeps its private
-  reading as a copy beside it, so a rule on `{category: read, exposure: private}` still denies. So each of these
-  lines decides as before #461 or stricter under each of these policies.
+  reading as a copy beside it, so a rule on `{category: read, exposure: private}` still denies. The same holds
+  where main's later readings make the store write below the hop: a store path in another letter case (#635,
+  `ssh host gh release download v1 -R pub/x -O ~/.EXO/policies/gates.yaml`), a `$((` read as a command
+  substitution (#652) and an `env -S` text (#634). So each of these lines decides as before #461 or stricter
+  under each of these policies: on main at e0968a2b gate_diff's aimed corpus counted 499 pairs on 81 actions
+  lowered against dcab371a (main before #461), and 0 with this change.
 - A gh download or clone into the Exo store is a store write, as `curl -o` and `git clone` already are (#461).
   gh release download writes what it fetches into `-O`/`--output` or `-D`/`--dir`, gh run download into
   `-D`/`--dir`, gh attestation download into the current folder, and gh repo clone and gh gist clone into their
