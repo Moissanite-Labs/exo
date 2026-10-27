@@ -6466,3 +6466,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `limit` up to the top of the `page_chars` range, 24,000. It cannot see the configured value. The tool
   refuses a limit above that value, so the category is `read` on both paths and no policy result changes.
   `exo.tool_evidence.PAGE_CHARS` holds the range, and a test fails if the gate's ceiling and its top differ.
+- **Amendment 2026-10-27 (gate comparison after the stack rebase):** Main's `scripts/gate_diff.py` compared
+  main `1c3d4322` with the rebased branch at `9191c801`. It ran the built-in corpus with variants, the saved
+  `tool_output` cases and four page-limit cases: 78,506 actions against 87 policies. It found 18 lowered
+  pairs on six actions. All six are supported `tool_output` page calls, each from `unknown` to `read` under
+  `categories_deny`, `categories_ask` and `categories_log`. These are the intended lowerings named above.
+  No reserved hit or violation was lost, no pair tightened, and neither tree had an error. A limit of 24,001
+  stays `unknown`. The gate imports no other Exo module, so its `tool_output` rule is the only change.
