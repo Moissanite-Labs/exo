@@ -1,10 +1,21 @@
 import asyncio
 import json
 
+import pytest
+
 from exo.learn import attach, handle_feedback
-from exo.learn.review import review, run_review
+from exo.learn.review import parse_json, review, run_review
 
 from conftest import feedback, new_session
+
+
+def test_parse_json_keeps_a_value_with_trailing_braces():
+    text = 'Here is the review: {"proposals": []} } thanks }'
+    assert parse_json(text) == {"proposals": []}
+    assert parse_json('[{"a": 1}] trailing ]') == [{"a": 1}]
+    assert parse_json('prefix {"objection": null} suffix') == {"objection": None}
+    with pytest.raises(Exception):
+        parse_json("this is not json at all")
 
 
 def reply(items):
