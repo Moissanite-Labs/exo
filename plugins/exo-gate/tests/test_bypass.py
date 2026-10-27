@@ -20,6 +20,13 @@ FLOOR = [
     ("terminal", {"command": "echo x >> $EXO_HOME/policies/gates.yaml"}),
     ("terminal", {"command": "sqlite3 ledger.sqlite 'delete from events'"}),
     ("terminal", {"command": "cat ~/.exo/keys/exo-gate.key"}),
+    # #651: a read-named tool that replaces text writes the store file it names, so its floor ask holds in
+    # bypass too: the seat file, a policy file and config.json, snake and camel spellings
+    ("mcp__fs__search_replace", {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}),
+    ("mcp__fs__searchReplace", {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}),
+    ("search_replace", {"path": "~/.exo/policies/gates.yaml", "search": "ask", "replace": "bypass"}),
+    ("findAndReplace", {"path": "~/.exo/policies/gates.yaml", "oldString": "ask", "newString": "bypass"}),
+    ("find_and_replace", {"path": "~/.exo/config.json", "old_string": '"ask"', "new_string": '"bypass"'}),
 ]
 
 
@@ -67,6 +74,33 @@ def test_bypass_runs_risky_calls_and_logs_them_as_bypass(keyed_store, as_caller,
     assert row["decision"]["rule"] == "bypass" and row["bypass"]["would"] == "ask"
     assert row["call"]["tool"] == tool and json.loads(row["call"]["args"]) == args  # the exact call
     assert g.permissions.auto_approved == 1
+
+
+@pytest.mark.parametrize("author", ["local", "peer:mallory", "bus:scout", "job", "schedule", "delegate", "agent"])
+def test_bypass_lowers_no_turn_started_by_anyone_else(keyed_store, as_caller, author):
+    """#598: the principal consented to skip asking in their own turns. A turn a peer, a bus wake, a job notice,
+    a schedule, a delegate or a local caller started in the same core runs its asks as if bypass were off."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    r = call(ctx, *RISKY[1], author=author)
+    assert r["action"] == "approve" and rows(store)[0]["outcome"] == "ask"
+    assert "decided_by" not in rows(store)[0]
+    assert g.permissions.auto_approved == 0
+
+
+@pytest.mark.parametrize("author", ["principal", "principal:web"])
+def test_bypass_lowers_every_label_of_the_principal(keyed_store, as_caller, author):
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    assert call(ctx, *RISKY[1], author=author) is None
+    [row] = rows(store)
+    assert row["decided_by"] == "bypass" and row["turn_author"] == author
+    assert g.permissions.auto_approved == 1
+
+
+def test_a_hook_with_no_author_keeps_the_ask(keyed_store, as_caller):
+    """An older core passes no author: the gate cannot say whose turn it is, so it keeps the card."""
+    g, ctx, store = bypassed(keyed_store, as_caller)
+    assert call(ctx, *RISKY[1], author="")["action"] == "approve"
+    assert g.permissions.auto_approved == 0 and rows(store)[0]["outcome"] == "ask"
 
 
 @pytest.mark.parametrize("tool,args", FLOOR)
