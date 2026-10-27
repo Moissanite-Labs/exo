@@ -7019,8 +7019,15 @@ _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "new_path", "paths", 
 _WIDE_WORDS = frozenset(("move", "rename", "mv", "delete", "remove", "destroy", "drop", "purge", "wipe", "erase",
                          "revoke", "trash"))
 # Name words of a tool whose name reads as a read but that writes what it took where its path arguments say
-# (`download_file`, `export_csv`): the store scan reads those arguments as a write's (#494).
-_FETCH_WRITE_WORDS = frozenset(("download", "export"))
+# (`download_file`, `export_csv`): the store scan reads those arguments as a write's (#494). A name that says it
+# replaces, substitutes, patches, edits, updates or seds the file its path names writes it too (#651): a
+# `search_replace` on a store path is a write of the seat, policy or config file it names, as `write_file` is,
+# never a read the store skips.
+_FETCH_WRITE_WORDS = frozenset(("download", "export", "replace", "substitute", "patch", "edit", "update", "sed"))
+# The old and new text a replace carries in its arguments, beside the path it names: the replace signal of a tool
+# whose name alone does not say it writes (#651).
+_REPLACE_ARG_KEYS = (("old_string", "new_string"), ("old_text", "new_text"), ("search", "replace"),
+                     ("find", "replace"), ("old", "new"), ("pattern", "replacement"))
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
@@ -7035,6 +7042,12 @@ def args_sensitive(args: Mapping) -> str:
                 if words is None or _sensitive_words(words) or _glob_words(words):
                     return item
     return ""
+
+
+def _replace_args(args: Mapping) -> bool:
+    """Whether the call's arguments carry the old text and the new, beside the path they name (#651): a tool whose
+    name reads as a read but that declares both replaces the file its path names, as `write_file` writes one."""
+    return any(args.get(a) and args.get(b) for a, b in _REPLACE_ARG_KEYS)
 
 
 _KEYCHAIN = re.compile(r"\bsecurity\s+(?:-\S+\s+)*(find-generic-password|find-internet-password|"
@@ -7597,8 +7610,12 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
             cat = "credentials"
         stores: list[str] = []
         # A tool named with a read verb that writes what it took where its path arguments say (`download_file`)
-        # reads the store as a write's too (#494); a plain read of the store stays a read.
-        fetch = own in ("read", "web_read") and not _FETCH_WRITE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+        # reads the store as a write's too (#494); a name that says it replaces, patches or edits the file counts
+        # with them, and so do arguments that carry the old and new text beside a path (#651): a `search_replace`
+        # or `find_and_replace` of the seat, a policy file or config.json writes it, as `write_file` does. A plain
+        # read of the store stays a read.
+        fetch = own in ("read", "web_read") and (not _FETCH_WRITE_WORDS.isdisjoint(_name_tokens(_CAMEL.sub("_", tool)))
+                                                 or _replace_args(args))
         if own not in ("read", "web_read") or fetch:
             # A delete reaches the store through a folder that holds it, as `rm` does, and so does a move or
             # rename, as `mv` does, with or without a secret beside it (#494). A tool whose camelCase name says so
