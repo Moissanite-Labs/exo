@@ -1253,7 +1253,10 @@ gate does not read:
   (`cat ~/.kube/config`) or a string literal in its code
   (`node -e "require('child_process').execSync('gh pr comment 3')"`). No two of its parts have
   different own texts, so a rule that matches the line names its one command, and the line is
-  decided as before. An `execute_code` call is one such action. A command the gate finds run inside
+  decided as before. An `execute_code` call is one such action. The one exception is the part a
+  shell call's own folder added: it carries the `cd <folder>` stand-in among its setters (#516), so
+  a line with it is not one text, and a rule that would lower the line or lift the part's deny
+  names the folder, as it names the `cd` in the cd form ("The tool's own folder"). A command the gate finds run inside
   another is a part of its own and must be named too: the string of an `eval`, `bash -c` or `ssh`
   (`eval "$CMD"` runs `$CMD`, a program name from a variable, so
   `{category: opaque_exec, command: '^eval', decision: allow}` alone no longer allows it), an `-x`
@@ -1470,7 +1473,26 @@ gate does not read:
   exporter, `unset`, `read`, `printf -v`, a nameref or `test -v` takes. `mapfile` and `getopts`
   already ask. Parameter expansion that
   only reads or substitutes (`${PATH}`, `${PATH:-/usr/bin}`, `${PATH#/x}`) assigns nothing and
-  stays `allow`. So does text bash does not expand: single-quoted text, a quoted here-doc, and
+  stays `allow`. A `${..@P}` prompt transformation is different (#579). With `promptvars` on,
+  the default, bash expands the value as a prompt string, which runs its command substitutions
+  and expands its parameters: `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` runs `id`, and a
+  value `read` or `printf -v` fills can rebuild a form the gate reads only as written, a `/`
+  substitution of a store variable (#342), so `cat ${p@P}` reads `$HOME/.kube/config`. The gate
+  cannot see that value, so any `${name@P}`, `${arr[0]@P}`, `${@@P}`, `${*@P}` or `${@:2@P}` the
+  line expands is `opaque_exec` and asks — also in a here-string, a here-document body, or a
+  redirection target, and in a word bash expands inside another one's default
+  (`echo "${a:-'${b@P}'}"` asks). One exception: when the line assigns the variable a literal
+  value with no `$`, backtick or backslash (`p=x; echo ${p@P}` is `echo x`), the prompt
+  expansion of it is the value itself, so the line keeps its class; the last literal wins, an
+  exporter's assignment counts, and a literal appended to a literal is still one (`p+=y`).
+  A prefix assignment sets the command's own environment, which bash expands the words before,
+  so `p=x echo ${p@P}` asks; an append onto a value the line does not know leaves it unknown;
+  and a value `printf -v` or `read` fills is never one the line spells. A backslash is a prompt
+  escape (`p='\u'` is the username), so a value with one asks. The other operators (`@Q`, `@E`,
+  `@a`, `@K`, `@L`, `@U`, `@#`, `@t`, `@k`) decode or spell the value and run nothing, so they
+  keep their reading, and the operator is read only where the parameter ends, so
+  `echo ${x:-foo@P}` stays a default word and `echo '${p@P}'` is text.
+  So does text bash does not expand: single-quoted text, a quoted here-doc, and
   a bracket outside a subscript, which is a glob (`git commit -m 'read ${PATH:=.}'`,
   `pytest -q 'test_x[HOME=/tmp]'`, `echo [HOME=x]`). An expansion runs to the `}` bash closes
   it with, past a nested `${b}` but not into quoted or escaped text, and the single-quoted text
@@ -2012,6 +2034,20 @@ the `cd` form. A rule on `*keys*` and `irreversible` denies `cat *; rm -rf build
 whose `costly` cell is stricter than its `irreversible` one still denies the call. There the folder
 form can be stricter than its `cd` form, which #468 weighs as one line.
 
+The part keeps no own text, as a `cd` form's parts have, and carries a `cd <folder>` stand-in among
+its setters, the folder as the call spells it (`~/.ssh`, or a relative `keys` for a folder joined to
+the session's) (#516). So a line with the part is not one text for the #394 own-text test: a rule
+keyed on `command` that would lower the line must name the folder, as it must name the `cd` in the
+cd form, and one that names only the line's text is passed over. Naming the folder never lifts the
+part's matrix deny: that deny stands under a rule on the line's text alone, as under any rule. Under
+`matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
+`git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir` is denied, as
+its `cd` form is, where main asks or allows. A rule that names everything lifts nothing, as before:
+the part, like the `cd` form's, is one the gate made with no own text, and no command rule lifts
+such a part. The weight a heavier command adds beside the part (#468) has no own text either, so no
+command rule lifts it, and on a line of two or more commands no rule lifts any of it. With no matrix
+deny, or no rule, the call decides as before.
+
 Before #311, a word that resolved into a store from `cwd` made the whole call `credentials` (#209).
 That reading is kept beside the line (`Classification.also`). `gate.decide` decides both, as it
 decides a gh line's reading from before #399 (`floor`, "Where a gh command lands"): the strictest
@@ -2086,12 +2122,10 @@ entries as on main. A word that is a substitution alone is `*` there, so `echo x
   the name alone (`config`). So a rule or `target:` entry on the name alone, such as a deny rule on
   `credentials` and `target: config`, reaches only the `cd` form. One on the path, such as
   `deny: ["target:*/.kube/*"]`, reaches only the folder form. The other form still asks.
-- The call's text has no `cd`. A rule keyed on `command` that names a line of one command lifts a
-  matrix deny on its parts, as on any such line (#394). So under
-  `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
-  `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` asks. Its `cd` form is
-  denied, since the rule does not name the `cd`. Main asks or allows there. On a line of two or more
-  commands, such as `cat *; git push --force origin main`, the deny stands.
+- The folder's read is a part with no own text, as a `cd` form's parts have, with the `cd <folder>`
+  stand-in among its setters (#516). A rule keyed on `command` that would lower the line or lift the
+  part's matrix deny names the folder, as it names the `cd` in the cd form; one that names only the
+  line does not, so a matrix deny on the part stands (the stand-in paragraph above).
 
 Tests: `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`,
 `tests/security/test_gate_store_name_forms.py` (the folder's reads beside each other).

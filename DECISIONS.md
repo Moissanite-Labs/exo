@@ -1230,6 +1230,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-26 (issue #579):* a prompt-string transformation is code the gate cannot see, unless the
+  line assigns the variable a literal value. `${name@P}` expands the value as a prompt string, and with
+  `promptvars` on, the default, that runs its command substitutions and expands its parameters, so the gate
+  read such a word as the parameter's ordinary expansion and allowed it: `printf -v p '%s(%s)' '$' 'id';
+  echo ${p@P}` runs `id`, `p='$(id)'; echo ${p@P}` ran it where the gate's ask came only from the assignment
+  it read, and a value a command the gate does not read as an assignment sets (`printf -v`, `read`) rebuilds
+  a form the gate reads only as written — a `/` substitution of a store variable (#342) — so
+  `read -r p <<< '${HOME/%//.kube}/config'; cat ${p@P}` read `$HOME/.kube/config` as an allowed read. Now any
+  `${..@P}` the line expands (a parameter, an array element, the positional parameters and their ranges,
+  also in double quotes, a here-string, a here-document body or a redirection target, and nested in a word
+  bash expands) is an `opaque_exec` part that asks, beside the line's other parts (D-075), so a deny on them
+  still wins. One exception keeps the everyday lines: a variable the line assigns a literal value with no
+  `$`, backtick or backslash prompt-expands to itself, so `p=x; echo ${p@P}` stays a read; the last assignment
+  wins, so a literal keeps the line a read while a value the gate cannot read makes the parameter unknown
+  again (`p=x; p=$y`, an append onto it too, `p=x; p+=$y`), an exporter's assignment counts, a literal
+  appended to a literal is still one, and after an `unset` the value is empty. An exporter's arguments
+  expand before any of its assignments applies, so a `${..@P}` in one reads the value from before it
+  (`export p=x q=${p@P}` asks). A prefix assignment sets the command's own environment, which bash expands
+  the words before, so it is no source, and a value `printf -v` or `read` fills is never one the line
+  spells, so either clears the literal the line set for the name. The
+  other `@` operators decode or spell the value and run nothing, so they keep their reading, and the
+  operator is read only where the parameter ends, so `echo ${x:-foo@P}` stays a default word. Chosen over
+  reading the value's own substitutions (the gate cannot know where the value's text ends or what a prompt
+  escape spells — `p='\u'` is the username) and over asking on every transformation (the inert ones run
+  nothing). No decision is lower: each new part only adds an ask. Tests:
+  `tests/security/test_gate_prompt_expansion.py`.
 - *Amendment 2026-10-26 (issue #466):* a pattern a decision runs that does not compile is refused when the policy
   loads, not when `decide` first reaches it. `normalize_policies` checked types and outcome names but compiled
   nothing, so a rule's `match.command`, a `command:<regex>` entry or a mapping's `command` in `deny:` and
@@ -1276,6 +1302,25 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `rm` of both paths was denied already (its `delete` part names the last path), reads keep their class, and the
   first path alone decides as before. Each new part only adds a match, so no decision is lower; gate_diff ran
   main 5a5a535d against this change and found 0 lowered.
+- *Amendment 2026-10-26 (issue #516):* an allow rule keyed on `command` that would lower the line over the matrix
+  deny of the part a shell call's own folder read adds (#311) must name the folder, as it names the `cd` in the cd
+  form; naming the folder never lifts that deny. The part had no own text, so a line of
+  one command beside it was one text for the #394 own-text test (`_one_text`) and the rule decided the line as
+  before, over the part's cell: `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir`
+  asked under `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`, where its `cd` form was
+  denied, since the rule does not name the `cd`. Now the part carries a `_StandIn` for `cd <folder>` among its
+  setters, the folder as the call spells it (`~/.ssh`, or a relative `keys` when the call gives one), so the line
+  is not one text and the #394 pass runs: a rule that names the line's text but not the folder is passed over, for
+  the part as for any part it does not name, and the part's cell stands, as the cd form's parts' cells do. The
+  part itself keeps no own text, so no rule lifts its deny — not one that names everything either, as before, and
+  not one that lifts the weight a heavier command adds beside the part (#468), which has no own text. A line of
+  two or more commands, a policy with no rule and no matrix deny decide as before. Chosen over keying the part on
+  the line's own command scope: the stand-in keeps the part weighed as the `cd` form's is and rules matched against
+  what a `cd` on the line would read as, so the two spellings agree. *Differential against main 6054da56*
+  (`scripts/gate_diff.py --no-variants --jobs 4`): 11,406 actions x 88 policies, 1,003,728 pairs, none lowered
+  (outcome, reserved or posting violation), 728 pairs tightened on 361 actions — a folder part's matrix or category
+  deny standing where an allow rule on the line lifted it, this amendment's rows among them. Tests:
+  `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`.
 - *Amendment 2026-10-26 (issue #461):* a gh download or clone writes the store the way `curl -o` and
   `git clone` do. gh's download and clone subcommands read on GitHub, so the store check took a line whose
   every part reads as a read for a read and never looked at their output paths: `gh release download -O
@@ -3569,6 +3614,29 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   as reaching back. A compress that folded only rows the window never held notes nothing, and a transcript cut
   short below the window's first row still drops nothing. The note follows the pins into a compression child
   and a `/branch` child.
+  *2026-10-26 note (#580):* the pending undo waits under its session in `exo.host_undo`, not in the engine that
+  heard the notice. The engine that acts on a notice records it with `pend`, holding the window the notice left,
+  and the engine that runs the session's next turn takes it with `take` and drops the earlier turns' pins from the
+  transcript, whichever agent Hermes built that engine on: a `/reasoning`, `/fast` or `/personality` rebuild
+  between an `/undo N` and the next turn no longer keeps them. A second notice before that turn keeps the first
+  record's window, and a compression move carries the record into the child session, as before. A compaction that
+  folds the window's first row ties its block to the record while it waits, in the engine that compacts or in a
+  rebuilt one. Expiry: the record never outlives the session's next turn, which settles it whatever it finds, a
+  transcript cut short included. A request that names no session and carries no user message leaves it for the
+  real turn. It can drop only the pins the window it holds showed, and only when the transcript reaches back to
+  where that window started, so a stale record never reaches a pin taken after it. Case 1 of the issue, an
+  `/undo` in the no-agent gap, still needs the CLI: with no agent there is no memory provider to pass the notice
+  on. The exo side is ready: `exo.host_undo.report(session)` from the `/undo` handler, one call beside the
+  provider notice, reaches the engines still registered for the session, which the registry holds weakly, and the
+  pending undo then waits for the rebuilt agent's turn. When no engine is registered any more, nothing holds the
+  window, so nothing can tell which pins the undone turns held, and that part waits on the CLI change. Not covered
+  now, six cases. Hermes's messaging gateway sends no notice (#537). Neither does the CLI while it has no agent,
+  from a command such as `/reasoning`, `/fast` or `/personality` to the next turn, until it reports
+  `exo.host_undo.report(session)` itself. Once no engine is registered any more, the gap-undo stays unheard for
+  good. A host without exo-memory as its memory provider never passes the notice on. An undo before the engine has
+  seen a turn of that session since it started finds no window. A `/compress` between the last turn and the undo
+  can keep the earlier undone turns' pins (#581). A summary row and a handoff file written before the drop keep
+  the ruling as written until the next compaction.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
