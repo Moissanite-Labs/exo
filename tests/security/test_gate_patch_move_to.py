@@ -122,6 +122,19 @@ def test_a_header_with_no_path_does_not_hide_the_next_header(bare, path, categor
     assert gate.decide(c, {"gates": {"deny": [category]}}).outcome == "deny"
 
 
+@pytest.mark.parametrize("path,category", [(".ssh/config", "credentials"), (".env", "credentials"),
+                                           (".exo/keys/k", "credentials"), (".exo/policies/default.yaml", "store_write"),
+                                           ("policies/gates.yaml", "store_write")])
+def test_a_header_with_no_path_does_not_hide_the_next_header_under_the_patch_tool(path, category, layout, monkeypatch):
+    """The bare-header rows above under the `patch` tool name, which the classify branch reads with the same
+    `_patch_paths` call as `apply_patch` (#548 follow-up)."""
+    monkeypatch.chdir(layout)
+    patch = f"*** Begin Patch\n*** Move to:\n*** Add File: {path}\n+x\n*** End Patch\n"
+    c = gate.classify({"tool": "patch", "args": {"patch": patch}})
+    assert (c.category, c.target, gate.decide(c).outcome) == (category, path, "ask")
+    assert gate.decide(c, {"gates": {"deny": [category]}}).outcome == "deny"
+
+
 @pytest.mark.parametrize("patch,category,target,outcome", [
     # a path the reading across a line found still counts
     ("*** Update File:\n.ssh/config\n@@\n-a\n+b\n", "credentials", ".ssh/config", "ask"),

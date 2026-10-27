@@ -2,7 +2,9 @@
 
 In ``bypass`` the gate turns an ``ask`` into an ``allow`` so the agent never waits for an answer. It is never silent:
 every such call is written to the signed ledger with ``decided_by: bypass`` and the call itself, and the clients show
-a banner while it is on. Three things are not lifted:
+a banner while it is on. Lowering happens only in a turn the principal started (the author the core stamps at
+ingress, D-040): a turn a peer, a bus wake, a job notice or a local caller started keeps its card (#598). Three
+things are not lifted:
 
 - the floor: writes to Exo's own records (``store_write``: policies, ledger, keys, grants, seat files, the core
   sockets) and reading secrets (``credentials``) still ask the principal, every time;

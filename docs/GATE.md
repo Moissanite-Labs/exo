@@ -1163,7 +1163,8 @@ backslash-newline. There the joined text stays quoted or unread, and the line as
 decides: `: # $\<newline>(git push ...)` keeps its deny, since bash runs the next line. A `${..}`
 is joined to its own `}`, past a `${..}` nested in it. Limits: only shell calls are read again
 (not `execute_code`), the folder walk of `cd` targets is not joined, and a joined form is read as
-its plain form is, so `$\<newline>[..]` is as unread as `$[..]` (#588).
+its plain form is, so `$\<newline>[..]` is read as the `$[..]` it joins to, and that is read as the
+arithmetic `$((..))` it stands for (#588).
 
 A command is meant to be `allow` only when every program in it is known and nothing the gate reads
 is hidden; "Known limits" below names the paths where a known program still runs a command the
@@ -1310,7 +1311,10 @@ gate does not read:
   (`cat ~/.kube/config`) or a string literal in its code
   (`node -e "require('child_process').execSync('gh pr comment 3')"`). No two of its parts have
   different own texts, so a rule that matches the line names its one command, and the line is
-  decided as before. An `execute_code` call is one such action. A command the gate finds run inside
+  decided as before. An `execute_code` call is one such action. The one exception is the part a
+  shell call's own folder added: it carries the `cd <folder>` stand-in among its setters (#516), so
+  a line with it is not one text, and a rule that would lower the line or lift the part's deny
+  names the folder, as it names the `cd` in the cd form ("The tool's own folder"). A command the gate finds run inside
   another is a part of its own and must be named too: the string of an `eval`, `bash -c` or `ssh`
   (`eval "$CMD"` runs `$CMD`, a program name from a variable, so
   `{category: opaque_exec, command: '^eval', decision: allow}` alone no longer allows it), an `-x`
@@ -1520,12 +1524,33 @@ gate does not read:
   (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
   `-a`) or `printf -v` fills, as a `for` variable, through a nameref (`declare -n r=PATH`), or as
   an integer through arithmetic, an array subscript, or a `{PATH}>` redirection (`$((PATH=10))`,
-  `$((PATH++))`, `$((--PATH))`, `$((PATH<<=1))`, `a[PATH=10]=1`, `${a[PATH=10]}`). A subscript
+  `$((PATH++))`, `$((--PATH))`, `$((PATH<<=1))`, `a[PATH=10]=1`, `${a[PATH=10]}`). The legacy `$[..]` spelling of arithmetic is read as the `$((..))` it stands for
+   (#588), so `$[PATH=10]` and the element its body sets (`$[BASH_CMDS[ls]=1]`) decide as their
+   `$((..))` spellings do. A subscript
   counts where bash reads the word as a variable name: an assignment, `${a[...]}`, and the name an
   exporter, `unset`, `read`, `printf -v`, a nameref or `test -v` takes. `mapfile` and `getopts`
   already ask. Parameter expansion that
   only reads or substitutes (`${PATH}`, `${PATH:-/usr/bin}`, `${PATH#/x}`) assigns nothing and
-  stays `allow`. So does text bash does not expand: single-quoted text, a quoted here-doc, and
+  stays `allow`. A `${..@P}` prompt transformation is different (#579). With `promptvars` on,
+  the default, bash expands the value as a prompt string, which runs its command substitutions
+  and expands its parameters: `printf -v p '%s(%s)' '$' 'id'; echo ${p@P}` runs `id`, and a
+  value `read` or `printf -v` fills can rebuild a form the gate reads only as written, a `/`
+  substitution of a store variable (#342), so `cat ${p@P}` reads `$HOME/.kube/config`. The gate
+  cannot see that value, so any `${name@P}`, `${arr[0]@P}`, `${@@P}`, `${*@P}` or `${@:2@P}` the
+  line expands is `opaque_exec` and asks — also in a here-string, a here-document body, or a
+  redirection target, and in a word bash expands inside another one's default
+  (`echo "${a:-'${b@P}'}"` asks). One exception: when the line assigns the variable a literal
+  value with no `$`, backtick or backslash (`p=x; echo ${p@P}` is `echo x`), the prompt
+  expansion of it is the value itself, so the line keeps its class; the last literal wins, an
+  exporter's assignment counts, and a literal appended to a literal is still one (`p+=y`).
+  A prefix assignment sets the command's own environment, which bash expands the words before,
+  so `p=x echo ${p@P}` asks; an append onto a value the line does not know leaves it unknown;
+  and a value `printf -v` or `read` fills is never one the line spells. A backslash is a prompt
+  escape (`p='\u'` is the username), so a value with one asks. The other operators (`@Q`, `@E`,
+  `@a`, `@K`, `@L`, `@U`, `@#`, `@t`, `@k`) decode or spell the value and run nothing, so they
+  keep their reading, and the operator is read only where the parameter ends, so
+  `echo ${x:-foo@P}` stays a default word and `echo '${p@P}'` is text.
+  So does text bash does not expand: single-quoted text, a quoted here-doc, and
   a bracket outside a subscript, which is a glob (`git commit -m 'read ${PATH:=.}'`,
   `pytest -q 'test_x[HOME=/tmp]'`, `echo [HOME=x]`). An expansion runs to the `}` bash closes
   it with, past a nested `${b}` but not into quoted or escaped text, and the single-quoted text
@@ -1557,6 +1582,9 @@ gate does not read:
   split, and a glob keeps a slash it has (`hash -p /tmp/x*`), so these stay `read`. A
   double-quoted `${!n}` is not one word: with `n=@` bash splits it as it splits `"$@"`, so
   `hash "${!n}"` and `hash -p "${!n}"` are opaque, while `hash "$cmd"` stays `read`.
+  A `$` form a `\<newline>` splits reads as its plain spelling does (#585): `hash "$\<newline>@"; ls`,
+  `hash "${\<newline>!n}"; ls` and `hash -p $\<newline>P; ls` are opaque as their plain spellings are, while
+  `hash "$cmd"`, `hash -p "$P"` and `hash "$r"` through a nameref stay `read`.
   A word that starts with an unquoted `[` is a glob too, also after a `\<newline>`. With files
   named `-p`, `as` and `ls` in the folder, bash runs `hash [-]p /tmp/x ls` as
   `hash -p /tmp/x ls` and `hash -p [al]s` as `hash -p as ls`, so both are opaque. So is
@@ -1618,10 +1646,12 @@ gate does not read:
   (it comes from a variable) for an exec key, and `git clone --template` or `git init
   --template` are opaque. `env` and `sudo` read `NAME=VALUE` from their
   own argv, so after them a word quoted whole (`env 'LD_PRELOAD=x' ls`) is an assignment too;
-  elsewhere only its value may be quoted (#471). That holds for env's argv, not for the text of
-  `env -S` or `--split-string`: the gate reads that text as a shell line, so a leading assignment
-  quoted whole there (`env -S "'X=a b' rm -rf /srv/data"`) reads as an unknown program, which
-  asks under the defaults, although GNU env runs the command behind it (#591). `IFS` is left
+  elsewhere only its value may be quoted (#471). A `-S` text is
+  read the same way (#591): env splits it into words and reads them as its own argv, so a word
+  quoted whole with the form `NAME=value` (`env -S "'X=a b' rm -rf /srv/data"`) is an assignment
+  there too, and the first word that is neither an env option nor an assignment starts the command.
+  After `--`, or where a shell operator would sit, a `NAME=value` word is a command or a word of
+  argv to env, not an assignment. `IFS` is left
   out: it does not change how literal words split, and `while IFS= read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
@@ -2063,6 +2093,20 @@ the `cd` form. A rule on `*keys*` and `irreversible` denies `cat *; rm -rf build
 whose `costly` cell is stricter than its `irreversible` one still denies the call. There the folder
 form can be stricter than its `cd` form, which #468 weighs as one line.
 
+The part keeps no own text, as a `cd` form's parts have, and carries a `cd <folder>` stand-in among
+its setters, the folder as the call spells it (`~/.ssh`, or a relative `keys` for a folder joined to
+the session's) (#516). So a line with the part is not one text for the #394 own-text test: a rule
+keyed on `command` that would lower the line must name the folder, as it must name the `cd` in the
+cd form, and one that names only the line's text is passed over. Naming the folder never lifts the
+part's matrix deny: that deny stands under a rule on the line's text alone, as under any rule. Under
+`matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
+`git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir` is denied, as
+its `cd` form is, where main asks or allows. A rule that names everything lifts nothing, as before:
+the part, like the `cd` form's, is one the gate made with no own text, and no command rule lifts
+such a part. The weight a heavier command adds beside the part (#468) has no own text either, so no
+command rule lifts it, and on a line of two or more commands no rule lifts any of it. With no matrix
+deny, or no rule, the call decides as before.
+
 Before #311, a word that resolved into a store from `cwd` made the whole call `credentials` (#209).
 That reading is kept beside the line (`Classification.also`). `gate.decide` decides both, as it
 decides a gh line's reading from before #399 (`floor`, "Where a gh command lands"): the strictest
@@ -2137,12 +2181,10 @@ entries as on main. A word that is a substitution alone is `*` there, so `echo x
   the name alone (`config`). So a rule or `target:` entry on the name alone, such as a deny rule on
   `credentials` and `target: config`, reaches only the `cd` form. One on the path, such as
   `deny: ["target:*/.kube/*"]`, reaches only the folder form. The other form still asks.
-- The call's text has no `cd`. A rule keyed on `command` that names a line of one command lifts a
-  matrix deny on its parts, as on any such line (#394). So under
-  `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
-  `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` asks. Its `cd` form is
-  denied, since the rule does not name the `cd`. Main asks or allows there. On a line of two or more
-  commands, such as `cat *; git push --force origin main`, the deny stands.
+- The folder's read is a part with no own text, as a `cd` form's parts have, with the `cd <folder>`
+  stand-in among its setters (#516). A rule keyed on `command` that would lower the line or lift the
+  part's matrix deny names the folder, as it names the `cd` in the cd form; one that names only the
+  line does not, so a matrix deny on the part stands (the stand-in paragraph above).
 
 Tests: `tests/security/test_gate_tool_cwd.py`, `plugins/exo-gate/tests/test_tool_cwd.py`,
 `tests/security/test_gate_store_name_forms.py` (the folder's reads beside each other).
@@ -2389,7 +2431,7 @@ denies `opaque_exec` (#191) denies the line.
 The gate reads the common ways a line sets a variable. A shell's rarer expansion forms can still
 set one unseen: an unquoted here-doc body fed to a builtin (`${NAME:=v}` or `$((NAME=n))` in
 it), a brace expansion in a name (`export {PATH,FOO}=x`), indirect expansion (`${!ref:=v}`),
-arithmetic in a substring offset (`${x:PATH=1}`), the old `$[...]` arithmetic, an integer
+arithmetic in a substring offset (`${x:PATH=1}`), an integer
 variable (`declare -i x; x=PATH=5`), `wait -p NAME` and `{NAME}<<<x`. This is one more reason
 the sandbox is the real fix.
 
@@ -2401,7 +2443,7 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 that signed seat answers and the relay trust, the relay database and its `-wal`, `-shm` and
 `-journal` files, #210), `$EXO_HOME/plugins` (code the core loads, #435) and the other folders Exo loads
 code from (#459, below: the venv, Hermes' plugin home, the source copy and the folders
-`$EXO_PLUGIN_DIRS` name), `$EXO_HOME/update`
+`$EXO_PLUGIN_DIRS` name, also the two config.json records, #612), `$EXO_HOME/update`
 (`allowed_signers`, the signed-update trust pin of D-073, #133), `$EXO_HOME/config.json` (D-074,
 #125: the plugins the core loads, this gate among them, as `core_plugins`, their config, the `venv`
 that runs Hermes and Exo, each provider's `base_url` and headers, and the `principal` a peer key
@@ -2451,13 +2493,20 @@ home, `${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}/plugins`, which the core loads 
 `--with-hermes`. The source copy, `$EXO_HOME/src`, which the installer clones a git URL into and `exo
 update` refreshes, and whose copy `exo web` reads plugins under `<package>/../../plugins` of.
 And the folders `$EXO_PLUGIN_DIRS` names (`default_dirs` searches them first and keeps the first plugin
-found of a name, so a plugin of a core name there takes the real one's place). Each absolute spelling is
+found of a name, so a plugin of a core name there takes the real one's place). And the two the home's
+config.json records (#612): `venv`, the venv the installer put the package in, and `hermes_home`, the
+Hermes home its plugins went to — `scripts/install.sh` writes both and nothing exports the matching
+environment when the daemon runs, so a custom install spells its code folders in the file alone. The gate
+reads them there as it reads the config's `principals` for store roots: a missing, stale or unreadable
+file, or a value that is no absolute path, adds nothing, and the environment still leads — a folder the
+file records joins the protected list beside what `EXO_VENV` or `EXO_HERMES_HOME` names, it does not
+replace one. Each absolute spelling is
 checked against the folder's own, so a link into or out of it counts both ways, and a `cd` into one, or a
 `git -C` on it, makes the relative names after it count. Not code, and not protected: a `.venv` folder
 under the home (no install script makes one, EXO_VENV is the only override), the rest of
 `hermes-home` (Hermes' own state, its database and registry, not the code), a relative `EXO_VENV` or
 `EXO_PLUGIN_DIRS` value (a constant of the tool's working folder, which the gate cannot see), and a
-Hermes home that only config.json names (D-074: the gate reads no config.json content). The cost: a `pip
+relative `venv` or `hermes_home` value in config.json (the same working-folder constant). The cost: a `pip
 install` into the venv Exo itself runs from now asks; everyday work installs into a project or scratch
 venv, not into `$EXO_HOME/venv`, so the ask is rare. Editing a checkout named in `$EXO_PLUGIN_DIRS`
 now asks on every write, so leave the variable unset while the principal edits, or point it at the
@@ -2762,6 +2811,26 @@ decides each call under both. The stricter outcome wins. So a change can tighten
 can never loosen until the principal runs `/gate accept` (ledger row `policy_accept`), or the
 core restarts. `/gate` says whether a change is waiting.
 
+With two valid files the old and new decisions merge as one stricter reading (#586), as they do
+beside a policy error (#557): the widest exposure, a third party if either has one, every
+violation and every reserved part, and at an equal outcome the other side stands only when it
+lists a violation the standing one lacks. These are the decisions that change for valid policies:
+at an equal outcome the changed files' posting or scrub findings stay on the card of an ask the
+pinned policy already made, and the ask takes the widest exposure of the two, so it binds to the
+exact line where either decision would bind it. No outcome is lower than either side's, and a
+single valid file decides as before, grants included.
+
+A standing grant applies only where each side's own decision (with the decision model's verdict)
+also asks and finds one, each side by its own lookup, so an unbound and a bound grant for one
+line count separately. The merged ask runs only where both sides would run it: an unbound grant
+does not run a call the pinned file logs (a `reserved` entry the changed files add:
+`git push origin main` logs under `escalate: {categories: [payment]}` and asks once
+`reserved: [vcs_push]` is added), and a grant bound to the exact line does not run a call the
+pinned policy asks for without that binding (a pinned `categories: {local_write: ask}` asks for
+`sudo echo hi > /tmp/f` unbound; changed files that make the displaced part ask, such as a valid
+escalate that names `read`, bind the line). Answering "always" there still writes a grant; it
+covers the line once `/gate accept` adopts files that ask for it and bind it the same way.
+
 The same holds for `approvals.yaml` (#211). An ask lists only the approvers both files allow, in
 the pinned order (`gate.strictest_approvers`, an ordered intersection; the principal is first in
 both, so the list is never empty), and an "always" answer lasts the shorter of the pinned and
@@ -2769,10 +2838,9 @@ changed `always` values, so a 0 in either writes no grant. A seat the principal 
 answer the next ask; a seat they add waits for `/gate accept`. A changed file that does not load
 counts as the defaults: the principal alone, 30 and 7 days. A changed `gates.yaml` whose only
 error is a malformed `escalate` keeps its other sections and is decided beside the defaults, with
-approvers no wider than theirs (#557). When the pinned or the changed file has that error, the
-old and new decisions merge as the readings of a line merge, so at an equal outcome the other's
-violations stay on the card, and a standing grant applies only where the decision with the defaults
-in place of that file also asks and finds it. Limits: an ask already
+approvers no wider than theirs (#557). When the pinned or the changed file has that error, a
+standing grant applies only where the decision with the defaults in place of that file also asks
+and finds it. Limits: an ask already
 open keeps the approvers it was sent with, and grants written before the change still match until
 they expire or `/grants revoke` removes them.
 
@@ -2833,6 +2901,12 @@ default, and no policy file turns it on.
 | A public post that breaks the posting rules (an internal name, a home path, a missing footer) | asks, with the fixes | held: the call fails with the fixes, so the agent rewrites the text and calls again |
 | A standing grant, `allow` or `log` | runs | runs |
 
+**Whose turn.** Lowering reaches only a turn the principal started. The core passes the turn's author (D-040) into
+every tool hook, and the gate lowers an ask only when that author is the principal: a turn a local caller, a peer,
+a bus wake, a job notice or the scheduler started in the same core runs its asks as if bypass were off, and the
+card opens and waits. A non-principal steer stops the lowering for the rest of the turn. Every bypass ledger row
+names the turn author (`turn_author`), so the audit says whose turn each auto-approved call served (#598).
+
 **Why that floor.** It is not about permission. It protects the record of what the agent did. If the agent could
 rewrite its own ledger, policies or grants while nobody is asked, the audit of a bypass session would be worthless,
 and it could make bypass permanent. Secrets stay asked because a key, once read, cannot be un-read, and the record
@@ -2851,6 +2925,7 @@ agent gets the list of fixes and goes on.
   arguments are recorded with obvious secrets redacted (`redacted` counts them) and cut at 8000 characters
   (`truncated` gives the length); `args_sha256` still identifies the exact call. Held posts have `decided_by:
   bypass` and `decision.rule: bypass_hold`. Floor calls that still asked carry `bypass: {floor: <category>}`.
+  Each row also names the turn it served (`turn_author`).
 - `/permissions` gives the counts for this run: auto-approved, held, and still asked.
 
 **Exo OS.** With a required tool executor (D-020, #70) bypass is refused: `/permissions bypass` fails with

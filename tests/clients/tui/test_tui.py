@@ -250,10 +250,11 @@ def test_palette_opens_filters_and_runs(tmp_path):
 
 
 def test_slash_new_sessions_and_file_context(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # a session captures the window directory when it opens
+
     async def sc(app, pilot, client, eng):
         first = app.session
         (tmp_path / "notes.txt").write_text("secret-content")
-        monkeypatch.chdir(tmp_path)
         await send(app, pilot, "hello see @notes.txt")
         await until(lambda: not app.busy and app.last_answer[1], pilot)
         sent = [b for b in app.sent if isinstance(b, s.TurnSend)][0]
