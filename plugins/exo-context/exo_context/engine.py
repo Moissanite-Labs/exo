@@ -213,6 +213,7 @@ class ExoContextEngine(ContextEngine):
         d['_x_nodes'] = {}
         d['_x_handoffs'] = {}  # session -> (path, session of the window it was written from, topic): automatic only
         d['_x_folded'] = {}  # session -> {digest of a pin a compaction folded: digests of the summary blocks it rides}
+        d['_x_dropped'] = {}  # session -> {digest of a pin an undo dropped}: no rebind carries it back (#592)
         # A host's undo until that session's next turn: (session, window without the undone turn, the blocks of the
         # summary rows written since that folded the window's first row or its summary part)
         d['_x_undo'] = None
@@ -356,7 +357,8 @@ class ExoContextEngine(ContextEngine):
     def bind_session_state(self, session_db: Any, session_id: str) -> None:
         """A reset-only switch (/new, /resume, /branch): Hermes hands the session db and the new id and
         sends no on_session_start, so rebind here or the engine keeps the previous session's pins. A branch
-        child inherits its parent's pins, the way a fork's copies keep their author."""
+        child inherits its parent's pins, the way a fork's copies keep their author, except a pin the child
+        undid: that one stays undone through every later bind (#592)."""
         self._bind(session_id)
         parent = self._parent_of(session_db, str(session_id or ''))
         if parent and parent != str(session_id):
@@ -381,13 +383,18 @@ class ExoContextEngine(ContextEngine):
         return ''
 
     def _carry_pins(self, old_sid: str, new_sid: str) -> None:
-        """Merge one session's pins into another's, oldest first, dropping repeats, and what compactions folded."""
+        """Merge one session's pins into another's, oldest first, dropping repeats, and what compactions folded.
+        A pin the target session undid stays undone: its digest sits in its file, and the parent's copy is
+        skipped, so a rebind of a `/branch` or compression child puts no undone ruling back (#592)."""
         try:
-            old, new = self._load_pins(old_sid), self._load_pins(new_sid)
+            # The target's file is read again, not a cache another engine may have left stale, as on an undo
+            old, new = self._load_pins(old_sid), self._load_pins(new_sid, fresh=True)
+            gone = self._x_dropped.get(new_sid, set())
             merged = {}
             for kind in ('ruling', 'correction', 'open_decision'):
-                have = {hf.Signal(kind, t).key() for t in old[kind]}
-                merged[kind] = list(old[kind]) + [t for t in new[kind] if hf.Signal(kind, t).key() not in have]
+                carried = [t for t in old[kind] if _pin_digest(kind, t) not in gone]
+                have = {hf.Signal(kind, t).key() for t in carried}
+                merged[kind] = carried + [t for t in new[kind] if hf.Signal(kind, t).key() not in have]
             merged['open_decision'] = merged['open_decision'][-12:]  # the cap _observe keeps (#398)
             folded = self._x_folded.setdefault(new_sid, {})
             before = dict(folded)
@@ -544,6 +551,9 @@ class ExoContextEngine(ContextEngine):
         changed = kept != pins
         if changed:
             self._x_pins[sid] = kept
+            live = {_pin_digest(k, t) for k, items in kept.items() for t in items}
+            gone = {_pin_digest(k, t) for k, items in pins.items() for t in items} - live
+            self._x_dropped[sid] = self._x_dropped.get(sid, set()) | gone  # no rebind carries them back (#592)
             self._save_pins(kept, sid)
             logger.info('exo-context: an undo in session %s dropped %s', sid,
                         ', '.join(f'{len(pins[k]) - len(kept[k])} {k}' for k in pins))
@@ -597,8 +607,8 @@ class ExoContextEngine(ContextEngine):
         return exo_home() / 'context-pins' / f'{sid}.json'
 
     def _load_pins(self, sid: str | None = None, fresh: bool = False) -> dict[str, list[str]]:
-        """This session's pins, and what compactions folded (#389), from the cache or the pins file. `fresh` reads
-        the file again, keeping the cache when it cannot be read."""
+        """This session's pins, what compactions folded (#389) and what an undo dropped (#592), from the cache or
+        the pins file. `fresh` reads the file again, keeping the cache when it cannot be read."""
         sid = self._x_session_id if sid is None else sid
         pins = None if fresh else self._x_pins.get(sid)
         if pins is None:
@@ -608,6 +618,8 @@ class ExoContextEngine(ContextEngine):
                 folded = data.get('folded')
                 self._x_folded[sid] = {str(d): [str(x) for x in ties] for d, ties in folded.items()
                                        if isinstance(ties, list)} if isinstance(folded, dict) else {}
+                dropped = data.get('dropped')
+                self._x_dropped[sid] = {str(d) for d in dropped} if isinstance(dropped, list) else set()
             except (OSError, ValueError, AttributeError, TypeError):
                 pins = self._x_pins.get(sid) or {'ruling': [], 'correction': [], 'open_decision': []}
             self._x_pins[sid] = pins
@@ -641,14 +653,21 @@ class ExoContextEngine(ContextEngine):
         return pins
 
     def _save_pins(self, pins: dict[str, list[str]], sid: str | None = None) -> None:
-        """Write this session's pins, and the folded ones among them as digests with the blocks they ride (#389)."""
+        """Write this session's pins, the folded ones among them as digests with the blocks they ride (#389), and
+        what an undo dropped, as digests (#592). A digest of a pin live again leaves the dropped list."""
         sid = self._x_session_id if sid is None else sid
         names = {_pin_digest(k, t) for k, items in pins.items() for t in items}
         folded = self._x_folded[sid] = {d: v for d, v in self._x_folded.get(sid, {}).items() if d in names}
+        dropped = self._x_dropped[sid] = {d for d in self._x_dropped.get(sid, set()) if d not in names}
         try:
             path = self._pin_file(sid)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({**pins, 'folded': folded} if folded else pins), encoding='utf-8')
+            data = dict(pins)
+            if folded:
+                data['folded'] = folded
+            if dropped:
+                data['dropped'] = sorted(dropped)
+            path.write_text(json.dumps(data), encoding='utf-8')
         except OSError as e:
             logger.warning('exo-context: could not save pins: %s', e)
 

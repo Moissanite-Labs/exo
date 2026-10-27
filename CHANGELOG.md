@@ -368,8 +368,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   even when the undone turn says it again, also after a restart, in a new agent and in a `/branch` child. An
   undo that also takes that summary row drops the ruling. A transcript that does not reach back to where the
   window started drops nothing. The ruling leaves the pins, the next turn's block and every later summary
-  block and handoff, after any number of compactions. Compaction drops no pin on its own, so a ruling in the
-  tail that `/compress here N` holds out stays pinned. A drop is logged as counts per kind and the session id.
+  block and handoff, after any number of compactions. A rebind puts it back no more (#592): Hermes builds a
+  new agent on a `/model`, `/reasoning` or `/fast` change and on `/resume`, and every such bind merged the
+  parent session's pins into the child's, so a `/branch` or compression child that had undone a ruling held
+  it again and the next turn's block or compaction wrote it back. What an undo drops is now kept in the pins
+  file as digests, beside the folded pins' ties, and a pin carry skips a parent pin whose digest is there. A
+  first bind still inherits, a pin the child still holds carries as before, and a ruling said again after the
+  undo is pinned again, so only its undone copy stays out. Compaction drops no pin on its own, so a ruling in
+  the tail that `/compress here N` holds out stays pinned. A drop is logged as counts per kind and the
+  session id.
   This also corrects the #385 entry below and the D-040 amendment: what a pinned block held survives
   compaction by the pins until an undo removes its turn. exo-context hears a Hermes undo only through
   exo-memory. The messaging gateway's `/undo` tells no one, and neither does the CLI from a command such as

@@ -16,7 +16,7 @@ from exo.core.engine import CoreEngine
 from exo.core.plugins import PluginManager
 from exo.core.types import ContentPart, Message, ToolCall, ToolResult
 from exo.protocol import schema as s
-from exo_context.engine import ExoContextEngine
+from exo_context.engine import ExoContextEngine, _pin_digest
 from exo_context.inner import END_LINE
 
 MINE = "From now on, write every report in British English."
@@ -39,7 +39,8 @@ def others():
 
 
 def pins(tmp_path, sid):
-    return json.loads((tmp_path / "exo-home" / "context-pins" / f"{sid}.json").read_text())
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / f"{sid}.json").read_text())
+    return {k: data[k] for k in ("ruling", "correction", "open_decision")}  # the digest keys in the file are not pins
 
 
 def test_capture_reads_rulings_only_from_the_principal():
@@ -322,6 +323,109 @@ def test_bind_session_state_rebinds_and_stops_the_previous_sessions_pins_leaking
     eng.bind_session_state(FakeSessionDB({"kid": "a"}), "kid")  # /branch: the child inherits a's pins
     out = eng.select_context([{"role": "system", "content": "sys"}, mine("next")])
     assert MINE in hf.message_text(out[0])
+
+
+def test_a_rebind_leaves_alone_a_pin_a_branch_child_dropped(tmp_path):
+    """#592: Hermes rebinds on every new agent (a /model or /fast rebuild, a restart) and on /resume, and each
+    bind merges the parent's pins into the child's. A ruling the child undid came back that way, and the next
+    turn's block showed it again. The undo now keeps its digests in the child's pins file, and a carry skips
+    them, so the rebind leaves the ruling undone."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine(MINE), mine("carry on")], session_id="p")
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")  # /branch: the child inherits the parent's pins
+    assert pins(tmp_path, "c")["ruling"] == [MINE]
+    eng.select_context([SYS, mine(MINE), mine("turn one")], session_id="c")
+    eng.select_context([SYS, mine(MINE), mine("turn one"), mine("turn two")], session_id="c")
+    host_undo("c")  # /undo 2, as exo-memory passes the notice on
+    eng.select_context([SYS, mine("after the undo")], session_id="c",
+                       conversation_messages=[mine("after the undo")], incoming_message=mine("after the undo"))
+    assert pins(tmp_path, "c")["ruling"] == []
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / "c.json").read_text())
+    assert data["dropped"] == [_pin_digest("ruling", MINE)]
+    fresh = ExoContextEngine(write_handoffs=False)
+    fresh.bind_session_state(FakeSessionDB({"c": "p"}), "c")  # the rebuild binds, and the carry must skip MINE
+    assert pins(tmp_path, "c")["ruling"] == []
+    out = fresh.select_context([SYS, mine("go on")], session_id="c")
+    assert out is None or MINE not in hf.message_text(out[0])
+
+
+def test_a_rebind_leaves_alone_a_pin_a_compression_child_dropped(tmp_path):
+    """#592, the compression child: it inherits the parent's pins at the compaction, undoes a turn that holds
+    one, and a later rebuild binds with the parent link Hermes keeps for it. The carry skips what the child's
+    undo dropped, so the next compaction writes no block for the ruling."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine("early work"), mine("carry on"), mine(MINE)], session_id="p0")
+    eng.on_session_start("p1", boundary_reason="compression", old_session_id="p0")  # the child takes over
+    assert pins(tmp_path, "p1")["ruling"] == [MINE]
+    eng.select_context([SYS, mine("early work"), mine("carry on"), mine(MINE), mine("next")], session_id="p1")
+    host_undo("p1")  # /undo 2
+    eng.select_context([SYS, mine("after the undo")], session_id="p1",
+                       conversation_messages=[mine("after the undo")], incoming_message=mine("after the undo"))
+    assert pins(tmp_path, "p1")["ruling"] == []
+    fresh = ExoContextEngine(inner=HermesSummary(), write_handoffs=False)
+    fresh.bind_session_state(FakeSessionDB({"p1": "p0"}), "p1")  # the rebuild binds, the carry must skip MINE
+    assert pins(tmp_path, "p1")["ruling"] == []
+    assert block_of(fresh.compress([SYS, mine("later"), mine("carry on")], force=True))["ruling"] == []
+
+
+def test_a_first_bind_still_inherits_and_later_pins_still_carry(tmp_path):
+    """#592: the dropped digests hold back only what the child undid. A first bind inherits, and a pin the
+    parent gains after the branch still carries to a child that dropped nothing."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine(MINE)], session_id="p")
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    assert pins(tmp_path, "c")["ruling"] == [MINE]
+    eng.select_context([SYS, mine(MINE), mine(NOTE)], session_id="p")  # the parent gains a pin after the branch
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    assert pins(tmp_path, "c")["ruling"] == [MINE, NOTE]
+
+
+def test_a_rebind_still_carries_what_the_child_holds(tmp_path):
+    """#592: only what the child undid is skipped. A ruling of a turn the undo left stands, the parent's copy
+    of it dedupes as before, and a parent pin the child never saw still carries."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine(MINE), ok(), mine(NOTE)], session_id="p")
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")  # the child inherits [MINE, NOTE]
+    assert pins(tmp_path, "c")["ruling"] == [MINE, NOTE]
+    eng.select_context([SYS, mine(MINE), ok(), mine(NOTE), ok(), mine("carry on"), ok(), mine("two")],
+                       session_id="c")
+    host_undo("c")  # /undo 2: NOTE's turn goes, MINE's stays
+    eng.select_context([SYS, mine(MINE), ok()], session_id="c",
+                       conversation_messages=[mine(MINE), ok()], incoming_message=mine(MINE))
+    assert pins(tmp_path, "c")["ruling"] == [MINE]
+    later = "From now on, ship on Tuesdays only."
+    eng.select_context([SYS, mine(MINE), ok(), mine(NOTE), mine(later)], session_id="p")  # the parent gains one
+    fresh = ExoContextEngine(write_handoffs=False)
+    fresh.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    assert pins(tmp_path, "c")["ruling"] == [MINE, later]
+    out = fresh.select_context([SYS, mine("go on")], session_id="c")
+    text = hf.message_text(out[0])
+    assert MINE in text and later in text and NOTE not in text
+
+
+def test_a_pin_said_again_and_dropped_again_stays_dropped_through_a_rebind(tmp_path):
+    """#592: the child undid the ruling, said it again (it is pinned, and its digest leaves the dropped list),
+    then undid that turn too. The digest is recorded again, and a later rebind still carries nothing."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine(MINE), mine("carry on")], session_id="p")
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    eng.select_context([SYS, mine(MINE), mine("turn one")], session_id="c")
+    eng.select_context([SYS, mine(MINE), mine("turn one"), mine("turn two")], session_id="c")
+    host_undo("c")
+    eng.select_context([SYS, mine("after the undo")], session_id="c",
+                       conversation_messages=[mine("after the undo")], incoming_message=mine("after the undo"))
+    assert pins(tmp_path, "c")["ruling"] == []
+    eng.select_context([SYS, mine(MINE), mine("said again")], session_id="c")  # live again: pinned, digest cleared
+    assert pins(tmp_path, "c")["ruling"] == [MINE]
+    host_undo("c")
+    eng.select_context([SYS, mine("gone again")], session_id="c",
+                       conversation_messages=[mine("gone again")], incoming_message=mine("gone again"))
+    assert pins(tmp_path, "c")["ruling"] == []
+    fresh = ExoContextEngine(write_handoffs=False)
+    fresh.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    assert pins(tmp_path, "c")["ruling"] == []
+    out = fresh.select_context([SYS, mine("go on")], session_id="c")
+    assert out is None or MINE not in hf.message_text(out[0])
 
 
 def test_an_open_decision_pin_comes_only_from_the_principal(tmp_path):
