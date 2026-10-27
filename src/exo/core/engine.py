@@ -418,6 +418,8 @@ class CoreRuntime:
     def _hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
         return {"tool_name": call.name, "args": call.arguments, "session_id": ctx.session or "",
                 "task_id": ctx.session or "", "tool_call_id": call.id, "turn_id": ctx.meta.get("turn_id", ""),
+                "author": ctx.meta.get("author", ""),   # who started the turn (D-040): the gate lowers only for
+                                                        # the principal's turn (#598)
                 "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low",
                 "cwd": str(ctx.cwd or "")}   # the folder relative paths resolve from (the gate reads them there, #209)
 
@@ -499,8 +501,9 @@ class CoreRuntime:
         if call.name == "bash" and sid:
             self._guard_cwd(sid, call, info.cwd if info and info.cwd else self.cwd)
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,
-                          emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "jobs": self.jobs, "env_allow": self.env_allow,
-                                "env_deny": self.env_deny})
+                          emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "author": lctx.get("author", ""),
+                                           "jobs": self.jobs, "env_allow": self.env_allow,
+                                           "env_deny": self.env_deny})
         return await self.registry.call(call, ctx)
 
     def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:
