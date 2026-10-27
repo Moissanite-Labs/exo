@@ -793,3 +793,41 @@ def test_a_shell_text_nested_many_levels_still_reaches_the_folder():
         text = "bash -c " + shlex.quote(text)
     c = _bash_in(text, "~/.kube")
     assert _store_parts(c) and gate.decide(c).outcome == "ask"
+
+
+# --- issue #578: a line that turns credentials keeps the read that led it ----------------------------
+
+def test_a_line_that_turns_credentials_keeps_its_reading(_home):
+    """`ls; ssh h 'cat ~/.kube/config'` keeps the reserved hits of `ls; ssh h 'cat ~/notes.txt'`."""
+    notes = _bash("ls; ssh h 'cat ~/notes.txt'")
+    kube = _bash("ls; ssh h 'cat ~/.kube/config'")
+    for entry in (["read"], ["target:h"]):
+        pol = _pol({"gates": {"reserved": entry}})
+        dn = gate.decide(notes, pol)
+        dk = gate.decide(kube, pol)
+        assert set(dn.reserved) <= set(dk.reserved), (entry, dn.reserved, dk.reserved)
+    pol = _pol({"gates": {"reserved": ["credentials"]}})
+    dk = gate.decide(kube, pol)
+    assert ("credentials", str(_home / ".kube" / "config")) in dk.reserved, dk.reserved
+    pure = _bash("ssh h")
+    dp = gate.decide(pure, _pol({"gates": {"reserved": ["read"]}}))
+    assert dp.reserved == [], dp.reserved
+
+
+# --- issue #578: a line that turns credentials keeps the read that led it ----------------------------
+
+def test_a_line_that_turns_credentials_keeps_its_reading(_home):
+    """`ls; ssh h 'cat ~/.kube/config'` keeps the reserved hits of `ls; ssh h 'cat ~/notes.txt'`."""
+    notes = _bash("ls; ssh h 'cat ~/notes.txt'")
+    kube = _bash("ls; ssh h 'cat ~/.kube/config'")
+    for entry in (["read"], ["target:h"]):
+        pol = _pol({"gates": {"reserved": entry}})
+        dn = gate.decide(notes, pol)
+        dk = gate.decide(kube, pol)
+        assert set(dn.reserved) <= set(dk.reserved), (entry, dn.reserved, dk.reserved)
+    pol = _pol({"gates": {"reserved": ["credentials"]}})
+    dk = gate.decide(kube, pol)
+    assert ("credentials", str(_home / ".kube" / "config")) in dk.reserved, dk.reserved
+    pure = _bash("ssh h")
+    dp = gate.decide(pure, _pol({"gates": {"reserved": ["read"]}}))
+    assert dp.reserved == [], dp.reserved

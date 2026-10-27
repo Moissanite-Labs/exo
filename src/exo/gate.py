@@ -3939,6 +3939,13 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 # with no parts and no post, as #320's.
                 c.parts = [*c.parts, replace(old, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (old.signals if old.own_signals is None else old.own_signals) if s != "unseen_body"])]
+            elif top is not None and top.target and top.target != dest and not any(
+                    p.category == "read" and p.target == dest for p in c.parts):
+                # A secret or store substitution turns the remote line into credentials with its own target, so the
+                # hop's host read (the line's own reading before it turned) is not carried by `top` above. Keep it
+                # as a read part on the host, so reserved, deny and rule entries on that reading still match (#578).
+                c.parts = [*c.parts, _make("read", summary=f"ssh {dest}", target=dest, command=cmd,
+                                           signals=["remote host"])]
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
         # An ssh that passes a stdin on gives its remote command that stdin, and an ssh there that runs it runs it
