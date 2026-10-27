@@ -387,9 +387,17 @@ def seat_file(home, name, principal=None):
     (home / "seats" / f"{name}.toml").write_text(f'name = "{name}"\n' + (f'principal = "{principal}"\n' if principal else ""))
 
 
-def announce(run_dir, seat, daemon, signer, principal):
+def announce(run_dir, seat, daemon, signer, principal, socket="/tmp/x.sock"):
+    """A presence file as every daemon writes it since #523: the entry signed with the seat's own key."""
     Directory(run_dir / "peers").write(Presence(
-        seat=seat, daemon=daemon, pid=os.getpid(), platform="exo", socket="/tmp/x.sock",
+        seat=seat, daemon=daemon, pid=os.getpid(), platform="exo", socket=socket,
+        pub=signer.pub, principal=principal).signed(signer))
+
+
+def announce_unsigned(run_dir, seat, daemon, signer, principal, socket="/tmp/x.sock"):
+    """A presence file as an older ``exo`` wrote it, with no signature (#523)."""
+    Directory(run_dir / "peers").write(Presence(
+        seat=seat, daemon=daemon, pid=os.getpid(), platform="exo", socket=socket,
         pub=signer.pub, principal=principal))
 
 

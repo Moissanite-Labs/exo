@@ -1019,17 +1019,21 @@ def test_an_ask_rule_that_lowers_a_category_deny_must_name_the_command():
     assert outcome(F, pol(rule(["^git status", PUSH], "ask"), categories=deny_push)) == "ask"
 
 
-def test_a_failure_in_the_own_text_pass_gives_the_decision_from_before():
+def test_a_failure_in_the_own_text_pass_gives_the_decision_from_before(monkeypatch):
     # The pass reads rules and patterns that deciding as before never reaches: the walk past a rule it passes over,
-    # every pattern of a matched list. A bad regex there raised, and the hook turned main's deny into an ask
-    # ("exo-gate could not classify"). Now the line is decided as before, with main's outcome and reason.
-    d = decide(sh(F), pol(ALLOW_STATUS, rule("("), deny=["force_push"]))
+    # every pattern of a matched list. A bad regex there used to raise, and the hook turned main's deny into an ask
+    # ("exo-gate could not classify"). #466 refuses such a pattern when the policy loads, before decide, so the
+    # failure is fed by hand here; any failure in the pass still decides the line as before.
+    def broken(c, pol, ctx):
+        def test(decision, patterns):
+            raise ValueError("boom")
+        return test
+    monkeypatch.setattr(gate, "_line_own_test", broken)
+    d = decide(sh(F), pol(ALLOW_STATUS, rule("^git status 2"), deny=["force_push"]))
     assert (d.outcome, d.rule, d.reason) == ("deny", "deny", "denied by policy (force_push)"), d
-    d = decide(sh("git status; ls"), pol(rule(["^git", "("])))
+    monkeypatch.undo()
+    d = decide(sh("git status; ls"), pol(rule(["^git", "^ls"])))
     assert (d.outcome, d.rule) == ("allow", "rule"), d
-    # A pattern that deciding as before reaches still fails as it did.
-    with pytest.raises(re.error):
-        decide(sh(F), pol(rule("(")))
 
 
 NEVER_LINES = [
