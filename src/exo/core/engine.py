@@ -503,7 +503,7 @@ class CoreRuntime:
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,
                           emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "author": lctx.get("author", ""),
                                            "jobs": self.jobs, "env_allow": self.env_allow,
-                                           "env_deny": self.env_deny})
+                                           "env_deny": self.env_deny, "github_auth": (str(self.home), self.agent)})
         return await self.registry.call(call, ctx)
 
     def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:
