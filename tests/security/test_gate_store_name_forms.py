@@ -914,3 +914,141 @@ def test_many_expansions_in_path_words_stay_linear(line, cat, monkeypatch):
         assert count["forms"] <= 8 * (3 * n + 3), (n, count)
     for k in ("forms", "glob", "calls"):
         assert seen[1][k] <= 2.2 * seen[0][k] + 50, seen
+
+
+# A store or secret name in another letter case (#601). On a case-insensitive file system `.exO/config.json`
+# IS `.exo/config.json`, and main a8a4ffbd read the spelling as written and allowed it. Names match in any
+# case, which on a case-sensitive file system also asks for a distinct `.exO` folder — the cost, as for a
+# glob that could name one. In a glob a part with no wildcard folds (a folder the file system opens:
+# `~/.EXO/*`, `~/*/RUN/x`), and a part that holds one stays as written, as bash matches it against the
+# entries (`ls -d [HOME=x]*`, `~/.e*O/*`). The rows force the reading each way with EXO_GATE_CASE_SENSITIVE,
+# so they hold on either kind of file system.
+CASE = [
+    ("cp /tmp/x ~/.exO/config.json", "store_write"),       # the issue's rows
+    ("cp /tmp/x $HOME/.EXO/config.json", "store_write"),
+    ("echo x > ~/.KUBE/config", "credentials"),
+    ("cat ~/.SSH/id_rsa", "credentials"),                  # asked on main already, by the id_rsa name
+    ("cat ~/.SSH/config", "credentials"),                  # and now by the .ssh folder's own name
+    ("cp /tmp/x ~/.exo/POLICIES/gates.yaml", "store_write"),
+    ("cp /tmp/x ~/.exo/config.JSON", "store_write"),
+    ("rm -rf ~/.EXO/policies", "store_write"),             # delete asked on main; the store write is the principal's
+    ("cat ~/.EXO/keys/seat", "credentials"),
+    ("cat ~/.EXO/run/exod.principal.key", "credentials"),
+    ("tar czf - -C ~/.EXO keys", "credentials"),
+    ("cd ~/.EXO && ls principals", "credentials"),
+    ("ls ~/.EXO/*", "credentials"),                        # the folder's own name folds, the `*` is bash's
+    ("cp x ~/.EXO/$(printf policies)/default.yaml", "store_write"),
+]
+
+CASE_READS = [   # a case variant reads as the plain spelling reads
+    ("cat ~/.EXO/seats/a.toml", "read"),
+    ("cd ~/.EXO && cat policies/gates.yaml", "read"),
+    ("cat ~/.EXO/ledger.sqlite", "read"),
+    ("cat ~/.EXO/bus/registry.json", "read"),
+    ("echo x > ~/.KUBE/notes", "local_write"),   # .kube's own name is not the store: the config file's is
+]
+
+CASE_ORDINARY = [
+    ("cp /tmp/x ~/.ExO/config.json.bak", "shell"),   # .bak is another file on either file system
+    ("cp /tmp/x ~/project/CONFIG.JSON", "shell"),    # a project's config.json by any name
+    ("ls -d [HOME=x]*", "read"),                     # a class stays as written, as bash matches it
+]
+
+CASE_OFF = [     # main d800f33c's reading: a distinct `.exO` folder on a case-sensitive file system allows
+    ("cp /tmp/x ~/.exO/config.json", "shell"),
+    ("cp /tmp/x $HOME/.EXO/config.json", "shell"),
+    ("echo x > ~/.KUBE/config", "local_write"),
+    ("cat ~/.SSH/config", "read"),
+    ("cp /tmp/x ~/.exo/POLICIES/gates.yaml", "shell"),
+    ("cp /tmp/x ~/.exo/config.JSON", "shell"),
+    ("cat ~/.EXO/keys/seat", "read"),
+    ("rm -rf ~/.EXO/policies", "delete"),
+    ("tar czf - -C ~/.EXO keys", "shell"),
+    ("cd ~/.EXO && ls principals", "read"),
+    ("ls ~/.EXO/*", "read"),
+    ("cp x ~/.EXO/$(printf policies)/default.yaml", "shell"),
+]
+
+CASE_KEPT = [    # the plain spellings, as main decides them, in either reading
+    ("cp /tmp/x ~/.exo/config.json", "store_write"),
+    ("echo x > ~/.kube/config", "credentials"),
+    ("cat ~/.ssh/id_rsa", "credentials"),
+    ("cat ~/.ssh/config", "credentials"),
+    ("cp /tmp/x ~/.exo/policies/gates.yaml", "store_write"),
+    ("echo x > ~/.exo/state/gate-grants.json", "store_write"),   # a store file's own name, matched anywhere
+]
+
+LOOSE = {"gates": {"categories": {k: "allow" for k in ("shell", "delete", "local_write", "opaque_exec",
+                                                       "history_rewrite", "read", "credentials")}}}
+
+
+def _case(monkeypatch, on):
+    if on:
+        monkeypatch.delenv("EXO_GATE_CASE_SENSITIVE", raising=False)
+    else:
+        monkeypatch.setenv("EXO_GATE_CASE_SENSITIVE", "1")
+
+
+@pytest.mark.parametrize("cmd,cat", CASE)
+def test_a_case_variant_of_a_store_or_secret_name_asks(cmd, cat, monkeypatch):
+    _case(monkeypatch, True)
+    c = gate.classify(sh(cmd))
+    assert c.category == cat, (cmd, c.category)
+    assert gate.decide(c).outcome == "ask"
+    assert gate.decide(c, LOOSE).outcome == "ask"   # credentials and store writes ask under any allowing policy
+
+
+@pytest.mark.parametrize("cmd,cat", CASE_READS)
+def test_a_case_variant_read_keeps_the_plain_spellings_class(cmd, cat, monkeypatch):
+    _case(monkeypatch, True)
+    c = gate.classify(sh(cmd))
+    assert (c.category, gate.decide(c).outcome) == (cat, "allow"), (cmd, c.category)
+
+
+@pytest.mark.parametrize("on", [True, False], ids=["any-case", "mains-case"])
+@pytest.mark.parametrize("cmd,cat", CASE_ORDINARY)
+def test_an_ordinary_case_spelling_keeps_its_class_in_either_reading(cmd, cat, on, monkeypatch):
+    _case(monkeypatch, on)
+    c = gate.classify(sh(cmd))
+    assert (c.category, gate.decide(c).outcome) == (cat, "allow"), (cmd, c.category)
+
+
+@pytest.mark.parametrize("cmd,cat", CASE_OFF)
+def test_mains_case_sensitive_reading_back_under_the_setting(cmd, cat, monkeypatch):
+    """EXO_GATE_CASE_SENSITIVE=1 reads main's names: on a case-sensitive file system a distinct `.exO` folder
+    allows, as main a8a4ffbd did."""
+    monkeypatch.setenv("EXO_GATE_CASE_SENSITIVE", "1")
+    c = gate.classify(sh(cmd))
+    assert (c.category, gate.decide(c).outcome) == (cat, "ask" if cat == "delete" else "allow"), (cmd, c.category)
+
+
+@pytest.mark.parametrize("on", [True, False], ids=["any-case", "mains-case"])
+@pytest.mark.parametrize("cmd,cat", CASE_KEPT)
+def test_the_plain_spellings_keep_their_class(cmd, cat, on, monkeypatch):
+    _case(monkeypatch, on)
+    c = gate.classify(sh(cmd))
+    assert c.category == cat, (cmd, c.category)
+    assert gate.decide(c).outcome == "ask"
+
+
+# An ssh hop keeps the host beside a case-variant store path (#601, review of #635). Main read such a line as a
+# plain delete of the path, and the copy of the action on the alt target carried the host into the reserved set;
+# the folded reading makes the line store_write, and the host keeps the line's own action beside the folded store
+# path. The same rows hold under EXO_GATE_CASE_SENSITIVE=1, which reads main's spellings: the sets are main's own
+# in either reading.
+SSH_RESERVED = [
+    ("ssh host 'rm -rf ~/.EXO/policies'",
+     {("delete", "host"), ("delete", "~/.EXO/policies")}),
+    ("ssh host 'rm -rf /srv/app/state'",   # no store reading: the hop's own host entry, as main lists it
+     {("delete", "host"), ("delete", "/srv/app/state")}),
+    ("rm -rf ~/.EXO/policies",             # no hop: the one path part, as main lists it
+     {("delete", "~/.EXO/policies")}),
+]
+
+
+@pytest.mark.parametrize("on", [True, False], ids=["any-case", "mains-case"])
+@pytest.mark.parametrize("cmd,hits", SSH_RESERVED)
+def test_an_ssh_hop_keeps_the_host_beside_a_case_variant_store_path(cmd, hits, on, monkeypatch):
+    _case(monkeypatch, on)
+    d = gate.decide(gate.classify(sh(cmd)), {"gates": {"reserved": ["delete"]}})
+    assert d.outcome == "ask" and set(d.reserved) == hits, d
