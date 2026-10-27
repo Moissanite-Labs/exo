@@ -6105,6 +6105,21 @@ _SENSITIVE_SAMPLES = ("keys.env", ".exo/keys", ".config/exo/keys.env", ".divan/s
                       ".config/gh/hosts.yml", ".git-credentials", ".docker/config.json", ".kube/config")
 
 
+_SAMPLE_BASES: dict[bool, tuple[str, ...]] = {}
+
+
+def _store_name_bases() -> tuple[str, ...]:
+    """The glob samples' basenames that are themselves store names, folded (#310): the last-component
+    rule tests a glob's base against these, computed once per case mode, instead of folding every
+    sample's basename for every word (which broke the linear-work test on long lines)."""
+    sensitive = os.environ.get("EXO_GATE_CASE_SENSITIVE", "") == "1"
+    if sensitive not in _SAMPLE_BASES:
+        rx = _SENSITIVE_PATH if sensitive else _SENSITIVE_PATH_F
+        _SAMPLE_BASES[sensitive] = tuple(dict.fromkeys(
+            _fold(os.path.basename(x)) for x in _SENSITIVE_SAMPLES if rx.search(_fold(os.path.basename(x)))))
+    return _SAMPLE_BASES[sensitive]
+
+
 def _home() -> str:
     return os.environ.get("HOME") or os.path.expanduser("~")
 
@@ -6630,12 +6645,14 @@ def _glob_hits_secret(tok: str) -> bool:
 
 def _expansion_span(word: str, i: int) -> int | None:
     """The end of the expansion starting at ``i`` (a ``$`` or a backtick) in a plain word, or None when no
-    expansion starts there. Brackets are counted, so a nested ``$( )`` or ``${ }`` ends at its own close;
-    an opener with no close runs to the end of the word, so a nest of unclosed openers is read in one
-    pass, never once per opener (#334's linear rule)."""
+    expansion starts there, or when its opener never closes. Brackets are counted, so a nested ``$( )``
+    or ``${ }`` ends at its own close. An unclosed opener is not an expansion that ends the word: the
+    cd machinery splits words at expansions, so its fragments end in `$(`, and reading those as trailing
+    expansions would double the glob checks on every split word (#310 repair). The scan still passes
+    over an unclosed opener once, never once per opener (#334's linear rule)."""
     if word[i] == "`":
         j = word.find("`", i + 1)
-        return len(word) if j < 0 else j + 1
+        return None if j < 0 else j + 1
     if i + 1 >= len(word):
         return None
     c = word[i + 1]
@@ -6652,7 +6669,7 @@ def _expansion_span(word: str, i: int) -> int | None:
                 if not depth:
                     return j + 1
             j += 1
-        return len(word)
+        return None
     if c.isalpha() or c == "_":
         j = i + 1
         while j < len(word) and (word[j].isalnum() or word[j] == "_"):
@@ -6714,7 +6731,11 @@ def _glob_words(words: list[str]) -> bool:
                                                                        _dynamic_secret_paths()[1]]
     secrets = _run_secrets()
     runs = [os.path.join(_exo_home(), "run"), os.path.join(home, ".exo", "run"), ".exo/run"]
-    return any(_glob_word(w, home, samples, secrets, runs) for w in words)
+    bases = _store_name_bases()
+    known = set(bases)
+    extra = tuple(b for b in (_fold(os.path.basename(x)) for x in samples)
+                  if b not in known and _sensitive_re().search(b))
+    return any(_glob_word(w, home, samples, secrets, runs, (*bases, *extra)) for w in words)
 
 
 _PROC_FILE = re.compile(r"/proc/[^/]+/(?:([^/]+)/[^/]+/)?([^/]+)")
@@ -6859,7 +6880,11 @@ def _glob_spells_secret(base: str) -> bool:
     return any(rx.search(_fold(c)) for c in dict.fromkeys(cands))
 
 
-def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
+def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str],
+               store_bases: tuple[str, ...] = ()) -> bool:
+    """``store_bases`` is the folded store-name basenames _glob_words computed once for this samples
+    list (#310): the last-component rule tests the glob's base against them, plus the instantiation
+    check, instead of folding every sample per word."""
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
     proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ, or a thread's (#199, #313)
@@ -6918,8 +6943,7 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
         # glob's head passes every home sample, then matches none of them (`~/*/.env.*`).
         if "/" in ftok:
             rx = _glob_rx(fbase)
-            if any(rx.match(_fold(os.path.basename(x))) for x in samples + list(_SENSITIVE_SAMPLES)
-                   if _sensitive_re().search(_fold(os.path.basename(x)))):
+            if any(rx.match(bx) for bx in store_bases):
                 return True
         return _glob_spells_secret(fbase)
     return False

@@ -1230,6 +1230,25 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-27 (issue #310):* a `.env.<suffix>` read asks as a glob and after a trailing
+  expansion. The samples held only `.env`, so `cat .env.*` matched no sample; a glob in a folder the
+  samples do not live in matched none by its head; and an expansion ending the word (`.env.$(hostname)`,
+  `.env.${STAGE}`, backticks) was read as no glob at all. Now the samples hold `.env.local`; a glob in
+  another folder is judged by its last component against the store names, falling through to that rule
+  whenever the head match gives nothing, not only when it finds no candidates (a HOME-anchored glob's
+  head passes every home sample, then matches none of them, so `~/*/.env.*` asked only after this
+  change); and where the last-component match gives nothing, the component's wildcards are instantiated
+  (`*` as '' and 'x', `?` as 'x', a class as one member), so `.env.prod*`, `.env.???`, `.env.[pd]rod`
+  and `.env.{a,b}*` (brace-expanded first) ask. An expansion that ends a word reads as `*` even behind
+  an earlier expansion (`$APP_DIR/.env.$STAGE` names `*/.env.*`, `.env.$A$B` names `.env.*`), a run
+  collapsing into one `*`. A word that is only an expansion, and one ending in literal text
+  (`build-$(date +%s).log`), still get no form. Known fail-closed friction, kept because the
+  at-any-depth rule pins it: a glob that could name a store sample asks even where the file need not be
+  a store (`tail -f logs/server.*`, `cat build/keys.*`, `ls tests/*secret*`, `cat config.$ENV`), and a
+  trailing expansion on a host, URL or message word asks as its bare-glob twin does on main
+  (`ssh server.$DOMAIN`, as `ping server.*` does). Under a policy that denies reads and allows
+  credentials, such a line's category moves from read to credentials, so the credentials entries, not
+  the read entries, reach it.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
   globbed folder against the folder of each glob sample (`_glob_folder_hit`), so `cat ~/.ss?/*`, `cat ~/.aw?/*`
