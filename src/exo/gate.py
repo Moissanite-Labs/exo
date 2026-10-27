@@ -3848,7 +3848,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         target = next((w for w in words[1:] if not w.text.startswith("-")), None)
         dest = target.text if target else ""
         seen = ctx.setdefault("store_braces", {})
-        if target and (_in_store_dir_words(_shell_words(target, seen, "dir")) or _unknown_store(target, seen, inside=True)):
+        if target and (_shell_hits(target, seen, "dir", _store_dir_hit) != [] or _unknown_store(target, seen, inside=True)):
             ctx["store_cwd"] = True
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
@@ -4745,33 +4745,52 @@ def _ln_targets(argv: list[str]) -> list[str]:
     bases = [d for d in dict.fromkeys(map(_expand_text, dirs)) if d.startswith("/")]
     return [os.path.join(b, t) for t in dict.fromkeys(operands + values) if not _expand_text(t).startswith("/")
             for b in bases]
-# A store check on a spelling makes the checks it covers redundant: a word checked with its ancestors and pieces
-# ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check ("target").
+# A store check on a spelling that found nothing makes the checks it covers redundant: a word checked with its
+# ancestors and pieces ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check
+# ("target").
 _COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
 
 
-def _shell_words(w: _Word, seen: dict, check: str) -> list[str] | None:
-    """The words bash makes of shell word ``w`` for a store check (#224): its text, plus its source spelling
-    brace-expanded and then dequoted, as _shell_credential_hit reads it. A word the gate built (an `ln` target) has
-    no source spelling and keeps its text. ``seen`` keeps each spelling's words for the line, so a spelling is
-    expanded and charged once; [] when a check covering ``check`` already ran on it. None past the cap."""
+def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str]]) -> list[str] | None:
+    """What ``find`` gives on the words bash makes of shell word ``w`` for a store check (#224): its text, plus its
+    source spelling brace-expanded and then dequoted, as _shell_credential_hit reads it. A word the gate built (an
+    `ln` target) has no source spelling and keeps its text. ``seen`` keeps each spelling's words and each check's
+    hits on it for the line, so a spelling is expanded and charged once and each check runs once on it. A later
+    command that repeats the spelling gets the same hits, so its own store part stays (#611 follow-up: [] there
+    gave its write to the first command's text). [] when a check covering ``check`` found none; None past the cap,
+    which callers count as a hit."""
     src = w.raw.replace("\\\n", "")
     if "{" not in src:
-        return [w.text]
+        return find(w.text)
     if src not in seen:
         words = _brace_words(src, pool=1)
         seen[src] = (None if words is None else list(dict.fromkeys([w.text] + [d for e in words[1:] for d in _dequote(e)])),
-                     set())
+                     {})
     words, done = seen[src]
-    if done & _COVERS[check]:
-        return []
-    done.add(check)
-    return words
+    if check not in done:
+        if any(done.get(c, 0) == [] for c in _COVERS[check]):
+            return []
+        found = None if words is None else (h for x in words for h in find(x))
+        # a redirect target or a folder check asks only whether there is a hit, so it stops at the first, as any() did
+        done[check] = None if found is None else list(itertools.islice(found, 1) if check in ("target", "dir") else
+                                                      dict.fromkeys(found))
+        return done[check]
+    hits, left = done[check], _brace_left.get()
+    if hits and left is not None:   # each repeat's hits come from a budget of their own, so a line of many repeats
+        left[2] -= len(hits)        # makes a bounded number of parts; past it a repeat is one hit, as past the cap
+        if left[2] < 0:
+            return None
+    return hits
 
 
-def _in_store_dir_words(words: list[str] | None) -> bool:
-    """_in_store_dir for any of a word's _shell_words; past the cap counts."""
-    return words is None or any(_in_store_dir(x) for x in words)
+def _store_word_hit(x: str) -> list[str]:
+    """[x] when x is a store path (_shell_hits' find for a redirect target)."""
+    return [x] if _store_word(x) else []
+
+
+def _store_dir_hit(x: str) -> list[str]:
+    """[x] when x is in a store folder (_shell_hits' find for cd, pushd and git -C targets)."""
+    return [x] if _in_store_dir(x) else []
 
 
 def _unknown_store(w: _Word, seen: dict, ancestors: bool = False, inside: bool = False) -> bool:
@@ -4833,8 +4852,7 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         n = t.fd.lstrip("0") if t.fd.isascii() else ""     # compared as text: any length, never int()
         held = op == "<" and n != ""
         if op in _WRITE_REDIRS or held:
-            targets = _shell_words(t, seen, "target")
-            if targets is None or any(_store_word(x) for x in targets) or _unknown_store(t, seen) or \
+            if _shell_hits(t, seen, "target", _store_word_hit) != [] or _unknown_store(t, seen) or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 hits.append(t.text)
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
@@ -4850,18 +4868,18 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             len(a) > 2 and ("--symbolic-link".startswith(a) or "--link".startswith(a)) for a in argv)))  # --sym, --li
     if prog == "ln":
         words = words + [_Word(t) for t in _ln_targets(argv)]
+    def pieces(e: str) -> list[str]:
+        return [p for p in dict.fromkeys([e] + re.split(r"[:=,]", e)) if p and _store_word(p, ancestors=wide)]
     for i, w in enumerate(words):
-        expanded = _shell_words(w, seen, "wide" if wide else "narrow")   # braces first: `of=x{a,b}` is `of=xa of=xb`
-        if expanded is None:
+        got = _shell_hits(w, seen, "wide" if wide else "narrow", pieces)   # braces first: `of=x{a,b}` is `of=xa of=xb`
+        if got is None:
             hits.append(w.text)
             continue
-        for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
-            if piece and _store_word(piece, ancestors=wide):
-                hits.append(piece)
+        hits += got
         if _unknown_store(w, seen, ancestors=wide):    # `cp x ~/.exo/polic$(:)ies/`, `polic${u}ies` (#309)
             hits.append(w.text)
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and (
-                _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")) or
+                _shell_hits(words[i + 1], seen, "dir", _store_dir_hit) != [] or
                 _unknown_store(words[i + 1], seen, inside=True)):
             hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
@@ -6211,7 +6229,8 @@ def _run_secrets() -> list[str]:
 
 _BRACE_CAP = 1024
 _BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost), once for the secret-store checks
-                       # and once for the Exo-store checks (#224)
+                       # and once for the Exo-store checks (#224); and the hits a repeated store spelling gives again
+                       # (_shell_hits)
 _BRACE_SEQ = re.compile(r"([-+]?\d+)\.\.([-+]?\d+)(?:\.\.([-+]?\d+))?|([A-Za-z])\.\.([A-Za-z])(?:\.\.([-+]?\d+))?")
 _brace_left: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_brace_left", default=None)
 _call_memo: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_call_memo", default=None)
@@ -6234,7 +6253,7 @@ def _brace_budget(fn: _F) -> _F:
     def run(*a: Any, **kw: Any) -> Any:
         if _brace_left.get() is not None:
             return fn(*a, **kw)
-        token, memo = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET]), _call_memo.set({})
+        token, memo = _brace_left.set([_BRACE_BUDGET] * 3), _call_memo.set({})
         try:
             return fn(*a, **kw)
         finally:
@@ -7671,8 +7690,11 @@ def _classify_call(action: Any, *, legacy_name: bool = False) -> Classification:
         if cat != "local_write" or len(set(paths)) > 1:
             c.parts = [_make("local_write", summary=f"write {p}", target=p, link=p)
                        for p in dict.fromkeys(paths or [path])]
-        if cat == "credentials":    # #447: a store file it writes beside a secret is a part, so only the principal answers
-            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths) if is_store_path(p, from_cwd=True)]
+        # #447: a store file it writes beside a secret is a part, so only the principal answers. #514: so is each store
+        # file past the first, so a target entry on any of them matches, as for the other file tools.
+        if cat != "local_write":
+            c.parts += [_store_part(p, f"write {p}") for p in dict.fromkeys(paths)
+                        if (cat == "credentials" or p != path) and is_store_path(p, from_cwd=True)]
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
         url = urls[0] if isinstance(urls, list) and urls else str(urls)

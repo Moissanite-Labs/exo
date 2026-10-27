@@ -1347,8 +1347,36 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   The scan now keeps each store path a shell line or file tool writes, in the order it meets them, and each is a
   `store_write` part with that path as its target, as beside a secret (#447). The first path still leads the line,
   `rm` of both paths was denied already (its `delete` part names the last path), reads keep their class, and the
-  first path alone decides as before. Each new part only adds a match, so no decision is lower; gate_diff ran
-  main 5a5a535d against this change and found 0 lowered.
+  first path alone decides as before. gate_diff against the merge parent 1c3d4322 found 0 lowered on the
+  built-in corpus, but the scan of every word lowered a later command's braced store write (the #611 follow-up
+  amendment below), and `apply_patch` and `write_file` kept a later store path a `local_write` part.
+- *Amendment 2026-10-27 (#611 follow-up, review 5662072103):* a later command that repeats a braced store path keeps
+  its own `store_write` part. The store check expands and checks each brace spelling once per line, and marked a
+  spelling checked for the whole line; once #514 scanned every word, the first command marked each spelling it
+  met, and a later command that wrote the same spelling got no part, so its write had the first command's own
+  text (#394). Under `{categories: {store_write: deny}, rules: [{match: {command: '^cp '}, decision: allow}]}`,
+  `cp ~/.exo/policies/a.yaml ~/.exo/policies/{g,h}.yaml; printf x > ~/.exo/policies/{g,h}.yaml` was denied on
+  1c3d4322 and asked on main e0968a2b, and so did a matrix deny, a `log` or `ask` rule, and `tee`, `sudo tee`,
+  `truncate` or `scp` in place of `printf`; with `cp /var/tmp/a` first, the line asked on 1c3d4322 too. Each
+  check's hits on a spelling are now kept with it (`_shell_hits`), and a command that repeats the spelling gets
+  them for its own part; only a check that found nothing still covers a narrower one. The braced line decides as
+  the unbraced one does. The hits a repeat gives again come from a third 4,096 budget per call (`_BRACE_BUDGET`),
+  so a line of many repeats makes a bounded number of parts (40 `cp` commands that repeat a 676-path spelling make
+  4,772 store parts, each command with its own, where 27,080 without the budget; main made 677, all the first
+  command's); past it a repeat is one hit on the word as written, as a word past the brace cap is. The extra parts
+  cost time: that line classifies and decides in about 0.3 s, where main took 0.1 s. A redirect target or folder
+  check (`>`, `cd`, `git -C`) keeps only its first hit, as main's `any()` stopped at it. `apply_patch`
+  and `write_file` that write more than one store file make each store path past the first a `store_write` part
+  too, as `copy_file` does, so a `{category: store_write, target}` deny or reserved entry on a later file matches.
+  A case variant the store reads since #635 (`~/.EXO/policies/{g,h}.yaml`) keeps its part the same way.
+  Parts are only added; gate_diff against main e0968a2b lowered 0 of 1,053,712 pairs on the built-in corpus
+  (`--no-variants`, 0 tightened) and, on an aimed corpus (614 actions: the review's lines and their unbraced and
+  case-variant controls under each writer, `cd`, `pushd`, `-C` and file tool forms, the #651 replace tools, and
+  lines of many repeats, redirect and folder ones too; 135 policies, the built-in ones and 47 on targets, rules on
+  `^cp `, matrix cells and reserved entries), 0 of 82,890 pairs, with 485 tightened. Not covered, as before: a relative path read from a `cd` into the store, from
+  `tar -C` or `git -C`, or from the call's own folder (#453, #527) is no target, so a `target:` entry on it does
+  not match (`cd ~/.exo/policies && cp a.yaml gates.yaml` asks under `deny: ["target:*/gates.yaml"]`). The `cd`
+  and `-C` lines still ask the principal alone; the own-folder line is allowed, as #453 records.
 - *Amendment 2026-10-26 (issue #516):* an allow rule keyed on `command` that would lower the line over the matrix
   deny of the part a shell call's own folder read adds (#311) must name the folder, as it names the `cd` in the cd
   form; naming the folder never lifts that deny. The part had no own text, so a line of
