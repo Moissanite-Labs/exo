@@ -35,6 +35,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Differential against main fa5dfcd8: 0 lowered. Tests: `tests/security/test_gate_file_tool_replace_writes.py`,
   `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_bypass.py`. **Docs:** `docs/GATE.md`,
   `DECISIONS.md` (D-038).
+- Command web tests now include the `permissions` module fixture in their offline Node module sets, so the `chat.js` and `app.js` imports resolve (#617).
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
