@@ -1246,6 +1246,7 @@ _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_g
 # The folder a line entered by `cd` into the store or a descriptor folder (_classify_simple's store_cwd and fd_cwd),
 # for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or ""), or None.
 _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_cd_into", default=None)
+_bus_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_bus_into", default=None)
 
 # Whether the next line read is fed a stdin whose text the gate cannot read (#316): a >( ) body, a $( ) that
 # inherits such a stdin, the remote command of an ssh that passes its stdin on. The mark travels here, not as a
@@ -3801,7 +3802,14 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "eval":
         parts = [_opaque("eval runs text as a command", cmd)]
         if depth < _DEPTH:
-            parts.append(classify_shell(" ".join(argv[1:]), inner_depth))
+            # #339: eval runs its text in this shell, so it starts in the line's bus folders, as a nested
+            # shell does below; a remote shell's text never reaches here with bases set
+            mark = _bus_into.set(tuple(ctx.get("bus_bases") or ())) if ctx.get("bus_bases") else None
+            try:
+                parts.append(classify_shell(" ".join(argv[1:]), inner_depth))
+            finally:
+                if mark is not None:
+                    _bus_into.reset(mark)
         return parts
     if prog in _SHELLS:
         args = argv[1:]
@@ -3811,7 +3819,16 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         for i, a in enumerate(args):
             if a == "-c" or (re.fullmatch(r"-[a-zA-Z]+", a) and "c" in a):
                 if depth < _DEPTH:
-                    parts.append(classify_shell(args[i + 1] if i + 1 < len(args) else "", inner_depth))
+                    # #339: a local -c shell inherits this shell's folder, so its text starts in the line's
+                    # bus folders; without this it classified as opaque_exec, which an opaque_exec allow
+                    # lets through. An ssh hop's remote text is classified without bases set, so it keeps
+                    # the remote folder's reading.
+                    mark = _bus_into.set(tuple(ctx.get("bus_bases") or ())) if ctx.get("bus_bases") else None
+                    try:
+                        parts.append(classify_shell(args[i + 1] if i + 1 < len(args) else "", inner_depth))
+                    finally:
+                        if mark is not None:
+                            _bus_into.reset(mark)
                 return parts
             if not a.startswith(("-", "+")):
                 parts[0].summary = f"{prog} runs the script {a}"[:120]
@@ -3853,6 +3870,17 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             into = _expand_text(dest).strip()
             if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
                 ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
+        if target:
+            # #339: a folder the bus paths live in or above joins the line's bus bases; _store_touch reads
+            # relative names against all of them. The set only grows within the line: a later cd never clears
+            # it, because a cd that does not move the shell (a subshell, a pipeline, the background, a branch
+            # that does not run, a failing cd, `cd -`, `popd`) must not clear what an earlier one set, and the
+            # gate cannot tell those apart from one that does. A bare cd, `cd -` and `popd` change nothing.
+            into = _expand_text(dest).strip()
+            bases = ctx.setdefault("bus_bases", [])
+            for cand in _bus_cd_targets(into, bases, ctx):
+                if _bus_dir(cand, ctx) and cand not in bases:
+                    bases.append(cand)
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -4748,7 +4776,12 @@ def _ln_targets(argv: list[str]) -> list[str]:
 # A store check on a spelling that found nothing makes the checks it covers redundant: a word checked with its
 # ancestors and pieces ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check
 # ("target").
-_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
+_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"},
+           # #339: the bus checks memoise apart from the store ones, with the same covering shape, so a store
+           # [] never short-circuits a bus find on the same word; the landing rule expands sources under its
+           # own key, apart from the word loop's bus find on the same word
+           "bus-target": {"bus-target", "bus-narrow", "bus-wide"}, "bus-narrow": {"bus-narrow", "bus-wide"},
+           "bus-wide": {"bus-wide"}, "bus-land": {"bus-land"}}
 
 
 def _shell_hits(w: _Word, seen: dict, check: str, find: Callable[[str], list[str]]) -> list[str] | None:
@@ -4844,6 +4877,10 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     Reads of the store are fine."""
     seen = ctx.setdefault("store_braces", {})
     hits: list[str] = []
+    bases = ctx.get("bus_bases") or []          # #339: bus folders the line stands in; relative names join them
+
+    def bus_hit(x: str) -> list[str]:
+        return [x] if _bus_joined(x, bases, ctx) else []
     for op, t in k.redirs:
         # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
         # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. A
@@ -4853,6 +4890,7 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         held = op == "<" and n != ""
         if op in _WRITE_REDIRS or held:
             if _shell_hits(t, seen, "target", _store_word_hit) != [] or _unknown_store(t, seen) or \
+                    _shell_hits(t, seen, "bus-target", bus_hit) != [] or \
                     held and n in ("1", "2") and (t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 hits.append(t.text)
     # `hash -p` and setting BASH_CMDS or BASH_ALIASES only record a path for a later name to run (#330), so a store
@@ -4868,8 +4906,38 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             len(a) > 2 and ("--symbolic-link".startswith(a) or "--link".startswith(a)) for a in argv)))  # --sym, --li
     if prog == "ln":
         words = words + [_Word(t) for t in _ln_targets(argv)]
+    if prog == "tar" and _tar_extracts(argv):
+        # #339: extraction writes the archive's member names into its folder, and the gate cannot read them;
+        # into a bus folder (tar -C there, or the line's bus working folders) any of them may be a bus file.
+        cdirs: list = []
+        _cd_walk([k], cdirs, [], [])
+        dirs = []
+        for t, _u in cdirs:
+            d = _expand_text(t).strip()
+            if d and not d.startswith("/"):
+                dirs += [(t, os.path.join(b, d)) for b in bases]
+            elif d:
+                dirs.append((t, d))
+        if not cdirs:
+            dirs += [(b, b) for b in bases]
+        for t, d in dirs:
+            if _bus_inside(os.path.normpath(d), ctx):
+                hits.append(t)
+                break
+    if prog == "unzip" and _unzip_extracts(argv):
+        # #339: extraction into a bus folder writes member names the gate cannot read, as tar does: -d names
+        # the folder, and without it the archive lands in the line's bus working folders.
+        ud = _unzip_dir(argv)
+        if ud is not None:
+            dd = _expand_text(ud).strip()
+            dests = [dd] if dd.startswith("/") else [os.path.join(b, dd) for b in bases if dd]
+            if any(_bus_inside(os.path.normpath(x), ctx) for x in dests):
+                hits.append(ud)
+        elif any(_bus_inside(b, ctx) for b in bases):
+            hits.append(bases[0])
     def pieces(e: str) -> list[str]:
         return [p for p in dict.fromkeys([e] + re.split(r"[:=,]", e)) if p and _store_word(p, ancestors=wide)]
+    cmd_bases = bases                       # a git -C folder replaces the line's bases for its own command
     for i, w in enumerate(words):
         got = _shell_hits(w, seen, "wide" if wide else "narrow", pieces)   # braces first: `of=x{a,b}` is `of=xa of=xb`
         if got is None:
@@ -4882,6 +4950,59 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                 _shell_hits(words[i + 1], seen, "dir", _store_dir_hit) != [] or
                 _unknown_store(words[i + 1], seen, inside=True)):
             hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
+        # #339: a relative name joined onto a bus folder names a bus file; the check runs on the same
+        # expansions as the store one, with its own memo keys, so a store [] never hides a bus hit
+        bgot = _shell_hits(w, seen, "bus-wide" if wide else "bus-narrow",
+                           lambda e: [p for p in dict.fromkeys([e] + re.split(r"[:=,]", e))
+                                      if p and _bus_joined(p, cmd_bases, ctx, wide)])
+        if bgot:
+            hits += bgot
+        if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words):
+            nxt = _expand_text(words[i + 1].text).strip()   # a git -C folder is the join base after it
+            if nxt.startswith("/"):
+                cmd_bases = [nxt] if _bus_dir(nxt, ctx) else []
+            else:
+                # a relative -C folder joins the bases the line stands in (`git -C divan` after `cd $S`)
+                # and joins them, without dropping the line's own bases
+                for cand in _bus_cd_targets(nxt, cmd_bases, ctx):
+                    if _bus_dir(cand, ctx) and cand not in cmd_bases:
+                        cmd_bases = cmd_bases + [cand]
+    if prog in ("cp", "mv", "rsync"):
+        # #339, the landing rule #125 adds for the home: a copy into a bus folder of a source named like one of
+        # its protected names lands on that name (`cp -r evil/kd $H/srv/` puts a keys folder at $H/srv/kd).
+        # With -t/--target-directory the destination is that value, not the last operand.
+        tval = _cp_target(argv) if prog == "cp" else None
+        ops: list = []
+        j = 1
+        while j < len(words):
+            a = argv[j]
+            if a == "--":
+                ops += words[j + 1:]
+                break
+            if tval is not None and (a in ("-t", "--target-directory") or
+                                     a.startswith("--target-directory=") or
+                                     re.fullmatch(r"-[A-Za-z]*t", a)):
+                j += 1 if a.startswith("--target-directory=") else 2
+                continue
+            if a.startswith("-") and len(a) > 1:
+                j += 1
+                continue
+            ops.append(words[j])
+            j += 1
+        dest = tval if tval is not None else (ops[-1].text if ops else "")
+        srcs = ops if tval is not None else ops[:-1]
+        dd = _expand_text(dest).strip()
+        dests = [dd] if dd.startswith("/") else [os.path.join(b, dd) for b in bases if dd]
+        for resolved in dests:
+            names = _bus_folder_names(resolved, ctx)
+            if not names:
+                continue
+            for sw in srcs:
+                exps = _shell_hits(sw, seen, "bus-land", lambda e: [e]) or [sw.text]
+                for piece in exps:
+                    if piece.rstrip("/").rsplit("/", 1)[-1] in names:
+                        hits.append(piece)
+                        break
     if ctx.get("store_cwd"):
         hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
     return list(dict.fromkeys(hits))
@@ -5677,7 +5798,7 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     if fed:
         _fed_stdin.set(False)
     # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it.
-    key = ("shell", cmd, depth, _budgets(), _cd_into.get(), fed)
+    key = ("shell", cmd, depth, _budgets(), _cd_into.get(), _bus_into.get(), fed)
     if key not in seen:
         own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
@@ -5783,6 +5904,8 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         ctx["store_cwd"] = True
         if into[1]:
             ctx["fd_cwd"] = into[1]
+    if binto := _bus_into.get():          # a local nested shell runs in the line's bus folders (#339)
+        ctx["bus_bases"] = list(binto)
     parts: list[Classification] = []
     prev: _Cmd | None = None
     slot = _own_text.get() or [None]      # classify_shell gives each line its own
@@ -5790,6 +5913,12 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # there. They are the first subs_met of the line's subs, which the lexer lists in the order of the line.
     upto, at = (0, -1) if into else (-1, -1)
     token = _cd_into.set(None) if into else None     # a line nested in this one (ssh, bash -c) has its own folder
+    # #339: consumed, so a deeper nested line inherits only what its own shell branch sets again; the snapshots
+    # below seed each $( ) with the bases in force when its enclosing command runs (a $( ) is expanded before
+    # that command, so it sees the bases before it, not after)
+    bmark = _bus_into.set(None) if binto else None
+    at_bus = -1
+    bus_snaps: list[tuple[int, tuple]] = []
     try:
         for n, k in enumerate(cmds):
             piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
@@ -5809,9 +5938,16 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
             prev = k
             if upto < 0 and ctx.get("store_cwd"):
                 upto, at = k.subs_met, n
+            cur_bases = tuple(ctx.get("bus_bases") or ())
+            if cur_bases and (not bus_snaps or bus_snaps[-1][1] != cur_bases):
+                bus_snaps.append((k.subs_met, cur_bases))
+            if at_bus < 0 and cur_bases:
+                at_bus = n
     finally:
         if token is not None:
             _cd_into.reset(token)
+        if bmark is not None:
+            _bus_into.reset(bmark)
     slot[0] = None
     # A $( ) runs where the gate no longer knows which command it is in, so on a line where one has a stdin of its
     # own, a shell inside a $( ) reads a stdin the gate cannot name (`curl .. | echo $(bash)`).
@@ -5822,14 +5958,24 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # own commands, a subshell or a later `cd` out is not followed: fails closed.
     there = (True, ctx.get("fd_cwd") or "") if ctx.get("store_cwd") else None
     early = [range(k.opens[1], k.subs_met) for k in cmds if k.opens and k.opens[0] <= at] if there else []
+    early_bus = [range(k.opens[1], k.subs_met) for k in cmds if k.opens and k.opens[0] <= at_bus] if at_bus >= 0 else []
     for j, sub in enumerate(subs):
         seed = there if there and j >= upto and not any(j in r for r in early) else None
         token = _cd_into.set(seed) if seed else None
+        bseed = None
+        for s_met, s_bases in bus_snaps:
+            if s_met <= j and s_bases:
+                bseed = s_bases
+        if bseed is not None and any(j in r for r in early_bus):
+            bseed = None
+        bsub = _bus_into.set(bseed) if bseed else None
         try:
             got = [_classify_sub(sub, depth + 1, inherits, stdin_unknown) if depth < _DEPTH else _too_deep(cmd)]
         finally:
             if token is not None:
                 _cd_into.reset(token)
+            if bsub is not None:
+                _bus_into.reset(bsub)
         parts += _given_stdin(got, lambda: None, ctx) if given or isinstance(sub, _OutSub) else got
     parts += ctx.get("late", [])
     if func:
@@ -6837,6 +6983,171 @@ def _bus_paths() -> list[tuple[str, tuple]]:
             folder, base = os.path.split(os.path.abspath(os.path.expanduser(value)))
             out.append((folder, tuple(base + e for e in ends)))
     return out
+
+
+def _bus_entries(ctx: dict | None = None) -> list[tuple[frozenset, tuple]]:
+    """(spellings of each bus folder, its protected names), cached on the line's ctx: _bus_hit runs on every
+    word piece, and recomputing each folder's resolved spelling there made long lines after a bus cd several
+    times slower (#339). The environment is fixed for a classify call, so one computation per line is enough."""
+    if ctx is not None and "bus_entries" in ctx:
+        return ctx["bus_entries"]
+    entries = [(frozenset(_path_forms(folder)), names) for folder, names in _bus_paths()]
+    if ctx is not None:
+        ctx["bus_entries"] = entries
+    return entries
+
+
+def _bus_hit(path: str, ancestors: bool = False, ctx: dict | None = None) -> bool:
+    """#339: an absolute path that names a bus file the environment moved (_bus_paths): the file itself, a name
+    below its folder whose first part is protected (the seat keys folder and anything in it), or, with
+    ancestors, a folder above one (moving the folder moves the file). _store_word reads absolute paths against
+    the same roots; this is for names joined onto a working folder, which _store_word cannot see."""
+    for forms, names in _bus_entries(ctx):
+        for f in forms:
+            base = f.rstrip("/")
+            for c in _path_forms(path):
+                rel = c[len(base) + 1:] if c.startswith(base + "/") else ""
+                if rel and rel.split("/")[0] in names:
+                    return True
+                if ancestors and any((base + "/" + n).startswith(c.rstrip("/") + "/") for n in names):
+                    return True
+    return False
+
+
+def _bus_inside(path: str, ctx: dict | None = None) -> bool:
+    """A folder that is a _bus_paths folder or inside one of its protected folders (the keys folder): names
+    written there land on the bus files."""
+    p = os.path.normpath(path)
+    return any(p in forms for forms, _ in _bus_entries(ctx)) or _bus_hit(p, ctx=ctx)
+
+
+def _bus_dir(path: str, ctx: dict | None = None) -> bool:
+    """A folder a line can stand in for the bus paths (#339): a _bus_paths folder, a folder inside one of its
+    protected folders, or a folder above one (a relative name after it carries the rest of the path)."""
+    p = os.path.normpath(path)
+    return _bus_inside(p, ctx) or any(f.startswith(p.rstrip("/") + "/")
+                                      for forms, _ in _bus_entries(ctx) for f in forms)
+
+
+def _bus_folder_names(path: str, ctx: dict | None = None) -> tuple | None:
+    """The protected names of the _bus_paths folder ``path`` names, or None."""
+    p = os.path.normpath(path)
+    for forms, names in _bus_entries(ctx):
+        if p in forms:
+            return names
+    return None
+
+
+def _bus_joined(piece: str, bases, ctx: dict | None = None, ancestors: bool = False) -> bool:
+    """A relative name read against bus working folders (#339): joined onto any of them, it names a bus file."""
+    if not piece or not bases:
+        return False
+    p = _expand_text(piece)
+    if not p or p.startswith(("/", "~")):
+        return False
+    return any(_bus_hit(os.path.normpath(os.path.join(b, p)), ancestors, ctx) for b in bases)
+
+
+def _bus_cd_targets(into: str, bases, ctx: dict | None = None) -> list[str]:
+    """Folders a cd or pushd target may stand the shell in, for the bus bases (#339). An absolute target counts
+    as written; a relative one is joined onto every base the line already stands in (`cd $S && cd divan`,
+    `cd divan && cd ../kd`); a brace set is expanded and each arm counted, and a glob counts every bus folder
+    or protected folder it matches (`cd $S/div*`), plus its literal directory prefix when that is itself a bus
+    folder (a glob into a subfolder of one). An unexpandable brace set fails closed on every bus folder. The
+    caller keeps only the targets _bus_dir accepts, and never drops a base: a cd the shell does not take
+    (a subshell, a pipeline, the background, a branch that does not run, a failing cd, `cd -`, `popd`) leaves
+    the set alone, so nothing that does not move the shell clears it."""
+    if not into:
+        return []
+    forms = _brace_words(into, pool=1) if "{" in into else [into]
+    if forms is None:
+        return [c for forms_, names in _bus_entries(ctx) for c in
+                list(forms_) + [f.rstrip("/") + "/" + n for f in forms_ for n in names]]
+    out: list[str] = []
+    for form in forms:
+        f = _expand_text(form).strip()
+        if not f:
+            continue
+        cands = [f] if f.startswith("/") else [os.path.join(b, f) for b in bases or []]
+        for cand in cands:
+            if _GLOBBY.search(cand):
+                for forms_, names in _bus_entries(ctx):
+                    for base in forms_:
+                        if fnmatch.fnmatchcase(base, cand):
+                            out.append(base)
+                        for n in names:
+                            if fnmatch.fnmatchcase(base.rstrip("/") + "/" + n, cand):
+                                out.append(base.rstrip("/") + "/" + n)
+                first = next(i for i, ch in enumerate(cand) if _GLOBBY.search(ch))
+                pre = cand[:first].rsplit("/", 1)[0] or "/"
+                if _bus_dir(pre, ctx):
+                    out.append(os.path.normpath(pre))
+            else:
+                out.append(os.path.normpath(cand))
+    return out
+
+
+def _tar_extracts(argv: list[str]) -> bool:
+    """tar writing archive members into a folder: -x, --extract or --get, in a cluster or the old-style
+    first word. A long option may be abbreviated the way getopt does (#339): --ext, --extr and --extra read
+    as --extract, and likewise for --get, when the abbreviation is at least 5 characters long."""
+    for i, a in enumerate(argv[1:], 1):
+        if a in ("--extract", "--get") or a.startswith("--extract=") or a.startswith("--get="):
+            return True
+        opt = a.split("=", 1)[0]
+        if opt.startswith("--") and len(opt) >= 5 and ("--extract".startswith(opt) or "--get".startswith(opt)):
+            return True
+        if a.startswith("-") and not a.startswith("--") and "x" in a[1:]:
+            return True
+        if i == 1 and not a.startswith("-") and "x" in a:
+            return True
+    return False
+
+
+def _unzip_extracts(argv: list[str]) -> bool:
+    """unzip writing archive members into a folder (#339): anything but a listing, a test, a pipe-out or a
+    verbose listing (-l, -t, -p, -v, -Z, in a cluster or alone). A -d or -P value ends its token's option
+    scan, so a directory or password spelling one of those letters does not read as one."""
+    for a in argv[1:]:
+        if not a.startswith("-") or a.startswith("--"):
+            continue
+        for ch in a[1:]:
+            if ch in "dP":
+                break
+            if ch in "ltpvZ":
+                return False
+    return True
+
+
+def _unzip_dir(argv: list[str]) -> str | None:
+    """unzip's -d folder, or None: the value after a separate -d, attached to it (-ddir), or in a cluster
+    after it (-oddir, -od dir)."""
+    for i, a in enumerate(argv[1:], 1):
+        if a == "-d":
+            if i + 1 < len(argv):
+                return argv[i + 1]
+        elif a.startswith("-") and not a.startswith("--"):
+            for j, ch in enumerate(a[1:], 1):
+                if ch == "P":
+                    break
+                if ch == "d":
+                    return a[j + 1:] if j + 1 < len(a) else (argv[i + 1] if i + 1 < len(argv) else None)
+    return None
+
+
+def _cp_target(argv: list[str]) -> str | None:
+    """cp's destination when -t or --target-directory names it (#339): the value after a separate -t or
+    --target-directory, in a cluster ending in t (-rt dir), or after --target-directory=. Else None, and the
+    last operand is the destination."""
+    for i, a in enumerate(argv[1:], 1):
+        if a == "-t" or a == "--target-directory":
+            if i + 1 < len(argv):
+                return argv[i + 1]
+        elif a.startswith("--target-directory="):
+            return a[len("--target-directory="):]
+        elif re.fullmatch(r"-[A-Za-z]*t", a) and i + 1 < len(argv):
+            return argv[i + 1]
+    return None
 
 
 def _config_code_paths() -> list[str]:

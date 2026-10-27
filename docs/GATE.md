@@ -2495,7 +2495,14 @@ with no seat file speaks for, #525), any `seat.toml`,
 `exo import-store --root`), for every id, not only the active one. When the environment moves a bus
 file, the gate protects where it points: the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name (with
 the database's sidecars) and the folder `EXO_BUS_KEYS_DIR` names, each also by its legacy `DIVAN_`
-name, and both spellings when both are set. Distinctive names match anywhere, so a relative
+name, and both spellings when both are set. When a line stands in a folder a moved bus file lives in or above
+one (after `cd`, `pushd` or `git -C` there), a relative name is read against every such folder the line
+entered, so the protected names ask and the rest of a shared folder stays writable; the bases only grow
+within the line, since a later cd never clears them, and a relative or glob cd into a bus folder counts.
+Extraction with `tar -C` or `unzip -d` into such a folder asks too, since the archive's member names are
+not read, and a copy or move into a bus folder of a source named like one of its protected names lands on
+that name and asks, including through `cp -t`. A nested local shell (`bash -c`, `eval`) starts in the
+line's bus folders. Distinctive names match anywhere, so a relative
 `policies/gates.yaml`, `state/approval-grants.json`, `bus/registry.json`, `bus/relay.sqlite` or
 `update/allowed_signers` counts too, and `.exo/bus`, `.exo/plugins`, `.exo/venv`, `.exo/src`,
 `.exo/hermes-home/plugins`, `.exo/update` and `.exo/config.json` count whatever `EXO_HOME` is. A project
