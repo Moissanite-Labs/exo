@@ -1893,6 +1893,30 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   into it makes the relative names after it count, a delete or move of it or of a folder above that holds it
   counts, and reads stay reads. The gate differential against main d4cc7ea3 (#423) ran the built-in corpus, then
   the new writes of this change as rows, and lowered nothing.
+  *Amendment 2026-10-27 (issue #203):* a plain write in a folder of the home that is not itself
+  part of the store is ordinary, not a store write. A `cd` into any folder of the home made every
+  writing command on the line a `store_write`, so `cd ~/.exo/handoffs && cp x config.json`
+  asked the principal over the folder's own file. The blanket rule now steps aside for one shape:
+  a program whose writes the gate can see (`cp`, `mv`, `install`, `tee`, `touch`, `mkdir`,
+  `sed -i`, `printf`, `echo`), spelt with nothing before it, with every word and redirection
+  target a plain relative name — no `..` segment, expansion, glob or brace — standing in a folder
+  every spelling of which sits inside the home and outside the store. The folders Exo loads code
+  from are store folders now (#435, #459), so the plugins folder, the venv and the source copy
+  keep asking, and a `.git` folder is never a home folder, since its hooks run code. Only a `cd`
+  the gate can prove moves the shell it stands in moves the folder the line stands in: a bare
+  top-level `cd` with one target and no option. A `cd` in a subshell, a branch, a pipeline, a
+  background job, a `&&`/`||` chain, with a prefix or an extra operand never does, and once the
+  line has stood in a store folder no later home `cd` re-opens the carve-out — a sequential
+  `cd` out of the store into a home folder still asks, a conservative over-block the gate
+  accepts. A word that itself names a store path still asks, and a read of a store file name
+  there still asks as it did (#192). The gate differential against pristine main (corpus 8,618
+  lines: the gate test literals, this change's rows, and their wrapped and joined variants; 10
+  policies) lowered 439 pairs over 98 lines: 52 lines decide lower, every one a plain write in
+  `~/.exo/handoffs`, its subfolder, or a principal's unprotected subfolder, and the other 46
+  lose only a reserved hit at an unchanged ask; unintended lowered lines: 0. Known limit: a `cd`
+  to a folder that does not exist reads the same as one to a folder that does, so a lone `cd`
+  into a nonexistent home folder still clears a plain write there; the gate cannot stat the
+  shell's filesystem.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
