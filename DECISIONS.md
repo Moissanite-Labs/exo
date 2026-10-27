@@ -3148,8 +3148,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   decision: deny}]`, `ssh host 'env -S "'"'"'X=a b'"'"' cat ~/.ssh/id_rsa"'` went deny -> ask (below its plain
   `-S` spelling, which denies), so did the `rm -rf` form and `echo '...' | ssh host`, and `reserved:
   [tool:terminal]` lost `(opaque_exec, me@host)` on `ssh -p 22 me@host 'env -S ...'`. Now the call is read as a
-  call of its own with each text a shell line only, as before #634, and, where #634's reading of the leading words
-  (`_env_split_argv`, unchanged) finds a command, with that reading, as main read it
+  call of its own with each text a shell line only, as before #634, and, whenever any `env -S` text or spelling
+  is read, with #634's reading of the leading words (`_env_split_argv`, unchanged), as main read it
   (`Classification.split_readings`; `_env_split_mode` tells each reading which). `readings` lists them, so
   `decide` keeps the strictest with every reserved hit and violation, and `no_grant`, `call_approvers`,
   `body_unseen`, the hook's body files and `binds_exact` read them too. Chosen over moving the host onto each
@@ -3177,24 +3177,53 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   parts. The exo-gate hook's bypass floor reads the category of the call and of each of these readings, as a
   line main read as credentials first (`env -S "'X=a b' gh auth token \d"`, `env -- -S "'X=a b' muse login"`)
   may lead with `opaque_exec` in the first reading now, and in bypass it went ask -> allow (review of this PR).
-  The split is linear in the text, and a call with an `env -S` text costs up to four readings; nesting stops at
-  `_DEPTH` as before. A spelling main missed is not read with #634's leading words (mode 1 is main's reading
-  exactly), so where env refuses its text (`env --split "'X=a b' gh auth token \d"`) it can ask where the `-S`
-  spelling denies; env runs nothing then, and main asked or allowed it too.
+  Main's reading (mode 1) is taken whenever any `env -S` text or spelling is read, not only where #634's reading
+  of the leading words finds a command in the first reading (verify 2 of this PR): that reading reads a spelling
+  main missed as `-S TEXT`, so it never reached a nested text main read after the option word, and `env -iS'\q'
+  sh -c 'env -S "'"'"'X=a b'"'"' rm -rf /srv/data"'` went deny -> ask under `deny: [delete]` and lost its
+  `reserved: [delete]` hit, its `gh auth token` form went deny -> ask under `deny: [credentials]` and lost
+  `no_grant`, and in bypass the hook allowed it where main asked at the floor (credentials, once); an aimed
+  gate_diff of 156 such lines lowered 19,909 pairs on 2,037 actions at 1ae3b3a9, and lowers none now. classify
+  puts main's reading first in `split_readings`, and in bypass the hook keeps main's order for it: the floor first
+  when main's reading (or the call, with no split readings) is a floor category, then the hold of a post that
+  breaks the posting rules, then the floor of any other reading, then allow. A floor check of every reading before
+  the hold (round 1) turned a post main held into an ask at the floor (credentials, once) wherever a missed
+  spelling's `-S TEXT` reading or mode 3 led with a secret or an environment dump: 65 of 1,694 hook lines (verify
+  3 of this PR), such as `env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"`. They are held
+  again, as on main, and `env -S "gh auth token"; gh pr comment ...` still asks at the floor. A hook probe of
+  3,626 lines through `pre_tool_call` (bypass on, and ask mode) lowers none against main 58503282. The split is
+  linear in the text, and a call with an `env -S` text costs up to four readings, each linear in the text with
+  budgets of its own; nesting stops at `_DEPTH` as before. A spelling main missed that was one opaque word on main
+  is read in full now. Measured in CPU time (best of three) against main 58503282: `env -S "'X=a b' rm -rf
+  /srv/data"` takes 6 ms (main 3 ms), the nested `env -iS'\q' sh -c '...'` row 7 ms (main 4 ms), `env
+  --split="..."` with a 40 KB text of 20,000 words 3.7-4.4 s (main 0.06 s; 1.0 s at 10 KB, so linear) and with one
+  40 KB word 0.5 s (main 0.06 s), and the aimed gate_diff below took 1,910 s on this branch against 544 s on main.
+  No memo is shared across the readings (each keeps its own budgets); a size cap or such a memo is left for a
+  follow-up. A spelling main missed is not read with #634's leading words (mode 1 is main's reading exactly), so
+  where env refuses its text (`env --split "'X=a b' gh auth token \d"`) it can ask where the `-S` spelling denies;
+  env runs nothing then, and main asked or allowed that line too. A text nested behind such a spelling that main
+  read (`env -iS'\q' sh -c 'env -S "..."'`, which main denied under `deny: [delete]`) is read as main read it, in
+  mode 1, and decides as on main.
   Measured on main e0968a2b, under `deny: [delete]` each of `env --split`, `--split-str`, `-iS`, `-vS`, `-i0vS`
   with `"'X=a b' rm -rf /srv/data"`, `env -S'"X=a b" rm -rf /srv/data'`, `env -iS "rm -rf /srv/data"`, the `--`
   row and `env -S "'X=a b';x rm -rf /srv/data"` asked and now denies; under `categories: {opaque_exec: allow}`
   the `--split`, `-iS`, `-vS` and glued `;x` rows were allowed and now ask; under `categories: {opaque_exec:
-  deny}` the `-i0vS"..."`, `--split=` and `--split-s=` rows asked and now deny. Nothing lowers: gate_diff (main's
-  script, `--jobs 2`) against main e0968a2b lowers 0 of 1,064,360 pairs on the built-in corpus without variants
-  (12,095 actions x 88 policies, 345 tightened) and 0 of 3,197,250 on an aimed corpus of 18,270 `env -S` lines
-  (28 spellings, 12 assignment prefixes, 10 payloads among them an unknown escape and an unclosed quote, both
-  quotings, bare and behind sudo, doas, nice and timeout, and 16 spellings behind six ssh, mosh and stdin-fed ssh
-  forms) under 175 policies (the built-in ones and 87 more: deny and allow rules on the host and `me@host`,
-  category lines, deny and reserved entries on ten categories and on the host, `forbid_words`; 61,328 pairs
-  tightened on 11,114 actions). Known limits, as without `-S` (review nits, not touched): a NAME env takes that
-  is not an identifier (`a.b=1`), a lone `-`, and the value of an option word that takes one (`env -iu HOME`)
-  read as the program, an unknown program that `categories: {opaque_exec: allow}` allows. Tests:
+  deny}` the `-i0vS"..."`, `--split=` and `--split-s=` rows asked and now deny (the same on main 58503282).
+  Nothing lowers: gate_diff (main's script, `--jobs 2`) against main 58503282 lowers 0 of 1,066,296 pairs on the
+  built-in corpus without variants (12,117 actions x 88 policies, 381 tightened) and 0 of 3,747,240 on an aimed
+  corpus of 20,818 `env -S` lines without variants (round 1's 18,270: 28 spellings, 12 assignment prefixes, 10
+  payloads among them an unknown escape and an unclosed quote, both quotings, bare and behind sudo, doas, nice
+  and timeout, and 16 spellings behind six ssh, mosh and stdin-fed ssh forms; verify 2's 156 nested
+  missed-spelling lines; and 2,392 more: 20 spellings before `sh -c` and `bash -c` with seven nested `env -S`
+  payloads, bare, behind sudo, doas, nice and timeout and behind four ssh, mosh and stdin-fed ssh forms, and
+  the bypass hold row) under 180 policies (the built-in ones and 92 more: deny and allow rules on the host and
+  `me@host`, category lines, deny and reserved entries on ten categories and on the host, `forbid_words`;
+  98,066 pairs tightened on 12,439 actions). Verify 2's 156 lines with their variants (2,912 actions x 93
+  policies) lower 19,909 pairs on 2,037 actions at 1ae3b3a9 and 0 now, and its 5,000 random `env -S` lines with
+  their variants (49,659 actions x 97 policies) lower 0. Known limits, as without `-S` (review nits, not
+  touched): a NAME env takes that is not an identifier (`a.b=1`), a lone `-`, and the value of an option word
+  that takes one (`env -iu HOME`) read as the program, an unknown program that `categories: {opaque_exec: allow}`
+  allows. Tests:
   `tests/security/test_gate_env_split_string.py`, `tests/security/test_gate_category_deny_parts.py`,
   `plugins/exo-gate/tests/test_bypass.py`.
 - *Amendment 2026-10-26 (issue #585):* the lexer reads the `$` form after a `\<newline>` itself now, as bash reads

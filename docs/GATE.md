@@ -1632,19 +1632,28 @@ gate does not read:
   `opaque_exec` part `-S` carries, in every spelling: a spelling main missed (`--split-s=`,
   `-i0vS"..."`) reads as `-S TEXT` does, and no environment dump is read in its option word. The
   call is read up to three more times as a call of its own: with each text a shell line only, as
-  before #634 (each spelling as main read it), the same with every spelling read as `-S TEXT`, and
-  with #634's reading of its leading words, as main read it. The strictest decision of the
-  readings stands, with every reserved hit and violation of each, so a part keeps the ssh hop's
-  host it had: a rule or reserved entry on the host and `opaque_exec` still reaches `ssh host 'env
-  -S "..."'` and `ssh host 'env -i0vS"..."'`. The exo-gate hook's bypass floor reads the category
-  of each of these readings, so a line one of them reads as credentials or a store write still
-  asks in bypass. A spelling main missed is not read with #634's leading words, so where env
-  refuses its text (`env --split "'X=a b' gh auth token \d"`, an unknown escape) it may ask where
-  the `-S` spelling denies; env runs nothing then. Known limits, as without `-S`: a `NAME` env
-  takes but the gate does not (`a.b=1`), a lone `-` and the value of an option word that takes
-  one (`env -iu HOME`) read as the program, an unknown program (`opaque_exec`) that `categories:
-  {opaque_exec: allow}` allows. `IFS` is left out: it does not change how literal words split, and
-  `while IFS= read -r line` is everyday.
+  before #634 (each spelling as main read it), the same with every spelling read as `-S TEXT`, and,
+  whenever any `env -S` text or spelling is read, with #634's reading of its leading words, as main
+  read it, so a text nested behind a spelling main missed (`env -iS'\q' sh -c 'env -S "..."'`)
+  decides as on main. The strictest decision of the readings stands, with every reserved hit and
+  violation of each, so a part keeps the ssh hop's host it had: a rule or reserved entry on the host
+  and `opaque_exec` still reaches `ssh host 'env -S "..."'` and `ssh host 'env -i0vS"..."'`. The
+  exo-gate hook's bypass floor reads the category of each of these readings, so a line one of them
+  reads as credentials or a store write still asks in bypass. It keeps main's order for main's own
+  reading (classify puts it first): the floor when that reading is a floor category, then the hold
+  of a post that breaks the posting rules, then the floor of any other reading. So with bypass on
+  `env -iS "gh auth token"; gh pr comment 5 --repo octo/demo --body "hello"` is held, as on main,
+  and its `-S` spelling asks at the floor (credentials, once), as on main. A call with an `env -S`
+  text costs up to four readings, each linear in the text, and a spelling main missed is read in
+  full (a 40 KB `env --split="..."` text of 20,000 words takes 3.7-4.4 s of CPU here, 0.06 s on main
+  58503282). A spelling main missed is not read with #634's leading words, so where env refuses its
+  own text (`env --split "'X=a b' gh auth token \d"`, an unknown escape) it may ask where the `-S`
+  spelling denies, as on main; env runs nothing then. A text nested behind it that main read is read
+  as main read it and decides as on main. Known limits, as without `-S`: a `NAME` env takes but the
+  gate does not (`a.b=1`), a lone `-` and the value of an option word that takes one (`env -iu
+  HOME`) read as the program, an unknown program (`opaque_exec`) that `categories: {opaque_exec:
+  allow}` allows. `IFS` is left out: it does not change how literal words split, and `while IFS=
+  read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`

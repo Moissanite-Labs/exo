@@ -83,10 +83,12 @@ def _every_part(c: gate.Classification) -> list:
     return out
 
 
-def _floor(c: gate.Classification) -> str:
+def _floor(c: gate.Classification, main: bool = False) -> str:
     """The floor category (store write, secret) that keeps an ask in bypass, or ''. The call's category, or that of
-    a reading of its `env -S` texts as before (``split_readings``, #591): main read some lines that way first."""
-    return next((r.category for r in (c, *c.split_readings) if r.category in perm.FLOOR), "")
+    a reading of its `env -S` texts as before (``split_readings``, #591): main read some lines that way first. With
+    ``main``, only main's own reading's: ``split_readings[0]`` (classify puts it first), or the call without any."""
+    rs = (c.split_readings[:1] or [c]) if main else [c, *c.split_readings]
+    return next((r.category for r in rs if r.category in perm.FLOOR), "")
 
 
 def _body_path(f: str) -> Optional[Path]:
@@ -385,9 +387,11 @@ class Gate:
         local caller keeps its card, as when bypass was off."""
         if d.outcome != "ask" or not self.bypass_on or not is_principal(author):
             return None
-        if _floor(c):
+        if _floor(c, main=True):                 # #591: main's order for main's reading, so main's holds stay
             return "floor"
-        return "hold" if d.violations else "allow"
+        if d.violations:
+            return "hold"
+        return "floor" if _floor(c) else "allow"
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -749,7 +753,7 @@ class Gate:
             if bypass == "allow":
                 body["bypass"] = asked
         elif bypass == "floor":
-            body["bypass"] = {"floor": _floor(c)}
+            body["bypass"] = {"floor": _floor(c, main=True) or _floor(c)}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}

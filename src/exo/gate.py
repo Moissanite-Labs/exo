@@ -165,7 +165,7 @@ class Classification:
     ordinary: "Classification | None" = field(default=None, repr=False, compare=False)
     # The same call with each `env -S` text read as before (#591 follow-up to #634): a shell line only, as before #634,
     # where the call's first reading also read the line env runs (_env_split_lines); and with #634's reading of its
-    # leading words (_env_split_argv), where that found a command. decide takes every reading and the strictest stands.
+    # leading words (_env_split_argv), as main read it, first. decide takes every reading and the strictest stands.
     split_readings: list["Classification"] = field(default_factory=list, repr=False, compare=False)
 
     def as_dict(self) -> dict:
@@ -7762,10 +7762,11 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments (_classify_reading). Pure; never raises on odd args. Its
     first reading reads each `env -S` text, beside the text as a shell line, as the line env runs (#591 follow-up to
     #634, _env_split_lines), and a spelling main missed (`--split`, `-i0vS`) as `-S TEXT` (_env_s_text). Where it
-    read a line or such a spelling, the call is read again with each text a shell line only: as before #634 (mode
-    0), and with every spelling read as `-S TEXT` (mode 3); and once more as main reads it (mode 1), with #634's
-    reading of the text's leading words (_env_split_argv). Each is a call of its
-    own, in ``split_readings``, so a part that leads one reading or takes an ssh hop's host there keeps it (review
+    read a line or such a spelling, the call is read again with each text a shell line only: with #634's reading of
+    the text's leading words (_env_split_argv), as main read it (mode 1), also where only a reading as main's found
+    one (a nested text a missed spelling hid, verify 2 of #707); as before #634 (mode 0); and with every spelling
+    read as `-S TEXT` (mode 3). Each is a call of its own, in ``split_readings`` with main's first (the hook's bypass
+    keeps main's order with it), so a part that leads one reading or takes an ssh hop's host there keeps it (review
     of #634), and decide keeps the strictest."""
     if _env_split_mode.get() is not None:      # a reading inside a reading (D-074's ordinary): the same mode
         return _classify_reading(action, cwd)
@@ -7775,9 +7776,9 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
         c = _classify_reading(action, cwd)
     finally:
         _env_split_mode.reset(token)
-    if mark[0] & 1:                            # main's own reading too, whenever any split reading is taken
+    if mark[0] & 1:     # main's reading whenever any is taken: a text read here can hide a nested one main read
         mark[0] |= 2
-    for mode in (0, 1, 3):
+    for mode in (1, 0, 3):                      # main's reading first: split_readings[0] when any is taken
         if mark[0] & (1 << mode):
             token = _env_split_mode.set((mode, [0]))
             try:

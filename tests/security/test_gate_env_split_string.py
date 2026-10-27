@@ -141,6 +141,43 @@ def test_the_readings_as_before_are_kept_and_bind(line):
         assert all(rank(decide(c, norm(pol))) >= rank(decide(r, norm(pol))) for r in c.split_readings), (line, pol)
 
 
+# Verify 2 of this PR: a spelling main missed, read as `-S TEXT` in the first reading, hid a nested `env -S` text that
+# main read after the option word, and main's own reading (mode 1) was taken only when #634's leading words found a
+# command. `env -iS'\q' sh -c 'env -S "..."'` went deny -> ask under deny: [delete], lost its reserved hit and its
+# NO_GRANT. Main's reading is now taken whenever any env -S text or spelling is read. Main 58503282 decides each row
+# as asserted here.
+NESTED_SPELLINGS = ["-iS'\\q'", "-iStrue", "--split-s=true", "--split=", "-vS'\"'", "-i0vStrue", "--split-str=true"]
+NESTED_POLICIES = {
+    "deny_delete": {"gates": {"deny": ["delete"]}},
+    "deny_credentials": {"gates": {"deny": ["credentials"]}},
+    "reserved_delete": {"gates": {"reserved": ["delete"]}},
+    "opaque_allow": {"gates": {"categories": {"opaque_exec": "allow"}}},
+}
+
+
+def _nested_line(spelling, payload, outer="sh"):
+    return f"env {spelling} {outer} -c 'env -S \"{Q}X=a b{Q} {payload}\"'"
+
+
+NESTED_ROWS = [(s, w, outer) for s in NESTED_SPELLINGS for w in ("", "sudo ") for outer in ("sh", "bash")]
+
+
+@pytest.mark.parametrize("spelling,wrap,outer", NESTED_ROWS)
+def test_a_missed_spelling_keeps_the_nested_text_main_read(spelling, wrap, outer):
+    def nd(payload, pol):
+        return decide(term(wrap + _nested_line(spelling, payload, outer)), norm(NESTED_POLICIES[pol]))
+    assert nd("rm -rf /srv/data", "deny_delete").outcome == "deny", spelling
+    assert nd("gh auth token", "deny_credentials").outcome == "deny", spelling
+    assert ("delete", "/srv/data") in [tuple(r) for r in nd("rm -rf /srv/data", "reserved_delete").reserved]
+    assert nd("rm -rf /srv/data", "opaque_allow").outcome == "ask", spelling
+    assert nd("git push --force origin main", "opaque_allow").outcome == "ask", spelling
+
+
+@pytest.mark.parametrize("spelling", NESTED_SPELLINGS)
+def test_a_missed_spelling_keeps_the_nested_secret_out_of_a_grant(spelling):
+    assert gate.no_grant(term(_nested_line(spelling, "gh auth token"))), spelling
+
+
 # The spellings main e0968a2b still read as a shell line only (review 5665626829): each asked under deny: [delete]
 # and was allowed under opaque_exec: allow, but for `-i0vS"..."`, `-S'..'` and `--split=..`, which it asked about.
 SPELLING_ROWS = [
