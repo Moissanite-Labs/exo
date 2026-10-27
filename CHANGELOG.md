@@ -15,6 +15,47 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   across module boundaries, so the coupling is now counted where the split is going.
 
 ### Fixed
+
+- Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
+  tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
+  `f` prefix preserves the test cases and removes the two findings.
+- The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
+  but never entered the completion table the web route reads its client commands from.
+- Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
+- A `$((` bash reads as a command substitution is read as one now (#553). bash closes the `$( ` at the first `)`
+  outside quotes, backquotes, `$( )` bodies and comments, and reads the span as arithmetic only when the text
+  between the parens, quoted spans skipped, holds balanced parens (chk_arithsub); else it re-reads the span as
+  `$( ( )`, a subshell, and the commands in it run. The gate matched `$((` against `))` without counting quotes,
+  so a `((` in a quoted word made it read the whole span as arithmetic and it never read the commands:
+  `echo $((echo '((' ; git push --force origin main) )` was an allowed `read` under `deny: [force_push]`, where
+  the same line written `echo $( (echo '((' ; git push --force origin main) )` denied, and so were
+  `echo $((echo "(( " ; ... ) )` and the `$'..'` form, a hidden `git push origin :main` or `rm -rf x` in the same
+  shape, and `echo $(( 1 + '(' )); git push --force origin main`, where a quoted paren made the span run to the
+  end of the line. The span is found with quotes and nesting counted and bash's paren balance applied, and a
+  span that fails it is read as the `$( ( )` it runs as, so the commands in it classify; the arithmetic span is
+  the one bash extracts, so what follows is read where bash discards its line only after the error. An unclosed
+  `$((` bash cannot parse and runs nothing, and the span stays arithmetic text to the end of the line, as
+  before, so the deep-nest readings stay linear. Plain arithmetic decides as it did
+  (`$((1+2))`, `$((PATH=5))`, `$[PATH=5]`, a ternary, a `$( )` or a backquote inside the body), and `_nest_end`
+  ends a cut at the same span. Tests: `tests/security/test_gate_dollar_paren_cmdsub.py`. **Docs:** `docs/GATE.md`,
+- A read-named tool that replaces text writes the store file it names (#651). `search_replace` and
+  `find_and_replace` read as reads, so the store scan skipped them (#494) and
+  `mcp__fs__search_replace {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}` ran
+  with no ask in every permission mode -- the seat file's default could be made bypass, and the policy files and
+  config.json were as bare. The name's replace, substitute, patch, edit, update and sed words count as
+  fetch-write words now, and so do arguments that carry the old text and the new beside the path they name, so
+  the replace of a store file is a `store_write` the principal alone answers, as `write_file` is (the store
+  floor, observe's `no_grant` and bypass's floor all hold); a plain read of the store stays a read.
+  Differential against main fa5dfcd8: 0 lowered. Tests: `tests/security/test_gate_file_tool_replace_writes.py`,
+  `plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_bypass.py`. **Docs:** `docs/GATE.md`,
+  `DECISIONS.md` (D-038).
+- Command web tests now include the `permissions` module fixture in their offline Node module sets, so the `chat.js` and `app.js` imports resolve (#617).
+- Shared agent-log search and recall left out only a private thread's own rows, so an ordinary thread under one
+  still matched (#632). The agent branch of `SessionStore.search` now excludes a private thread and its
+  descendants at any depth inside the one query (a recursive `hid` set, as `store.private` and
+  `memory_zoom(subagent=)` already walked), so a private hit cannot eat the result limit, a parent loop ends,
+  and public threads, hidden-row filtering and the thread's own local search are unchanged.
+  Tests: `tests/core/test_agent_log.py::test_shared_search_leaves_out_a_private_threads_descendants`.
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
@@ -154,6 +195,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   written `--\>`, so a markdown viewer's comment keeps the header whole, and the reader undoes the escape, where an
   older file's raw `-->` in a value reads as itself. Not covered: a forged `## Open decisions` first through an older
   file's path or launch line still reads as on main, for the reader has no value to check a path line against.
+- A store or secret name matches in any case (#601, D-082). On a case-insensitive file system (default APFS)
+  `.exO/config.json` IS `.exo/config.json`, but every store and secret name check read the spelling as written, so
+  a case variant walked past: `cp /tmp/x ~/.exO/config.json` and `cp /tmp/x $HOME/.EXO/config.json` were
+  `shell`/allow where the plain spelling is a `store_write` ask, `echo x > ~/.KUBE/config` a `local_write`/allow
+  where `~/.kube/config` is `credentials`, and `cat ~/.SSH/config` a read where `~/.ssh/config` asks
+  (`cat ~/.SSH/id_rsa` asked already, by the `id_rsa` name). The name checks now fold case: `~/.EXO/keys/seat`,
+  `~/.exo/POLICIES/gates.yaml`, `tar -C ~/.EXO keys`, `cd ~/.EXO && ls principals` and `ls ~/.EXO/*` ask wherever
+  the file system would land them on the store file. On a case-sensitive file system that also asks for a
+  distinct `.exO` folder, the fail-closed side as for a glob that could name one. In a glob a part with no
+  wildcard folds (a folder the file system opens: `~/.EXO/*`, `~/*/RUN/x`), and a part that holds a wildcard
+  stays as written, as bash matches it against the entries (`[HOME=x]*`, `~/.e*O/*` stay ordinary).
+  `EXO_GATE_CASE_SENSITIVE=1` reads main d800f33c's case-sensitive names. An ssh hop whose remote command names a
+  case-variant store path keeps the host beside the line's own action in its reserved parts (`ssh host
+  'rm -rf ~/.EXO/policies'` lists `(delete, host)` beside `(delete, ~/.EXO/policies)`, as main did), and the
+  plain-spelling rows keep every part they had.
 - Every store path a write names is a target, not only the first (#514). A store write with no secret on the call
   took its target from the first store path the scan met and made no part of the others, so a `target:` deny or
   `reserved:` entry on a later path missed and an approver could have waved the write through:

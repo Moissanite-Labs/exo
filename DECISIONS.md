@@ -1430,6 +1430,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `store_write` ask, and to `credentials` ask where the new keys name a secret), 409 pairs reworded in detail.
   Tests beside the #489 rows (`plugins/exo-gate/tests/test_store_floor_any_part.py`) and in the D-074 file
   (`tests/security/test_gate_config_store.py`).
+- *Amendment 2026-10-26 (issue #651):* a read-verb name that says it replaces the file its path names runs the
+  store scan as a write's, as the #494 fetch words do: the name's replace, substitute, patch, edit, update and
+  sed words join `_FETCH_WRITE_WORDS`, and arguments that carry the old text and the new beside the path they
+  name are the replace signal of a name that does not say so. `mcp__fs__search_replace
+  {"path": "~/.exo/seats/principal.toml", "search": "ask", "replace": "bypass"}` was a `read` in every
+  permission mode, so the seat file's default could be made bypass with no ask, which the seat's bypass reading
+  (D-065) does not allow a non-principal hand to reach; the policy files and config.json were as bare. The
+  replace is a `store_write` now, the principal alone answers it as `write_file`'s, and a plain read of the
+  store stays a read. The differential against main fa5dfcd8 (`scripts/gate_diff.py --no-variants --jobs 4`,
+  base main, head this branch) finds 0 lowered pairs: 11,868 actions, 2,040 pairs tightened on 24 actions (read
+  allow to `store_write` ask, 72 of them to deny under a store_write deny policy), 1,616 pairs reworded in
+  detail. Tests: `tests/security/test_gate_file_tool_replace_writes.py` (6 rows fail on main fa5dfcd8), the
+  #651 rows in `plugins/exo-gate/tests/test_hook.py` (7 of 8 fail on main) and `test_bypass.py` (5 of 9 fail on
+  main).
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
   `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
   grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on
@@ -3165,6 +3179,32 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `--no-variants`, 11,470 actions under the 88 policies, lowers 0 pairs and tightens 2,016 pairs on 28 actions,
   mostly `read allow` to the arithmetic's `opaque_exec ask`. No classify or decide errors.
   *Revisit if:* the card for an element set in arithmetic names the array (`BASH_CMDS`), not the element's key.
+  *Amendment 2026-10-26 (issue #553):* a `$((` bash reads as a command substitution is read as one. bash closes the
+  `$( ` at the first `)` outside quotes, backquotes, `$( )` bodies and comments, and reads the span as arithmetic
+  only when the text between the parens, quoted spans skipped, holds balanced parens (its chk_arithsub); else it
+  re-reads the span as `$( ( )`, a subshell, and the commands in it run. The gate matched `$((` against `))` without
+  counting quotes, so a `((` in a quoted word made it read the whole span as arithmetic text and it never read the
+  commands: `echo $((echo '((' ; git push --force origin main) )` was an allowed `read` under `deny: [force_push]`,
+  where the same line written `echo $( (echo '((' ; git push --force origin main) )` denied, and so were the
+  double-quoted and `$'..'` forms, a hidden `git push origin :main` or `rm -rf x` in the same shape (both deny under
+  `deny: [delete]`), and `echo $(( 1 + '(' )); git push --force origin main`, where a quoted paren made the span run
+  to the end of the line, so the push after `;` was never read — bash discards the rest of its line after that
+  arithmetic error, but runs it on the next line, in a script, and other shells may run it on the same line. The
+  gate now finds the `))` with quotes and nesting counted, applies the paren balance to what is between the parens,
+  reads a span that fails either as the `$( ( )` it runs as, and reads the arithmetic span only as far as bash
+  extracts it, so what follows is read when bash's line would end. An unclosed `$((` bash cannot parse and runs
+  nothing, and the span stays arithmetic text to the end of the line, as before, so the deep-nest readings stay
+  linear. Plain arithmetic decides as it did (`$((1+2))`, `$((PATH=5))`, `$[PATH=5]`, a ternary, a `$( )` or a
+  backquote inside the body, a `$((echo hi) )` subshell), and `_nest_end` ends a cut at the same span.
+  The #553 differential against main fa5dfcd8, each tree in its own process, `--jobs 4`: the built-in corpus with
+  `--no-variants`, 11,855 actions under the 88 policies, lowers 0 pairs and tightens 1,290 pairs on 18 actions,
+  mostly `read allow` to the hidden commands' asks and denies (932 to `force_push ask`, 258 to `delete ask`, 42 to
+  `force_push deny`, 18 to `delete deny`). Of the corpus's 69 `$((` rows, 3 decide differently: the issue's own two
+  shapes and `echo $((echo hi) ; git push --force origin main )`. No classify or decide errors.
+  Tests: `tests/security/test_gate_dollar_paren_cmdsub.py`.
+  *Revisit if:* a `${x:-$((cmd))}` should read the commands in its default word — a `$((` inside a `${..}` body is
+  still read as the brace's visible text, as the same line with a plain `$( )` there is (both were `allow` on main
+  and stay so), which is the `${..}` default word's own gap, not this one.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -4482,8 +4522,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Limits:** as for the other store files: a glob in the file's own name (`~/.exo/config.js?`), a path in a variable
   or one a command builds from pieces (`F=~/.exo/config.json; cp x "$F"`), a write through a hard link made earlier,
   the bash tool's `cwd` argument and `python -mexo.config` written as one word, which keep main's `opaque_exec`
-  ask. Names are matched case-sensitively, so on a case-insensitive filesystem `~/.exo/CONFIG.JSON` keeps its class,
-  as `~/.exo/POLICIES/gates.yaml` does. A symlink is not a limit: one made earlier is resolved (`_path_forms`), and
+  ask. Names matched case-sensitively here — on a case-insensitive filesystem `~/.exo/CONFIG.JSON` kept its
+  class, as `~/.exo/POLICIES/gates.yaml` did — until #601 (D-082) made the names match in any case, so these
+  ask now. A symlink is not a limit: one made earlier is resolved (`_path_forms`), and
   one made on the same line (`ln -s ~/.exo/config.json /tmp/l && cp x /tmp/l`) names the file in its `ln`, which is
   the store write, as for `policies/gates.yaml` on main. A copy or extraction whose destination is a folder that
   holds the file (`cp -t ~/.exo`, `cp /tmp/x/config.json ~/.exo/`, `tar -C ~/.exo -xf`, `unzip -d ~/.exo`) is #483.
@@ -4892,6 +4933,40 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   here under a new number, recovered during the
   2026-10-18 exo-live update. Team operating record, not product behaviour.
 - **Docs:** this entry.
+
+## D-082 (2026-10-26) A store or secret name matches in any case (issue #601)
+- **Status:** Accepted 2026-10-26 (gate security; strictness only grows). It amends the case-sensitive note in
+  D-074's limits and the same limits in `docs/GATE.md`.
+- **Why:** on a case-insensitive file system (default APFS) `.exO/config.json` IS `.exo/config.json`, but every
+  store and secret name check read the spelling as written, so a case variant walked past: on main a8a4ffbd,
+  `cp /tmp/x ~/.exO/config.json` and `cp /tmp/x $HOME/.EXO/config.json` were `shell`/allow where the plain
+  spelling is a `store_write` ask, `echo x > ~/.KUBE/config` a `local_write`/allow where `~/.kube/config` is
+  `credentials`, and `cat ~/.SSH/config` a read where `~/.ssh/config` asks. `realpath` does not canonicalise
+  case, so the resolved spelling kept the variant (`_path_forms`). The `id_rsa` name in `cat ~/.SSH/id_rsa`
+  asked already, matched anywhere.
+- **Decision:** every store and secret name matches in any case. The name regexes (`_STORE_NAMES`,
+  `_CONFIG_NAME`, `_RUN_DIR`, `_SENSITIVE_PATH`) are searched on the folded text (`_fold`), the list itself
+  compiled twice (`_SENSITIVE_PATH_F`) because `Netlify` in it is mixed-case, which a lowered text would not
+  meet; the plain compares (store roots and code folders, protected parts, the `cd`-store hints, `_could_be`,
+  the glob samplings) fold through `_fold`. A glob part folds when it holds no wildcard — a folder the file
+  system opens (`~/.EXO/*`, `~/*/RUN/x`) — and stays as written when it holds one, as bash matches it against
+  the entries case-sensitively (`[HOME=x]*`, `~/.e*O/*`; `_fold_glob`). `EXO_GATE_CASE_SENSITIVE=1` reads main
+  d800f33c's case-sensitive names instead, for a file system whose `.exO` is a different folder; the tests pin
+  both readings. An ssh hop whose remote command names a case-variant store path keeps the host beside the
+  line's own action in the reserved parts (`_fold_made`), as main listed it while the path read as an ordinary
+  one.
+- **Cost:** on a case-sensitive file system a distinct `.exO` folder asks, and `cert.PEM` or `NOTES.ENV` count
+  as keys and env files — the fail-closed side, as for a glob that could name one. A case variant of a store
+  folder before a wildcard asks as a `cd` into it does (`ls ~/.EXO/*`).
+- **Limits:** descriptor and process folders (`/dev/fd/3`, `/proc/self/environ`) still match as written, as do
+  every env-spelled path beside its own spelling (`EXO_HOME`'s own case); a glob part that holds a wildcard is
+  bash's matching, not the file system's (`~/.e*O`, `[HOME=x]*`).
+- **Validation:** `tests/security/test_gate_store_name_forms.py` ("a case variant of a store or secret name
+  asks", both readings), `tests/security/test_gate_config_store.py`, `tests/test_gate_diff.py` (the loosening
+  patches re-anchored), and `scripts/gate_diff.py --base main --head .` printing `nothing lowered` with the
+  issue's five rows added to the corpus as tightened pairs.
+- **Docs:** `docs/GATE.md` "Store-path checks", "Secret-store paths", "Search tools", "Change limits",
+  `CHANGELOG.md`.
 
 ## D-083 (2026-10-26) The core budget prices coupling, not only lines
 - **Status:** Accepted 2026-10-26 by the lead (reversible). It amends D-077: it raises `CORE_HEADROOM` from 1,000 to
