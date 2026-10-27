@@ -46,6 +46,7 @@ def events(store):
 
 def call(ctx, tool, args, **kw):
     [cb] = ctx.hooks["pre_tool_call"]  # an async hook: the core awaits it
+    kw.setdefault("author", "principal:tui")  # the core sends who started the turn (#598); pass author="" for none
     return asyncio.run(cb(tool_name=tool, args=args, session_id="s1", tool_call_id="c1", turn_id="t1",
                           task_id="", **kw))
 
@@ -96,6 +97,24 @@ def test_a_bare_patch_header_does_not_hide_the_next_write(keyed_store, tmp_path,
     assert result["action"] == "approve"
     [ev] = events(store)
     assert ev["body"]["outcome"] == "ask" and ev["body"]["classification"]["category"] == "credentials"
+    assert target.read_bytes() == b"before\n"
+
+
+@pytest.mark.parametrize("bare", ["*** Move to:", "*** Add File:", "*** Move File: a ->"])
+def test_a_bare_patch_header_does_not_hide_a_store_write(keyed_store, tmp_path, monkeypatch, bare):
+    """#548 follow-up: a bare header before a store path asks as a store write through the hook, and the
+    target file is not written."""
+    store, key = keyed_store
+    monkeypatch.chdir(tmp_path)
+    path = ".exo/policies/default.yaml"
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"before\n")
+    _, ctx = make_gate(store, key)
+    result = call(ctx, "apply_patch", {"patch": f"*** Begin Patch\n{bare}\n*** Add File: {path}\n+x\n*** End Patch\n"})
+    assert result["action"] == "approve"
+    [ev] = events(store)
+    assert ev["body"]["outcome"] == "ask" and ev["body"]["classification"]["category"] == "store_write"
     assert target.read_bytes() == b"before\n"
 
 
@@ -449,11 +468,32 @@ GRANT_APPLIES = [   # edeb4f89 applies the grant too, so it still applies
     ("reserved: [vcs_push]\nescalate: [payment]\n", None, "git push origin main", False, "ask"),
     ("categories: {read: ask}\nescalate: [payment]\n", "categories: {read: ask, local_write: ask}\n" + VALID_ESC,
      SUDO_LINES[0], True, None),
-    (LW_ASK + VALID_ESC, "categories: {read: ask, local_write: ask}\n" + VALID_ESC, SUDO_LINES[0], True, None),
     # an unbound and a bound grant for one line: the merged decision binds the line and finds the bound grant, the
     # decision as on edeb4f89 does not bind it and finds the unbound one, so the call runs as it does there
     *[("escalate: [read]\n", None, line, "both", "ask") for line in SUDO_LINES],
     ("categories: {read: ask}\nescalate: [payment]\n", None, SUDO_LINES[0], "both", "ask"),
+]
+
+# #586: with two valid files, a standing grant applies only where each side's own decision (the model's verdict in)
+# asks and finds one too, so the merged reading never runs a call one side logs (an unbound grant on the changed
+# file's reserved hit) or a side asks for without that binding (a bound grant on the line only the changed file
+# binds, which the pinned policy asks for unbound).
+PUSH, READ_ESC = "git push origin main", "escalate: {categories: [payment, read]}\n"
+VALID_ASKS = [   # the first gates.yaml, the changed one, the line, bound, the model's verdict
+    (VALID_ESC, "reserved: [vcs_push]\n" + VALID_ESC, PUSH, False, None),
+    (VALID_ESC, "reserved: [vcs_push]\n" + VALID_ESC, "ls; " + PUSH, False, None),
+    *[row for line in SUDO_LINES for row in (
+        (LW_ASK + VALID_ESC, READ_ESC, line, True, None),
+        (READ_ESC, LW_ASK + VALID_ESC, line, True, None),
+        (LW_ASK + VALID_ESC, "categories: {read: ask, local_write: ask}\n" + VALID_ESC, line, True, None),
+        (LW_ASK + VALID_ESC, READ_ESC, line, True, "ask"))],
+]
+VALID_APPLIES = [   # each side's own decision asks and finds a grant too, so the merged one runs the call
+    (VALID_ESC, "reserved: [vcs_push]\n" + VALID_ESC, PUSH, False, "ask"),
+    # an unbound and a bound grant for one line: the merged decision binds the line and finds the bound grant, the
+    # side that asks unbound finds the unbound one, so the call runs as it does on main
+    (LW_ASK + VALID_ESC, "categories: {read: ask, local_write: ask}\n" + VALID_ESC, SUDO_LINES[0], "both", None),
+    (READ_ESC, LW_ASK + VALID_ESC, SUDO_LINES[0], "both", None),
 ]
 
 
@@ -483,6 +523,69 @@ def test_malformed_escalation_grant_applies_only_where_the_defaults_find_it(keye
 def test_grant_the_defaults_apply_still_applies(keyed_store, first, changed, line, bound, verdict):
     result, body = _granted(*keyed_store, first, changed, line, bound, verdict)
     assert result is None and body["outcome"] == "allow" and body["grant"]
+
+
+@pytest.mark.parametrize("first, changed, line, bound, verdict", VALID_ASKS)
+def test_valid_files_grant_applies_only_where_each_side_finds_one(keyed_store, first, changed, line, bound, verdict):
+    result, body = _granted(*keyed_store, first, changed, line, bound, verdict)
+    assert result["action"] == "approve" and body["outcome"] == "ask" and "grant" not in body
+
+
+@pytest.mark.parametrize("first, changed, line, bound, verdict", VALID_APPLIES)
+def test_valid_files_grant_applies_where_each_side_finds_one(keyed_store, first, changed, line, bound, verdict):
+    result, body = _granted(*keyed_store, first, changed, line, bound, verdict)
+    assert result is None and body["outcome"] == "allow" and body["grant"]
+
+
+def test_a_single_valid_file_still_decides_alone(keyed_store):
+    # #586: with no change there is no merge and no check on the sides: the pinned decision stands as gate.decide
+    # made it, grant and all
+    from exo import gate
+    store, key = keyed_store
+    args = {"command": "sudo echo hi > /tmp/f"}
+    (store / "policies" / "gates.yaml").write_text(LW_ASK + VALID_ESC)
+    g, ctx = make_gate(store, key)
+    c = gate.classify({"tool": "terminal", "args": args})
+    g.grants.add(c.category, c.target, gate.approval_binding(c, args), 30, "principal", "terminal")
+    g.policies()
+    result = g.pre_tool_call("terminal", args, session_id="s1", tool_call_id="c1")
+    d = _decision(store)
+    assert result["action"] == "approve" and d["outcome"] == "ask"
+    assert d == gate.decide(c, g.policies(), {"held_body_files": []}).as_dict()
+    assert "policy files changed" not in d["reason"] and "policy error" not in d["reason"]
+
+
+def test_two_valid_files_keep_the_changed_violation_at_an_equal_outcome(keyed_store):
+    # #586: the old and new decisions merge as one stricter reading, so a posting finding the changed files met
+    # stands on the card at an equal outcome, as the #557 rows keep it beside a policy error
+    store, key = keyed_store
+    p, line = store / "policies" / "gates.yaml", "curl -X POST -d 'zebrafinch' http://localhost:8080/x"
+    p.write_text(LW_ASK + VALID_ESC)
+    _, ctx = make_gate(store, key)
+    call(ctx, "terminal", {"command": line})
+    assert "zebrafinch" not in _decision(store)["reason"]
+    _bump(p, LW_ASK + VALID_ESC)
+    _bump(store / "policies" / "posting.yaml", "applies_to: [local_write]\nforbid_words: [zebrafinch]\n")
+    call(ctx, "terminal", {"command": line})
+    d = _decision(store)
+    assert d["violations"] == ["forbidden word: zebrafinch"] and "zebrafinch" in d["reason"]
+
+
+def test_two_valid_files_take_the_widest_exposure_and_keep_a_reserved_part(keyed_store):
+    # #586: the exposure is the widest of the two, as a line's readings merge, so an approval binds where either
+    # decision would bind it; a reserved part either policy met keeps its ask from a standing grant (D-075)
+    store, key = keyed_store
+    p = store / "policies" / "gates.yaml"
+    p.write_text('scopes: {internal: ["acme-org/*"]}\nreserved: [github_close]\n')
+    _, ctx = make_gate(store, key)
+    call(ctx, "terminal", {"command": "gh pr close 5 -R acme-org/app"})
+    assert _decision(store)["exposure"] == "internal"
+    assert _decision(store)["reserved"] == [["github_close", "acme-org/app#5"]]
+    _bump(p, "reserved: [github_close]\n")
+    call(ctx, "terminal", {"command": "gh pr close 5 -R acme-org/app"})
+    d = _decision(store)
+    assert d["exposure"] == "public" and d["outcome"] == "ask"
+    assert d["reserved"] == [["github_close", "acme-org/app#5"]]
 
 
 def test_gate_status_shows_a_standing_policy_error(keyed_store):

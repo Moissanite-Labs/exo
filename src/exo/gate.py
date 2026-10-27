@@ -437,7 +437,9 @@ class _Word:
     redir_after: bool = False  # a redirection, heredoc or here-string follows it before the next word (#207)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
     split: bool = False        # bash may make several words of it, or none: an expansion outside "..", or "$@" (#399)
+    legacy: bool = False       # holds bash's legacy arithmetic `$[ ]`, which main read as plain text (#588)
     exps: list = field(default_factory=list)  # (scan text, source, ${ frames) per ${..} and $((..)) bash expands
+    prompt: list = field(default_factory=list)  # the parameter of each `${..@P}` in it, whose value bash runs (#579)
     fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
 
 
@@ -448,6 +450,7 @@ class _Heredoc:
     quoted: bool
     ambiguous: bool = False    # delimiter spelled with $'..' or $"..": bash and dash end the body on different lines
     body: str = ""
+    prompt: list = field(default_factory=list)  # the `${..@P}` of the body, which expand as the body is made (#579)
     fd: str = ""               # the descriptor number before `<<` (`3<<EOF`); "" or 0 is stdin (#208)
     cut: str = ""              # the delimiter as the levels around read it, when it holds a part not read (#334)
 
@@ -658,8 +661,10 @@ class _Lexer:
             first = self.i
             self.i, last = _heredoc_body(self.s, self.i, hd, closer)
             if not hd.quoted:
+                w = _Word()
                 sub = _Lexer(hd.body, scan=False, nest=self.nest)
-                sub._dquote(_Word(), until_end=True)
+                sub._dquote(w, until_end=True)
+                hd.prompt = w.prompt              # a ${..@P} in the body expands as the body is made (#579)
                 self.subs += sub.subs
                 if sub.cuts:                   # the levels around hold a stand-in for the body, as for a cut
                     self.cuts.append((first, last, "$(" + _TOO_DEEP + ")\n"))
@@ -721,27 +726,33 @@ class _Lexer:
 
     def _dollar(self, w: _Word, double: bool = False) -> None:
         s, i = self.s, self.i
-        nxt = s[i + 1:i + 2]
+        k = _joins_past(s, i + 1)   # bash drops a \<newline> before it reads what follows the $ (#585)
+        nxt = s[k:k + 1]
         w.started = True
-        if s.startswith("$((", i):
+        legacy = s.startswith("$[", i)     # bash's legacy arithmetic (#588): read it as the $((..)) it stands for
+        if s.startswith("$((", i) or legacy:
             depth, j = 0, i + 1
+            pair = ({"[": 1, "]": -1} if legacy else {"(": 1, ")": -1}).get
             while j < len(s):
-                depth += {"(": 1, ")": -1}.get(s[j], 0)
+                depth += pair(s[j], 0)
                 j += 1
                 if depth == 0:
                     break
-            body = s[i:j]
+            body = "$((" + s[i + 2:j] + "))" if legacy else s[i:j]
+            at, end = (i + 2, j - 1) if legacy else (i + 3, j - 2)   # where the body bash reads starts and ends
+            if legacy:
+                w.legacy = True
             if self.nest >= _NEST and (_SUBST.search(body, 3) or "`" in body):
-                self.cuts.append((i + 3, max(i + 3, j - 2), "$(" + _TOO_DEEP + ")"))
+                self.cuts.append((at, max(at, end), "$(" + _TOO_DEEP + ")"))
                 self.subs.append(_TOO_DEEP)
             elif self.nest < _NEST and ("$(" in body[3:] or "`" in body):
                 sub = _Lexer(body[3:-2], scan=False, nest=self.nest + 1)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
-                self.cuts += [(x + i + 3, y + i + 3, stand_in) for x, y, stand_in in sub.cuts]
+                self.cuts += [(x + at, y + at, stand_in) for x, y, stand_in in sub.cuts]
             if self.scan and i >= self.covered:
                 w.exps.append((body, body, None))
-            w.text += body
+            w.text += s[i:j]               # as written, `$[..]`, so the word keeps its own spelling
             w.dynamic = True
             w.split = w.split or not double
             self.i = j
@@ -749,7 +760,7 @@ class _Lexer:
             if self.nest >= _NEST:
                 self._cut(w, i)
                 return
-            self.i = i + 2
+            self.i = k + 1
             start = self.i
             self.nest += 1
             toks = self.run(closer=True)
@@ -766,11 +777,20 @@ class _Lexer:
         elif nxt == "{":
             j = s.find("}", i)
             j = len(s) - 1 if j < 0 else j
+            if k > i + 1:                  # a ${ the \<newline> splits: bash still runs the $( ) and ` ` in it (#585)
+                sub = _Lexer(s[k:j + 1], scan=False, nest=self.nest)
+                sub._dquote(_Word(), until_end=True)
+                self.subs += sub.subs
             if self.scan and i >= self.covered:    # what bash reads: it may run past this first }
                 vis, close, frames = _dollar_brace(s, i, double, self.nest)
-                w.exps.append((vis, s[i:close + 1], {at - i: [end - i, None if up is None else up - i]
-                                                     for at, (end, up) in frames.items()}))
+                rel = {at - i: [end - i, None if up is None else up - i] for at, (end, up) in frames.items()}
+                w.exps.append((vis, s[i:close + 1], rel))
                 self.covered = close + 1
+                for at, (end, _) in rel.items():   # the outer ${ and every one nested in it
+                    if m := _RUNS_PROMPT.fullmatch(s[i + at:i + end + 1]):
+                        w.prompt.append(m[1])      # a value bash runs as a prompt string (#579)
+            elif m := _RUNS_PROMPT.fullmatch(s[i:j + 1]):
+                w.prompt.append(m[1])
             w.text += s[i:j + 1]
             w.dynamic = True
             # "${name[@]}", "${!name@}" and "${@:2}" make several words. bash may read past the first } when a
@@ -778,7 +798,7 @@ class _Lexer:
             w.split = w.split or not double or "@" in s[i:j + 1] or bool(re.search(r"[\"'`\\]|\$\(", s[i + 2:j]))
             self.i = j + 1
         elif nxt == "'":                       # $'..' (ANSI-C quoting): decode the escapes
-            j, out = i + 2, []
+            j, out = k + 1, []
             while j < len(s) and s[j] != "'":
                 step = 2 if s[j] == "\\" else 1
                 out.append(s[j:j + step])
@@ -792,17 +812,17 @@ class _Lexer:
             w.quoted = w.dollar_quote = True
             self.i = j + 1
         elif nxt == '"' and not double:        # $".." (locale quoting): the string itself, without the $
-            self.i = i + 2
-            w.locale = w.locale or s[i + 2:i + 3] != '"'     # bash never translates an empty $""
+            self.i = k + 1
+            w.locale = w.locale or s[k + 1:k + 2] != '"'     # bash never translates an empty $""
             w.dollar_quote = True
             self._dquote(w)
         else:
-            m = re.match(r"\$([A-Za-z_]\w*|[0-9@*#?$!-])", s[i:])
+            m = re.match(r"([A-Za-z_]\w*|[0-9@*#?$!-])", s[k:])
             if m:
-                w.text += m.group(0)
+                w.text += "$" + m.group(1)
                 w.dynamic = True
                 w.split = w.split or not double or m.group(1) == "@"
-                self.i = i + len(m.group(0))
+                self.i = k + len(m.group(1))
             else:
                 w.text += "$"
                 self.i = i + 1
@@ -849,8 +869,8 @@ _WORD_RUN = re.compile(r"[^ \t\r\n\\'\"`$<>&;|()#]+")
 _DQ_RUN = re.compile(r"[^\"\\$`]+")
 _BT_BODY = re.compile(r"(?:[^`\\]|\\.)*", re.S)
 _ANSI_BODY = re.compile(r"(?:[^'\\]|\\.)*", re.S)
-_VAR_REF = re.compile(r"\$(?:[A-Za-z_]\w*|[0-9@*#?$!-])")
 _PARENS = re.compile(r"[()]")
+_BRACKETS = re.compile(r"[\[\]]")
 _SUBST = re.compile(r"\$\((?!\()")          # a $( that is not $((
 _DELIM_MAX = 1024
 
@@ -918,7 +938,8 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
                 w.add(s, f.start, max(f.start, i - 1), "$()")
 
     def dollar(w: _Open, i: int, double: bool) -> int:     # as _Lexer._dollar
-        nxt = s[i + 1:i + 2]
+        k = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads what follows the $ (#585)
+        nxt = s[k:k + 1]
         w.started, w.digits = True, False
         if s.startswith("$((", i):
             depth, j = 0, n
@@ -929,31 +950,45 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
                     break
             w.add(s, i, j)
             return j
+        if nxt == "[":                         # bash's legacy arithmetic (#588), read to its `]` as $(( )) to `))`
+            depth, j = 0, n
+            for m in _BRACKETS.finditer(s, i + 1):
+                depth += 1 if m.group() == "[" else -1
+                if depth == 0:
+                    j = m.end()
+                    break
+            w.add(s, i, j)
+            return j
         if nxt == "(":
-            stack.append(_Open("$", i + 2))
-            return i + 2
+            stack.append(_Open("$", k + 1))
+            return k + 1
         if nxt == "{":
             j = s.find("}", i)
             j = n - 1 if j < 0 else j
             w.add(s, i, j + 1)
             return j + 1
         if nxt == "'":
-            j = _match_end(_ANSI_BODY, s, i + 2)
+            j = _match_end(_ANSI_BODY, s, k + 1)
             j = n + 1 if j < n and s[j] == "\\" else j          # a backslash that ends s takes one more step
             w.quoted = w.dollar = True
             if w.text is not None:
                 try:
-                    text = _ansi_c(s[i + 2:j])
+                    text = _ansi_c(s[k + 1:j])
                 except (UnicodeError, ValueError):
-                    text = s[i + 2:j]
+                    text = s[k + 1:j]
                 w.add(text, 0, len(text))
             return j + 1
         if nxt == '"' and not double:
             w.quoted = w.dollar = True
             stack.append(_Open('"', owner=w))
-            return i + 2
-        j = max(_match_end(_VAR_REF, s, i), i + 1)
-        w.add(s, i, j)
+            return k + 1
+        m = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
+        if m:
+            j = k + len(m.group(0))
+            w.add("$" + m.group(0), 0, 1 + len(m.group(0)))
+        else:
+            j = i + 1
+            w.add(s, i, j)
         return j
 
     def backtick(w: _Open, i: int) -> int:       # as _Lexer._backtick
@@ -1068,6 +1103,14 @@ def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
 # counts as no operator, and the text stays visible).
 _DQ_QUOTING_OP = re.compile(r"[!#]?(?:[A-Za-z_]\w*|\d+|[-@*#?$!])(?:\[[^\][]*\])?(?:[#%/^,~@?]|:\?)")
 
+# The ${ of a prompt transformation (#579): a parameter, an array element, a positional parameter or one of its
+# ranges, with `@P` for its operator. With promptvars on, the default, bash expands the value as a prompt string
+# and runs its command substitutions, so the value is code the gate cannot see (`printf -v p '%s(%s)' '$' 'id';
+# echo ${p@P}` runs id, and the value can rebuild a form the gate reads only as written, a `/` substitution of a
+# store variable, #342). The operator is read only where the parameter ends, so `${x:-foo@P}` stays a default
+# word, and an operator after an indirection (`${!x@P}`) is not read here.
+_RUNS_PROMPT = re.compile(r"\$\{((?:[A-Za-z_]\w*|\d+)(?:\[[^\][{}]*\])?|[@*](?::[^\][{}]*)?)@P\}")
+
 
 def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str, int, dict[int, list]]:
     """bash's reading of the `${` at s[i]: (its text with what bash does not expand blanked, the index of
@@ -1080,9 +1123,10 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
     (classify runs inside the gate hook). `nest` is the lexer's (_NEST)."""
     frames: dict[int, list] = {}
 
-    def open_(at: int, dq: bool, parent: int | None) -> list:   # [in a "..." inside it, sq expands, dq, start]
+    def open_(at: int, brace: int, dq: bool, parent: int | None) -> list:
+        # [in a "..." inside it, sq expands, dq, start]
         frames[at] = [len(s), parent]
-        return [False, dq and not _DQ_QUOTING_OP.match(s, at + 2), dq, at]
+        return [False, dq and not _DQ_QUOTING_OP.match(s, brace + 1), dq, at]
 
     def quoted_text(a: int, b: int, parent: int) -> str:
         # single-quoted text bash expands: the visible text, and the frames of the ${ in it, read within it
@@ -1096,7 +1140,9 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
             p = vis.find("${", close + 1)
         return vis
 
-    out, stack, j = ["${"], [open_(i, dq, None)], i + 2   # one entry per ${ still open, no recursion
+    b = _joins_past(s, i + 1)    # bash drops a \<newline> before it reads the { (#585)
+    # one entry per ${ still open, no recursion
+    out, stack, j = ["${", " " * (b - i - 1)], [open_(i, b, dq, None)], b + 1
     while j < len(s):
         inq, sq, fdq, start = stack[-1]
         ch, k = s[j], j + 1
@@ -1121,7 +1167,7 @@ def _dollar_brace(s: str, i: int, dq: bool = False, nest: int = 0) -> tuple[str,
                 k = lx.i
             out.append(" " * (k - j))
         elif s.startswith("${", j):
-            stack.append(open_(j, fdq or inq, start))
+            stack.append(open_(j, j + 1, fdq or inq, start))
             out.append("${")
             k = j + 2
         elif ch == "}" and not inq:
@@ -1670,14 +1716,16 @@ def _env_hazard(name: str, value: str | None = None, literal: bool = False) -> s
 
 
 # A variable the gate assigns without a plain NAME=value word. Parameter expansion assigns with `:=` or
-# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`) and an array subscript (`a[NAME=n]`,
-# itself arithmetic) assign an integer; a `{NAME}>` redirection drops the fd number into NAME. Each sets the
+# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`, and bash's legacy `$[NAME=n]` #588)
+# and an array subscript (`a[NAME=n]`, itself arithmetic) assign an integer, and so sets an element of an
+# array (`BASH_CMDS[ls]=1`); a `{NAME}>` redirection drops the fd number into NAME. Each sets the
 # variable as a side effect, whatever the program is, so a listed variable set this way must be read too.
 # Only what bash expands counts: the ${..} and $((..)) the lexer met outside single quotes (_Word.exps), each
 # read to the } bash closes it with and with quoted text blanked (_dollar_brace), and a bracket only as the
 # subscript of a name (`echo [HOME=x]` is a glob, `'${PATH:=.}'` and `${a:-'${PATH:=.}'}` are text).
 _PARAM_NAME = re.compile(r"\$\{([A-Za-z_]\w*)")            # then a subscript, and `:=` or `=` to assign
 _ARITH_SET = re.compile(r"\b([A-Za-z_]\w*)\s*(?:(?:<<|>>|[-+*/%&|^])?=(?!=)|\+\+|--)|(?:\+\+|--)\s*([A-Za-z_]\w*)")
+_ARITH_ELEM = re.compile(r"\b([A-Za-z_]\w*)\s*\[[^\][]*\]\s*=(?!=)")   # an element set inside the arithmetic
 _SUBSCRIPT = re.compile(r"[A-Za-z_]\w*\[([^\]]*)\]")
 _EXP_SUBSCRIPT = re.compile(r"\$\{[#!]?[A-Za-z_]\w*\[")
 _FD_VAR = re.compile(r"\{([A-Za-z_]\w*)\}")
@@ -1698,15 +1746,23 @@ def _pairs(text: str, opener: str, closer: str) -> dict[int, int]:
 
 
 def _spans(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` not inside
-    another, and the subscript of each `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare
-    `NAME=n` assigns."""
+    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` and of bash's
+    legacy `$[ ]` (#588), read as the `$((..))` it stands for, not inside another, and the subscript of each
+    `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare `NAME=n` assigns."""
     parens, brackets = _pairs(text, "(", ")"), _pairs(text, "[", "]")
     arith, i = [], 0
-    while (j := text.find("$((", i)) >= 0:
-        end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
-        arith.append((j + 3, end))
-        i = max(end, j + 3)
+    while True:
+        j, k = text.find("$((", i), text.find("$[", i)
+        if j >= 0 and (k < 0 or j < k):                   # the earlier form is read, to its own close
+            end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
+            arith.append((j + 3, end))
+            i = max(end, j + 3)
+        elif k >= 0:
+            end = brackets[k + 1]
+            arith.append((k + 2, end))
+            i = max(end, k + 2)
+        else:
+            break
     return arith, [(m.end(), brackets[m.end() - 1]) for m in _EXP_SUBSCRIPT.finditer(text)]
 
 
@@ -1790,6 +1846,7 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
             for region in (arith, subs):
                 for a, b in _covered(region):
                     out += [(m.group(1) or m.group(2), None, False) for m in _ARITH_SET.finditer(vis, a, b)]
+                    out += [(m.group(1), None, False) for m in _ARITH_ELEM.finditer(vis, a, b)]
     out += [(n, None, False) for name in names for n in _subscript_sets(name)]
     if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
         out += [(fm.group(1), None, False) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
@@ -1797,6 +1854,40 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None, boo
     targets = [t for _, t in k.redirs] + list(k.heredocs) + list(k.herestrings)
     out += [(fm.group(1), None, False) for t in targets if (fm := _FD_VAR.fullmatch(t.fd))]
     return list(dict.fromkeys(out))
+
+
+def _applies_late(k: "_Cmd") -> bool:
+    """True when this command's assignments apply only after its own words have expanded (#579): bash expands
+    every argument of export and its kind before any of the assignments takes effect, so a ${..@P} in one reads
+    the value from before the command."""
+    words = k.words
+    return bool(words) and not words[0].quoted and not words[0].dynamic and words[0].text in _EXPORTERS
+
+
+def _literal_assigns(k: "_Cmd", line: dict) -> dict[str, str | None]:
+    """What one command assigns, as written (#579), and the value each name holds after it: a `NAME=value`
+    word whose value holds no `$`, backtick or backslash gives the literal a prompt expansion of it expands
+    to itself, and a value the gate cannot read gives None — the last assignment wins, literal or not, as does
+    a name the gate cannot name (`p[$i]=x`). A bare assignment's own words, and the arguments of export and its
+    kind; `printf -v` and `read` set values the gate does not see, a for list is data the command runs over, and
+    an append (`p+=x`) joins the value the line knows: a literal onto a literal is one, anything else is None."""
+    words = k.words
+    if _applies_late(k):
+        words = words[1:]
+    elif not all(_ASSIGN.fullmatch(w.text) for w in words):
+        return {}
+    out: dict[str, str | None] = {}
+    for w in words:
+        name, eq, value = w.text.partition("=")
+        if re.match(r"[A-Za-z_]\w*\+=", w.text):
+            name = name[:-1]                          # an append: onto the literal the line knows, or onto None
+            cur = out[name] if name in out else line.get(name)
+            out[name] = cur + value if cur is not None and not re.search(r"[$`\\]", value) else None
+            continue
+        if not eq:
+            continue                                  # `export p`: it exports a value the line knows or not
+        out[name] = value if not (re.search(r"[$`\\]", value) or re.search(r"[$`]", name)) else None
+    return out
 
 
 def _unreadable_name(w: "_Word") -> bool:
@@ -1969,7 +2060,7 @@ def _hash_rebind(words: list) -> tuple[str, str] | None:
         return bool(re.match(r"~(?:[+-]\d*|\d+)(?:/|$)", w.raw.replace("\\\n", "")))
 
     def lone(w: _Word) -> bool:     # one double-quoted word stays one word, but "${!n}" with n=@ splits as "$@"
-        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw
+        return bool(re.fullmatch(r'"[^"@]*"', w.raw)) and "${!" not in w.raw.replace("\\\n", "")
 
     args, path, at, i = words[1:], None, 0, 0
     while i < len(args):
@@ -2931,6 +3022,46 @@ def _strip_prefix_words(words: list, quoted_value: bool | None = None) -> tuple[
     return words, sudo, None
 
 
+def _env_split_argv(split: str) -> str | None:
+    """The command a -S text's leading words name, read as env reads them, as its own argv (#591): env splits the
+    text into words and reads them itself, so a word quoted whole with the form NAME=value is an assignment, and
+    the first word that is neither an option nor an assignment starts the command. Returns the text from that word
+    on, or None when the shell line over the text already reads it: no leading word consumed, no command at all, a
+    split inside the split (env reads it again, the gate does not follow), or a shell operator before the command
+    (a word to env, but the line's own reading covers what follows it)."""
+    toks = _Lexer(split or "", scan=False).run()
+    words = [t for k, t in toks if k == "w"]
+    n, i = -1, 0
+    while i < len(words):
+        t = words[i].text
+        if _ASSIGN.fullmatch(t):          # env reads its own argv, so a quoted NAME=value is an assignment too
+            i += 1
+            continue
+        if not t.startswith("-") or t == "-":
+            n = i
+            break
+        f, i = t, i + 1
+        if f in ("-S", "--split-string") or f.startswith(("--split-string=", "-S")):
+            return None
+        if f == "--":
+            n = i                         # the options end: the next word is the command, assignments included
+            break
+        if f in _PREFIXES["env"] and i < len(words):
+            i += 1                        # a value of its own (`-u NAME`, `--chdir DIR`)
+    if n <= 0 or n >= len(words):
+        return None
+    # an operator before the command word is a word of argv to env, and the shell line over the text
+    # covers the commands after it
+    seen = 0
+    for k, _ in toks:
+        if k != "w":
+            if seen <= n:
+                return None
+            break
+        seen += 1
+    return " ".join(w.raw for w in words[n:])
+
+
 def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) -> tuple[int, list]:
     """Read a wrapper's options from argv[i] as getopt does: up to the first operand (past it with `permute`)
     or `--`, `--opt=value` or `--opt value` (an unambiguous prefix of four letters or more counts), short
@@ -3477,6 +3608,21 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
     return parts
 
 
+def _runs_prompt(k: "_Cmd", literals: dict) -> str:
+    """The parameter of the first `${..@P}` the command expands whose value the gate does not see (#579), ""
+    when there is none. One of a variable the line assigns a literal value (no `$`, backtick or backslash, so
+    the prompt expansion of it is the value itself) is known and keeps the line's class: the map holds the
+    literal, or None where the last assignment set a value the gate cannot read. A prefix assignment
+    sets the command's own environment, which bash expands the words before, so it is no source."""
+    for w in [*k.words, *k.herestrings, *(t for _, t in k.redirs)]:
+        if n := next((p for p in w.prompt if literals.get(p) is None), ""):
+            return n
+    for hd in k.heredocs:
+        if n := next((p for p in hd.prompt if literals.get(p) is None), ""):
+            return n
+    return ""
+
+
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
     """One simple command into its parts: the program's own category, the redirections, anything run
     inside it, and a store write when it touches the store."""
@@ -3493,10 +3639,22 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     n_late, octx = len(ctx.get("late", [])), dict(ctx)
     words, sudo, split = _strip_prefix_words(words)
     parts: list[Classification] = []
+    if words and words[0].text in ("read", "printf"):
+        # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
+        # one is gone from here on (#579)
+        ctx.setdefault("literals", {}).update(
+            {re.split(r"\[|\+?=", w.text, maxsplit=1)[0]: None for w in _filled_words(
+                words[0].text.rsplit("/", 1)[-1], words[1:])})
+    if n := _runs_prompt(k, ctx.setdefault("literals", {})):
+        # a prompt transformation expands the value as a prompt string, its command substitutions included (#579)
+        what = "the positional parameters" if n in ("@", "*") or n[:2] in ("@:", "*:") else n
+        parts.append(_opaque(f"runs the prompt expansion of {what}, a value the gate does not see", cmd))
     if split is not None:
         parts.append(_opaque("env -S runs a command line", cmd))
         if depth < _DEPTH:
             parts.append(classify_shell(split, depth + 1))
+            if rest := _env_split_argv(split):   # #591: the leading words are env's own argv, not a shell line
+                parts.append(classify_shell(rest, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
@@ -3542,6 +3700,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             continue
         if t.dynamic and "$" in dest:
             parts.append(_opaque(f"writes to a path from a variable ({t.text[:60]})", cmd))
+            if t.legacy:                       # main read a legacy `$[ ]` here as text; keep that write beside (#588)
+                parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text,
+                                   command=cmd))
+                if sudo:
+                    ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
         else:
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
             if sudo:
@@ -4117,17 +4280,11 @@ def _builtin_options(args: list, plus: bool) -> tuple[int, str]:
     return i, flags
 
 
-def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
-    """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
-    `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
-    comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
-    name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
-    _classify_simple with prog "for"."""
-    args, targets, parts = words[1:], [], []
-    if prog == "for":
-        targets = args[:1]
-    elif prog == "read":
-        i = 0
+def _filled_words(prog: str, args: list) -> list:
+    """The name words `read` (also `-a`, which names an array) and `printf -v` fill, which hold a value the
+    gate does not see (#579)."""
+    if prog == "read":
+        targets, i = [], 0
         while i < len(args) and args[i].text.startswith("-") and args[i].text != "-":
             t, i = args[i].text, i + 1
             if t == "--":
@@ -4140,9 +4297,21 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
                     if ch == "a" and val is not None:
                         targets.append(val)
                     break
-        targets += args[i:]
-    elif prog == "printf" and args[:1] and args[0].text.startswith("-v"):
-        targets = [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+        return targets + args[i:]
+    if prog == "printf" and args[:1] and args[0].text.startswith("-v"):
+        return [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+    return []
+
+
+def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
+    """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
+    `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
+    comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
+    name, or an exporter option word, the gate cannot read. A for-loop variable comes here from
+    _classify_simple with prog "for"."""
+    args, targets, parts = words[1:], [], []
+    if prog == "for":
+        targets = args[:1]
     elif prog in _EXPORTERS:
         i, flags = _builtin_options(args, prog in ("declare", "typeset", "local"))
         if "f" in flags or "F" in flags:                  # names functions, not variables
@@ -4160,6 +4329,8 @@ def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
                     parts.append(_opaque(f"{prog} -n {name} makes a reference the gate cannot follow"[:120], cmd))
                 else:
                     targets.append(_Word(text=ref, dynamic=w.dynamic))
+    else:
+        targets = _filled_words(prog, args)
     for w in targets:
         name = re.split(r"\[|\+?=", w.text, maxsplit=1)[0]
         if _unreadable_name(w):
@@ -5533,7 +5704,8 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # is never its line's. A value declare reads again runs its $( ) the same way (_subscript_parts).
     inherits = stdin_unknown or any(k.piped_in or k.stdin_unknown or (k.fed and bool(k.heredocs or k.herestrings))
                                     for k in cmds)
-    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits}
+    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits,
+                 "literals": {}}     # the value each command assigns as written, what the next ${..@P} reads (#579)
     if into := _cd_into.get():            # a $( ) on a line that entered the store runs in it (#465)
         ctx["store_cwd"] = True
         if into[1]:
@@ -5551,7 +5723,13 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
             # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
             ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
             slot[0] = k.own
+            own = _literal_assigns(k, ctx["literals"])
+            late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
+            if not late:
+                ctx["literals"].update(own)    # what this command sets, the next ${..@P} reads (#579)
             got = _classify_simple(k, cmd, depth, ctx, piped)
+            if late:
+                ctx["literals"].update(own)
             if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
                 got = _given_stdin(got, _stdin_own(k), ctx)
             parts += got
@@ -5936,7 +6114,8 @@ class _Scope:
     """What the secret-store checks of one classify call share: the folders the tool may read from (#209), the gate's
     own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot."""
     cwds: tuple[str, ...] = ()
-    tool_cwds: tuple[str, ...] = ()              # a shell call's own `cwd` or `workdir`, joined to the session folder
+    tool_cwds: tuple[tuple[str, str], ...] = ()  # a shell call's own `cwd` or `workdir` (#311), as (the folder
+                                                 # joined to the session's folder, the folder as the call spells it)
     here: str | None = None                      # the gate's own folder; "" when it cannot be read
     roots: set[str] | None = None
     real: dict[str, str] = field(default_factory=dict)
@@ -5961,12 +6140,13 @@ _TOOL_FOLDERS = ("cwd", "workdir")
 def _in_tool_folder(fn: _F) -> _F:
     """Run ``fn(action, cwd)`` in one _Scope that holds the folders the tool may read from (#209): ``cwd``, the
     session's working folder as the core passes it. A relative path is resolved from it and from the gate's own
-    folder. A shell tool's own folder argument (`cwd`, `workdir`), joined to that folder, is kept apart (tool_cwds):
+    folder. A shell tool's own folder argument (`cwd`, `workdir`), joined to that folder, is kept apart (tool_cwds),
+    beside the folder as the call spells it: the part the folder read adds names the `cd` in that spelling (#516).
     _shell_call reads the line in it (#311)."""
     @functools.wraps(fn)
     def run(action: Any, cwd: str | None = None) -> Any:
         folders: list[str] = []
-        own: list[str] = []
+        own: list[tuple[str, str]] = []
         try:
             tool, args = _args_of(action)
             base = os.path.expanduser(cwd) if isinstance(cwd, str) and cwd else ""
@@ -5976,10 +6156,14 @@ def _in_tool_folder(fn: _F) -> _F:
                 for key in _TOOL_FOLDERS:
                     sub = args.get(key)
                     if isinstance(sub, str) and sub:
-                        own.append(os.path.join(base, os.path.expanduser(sub)))
+                        own.append((os.path.join(base, os.path.expanduser(sub)), sub))
         except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
             pass
-        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders)), tool_cwds=tuple(dict.fromkeys(own))))
+        spell: dict[str, str] = {}                 # one folder per joined path, the first spelling kept
+        for joined, raw in own:
+            spell.setdefault(joined, raw)
+        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders)),
+                                  tool_cwds=tuple(spell.items())))
         try:
             return fn(action, cwd)
         finally:
@@ -6419,7 +6603,7 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # launch script's target folder, a live Hermes's state) is not the code. Absolute paths are also checked
 # against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
 # `principals` (`exo init --root`, `exo import-store --root`), the bus folder and files (_bus_paths) and the
-# code folders.
+# code folders, among them the venv and Hermes home the home's config.json records (#612).
 # $EXO_HOME/update holds the signed-update trust pin, which decides what `exo update` installs (D-073, #133).
 # The file names that end a path, one string per name ("\0": any text), which _STORE_NAMES and _store_glob share.
 _EXO_STORE_FILES = (
@@ -6477,6 +6661,27 @@ def _bus_paths() -> list[tuple[str, tuple]]:
     return out
 
 
+def _config_code_paths() -> list[str]:
+    """The venv and Hermes' plugin home the home's config.json records (`venv`, `hermes_home`): scripts/install.sh
+    writes both (its set_cfg lines, #612) and nothing exports EXO_VENV or EXO_HERMES_HOME when the daemon runs, so a
+    supported custom install spells its code folders in the file alone. Read like store.explicit_roots reads the
+    config's `principals`: a missing or unreadable file, or a value that is not an absolute path once ~ is expanded,
+    adds nothing. The environment still takes precedence (Config.get resolves it), so a folder named here joins the
+    code paths beside what EXO_VENV or EXO_HERMES_HOME names, it never replaces one."""
+    try:
+        data = json.loads((Path(_exo_home()) / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):            # a missing file, a stale or bad one: the default spellings stand
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for key, tail in (("venv", ""), ("hermes_home", "plugins")):
+        p = os.path.expanduser(data[key]) if isinstance(data.get(key), str) else ""
+        if p.startswith("/"):
+            out.append(os.path.join(p, tail) if tail else p)
+    return out
+
+
 def _code_paths() -> list[str]:
     """The folders Exo loads code from (#459), each the environment this gate sees spells, as it does EXO_HOME: the
     venv `scripts/install.sh` puts the `exo` package and this gate in (EXO_VENV, else the home's own `venv`; a
@@ -6484,9 +6689,11 @@ def _code_paths() -> list[str]:
     (EXO_HERMES_HOME, else the home's own `hermes-home/plugins`: with --with-hermes the core loads exo-gate from
     there), the source copy it clones a git URL into and `exo update` refreshes from (`$EXO_HOME/src`; `exo web`
     reads plugins on `<package>/../../plugins` of the copy too) and every folder EXO_PLUGIN_DIRS names, which
-    default_dirs searches first and where a duplicate plugin name keeps the first found. Non-absolute spellings are
-    not read: a relative EXO_VENV or dir is a constant of the tool's working folder, which the gate cannot see; a
-    `.venv` name is not Exo's (no install script makes one, EXO_VENV is the only override)."""
+    default_dirs searches first and where a duplicate plugin name keeps the first found. The home's config.json
+    records a venv and Hermes home of its own (`venv`, `hermes_home`, #612): those join, read as _config_code_paths
+    reads them. Non-absolute spellings are not read: a relative EXO_VENV or dir is a constant of the tool's working
+    folder, which the gate cannot see; a `.venv` name is not Exo's (no install script makes one, EXO_VENV is the
+    only override)."""
     home = _exo_home()
     out = []
     venv = os.path.expanduser(os.environ.get("EXO_VENV") or "")   # install.sh: ${EXO_VENV:-$EXO_HOME/venv}
@@ -6497,7 +6704,7 @@ def _code_paths() -> list[str]:
     out.append(os.path.join(home, "src"))
     out += [d for d in (os.path.expanduser(p) for p in
                         filter(None, os.environ.get("EXO_PLUGIN_DIRS", "").split(os.pathsep))) if d.startswith("/")]
-    return out
+    return out + [p for p in _config_code_paths() if p not in out]
 
 
 def _code_forms() -> list[str]:
@@ -6553,7 +6760,8 @@ def is_store_path(path: str, ancestors: bool = False, from_cwd: bool = False) ->
 
 # What _STORE_NAMES matches anywhere, one part per item ("\0": any text), for _store_glob: folders (a name below one
 # counts too) and file names that end a path. The code folders (_code_paths, #459) join: the home's own `venv` and
-# `src`, and `hermes-home/plugins`, whose every other spelling the environment settles. The home's config.json comes
+# `src`, and `hermes-home/plugins`, whose every other spelling the environment or the home's config.json settles
+# (#612). The home's config.json comes
 # from _HOME_PROTECTED; _store_glob counts it only while it counts (_config_on, D-074), so the call is marked and its
 # reading as before is main's.
 _STORE_GLOB_DIRS = tuple([".exo", *p, n] for p in ((), ("principals", "\0")) for n in _HOME_PROTECTED +
@@ -7014,12 +7222,15 @@ def _args_of(action: Any) -> tuple[str, dict]:
 def _shell_call(cmd: str) -> Classification:
     """A shell tool's line, as classify_shell reads it, run in the call's own folder argument (#311). The line keeps
     its own classification: category, target, axes, text and parts. When it reads a secret store from that folder
-    (_tool_folder_read), a credentials part is added for the read, weighed as a `cd` form's (_weigh). decide's
-    credentials floor then asks, and no_grant keeps a standing grant off the call, while the line's own deny
-    entries, rules, matrix cell, posting checks and reserved entries still apply. Before #311 a relative word that
-    resolves into a store from the folder made the whole call credentials (#209); that reading is kept beside the
-    line (``also``), and decide keeps the stricter of the two. One check per call, on the whole line: a nested line
-    is read in its own folders only."""
+    (_tool_folder_read), a credentials part is added for the read, weighed as a `cd` form's (_weigh). It keeps no
+    own text, and carries a `_StandIn` for `cd <folder>` among its setters (#516), so a rule keyed on `command`
+    that would lower the line names the folder, as it names the `cd` in the cd form; naming the folder lifts no
+    deny of the part's. decide's credentials floor then asks, and no_grant keeps a standing grant off the call,
+    while the line's own
+    deny entries, rules, matrix cell, posting checks and reserved entries still apply. Before #311 a relative word
+    that resolves into a store from the folder made the whole call credentials (#209); that reading is kept beside
+    the line (``also``), and decide keeps the stricter of the two. One check per call, on the whole line: a nested
+    line is read in its own folders only."""
     scope = _scope.get()
     if scope is None or not scope.tool_cwds:
         return classify_shell(cmd)
@@ -7031,7 +7242,7 @@ def _shell_call(cmd: str) -> Classification:
         here = ""
     # joined, not folded: the shell runs in `sdir/../keys` through the link sdir, as the kernel reads it; and folded
     # too, as #209 read the folder before #311, so that reading never loses a store
-    mine = [g for f in folders for g in (os.path.join(here, f), os.path.normpath(os.path.join(here, f)))]
+    mine = [g for f, _ in folders for g in (os.path.join(here, f), os.path.normpath(os.path.join(here, f)))]
     wide = replace(scope, cwds=tuple(dict.fromkeys([*scope.cwds, *mine])))
     token, memo = _scope.set(wide), _shell_seen.set(seen)
     try:
@@ -7054,11 +7265,16 @@ def _shell_call(cmd: str) -> Classification:
     top = _most_severe(p for p in _each_part(c) if p.category != "credentials") if c.category == "credentials" else None
     if new and top is not None:                 # first, as main reads the line before its parts
         c.parts = [replace(top, parts=[], own=None, line_copy=True), *c.parts]
-    for summary, target in new:
+    for summary, target, cd in new:
+        # The part keeps no own text, as a `cd` form's parts have (#394), so no rule keyed on `command` lifts its
+        # deny: _override_deny passes every such rule over for it. It carries a `_StandIn` for `cd <folder>` (#516)
+        # among its setters, the folder as the call spells it, so the line is not one text for _one_text and the
+        # #394 pass runs: a rule that would lower the line names the folder, as it names the `cd` in the cd form,
+        # and one that names only the line's text is passed over. The read keeps its own weight, and a heavier
+        # command on the line is a credentials part with that weight beside it, as beside a secret line (#468). So
+        # each matrix cell or rule the cd form's parts meet is met.
         part = _make("credentials", summary=summary[:120], target=target, command=cmd, own=None,
-                     signals=["secret store"])
-        # the read keeps its own weight, and a heavier command on the line is a credentials part with that weight
-        # beside it, as beside a secret line (#468). So each matrix cell or rule the cd form's parts meet is met.
+                     setters=[_StandIn(cd)], signals=["secret store"])
         c.parts = [*c.parts, _weigh(part, c, cmd)]
         c.signals = list(dict.fromkeys([*c.signals, "secret store"]))
     return c
@@ -7077,16 +7293,21 @@ def _line_alone(cmd: str, scope: _Scope, parsed: dict) -> Classification:
         _brace_left.reset(left)
 
 
-def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification | None) -> list[tuple[str, str]]:
-    """How a shell call reads a secret store from its own folder argument (#311), as [(summary, target)], or []. In
-    this order: the folder is itself a store, as a `cd` word is (a link resolved, a glob that could name one); a
-    relative word resolves into one from it (#209; ``read`` is that reading's credentials part); and the line reads
-    a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192): the words as written first, then
-    with #320's forms, whose name is a second read when it is another target, as on a cd line. The target is the
-    folder, or the folder joined with the name. A folder in a repo's own .claude worktrees, commands, agents or
-    skills is the repo's, not a store (_repo_claude), so only a word that resolves into a store counts there."""
+def _tool_folder_read(cmd: str, folders: tuple[tuple[str, str], ...],
+                      read: Classification | None) -> list[tuple[str, str, str]]:
+    """How a shell call reads a secret store from its own folder argument (#311), as [(summary, target, cd)], or
+    []. In this order: the folder is itself a store, as a `cd` word is (a link resolved, a glob that could name
+    one); a relative word resolves into one from it (#209; ``read`` is that reading's credentials part); and the
+    line reads a relative name there as after `cd <folder>` (_cd_store_read, D-038, #192): the words as written
+    first, then with #320's forms, whose name is a second read when it is another target, as on a cd line. The
+    target is the folder, or the folder joined with the name. ``folders`` holds each folder as the call spells it
+    beside its joined path, and the third word is the `cd` the part's stand-in setter names (#516): `cd <folder>`,
+    the folder as the call spells it, said once.
+    A folder in a repo's own .claude worktrees, commands, agents or skills is the repo's, not a store (_repo_claude),
+    so only a word that resolves into a store counts there."""
+    spell = dict(folders)                       # the folder as the call spells it, for the part's `cd` (#516)
     forms: list[tuple[str, str]] = []           # (the folder as the call gives it, a form to check)
-    for f in folders:
+    for f in spell:
         x = _expand_text(f)
         try:
             real = os.path.realpath(x) if os.path.isabs(x) and not _GLOBBY.search(x) else ""
@@ -7098,21 +7319,24 @@ def _tool_folder_read(cmd: str, folders: tuple[str, ...], read: Classification |
         forms += [(f, g) for g in [*linked, f] if not _repo_claude(g)]
     for f, g in forms:
         if is_sensitive_path(g) or _glob_hits_secret(g):
-            return [(f"shell runs in {f}", g)]
-    out: list[tuple[str, str]] = []
+            return [(f"shell runs in {f}", g, f"cd {spell[f]}")]
+    out: list[tuple[str, str, str]] = []
     if read is not None:                        # the target: the name in the folder it resolves into a store from
-        where = folders[0] if len(folders) == 1 else " or ".join(folders)
-        paths = [_in_folder(_expand_text(f), read.target) for f in folders]
+        where = folders[0][0] if len(folders) == 1 else " or ".join(f for f, _ in folders)
+        paths = [_in_folder(_expand_text(f), read.target) for f, _ in folders]
         linked = [_in_folder(g, read.target) for f, g in forms if g != f]   # `..` read past the link, as the kernel
-        out.append((f"{read.summary} in {where}", next((p for p in linked + paths if is_sensitive_path(p)), paths[0])))
+        cds = [f"cd {raw}" for _, raw in folders]
+        out.append((f"{read.summary} in {where}",
+                    next((p for p in linked + paths if is_sensitive_path(p)), paths[0]),
+                    cds[0] if len(cds) == 1 else " or ".join(cds)))
     cmds, subs, _ = _parse(cmd or "")           # #320: also beside ``read``, which only its forms may have made
     walked: list = []
     for wide in (False, True):                  # main's reading first, #320's beside it
         for f, g in forms:
             if found := _cd_store_read(cmds, subs, wide, walked, tools=(g,)):
                 target = _in_folder(_expand_text(g), found)
-                if all(target != t for _, t in out):
-                    out.append((f"shell touching {found} in {f}", target))
+                if all(target != t for _, t, *_ in out):
+                    out.append((f"shell touching {found} in {f}", target, f"cd {spell[f]}"))
                 break
     return out
 
@@ -7667,8 +7891,9 @@ def _line_matcher(c: Classification) -> Callable[[str], bool]:
 def _one_text(c: Classification) -> bool:
     """Whether no two parts of the line have different own texts (#394): a line of one simple command, beside the
     parts the gate made for it with no own text (a secret path it names in `cat ~/.kube/config`, a string literal in
-    its code). A rule that matches such a line as before names its one command, so the line is decided as before,
-    as a line of one part is."""
+    its code). The part the call's own folder added carries a `_StandIn` for `cd <folder>` among its setters (#516),
+    so a line with it is not one text: the #394 pass runs, and a rule that would lower the line names the folder, as
+    it names the `cd` in the cd form; naming the folder lifts no deny of the part's."""
     texts = {t for p in _each_part(c) for t in (p.own, *p.setters) if t is not None}
     return len(texts) < 2
 
@@ -7867,7 +8092,10 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     decided as before, and that decision stands unless the other is stricter, reason and all. That pass reads rules
     and patterns the decision before never reached (a regex past the first match, a rule after the one skipped), so
     when it fails, the line is decided as before, which then fails only where it failed before. A line of one simple
-    command, beside parts the gate made for it, is decided as before (_one_text).
+    command, beside parts the gate made for it, is decided as before (_one_text) — unless the part the call's own
+    folder added is on it. That part carries a `_StandIn` for `cd <folder>` among its setters (#516), so the line
+    goes through the own text pass: a rule that names only the command is passed over, and the part's matrix deny
+    stands, as it does on the cd form, whose parts the `cd`'s own text makes two texts of.
 
     A line the gate reads more than one way is decided on each reading first (readings): the shell call as read
     before #311 (``also``), the gh line as read before gh's subcommand search (``floor``, #399) and that line's own

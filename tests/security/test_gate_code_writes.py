@@ -6,8 +6,11 @@ $EXO_HOME/hermes-home), the source copy the installer clones a git URL into and 
 ($EXO_HOME/src), and the folders $EXO_PLUGIN_DIRS names (exo.core.plugins.default_dirs searches them first and keeps
 the first plugin of a name, so a plugin of a core name there takes the real one's place) are the store: a write
 there is a store_write, the floor, no standing grant, the principal alone. Reads stay reads. Every command string
-here is data for exo.gate.classify/decide; none is run."""
+here is data for exo.gate.classify/decide; none is run. The home's config.json records a venv and Hermes home of
+its own (#612): those join too, read like store.explicit_roots reads the config's `principals`."""
+import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -156,6 +159,96 @@ def test_the_env_folders_count(exo_home, tmp_path, monkeypatch):
     for cmd in (f"cp x {venv}/evil.pth", f"cp x {hermes}/plugins/exo-gate/__init__.py",
                 f"cp x {plug}/exo-gate/__init__.py", f"cp x {d}/exo-gate/__init__.py"):
         _assert_store_write(_sh(cmd))
+
+
+# #612: a venv or Hermes home the home's config.json records alone (scripts/install.sh's set_cfg writes both, and
+# nothing exports EXO_VENV or EXO_HERMES_HOME when the daemon runs) is a code folder too, read like store
+# .explicit_roots reads the config's `principals`: the environment still leads, and a file the gate cannot read, or
+# one whose value is no absolute path, adds nothing — the default spellings stand.
+@pytest.fixture
+def config_home(exo_home, tmp_path):
+    """A custom install whose code folders config.json spells alone: a venv and Hermes' plugin home outside the
+    home, recorded as the installer records them."""
+    root = Path(os.environ.get("EXO_HOME") or os.path.join(os.environ["HOME"], ".exo"))
+    venv, hermes = tmp_path / "custom-venv", tmp_path / "custom-hermes"
+    (root / "config.json").write_text(json.dumps({"venv": str(venv), "hermes_home": str(hermes)}), encoding="utf-8")
+    return str(venv), str(hermes)
+
+
+def _config_points(v, hm, which):
+    """(a code file in the recorded folder, the folder's deepest shared layer), as the installer records them."""
+    return {
+        "venv": (f"{v}/lib/python3.13/site-packages/exo/gate.py", f"{v}/lib/python3.13/site-packages"),
+        "hermes": (f"{hm}/plugins/exo-gate/__init__.py", f"{hm}/plugins/exo-gate"),
+    }[which]
+
+
+@pytest.mark.parametrize("make", [
+    lambda f, p: _sh(f"cp evil.py {f}"),
+    lambda f, p: {"tool": "write_file", "args": {"path": f, "content": "x"}},
+    lambda f, p: _sh(f"pip install --target {p} evil"),
+    lambda f, p: _sh(f"rm -rf {p}"),
+    lambda f, p: _sh(f"cd {p} && cp evil.py evil2.py"),
+], ids=range(5))
+@pytest.mark.parametrize("which", ("venv", "hermes"))
+def test_a_config_recorded_code_folder_asks(which, make, config_home):
+    v, hm = config_home
+    f, p = _config_points(v, hm, which)
+    _assert_store_write(make(f, p))
+
+
+@pytest.mark.parametrize("cmd", [
+    "cat {v}/lib/python3.13/site-packages/exo/gate.py",
+    "grep -rn register {hm}/plugins/exo-gate",
+    "cd {hm}/plugins && grep -rn register exo-gate",
+], ids=range(3))
+def test_a_read_of_a_recorded_folder_stays_a_read(cmd, config_home):
+    v, hm = config_home
+    c = gate.classify(_sh(cmd.format(v=v, hm=hm)))
+    assert (c.category, gate.decide(c).outcome) == ("read", "allow")
+
+
+def test_the_environment_leads_a_recorded_folder(config_home, tmp_path, monkeypatch):
+    """EXO_VENV and EXO_HERMES_HOME name the folders Exo loads (Config.get resolves the environment first), and the
+    recorded ones join them, they do not replace them: all four ask."""
+    v, hm = config_home
+    monkeypatch.setenv("EXO_VENV", str(venv := tmp_path / "env-venv"))
+    monkeypatch.setenv("EXO_HERMES_HOME", str(hermes := tmp_path / "env-hermes"))
+    for f, p in ((f"{venv}/lib/py/evil.pth", f"{venv}/lib/py"),
+                 (f"{hermes}/plugins/exo-gate/__init__.py", f"{hermes}/plugins/exo-gate"),
+                 (f"{v}/lib/py/evil.pth", f"{v}/lib/py"),
+                 (f"{hm}/plugins/exo-gate/__init__.py", f"{hm}/plugins/exo-gate")):
+        _assert_store_write(_sh(f"cp x {f}"))
+
+
+@pytest.mark.parametrize("body", [
+    '{"principal": "lead"}',                              # the keys absent
+    '{"venv": ',                                          # a stale file: not valid JSON
+    '[]',                                                 # a top level that is not an object
+    '{"venv": 3, "hermes_home": "custom-hermes"}',        # a value that is not a path, or a relative one
+    None,                                                 # a folder in the file's place
+], ids=range(5))
+def test_a_config_the_gate_cannot_read_leaves_the_defaults(body, exo_home, tmp_path):
+    """A config.json with no readable code folders adds nothing and raises nothing: the default spellings still
+    ask, and a folder no key names stays ordinary."""
+    h, _ = exo_home
+    cfg = Path(os.environ.get("EXO_HOME") or os.path.join(os.environ["HOME"], ".exo")) / "config.json"
+    if body is None:
+        cfg.mkdir()
+    else:
+        cfg.write_text(body, encoding="utf-8")
+    f, p = _points(h, str(tmp_path), "venv")
+    _assert_store_write(_sh(f"cp evil.py {p}/exo/gate.py"))
+    c = gate.classify({"tool": "write_file", "args": {"path": f"{tmp_path}/other/lib/evil.py", "content": "x"}})
+    assert c.category == "local_write"
+
+
+def test_the_recorded_venv_is_the_supported_spell(config_home):
+    """Config.load resolves the recorded venv (the issue's evidence that a config-only install is supported), so
+    the folder the gate cannot otherwise see is the one it must protect."""
+    from exo.config import Config
+    v, _ = config_home
+    assert str(Config.load().venv) == v
 
 
 def test_the_principal_can_still_deny_it(exo_home):
