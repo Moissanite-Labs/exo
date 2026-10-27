@@ -1631,8 +1631,16 @@ gate does not read:
   as getopt reads them, clustered (`-Es`, `-iu root`), with their values (`-u root`, `--user=root`,
   `--user root`, a unique prefix of a long option), up to `--` or the first operand, then the
   `NAME=VALUE` words it takes for the environment; behind `env`, `nice`, `timeout`, `command` or
-  another sudo too. An option word the gate cannot read, one with an expansion or an unquoted glob
-  (`sudo -"$X"`, `sudo -?`), counts as a shell option, since it may come to `-s`. With a command,
+  another sudo too. A word the gate cannot read that may come to `-s` counts as a shell option: an
+  option word with an expansion or an unquoted glob (`sudo -"$X"`, `sudo -?`) unless the expansion
+  is the value of a letter or `=` before it (`sudo -u"$U" -l` and `sudo --user="$U" -v` stay
+  reads), an option's value that bash may split into several words (`sudo -u $U`, `sudo -u $(id
+  -un)`; a brace set is expanded and its words read as options, so `sudo -u {root,-s}` is
+  `sudo -u root -s`), and an operand that may expand to an option (`sudo "$X"`, `sudo ?s`,
+  `sudo {-s,}`). Such a word may also take the next word for its value (`sudo -$X root` may be
+  `sudo -iu root`), so when the line feeds the command a stdin, that stdin is read as the
+  shell's too. So `sudo -u $U <<< 'rm -rf /srv/data'` is `delete`, and `sudo -u $U` alone asks
+  as `bash` alone does, while `sudo -u $U ls` with no feed stays a read. With a command,
   sudo runs `$SHELL -c` on the command's words joined with spaces, each character but a letter, a
   digit, `_`, `-` and `$` escaped with a backslash. The gate reads that text too where it may
   differ from the words: a `$` the shell expands again, a newline it drops as a line continuation

@@ -506,9 +506,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (a pipe, a here-string, a heredoc), so those lines are `delete` or `store_write` and a deny on them denies. A stdin
   the gate cannot read (`sudo -s < /tmp/script.sh`, a variable) asks, and so does a bare `sudo -s`, as `bash` alone
   does. sudo's options are read as getopt reads them (`-Es`, `-iu root`, `--user=root`, `--user root`, `--`), behind
-  `env`, `nice`, `timeout`, `command` or another sudo too, and an option word with an expansion or an unquoted glob
-  (`sudo -"$X"`, `sudo -?`) counts as a shell option. With a command, sudo runs `$SHELL -c` on its words joined
-  with the shell's metacharacters escaped, and that text is read too where it may differ from the words (a `$`, a
+  `env`, `nice`, `timeout`, `command` or another sudo too. A word the gate cannot read that may come to `-s` counts as
+  a shell option: an option word with an expansion or an unquoted glob (`sudo -"$X"`, `sudo -?`; not `sudo -u"$U"`,
+  whose expansion is the value), an option's value that may split into several words (`sudo -u $U`, and a brace set,
+  expanded: `sudo -u {root,-s}` is `sudo -u root -s`), and an operand that may expand to an option (`sudo "$X"`,
+  `sudo ?s`); when the line feeds such a command a stdin, it is read as the shell's too, since the word may take the
+  next one as its value (`sudo -$X root` may be `sudo -iu root`). With a command, sudo runs `$SHELL -c` on its words
+  joined with the shell's metacharacters escaped, and that text is read too where it may differ from the words (a `$`, a
   newline, an empty word, an option the prefix reader misread: `sudo -iu root rm -rf /srv/data` is `delete`), and such
   a line still asks as code the gate cannot fully see, as it did as an unknown program; a word the gate cannot read
   asks. The line's own parts stay beside the new ones, and the call is also read as before (`gate.readings`) and

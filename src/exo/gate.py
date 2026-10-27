@@ -2930,40 +2930,74 @@ _sudo_shell_off: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate
 _SUDO_READ = ("sudo", "shell read")          # the mark in _call_memo that _read_core reads the call as before #491 too
 
 
-def _sudo_shells(sudos: list) -> list[tuple[str, list]]:
+def _sudo_unread(prog: str, w: _Word) -> bool:
+    """Whether a word in sudo's or doas's options may come to options the gate cannot read (#491): an operand that
+    may expand to one (`"$X"`, `?s`, `{-s,}`), or an option word with an expansion or an unquoted glob that may make
+    several words, or that comes before any letter or `=` taking a value (`-$X`, `-?`, `-E"$X"`; not `-u"$U"` or
+    `--user="$U"`, whose expansion is the value, one word)."""
+    f = w.text
+    if not f.startswith("-"):
+        return (w.dynamic or _expands(w) or w.raw[:1] == "[" and "]" in f) and f[:1] in "$`*?[{"
+    if not (w.dynamic or w.glob):
+        return False
+    if _gh_splits(w):
+        return True
+    at = min([f.find(c, 1) for c in "$`*?[{" if c in f[1:]] or [len(f)])
+    if f.startswith("--"):
+        return "=" not in f[:at]
+    return not any(ch in _SUDO_VALUES[prog] or ch == "h" and prog == "sudo" for ch in f[1:at])
+
+
+def _sudo_shells(sudos: list, fed: bool = False) -> list[tuple[str, list, bool]]:
     """For each sudo or doas in ``sudos`` (_strip_prefix_words) that starts the target user's shell (sudo -s, -i,
-    --shell, --login, doas -s: #491), the option that does and the words of its command, read as getopt reads the
-    options: clustered (`-Es`, `-iu root`), `--user=root` or `--user root`, a unique prefix of a long one, up to
-    `--` or the first operand, and the NAME=VALUE words sudo takes for the environment after them. sudo's -h takes
-    the next word as its host when that is no option. An ambiguous long option counts as a shell option if it may
-    be one (getopt then stops sudo). So does an option word the gate cannot read, one that holds an expansion or
-    an unquoted glob (`-$X`, `-?`), which may come to -s."""
+    --shell, --login, doas -s: #491), the option that does, the words of its command and whether it only may, read
+    as getopt reads the options: clustered (`-Es`, `-iu root`), `--user=root` or `--user root`, a unique prefix of a
+    long one, up to `--` or the first operand, and the NAME=VALUE words sudo takes for the environment after them.
+    sudo's -h takes the next word as its host when that is no option. An ambiguous long option counts as a shell
+    option if it may be one (getopt then stops sudo). So does a word the gate cannot read that may come to one
+    (_sudo_unread), and an option's value that may make several words (`-u $U`): a brace set there is expanded and
+    its words read as option words (`-u {root,-s}` is `-u root -s`). Such a word may also take the next word as its
+    value, so when the line feeds the command a stdin (``fed``), the shell is also read with no command."""
     out = []
     for prog, words in sudos:
-        shell, i = "", 0
-        while i < len(words) and words[i].text.startswith("-") and words[i].text != "-":
+        shell, unsure, i = "", False, 0
+        while i < len(words) and words[i].text != "-" and (words[i].text.startswith("-") or
+                                                           _sudo_unread(prog, words[i])):
             f, i = words[i].text, i + 1
             if f == "--":
                 break
-            if words[i - 1].dynamic or words[i - 1].glob:
-                shell = shell or f
+            if _sudo_unread(prog, words[i - 1]):
+                shell, unsure = shell or f, True
                 continue
+            takes = False
             if f.startswith("--"):
                 name, eq, _ = f[2:].partition("=")
                 hits = ([o for o in _SUDO_LONG if o.rstrip("=") == name] or
                         [o for o in _SUDO_LONG if o.startswith(name)]) if prog == "sudo" else []
                 shell = shell or next((f for o in hits if o in ("shell", "login")), "")
-                i += len(hits) == 1 and hits[0].endswith("=") and not eq and i < len(words)
-                continue
-            for j, ch in enumerate(f[1:], 2):
+                takes = len(hits) == 1 and hits[0].endswith("=") and not eq
+            for j, ch in enumerate(f[1:] if not f.startswith("--") else "", 2):
                 shell = shell or (f if ch == "s" or ch == "i" and prog == "sudo" else "")
                 if ch in _SUDO_VALUES[prog] or ch == "h" and prog == "sudo":
-                    i += j == len(f) and i < len(words) and not (ch == "h" and words[i].text.startswith("-"))
+                    takes = j == len(f) and not (ch == "h" and i < len(words) and words[i].text.startswith("-"))
                     break
+            if not takes or i == len(words):
+                continue
+            v = words[i]
+            if v.brace and _gh_splits(v) and not v.dynamic:
+                alts = (_brace_words(v.raw.replace("\\\n", "")) or [])[1:]
+                ws = [x for c in _parse(" ".join(alts))[0] for x in c.words]
+                if ws and len(ws) == len([a for a in alts if a]):
+                    words, v = words[:i] + ws + words[i + 1:], ws[0]
+            if _gh_splits(v):
+                shell, unsure = shell or v.text, True
+            i += 1
         while prog == "sudo" and i < len(words) and _ASSIGN.fullmatch(words[i].text):
             i += 1
         if shell:
-            out.append((f"{prog} {shell}", words[i:]))
+            out.append((f"{prog} {shell}", words[i:], unsure))
+            if unsure and fed and words[i:]:
+                out.append((f"{prog} {shell}", [], unsure))
     return out
 
 
@@ -2981,11 +3015,13 @@ def _sudo_shell_parts(sudos: list, words: list, k: _Cmd, cmd: str, depth: int, c
     is read here: it holds the sudos after it, which that reading reads in turn (one per level, not each again)."""
     parts: list[Classification] = []
     reread = False
-    for what, rest in _sudo_shells(sudos):
+    fed = _own_stdin(k) or k.piped_in or k.fed or k.stdin_unknown
+    for what, rest, unsure in _sudo_shells(sudos, fed):
         if rest and reread:
             continue
         if not rest:
-            parts.append(_runs_stdin(_opaque(f"{what} starts a shell, which runs its stdin"[:120], cmd), k))
+            starts = "may start" if unsure else "starts"
+            parts.append(_runs_stdin(_opaque(f"{what} {starts} a shell, which runs its stdin"[:120], cmd), k))
             if depth < _DEPTH:
                 parts += _once(ctx, (classify_shell, depth + 1), k, piped, lambda t: [classify_shell(t, depth + 1)])
             continue
