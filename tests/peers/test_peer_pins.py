@@ -120,7 +120,7 @@ async def sent_to_alpha(run_dir, node, presence_key):
     async def rpc(path, body):  # alpha's daemon: lists one session, holds the message
         if body.action == "list":
             return {"sessions": [{"id": "s_alpha", "title": "", "state": "idle"}]}
-        return crypto.sign_doc({"v": 1, "msg_id": msg_id(body.envelope), "state": "held",
+        return crypto.sign_doc({"v": 1, "kind": "reply", "msg_id": msg_id(body.envelope), "state": "held",
                                 "detail": "held for the principal", "by": "alpha", "daemon": "alpha-7777",
                                 "ts": crypto.now_ts()}, presence_key.key)
     node.rpc = rpc
