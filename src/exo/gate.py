@@ -3540,15 +3540,25 @@ def _hand_out(pair: tuple) -> Classification:
     sits; the marked part's own exposure is never read at combine time."""
     c, marked = pair
     if marked is None:
-        return _copy(c)
+        out = _copy(c)
+        for fname in ("displaced", "floor", "also", "ordinary"):
+            v = getattr(c, fname)
+            if v is not None:
+                setattr(out, fname, _copy(v))
+        return out
     out = _copy(c)
     out.parts = [marked]
+    for fname in ("displaced", "floor", "also", "ordinary"):
+        setattr(out, fname, getattr(marked, fname))
     return out
 
 
 def _hop_copy(c: Classification, shared: dict, memo: dict | None = None) -> Classification:
     """copy.deepcopy of an ssh hop's result, except the parts _remote_fed marked and shares for the line
-    (in `shared`, by id): those stay shared, so a text fed to many ssh is copied once, not once per ssh."""
+    (in `shared`, by id): those stay shared, so a text fed to many ssh is copied once, not once per ssh.
+    deepcopy keeps a part that is both listed and displaced (or floored, also, ordinary) one object, so
+    the hop's marking walk marks it in both places; replace() alone would leave the field pointing at
+    the unmarked original, and a displaced gh part would keep its private exposure (#327 repair)."""
     memo = {} if memo is None else memo
     if id(c) in shared:
         return c
@@ -3557,6 +3567,10 @@ def _hop_copy(c: Classification, shared: dict, memo: dict | None = None) -> Clas
     out = replace(c, signals=list(c.signals), _command_views=list(c._command_views), parts=[])
     memo[id(c)] = out
     out.parts = list(c.parts) if id(c.parts) in shared else [_hop_copy(p, shared, memo) for p in c.parts]
+    for fname in ("displaced", "floor", "also", "ordinary"):
+        v = getattr(c, fname)
+        if v is not None:
+            setattr(out, fname, _hop_copy(v, shared, memo))
     return out
 
 
