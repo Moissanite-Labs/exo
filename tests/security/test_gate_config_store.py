@@ -264,8 +264,8 @@ def test_a_file_tool_read_of_config_json_stays_a_read(exo_home):
     ("printf x > {h}/config.jsonl", "local_write"),
     ("cp /tmp/x $(echo ~/.exo/config.json.bak)", "shell"),
     ("cp /tmp/x ~/.exo/config.json-old", "shell"),
-    # names are matched case-sensitively, as `~/.exo/POLICIES/gates.yaml` is on main (a limit in docs/GATE.md)
-    ("cp /tmp/x {h}/CONFIG.JSON", "shell"),
+    # `{h}/CONFIG.JSON` asked here no more: store and secret names match in any case (#601), and the
+    # case-variant rows live in test_gate_store_name_forms.py (both readings, EXO_GATE_CASE_SENSITIVE).
 ])
 def test_other_config_like_paths_keep_their_class(line, category, exo_home):
     c, d = _decide(_sh(line.format(h=exo_home)))

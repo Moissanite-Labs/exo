@@ -85,7 +85,8 @@ def test_slash_permissions_switches_and_the_banner_follows(tmp_path):
 
 def test_banner_counts_auto_approved_calls(tmp_path):
     async def sc(app, pilot, eng):
-        await eng.plugins.hooks.afire("pre_tool_call", tool_name="bash", args={"command": "rm -rf build"})
+        await eng.plugins.hooks.afire("pre_tool_call", tool_name="bash", args={"command": "rm -rf build"},
+                                      author="principal:tui")  # the core sends who started the turn (#598)
         await app.load_permissions()
         assert "(1 auto-approved)" in app.status_text() and "1 auto-approved" in strip_text(app)
     run(tmp_path, sc, skip_permissions=True)
