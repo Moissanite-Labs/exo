@@ -200,6 +200,28 @@ def test_close_cancels_the_scheduler_loop_it_took_over(tmp_path):
     asyncio.run(run())
 
 
+def test_close_cancels_a_running_scheduled_job_before_transports_stop(tmp_path):
+    """Scheduler.tasks lists the running jobs too, so close cancels them at admission, not in its scheduler step."""
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={}, attach_scheduler=Scheduler)
+    stop_channels, running, seen = engine.stop_channels, [], []
+
+    async def check_then_stop():
+        await asyncio.sleep(0)  # one turn of the loop delivers the cancel sent at admission
+        seen.append(running[0].cancelled())
+        await stop_channels()
+
+    engine.stop_channels = check_then_stop
+
+    async def run():
+        running.append(asyncio.ensure_future(asyncio.sleep(30)))
+        engine.scheduler.running["job"] = running[0]
+        assert engine.scheduler.tasks() == tuple(running)
+        await engine.close()
+        assert seen == [True]
+
+    asyncio.run(run())
+
+
 def test_a_job_that_comes_due_while_close_stops_transports_is_left_for_the_next_start(tmp_path):
     engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={}, attach_scheduler=Scheduler)
     scheduler, now, launched = engine.scheduler, [1_000_000.0], []

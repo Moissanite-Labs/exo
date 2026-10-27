@@ -193,3 +193,16 @@ def test_abort_startup_itself_releases_each_resource(tmp_path):
     engine.abort_startup()
     assert ran == ["learner", "cleanup"] and writer.closed and engine.store._conn is None
     assert engine._on_harness_error not in [ref() for ref in trace._sinks]
+
+
+def test_abort_startup_refuses_an_engine_whose_loop_still_runs_a_turn(tmp_path):
+    """A direct Loop.send caller is not an owned task, so Loop.busy is what tells abort_startup a turn still runs."""
+    engine = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path),
+                        env={})
+    engine.loop.state("direct").running = True
+    with pytest.raises(RuntimeError, match="unstarted engine"):
+        engine.abort_startup()
+    assert engine.store._conn is not None  # nothing was released
+    engine.loop.state("direct").running = False
+    engine.abort_startup()
+    assert engine.store._conn is None
