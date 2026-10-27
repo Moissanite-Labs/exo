@@ -1258,6 +1258,27 @@ def test_a_store_name_in_another_case_and_an_odd_spelling_asks(call):
     assert (bash(call) if isinstance(call, str) else decided(call)) == ("credentials", "ask")
 
 
+# #601 keeps the host's copy of a remote line's own action beside a store path that is one only by its letter case
+# (_fold_made): main read `ssh prod 'rm -rf ~/.Kube/config'` as a delete on the host. A path in another case and an
+# odd spelling at once is fold-made in its lexical form too, so the host keeps its delete as for the plain spelling
+# (#513 checker, the merge of main e0968a2b). A path that is a store in its own case decides as on main, with no copy.
+HOST_DELETE = [{"gates": {"deny": [{"category": "delete", "target": "prod"}]}},
+               {"gates": {"rules": [{"match": {"category": "delete", "target": "prod"}, "decision": "deny",
+                                     "reason": "r"}]}}]
+
+
+@pytest.mark.parametrize("policy", HOST_DELETE)
+@pytest.mark.parametrize("hop", ["ssh prod '{}'", "mosh prod -- {}", "ssh a ssh prod '{}'"])
+@pytest.mark.parametrize("path", ["~/.Kube//config", "~/.KUBE/./config", "~/.Kube/x/../Config", "~/.Kube/config"])
+def test_the_host_keeps_its_delete_beside_a_path_in_another_case_and_an_odd_spelling(path, hop, policy):
+    assert full(hop.format(f"rm -rf {path}"), policy)[:2] == ("credentials", "deny")
+
+
+@pytest.mark.parametrize("path", ["~/.kube//config", "~/.kube/config"])
+def test_a_path_in_its_own_case_gets_no_copy_of_the_host_s_delete(path):
+    assert full(f"ssh prod 'rm -rf {path}'", HOST_DELETE[0])[:2] == ("credentials", "ask")
+
+
 @pytest.mark.parametrize("line", ["ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'", "ssh prod 'cat ~/.kube/config'",
                                   "ssh prod 'cat ~/.kube/config ~/.ssh/id_rsa'"])
 def test_the_host_keeps_every_reserved_hit_main_lists(line):

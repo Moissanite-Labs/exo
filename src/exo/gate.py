@@ -6008,7 +6008,8 @@ def _fold_made(t: str) -> bool:
     as written. The ssh hop keeps the host beside the line's own action then (review of #635): the fold-made part
     took the line's category, and the alt target's decision — the copy of the action on the host — with it. A name
     an expansion form made a store of folds the same way in either spelling, so this is False there and the hop
-    keeps the reading both spellings share."""
+    keeps the reading both spellings share. Each spelling is read in its lexical form too (#446), as the store checks
+    read it, so `~/.Kube//config` is fold-made as `~/.Kube/config` is (#513)."""
     if not t:
         return False
     f = _fold(t)
@@ -6016,8 +6017,8 @@ def _fold_made(t: str) -> bool:
         return False
     token = _case_off.set(True)
     try:
-        plain = _store_word(t, ancestors=True) or bool(_SENSITIVE_PATH.search(t))
-        folded = _store_word(f, ancestors=True) or bool(_SENSITIVE_PATH.search(f))
+        plain = _store_word(t, ancestors=True) or any(map(_SENSITIVE_PATH.search, _lexical(t)))
+        folded = _store_word(f, ancestors=True) or any(map(_SENSITIVE_PATH.search, _lexical(f)))
     finally:
         _case_off.reset(token)
     return not plain and folded
