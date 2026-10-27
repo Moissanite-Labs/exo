@@ -1242,10 +1242,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   also in double quotes, a here-string, a here-document body or a redirection target, and nested in a word
   bash expands) is an `opaque_exec` part that asks, beside the line's other parts (D-075), so a deny on them
   still wins. One exception keeps the everyday lines: a variable the line assigns a literal value with no
-  `$`, backtick or backslash prompt-expands to itself, so `p=x; echo ${p@P}` stays a read; the last literal
-  wins, an exporter's assignment counts, a literal appended to a literal is still one, and after an `unset`
-  the value is empty. A prefix assignment sets the command's own environment, which bash expands the words
-  before, so it is no source, and a value `printf -v` or `read` fills is never one the line spells. The
+  `$`, backtick or backslash prompt-expands to itself, so `p=x; echo ${p@P}` stays a read; the last assignment
+  wins, so a literal keeps the line a read while a value the gate cannot read makes the parameter unknown
+  again (`p=x; p=$y`, an append onto it too, `p=x; p+=$y`), an exporter's assignment counts, a literal
+  appended to a literal is still one, and after an `unset` the value is empty. An exporter's arguments
+  expand before any of its assignments applies, so a `${..@P}` in one reads the value from before it
+  (`export p=x q=${p@P}` asks). A prefix assignment sets the command's own environment, which bash expands
+  the words before, so it is no source, and a value `printf -v` or `read` fills is never one the line
+  spells, so either clears the literal the line set for the name. The
   other `@` operators decode or spell the value and run nothing, so they keep their reading, and the
   operator is read only where the parameter ends, so `echo ${x:-foo@P}` stays a default word. Chosen over
   reading the value's own substitutions (the gate cannot know where the value's text ends or what a prompt
