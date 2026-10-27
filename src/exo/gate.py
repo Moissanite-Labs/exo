@@ -7153,8 +7153,9 @@ def _shell_call(cmd: str) -> Classification:
                 is_sensitive_path(p.target, True) or _glob_hits_secret(p.target, True) or not (
                     is_sensitive_path(p.target) or _glob_hits_secret(p.target)))), None)
             # A word main read with no name of its own (`keys` in `~/.exo`) made main's line a secret line with no
-            # target and gets no part (_plain_part), so main's read is the line, and its path the folder as written
-            if plain_read is None and (mine := _plain_hit(cmd)):
+            # target and gets no part (_plain_part), so main's read is the line, and its path the folder as written.
+            # A line with no secret read here has none as main read it either, so it costs no second reading
+            if plain_read is None and read is not None and (mine := _plain_hit(cmd)):
                 plain_read = _make("credentials", summary=f"shell touching {mine}"[:120],
                                    target=mine if "/" in mine or "." in mine else "")
             found += [f for f in _tool_folder_read(cmd, folders, plain_read, plain=True)
