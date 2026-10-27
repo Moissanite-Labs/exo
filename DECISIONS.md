@@ -2803,12 +2803,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line under the same key as a fed `bash`. A stdin it cannot read asks, and so does a bare `sudo -s`, since a command
   around the line may feed it. sudo's and doas's options are read as getopt reads them (`_sudo_shells`): clusters,
   values attached or not, unique prefixes of sudo's long options, `--`, then sudo's `NAME=VALUE` words, for each
-  sudo or doas the prefix reader passes (`env`, `nice`, `timeout`, `command`, another sudo). With a command, sudo
+  sudo or doas the prefix reader passes (`env`, `nice`, `timeout`, `command`, another sudo); an option word with an
+  expansion or an unquoted glob (`sudo -"$X"`, `sudo -?`) counts as a shell option, since it may come to `-s`
+  (review of #491: `sudo -$(printf s) <<< 'rm -rf x'` was allowed under `deny: [delete]`). With a command, sudo
   runs `$SHELL -c` on its words joined with spaces, each character but a letter, a digit, `_`, `-` and `$` escaped
   with a backslash. Where that text may not be the words the line's own reading took (a `$`, a newline the shell
   drops as a line continuation, an empty word, or `-iu root` and `--user root`, which the prefix reader takes for a
   program), the gate also reads it, beside an `opaque_exec` part, so the line asks as it did when it read an unknown
-  program there and its approval binds to the exact command. A word of the command the gate cannot read asks too.
+  program there and its approval binds to the exact command. Only the first such text is read at each level: it
+  holds the sudos after it, which its own reading reads in turn (reading each of them again at each level made a
+  40-deep `sudo -s ... echo '$x'` take minutes). A word of the command the gate cannot read asks too.
   Chosen over rewriting the prefix reader: every part main made stays (the line's first part keeps sudo's raise and
   signal, and #454's sudo write still leads where main's `read` would), and the new parts only add. Added parts can
   still lower a line where they take the lead and a policy allows their category (`ssh host 'sudo -s < f'` was a
@@ -2820,14 +2824,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line, as for `echo 'rm -rf x' | bash`. Known limits, not filed here: `su` with no `-c` and `sudo su` with a stdin
   ask as an unknown program and the fed text is not read, so a deny on what it carries asks rather than denies; the
   files a login shell reads first and a `SHELL` that names another program are not read; an ambiguous long option
-  is taken for a shell option when it may be one. The differential against main 54525f73 (scripts/gate_diff.py,
-  `--jobs 2`) lowers no pair: the built-in corpus without variants (9,741 actions x 87 policies) tightens 4,264
-  pairs on 67 actions; with its variants (73,777 actions) it tightens 29,439 pairs on 530 actions and changes 6
-  actions in their classification only (an `ssh host 'sudo -s < f'` hop inside a line that already asked); and
-  an aimed corpus of 2,326 lines (the new tests' lines and each shell spelling, feed, payload and wrapper) under
-  the 87 built-in policies and 37 more deny, category and reserved policies on `delete`, `force_push`,
-  `web_post`, `store_write`, `credentials`, `opaque_exec` and `github_post` tightens 148,465 pairs on 1,699
-  actions.
+  is taken for a shell option when it may be one. The differential against main dcab371a (scripts/gate_diff.py,
+  `--jobs 2`) lowers no pair: the built-in corpus without variants (11,088 actions x 87 policies) tightens 6,170
+  pairs on 91 actions, and an aimed corpus of 3,236 lines (the new tests' lines, each shell spelling, feed, payload
+  and wrapper, option words with an expansion or a glob, and nested sudo shells) under the 87 built-in policies and
+  37 more deny, category and reserved policies on `delete`, `force_push`, `web_post`, `store_write`,
+  `credentials`, `opaque_exec` and `github_post` tightens 205,461 pairs on 2,267 actions.
 
   *Amendment 2026-10-26 (issue #584):* a backslash-newline inside a `$` form is joined before the form is read, as
   bash joins it. Outside single quotes bash drops each `\<newline>` before it expands a word, so

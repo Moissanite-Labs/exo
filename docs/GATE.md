@@ -1573,14 +1573,17 @@ gate does not read:
   as getopt reads them, clustered (`-Es`, `-iu root`), with their values (`-u root`, `--user=root`,
   `--user root`, a unique prefix of a long option), up to `--` or the first operand, then the
   `NAME=VALUE` words it takes for the environment; behind `env`, `nice`, `timeout`, `command` or
-  another sudo too. With a command, sudo runs `$SHELL -c` on the command's words joined with
-  spaces, each character but a letter, a digit, `_`, `-` and `$` escaped with a backslash. The
-  gate reads that text too where it may differ from the words: a `$` the shell expands again, a
-  newline it drops as a line continuation (`sudo -s $'r\nm' -rf /srv/data` runs `rm`), an empty
-  word, or an option sudo reads otherwise than the prefix reader (`sudo -iu root rm -rf /srv/data`
-  is `delete`). Such a line also asks as `opaque_exec` (unless a policy names `opaque_exec` below
-  ask), as it did when the gate read an unknown program there, and its approval binds to the exact
-  command. A word of the command the gate cannot read (`sudo -s rm -rf "$D"`) asks. The line's own
+  another sudo too. An option word the gate cannot read, one with an expansion or an unquoted glob
+  (`sudo -"$X"`, `sudo -?`), counts as a shell option, since it may come to `-s`. With a command,
+  sudo runs `$SHELL -c` on the command's words joined with spaces, each character but a letter, a
+  digit, `_`, `-` and `$` escaped with a backslash. The gate reads that text too where it may
+  differ from the words: a `$` the shell expands again, a newline it drops as a line continuation
+  (`sudo -s $'r\nm' -rf /srv/data` runs `rm`), an empty word, or an option sudo reads otherwise
+  than the prefix reader (`sudo -iu root rm -rf /srv/data` is `delete`). Such a line also asks as
+  `opaque_exec` (unless a policy names `opaque_exec` below ask), as it did when the gate read an
+  unknown program there, and its approval binds to the exact command. That text holds the sudos
+  after it, which its own reading reads in turn, so nested sudo shells are read once per level. A
+  word of the command the gate cannot read (`sudo -s rm -rf "$D"`) asks. The line's own
   parts stay beside these, and the call is also read as before #491, as the last of its floors
   (`gate.readings`), and decided on each reading, the strictest standing. So a policy that allows
   the category the shell's parts lead with does not lower a line main asked or logged

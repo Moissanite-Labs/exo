@@ -2921,7 +2921,8 @@ def _sudo_shells(sudos: list) -> list[tuple[str, list]]:
     options: clustered (`-Es`, `-iu root`), `--user=root` or `--user root`, a unique prefix of a long one, up to
     `--` or the first operand, and the NAME=VALUE words sudo takes for the environment after them. sudo's -h takes
     the next word as its host when that is no option. An ambiguous long option counts as a shell option if it may
-    be one (getopt then stops sudo)."""
+    be one (getopt then stops sudo). So does an option word the gate cannot read, one that holds an expansion or
+    an unquoted glob (`-$X`, `-?`), which may come to -s."""
     out = []
     for prog, words in sudos:
         shell, i = "", 0
@@ -2929,6 +2930,9 @@ def _sudo_shells(sudos: list) -> list[tuple[str, list]]:
             f, i = words[i].text, i + 1
             if f == "--":
                 break
+            if words[i - 1].dynamic or words[i - 1].glob:
+                shell = shell or f
+                continue
             if f.startswith("--"):
                 name, eq, _ = f[2:].partition("=")
                 hits = ([o for o in _SUDO_LONG if o.rstrip("=") == name] or
@@ -2958,9 +2962,13 @@ def _sudo_shell_parts(sudos: list, words: list, k: _Cmd, cmd: str, depth: int, c
     so the shell expands a `$` again and drops a newline, as a line continuation. That text is read where it may
     not be the words the line's own reading took (``words``): a `$`, a newline, an empty word, or an option of
     sudo's that _strip_prefix_words reads otherwise (`-iu root`). An opaque part beside it keeps the ask the line
-    had when its own reading was an unknown program. A word the gate cannot read asks."""
+    had when its own reading was an unknown program. A word the gate cannot read asks. Only the first such text
+    is read here: it holds the sudos after it, which that reading reads in turn (one per level, not each again)."""
     parts: list[Classification] = []
+    reread = False
     for what, rest in _sudo_shells(sudos):
+        if rest and reread:
+            continue
         if not rest:
             parts.append(_runs_stdin(_opaque(f"{what} starts a shell, which runs its stdin"[:120], cmd), k))
             if depth < _DEPTH:
@@ -2976,6 +2984,7 @@ def _sudo_shell_parts(sudos: list, words: list, k: _Cmd, cmd: str, depth: int, c
                 [(w.text, w.dynamic) for w in ws] == [(w.text, False) for w in rest]:
             continue
         parts.append(_opaque(f"{what} runs its command through a shell, which reads other words"[:120], cmd))
+        reread = True
         parts += _classify_simple(_wrapped(k, ws), cmd, depth + 1, ctx, piped) if depth < _DEPTH else [_too_deep(cmd)]
     return parts
 
