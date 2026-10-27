@@ -1230,6 +1230,17 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-27 (issue #339):* a moved bus file is protected by relative names too. A cd or pushd into
+  a folder a bus file lives in or above joins that folder to the line's bus bases, and relative names are read
+  against every base; a git -C folder does the same for its own command, and a nested local shell (`bash -c`,
+  `eval`) starts in the line's bases. The bases only grow within the line: a later cd never clears them,
+  because the gate cannot tell a cd that moves the shell from one that does not (a subshell, a pipeline, the
+  background, a dead branch, a failing cd, `cd -`, `popd`). A relative or glob cd into a bus folder counts, as
+  do `cp -t`, `unzip -d` and `tar -C` with an abbreviated `--extract`. A `$( )` after a bus cd is seeded with
+  the bases in force when its enclosing command runs. Remaining limits: a cd target or operand the gate cannot
+  spell (a variable, a loop value) is not joined; a glob cd into a subfolder of a bus folder keeps the folder
+  as the base, so a `..` out of it is not followed; patch, git apply, rsync, scp and the other delivery forms
+  are not all read; a heredoc-fed shell does not inherit the bases.
 - *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
   the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
   globbed folder against the folder of each glob sample (`_glob_folder_hit`), so `cat ~/.ss?/*`, `cat ~/.aw?/*`

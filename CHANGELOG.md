@@ -31,6 +31,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   segment of a dotted key. Both now mask a secret at any level of the key path (a secret-shaped name, a container
   under one, and a literal under `env` or `headers`), and `config set` refuses the same shapes. `${VAR}` references
   and `*_env` names are still shown and accepted (#691).
+
+- A bus file the environment moves is protected against relative writes too (#339). #305 protected the
+  files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` name and the folder `EXO_BUS_KEYS_DIR` names by their absolute
+  paths, but a relative write after a `cd` or `pushd` into their folder, an extraction with `tar -C` there,
+  and a copy landing a protected name in the folder all wrote without asking. A line standing in a folder a
+  moved bus file lives in or above one now reads relative names against every such folder it entered (a
+  `git -C` folder does the same for its own command), an extraction into such a folder asks, and a copy or
+  move into a bus folder of a source named like one of its protected names lands on that name and asks. The
+  bases only grow within the line: a later cd never clears them, because the gate cannot tell a cd that
+  moves the shell from one that does not (a subshell, a pipeline, the background, a dead branch, a failing
+  cd, `cd -`, `popd`). A relative or glob cd into a bus folder counts, as do `cp -t`, `unzip -d`, `tar -C`
+  with an abbreviated `--extract`, and a nested local shell (`bash -c`, `eval`), which starts in the line's
+  bus folders instead of classifying as opaque. The rest of a shared folder stays writable, and a pure read
+  of the file keeps its class (a read whose output goes elsewhere is a store write, as its absolute spelling
+  is). Remaining limits: a cd target or operand the gate cannot spell (a variable, a loop value) is not
+  joined, and patch, git apply and the other delivery forms are not all read.
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
