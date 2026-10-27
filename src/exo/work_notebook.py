@@ -306,7 +306,7 @@ def attach(engine: Any, config: dict[str, Any] | NotebookConfig | None = None, *
     if engine.registry.get(SPEC.name):
         raise ConfigError("work_notes tool name is already registered")
     notebook = WorkNotebook(engine, config, principal or "")
-    previous = engine.loop.workspace_extra
+    previous = getattr(engine.loop, "workspace_extra", None)
     engine.registry.register(SPEC, notebook.tool)
     engine.work_notebook = notebook
     engine.loop.workspace_extra = lambda session, cwd: "\n\n".join(filter(None, (
