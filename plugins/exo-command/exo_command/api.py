@@ -150,6 +150,8 @@ async def _sessions(c, p, q, body):
         limit = min(int(q["limit"][0]), 500) if q.get("limit") else 100
     except ValueError:
         raise BadRequest("limit must be a number")
+    if limit < 1:   # SQLite reads LIMIT -1 as no limit at all (exo-desktop #55)
+        raise BadRequest("limit must be at least 1")
     res = await c.source.call(s.SessionList(limit=limit))
     return {"sessions": res.get("sessions") or []}
 

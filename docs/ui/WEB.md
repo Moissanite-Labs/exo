@@ -211,6 +211,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   loaded scope; this is not full-history or message search. The status selector shows all conversations,
   working conversations or those with an approval waiting. Search and filtering do not switch the active
   conversation or touch its draft. Clear or Show all conversations resets the search.
+  The list comes from `GET /api/chat/sessions`, which takes a `limit` from 1 to 500 (100 when none is given).
+  A larger limit is cut to 500. A limit below 1, or one that is not a number, gets a 400 and sends nothing to
+  the core: SQLite reads a negative `LIMIT` as no limit, so `limit=-1` used to return every session (exo-desktop #55).
   Narrow windows start with a compact Conversations disclosure showing the current title. Open it to
   search or select a thread. Choosing a conversation closes it and returns to the writing area. Resizing
   does not hide a focused control inside the disclosure. This choice is not saved as a pane preference.
