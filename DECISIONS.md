@@ -6260,7 +6260,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
 
 ## D-088 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
-- **Status:** Implemented for review ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
+- **Status:** Built ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
   letting users choose how lean or capable Exo should be. Comparative performance is not yet established.
 - **Evidence:** `docs/HARNESS-LANDSCAPE.md` records the current Pi, Codex, Hermes, OpenCode, DeepSeek Harness,
   Claude Code, Aider and Goose sources, concrete user requests, licenses and remaining work. The strongest

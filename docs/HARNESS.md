@@ -1,6 +1,6 @@
 # Modular harness profiles
 
-**Status:** In progress (D-088, [#496](https://github.com/aska-digital/exo/issues/496)). Implemented on the feature branch and awaiting review.
+**Status:** Built (D-088, [#496](https://github.com/aska-digital/exo/issues/496)). Profiles are opt-in. An install with no profile keeps its behavior.
 
 Exo can run with a small set of capabilities or with its full set of integrations.
 Profiles select runtime components. They do not change models, approval policy,
@@ -215,12 +215,14 @@ the comparative evaluations described there.
 
 ## Verification of this change
 
-Checked on 2026-10-23 with Python 3.11.17 on Linux:
+This is the first check, on 2026-10-23, before the review rounds changed shutdown,
+instructions and the CLI. It ran with Python 3.11.17 on Linux. Each later commit
+names the tests it ran.
 
 - Full root suite: **7,368 passed, 124 skipped**, with one asyncio subprocess-transport
   finalizer warning in `test_claude_cli.py` (`Event loop is closed`). No root test failed.
-- Final focused composition, lifecycle, workspace, learning, CLI, plugin, docs and budget
-  sweep after the last edits: **234 passed**. Independent scheduler/instruction tests also pass.
+- Focused composition, lifecycle, workspace, learning, CLI, plugin, docs and budget
+  sweep: **234 passed**. Independent scheduler/instruction tests also pass.
 - Each plugin suite ran separately: **2,471 passed, 1 skipped, 2 failed** initially.
   A Chrome fixture startup failure passed immediately on isolated retry. The remaining
   [browser layout assertion](https://github.com/aska-digital/exo/issues/499) (`inputY=134`, expected `<120`) reproduces unchanged on base

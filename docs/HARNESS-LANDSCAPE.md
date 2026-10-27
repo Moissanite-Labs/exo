@@ -1,6 +1,6 @@
 # Harness landscape and modular evolution
 
-**Status:** In progress (D-088, [#496](https://github.com/aska-digital/exo/issues/496)). Implemented on the feature branch and awaiting review.
+**Status:** Research record for D-088 ([#496](https://github.com/aska-digital/exo/issues/496)). The profiles it led to are built. The roadmap items below are not.
 
 Research snapshot: **2026-10-23**. Scope: current public documentation, repository code/configuration,
 and selected issue reports. This is an engineering comparison, not evidence that any harness is best or
