@@ -256,7 +256,11 @@ of all three turns. A turn of another session in between leaves the undo pending
 turn keeps the window the first one left. A transcript that does not reach back to where the window started was cut
 short, not undone, so it drops nothing. When `/undo N` cuts at a row Hermes merged its summary into, Hermes keeps
 only that row's summary part, and that part reaches back too. A compaction since the undo reaches back when its
-summary row folded the window's first row or that part.
+summary row folded the window's first row or that part, and so does one before the undo: it notes the fold with
+the pins (the row's digest and the summary blocks written for it), the undo seeds its reach from that note, and a
+compaction that folds a row already noted hands the note on. One that folded only rows the window never held notes
+nothing, so a transcript cut short below the window's first row still drops nothing. The note follows the pins into
+a compression child and a `/branch` child.
 
 Each compaction ties the pins whose message it folded to the block it writes into its summary row, and the pins
 file keeps those ties. A summary row shows the pins tied to its block. So a folded pin stays while a summary row
