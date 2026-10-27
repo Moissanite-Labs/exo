@@ -8,6 +8,19 @@ def test_command_from_env_and_fallback():
     assert restart_command(None, {"EXO_RESTART_CMD": "x"}) == ["x", "--resume"]
 
 
+def test_restart_drops_full_access_flag():
+    out = restart_command("sB", {}, ["exo", "--full-access", "--session", "sA"])
+    assert out[1:] == ["exo", "--session", "sB"]
+    out = restart_command("sB", {}, ["exo", "--full", "--session", "sA"])
+    assert out[1:] == ["exo", "--session", "sB"]
+    out = restart_command("sB", {}, ["exo", "--full-acc", "--session", "sA"])
+    assert out[1:] == ["exo", "--session", "sB"]
+    out = restart_command("s_new", {}, ["exo", "--full-access", "--resume"])
+    assert out[1:] == ["exo", "--session", "s_new"]
+    out = restart_command("sB", {}, ["exo", "--full-access=true", "--session", "sA"])
+    assert out[1:] == ["exo", "--session", "sB"]
+
+
 def test_macos_terminal_and_iterm():
     got = []
     assert open_tab(["exo", "--session", "s1"], {}, "darwin", got.append) == "opened"

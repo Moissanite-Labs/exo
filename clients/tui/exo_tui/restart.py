@@ -50,7 +50,7 @@ def restart_command(session: str | None, env: dict[str, str] | None = None,
                     argv: list[str] | None = None) -> list[str]:
     """The command line that resumes ``session``: EXO_RESTART_CMD, else re-exec of argv."""
     env = os.environ if env is None else env
-    base = _without_options(_launch_command(env, argv), ("--session",), ("--resume",))
+    base = _without_options(_launch_command(env, argv), ("--session",), ("--resume", "--full-access"))
     return [*base, "--session", session] if session else [*base, "--resume"]
 
 
