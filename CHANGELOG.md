@@ -9,7 +9,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - The core budget prices coupling, not only lines (D-083, amending D-077). `CORE_HEADROOM` goes from 1,000 to
   2,000, so the ceiling is 16,813 against 15,812 counted lines, and the engine split's step 4 counts are
   asserted and ratcheted in `tests/integration/test_wave1_acceptance.py`: at most 39 product imports into the
-  core (`INWARD_IMPORTS_MAX`) and at most 7 cross-module private-state reads (`PRIVATE_STATE_MAX`). The floor
+  core (`INWARD_IMPORTS_MAX`) and at most 8 cross-module private-state reads (`PRIVATE_STATE_MAX`). The floor
   keeps its rule, it only ratchets down, and each of the two counts may only go down. The numbers are priced
   here with the reason: a line budget alone pushed work around itself, into long function bodies and coupling
   across module boundaries, so the coupling is now counted where the split is going.
