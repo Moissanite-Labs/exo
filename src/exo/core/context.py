@@ -314,7 +314,7 @@ def missing_directives(summary: str, principal: list[Message]) -> list[str]:
 
 
 class TurnContext(Protocol):
-    """Minimal context view used by a turn; recall/cache/turn callbacks are optional."""
+    """Minimal turn view; optional for_child(tree, tools=names) decorates delegated context."""
 
     on_event: Callable[[Any, str], Awaitable[Any]] | None
 
@@ -884,7 +884,7 @@ class AgentContext(TreeContext):
         last, text = self._unseen(session, agent, frontier, meta)
         if last is None:
             return None
-        self.store.set_meta(session, {**meta, "seen_pos": last})
+        self.store.update_meta(session, lambda current: current.update(seen_pos=last))
         if not text:
             return None
         msg = Message.user(text)
@@ -968,8 +968,8 @@ class AgentContext(TreeContext):
         new = [n for n in self.store.summaries(key) if n.id not in known]
         _, frontier, _ = self._view(key)
         if frontier:  # let this thread's tail drop what the new summaries now cover
-            meta = self.store.get_meta(session)
-            self.store.set_meta(session, {**meta, "compact_seq": self.store.last_logged_seq(session, frontier)})
+            self.store.update_meta(session, lambda meta: meta.update(
+                compact_seq=self.store.last_logged_seq(session, frontier)))
         after = self.report(session, system)
         folded = [{"level": n.level, "start": n.start, "end": n.end, "before_tokens": self._source_tokens(n),
                    "after_tokens": estimate_tokens(n.text)} for n in new if n.status == "done"]
