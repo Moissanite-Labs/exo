@@ -60,8 +60,7 @@ def test_rotation_remove_and_explicit_host(tmp_path, monkeypatch):
     assert auth.child_env({}, tmp_path, 'alice')['GH_TOKEN'] == TOKEN + 'rotated'
     auth.remove(tmp_path, 'alice')
     assert auth.status(tmp_path, 'alice')['mode'] == 'disabled'
-    with pytest.raises(auth.AuthError):
-        auth.child_env({}, tmp_path, 'alice')
+    assert auth.child_env({}, tmp_path, 'alice')['GH_TOKEN'] == auth.DISABLED_TOKEN
     assert keys.file_get(auth.account(tmp_path, 'alice', 'github.com')) is None
     auth.configure(tmp_path, 'alice', 'host')
     assert auth.child_env({'HOME': '/host'}, tmp_path, 'alice')['HOME'] == '/host'
@@ -110,7 +109,11 @@ def test_private_plaintext_login_only_never_calls_gh_or_keychain(tmp_path, monke
     path = ghdir / 'hosts.yml'
     path.write_text('github.com:\n    oauth_token: ' + TOKEN + '\n')
     path.chmod(0o600)
-    monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('must not consult gh global keychain'))
+    original_run = subprocess.run
+    def no_gh(argv, **kwargs):
+        assert Path(argv[0]).name == 'git', 'must not consult gh global keychain'
+        return original_run(argv, **kwargs)
+    monkeypatch.setattr(subprocess, 'run', no_gh)
     assert auth.child_env({}, tmp_path, 'alice')['GH_TOKEN'] == TOKEN
     path.chmod(0o644)
     with pytest.raises(auth.AuthError):
@@ -123,7 +126,10 @@ def test_private_plaintext_login_only_never_calls_gh_or_keychain(tmp_path, monke
 def test_gh_login_validates_before_invocation_and_uses_https(tmp_path, monkeypatch):
     monkeypatch.setenv('EXO_HOME', str(tmp_path))
     calls = []
+    original_run = subprocess.run
     def fake_run(argv, **kw):
+        if Path(argv[0]).name == 'git':
+            return original_run(argv, **kw)
         calls.append((argv, kw))
         ghdir = Path(kw['env']['GH_CONFIG_DIR'])
         (ghdir / 'hosts.yml').write_text('github.com:\n    oauth_token: ' + TOKEN + '\n')
@@ -133,6 +139,9 @@ def test_gh_login_validates_before_invocation_and_uses_https(tmp_path, monkeypat
     assert github_auth_cmd.main(['login', '--seat', 'alice', '--host', 'invalid/host']) == 1
     assert not calls
     auth.configure(tmp_path, 'alice', 'token', token=TOKEN, store='file')
+    assert github_auth_cmd.main(['login', '--seat', 'alice']) == 1
+    assert not calls
+    auth.remove(tmp_path, 'alice')
     assert github_auth_cmd.main(['login', '--seat', 'alice']) == 0
     assert auth.child_env({}, tmp_path, 'alice')['GH_TOKEN'] == TOKEN
     assert (auth.paths(tmp_path, 'alice')[1] / 'hosts.yml').exists()
@@ -163,6 +172,9 @@ def test_malformed_metadata_is_quiet_and_token_mode_excludes_old_login(tmp_path)
     auth.configure(tmp_path, 'alice', 'gh-login')
     path, ghdir = auth.paths(tmp_path, 'alice')
     (ghdir / 'hosts.yml').write_text('other.example:\n    oauth_token: fake-other-secret\n')
+    with pytest.raises(auth.AuthError):
+        auth.configure(tmp_path, 'alice', 'token', token=TOKEN, store='file')
+    auth.remove(tmp_path, 'alice')
     auth.configure(tmp_path, 'alice', 'token', token=TOKEN, store='file')
     env = auth.child_env({}, tmp_path, 'alice')
     assert Path(env['GH_CONFIG_DIR']) == ghdir / 'token'
@@ -171,3 +183,160 @@ def test_malformed_metadata_is_quiet_and_token_mode_excludes_old_login(tmp_path)
         path.write_text(json.dumps({'mode': 'token', 'store': 'file', 'host': host}))
         with pytest.raises(auth.AuthError):
             auth.status(tmp_path, 'alice')
+
+
+def test_keychain_errors_are_quiet_and_never_fall_back(tmp_path, monkeypatch, capsys):
+    import io
+    from exo import providers_setup as ps
+    monkeypatch.setenv('EXO_HOME', str(tmp_path))
+    monkeypatch.delenv('EXO_NO_KEYCHAIN')
+    monkeypatch.setattr('sys.platform', 'darwin')
+    monkeypatch.setattr('sys.stdin', io.StringIO(TOKEN))
+    def refuse(*args, **kwargs):
+        raise ps.SetupError('Keychain refused: ' + TOKEN)
+    monkeypatch.setattr(ps, '_keychain_set', refuse)
+    assert github_auth_cmd.main(['configure', '--seat', 'alice', '--token-stdin']) == 1
+    captured = capsys.readouterr()
+    assert TOKEN not in captured.out + captured.err
+    assert not Path(os.environ['EXO_KEYS_FILE']).exists()
+    assert not auth.paths(tmp_path, 'alice')[0].exists()
+
+
+def test_remove_disables_first_and_retains_failed_cleanup_for_retry(tmp_path, monkeypatch):
+    from exo import providers_setup as ps
+    monkeypatch.delenv('EXO_NO_KEYCHAIN')
+    monkeypatch.setattr('sys.platform', 'darwin')
+    monkeypatch.setattr(ps, '_keychain_set', lambda *a: None)
+    monkeypatch.setattr(keys, 'keychain_get', lambda n: TOKEN)
+    auth.configure(tmp_path, 'alice', 'token', token=TOKEN, store='keychain')
+    def locked(argv, **kwargs):
+        assert auth.binding(tmp_path, 'alice')['mode'] == 'disabled'
+        return subprocess.CompletedProcess(argv, 36, '', TOKEN)
+    monkeypatch.setattr(ps, '_run', locked)
+    result = auth.remove(tmp_path, 'alice')
+    assert result['cleanup_pending'] and not result['removed']
+    assert TOKEN not in json.dumps(result) + auth.paths(tmp_path, 'alice')[0].read_text()
+    with pytest.raises(auth.AuthError):
+        auth.configure(tmp_path, 'alice', 'token', token=TOKEN, store='file')
+    assert not Path(os.environ['EXO_KEYS_FILE']).exists()
+    monkeypatch.setattr(ps, '_run', lambda argv, **kw: subprocess.CompletedProcess(argv, 44, '', ''))
+    result = auth.remove(tmp_path, 'alice')
+    assert result['removed'] and not result['cleanup_pending']
+
+
+def test_backend_change_requires_confirmed_removal_before_new_binding(tmp_path, monkeypatch):
+    from exo import providers_setup as ps
+    auth.configure(tmp_path, 'alice', 'token', token=TOKEN, store='file')
+    name = auth.account(tmp_path, 'alice', 'github.com')
+    monkeypatch.delenv('EXO_NO_KEYCHAIN')
+    monkeypatch.setattr('sys.platform', 'darwin')
+    saved = {}
+    def save(key, value):
+        assert keys.file_get(name) is None
+        saved[key] = value
+    monkeypatch.setattr(ps, '_keychain_set', save)
+    monkeypatch.setattr(keys, 'keychain_get', lambda n: saved.get(n))
+    with pytest.raises(auth.AuthError):
+        auth.configure(tmp_path, 'alice', 'token', token=TOKEN + 'rotated', store='keychain')
+    assert keys.file_get(name) == TOKEN and not saved
+    assert auth.remove(tmp_path, 'alice')['removed']
+    auth.configure(tmp_path, 'alice', 'token', token=TOKEN + 'rotated', store='keychain')
+    assert auth.child_env({}, tmp_path, 'alice')['GH_TOKEN'] == TOKEN + 'rotated'
+    assert keys.file_get(name) is None
+
+
+def test_disabled_allows_unrelated_shell_without_host_auth(tmp_path, monkeypatch):
+    auth.remove(tmp_path, 'alice')
+    before = dict(os.environ)
+    env = auth.child_env({'GH_TOKEN': 'host', 'GITHUB_TOKEN': 'host', 'GH_ENTERPRISE_TOKEN': 'host'}, tmp_path, 'alice')
+    assert env['GH_TOKEN'] == env['GH_ENTERPRISE_TOKEN'] == auth.DISABLED_TOKEN
+    assert 'GITHUB_TOKEN' not in env and env['GH_CONFIG_DIR'].endswith('/disabled')
+    code, output, _ = run_command('printf unrelated', str(tmp_path), 3, github_auth=(str(tmp_path), 'alice'))
+    assert code == 0 and 'unrelated' in output
+    assert dict(os.environ) == before
+    for pattern in ('GH_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GH_PROMPT_DISABLED', 'GIT_CONFIG*', 'GIT_CONFIG_VALUE_2', 'GIT_TERMINAL_PROMPT'):
+        with pytest.raises(auth.AuthError):
+            auth.child_env({}, tmp_path, 'alice', deny=[pattern])
+
+
+def test_https_git_uses_seat_helper_without_host_config_mutation(tmp_path, monkeypatch):
+    import shutil
+    git = shutil.which('git')
+    if not git:
+        pytest.skip('git is not installed')
+    bins = tmp_path / 'bin'; bins.mkdir()
+    gh = bins / 'gh'
+    gh.write_text('#!/bin/sh\nprintf "username=seat-user\\npassword=%s\\n" "$GH_TOKEN"\n')
+    gh.chmod(0o700)
+    host = tmp_path / 'host'; host.mkdir()
+    marker = tmp_path / 'host-helper-used'
+    config = host / '.gitconfig'
+    config.write_text('[credential]\n helper = !touch "' + str(marker) + '"; echo username=host; echo password=host-password\n'
+                      '[http]\n extraHeader = Authorization: host-header\n'
+                      '[http "https://github.com/org"]\n extraHeader = Authorization: path-host-header\n')
+    original = config.read_bytes()
+    repo = tmp_path / 'repo'
+    subprocess.run([git, 'init', '-q', str(repo)], check=True, capture_output=True)
+    subprocess.run([git, 'config', '--file', str(repo / '.git/config'),
+                    'http.https://github.com/org/team.extraHeader', 'Authorization: repo-header'], check=True)
+    repo_original = (repo / '.git/config').read_bytes()
+    auth.configure(tmp_path, 'alice', 'token', token=TOKEN, store='file')
+    base = {'HOME': str(host), 'PATH': str(bins) + os.pathsep + os.environ.get('PATH', ''),
+            'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'http.extraHeader',
+            'GIT_CONFIG_VALUE_0': 'Authorization: inherited-header', 'GIT_CONFIG_PARAMETERS': "'credential.helper=host'",
+            'GIT_ASKPASS': '/host/askpass', 'SSH_ASKPASS': '/host/askpass', 'GH_DEBUG': 'api',
+            'GIT_TRACE': '/host/trace', 'GIT_TRACE_CURL': '/host/curltrace', 'GIT_TRACE_REDACT': '0',
+            'GIT_CURL_VERBOSE': '1'}
+    env = auth.child_env(base, tmp_path, 'alice', cwd=repo)
+    assert all(k not in env for k in ('GIT_CONFIG_PARAMETERS', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GH_DEBUG',
+                                        'GIT_TRACE', 'GIT_TRACE_CURL', 'GIT_TRACE_REDACT', 'GIT_CURL_VERBOSE'))
+    def fill():
+        return subprocess.run([git, 'credential', 'fill'], input='protocol=https\nhost=github.com\n\n',
+                              env=env, cwd=repo, text=True, capture_output=True, timeout=5)
+    result = fill()
+    assert result.returncode == 0 and 'password=' + TOKEN in result.stdout
+    assert not marker.exists() and config.read_bytes() == original
+    header = subprocess.run([git, 'config', '--get-urlmatch', 'http.extraHeader', 'https://github.com/org/team/repo'],
+                            env=env, cwd=repo, text=True, capture_output=True, timeout=5)
+    assert header.stdout.strip() == ''
+    assert (repo / '.git/config').read_bytes() == repo_original
+    auth.remove(tmp_path, 'alice')
+    env = auth.child_env(base, tmp_path, 'alice', cwd=repo)
+    assert 'password=' + auth.DISABLED_TOKEN in fill().stdout
+    assert not marker.exists() and config.read_bytes() == original
+
+
+@pytest.mark.parametrize('url', ['https://user:fake-config-password@github.com/org/',
+                                 'https://github.com/org/?token=fake-config-password',
+                                 'https://github.com/org/#fake-config-password'])
+def test_git_header_url_credentials_never_enter_child_environment(tmp_path, url):
+    import shutil
+    if not shutil.which('git'):
+        pytest.skip('git is not installed')
+    host = tmp_path / 'host'; host.mkdir()
+    (host / '.gitconfig').write_text('[http "' + url + '"]\n extraHeader = Authorization: fake-header\n')
+    env = {'HOME': str(host), 'PATH': os.environ.get('PATH', '')}
+    original = dict(env)
+    with pytest.raises(auth.AuthError) as caught:
+        auth._git_env(env, 'github.com', (), tmp_path)
+    assert 'fake-config-password' not in str(caught.value)
+    assert env == original
+
+
+@pytest.mark.parametrize('output', ['x' * 65537, 'http.https://github.com/.extraheader\n' * 257])
+def test_git_header_inspection_enforces_stream_and_name_limits(tmp_path, output):
+    import sys
+    git = tmp_path / 'fake-git'
+    git.write_text('#!' + sys.executable + '\nimport sys\nsys.stdout.write(' + repr(output) + ')\n')
+    git.chmod(0o700)
+    with pytest.raises(auth.AuthError):
+        auth._git_header_names(str(git), {}, tmp_path)
+
+
+def test_git_header_inspection_timeout_reaps_child(tmp_path):
+    import sys
+    git = tmp_path / 'fake-git'
+    git.write_text('#!' + sys.executable + '\nimport time\ntime.sleep(30)\n')
+    git.chmod(0o700)
+    with pytest.raises(auth.AuthError, match='timed out'):
+        auth._git_header_names(str(git), {}, tmp_path)
