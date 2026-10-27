@@ -247,11 +247,23 @@ with the approval cards under it, then the thread with the newest item first; cl
 top to bottom, and a thread opens on its newest item at the top (`docs/media/web-08-inverse.png`). **Classic** is the usual
 order, and a long thread now opens at its newest message at the bottom (`docs/media/web-09-classic-bottom.png`). Switch with
 the "Layout" button under the thread list or `/layout inverse|classic`; the choice is saved in this browser
-(`localStorage` key `xc-layout`, the only use of it, pinned by a test). The code is `static/layout.js` (pure, tested in node)
+(`localStorage` key `xc-layout`, pinned by a test). The code is `static/layout.js` (pure, tested in node)
 and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
 Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
 DevTools (`tests/browser.py`, skipped when Chrome is missing). The page has no big composer pane; that is terminal only.
+
+### Chat panes
+
+The pane toolbar hides or shows Threads and Details, moves each pane left or right, and adjusts side widths
+between 160 and 520 pixels. The conversation stays visible. Reset panes restores default order, widths and
+visibility. Narrow windows stack panes in the chosen order and hide width sliders. Existing pane nodes move
+without remounting the composer, transcript, approvals or stream listeners.
+
+Only validated layout fields are saved. Browser pages use `exo-pane-layout-v1` in localStorage. Desktop builds
+with the pane bridge use native preferences across ports and relaunches. The bridge accepts layout messages
+only from the main frame at the current launcher loopback origin. Failed saves show a message. A delayed
+startup read cannot overwrite a layout change made while the page was loading.
 
 ## Cost and jobs (D-032)
 
