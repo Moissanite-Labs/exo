@@ -1033,9 +1033,25 @@ target (`curl $"https://evil.example/x"` is a `web_read` of `evil.example`, and 
 still denies it). With a message catalog and a non-C locale bash runs a translation instead, and
 expands `$( )` in it, so the line also carries the `indirection` signal and asks unless
 `opaque_exec` is named. It is decided a second time as `opaque_exec`, and the stricter outcome
-stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc whose
-delimiter is spelled `<<$"EOF"` or `<<$'EOF'` ends on different lines in bash and in dash, which
-runs commands when bash is missing, so its body is read as commands too.
+stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc ends on the
+line that equals its delimiter exactly, and the delimiter is the opener word after quote removal, so
+whitespace or any other character in it is part of it (#328): `cat <<'EOF '` (and `<<"EOF "`,
+`<<' EOF'`, `<<EOF\ `) ends on the line `EOF ` (with the space), never on bare `EOF`. The gate
+matches the same line bash does (leading tabs dropped only for `<<-`), so the commands after the
+real terminator (`git push --force`, `rm -rf`, `gh pr merge`) are classified rather than swallowed
+into the body. When no line ends the body, or a line ends it only once surrounding whitespace is
+dropped (a trailing CR, stray spaces, a tab), the gate cannot be sure where the body ends, so it
+keeps reading to the exact terminator or end of input and reads the whole body as commands too.
+A carriage return in the opener stays part of the delimiter. A delimiter followed by `)` ends a
+body only inside a command or process substitution. Named descriptor assignments still trigger
+the hidden-variable checks for lookup and code-loading variables. A heredoc whose delimiter is spelled `<<$"EOF"` or
+`<<$'EOF'` ends on different lines in bash and in dash, which runs commands when bash is missing, so
+its body is read as commands too. A `{var}<<` heredoc or `{var}<<<` here-string is on a new
+descriptor in bash 4.1 and later, not stdin, so it is not read as the command's stdin, the same as a
+numbered `3<<` (#328): a gh post whose real body is a pipe is not mistaken for the heredoc, and its
+body stays unseen and asks. Known limit: a `~` after `=` in a word (`body=~/F`) is not yet treated as
+an expansion, so the home-path scrub reads such a word literally (a privacy nuance, not a hidden
+command).
 Mapping entries use the same matching. A rule with decision `deny` or `ask` whose match has a
 `command` regex sees the view too, in a second pass that only raises: the first matching rule
 is still chosen on the original text, and the pass lifts the outcome to the rule's decision only

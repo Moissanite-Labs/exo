@@ -1993,6 +1993,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   as target for ssh), so these lines are denied as before. Rejected: reading both coproc readings whenever
   the line has any redirection (the issue's first sketch), which reads the name as a program in `coproc rm { echo
   >/dev/null hi; }`, where bash runs a named compound.
+  *Amendment 2026-10-19 (issue #328):* the lexer ended a heredoc at the first line that equalled the delimiter once
+  its surrounding whitespace was stripped, so a delimiter with a space (`<<'EOF '`, `<<"EOF "`, `<<' EOF'`, `<<EOF\ `)
+  never matched: every later line, including the real terminator, was read as body, and the commands after it were
+  never classified. `cat <<'EOF ' ... EOF ` then a force push was `allow` as a bare `cat`. Now the lexer ends the body
+  on the line that equals the delimiter exactly, as bash does: the delimiter is the opener word after quote removal
+  (its spaces, tabs and other characters kept; leading tabs dropped on the terminator only for `<<-`), matched for
+  every quoting form (`'..'`, `".."`, `\`-escapes, mixed quoting). When no line ends the body, or a line ends it only
+  once surrounding whitespace is dropped, the gate keeps reading to the exact terminator or end of input and
+  reads that whole body as commands too, fail closed. A CR in the delimiter is retained; `EOF)` ends a body only
+  inside a command or process substitution. Named descriptor assignments keep the hidden-variable checks. The `<<$'EOF'`/`<<$"EOF"`
+  case keeps its own fail-closed reading (bash and dash disagree; bash, verified, expands a `$'..'` delimiter). A
+  `{var}<<` heredoc or `{var}<<<` here-string, which bash 4.1+ puts on a new descriptor rather than stdin, is no longer
+  read as a command's stdin, as a numbered `3<<` already was not: so a gh post whose real body is a pipe is not
+  mistaken for the heredoc, and its body stays unseen and asks. Still open from the same review: a `~` after `=` in a
+  word (`body=~/F`) is not yet an expansion to the lexer, so the home-path scrub reads it literally (a privacy nuance,
+  not a hidden command; `_expands` is used widely, so it wants its own scoped change).
   *Amendment 2026-10-20 (issue #334, follow-up to #231):* #231 reads values bash runs later as code, and a nest of
   `$(` in one cost about n**4. Each `$( )` is listed at every level above it and classified there again, and nothing
   bounded the depth, so 40 levels in `PROMPT_COMMAND` took 15 s, and from about 500 levels the lexer's recursion
