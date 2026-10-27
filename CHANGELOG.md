@@ -406,8 +406,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   it again and the next turn's block or compaction wrote it back. What an undo drops is now kept in the pins
   file as digests, beside the folded pins' ties, and a pin carry skips a parent pin whose digest is there. A
   first bind still inherits, a pin the child still holds carries as before, and a ruling said again after the
-  undo is pinned again, so only its undone copy stays out. Compaction drops no pin on its own, so a ruling in
-  the tail that `/compress here N` holds out stays pinned. A drop is logged as counts per kind and the
+  undo is pinned again, so only its undone copy stays out. A `/compress` between the last turn and the undo
+  keeps the earlier undone turns' pins no more (#581): the compaction folded the window's first row and the
+  window was not updated, so the next turn's transcript held neither that row nor its summary part, and no
+  summary row stood for it — the undo read as cut short. A compress now notes that fold in the pins file, with
+  or without a pending undo, and the undo counts the noted row's summary as reaching back; a compress that
+  folded only rows the window never held still counts as cut short. Compaction drops no pin on its own, so a
+  ruling in the tail that `/compress here N` holds out stays pinned. A drop is logged as counts per kind and the
   session id.
   This also corrects the #385 entry below and the D-040 amendment: what a pinned block held survives
   compaction by the pins until an undo removes its turn. exo-context hears a Hermes undo only through
