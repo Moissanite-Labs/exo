@@ -357,6 +357,24 @@ def test_a_sticky_shared_folder_with_another_uids_marker_is_refused(tmp_path):
     assert "PLANTED GUIDANCE" not in guidance.render(shared)
 
 
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0, reason="chown to another uid needs root")
+def test_the_upward_walk_stops_at_a_folder_another_user_can_write(tmp_path):
+    """A trusted repository above a shared folder is not reached through it: only the session's folder is read."""
+    outer = tmp_path / "outer"
+    (outer / ".git").mkdir(parents=True)
+    (outer / "AGENTS.md").write_text("OUTER GUIDANCE")
+    shared = outer / "shared"
+    mine = shared / "mywork"
+    mine.mkdir(parents=True)
+    (mine / "AGENTS.md").write_text("MY GUIDANCE")
+    os.chown(shared, 65534, 65534)
+    shared.chmod(0o1777)
+    guidance = WorkspaceInstructions({"enabled": True})
+    assert guidance.inspect(mine)["root"] == str(mine)
+    text = guidance.render(mine)
+    assert "MY GUIDANCE" in text and "OUTER GUIDANCE" not in text
+
+
 def test_warnings_and_headings_have_a_total_bound(tmp_path):
     root, guidance = workspace(tmp_path)
     current = root
