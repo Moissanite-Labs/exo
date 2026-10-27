@@ -2705,7 +2705,7 @@ every time, and no grant covers it: `tar czf /tmp/k.tgz -C ~/.exo keys`,
 `tar cf - -C ~/.exo keys | ...`, `cat < ~/.exo/keys/seat.key > /tmp/k` and
 `cat ~/.exo/keys/seat.key | tee /tmp/k`.
 
-Descriptor paths (#217). `/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/fd/N`, `/proc/<pid>/cwd`,
+Descriptor paths (#217). `/dev/fd/N`, `/dev/stdin`, `/proc/fd/N`, `/proc/<pid>/fd/N`, `/proc/<pid>/cwd`,
 `/proc/<pid>/root` and `/proc/<pid>/map_files` (`<pid>` also `self`, `thread-self` or `$$`, with or
 without `task/<tid>/`) name whatever the writing process holds there, which the gate cannot resolve
 from its own process. On Linux a write through one reopens that file for writing, so
@@ -2714,8 +2714,26 @@ path or below it is a `store_write`, however it is spelt: a redirection, `tee`, 
 to it (`ln -s /proc/self/fd/3 x`), a file tool's path, `//dev/fd/3`, `/dev/fd/$fd`, or a relative
 `dev/fd/3` (after `cd /`). So is a writing command after a `cd` into one, or into `/dev`, `/proc`,
 `/proc/<pid>` or `/proc/<pid>/task/<tid>` (`cd /dev && printf x > fd/3`), also one in a `$( )`,
-backticks or `<( )` of a later command (#465: `cd /dev && echo $(cp /tmp/evil fd/3)`). The writer's own stdout and
-stderr stay ordinary (`> /dev/fd/1`, `> /proc/self/fd/2`, `> /dev/stdout`). A store path opened for
+backticks or `<( )` of a later command (#465: `cd /dev && echo $(cp /tmp/evil fd/3)`). After such a
+`cd`, a write counts when its target, read against that folder, is a descriptor path
+(`cd /dev && printf x > fd/3`, `cd /proc && printf x > self/fd/3`), lands in /dev itself
+(`cd /dev && cp x out/a.json`), or when the target cannot be
+pinned to a path (a variable, a glob). Files cannot be created in /proc, so a landing
+there is not a write to anything. The target may be a redirection or a writer's argument
+(`cp`, `tee`, `dd of=`, `mv`, `install`, `truncate`, `ln`, `sed -i`); a read source is not a target
+(`cd /dev && cp fd/3 /tmp/out`). A command after such a `cd` that writes somewhere else, or
+writes nothing, keeps its own class (`cd /proc && sort meminfo`,
+`cd /proc && grep x meminfo > /tmp/m`). Only a `cd` into a descriptor folder itself narrows the
+rule; a `cd` through a descriptor or process link (`/proc/self/cwd`, `/proc/self/root/...`,
+`/dev/fd/3`) keeps the blanket rule, because the link may lead to the store itself, and the
+link path stays the recorded target, so a rule keyed on it still matches. A relative
+`cd` after the descriptor `cd` is followed (`cd /dev && cd fd && printf x > 3`); one the gate
+cannot pin (a variable, a glob, `cd -`, `popd`) falls back to the blanket rule. Text a nested
+shell in the same shell runs (`bash -c`, `sh -c`, `eval`, a trap) starts in the folder the line
+entered, while an ssh remote command runs on its own host. A line that has also entered the store
+itself keeps the blanket rule for its remaining parts: a later `cd` into `/dev` or `/proc` does
+not lift it (`cd ~/.exo/state && (cd /dev) && cp /tmp/x gate-grants.json`). The writer's own stdout and
+stderr stay ordinary (`> /dev/fd/1`, `> /proc/fd/2`, `> /proc/self/fd/2`, `> /dev/stdout`). A store path opened for
 reading on a descriptor other than stdin (`3< f`, `exec 2< f`, `{ ...; } 1< f`) is a `store_write`
 too, because `> /dev/fd/3` or `> /dev/stdout` later on the line, or in a later call of a persistent
 shell, writes it back. On stdout or stderr, where the write back is an ordinary write, any target the

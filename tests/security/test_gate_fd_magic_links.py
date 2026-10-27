@@ -51,6 +51,9 @@ def _decided(action):
     "printf x > /dev/fd/$fd",
     f"exec {{fd}}< {GRANTS}; printf x > /dev/fd/$fd",
     "printf x > /proc/self/fd/3",
+    "printf x > /proc/fd/3",                        # /proc/fd is /proc/self/fd under the kernel's other name
+    "printf x > /proc/fd/0",
+    "cp x /proc/fd/3",
     "printf x > /proc/thread-self/fd/3",
     "printf x > /proc/self/task/7/fd/3",
     "printf x > /proc/1234/fd/3",
@@ -110,6 +113,8 @@ def test_a_file_tool_write_through_a_descriptor_path_is_a_store_write(path):
     ("printf x > /dev/fd/01", "local_write"),
     ("printf x > /proc/self/fd/1", "local_write"),
     ("printf x > /proc/self/fd/2", "local_write"),
+    ("printf x > /proc/fd/1", "local_write"),
+    ("printf x > /proc/fd/2", "local_write"),
     ("printf x > /dev/stdout", "read"),
     ("printf x > /dev/stderr", "read"),
     ("printf x > /dev/null", "read"),

@@ -608,6 +608,26 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and the handoff already kept. This change also corrects the upgrade note in the #385 entry below and in
   the D-040 amendment: a session last compacted on 0.2.0 loses its rulings and corrections as well as its
   open decisions, not the open decisions alone.
+- After a `cd` into `/proc` or `/dev`, a command that writes nothing, or writes somewhere
+  else, is no longer a store write (#338). #305 made every non-read command after such a
+  `cd` a principal-only `store_write`, so plain diagnostics (`sed -n 1p version`,
+  `sort meminfo`) and copies out of `/proc` (`cat cpuinfo > /tmp/c`) asked the principal,
+  and no policy or grant could lower them. Only a write whose target, read against the
+  folder the `cd` entered, is a descriptor path counts now (`cd /dev && printf x > fd/3`,
+  `cd /proc && printf x > fd/3`), along with a target the gate cannot pin to a path.
+  A `cd` into the Exo store itself keeps the blanket rule, and a later `cd` into `/proc`
+  or `/dev` on the same line does not lift it.
+- Repair to the #338 narrowing, from review: a writer's argument targets count as well as
+  redirections (`cp`, `tee`, `dd of=`, `mv`, `install`, `truncate`, `ln`, `sed -i`), while a read
+  source still does not; a `cd` through a descriptor or process link (`cwd`, `root`, `fd/N`)
+  keeps the blanket rule instead of narrowing; a relative `cd` after the descriptor `cd` is
+  followed, and one the gate cannot pin (a variable, a glob, `cd -`, `popd`) falls back to
+  the blanket; text a nested command in the same shell runs (`bash -c`, `sh -c`, `eval`, a
+  trap) starts in the folder the line entered, and a store `cd`'s blanket latch carries into
+  nested lines. A `cd` through a descriptor or process link keeps the link path as the
+  recorded target, so a rule keyed on that path still matches the blanket write. A write
+  target that lands in /dev itself counts too, so a rule keyed on the folder still
+  matches it; files cannot be created in /proc, so a landing there is not a write.
 - A reopen's comment and a merge's subject and body are checked by the posting rules (#397).
   `gh issue reopen --comment` and `gh pr reopen -c` post a comment the gate filed as a post but
   never read, and `gh pr merge --body` was read but never checked, with `--subject` not read at

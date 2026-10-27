@@ -457,6 +457,13 @@ HEREDOC = "cd ~/.config/app && cat > settings.toml <<'EOF'\n" + "\n".join(
     "cd /proc && cat cpuinfo | tr '[:upper:]' '[:lower:]'",
     "cd /proc && grep -E '^[[:alnum:]_]+:' meminfo",
     "cd /proc && sed 's/[.]/_/g' version",
+    # #338: diagnostics and copies out of /proc and /dev are not store writes
+    "cd /proc && sed -n 1p version",
+    "cd /proc && sort meminfo",
+    "cd /proc && grep x meminfo > /tmp/m",
+    "cd /proc && cat cpuinfo > /tmp/c",
+    "cd /dev && ls -l > /tmp/devs",
+    "cd /proc && python3 x.py",
     "cd ~/.config/nvim && grep -rn '[[:space:]]$' lua/",
     "cd ~/.config/nvim && jq '.[:3]' lazy-lock.json",
     "cd ~/.kube && kubectl get pods -o jsonpath='{.items[:2].metadata.name}'",
@@ -505,6 +512,120 @@ def test_ordinary_lines_keep_their_class(cmd):
     c = _bash(cmd)
     assert c.category != "credentials", (cmd, c.summary)
     assert "secret store" not in c.signals
+    if "cd /proc" in cmd or "cd /dev" in cmd:
+        assert c.category != "store_write", (cmd, c.summary)   # #338
+
+
+@pytest.mark.parametrize("cmd, category", [
+    # #338: after a cd into /proc or /dev, only a write through a descriptor path is a store write
+    ("cd /proc && sed -n 1p version", "read"),
+    ("cd /proc && sed 's/[.]/_/g' version", "read"),
+    ("cd /proc && sort meminfo", "read"),
+    ("cd /proc && grep x meminfo > /tmp/m", "local_write"),
+    ("cd /proc && cat cpuinfo > /tmp/c", "local_write"),
+    ("cd /dev && ls -l > /tmp/devs", "local_write"),
+    ("cd /proc && python3 x.py", "opaque_exec"),
+    ("cd /proc && printf x > fd/3", "store_write"),          # /proc/fd is /proc/self/fd under the kernel's other name
+    ("cd /proc && printf x > fd/1", "local_write"),          # the writer's own stdout, as under /dev
+    ("cd /proc && echo x > version2", "local_write"),
+    ("cd /dev && cat fd/3 > /tmp/out", "local_write"),       # reading a descriptor writes nothing through it
+    ("cd /dev && printf x > fd/3", "store_write"),
+    ("cd /dev && printf x >> fd/3", "store_write"),
+    ("cd /proc/self && printf x > fd/3", "store_write"),
+    ("cd /proc && printf x > self/fd/3", "store_write"),
+    ("cd /proc/self && printf x > stdin", "store_write"),
+    ("cd /proc/self && printf x > cwd/x", "store_write"),
+    ("cd /proc/12/task/34 && printf x > fd/3", "store_write"),
+    ("cd /dev && printf x > $F", "store_write"),             # a target the gate cannot pin to a path
+    ("cd /dev && printf x > fd/*", "store_write"),
+    ("cd /proc && cd /dev && printf x > fd/3", "store_write"),
+    ("cd /proc && cd ~/.exo && rm x", "store_write"),        # a cd into the store itself: the blanket rule
+])
+def test_after_a_cd_into_a_descriptor_folder_only_a_descriptor_write_is_a_store_write(cmd, category):
+    assert _bash(cmd).category == category, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    # the store was entered first: a later cd into /dev or /proc does not lift the blanket rule,
+    # because the parts after `(cd /dev)` still run in the store folder
+    "cd ~/.exo/state && (cd /dev) && cp /tmp/x gate-grants.json",
+    "cd ~/.exo/state && (cd /proc) && cp /tmp/x gate-grants.json",
+    "cd ~/.exo && (cd /dev) && cp /tmp/x policies/gates.yaml",
+    "cd ~/.exo/state && cd /dev && cp /tmp/x gate-grants.json",
+    "cd ~/.exo/state && (cd /dev) && rm gate-grants.json",
+    "cd ~/.exo/state && cd /dev && sed -n 1p version",
+])
+def test_a_cd_into_the_store_keeps_the_blanket_rule_after_a_descriptor_cd(cmd):
+    c = _bash(cmd)
+    assert c.category == "store_write", (cmd, c.summary)
+    assert gate.decide(c).outcome == "ask", cmd
+    assert gate.decide(c, {"gates": {"deny": ["store_write"]}}).outcome == "deny", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    # #338 repair: writer arguments count, not only redirections
+    "cd /dev && cp /tmp/x fd/3",
+    "cd /dev && tee fd/3 < /tmp/x",
+    "cd /dev && dd if=/tmp/x of=fd/3",
+    "cd /dev && mv /tmp/x fd/3",
+    "cd /dev && install /tmp/x fd/3",
+    "cd /dev && truncate -s0 fd/3",
+    "cd /dev && ln -sf /tmp/x fd/3",
+    "cd /dev && sed -i s/a/b/ fd/3",
+    "cd /dev && cp -t fd/3 /tmp/x",
+    "cd /dev && cp /tmp/x fd/*",
+    "cd /dev && cp /tmp/x $F",
+    "cd /dev && sudo tee fd/3 < /tmp/x",
+    "cd /dev && env cp /tmp/x fd/3",
+    "cd /proc/self/fd && cp /tmp/x gate-grants.json",
+    # #338 repair: a cd through a descriptor or process link keeps the blanket rule
+    "cd /proc/self/cwd && cp /tmp/x gate-grants.json",
+    "cd /proc/self/root$HOME/.exo/state && cp /tmp/x gate-grants.json",
+    "cd /dev/fd/3 && cp /tmp/x gate-grants.json",
+    # #338 repair: a relative cd after the descriptor cd is followed
+    "cd /dev && cd fd && printf x > 3",
+    "cd /proc && cd self/fd && printf x > 3",
+    "cd /dev && cd fd/3 && printf x > custom.json",
+    "cd /proc && cd self && printf x > fd/3",
+    # #338 repair: a write target that lands in /dev itself counts too
+    "cd /dev && cp x out/a.json",
+    "cd /dev && cp x /dev/out/a.json",
+    # #338 repair: nested text in the same shell starts in the folder; cd - and popd fall back to the blanket
+    "cd /dev && bash -c 'printf x > fd/3'",
+    "cd /dev && sh -c 'printf F > fd/3'",
+    "cd /dev && eval 'printf x > fd/3'",
+    "cd ~/.exo/state && cd /dev && bash -c 'cp /tmp/x gate-grants.json'",
+    "cd ~/.exo/state && cd /dev && echo $(cp /tmp/x gate-grants.json)",
+    "cd /dev && cd - && printf x > fd/3",
+    "cd /dev && pushd fd && popd && printf x > fd/3",
+])
+def test_a_descriptor_cd_repair_rows_are_store_writes(cmd):
+    c = _bash(cmd)
+    assert c.category == "store_write", (cmd, c.summary)
+    assert gate.decide(c).outcome == "ask", cmd
+    assert gate.decide(c, {"gates": {"deny": ["store_write"]}}).outcome == "deny", cmd
+
+
+@pytest.mark.parametrize("cmd, category", [
+    # #338 repair: a read source is not a write target, and a plain command after a followed cd keeps its class
+    ("cd /dev && cp fd/3 /tmp/out", "read"),
+    ("cd /dev && cat fd/3 > /tmp/out", "local_write"),
+    ("cd /dev && cd fd && ls", "read"),
+    ("cd /dev && printf x > ../tmp/out", "local_write"),
+])
+def test_a_descriptor_cd_repair_rows_keep_their_class(cmd, category):
+    assert _bash(cmd).category == category, cmd
+
+
+def test_a_link_through_cd_keeps_the_link_path_as_target(_home):
+    # #338 repair: the blanket keeps the link path as the recorded target, so a target-keyed
+    # deny rule still matches it, as on main before the repair
+    link = f"/proc/self/root{_home}/.exo/state"
+    for cmd in (f"cd /proc/self/root$HOME/.exo/state && cp /tmp/x gate-grants.json",
+                f"cd /proc/self/root$HOME/.exo/state && bash -c 'cp /tmp/x gate-grants.json'"):
+        c = _bash(cmd)
+        assert c.category == "store_write", cmd
+        assert c.target == link, (cmd, c.target)
 
 
 @pytest.mark.parametrize("cmd", [

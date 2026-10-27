@@ -1243,9 +1243,20 @@ def _literal_heredoc(toks: list) -> str | None:
 # one fell is read again and spends it again. Every $( ) is listed at each level above it, so a nest of n levels was
 # classified about n**4 / 24 times without this.
 _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_shell_seen", default=None)
-# The folder a line entered by `cd` into the store or a descriptor folder (_classify_simple's store_cwd and fd_cwd),
-# for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or ""), or None.
+# The folder a line entered by `cd` into the store or a descriptor folder (_classify_simple's store_cwd, fd_cwd
+# and store_cd_target), for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or "",
+# the link path a blanket latched through or ""), or None.
 _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_cd_into", default=None)
+
+
+def _cd_seed(ctx: dict) -> tuple | None:
+    """The folder a nested line starts in after a `cd` into the store (#338): the descriptor folder, or ""
+    for the blanket when a cd into the store itself latched it, plus the link path the blanket latched through
+    when it did, or None when the line entered no store folder."""
+    if not ctx.get("store_cwd"):
+        return None
+    return (True, "" if ctx.get("store_self_cwd") else (ctx.get("fd_cwd") or ""),
+            ctx.get("store_cd_target") or "")
 
 # Whether the next line read is fed a stdin whose text the gate cannot read (#316): a >( ) body, a $( ) that
 # inherits such a stdin, the remote command of an ssh that passes its stdin on. The mark travels here, not as a
@@ -3685,7 +3696,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
             # #465: a value bash runs again after a `cd` into the store runs there too
-            token = _cd_into.set((True, ctx.get("fd_cwd") or "")) if ctx.get("store_cwd") else None
+            seed = _cd_seed(ctx)
+            token = _cd_into.set(seed) if seed else None
             fed = bool(ctx.get("subs_fed")) or _stdin_given(k, piped)    # bash reads the value as it runs (#316)
             try:
                 parts += _subscript_parts(words[0].text, words[1:] + k.operands, cmd, depth, ctx.get("subs", []),
@@ -3796,12 +3808,24 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                                        signals=["secret store"]))
                     break
         if prog == "trap" and len(argv) > 1 and depth < _DEPTH:
-            parts.append(classify_shell(argv[1], inner_depth))
+            seed = _cd_seed(ctx)     # a trap runs in this shell, so it starts in this folder (#338)
+            token = _cd_into.set(seed) if seed else None
+            try:
+                parts.append(classify_shell(argv[1], inner_depth))
+            finally:
+                if token is not None:
+                    _cd_into.reset(token)
         return parts
     if prog == "eval":
         parts = [_opaque("eval runs text as a command", cmd)]
         if depth < _DEPTH:
-            parts.append(classify_shell(" ".join(argv[1:]), inner_depth))
+            seed = _cd_seed(ctx)     # eval runs in this shell, so it starts in this folder (#338)
+            token = _cd_into.set(seed) if seed else None
+            try:
+                parts.append(classify_shell(" ".join(argv[1:]), inner_depth))
+            finally:
+                if token is not None:
+                    _cd_into.reset(token)
         return parts
     if prog in _SHELLS:
         args = argv[1:]
@@ -3811,7 +3835,13 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         for i, a in enumerate(args):
             if a == "-c" or (re.fullmatch(r"-[a-zA-Z]+", a) and "c" in a):
                 if depth < _DEPTH:
-                    parts.append(classify_shell(args[i + 1] if i + 1 < len(args) else "", inner_depth))
+                    seed = _cd_seed(ctx)     # a -c shell runs here, so it starts in this folder (#338)
+                    token = _cd_into.set(seed) if seed else None
+                    try:
+                        parts.append(classify_shell(args[i + 1] if i + 1 < len(args) else "", inner_depth))
+                    finally:
+                        if token is not None:
+                            _cd_into.reset(token)
                 return parts
             if not a.startswith(("-", "+")):
                 parts[0].summary = f"{prog} runs the script {a}"[:120]
@@ -3844,15 +3874,63 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 parts.append(_make("local_write", summary=f"find {words[i].text}", command=cmd))
             i += 1
         return parts
+    if prog == "popd" and ctx.get("fd_cwd"):
+        # the directory stack is not tracked: a popd after a descriptor cd leaves the folder unknowable (#338)
+        ctx["store_self_cwd"] = True
+        ctx.pop("fd_cwd", None)
     if prog in ("cd", "pushd"):
         target = next((w for w in words[1:] if not w.text.startswith("-")), None)
         dest = target.text if target else ""
         seen = ctx.setdefault("store_braces", {})
-        if target and (_shell_hits(target, seen, "dir", _store_dir_hit) != [] or _unknown_store(target, seen, inside=True)):
+        if prog == "cd" and "-" in argv[1:] and ctx.get("fd_cwd"):
+            # `cd -` returns to a folder the line does not name: the blanket stands (#338)
+            ctx["store_self_cwd"] = True
+            ctx.pop("fd_cwd", None)
+        elif target and (_shell_hits(target, seen, "dir", _store_dir_hit) != [] or _unknown_store(target, seen, inside=True)):
             ctx["store_cwd"] = True
             into = _expand_text(dest).strip()
-            if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
-                ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
+            if _is_fd_folder(into):
+                ctx["fd_cwd"] = into     # #217: the card names the descriptor folder, not "the store"
+            else:
+                ctx["store_self_cwd"] = True
+                ctx.pop("fd_cwd", None)  # the store itself, or a path through a descriptor link (#338)
+                if _fd_path(into):
+                    ctx["store_cd_target"] = into   # the link path stays the recorded target, as on main
+                else:
+                    ctx.pop("store_cd_target", None)
+        elif ctx.get("fd_cwd") and target:
+            # a later cd from inside a descriptor folder: follow a relative target, or fall back to the
+            # blanket when the folder cannot be pinned (#338)
+            raw = _expand_text(dest).strip()
+            if not raw or target.dynamic or target.glob or raw.startswith("~"):
+                ctx["store_self_cwd"] = True
+                ctx.pop("fd_cwd", None)
+                ctx.pop("store_cd_target", None)
+            elif raw.startswith("/"):
+                if _is_fd_folder(raw):
+                    ctx["fd_cwd"] = raw
+                elif _fd_path(raw) or _store_word(raw) or _in_store_dir(raw):
+                    ctx["store_self_cwd"] = True
+                    ctx.pop("fd_cwd", None)
+                    if _fd_path(raw):
+                        ctx["store_cd_target"] = raw
+                    else:
+                        ctx.pop("store_cd_target", None)
+                # any other absolute folder: the shell left the descriptor tree, and the old folder
+                # stays for descriptor writes (over-ask) while other writes read against it correctly
+            else:
+                joined = os.path.normpath(os.path.join(ctx["fd_cwd"], raw))
+                if _is_fd_folder(joined):
+                    ctx["fd_cwd"] = joined
+                elif _store_word(joined) or _in_store_dir(joined) or ".exo" in joined.split(os.sep):
+                    ctx["store_self_cwd"] = True
+                    ctx.pop("fd_cwd", None)  # the cd entered the store itself, or through a descriptor link
+                    if _fd_path(joined):
+                        ctx["store_cd_target"] = joined
+                    else:
+                        ctx.pop("store_cd_target", None)
+                else:
+                    ctx["fd_cwd"] = joined
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -4866,6 +4944,7 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
         p.category == "delete" for p in parts) or (prog == "cp" and (_has(argv, "-s", "-l") or any(
             len(a) > 2 and ("--symbolic-link".startswith(a) or "--link".startswith(a)) for a in argv)))  # --sym, --li
+    base_words = words
     if prog == "ln":
         words = words + [_Word(t) for t in _ln_targets(argv)]
     def pieces(e: str) -> list[str]:
@@ -4883,7 +4962,16 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
                 _unknown_store(words[i + 1], seen, inside=True)):
             hits.append(words[i + 1].text)      # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
-        hits.append(ctx.get("fd_cwd") or "a path inside the store (after cd)")
+        fd_dir = ctx.get("fd_cwd")
+        if not fd_dir or ctx.get("store_self_cwd"):
+            hits.append(ctx.get("store_cd_target") or "a path inside the store (after cd)")
+        # #338: the line's only store entry is a descriptor or process folder. Only a write that
+        # could land on a descriptor path under it counts; a command that writes nothing, or
+        # writes to a path elsewhere, keeps its own class. Once a cd has entered the store itself
+        # the blanket rule above stands for the rest of the line: a later cd into /dev or /proc
+        # does not lift it, because the parts after `(cd /dev)` still run in the store folder.
+        elif _fd_cwd_write(k, base_words, fd_dir, seen):
+            hits.append(fd_dir)
     return list(dict.fromkeys(hits))
 
 
@@ -4968,6 +5056,172 @@ def _lead(parts: list[Classification]) -> Classification | None:
         if _severity(before)[3]:
             return before
     return c
+
+
+def _fd_cwd_write(k: _Cmd, words: list, fd_dir: str, seen: dict) -> bool:
+    """Whether a command after a `cd` into a descriptor or process folder writes through one (#338).
+
+    Only a write target counts, read against the folder the `cd` entered: `fd/3` under `/dev`,
+    `self/fd/3` or `cwd/x` under `/proc/self`. A target the gate cannot pin to a path counts too
+    (a variable, a glob, braces past the cap), as it does for a store file opened on a descriptor
+    (#217). A target that lands in /dev itself counts too (`out/a.json` under `/dev`), so a
+    rule keyed on the folder still matches it; files cannot be created in /proc, so a landing
+    there is not a write to anything. `>&1` names a descriptor, not a path, and an absolute
+    target stands on its own."""
+    for op, t in k.redirs:
+        if op not in _WRITE_REDIRS or (op == ">&" and re.fullmatch(r"\d+|-", t.text)):
+            continue
+        if _fd_word_hit(t, fd_dir, seen):
+            return True
+    return any(_fd_word_hit(w, fd_dir, seen) for w in _fd_target_words(words))
+
+
+def _fd_word_hit(w: _Word, fd_dir: str, seen: dict) -> bool:
+    """Whether one write-target word, read against a descriptor folder, names a descriptor path (#338).
+
+    The expansion is computed here, not through _shell_hits: that helper caches one
+    result per word spelling and check name, and a store check on the same word would
+    short-circuit this one to its own answer."""
+    if w.dynamic or w.glob:
+        return True
+    src = w.raw.replace("\\\n", "")
+    if "{" not in src:
+        expanded = [w.text]
+    else:
+        words = _brace_words(src, pool=1)
+        if words is None:
+            return True
+        expanded = list(dict.fromkeys([w.text] + [d for e in words[1:] for d in _dequote(e)]))
+    return any(_fd_relative(fd_dir, p) for e in expanded for p in [e] + re.split(r"[:=,]", e)) or \
+        any(_fd_in_folder(fd_dir, e) for e in expanded)
+
+
+def _fd_in_folder(fd_dir: str, target: str) -> bool:
+    """Whether a write target, read against a descriptor folder, lands in that folder (#338).
+
+    Only /dev counts: a relative target lands where the shell runs it, so after
+    `cd /dev` it is a write into /dev itself, and a rule keyed on the folder still
+    matches it. Files cannot be created in /proc, so a landing there is not a
+    write to anything. A word holding an assignment is not a path on its own
+    (dd's `of=` values arrive already extracted). Stdout and stderr spellings
+    stay ordinary, as do writes elsewhere."""
+    folder = os.path.normpath(fd_dir)
+    if folder != "/dev" and not folder.startswith("/dev/"):
+        return False
+    t = _expand_text(target).strip().replace("\\", "/")
+    if not t or t == "-" or "=" in t:
+        return False
+    resolved = os.path.normpath(t if t.startswith("/") else os.path.join(fd_dir, t))
+    if resolved in ("/dev/stdout", "/dev/stderr") or _STD_FD.search(resolved):
+        return False
+    return resolved == folder or resolved.startswith(folder + "/")
+
+
+def _fd_synth(text: str) -> _Word:
+    """A word the gate built from an attached option value, carrying the flags its text implies (#338)."""
+    w = _Word(text)
+    w.raw = text
+    w.dynamic = "$" in text or "`" in text
+    w.glob = "*" in text or "?" in text
+    w.brace = "{" in text
+    return w
+
+
+def _fd_opt_value(words: list, short: str, longs: tuple) -> _Word | None:
+    """The word given to a value option, or None (#338)."""
+    i = 1
+    while i < len(words):
+        w = words[i].text
+        if w == "--":
+            return None
+        if w.startswith("--"):
+            name, eq, val = w.partition("=")
+            if name in longs:
+                return _fd_synth(val) if eq else (words[i + 1] if i + 1 < len(words) else None)
+            i += 1
+            continue
+        if w.startswith("-") and w != "-":
+            m = re.match(r"^-([a-zA-Z]*?)(" + short + r")(.*)$", w) if short else None
+            if m:
+                return _fd_synth(m.group(3)) if m.group(3) else (words[i + 1] if i + 1 < len(words) else None)
+            i += 1
+            continue
+        i += 1
+    return None
+
+
+def _fd_operands(words: list, value_short: str, value_long: tuple) -> list:
+    """Operands of a command: option words and their values removed (#338)."""
+    out, i, after_dd = [], 1, False
+    while i < len(words):
+        w = words[i].text
+        if after_dd:
+            out.append(words[i])
+            i += 1
+            continue
+        if w == "--":
+            after_dd = True
+            i += 1
+            continue
+        if w.startswith("--"):
+            name, eq, _ = w.partition("=")
+            i += 2 if name in value_long and not eq else 1
+            continue
+        if w.startswith("-") and w != "-":
+            m = re.match(r"^-([a-zA-Z]*?)([" + value_short + r"])(.*)$", w) if value_short else None
+            i += 1 if (m and m.group(3)) or not m else 2
+            continue
+        out.append(words[i])
+        i += 1
+    return out
+
+
+def _fd_target_words(words: list) -> list:
+    """The write-target words of a writer command after a descriptor cd (#338). Sources are not targets:
+    `cp fd/3 /tmp/out` reads the descriptor and writes elsewhere, so only the destination counts."""
+    if not words:
+        return []
+    prog = words[0].text.rsplit("/", 1)[-1]
+    argv = [w.text for w in words]
+    if prog in ("cp", "mv", "install"):
+        tdir = _fd_opt_value(words, "t", ("--target-directory",))
+        if tdir is not None:
+            return [tdir]
+        if prog == "install" and _has(argv, "-d", "--directory"):
+            return _fd_operands(words, "tgomd", ("--target-directory", "--group", "--owner", "--mode"))
+        shorts = "tS" if prog in ("cp", "mv") else "tgom"
+        longs = ("--target-directory", "--suffix") if prog in ("cp", "mv") else \
+            ("--target-directory", "--group", "--owner", "--mode")
+        ops = _fd_operands(words, shorts, longs)
+        return ops[-1:] if ops else []
+    if prog in ("tee", "truncate", "touch"):
+        shorts = "" if prog == "tee" else "s" if prog == "truncate" else "drt"
+        tlongs = () if prog == "tee" else ("--size",) if prog == "truncate" else ("--date", "--reference")
+        return _fd_operands(words, shorts, tlongs)
+    if prog == "sed" and (_has(argv, "-i") or any(a.startswith("--in-place") for a in argv)):
+        return _fd_operands(words, "ef", ("--expression", "--file"))
+    if prog == "ln":
+        # the link name is the write; a source that is a descriptor path makes a link to one (#217)
+        tdir = _fd_opt_value(words, "t", ("--target-directory",))
+        ops = _fd_operands(words, "tS", ("--target-directory", "--suffix"))
+        if tdir is not None:
+            return [tdir] + ops
+        return ops if len(ops) > 1 else []
+    if prog == "dd":
+        return [_fd_synth(w.text[3:]) for w in words[1:] if w.text.startswith("of=")]
+    return []
+
+
+def _fd_relative(fd_dir: str, target: str) -> bool:
+    """Whether a write target, read against a descriptor or process folder, names a descriptor path."""
+    t = _expand_text(target).strip().replace("\\", "/")
+    if not t:
+        return False
+    if t.startswith("/"):
+        return _fd_path(t)          # an absolute target stands on its own
+    if os.path.normpath(t) in ("stdin", "self/stdin", "thread-self/stdin"):
+        return True                 # /proc/self/stdin is descriptor 0 under another name
+    return _fd_path(os.path.join(fd_dir, t))
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
@@ -5783,6 +6037,8 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         ctx["store_cwd"] = True
         if into[1]:
             ctx["fd_cwd"] = into[1]
+        if len(into) > 2 and into[2]:
+            ctx["store_cd_target"] = into[2]
     parts: list[Classification] = []
     prev: _Cmd | None = None
     slot = _own_text.get() or [None]      # classify_shell gives each line its own
@@ -5820,7 +6076,7 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # write, as it is unwrapped. One in a here-doc body counts as after every command on its line. One in the
     # redirections of a compound that holds the `cd` runs before the compound (`done < <(sort x)`). As for the line's
     # own commands, a subshell or a later `cd` out is not followed: fails closed.
-    there = (True, ctx.get("fd_cwd") or "") if ctx.get("store_cwd") else None
+    there = _cd_seed(ctx)
     early = [range(k.opens[1], k.subs_met) for k in cmds if k.opens and k.opens[0] <= at] if there else []
     for j, sub in enumerate(subs):
         seed = there if there and j >= upto and not any(j in r for r in early) else None
@@ -6813,10 +7069,20 @@ _BUS_FILES = (("REGISTRY", ("",)), ("DB", ("", "-wal", "-shm", "-journal")), ("K
 # a store write. It matches anywhere in a path as written, so a relative `dev/fd/3` after `cd /` counts; a
 # resolved spelling is not tested (the gate's own realpath of /dev/stdout runs through its own descriptors). The
 # writer's stdout and stderr (`/dev/fd/1`, `/proc/self/fd/2`) are left out: a store file opened on them is caught
-# where it is opened (_store_touch).
-_FD_PATH = re.compile(r"(^|/)(dev/(fd|stdin)|proc/(self|thread-self|\d+|\$[^/]*)(/task/[^/]+)?/(fd|cwd|root|map_files))(/|$)")
-_STD_FD = re.compile(r"(^|/)(dev/fd|proc/(self|thread-self)(/task/[^/]+)?/fd)/0*[12]$")
+# where it is opened (_store_touch). `/proc/fd` is the kernel's other name for `/proc/self/fd`, so it counts the
+# same way, stdout and stderr included.
+_FD_PATH = re.compile(r"(^|/)(dev/(fd|stdin)|proc/fd|proc/(self|thread-self|\d+|\$[^/]*)(/task/[^/]+)?/(fd|cwd|root|map_files))(/|$)")
+_STD_FD = re.compile(r"(^|/)(dev/fd|proc/fd|proc/(self|thread-self)(/task/[^/]+)?/fd)/0*[12]$")
 _FD_DIR = re.compile(r"/+(dev|proc(/[^/]+(/task(/[^/]+)?)?)?)")      # cd here, then `> fd/3` or `> self/fd/3`
+_FD_FOLDER = re.compile(r"/+(dev/fd|proc/fd|proc/(self|thread-self|\d+|\$[^/]*)(/task/[^/]+)?/fd)")
+
+
+def _is_fd_folder(path: str) -> bool:
+    """Whether a `cd` target is a descriptor folder itself (#338): `/dev`, `/proc`, `/proc/<pid>`,
+    `/proc/<pid>/task/<tid>`, or a folder of descriptors (`/dev/fd`, `/proc/self/fd`). A path through one
+    (`/proc/self/cwd`, `/proc/self/root/...`, `/dev/fd/3`) is not: the link may lead to the store itself."""
+    p = os.path.normpath(path or ".")
+    return bool(_FD_DIR.fullmatch(p) or _FD_FOLDER.fullmatch(p))
 
 
 def _store_roots() -> list[tuple[str, tuple, bool]]:
