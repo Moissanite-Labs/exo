@@ -6,6 +6,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Chat Completions now replays reasoning on assistant tool-call turns within the same provider/route (#616), so reasoning-dependent continuations keep their reasoning; plain turns and cross-provider history are unaffected.
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
