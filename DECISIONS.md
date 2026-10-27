@@ -1498,6 +1498,20 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   unbound, bound and both grants, with and without a decision-model ask) found 0 lower than main, and 6 pairs that
   take the wider exposure at an equal outcome (`gh pr close 5 -R acme-org/app` beside a scope that no longer holds
   asks with the wider exposure). Tests: `plugins/exo-gate/tests/test_hook.py`
+- *Amendment 2026-10-27 (issue #312):* a link into a store is judged by where it leads when reached through a
+  folder the line enters, the current folder spelled out, or a glob. A relative name resolves from every folder
+  the line enters, chained, and a glob in a target or in a folder part expands one level at a time in those
+  folders; a word naming the current folder (`$PWD`, `$(pwd)`, `` `pwd` ``, `~+`) reads from the tool's folder.
+  Only globs bash would expand are expanded: quoted or escaped globs stay reads. The expansion shares one
+  budget per classify call (65,536 directory entries); a word that spends it counts as a hit, and past 128 link
+  targets the line counts too — both caps fail closed, where the first version of this change cut them silently.
+  The first version also expanded every match through the full name check, which cost ~24s of CPU on a 64-folder
+  line; the rework checks each match by its resolved folder once, and the same line takes ~3s. A match below a
+  tool folder is judged by its part below that folder, as a relative word is, so a repo's `.claude/worktrees`
+  checkout is not a store. The line's working-folder walk runs once per classify call and is shared by the
+  line-folders check, the glob candidates and the cd check, so a 2,000-opener line stays inside the
+  opener/closer lookup bound. Tests:
+  `tests/security/test_gate_secret_link_forms.py`
   (`test_valid_files_grant_*`, `test_a_single_valid_file_still_decides_alone`,
   `test_two_valid_files_keep_the_changed_violation_at_an_equal_outcome`,
   `test_two_valid_files_take_the_widest_exposure_and_keep_a_reserved_part`).

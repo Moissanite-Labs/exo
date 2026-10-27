@@ -779,10 +779,29 @@ subscript with an expansion in braces (`cat ${!x:-~/.kube}/config`, `cat ${!x[0]
 (`cat ${x:-$(printf ~/.kube)}/config`). Open issues:
   - #310: a substitution at the end of a store name is read as empty and as `*`, so `cat .env.$(hostname)` is
     read as the glob `cat .env.*`, which stays a read (the glob samples have no `.env.<suffix>`);
-  - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved.
+  - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob is resolved (below).
+
+A link reached through a folder the line enters, the current folder spelled out, or a glob is resolved too
+(#312). A relative name is resolved from every folder the line enters (`cd`, `pushd`, `git -C`, `tar -C`,
+`env -C`), chained, so `cd work && cd kdir && cat config` reads the kube config through the linked folder.
+A target that is itself a link into a store counts as entering the store, and a glob in a target (`cd kd*`)
+enters the folder it lands in. A word that starts by naming the current folder (`$PWD`, `${PWD}`, `$(pwd)`,
+`` `pwd` ``, `~+`) is read from the tool's folder like a relative one. A glob word is read as the names it
+expands to in those folders, one level at a time, so `cat kd*/config` and `cat k*/c*` ask where the plain
+`cat k*/other.txt` stays a read. A match below a tool folder is judged by its part below that folder, as a
+relative word is, so a checkout at `<repo>/.claude/worktrees/x` is not a store and its files stay reads; a
+link out of it still asks, since its resolved path is not below the folder. Only globs bash would expand are
+expanded: a quoted or escaped glob
+(`echo '*'`, `git commit -m 'update *'`) stays a read. A folder the gate cannot read, or an entry it cannot
+stat, contributes nothing, as bash expands nothing from it (`cat /proc/self/*/*/status` stays a read, while
+the `environ` form asks). The expansion is bounded: each directory entry scanned
+is charged to one budget shared by the whole classify call, and a word that spends it counts as a hit rather
+than being cut short; past 128 link targets the line counts too. Both caps fail closed, where the first
+version of this change cut them silently.
 
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
-`test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`, and
+`test_gate_expansions_in_names.py`, `test_gate_store_name_forms.py`, `test_gate_bash_glob_classes.py`,
+`test_gate_secret_link_forms.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
 ### A glob in a store's folder (#594, #609)

@@ -5266,6 +5266,155 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
                    if w.brace or not re.search(r"\s", t)]
 
 
+def _here_word(t: str) -> str:
+    """A target with a leading current-folder form ($PWD, ${PWD%/*}, $(pwd), ~+ ...) read as `.` or `..`, as
+    _cd_store_read's `here` reads it, so it resolves from the tool's folder (#312)."""
+    return _HERE.sub(lambda m: "/".join([".."] * m.group(0).count("/*")) if "%" in m.group(0) else ".", t)
+
+
+_GLOB_BUDGET = 65536   # directory entries glob expansion may scan in one classify call (#312)
+
+
+def _glob_left() -> list:
+    """The call's remaining glob budget, shared like _exo_relative's (a fresh pool when no call memo exists)."""
+    memo = _call_memo.get()
+    if memo is None:
+        return [_GLOB_BUDGET]
+    return memo.setdefault("glob_left", [_GLOB_BUDGET])
+
+
+def _expand_glob_word(word: str, bases: list[str], quoted: tuple[bool, ...] | None = None) -> tuple[list[str], str]:
+    """Existing paths a word expands to, part by part, as bash expands it from each base (#312). A part with an
+    unquoted glob is expanded in each folder reached so far; a literal part is joined, except `..`, which is
+    resolved physically, as the kernel resolves it past a link. Dot names only match a glob that spells the dot.
+    Each directory entry scanned is charged to the call's glob budget; past it, the word is returned as over
+    (the caller asks) and the partial matches are dropped. A folder the gate cannot read, or an entry it
+    cannot stat, contributes nothing, as bash expands nothing from it. ``quoted`` marks each character of
+    ``word`` as quoted or escaped (None: none are)."""
+    if not word:
+        return [], ""
+    if quoted is not None and len(quoted) != len(word):
+        quoted = None
+    segs: list[tuple[str, tuple[bool, ...]]] = []
+    off = 0
+    for part in word.split("/"):
+        segs.append((part, quoted[off:off + len(part)] if quoted else ()))
+        off += len(part) + 1
+    if word.startswith("/"):
+        current = ["/"]
+        segs = segs[1:]
+    else:
+        current = [b for b in dict.fromkeys(bases) if b and os.path.isdir(b)]
+    left = _glob_left()
+    for idx, (part, q) in enumerate(segs):
+        if part in ("", "."):
+            continue
+        last = idx == len(segs) - 1
+        has_glob = any(c in "*?[" and not (q[j] if q else False) for j, c in enumerate(part))
+        if not has_glob:
+            nxt: list[str] = []
+            for c in current:
+                try:
+                    p = os.path.realpath(os.path.join(c, part)) if part == ".." else \
+                        os.path.normpath(os.path.join(c, part))
+                except (OSError, ValueError):
+                    continue
+                if os.path.isdir(p) if not last else os.path.lexists(p):
+                    nxt.append(p)
+            current = nxt
+        else:
+            pat = _fn_glob(part)
+            rx = None if pat is None else re.compile(fnmatch.translate(pat))
+            nxt = []
+            for c in current:
+                try:
+                    with os.scandir(c) as it:
+                        for e in it:
+                            left[0] -= 1
+                            if left[0] < 0:
+                                return [], word
+                            name = e.name
+                            if not part.startswith(".") and name.startswith("."):
+                                continue
+                            if rx is not None and not rx.match(name):
+                                continue
+                            p = os.path.join(c, name)
+                            try:
+                                isdir = e.is_dir()
+                            except (OSError, ValueError):
+                                # A stat failure is not a folder, as bash reads it
+                                # (/proc/self/map_files/* raises EPERM on stat).
+                                isdir = False
+                            if last or isdir:
+                                nxt.append(p)
+                except (OSError, ValueError):
+                    # A folder the gate cannot read contributes nothing, as bash
+                    # expands nothing from it; the budget cap below still fails closed.
+                    continue
+            current = nxt
+        if not current:
+            return [], ""
+    return list(dict.fromkeys(current)), ""
+
+
+def _top_walk(cmds: list) -> tuple[list, list, list]:
+    """The top-level _cd_walk of ``cmds`` (targets, pieces, bodies), walked once per classify call and shared
+    by the line-folders check, the glob candidates and the cd check: _cd_walk scans leading words against
+    the opener set, so a line of n openers costs n lookups per walk, and the opener/closer lookup bound
+    counts every walk. Copies are returned, so a caller accumulating deeper targets into them (the cd
+    check's queue) cannot pollute the memo."""
+    memo = _call_memo.get()
+    if memo is not None:
+        entry = memo.get("top_walk")
+        if entry is not None and entry[0] is cmds:
+            return list(entry[1]), list(entry[2]), list(entry[3])
+    targets: list = []
+    pieces: list = []
+    bodies: list = []
+    _cd_walk(cmds, targets, pieces, bodies)
+    if memo is not None:
+        memo["top_walk"] = (cmds, targets, pieces, bodies)
+    return list(targets), list(pieces), list(bodies)
+
+
+def _line_folders(cmds: list) -> tuple[list[str], str]:
+    """The folders a line enters (the working-folder targets _cd_walk tracks: cd, pushd, git -C, tar -C ...),
+    spelled absolutely: each target from the tool's folders, from the gate's own and from the targets before it
+    on the line, so a relative name on the line can be resolved from the folder the line is in when it is read
+    (#312). A target with a glob is expanded one level at a time, so `cd kd*` enters the folder it lands in.
+    There is no count cap: truncating the list fails open (the 64-folder cap this replaces let a store entered
+    past it read without asking). The cost stays bounded: an absolute target is checked once, and glob expansion
+    charges the call's glob budget and reports the word that spends it. Neither the order nor the success of the
+    commands is followed, so this fails closed. Targets come from _cd_walk as written text, so a quoted glob
+    target is expanded as if unquoted; that only ever adds an ask."""
+    targets, _pieces, _bodies = _top_walk(cmds)
+    if not targets:
+        return [], ""
+    scope = _scope.get() or _Scope()
+    here = scope.here
+    if here is None:
+        try:
+            here = os.getcwd()
+        except OSError:
+            here = ""
+    bases = [b for b in dict.fromkeys((here, *scope.cwds)) if b]
+    out: list[str] = []
+    for t, _form in targets:
+        t = os.path.expanduser(_expand_text(_here_word(t)).strip())
+        if not t or t == "-":
+            continue
+        if os.path.isabs(t):
+            folders, over = _expand_glob_word(t, [""])
+        else:
+            folders, over = _expand_glob_word(t, [*bases, *out])
+        if over:
+            return out, over
+        for f in folders:
+            if f not in out and os.path.isdir(f):
+                out.append(f)
+    return out, ""
+
+
 _ANY = object()                                     # any path, in _cd_store_read's index of levels up
 
 
@@ -5291,7 +5440,9 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
     """D-038 (#192): a line that enters a folder that can hold a secret store may read it by a relative name. It
     enters one when a working-folder target anywhere in it ($( ), <( ) and a shell's text included) has a store
     folder among its parts (~/.kube, ~/.config/nvim, /proc/self; see _store_hints), or goes by a relative name into
-    a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd proc`). Then a relative name
+    a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd proc`). A target that is a
+    link into a store enters it too: the folder it resolves to from the tool's folders counts as a target (#312).
+    Then a relative name
     counts when its file name is a store file's (a glob or brace set: when it could match one) or it goes into a
     store folder (`gh/x` after ~/.config, `../.docker/x`); any relative name counts when the target is itself a
     store. The targets' own words are not names. ``tools`` are the folders a shell call runs in by its own `cwd`
@@ -5303,9 +5454,8 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
     if walked:
         targets, pieces, stored = walked
     else:
-        targets, pieces, stored = [], [], {}
-        bodies: list = []
-        _cd_walk(cmds, targets, pieces, bodies)
+        targets, pieces, bodies = _top_walk(cmds)
+        stored = {}
         queue = [(s, 0) for s in subs] + [(b, 1) for b in bodies]
         seen: dict = {}             # text -> the shallowest depth it was read at
         while queue:                # each $( ), <( ) and shell text once per depth at most, nested ones too
@@ -5388,6 +5538,41 @@ def _cd_store_read(cmds: list, subs: list, forms: bool = True, walked: list | No
         return [x for a in _brace_alts(t) for h in [here(a)] for x in [a] + ([u for u in [_dotdot(h)] if u] if forms
                 and h[:1] not in ("/", "~", "$") and "/.." in "/" + h and _GLOBBY.search(h) else [])]
 
+    # A target that is a link into a store enters the store too (#312): each target that names a folder on
+    # disk is also read as the folder it resolves to, from the tool's folders and from the folders the line
+    # itself enters (chained, so `cd work && cd kdir` counts), with a glob target expanded one level at a
+    # time. Past 128 such folders, or past the glob budget, the line counts (fails closed, _TOO_MANY). The
+    # cap breaks out of both loops: the old code broke only the inner one.
+    scope = _scope.get() or _Scope()
+    own = scope.here
+    if own is None:
+        try:
+            own = os.getcwd()
+        except OSError:
+            own = ""
+    line_folders, over = _line_folders(cmds)
+    if over:
+        return _TOO_MANY
+    bases = [b for b in dict.fromkeys((own, *scope.cwds, *line_folders)) if b]
+    known = set(targets)
+    added = 0
+    for t in list(targets):
+        x = os.path.expanduser(_expand_text(here(t)).strip())
+        if not x or x == "-":
+            continue
+        resolved, over = _expand_glob_word(x, bases) if not os.path.isabs(x) else _expand_glob_word(x, [""])
+        if over:
+            return _TOO_MANY
+        for j in resolved:
+            if not os.path.isdir(j):
+                continue
+            r = os.path.realpath(j)
+            if r != os.path.normpath(j) and r not in known:
+                known.add(r)
+                targets.append(r)
+                added += 1
+                if added >= 128:
+                    return _TOO_MANY
     split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in alts(t)
              for p, parts in [folders(alt)]]
     for _, parts, _ in split:
@@ -5872,7 +6057,15 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
         out.parts = list(parts)
         return _weigh(out, combined, cmd)
     every: list[str] = []
-    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], every)
+    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]], every,
+                                cmds, subs)
+    if hit and c.category == "store_write":
+        # A write spelled into a store is a credential hit too, and the hit wins, as before #312; a name
+        # that only resolves into a store from a folder the line enters does not demote the write, as
+        # with the cd check below. The recompute keeps the line's bodies but not its entered folders.
+        every = []
+        hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]],
+                                    every, cmds, subs, False)
     named = hit if "/" in hit or "." in hit else ""
     # #320: on a line that is already a secret line (an expansion form read as a secret in a nested line, such as an
     # ssh remote command, decides it), the secret the line names is a part beside it when it is another target, as
@@ -6496,12 +6689,28 @@ def is_sensitive_path(path: str) -> bool:
     return words is None or _sensitive_words(words)
 
 
+def _here_variants(words: list[str]) -> list[str]:
+    """Each word that starts by naming the current folder (a _HERE form: $PWD, ${PWD%/*}, $(pwd), ~+ ...) also
+    spelled from that folder itself (``.``, or `../..` for a parent form), as _cd_store_read's `here` reads it,
+    so the word is resolved from the tool's folder like a relative one (#312)."""
+    out = []
+    for w in words:
+        if _HERE.match(w):
+            v = _HERE.sub(lambda m: "/".join([".."] * m.group(0).count("/*")) if "%" in m.group(0) else ".", w,
+                          count=1)
+            if v != w:
+                out.append(v)
+    return out
+
+
 def _sensitive_words(words: list[str]) -> bool:
     """is_sensitive_path for any of ``words``, which are already brace-expanded. A word is matched as written, and
     as resolved from the gate's own folder and from the tool's (_Scope, #209): its absolute and real forms against
     the dynamic stores, and, when a link led elsewhere, its real form by name too (for a relative word that lands
     below the folder it was read from, only the part below it, so a folder like a repo's `.claude` does not count).
-    A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads."""
+    A word that starts by naming the current folder ($PWD, $(pwd)) is also read from the tool's folder, so a
+    link it lands on is judged by where it leads (#312). A form ending in `.pub` is a public key, meant to be
+    shared; a link named `x.pub` is judged by where it leads."""
     words = [w for w in (w.strip() for w in _expand_words(words)) if w]
     if any(_sensitive_re().search(_fold(w.replace("\\", "/"))) for w in words if not _fold(w).endswith(".pub")):
         return True
@@ -6513,6 +6722,11 @@ def _sensitive_words(words: list[str]) -> bool:
         except OSError:
             scope.here = ""
     roots, memo = scope.roots, scope.real
+    extra = _here_variants(words)
+    if extra:
+        words += extra
+        if any(_sensitive_re().search(_fold(w.replace("\\", "/"))) for w in extra if not _fold(w).endswith(".pub")):
+            return True
     for base in dict.fromkeys(("", *scope.cwds)):       # "": the gate's own folder
         for w in words:
             p = os.path.join(base, w)                    # an absolute word stays as it is
@@ -7169,13 +7383,247 @@ def _env_dump(argv: list[str]) -> bool:
     return False
 
 
+def _dequote_masked(raw: str) -> tuple[str, tuple[bool, ...]] | None:
+    """A raw word dequoted, with per-character flags for quoted or escaped characters, or None when the word
+    holds a substitution outside quotes (`$( )`, backticks, `<( )`): its innards are collected separately, so
+    `$(cat no*)` is not read as a glob of its own text (#312). A quoted glob (`'*'`, `\\*`, `'no*'`) keeps its
+    flag, so it is never expanded as bash would not expand it."""
+    raw = raw.replace("\\\n", "")
+    out: list[str] = []
+    mask: list[bool] = []
+    q = ""
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if q == "'":
+            if ch == "'":
+                q = ""
+            else:
+                out.append(ch)
+                mask.append(True)
+            i += 1
+            continue
+        if q == '"':
+            if ch == '"':
+                q = ""
+            elif ch == "\\" and i + 1 < len(raw) and raw[i + 1] in "$`\"\\\n":
+                out.append(raw[i + 1])
+                mask.append(True)
+                i += 2
+                continue
+            else:
+                out.append(ch)
+                mask.append(True)
+            i += 1
+            continue
+        if ch == "'":
+            q = "'"
+            i += 1
+            continue
+        if ch == '"':
+            q = '"'
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < len(raw):
+            out.append(raw[i + 1])
+            mask.append(True)
+            i += 2
+            continue
+        if ch == "`" or raw.startswith("$(", i) or raw.startswith("<(", i):
+            return None
+        out.append(ch)
+        mask.append(False)
+        i += 1
+    return "".join(out), tuple(mask)
+
+
+def _glob_candidates(cmds: list | None, subs: list | None, raws: list[str] | None) -> list[tuple[str, tuple[bool, ...] | None]]:
+    """Words a glob expansion may read, each with its quoted flags: each raw word of the line, each word of a
+    `bash -c` or heredoc body, and each word inside a substitution, to _DEPTH levels, each text once per depth
+    at most (as _cd_store_read reads them). A word holding a substitution is skipped here; its innards are
+    collected from the substitution itself (#312). ``cmds``/``subs`` are the caller's already-parsed line;
+    nothing here re-parses it, so a long line costs one parse."""
+    out: list[tuple[str, tuple[bool, ...] | None]] = []
+    for raw in dict.fromkeys(raws or []):
+        got = _dequote_masked(raw)
+        if got is not None:
+            out.append(got)
+    seen: dict = {}
+    queue = [(s, 0) for s in (subs or [])]
+    bodies: list = []
+    if cmds is not None:
+        _t, _p, bodies = _top_walk(cmds)
+    queue += [(b, 1) for b in bodies]
+    while queue:
+        text, n = queue.pop()
+        if seen.get(text, _DEPTH + 1) <= n:
+            continue
+        seen[text] = n
+        c2, s2 = _parse(text)[:2]
+        more: list = []
+        _cd_walk(c2, [], [], more)
+        for w in [w.raw for k in c2 for w in k.words + [t for _, t in k.redirs]]:
+            got = _dequote_masked(w)
+            if got is not None:
+                out.append(got)
+        if n < _DEPTH:
+            queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
+    return out
+
+
+def _expand_masked_prefix(word: str, mask: tuple[bool, ...]) -> tuple[str, tuple[bool, ...]]:
+    """A word with a leading current-folder, home or store-home form ($PWD, ~, $HOME, $EXO_HOME) spelled out,
+    its quoted mask rebuilt around the value, so a quoted glob stays quoted after the spelling changes (#312).
+    A quoted $PWD is read as the folder too, as _here_variants reads it. Unknown leading variables are left."""
+    m = _HERE.match(word)
+    if m:
+        form = m.group(0)
+        rep = "/".join([".."] * form.count("/*")) if "%" in form else "."
+        return rep + word[len(form):], (False,) * len(rep) + mask[len(form):]
+    if word.startswith("~") and (len(word) == 1 or word[1] == "/"):
+        home = _home()
+        return home + word[1:], (False,) * len(home) + mask[1:]
+    if word.startswith("~"):
+        head = word.split("/", 1)[0]
+        expanded = os.path.expanduser(head)
+        if expanded != head:
+            return expanded + word[len(head):], (False,) * len(expanded) + mask[len(head):]
+    for var, val in (("$HOME", _home()), ("${HOME}", _home()), ("$EXO_HOME", _exo_home()),
+                     ("${EXO_HOME}", _exo_home())):
+        if word == var or word.startswith(var + "/"):
+            return val + word[len(var):], (False,) * len(val) + mask[len(var):]
+    return word, mask
+
+
+def _glob_line_matches(cands: list[tuple[str, tuple[bool, ...] | None]], extra: tuple[str, ...] = ()) -> tuple[list[str], str]:
+    """The sensitive names a glob word on a shell line expands to, as absolute paths (#312): each candidate
+    word is expanded part by part (a glob in a folder part too, one level at a time) from the gate's own folder,
+    the tool's folders and the folders the line enters (``extra``, when the caller has not already put them in
+    the scope). Only matches that touch a store are returned. A match below a tool folder is judged by its part
+    below that folder, as _sensitive_words judges a relative word, so a checkout at <repo>/.claude/worktrees/x
+    is not a store; a link out of it still is, since its resolved path is not below the folder. A word with no
+    unquoted glob expands to nothing here. Each match is checked by name and by its resolved
+    folder, never by resolving it again from every base: the folder is resolved once, a plain entry needs only
+    the store-name pattern and the dynamic roots, and only a link entry is resolved itself. That keeps the cost
+    linear in the entries scanned, not in folders times matches times bases. The second value is the word whose
+    expansion spent the call's glob budget, or '': the caller asks on it, since a cap that silently cut the
+    expansion would fail open. The lexical glob check reads a word with no unquoted glob elsewhere."""
+    scope = _scope.get() or _Scope()
+    here = scope.here
+    if here is None:
+        try:
+            here = os.getcwd()
+        except OSError:
+            here = ""
+    bases = [b for b in dict.fromkeys((here, *scope.cwds, *extra)) if b]
+    if scope.roots is not None:
+        roots = {_fold(r) for r in scope.roots}
+    else:
+        roots = {_fold(r) for root in _dynamic_secret_paths()
+                 for r in (os.path.abspath(root), os.path.realpath(root))}
+    rx = _sensitive_re()
+    real_folders: dict[str, str] = {}
+    # A match below a tool folder is judged by its part below that folder, as _sensitive_words
+    # judges a relative word: a checkout at <repo>/.claude/worktrees/x is not a store, so its files
+    # are not (a link out of it still is, since its resolved path is not below the folder).
+    base_prefixes: list[str] = []
+    for b in bases:
+        try:
+            real_b = os.path.realpath(b)
+        except (OSError, ValueError):
+            real_b = b
+        base_prefixes.append(real_b.rstrip(os.sep) + os.sep)
+        if real_b != b:
+            base_prefixes.append(b.rstrip(os.sep) + os.sep)
+    base_prefixes.sort(key=len, reverse=True)
+
+    def below_part(full: str) -> str:
+        for pre in base_prefixes:
+            if full.startswith(pre):
+                return full[len(pre):]
+        return full
+
+    def is_store_path(full: str) -> bool:
+        f = _fold(full)
+        if rx.search(_fold(below_part(full))):
+            return True
+        if any(f == r or f.startswith(r + os.sep) for r in roots):
+            return True
+        return f.endswith("/run") and _is_run_dir(full, full)
+
+    matches: list[str] = []
+    seen: set[str] = set()
+    for word, mask in dict.fromkeys(cands):
+        if mask is None:
+            mask = (False,) * len(word)
+        w, m = _expand_masked_prefix(word, mask)
+        # A word with no unquoted glob expands to nothing here; the lexical glob check reads it
+        # elsewhere. Expanding a literal word would also judge it by its full tool-folder path,
+        # where _sensitive_words judges it by the part below that folder.
+        if not any(c in "*?[" and not (m[j] if m else False) for j, c in enumerate(w)):
+            continue
+        x = w.strip()
+        if not x:
+            continue
+        paths, over = _expand_glob_word(x, bases, m) if not os.path.isabs(x) else \
+            _expand_glob_word(x, [""], m)
+        if over:
+            return matches, over
+        for p in paths:
+            if p in seen:
+                continue
+            seen.add(p)
+            folder, name = os.path.split(p)
+            real_folder = real_folders.get(folder)
+            if real_folder is None:
+                try:
+                    real_folder = os.path.realpath(folder)
+                except (OSError, ValueError):
+                    real_folder = folder
+                real_folders[folder] = real_folder
+            if os.path.islink(p):
+                try:
+                    real_p = os.path.realpath(p)
+                except (OSError, ValueError):
+                    real_p = p
+                fulls = [p, real_p]
+            elif real_folder == folder:
+                fulls = [p]
+            else:
+                fulls = [p, os.path.join(real_folder, name)]
+            if any(is_store_path(f) for f in fulls) or _glob_words([below_part(p)]):
+                matches.append(p)
+    return matches, ""
+
+
 def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None,
-                          every: list[str] | None = None) -> str:
+                          every: list[str] | None = None, cmds: list | None = None, subs: list | None = None,
+                          extend: bool = True) -> str:
     """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a brace set
     in the source text ``raws`` of a word or redirection target, or a quoted `bash -c` string), the Keychain,
     or a bare environment dump. '' if nothing. With ``every``, each path, and each word of a brace set, that
     touches a store is added to it, the first one too; the result stays the first, a Keychain or environment
-    dump hit too, and the paths after such a hit are still listed (#609 follow-up)."""
+    dump hit too, and the paths after such a hit are still listed (#609 follow-up). A relative path is also
+    resolved from each folder the line itself enters (``cmds``' working-folder targets, #312), as if the tool
+    ran there. ``cmds``/``subs`` are the caller's already-parsed line; they are never re-parsed here, so a
+    long line costs one parse, not one per check (the opener/closer lookup bound)."""
+    if cmds and extend:
+        folders, fover = _line_folders(cmds)
+        scope = _scope.get()
+        if scope is not None:
+            token = _scope.set(replace(scope, cwds=tuple(dict.fromkeys((*scope.cwds, *folders)))))
+            try:
+                hit = _shell_credential_hit(cmd, segs, raws, every, cmds, subs, False)
+            finally:
+                _scope.reset(token)
+            if every is None:
+                return hit or fover
+            if fover:
+                every.append(fover)
+            return hit or fover
+        extra, fover = tuple(folders), fover
+    else:
+        extra, fover = (), ""
     text = _expand_text(cmd)
     first = ("keychain access" if _KEYCHAIN.search(text) else "provider key route" if _PROVIDER_ROUTE.search(text)
              else "secret environment variable" if _SECRET_VAR.search(text) else "")
@@ -7201,6 +7649,20 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
                 return p
             first = first or p
             every.append(_expand_text(p))           # a word of a segment as the text spells it: `~` read
+    # A glob word counts as the names it expands to (#312): only unquoted globs are expanded, and a word that
+    # spends the call's glob budget counts as a hit rather than being cut short.
+    gmatches, gover = _glob_line_matches(_glob_candidates(cmds, subs, raws), extra)
+    if fover and not gover:
+        gover = fover
+    if gmatches or gover:
+        if every is None:
+            return gmatches[0] if gmatches else gover
+        if gmatches:
+            first = first or gmatches[0]
+            every += gmatches
+        if gover:
+            first = first or gover
+            every.append(gover)
     groups: dict[str, list[str]] = {}         # bash expands only unquoted braces: expand, then dequote
     for raw in dict.fromkeys(raws or []):
         words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
@@ -7216,11 +7678,15 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
         if found:
             groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for d in found]
     words = [w for ws in groups.values() for w in ws]
-    if words and (_sensitive_words(words) or _glob_words(words)):
+    gmatches, gover = _glob_line_matches([(w, None) for w in words], extra) if words else ([], "")
+    if words and (_sensitive_words(words) or _glob_words(words) or gmatches or gover):
         hit = next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
         if every is None:
             return hit
         every += [_expand_text(w) for w in words if _sensitive_words([w]) or _glob_words([w])]
+        every += gmatches
+        if gover:
+            every.append(gover)
         return first or hit
     return first
 
