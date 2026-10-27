@@ -45,7 +45,6 @@ def _without_options(base: list[str], valued: tuple[str, ...], switches: tuple[s
         if skip:
             skip = False
             continue
-        key = arg.split("=", 1)[0]
         matches = _matching(arg, (*valued, *switches))
         if len(matches) == 1:
             skip = matches[0] in valued and "=" not in arg
