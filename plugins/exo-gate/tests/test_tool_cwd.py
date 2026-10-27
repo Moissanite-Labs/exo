@@ -209,15 +209,18 @@ FLOOR_STORE_WRITES = [   # the line as read before #399 writes the store; the fo
 @pytest.mark.parametrize("tool, args", FLOOR_STORE_WRITES + [
     ("terminal", {"command": "cat config ; gh -R pub/x run download 5 -D ~/.exo/policies", "workdir": "~/.kube"}),
 ])
-def test_a_policy_that_breaks_decide_reads_the_floor_of_a_call_with_a_folder(tmp_path, home, monkeypatch, tool, args):
-    """Main's fallback read the floor and this branch's the folder's part. Each reading counts: the principal
-    alone answers, once, in both modes."""
+def test_a_policy_pattern_that_does_not_compile_refuses_the_policy_and_the_floor_still_asks(tmp_path, home,
+                                                                                            monkeypatch, tool, args):
+    """#466: the loader refuses a policy whose pattern does not compile and the hook decides on the defaults.
+    The floors stand without the policy, so the store write of each reading and the credentials part still ask
+    the principal alone, once, in both modes -- on a real store_write ask, not the plain error card."""
     root, key = _seat_answers_credentials(tmp_path, home, monkeypatch, "deny:\n  - 'command:^(rm|shred'\n")
     for extra in ({}, {"mode": "observe"}):
         _, ctx = make_gate((root, key), **extra)
         r = call(ctx, tool, args)
-        assert r and r["rule_key"] == f"exo-gate:error:{tool}", (args, extra, r)
+        assert r["rule_key"].startswith("exo-gate:store_write:"), (args, extra, r)
         assert (r.get("approvers"), r.get("once")) == (["principal"], True), (args, extra, r)
+        assert "policy error, defaults used" in r["message"], (args, extra, r)
 
 
 @pytest.mark.parametrize("tool, args", [

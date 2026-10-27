@@ -54,3 +54,17 @@ def test_fallback_carries_exo_env_but_not_secrets():
     assert out[0] == "env" and "EXO_HOME=/h" in out and "EXO_BUS_KEYS_DIR=/k" in out
     assert not any(a.startswith(("EXO_API_KEY", "PATH=")) for a in out)
     assert out[-2:] == ["--session", "s3"]
+
+
+def test_native_opener_wait_is_bounded(monkeypatch):
+    import subprocess
+    from exo_tui import restart as rs
+    seen = []
+
+    def timed_out(args, **kwargs):
+        seen.append(kwargs['timeout'])
+        raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+
+    monkeypatch.setattr(rs.subprocess, 'run', timed_out)
+    result = rs.open_tab(['exo'], {}, 'darwin')
+    assert result != 'opened' and seen == [15]

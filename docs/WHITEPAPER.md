@@ -439,7 +439,7 @@ out of the core.
 Since then the budget is a ratchet with headroom (D-077), not a fixed cap. The test records a *floor*, the count
 right after the last real reduction, and fails when the count reaches the floor plus a headroom that is itself
 recorded. A reduction that ends below the floor sets the floor to its new count, and the floor never rises, so such
-a reduction lowers the ceiling. D-082 raised the headroom from 1,000 to 2,000 on 2026-10-26, when the count stood
+a reduction lowers the ceiling. D-083 raised the headroom from 1,000 to 2,000 on 2026-10-26, when the count stood
 at 15,812 of 15,813, and made two of the engine split's structure counts assertions beside it: imports of a product
 module from the core, and reads of another module's private state, both capped at their measured number and both
 ratcheting down. Fixes and features fit inside the headroom with no ceremony. A security or robustness fix is never

@@ -61,7 +61,7 @@ engine that `exo serve` runs; `exo.core.engine:create` forwards to it. The diagn
 goes in compose, new read-only views go in diagnostics, and neither goes into `CoreEngine`. These modules still read
 some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the split will replace with public queries.
 
-**The core budget (D-077, D-082).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
+**The core budget (D-077, D-083).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
 in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
 protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
 `CORE_HEADROOM`. Today that is 14,813 plus 2,000, a ceiling of 16,813. The test prints the current count and the headroom left (run it
@@ -263,9 +263,11 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
 `on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. The tool hooks (`pre_tool_call`,
 `post_tool_call`, `transform_tool_result`) get `tool_name`, `args`, `session_id`, `task_id`, `tool_call_id`,
-`turn_id`, `risk` and `cwd`, the session's working folder from which relative paths in `args` resolve (the gate
-reads them there, #209). Each callback gets only the keywords it declares, or all of them when it takes
-`**kwargs`, so a key added later does not break an older callback. A failing callback is logged and
+`turn_id`, `author` (who started the turn, D-040: `principal` or `principal:<label>`, `local`, `peer:<name>`,
+`bus:<seat>`, `job`, `schedule`, `delegate`, `system`; empty from an older caller), `risk` and `cwd`, the
+session's working folder from which relative paths in `args` resolve (the gate reads them there, #209). Each
+callback gets only the keywords it declares, or all of them when it takes `**kwargs`, so a key added later does
+not break an older callback. A failing callback is logged and
 skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns

@@ -224,9 +224,10 @@ def test_core_line_budget():
     is a wave 3 item, so the budget moved to 15k on 2026-10-12. Raised to 16k the same day for the audit security
     wave (D-038..D-042). Engine split step 4 (D-067, #124) brought the count to 14,813, and the cap went back to
     15k on 2026-10-13 as a hard wall. On 2026-10-15 the wall became this ratchet (D-077): floor 14,813, headroom
-    1,000, ceiling 15,813. On 2026-10-26 main counted 15,812, so 1 line of 1,000 was left, and D-082 raised the
-    headroom to 2,000 (ceiling 16,813) and capped the step 4 structure at its measured count: the ratchet now
-    prices lines and coupling instead of lines alone. Issue #46 tracks the rest of the split."""
+    1,000, ceiling 15,813. On 2026-10-26 #598 (a security fix) raised headroom by 11 to 1,011 for the turn-author
+    plumbing into hooks, which left 1 line of it free at 15,823 counted lines. D-082 then raised the headroom to
+    2,000 (ceiling 16,813) and capped the step 4 structure at its measured count: the ratchet now prices lines and
+    coupling instead of lines alone. Issue #46 tracks the rest of the split."""
     files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
              if "generated" not in p.parts]
     counts = {p.relative_to(REPO).as_posix(): len(p.read_text().splitlines()) for p in files}

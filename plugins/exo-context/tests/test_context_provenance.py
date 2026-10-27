@@ -16,7 +16,7 @@ from exo.core.engine import CoreEngine
 from exo.core.plugins import PluginManager
 from exo.core.types import ContentPart, Message, ToolCall, ToolResult
 from exo.protocol import schema as s
-from exo_context.engine import ExoContextEngine
+from exo_context.engine import ExoContextEngine, _pin_digest
 from exo_context.inner import END_LINE
 
 MINE = "From now on, write every report in British English."
@@ -39,7 +39,8 @@ def others():
 
 
 def pins(tmp_path, sid):
-    return json.loads((tmp_path / "exo-home" / "context-pins" / f"{sid}.json").read_text())
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / f"{sid}.json").read_text())
+    return {k: data[k] for k in ("ruling", "correction", "open_decision")}  # the digest keys in the file are not pins
 
 
 def test_capture_reads_rulings_only_from_the_principal():
@@ -322,6 +323,109 @@ def test_bind_session_state_rebinds_and_stops_the_previous_sessions_pins_leaking
     eng.bind_session_state(FakeSessionDB({"kid": "a"}), "kid")  # /branch: the child inherits a's pins
     out = eng.select_context([{"role": "system", "content": "sys"}, mine("next")])
     assert MINE in hf.message_text(out[0])
+
+
+def test_a_rebind_leaves_alone_a_pin_a_branch_child_dropped(tmp_path):
+    """#592: Hermes rebinds on every new agent (a /model or /fast rebuild, a restart) and on /resume, and each
+    bind merges the parent's pins into the child's. A ruling the child undid came back that way, and the next
+    turn's block showed it again. The undo now keeps its digests in the child's pins file, and a carry skips
+    them, so the rebind leaves the ruling undone."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine(MINE), mine("carry on")], session_id="p")
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")  # /branch: the child inherits the parent's pins
+    assert pins(tmp_path, "c")["ruling"] == [MINE]
+    eng.select_context([SYS, mine(MINE), mine("turn one")], session_id="c")
+    eng.select_context([SYS, mine(MINE), mine("turn one"), mine("turn two")], session_id="c")
+    host_undo("c")  # /undo 2, as exo-memory passes the notice on
+    eng.select_context([SYS, mine("after the undo")], session_id="c",
+                       conversation_messages=[mine("after the undo")], incoming_message=mine("after the undo"))
+    assert pins(tmp_path, "c")["ruling"] == []
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / "c.json").read_text())
+    assert data["dropped"] == [_pin_digest("ruling", MINE)]
+    fresh = ExoContextEngine(write_handoffs=False)
+    fresh.bind_session_state(FakeSessionDB({"c": "p"}), "c")  # the rebuild binds, and the carry must skip MINE
+    assert pins(tmp_path, "c")["ruling"] == []
+    out = fresh.select_context([SYS, mine("go on")], session_id="c")
+    assert out is None or MINE not in hf.message_text(out[0])
+
+
+def test_a_rebind_leaves_alone_a_pin_a_compression_child_dropped(tmp_path):
+    """#592, the compression child: it inherits the parent's pins at the compaction, undoes a turn that holds
+    one, and a later rebuild binds with the parent link Hermes keeps for it. The carry skips what the child's
+    undo dropped, so the next compaction writes no block for the ruling."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine("early work"), mine("carry on"), mine(MINE)], session_id="p0")
+    eng.on_session_start("p1", boundary_reason="compression", old_session_id="p0")  # the child takes over
+    assert pins(tmp_path, "p1")["ruling"] == [MINE]
+    eng.select_context([SYS, mine("early work"), mine("carry on"), mine(MINE), mine("next")], session_id="p1")
+    host_undo("p1")  # /undo 2
+    eng.select_context([SYS, mine("after the undo")], session_id="p1",
+                       conversation_messages=[mine("after the undo")], incoming_message=mine("after the undo"))
+    assert pins(tmp_path, "p1")["ruling"] == []
+    fresh = ExoContextEngine(inner=HermesSummary(), write_handoffs=False)
+    fresh.bind_session_state(FakeSessionDB({"p1": "p0"}), "p1")  # the rebuild binds, the carry must skip MINE
+    assert pins(tmp_path, "p1")["ruling"] == []
+    assert block_of(fresh.compress([SYS, mine("later"), mine("carry on")], force=True))["ruling"] == []
+
+
+def test_a_first_bind_still_inherits_and_later_pins_still_carry(tmp_path):
+    """#592: the dropped digests hold back only what the child undid. A first bind inherits, and a pin the
+    parent gains after the branch still carries to a child that dropped nothing."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine(MINE)], session_id="p")
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    assert pins(tmp_path, "c")["ruling"] == [MINE]
+    eng.select_context([SYS, mine(MINE), mine(NOTE)], session_id="p")  # the parent gains a pin after the branch
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    assert pins(tmp_path, "c")["ruling"] == [MINE, NOTE]
+
+
+def test_a_rebind_still_carries_what_the_child_holds(tmp_path):
+    """#592: only what the child undid is skipped. A ruling of a turn the undo left stands, the parent's copy
+    of it dedupes as before, and a parent pin the child never saw still carries."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine(MINE), ok(), mine(NOTE)], session_id="p")
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")  # the child inherits [MINE, NOTE]
+    assert pins(tmp_path, "c")["ruling"] == [MINE, NOTE]
+    eng.select_context([SYS, mine(MINE), ok(), mine(NOTE), ok(), mine("carry on"), ok(), mine("two")],
+                       session_id="c")
+    host_undo("c")  # /undo 2: NOTE's turn goes, MINE's stays
+    eng.select_context([SYS, mine(MINE), ok()], session_id="c",
+                       conversation_messages=[mine(MINE), ok()], incoming_message=mine(MINE))
+    assert pins(tmp_path, "c")["ruling"] == [MINE]
+    later = "From now on, ship on Tuesdays only."
+    eng.select_context([SYS, mine(MINE), ok(), mine(NOTE), mine(later)], session_id="p")  # the parent gains one
+    fresh = ExoContextEngine(write_handoffs=False)
+    fresh.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    assert pins(tmp_path, "c")["ruling"] == [MINE, later]
+    out = fresh.select_context([SYS, mine("go on")], session_id="c")
+    text = hf.message_text(out[0])
+    assert MINE in text and later in text and NOTE not in text
+
+
+def test_a_pin_said_again_and_dropped_again_stays_dropped_through_a_rebind(tmp_path):
+    """#592: the child undid the ruling, said it again (it is pinned, and its digest leaves the dropped list),
+    then undid that turn too. The digest is recorded again, and a later rebind still carries nothing."""
+    eng = ExoContextEngine(write_handoffs=False)
+    eng.select_context([SYS, mine(MINE), mine("carry on")], session_id="p")
+    eng.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    eng.select_context([SYS, mine(MINE), mine("turn one")], session_id="c")
+    eng.select_context([SYS, mine(MINE), mine("turn one"), mine("turn two")], session_id="c")
+    host_undo("c")
+    eng.select_context([SYS, mine("after the undo")], session_id="c",
+                       conversation_messages=[mine("after the undo")], incoming_message=mine("after the undo"))
+    assert pins(tmp_path, "c")["ruling"] == []
+    eng.select_context([SYS, mine(MINE), mine("said again")], session_id="c")  # live again: pinned, digest cleared
+    assert pins(tmp_path, "c")["ruling"] == [MINE]
+    host_undo("c")
+    eng.select_context([SYS, mine("gone again")], session_id="c",
+                       conversation_messages=[mine("gone again")], incoming_message=mine("gone again"))
+    assert pins(tmp_path, "c")["ruling"] == []
+    fresh = ExoContextEngine(write_handoffs=False)
+    fresh.bind_session_state(FakeSessionDB({"c": "p"}), "c")
+    assert pins(tmp_path, "c")["ruling"] == []
+    out = fresh.select_context([SYS, mine("go on")], session_id="c")
+    assert out is None or MINE not in hf.message_text(out[0])
 
 
 def test_an_open_decision_pin_comes_only_from_the_principal(tmp_path):
@@ -1449,6 +1553,111 @@ def test_a_transcript_cut_short_at_a_summary_row_is_no_undo(tmp_path):
     assert tail[0].get("_compressed_summary")
     h.eng.select_context([SYS, *tail], conversation_messages=tail, incoming_message=tail[-1])
     assert pins(tmp_path, "s2")["ruling"] == [MINE]
+
+
+class Tail(Paraphrase):
+    """A Hermes /compress that folds everything before its tail, which keeps the last `rows` messages."""
+
+    def __init__(self, rows=4):
+        self.rows = rows
+
+    def compress(self, messages, **kw):
+        return super().compress(messages[:-self.rows], **kw)[1:2] + list(messages[-self.rows:])
+
+
+def test_a_compress_before_the_undo_lets_it_reach_back(tmp_path):
+    """#581: /compress between the last turn and /undo 2 folds the window's first row, and the window is not
+    updated. The next turn's transcript held neither that row nor its summary part, and no summary row stood for
+    it, so the undo read as cut short and the earlier undone turn's ruling stayed. The compress now notes the
+    fold with the pins, and the notice seeds the undo with that row's summary, so the ruling goes."""
+    h = Hermes(tmp_path, "c581", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.compress()
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / "c581.json").read_text())
+    assert len(data["first_row"]) == 1 and next(iter(data["first_row"].values()))
+    h.undo(2)
+    assert pins(tmp_path, "c581")["ruling"] == [NOTE, MINE]  # one notice: only the last turn is known yet
+    out = h.turn("next step")
+    assert pins(tmp_path, "c581")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+    h.turn("and the tests")
+    assert summary_block(h.compress())["ruling"] == [NOTE]
+
+
+def test_a_compress_before_the_window_still_reads_cut_short(tmp_path, caplog):
+    """#581, the strict side: a compress whose fold stops short of the window's first row — it folded only rows the
+    window never held — notes nothing, and a transcript cut short below that row still drops nothing."""
+    eng = ExoContextEngine(inner=Tail(rows=5), write_handoffs=False)
+    eng.on_session_start("w581")
+    eng.select_context([SYS, mine("early work"), ok(), mine(MINE), ok(), mine("carry on")])
+    eng.on_turn_complete([mine(MINE), ok(), mine("carry on")], usage=None)  # the window starts at the ruling
+    out = eng.compress([SYS, mine("early work"), ok(), mine(MINE), ok(), mine("carry on"), ok(), mine("go on")],
+                       force=True)  # folds only the rows before the window's first row
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / "w581.json").read_text())
+    assert "first_row" not in data
+    host_undo("w581")  # /undo 3: the ruling's turn, carry on's and go on's
+    tail = [out[0], mine("next step")]
+    with caplog.at_level("INFO", logger="exo_context.engine"):
+        eng.select_context([SYS, *tail], conversation_messages=tail, incoming_message=tail[-1])
+    assert pins(tmp_path, "w581")["ruling"] == [MINE]
+    assert [r.getMessage() for r in caplog.records if r.name == "exo_context.engine"] == [
+        "exo-context: the transcript after an undo in session w581 does not start where the window did, so no pin "
+        "was dropped"]
+    assert "British" not in caplog.text
+
+
+def test_a_second_compress_hands_the_note_to_its_own_row(tmp_path):
+    """#581: a second compress folds the row the first one noted; its own row then stands for the window's first
+    row, so the undo after it still reaches back and the earlier undone turn's ruling goes."""
+    h = Hermes(tmp_path, "d581", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.compress()
+    h.compress()  # folds the noted row; the window is still the pre-compress one
+    h.undo(2)
+    out = h.turn("next step")
+    assert pins(tmp_path, "d581")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+
+
+def test_an_undo_then_a_compress_still_reaches_back(tmp_path):
+    """#581 with the order reversed: the compress after the notice folds the window's first row itself, as the
+    pending undo has always counted. The next turn still drops the earlier undone turn's ruling."""
+    h = Hermes(tmp_path, "r581", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.undo(2)
+    h.compress()
+    out = h.turn("next step")
+    assert pins(tmp_path, "r581")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
+
+
+def test_a_noted_first_row_with_no_undo_changes_nothing(tmp_path):
+    """#581: the note is for an undo. With none, the turns go on as before, no pin moves, and the note rides the
+    saves keyed to the window's first row."""
+    h = Hermes(tmp_path, "n581", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE):
+        h.turn(text)
+    h.compress()
+    h.turn("and the writer")
+    h.turn("carry on")
+    assert pins(tmp_path, "n581")["ruling"] == [NOTE, MINE]
+    data = json.loads((tmp_path / "exo-home" / "context-pins" / "n581.json").read_text())
+    assert len(data["first_row"]) == 1
+    assert summary_block(h.compress())["ruling"] == [MINE, NOTE]  # the tail still says MINE, the pins carry NOTE
+
+
+def test_a_noted_first_row_carries_into_a_compression_child(tmp_path):
+    """#581: with compression.in_place false, the child takes the window over after the compress. The note moves
+    with it, so an undo in the child still reaches back and drops the earlier undone turn's ruling."""
+    h = Hermes(tmp_path, "c581p", inner=Tail())
+    for text in ("start the importer", NOTE, "now the parser", MINE, "and the writer"):
+        h.turn(text)
+    h.compress()
+    h.eng.on_session_start("c581k", boundary_reason="compression", old_session_id="c581p")
+    h.sid = "c581k"
+    h.undo(2)
+    out = h.turn("next step")
+    assert pins(tmp_path, "c581k")["ruling"] == [NOTE] and (out is None or MINE not in hf.message_text(out[0]))
 
 
 class NoHead(Paraphrase):

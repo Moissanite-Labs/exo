@@ -94,7 +94,7 @@ is a ratchet with headroom. The structural goal in point 5 is the aim, and the c
 1. **Recorded numbers.** `tests/integration/test_wave1_acceptance.py` holds `CORE_FLOOR = 14813` and
    `CORE_HEADROOM = 2000`. The line assertion is `total < CORE_FLOOR + CORE_HEADROOM`, so the ceiling today is
    16,813 counted lines. The floor is the count right after the last real reduction, #124 (D-067). That branch measured 14,812
-   before its last merge from main, and the count at the merge is 14,813. D-082 raised the headroom from 1,000 on
+   before its last merge from main, and the count at the merge is 14,813. D-083 raised the headroom from 1,000 on
    2026-10-26, when main counted 15,812 of the 15,813 the old ceiling allowed.
 2. **The floor ratchets down.** Every real reduction PR (deletions, simplification, real seams per this plan) sets
    `CORE_FLOOR` to its post-merge count in the same PR. The floor never goes up, so a reduction that ends above the
@@ -108,7 +108,7 @@ is a ratchet with headroom. The structural goal in point 5 is the aim, and the c
 5. **The structural goal carries the real intent.** Step 4's criteria are the goal: no private-state reads across
    module boundaries (`loop._state`, `store._q`, the tree's `_view` and `_agent_key`), no product imports into the
    engine (the inward imports listed under "Progress"), and one responsibility per module. Two of the counts are
-   asserted beside the line budget, and they ratchet down like the floor (D-082): `INWARD_IMPORTS_MAX = 36` imports of
+   asserted beside the line budget, and they ratchet down like the floor (D-083): `INWARD_IMPORTS_MAX = 36` imports of
    a product module from the core, and `PRIVATE_STATE_MAX = 7` cross-module private-state reads. Neither may be raised
    to pass a false positive; fix the reader. The test also prints the largest counted files and flags any above 1,000
    lines. That report is information, not an assertion.
