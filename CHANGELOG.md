@@ -15,15 +15,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   main) )` is a `force_push` (#553). `${name@P}`, `${@@P}`, `${*@P}`, `${!name}`, `${!@}` and `${!*}`, which run a
   value, ask (#554); the listing forms `${!prefix*}` and `${!arr[@]}` do not. A here-document opened in a `$( )`
   stays with it, a backslash-newline after `$` is joined as #584 joins it, `$'` in double quotes is no ANSI-C
-  string, and bash
-  5.3's `${ cmd; }` is read and asks, and so does a line that ends inside a quote (`'`, `"` or `$'`). A part only
-  bash's reading opens (a `$( )`, `<( )`, `>( )`, backquote or arithmetic `$((` in a word, a `$((` bash runs as a
-  subshell, quoted text bash expands, the text of `${ cmd; }`) is read three levels deep, its first `$(` or
-  backquote level 1, and a call opens 24 such parts; a command deeper or past them asks. Where bash's reading may
-  differ from the one before, the call is read both ways, the stricter decision holds, and an approval on a line whose
-  readings are different acts is bound to its exact text. `scripts/gate_diff.py` finds no decision lower than
-  before on its built-in corpus (with and without variants) and on an aimed corpus of these forms.
-  `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
+  string, and bash 5.3's `${ cmd; }` is read and asks, and so does a line that ends inside a quote (`'`, `"` or
+  `$'`). A part only bash's reading opens (a `$( )`, `<( )`, `>( )`, backquote or arithmetic `$((` in a word, a
+  `$((` bash runs as a subshell, quoted text bash expands, the text of `${ cmd; }`) is read three levels deep, its
+  first `$(` or backquote level 1, and a call opens 24 such parts; a command deeper or past them asks. Where bash's
+  reading may differ from the one before, the call is read both ways, the stricter decision holds, and an approval on
+  such a line is bound to its exact text, even where both readings are the same act, as for any line with an `also`
+  reading, so a standing grant on its category and target does not cover it. `scripts/gate_diff.py` finds no
+  decision lower than before on its built-in corpus (with and without variants) and on an aimed corpus of these
+  forms. Each of the
+  two readings keeps its own #584 joined reading and D-074 `ordinary` reading, and `gate.readings` lists the
+  `ordinary` reading of each. `docs/GATE.md` "Shell parameter expansion (D-038)" lists the limits.
 - A patch header with no path (`*** Move to:`, `*** Add File:`, `*** Move File: a ->`) no longer hides the header
   after it (#548 follow-up). The reader let a header's path run onto the next line, so the next header was taken as
   that path and its write was never read. A patch tool skips the bare line and applies the next header, so after

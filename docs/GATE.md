@@ -876,10 +876,12 @@ logged with the grant id.
 - A gh command that may land on more than one target (`alt_targets`, "Where a gh command
   lands") is granted for the exact command only, like an outward act. A grant on one of its targets
   does not cover it (#399).
-- A line the gate reads more than one way (`gate.readings`) is granted for the exact command only
-  when one reading is another act, or would be granted that way itself: a `${...}` word or a `$((`
-  read as bash reads it and as before (#143, "Shell parameter expansion"). A grant on its first
-  reading's category and target does not cover it.
+- A line the gate reads more than one way (`gate.readings`) is granted for the exact command only,
+  as a line with a `floor`, `also` or `ordinary` reading is. That includes a line with a `${...}`
+  word or a `$((` read as bash reads it and as before (#143, "Shell parameter expansion"), even
+  when both readings are the same act: `echo hi > /tmp/f ${x:-$(echo hi)}` is a `local_write` on
+  `/tmp/f` either way, and a grant on `local_write` and `/tmp/f` does not cover it. A line the gate
+  reads one way, such as `echo hi > /tmp/f ${x:-hi}`, keeps its grant.
 - A post whose body the gate did not read never gets a grant, and an older grant does not cover it
   (#208, "What an approval covers").
 - Only the principal can create a grant.
@@ -2353,27 +2355,30 @@ The reading before is kept. Where bash's reading may differ from it anywhere in 
 closed past its first `}`, a command in a word, a `$((` matched otherwise, an ask above), classify
 reads the call that way too, with budgets of its own, and adds that reading at the end of the
 call's `also` readings (`gate.readings`); `decide` keeps the stricter decision, with both readings'
-reserved parts and violations. A part bash's reading adds can lead the line and turn a category
-line or the opaque floor (a push a word hid outranks a visible delete beside it; `deny: [delete]`
-still denies the line, as a deny matches any part, D-075). The second reading keeps such a line at
-its decision before, and it reads the words dash (the `/bin/sh` fallback, used when bash is
-missing) ends at their first `}` as dash reads them: dash has no `<( )` and takes a `'` inside
-`"${x:-..}"` as text, so `echo "${x:-'}" ; rm -rf ./work ; echo "'}"` stays a delete. An
-approval on a line whose two readings are different acts is bound to its exact text ("Standing
-grants"). A line that ends inside a quote (`'`, `"` or `$'`), which bash and dash reject, asks,
-also under a deny and under a catch-all `log` rule (#394): a shell that closes the quote elsewhere
-runs the rest
-(`echo "${x:-'}"; rm -rf ./work; echo '}"'`: dash runs the `rm`). The reading before is kept for
-it, so the line is never one a rule allows. A line left inside a `$( )` or a backquote is read as
+reserved parts and violations. Each of the two readings keeps its own reading joined at a
+backslash-newline in a `$` form (#584) and its own reading as before D-074 (`ordinary`), each with
+budgets of its own, and `gate.readings` lists every one. A part bash's reading adds can lead the
+line and turn a category line or the opaque floor (a push a word hid outranks a visible delete
+beside it; `deny: [delete]` still denies the line, as a deny matches any part, D-075). The second
+reading keeps such a line at its decision before, and it reads the words dash (the `/bin/sh`
+fallback, used when bash is missing) ends at their first `}` as dash reads them: dash has no `<( )`
+and takes a `'` inside `"${x:-..}"` as text, so `echo "${x:-'}" ; rm -rf ./work ; echo "'}"` stays
+a delete. An approval on a line read both ways is bound to its exact text, even where the two
+readings are the same act, as with any line that has an `also` reading ("Standing grants"). A
+line that ends inside a quote (`'`, `"` or `$'`), which bash and dash reject, asks, also under a
+deny and under a catch-all `log` rule (#394): a shell that closes the quote elsewhere runs the rest
+(`echo "${x:-'}"; rm -rf ./work; echo '}"'`: dash runs the `rm`). The reading before is kept for it,
+so the line is never one a rule allows. A line left inside a `$( )` or a backquote is read as
 before (a catch-all `log` rule logs `echo $(`). An over-deep part past the cap ends where the
 lexer would end it, `${...}` words and `$((` included (`_nest_end`); where the reading before ends
-it elsewhere, or a here-document opens in it, the call is read both ways. Each `$((` group's end
-is found once for a chain of them. Cost: bash's reading of a part only it opens costs what the same
-nest written as plain `$( )` costs, level for level, and the reading before, which reads none of
-it, costs next to nothing there. The three-level depth and the 24-part budget keep each line within
-3 times the reading before, or 15 ms more on a short line, where reading all 16 levels took 10 to
-40 times as long; a line of 32 nests in words, each 16 deep (about 5,900 characters), takes about
-twice the reading before.
+it elsewhere, or a here-document opens in it, the call is read both ways.
+Each `$((` group's end is found once for a chain of them. Cost: bash's reading of a part only it
+opens costs what the same nest written as plain `$( )` costs, level for level, and the reading
+before, which reads none of it, adds nothing there to its own cost (which on main grows with the
+text where a `$((` in a word is read to its end for secret-store paths, #320). The three-level
+depth and the 24-part budget keep each line within 3 times the reading before, or 15 ms more on a
+short line, where reading all 16 levels took 10 to 40 times as long; a line of 32 nests in words,
+each 16 deep (about 5,900 characters), takes about twice the reading before.
 
 Known limits. Arithmetic on a bare name (`$((x))`, `${s:x}`) evaluates a value the gate does not
 see. A command more than three levels deep in a part only bash's reading opens, or in a part past
@@ -2383,6 +2388,14 @@ allows it, as main allows the line. dash's other differences, and bash 3.2's pai
 `"${...}"`, are not modelled; a line both shells close, at different places, is decided on both
 readings. A `${...}` word bash never closes asks, and a command after it is read only by the
 reading before, which ends the word at its first `}`.
+
+Each mark in the lexer that makes a line ask here (an odd part: a value that runs, `${ cmd; }`, a
+word or `$((` bash never closes, a line left inside a quote; and an unread part: past the three
+levels, past the 16-level cap, past the 24-part budget, or one that takes the rest of the text)
+has a row in `tests/security/test_gate_parameter_expansion.py` whose line asks for that mark
+alone, such as `echo ${!x}`, `echo 'unclosed` or 24 words each holding a `$(echo n)` and one more
+part. A change that drops the mark fails that row, also where a deny on a command after it would
+still hold through the reading before (review 5652171811).
 
 ## The store is credentials (D-038)
 
