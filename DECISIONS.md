@@ -6027,13 +6027,6 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   issue's five rows added to the corpus as tightened pairs.
 - **Docs:** `docs/GATE.md` "Store-path checks", "Secret-store paths", "Search tools", "Change limits",
   `CHANGELOG.md`.
-- **Plugin binding follow-up (2026-10-23, #498):** `exo.plugin_lifecycle.PluginToolBridge` now owns the
-  Hermes-compatible tool/slot adapters and lifecycle-verdict translation previously inside `CoreRuntime`.
-  `PluginManager.bind_tools` takes explicit collaborators, including the existing approval desk and a
-  live required-mode callback. Core helper shims preserve compatibility. This is a behavior-preserving
-  extraction: no approval policy, binding, private-thread rule or protocol contract changed. It restores
-  the standard core allowance (D-077 amendment above); broader private-state query cleanup remains open.
-  User-guide impact: none. Developer-guide impact: the runtime-binding interface and extension location.
 
 ## D-086: Optional session working notes
 
@@ -6378,3 +6371,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   now follow the review commits, so the bridge carries the shutdown work: sync plugin handlers stay sync, and
   the registry still tracks their workers. Main added the turn's author to the hook keywords (#598) after
   #508 was written. The bridge's `hook_kw` keeps it, so the gate still lowers only for the principal's turn.
+- **Amendment 2026-10-27 (rebased onto #512):** #512 merged the work notebook (D-086) into main first, with
+  this PR's `Loop.workspace_extra` hook and a copy of the plugin binding paragraph above under D-087 (#601).
+  The copy is removed there. compose attaches workspace instructions before the notebook, so the notebook's
+  prompt callback keeps the instructions in the prompt. The notebook test that waited for this PR runs again.
