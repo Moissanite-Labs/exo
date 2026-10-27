@@ -96,6 +96,9 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `session.create` SessionCreate: title = "", seat?, model?, cwd?
 - `session.list` SessionList: limit = 50, seat?
 - `session.get` SessionGet: session
+  Its queued `steers` list contains message IDs. `Loop.steer` assigns a missing ID only after the running turn
+  accepts the message, preserving a supplied ID. Snapshot, cancellation and delivered transcript use that same
+  identity. Refusal leaves the message and queue unchanged.
 - `session.fork` SessionFork: session, at_message?, title = ""
 - `session.resume` SessionResume: session. It closes a tool round a crash left open. While a turn is running in
   the session it only reads, so a second window never writes into a live tool call
