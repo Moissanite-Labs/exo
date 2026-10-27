@@ -5073,17 +5073,22 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/GATE.md` "Store-path checks", "Secret-store paths", "Search tools", "Change limits",
   `CHANGELOG.md`.
 
-## D-083 (2026-10-26) The core budget prices coupling, not only lines
-- **Status:** Accepted 2026-10-26 by the lead (reversible). It amends D-077: it raises `CORE_HEADROOM` from 1,000 to
-  2,000 and makes two of the engine split's step 4 numbers assertions instead of printouts. D-077's ratchet stands
-  unchanged otherwise.
-- **Why:** on 2026-10-26 main counted 15,812 of the 15,813 lines the ratchet allowed, so one line was left. D-077's
-  own record went from 14,999 (2026-10-15) to that count in eleven days, and the two rule-4 raises so far (#314 +58,
-  #346 +29) were each undone by the reduction they called for. At one line of headroom the next security or robustness
-  fix would have had to wait for a cut, which is the one thing rule 4 says the budget must never do. The count was also
-  pricing size alone, while D-077's point 5 names structure as the real goal, and structure was only printed.
-- **Decision:** `tests/integration/test_wave1_acceptance.py` records `CORE_HEADROOM = 2000`, so the ceiling is
-  16,813 and 1,001 lines were free at 15,812. It also records `INWARD_IMPORTS_MAX = 39` and
+## D-083 (2026-10-26, amended 2026-10-27) The core budget prices coupling, not only lines, and has no ceiling
+- **Status:** Accepted 2026-10-26 by the lead (reversible), amended 2026-10-27 by the principal's ruling "we're
+  dropping the ceiling for now as we build out the codebase, it was too restrictive". It amends D-077: the line
+  ceiling is off, and two of the engine split's step 4 numbers are assertions instead of printouts. The floor and its
+  ratchet stand.
+- **Why:** on 2026-10-26 at `dcab371a` main counted 15,812 of the 15,813 lines the ratchet then allowed, so one line was
+  left. It has moved since: #598 raised the headroom by 11 to 1,011 and the count rose past it, so on 2026-10-27 `main`
+  at `13cea687` counted 15,828 against a 15,824 ceiling and `test_core_line_budget` failed on `main` while the work it
+  blocked was ordinary product work. Raising the headroom again would only move the same wall, and the principal's
+  ruling names the wall itself as too restrictive. D-077's own record went from 14,999 (2026-10-15) to that count in
+  twelve days, and the two rule-4 raises so far (#314 +58, #346 +29) were each undone by the reduction they called
+  for: the number was never the thing that kept the core lean, the structure was. The count is also pricing size alone,
+  while D-077's point 5 names structure as the real goal, and structure was only printed.
+- **Decision:** `tests/integration/test_wave1_acceptance.py` no longer records `CORE_HEADROOM` and no longer asserts
+  anything about lines. It keeps `CORE_FLOOR = 14813`, keeps the floor's ratchet-down rule, and prints the count and
+  its distance from the floor on every run. It records `INWARD_IMPORTS_MAX = 39` and
   `PRIVATE_STATE_MAX = 8` and asserts them in the same test, from a `_scorecard` helper that walks `src/exo/core`
   with `ast`:
   - *inward product imports* count every import of a non-core `exo` module from the core (`exo.model_spend`,
@@ -5099,21 +5104,28 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Rejected:**
   - Keeping the headroom at 1,000 and cutting before the next fix. Rule 4 forbids blocking a security or robustness
     fix on the count, and the count was already at one line free.
+  - Raising the headroom again in this PR. It leaves the same gate in place at a higher number and it failed on
+    `main` anyway, so the next ordinary feature would break it again.
   - Setting `CORE_FLOOR` to the current count to make room. The floor never goes up (D-077).
   - Counting every read of a private name. Most are not state at all (methods, module helpers, locals): about 590,
     and the number moves with unrelated edits. Counting method calls on private names is about 353 for the same
     reason.
   - Allow-lists by name. They hide the reads instead of counting them, and they rot.
 - **Numbers:** measured 2026-10-26 on the branch after merging main `dcab371a` (`0d680b83`): 15,812 counted lines in
-  58 files, floor 14,813, headroom 2,000, 1,001 left. Step 4, counted over every import form: 39 inward imports (by
+  58 files, against a floor of 14,813. Re-measured on the landing head, after merging main
+  `13cea687`: 15,828 lines in 58 files against the same floor, 39 inward imports (cap 39) and 8 private-state reads
+  (cap 8).
+  Step 4, counted over every import form: 39 inward imports (by
   module `exo.bus` 4, `exo.gate` 4, `exo.provenance` 4, `exo.model_spend` 4, `exo.crypto` 3, `exo.config` 3,
   `exo.envscrub` 3, `exo.principal` 2, and 1 each for `exo.application`, `exo.capture`, `exo.compose`,
   `exo.diagnostics`, `exo.learn`, `exo.models_cmd`, `exo.plugin_context`, `exo.providers_setup`, `exo.search_worker`,
   `exo.store`, `exo.turn_settle`, `exo.wire`) and 8 private-state reads (`loop._state` 3 in `engine.py`,
   `hub._subs` in `jobs.py` and in `peer_target.py`, `loop._state` 2 in `peer_target.py`, `loop._state` 1 in
   `agents/delegate.py`).
-- **Revisit if:** the two step 4 caps stay still for a long stretch, or the headroom is raised again.
-- **Validation:** at head `c834a7af`, after merging main `58503282`, `tests/integration` with `tests/docs` and
-  `tests/core` gave 1,315 passed and 1 skipped, including the six `test_core_line_budget` cases.
+- **Revisit if:** the two step 4 caps stay still for a long stretch, or a ceiling is wanted again. Bring back a
+  number only with a recorded reason and a value the tree is already under.
+- **Validation:** at head `b1017433`, after merging main `13cea687`, `tests/integration` with `tests/docs` and
+  `tests/core` gave 1,315 passed and 1 skipped in 85.06s, including the six `test_core_line_budget` cases. With the
+  ceiling off, the same six pass on a tree that counts 15,828, where they fail on `main` at `13cea687`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md` §27,
   `docs/DOCS-MAP.md`, `CHANGELOG.md`.

@@ -61,7 +61,7 @@ Since the audit, `main` has moved by many merged PRs, mostly the sweep
 series. Measured on `6e4860af`: `gate.py` 4,700 LOC (was 2,756),
 `consolidate.py` 1,639, `core/context.py` 1,046, TUI `app.py` 2,097; mypy
 baseline 241 diagnostics in 170 entries (was 248 in 174). The core budget
-test reports its own headroom (D-077). Read it before sizing any CORE unit.
+test reports the count against `CORE_FLOOR` with no ceiling (D-077, D-083). Read it before sizing any CORE unit.
 
 | Issue | Finding | Status on main | Where |
 |-------|---------|----------------|-------|
@@ -308,8 +308,8 @@ inside this optimization program:
 - Do NOT apply a >=30% LOC-cut target (see header). Do NOT merge the three
   wire layers (`protocol/`, `protocols/sym2p/`, `wire/`) — rename/document
   only. Do NOT widen mypy targets and shrink the baseline in the same PR.
-- D-077: the core budget is a ratchet with headroom, and the >1,000-line
-  flag is information only. Every CORE unit states its counted-line cost and
+- D-077 and D-083: the core budget is a reported count over a floor with no
+  ceiling (dropped 2026-10-27), and the >1,000-line flag is information only. Every CORE unit states its counted-line cost and
   ratchets `CORE_FLOOR` down when it reduces it. A failing per-file size gate
   would fail on main today (`gate.py`, `consolidate.py`, `core/context.py`,
   TUI `app.py`), so W3-5 ships a report, not a gate, unless a ruling amends
