@@ -68,11 +68,13 @@ engine that `exo serve` runs; `exo.core.engine:create` forwards to it. The diagn
 goes in compose, new read-only views go in diagnostics, and neither goes into `CoreEngine`. These modules still read
 some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the split will replace with public queries.
 
-**The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
+**The core budget (D-077, D-083).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
 in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
-protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
-`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the headroom left (run it
-with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the rules
+protocol files excluded). The ceiling is off (D-083): the test reports the count against `CORE_FLOOR = 14,813` and
+asserts nothing about lines. Run it with `-s` to see the number. It does assert two step 4 structure counts, which
+ratchet down: `INWARD_IMPORTS_MAX = 39`
+imports of a product module from the core, and `PRIVATE_STATE_MAX = 8` cross-module private-state reads. A real
+reduction lowers the floor, and the floor never rises. Section 7 has the rules
 (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on the
 engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol has
 its own cap (section 2).
@@ -409,25 +411,26 @@ runs and CI never run it.
 
 If you changed the protocol schema, also run `python -m exo.protocol.export --check`.
 
-Rules that tests enforce: the protocol caps, the core line budget (a ratchet with headroom, explained below), the
+Rules that tests enforce: the protocol caps, the core line budget (a reported count over a floor, no ceiling; explained below), the
 TUI colour tokens against the site's
 `style.css`, that every `/help` command appears in the intro skill, and the docs map (`tests/docs/test_docs_map.py`).
 Tests use fake models and no network. The conftest fixtures isolate `EXO_HOME`, the bus identity and the peers
 folder, so a test never reads your real setup. The root fixture also clears inherited `NO_COLOR` so terminal
 settings cannot change the expected TUI theme. Tests that need no-colour mode set `NO_COLOR` themselves.
 
-**The core line budget (D-077).** `test_core_line_budget` (`tests/integration/test_wave1_acceptance.py`) counts the
-lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`,
-generated files excluded. It is a ratchet with headroom, not a wall. The test records `CORE_FLOOR` and
-`CORE_HEADROOM` and fails when the count reaches their sum. Run it with `-s` or `-rP` to see the count, the headroom
-left and the largest counted files. The rules are in `docs/ENGINE-SPLIT.md` "Budget policy":
+**The core line budget (D-077, D-083).** `test_core_line_budget` (`tests/integration/test_wave1_acceptance.py`)
+counts the lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and
+`src/exo/upstream.py`, generated files excluded. The ceiling is off: the test records `CORE_FLOOR = 14,813`, prints
+the count and its distance from the floor, and asserts nothing about lines. Run it with `-s` or `-rP` to see the
+count and the largest counted files. It does assert the two step 4 structure caps. The rules are in
+`docs/ENGINE-SPLIT.md` "Budget policy":
 
-- Fixes and features land inside the headroom with no ceremony.
+- Fixes and features land on their own merits. No headroom note, no waiting for a reduction.
 - A PR that makes a real reduction (deletions, simplification, a real seam from the engine split) sets `CORE_FLOOR` to
   its post-merge count in the same PR. The floor never goes up.
-- A security or robustness fix is never blocked. If it would cross the ceiling, raise `CORE_HEADROOM` by the minimum
-  that the failure message names, and add a one-line note to `DECISIONS.md`. A reduction follows within the week.
-- A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+- A count that climbs far past the floor is a reason to schedule a reduction, never a reason to refuse work.
+- The structure caps are the gate: `INWARD_IMPORTS_MAX` and `PRIVATE_STATE_MAX` only go down. A PR that adds one has
+  to remove another first.
 - Never edit the `CORE` list to dodge the count. The goal is structural: no private-state reads across module
   boundaries, no product imports into the engine, one responsibility per module. The count is a signal for it.
 
