@@ -79,7 +79,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Modular `lean`, `coding` and `full` harness profiles, individual capability overrides, dependency
   explanations and dry-run CLI configuration. Disabled services omit tools and startup resources.
   The approval gate and required executor constraints remain enforced. Existing configurations
-  without a profile retain legacy behavior (`docs/HARNESS.md`, D-082). `exo harness enable` and `disable` need a
+  without a profile retain legacy behavior (`docs/HARNESS.md`, D-088). `exo harness enable` and `disable` need a
   saved profile, and `show` and `use` name each discovered plugin that a profile will not load.
 - Dependency-aware plugin composition and synchronous resource cleanup on failed registration or
   final shutdown. Folder requirements are validated before import. Entry-point requirements before registration.
@@ -105,7 +105,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   private-state reads (`PRIVATE_STATE_MAX`). The floor and both counts keep their rule, they only ratchet
   down. Docs updated together: `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md`,
   `docs/CORE.md`, `docs/OPTIMIZATION.md`, `docs/DOCS-MAP.md`, `docs/WHITEPAPER.md` sections 11 and 27.
-- Engine shutdown is ordered and bounded (D-082, `docs/HARNESS.md`). `close()` refuses new turns, tools, background
+- Engine shutdown is ordered and bounded (D-088, `docs/HARNESS.md`). `close()` refuses new turns, tools, background
   jobs and job wakes. It stops channels, peers, background jobs, the scheduler and MCP. Then it waits up to five
   seconds for turns, synchronous tool workers and learning reviews, and only then runs plugin cleanups. A sync tool
   that outlives the wait keeps plugin resources, the store and the writer claim in place, and `close()` raises

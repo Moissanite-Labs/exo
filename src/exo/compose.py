@@ -130,7 +130,7 @@ def create(seat: str | None = None) -> CoreEngine:
             if pack := pack_dir():
                 folders.append(pack)
         factories: dict[str, Any] = {}
-        # Without a profile these keys did nothing before D-082, so legacy installs keep both managers.
+        # Without a profile these keys did nothing before D-088, so legacy installs keep both managers.
         if not plan.enabled("jobs") or plan.explicit and ((cfg.get("jobs") or {}).get("enabled") is False
                                                          or st and st.jobs.get("enabled") is False):
             from exo.harness_runtime import DisabledJobs

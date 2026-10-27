@@ -6259,7 +6259,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Why not stop the turn:** a free route may still serve the turn; the principal pays for the warning, not a dead session.
 - **Docs:** `docs/PROVIDERS.md` "When every route fails", `docs/TRACE.md` "Cost", `docs/DOCS-MAP.md`, `CHANGELOG.md`. Tests: `tests/core/models/test_router_refusals.py`, `tests/trace/test_trace.py`.
 
-## D-082 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
+## D-088 (2026-10-23) Explicit harness composition, plugin ownership and scoped workspace guidance
 - **Status:** Implemented for review ([#496](https://github.com/aska-digital/exo/issues/496)), following the principal's request to draw on current harnesses while
   letting users choose how lean or capable Exo should be. Comparative performance is not yet established.
 - **Evidence:** `docs/HARNESS-LANDSCAPE.md` records the current Pi, Codex, Hermes, OpenCode, DeepSeek Harness,
@@ -6321,3 +6321,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
     Entry points keep their discovery order. The executor's plugin refusal names the plugin and `core_plugins`.
   - *Deferred.* Calling the memory provider's `shutdown()` at close is a follow-up. Main never called it, and it
     changes exo-memory's shared runtime lifetime.
+- **Amendment 2026-10-27 (number):** this decision was D-082 until #235 merged its canary operating decisions
+  under that number. #601 then merged a second D-082, which #725 moved to D-087, and #613 merged D-083. #510
+  holds D-084 on #508's branch, open PR #511 holds D-085 and #512 merged D-086. So this decision is D-088. The
+  messages of #500's first two commits still say D-082.

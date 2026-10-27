@@ -1,6 +1,6 @@
 # Modular harness profiles
 
-**Status:** In progress (D-082, [#496](https://github.com/aska-digital/exo/issues/496)). Implemented on the feature branch and awaiting review.
+**Status:** In progress (D-088, [#496](https://github.com/aska-digital/exo/issues/496)). Implemented on the feature branch and awaiting review.
 
 Exo can run with a small set of capabilities or with its full set of integrations.
 Profiles select runtime components. They do not change models, approval policy,
@@ -92,7 +92,7 @@ the seat's `plugins`). Otherwise startup stops and names the plugin.
    `core_plugins` to keep it. They read only `plugin.yaml` files and entry-point names.
 4. Existing subsystem settings still apply. A selected capability may be configured off.
    With a profile, `jobs.enabled: false` or `delegation.enabled: false` omits that manager.
-   Without a profile these two keys change nothing, as before D-082.
+   Without a profile these two keys change nothing, as before D-088.
 5. A seat may narrow the selection. A seat plugin list must retain the gate and cannot
    name a disabled built-in plugin. Disabled MCP/channels/peers are suppressed even if
    a seat configures them. Disabling jobs in the profile or seat omits its manager.
@@ -143,7 +143,7 @@ Independent plugins still load. A failed registration rolls back its registratio
 Installed `exo.plugins` entry points can expose `PLUGIN_MANIFEST`. Python must import
 the entry point to read that metadata, so dependency validation prevents registration,
 not its import-time effects. Folder plugins take precedence over duplicate entry points.
-Entry points register in the order Python lists them, as before D-082, so their hooks
+Entry points register in the order Python lists them, as before D-088, so their hooks
 keep that order. A requirement can still move a dependency ahead of its consumer.
 Dependency names do not currently express version constraints.
 

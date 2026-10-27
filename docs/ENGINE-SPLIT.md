@@ -80,7 +80,7 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
     read `loop._state`, `store._q` or tree `_view`/`_agent_key`. Inward imports left in the engine: `exo.principal`,
     `exo.config`, `exo.provenance`, `exo.diagnostics` and lazy `exo.learn` and `exo.models_cmd` (the `exo.gate`
     approver checks moved with the desk to `exo.core.approvals`).
-  - **Added by D-082 (2026-10-23, reviewed 2026-10-26), also open for #46 and #498.** `exo.core.plugins` imports
+  - **Added by D-088 (2026-10-23, reviewed 2026-10-26), also open for #46 and #498.** `exo.core.plugins` imports
     `exo.plugin_lifecycle` at module level (`Resources`, `dependency_error`), and its `load_all` and
     `load_entry_points` call into it. `CoreRuntime.close` imports `exo.runtime_shutdown` lazily. Those uncounted
     modules read core private state: `stop_admission` and `drain` read `engine._tasks`, `engine._started`,

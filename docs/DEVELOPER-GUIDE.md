@@ -93,7 +93,7 @@ its own cap (section 2).
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
 program's database. Nothing in the core may assume one person's names, accounts or machines (D-004).
 
-**Harness composition (D-082).** `exo.harness.resolve` builds a side-effect-free capability plan.
+**Harness composition (D-088).** `exo.harness.resolve` builds a side-effect-free capability plan.
 `exo.compose` selects services and plugins before constructing the runtime. `exo harness show --json`
 explains the configuration without importing plugins. New optional services belong behind composition
 seams, as jobs/delegation factories do. Disabling a feature must remove its tools and resource startup,
@@ -303,7 +303,7 @@ tools when no `pre_tool_call` callback is registered: reinstall the plugins or e
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
 `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
 
-**Dependencies and cleanup (D-082).** A folder's `plugin.yaml` can declare `requires: [other-plugin]`.
+**Dependencies and cleanup (D-088).** A folder's `plugin.yaml` can declare `requires: [other-plugin]`.
 The loader orders selected dependencies first and blocks missing, failed or cyclic dependencies before
 importing the consumer. It never widens an explicit allowlist. Entry-point dependency metadata is
 available only after import and is checked before registration. Pair resources created in `register`

@@ -177,7 +177,7 @@ def load_entry_points(manager: PluginManager, group: str,
     from exo.core.plugins import Manifest
 
     candidates: dict[str, _Candidate] = {}
-    for ep in importlib.metadata.entry_points(group=group):  # discovery order, as before D-082: hooks keep it
+    for ep in importlib.metadata.entry_points(group=group):  # discovery order, as before D-088: hooks keep it
         if allow(ep.name):
             candidates.setdefault(ep.name, _Candidate(Manifest(name=ep.name, kind="entry_point"),
                                                        "entry_point", ep))
