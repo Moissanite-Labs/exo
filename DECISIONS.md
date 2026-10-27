@@ -1276,8 +1276,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `rm` of both paths was denied already (its `delete` part names the last path), reads keep their class, and the
   first path alone decides as before. Each new part only adds a match, so no decision is lower; gate_diff ran
   main 5a5a535d against this change and found 0 lowered.
-- *Amendment 2026-10-26 (issue #516):* an allow rule keyed on `command` no longer lifts the matrix deny of the part
-  a shell call's own folder read adds (#311), unless it names the folder. The part had no own text, so a line of
+- *Amendment 2026-10-26 (issue #516):* an allow rule keyed on `command` that would lower the line over the matrix
+  deny of the part a shell call's own folder read adds (#311) must name the folder, as it names the `cd` in the cd
+  form; naming the folder never lifts that deny. The part had no own text, so a line of
   one command beside it was one text for the #394 own-text test (`_one_text`) and the rule decided the line as
   before, over the part's cell: `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir`
   asked under `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`, where its `cd` form was

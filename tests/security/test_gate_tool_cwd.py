@@ -555,6 +555,35 @@ def test_a_rule_that_names_the_folder_decides_as_the_cd_form_does():
     assert gate.decide(c).outcome == gate.decide(cd).outcome == "ask"
 
 
+REL_NAMED = {"gates": {"matrix": {"costly": {"private": "deny"}},
+                       "rules": [{"match": {"command": r"cat \.ssh/config|cd ~"}, "decision": "allow"}]}}
+REL_DOUBLED = {"gates": {"matrix": {"costly": {"private": "deny"}},
+                         "rules": [{"match": {"command": r"cd cd ~|cat \.ssh/config"}, "decision": "allow"}]}}
+
+
+@pytest.mark.parametrize("tool, key", [("bash", "cwd"), ("terminal", "workdir"), ("exec_command", "workdir")])
+def test_the_relative_reads_stand_in_names_the_cd_once(tool, key):
+    """#516, review: the part the relative read adds (#209) carried the stand-in with the `cd` said twice —
+    `cd cd ~` for a folder the call spells `~` — so a rule naming the folder as it names the `cd` could not match
+    on this branch. _tool_folder_read returns the `cd` spelling itself and _shell_call adds no second one: the
+    stand-in is `cd <folder>`, said once, so a rule on the doubled spelling matches nothing where `cd <folder>`
+    does. Either way the part's matrix deny stands, as the cd form's does, and with no matrix deny the call asks."""
+    c = _bash_in("cat .ssh/config", "~", tool=tool, key=key)
+    assert [p.setters for p in _store_parts(c)] == [["cd ~"]]
+    assert gate._one_text(c) is False
+    cd = _bash("cd ~ && cat .ssh/config")
+    assert gate.decide(c, _pol(REL_NAMED)).outcome == gate.decide(cd, _pol(REL_NAMED)).outcome == "deny"
+    assert gate.decide(c, _pol(REL_DOUBLED)).outcome == "deny"
+    assert gate.decide(c).outcome == "ask"
+
+
+def test_two_folders_stand_in_names_each_cd_once():
+    """#516, review: with two folders the relative read's stand-in read `cd cd ~ or cd ~/x`; each folder's `cd` is
+    said once now."""
+    c = gate.classify({"tool": "bash", "args": {"command": "cat .ssh/config", "cwd": "~", "workdir": "~/x"}})
+    assert [p.setters for p in _store_parts(c)] == [["cd ~ or cd ~/x"]]
+
+
 EVERYDAY = ["ls *", "ls config", "wc -l *", "grep -r foo *", "du -sh *", "rg -n config src", "file *"]
 
 

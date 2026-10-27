@@ -2018,8 +2018,9 @@ form can be stricter than its `cd` form, which #468 weighs as one line.
 The part keeps no own text, as a `cd` form's parts have, and carries a `cd <folder>` stand-in among
 its setters, the folder as the call spells it (`~/.ssh`, or a relative `keys` for a folder joined to
 the session's) (#516). So a line with the part is not one text for the #394 own-text test: a rule
-keyed on `command` that would lower the line or lift the part's matrix deny must name the folder, as
-it must name the `cd` in the cd form, and one that names only the line's text is passed over. Under
+keyed on `command` that would lower the line must name the folder, as it must name the `cd` in the
+cd form, and one that names only the line's text is passed over. Naming the folder never lifts the
+part's matrix deny: that deny stands under a rule on the line's text alone, as under any rule. Under
 `matrix: {irreversible: {private: deny}}` and an allow rule on `git push`,
 `git push --force origin main` with `~/.ssh` or `~/.exo/keys` as `cwd` or `workdir` is denied, as
 its `cd` form is, where main asks or allows. A rule that names everything lifts nothing, as before:
