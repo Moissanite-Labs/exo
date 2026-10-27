@@ -457,6 +457,18 @@ def test_a_repeated_braced_store_path_keeps_its_own_part(monkeypatch, first, wri
         assert gate.decide(c, norm).outcome == gate.decide(plain, norm).outcome == "deny", (name, braced)
 
 
+@pytest.mark.parametrize("spelling", ["~/.EXO/policies/{g,h}.yaml", "~/.exo/Policies/{G,H}.yaml"])
+def test_a_repeated_case_variant_braced_store_path_keeps_its_own_part(monkeypatch, spelling):
+    # #635 reads a store name in any letter case; a repeated case-variant spelling keeps its own part the same way
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    monkeypatch.delenv("EXO_GATE_CASE_SENSITIVE", raising=False)
+    line = f"cp ~/.exo/policies/a.yaml {spelling}; printf x > {spelling}"
+    c = classify(line)
+    assert any(p.category == "store_write" and p.own == f"printf x > {spelling}" for p in gate._each_part(c)), c
+    for name, pol in REPEAT_POLICIES.items():
+        assert gate.decide(c, gate.normalize_policies(pol)).outcome == "deny", (name, line)
+
+
 def test_a_repeated_braced_store_path_changes_nothing_else(monkeypatch):
     monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
     pol = gate.normalize_policies(REPEAT_POLICIES["store_write deny+allow ^cp"])

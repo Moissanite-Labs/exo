@@ -1309,20 +1309,24 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   met, and a later command that wrote the same spelling got no part, so its write had the first command's own
   text (#394). Under `{categories: {store_write: deny}, rules: [{match: {command: '^cp '}, decision: allow}]}`,
   `cp ~/.exo/policies/a.yaml ~/.exo/policies/{g,h}.yaml; printf x > ~/.exo/policies/{g,h}.yaml` was denied on
-  1c3d4322 and asked on main fa5dfcd8, and so did a matrix deny, a `log` or `ask` rule, and `tee`, `sudo tee`,
+  1c3d4322 and asked on main e0968a2b, and so did a matrix deny, a `log` or `ask` rule, and `tee`, `sudo tee`,
   `truncate` or `scp` in place of `printf`; with `cp /var/tmp/a` first, the line asked on 1c3d4322 too. Each
   check's hits on a spelling are now kept with it (`_shell_hits`), and a command that repeats the spelling gets
   them for its own part; only a check that found nothing still covers a narrower one. The braced line decides as
   the unbraced one does. The hits a repeat gives again come from a third 4,096 budget per call (`_BRACE_BUDGET`),
   so a line of many repeats makes a bounded number of parts (40 `cp` commands that repeat a 676-path spelling make
   4,772 store parts, each command with its own, where 27,080 without the budget; main made 677, all the first
-  command's); past it a repeat is one hit on the word as written, as a word past the brace cap is. `apply_patch`
+  command's); past it a repeat is one hit on the word as written, as a word past the brace cap is. The extra parts
+  cost time: that line classifies and decides in about 0.3 s, where main took 0.1 s. A redirect target or folder
+  check (`>`, `cd`, `git -C`) keeps only its first hit, as main's `any()` stopped at it. `apply_patch`
   and `write_file` that write more than one store file make each store path past the first a `store_write` part
   too, as `copy_file` does, so a `{category: store_write, target}` deny or reserved entry on a later file matches.
-  Parts are only added; gate_diff against main fa5dfcd8 on an aimed corpus (452 actions: the review's lines and
-  their unbraced controls under each writer, `cd`, `-C` and file tool forms, and lines of many repeats; 135
-  policies, the built-in ones and 47 on targets, rules on `^cp `, matrix cells and reserved entries) lowered 0 of
-  61,020 pairs and tightened 318. Not covered, as before: a relative path read from a `cd` into the store, from
+  A case variant the store reads since #635 (`~/.EXO/policies/{g,h}.yaml`) keeps its part the same way.
+  Parts are only added; gate_diff against main e0968a2b lowered 0 of 1,053,712 pairs on the built-in corpus
+  (`--no-variants`, 0 tightened) and, on an aimed corpus (614 actions: the review's lines and their unbraced and
+  case-variant controls under each writer, `cd`, `pushd`, `-C` and file tool forms, the #651 replace tools, and
+  lines of many repeats, redirect and folder ones too; 135 policies, the built-in ones and 47 on targets, rules on
+  `^cp `, matrix cells and reserved entries), 0 of 82,890 pairs, with 485 tightened. Not covered, as before: a relative path read from a `cd` into the store, from
   `tar -C` or `git -C`, or from the call's own folder (#453, #527) is no target, so a `target:` entry on it does
   not match (`cd ~/.exo/policies && cp a.yaml gates.yaml` asks under `deny: ["target:*/gates.yaml"]`). The `cd`
   and `-C` lines still ask the principal alone; the own-folder line is allowed, as #453 records.

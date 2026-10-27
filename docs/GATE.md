@@ -2746,7 +2746,8 @@ command that repeats a braced store path keeps its own part (#611 follow-up): th
 expands and checks each brace spelling once per line and gives each command that repeats it the
 same hits, so `cp ~/.exo/policies/a.yaml ~/.exo/policies/{g,h}.yaml; printf x >
 ~/.exo/policies/{g,h}.yaml` is denied under `categories: {store_write: deny}` beside an allow rule
-on `^cp `, as the unbraced line is. The hits a repeat gives again come from a budget of their own
+on `^cp `, as the unbraced line is, and so is a case variant the store reads since #635
+(`~/.EXO/policies/{g,h}.yaml`). The hits a repeat gives again come from a budget of their own
 (4,096 per call), so a line of many repeats stays bounded; past it a repeat is one hit on the word
 as written, as a word past the brace cap is. Limits: a relative path read from a `cd` into the
 store, from `tar -C` or `git -C`, or from the call's own folder is no target, so a `target:` entry
