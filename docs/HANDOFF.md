@@ -70,7 +70,8 @@ file's path and launch lines, title, list fields and summary still reach it as t
 After `/undo`, exo-context drops the pins of the undone turns and the summaries the undo deleted, then writes again
 each automatic handoff that may quote them, another thread's included (`docs/MEMORY-MODEL.md`, "Undo and failed
 summaries"). A Hermes `/undo` in the CLI or TUI reaches exo-context through exo-memory, and the pins only the
-undone turns held go the same way (#389). A rebind carries an undone pin back no more (#592). A handoff a
+undone turns held go the same way (#389). A rebind carries an undone pin back no more (#592), and a `/compress`
+between the last turn and the undo reads as reaching back when it folded the window's first row (#581). A handoff a
 compaction wrote before that keeps the ruling until the next compaction writes it again.
 
 Client code: `clients/tui/exo_tui/handoff.py`. Tests: `tests/clients/tui/test_handoff.py`.
