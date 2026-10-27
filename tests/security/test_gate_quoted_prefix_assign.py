@@ -8,6 +8,7 @@ A word is now an assignment when its NAME= is unquoted in the source, and the fl
 unknown program as well. Classification and decision only; nothing is executed.
 """
 from collections import Counter
+from dataclasses import replace
 
 import pytest
 
@@ -361,6 +362,26 @@ def test_a_store_write_beside_a_quoted_assignment_is_the_principals_alone(home, 
     c = classify(sh(line))
     assert no_grant(c) and call_approvers(c, DELEGATED) == ["principal"], line
     assert decide(c, normalize_policies({"gates": {"deny": ["store_write"]}})).outcome == "deny", line
+
+
+# A store name an expansion hides (#320), a quoted or split one, and the Exo home's config.json so hidden (D-074),
+# written behind each quoted prefix style, after a push and behind sudo. Guard rows: main dcab371a counts each of
+# them, and so does each reading here, the new one alone too (the prefix strip and the store glob both run on it).
+HIDDEN_STORE = ["~/.exo/pol$(:)icies/gates.yaml", "~/.exo/$(printf policies)/default.yaml",
+                "~/.exo/pol'icies'/gates.yaml", "~/.exo/polic${u}ies/gates.yaml", "~/.exo/con$(:)fig.json"]
+STORE_DENY = normalize_policies({"gates": {"deny": ["store_write"]}})
+
+
+@pytest.mark.parametrize("form", ["{} cp /tmp/x {}", f"{PUSH} && {{}} cp /tmp/x {{}}", "{} sudo cp /tmp/x {}"])
+@pytest.mark.parametrize("name", HIDDEN_STORE)
+@pytest.mark.parametrize("style", STYLES)
+def test_a_hidden_store_name_behind_a_quoted_assignment_is_the_principals_alone(home, style, name, form):
+    line = form.format(style, name)
+    c = classify(sh(line))
+    assert decide(c, DEFAULT).outcome == "ask" and decide(c, STORE_DENY).outcome == "deny", line
+    assert no_grant(c) and call_approvers(c, DELEGATED) == ["principal"], line
+    new = replace(c, before=None) if getattr(c, "before", None) is not None else c
+    assert decide(new, STORE_DENY).outcome == "deny" and no_grant(new), line
 
 
 def test_a_sudo_write_behind_a_quoted_assignment_keeps_its_write():

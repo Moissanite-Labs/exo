@@ -1060,8 +1060,9 @@ both, and each violation as often as one of them lists it. So two posts to one P
 the footer after `X='a b' cd ~/.exo/state` list it twice, as the line read as before does. The
 exo-gate hook reads that reading, and its floor, wherever it reads a gh line's floor: a post's body
 file, the required executor's body check, who may answer, "once" and the categories that never get
-a grant. `gate.readings` lists it, with its own floor and its reading from before #311, after the
-line's own, so `no_grant`, `call_approvers` and `body_unseen` read its parts too: a store write
+a grant. `gate.readings` lists it, with its own floor, its reading from before #311 and its joined
+reading (#584), after the line's own and those of the line as read before D-074 (which has its own
+reading as before #471 too), so `no_grant`, `call_approvers` and `body_unseen` read its parts too: a store write
 part only that reading has keeps the answer with the principal, once (#447), and a sudo write it
 reads keeps its displaced part's approvers (#454). An "always" binds to the exact line when
 that reading would, and a reserved hit there that is not that reading's own act keeps the ask from

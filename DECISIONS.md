@@ -2605,6 +2605,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   at once: no ask that main never lets a grant answer takes one. Some lines ask where main took a grant: a reserved
   entry names a part main never read there (the command behind the quoted word, or the unknown program kept beside
   it), and D-075 keeps a hit on another part than the line's act from a grant. The runs and counts are in #546.
+  On main dcab371a (2026-10-26), which took #584 (a `$` form's backslash-newline joined) and D-074 (the home's
+  `config.json` a store path, `Classification.ordinary`), each reading keeps the others: the line read as before
+  #471 has its own joined reading and its own reading as before D-074, and the reading as before D-074 its own
+  reading as before #471. `gate.readings` lists the line's own readings, then those of the line as before D-074,
+  then those of the line as before #471. A store name an expansion hides (#320: `~/.exo/pol$(:)icies/gates.yaml`,
+  `~/.exo/$(printf policies)/default.yaml`), a quoted one (`~/.exo/pol'icies'/gates.yaml`) and the home's
+  `config.json` so hidden, written behind each quoted prefix style, after a push and behind `sudo`, are store writes
+  on the new reading alone too, as on main.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
