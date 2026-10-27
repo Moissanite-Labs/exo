@@ -45,13 +45,45 @@ class RunningSource(ModelSrc):
         return await super().call(body)
 
 
+# Track body completion too: fetch() resolves before api() consumes JSON and redraws.
+STARTUP_TRACKER = r"""
+window.startupRequests = new Set();
+const originalFetch = window.fetch;
+window.fetch = async (...args) => {
+  const request = {}; window.startupRequests.add(request);
+  try {
+    const response = await originalFetch(...args);
+    const originalJson = response.json.bind(response);
+    response.json = async () => {
+      try { return await originalJson(); }
+      finally { window.startupRequests.delete(request); }
+    };
+    return response;
+  } catch (error) { window.startupRequests.delete(request); throw error; }
+};
+"""
+STARTUP_READY = r"""(async () => {
+  const bus = await import("/static/bus.js");
+  // Let API continuations and their follow-up requests run before checking the queue.
+  await new Promise(requestAnimationFrame);
+  let synced = 0; const off = bus.onState(state => { synced = state.synced; }); off();
+  return synced > 0 && window.startupRequests.size === 0;
+})()"""
+
+
+def track_startup(browser):
+    browser.call('Page.addScriptToEvaluateOnNewDocument', source=STARTUP_TRACKER)
+
+
 @pytest.fixture
 def page():
     src = RunningSource()
     srv = Served(src)
     with Browser() as browser:
+        track_startup(browser)
         browser.goto(srv.url())
         browser.wait('document.querySelectorAll(".xc-sess").length === 2 && !!document.querySelector(".xc-msg")')
+        browser.wait(STARTUP_READY)
         browser.eval('window.thread = id => Array.from(document.querySelectorAll(".xc-sess")).find(e => e.querySelector(".xc-sess-title").textContent === id)')
         yield src, srv, browser
     srv.close()
@@ -273,3 +305,39 @@ def test_unknown_thread_event_during_list_request_is_merged(page):
     expect(browser, 's1', True)
     srv.call(release.set)
     browser.wait('window.thread("s3").querySelector(".xc-dim").textContent.includes("running")')
+
+
+
+def test_startup_barrier_waits_for_initial_approval_response():
+    src = RunningSource()
+    srv = Served(src)
+    entered = threading.Event()
+    release = None
+    original = src.call
+    async def held_approvals(body):
+        if type(body).TYPE == 'approvals.list':
+            entered.set()
+            await release.wait()
+        return await original(body)
+    def hold():
+        nonlocal release
+        release = asyncio.Event()
+        src.call = held_approvals
+    srv.call(hold)
+    try:
+        with Browser() as browser:
+            track_startup(browser)
+            browser.goto(srv.url())
+            # The old fixture was ready here, although approval sync still redraws later.
+            browser.wait('document.querySelectorAll(".xc-sess").length === 2 && !!document.querySelector(".xc-msg")')
+            assert entered.wait(2)
+            assert not browser.eval(STARTUP_READY)
+            srv.call(release.set)
+            browser.wait(STARTUP_READY)
+            browser.eval('window.originalThread = document.querySelector(".xc-sess")')
+            emit(srv, 1, 's2', 'turn.completed')
+            browser.wait('(async()=> (await import("/static/bus.js")).lastSeq() >= 1)()')
+            assert browser.eval('window.originalThread === document.querySelector(".xc-sess")')
+    finally:
+        srv.call(release.set)
+        srv.close()
