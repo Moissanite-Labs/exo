@@ -1430,7 +1430,10 @@ class ExoApp(App):
             dropped = rs.dropped_permission_flags()
             if dropped:
                 # The new window keeps --seat and EXO_HOME, so it joins this core (D-028, D-039) and the
-                # permission mode it gets is the core's, not the command line's (#669).
+                # permission mode it gets is the core's, not the command line's (#669). The mode is read from
+                # the gate now, not from the cached banner, so the note is right when another window of this
+                # core changed it since this window last looked.
+                await self.load_permissions()
                 core = ("bypass still applies there" if self.bypass
                         else "this core's permission mode still applies")
                 self.note(f"the new window runs without {' '.join(dropped)}: it joins this core, so {core}", "warn")
