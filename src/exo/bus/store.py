@@ -119,14 +119,21 @@ class Store:
 
         An inverted or empty range verifies nothing, so it reports ok False
         instead of ok True with checked 0: a caller must not read an empty
-        check as a clean log. to_seq is clamped to the head so the returned
+        check as a clean log. The one exception is the default call on an
+        empty log: verify() with no range asks whether the whole log is
+        clean, and an empty log is clean, so it reports ok True with an
+        empty marker. An explicit range on an empty log still reports
+        ok False. to_seq is clamped to the head so the returned
         range always matches what was checked.
         """
         from_seq = max(1, from_seq)
         head_seq, head_hash = self.head()
         if to_seq is None:
+            if head_seq == 0 and from_seq == 1:
+                return {"ok": True, "empty": True, "from": 1, "to": 0,
+                        "checked": 0, "head": head_hash}
             to_seq = head_seq
-        to_seq = min(to_seq, head_seq)
+        to_seq = max(0, min(to_seq, head_seq))
         if to_seq < from_seq:
             return {"ok": False, "error": "range is empty: nothing to verify",
                     "from": from_seq, "to": to_seq, "checked": 0, "head": head_hash}

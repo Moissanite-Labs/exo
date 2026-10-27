@@ -31,11 +31,18 @@ def test_verify_beyond_the_head_is_not_ok(tmp_path):
     assert result["checked"] == 0
 
 
-def test_verify_empty_store_is_not_ok(tmp_path):
+def test_verify_empty_store_default_is_ok_empty(tmp_path):
     store = Store(tmp_path / "log.sqlite")
     result = store.verify()
-    assert result["ok"] is False
+    assert result["ok"] is True
     assert result["checked"] == 0
+    assert result["empty"] is True
+
+
+def test_verify_explicit_empty_range_on_empty_store_is_not_ok(tmp_path):
+    store = Store(tmp_path / "log.sqlite")
+    assert store.verify(1, 0)["ok"] is False
+    assert store.verify(2)["ok"] is False
 
 
 def test_verify_clamps_to_past_the_head(tmp_path):
