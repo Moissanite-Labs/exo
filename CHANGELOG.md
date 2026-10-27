@@ -6,6 +6,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A `$((` bash reads as a command substitution is read as one now (#553). bash closes the `$( ` at the first `)`
+  outside quotes, backquotes, `$( )` bodies and comments, and reads the span as arithmetic only when the text
+  between the parens, quoted spans skipped, holds balanced parens (chk_arithsub); else it re-reads the span as
+  `$( ( )`, a subshell, and the commands in it run. The gate matched `$((` against `))` without counting quotes,
+  so a `((` in a quoted word made it read the whole span as arithmetic and it never read the commands:
+  `echo $((echo '((' ; git push --force origin main) )` was an allowed `read` under `deny: [force_push]`, where
+  the same line written `echo $( (echo '((' ; git push --force origin main) )` denied, and so were
+  `echo $((echo "(( " ; ... ) )` and the `$'..'` form, a hidden `git push origin :main` or `rm -rf x` in the same
+  shape, and `echo $(( 1 + '(' )); git push --force origin main`, where a quoted paren made the span run to the
+  end of the line. The span is found with quotes and nesting counted and bash's paren balance applied, and a
+  span that fails it is read as the `$( ( )` it runs as, so the commands in it classify; the arithmetic span is
+  the one bash extracts, so what follows is read where bash discards its line only after the error. An unclosed
+  `$((` bash cannot parse and runs nothing, and the span stays arithmetic text to the end of the line, as
+  before, so the deep-nest readings stay linear. Plain arithmetic decides as it did
+  (`$((1+2))`, `$((PATH=5))`, `$[PATH=5]`, a ternary, a `$( )` or a backquote inside the body), and `_nest_end`
+  ends a cut at the same span. Tests: `tests/security/test_gate_dollar_paren_cmdsub.py`. **Docs:** `docs/GATE.md`,
+  `DECISIONS.md` (D-038).
 - A prompt-string transformation is code the gate cannot see (#579). `${name@P}` expands the value as a prompt
   string, and with `promptvars` on, the default, that runs its command substitutions and expands its parameters,
   so the gate read the word as an ordinary parameter expansion and allowed the line: `printf -v p '%s(%s)' '$'
