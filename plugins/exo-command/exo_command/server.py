@@ -234,7 +234,7 @@ class WebServer:
         self._conns.add(task)
         try:
             await self._request(reader, writer)
-        except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError):
+        except (ConnectionError, asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError):
             pass
         except asyncio.CancelledError:
             pass
@@ -385,6 +385,10 @@ class WebServer:
                 writer.write(b"event: gap\ndata: " + json.dumps(gap).encode() + b"\n\n")
             for ev in events:
                 writer.write(_frame(ev))
+                # Replay obeys the same backpressure as live events. A slow
+                # browser must not accumulate the whole log in the transport.
+                await asyncio.wait_for(writer.drain(), 10)
+                await asyncio.sleep(0)
                 sent = ev["seq"]
             writer.write(b'event: synced\ndata: {}\n\n')
             await writer.drain()

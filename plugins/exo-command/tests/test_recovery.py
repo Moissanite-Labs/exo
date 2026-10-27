@@ -93,3 +93,56 @@ def test_a_cursor_from_an_older_core_epoch_resets_explicitly():
         assert gap == {"since": 100, "reset": True} and events[0]["seq"] == 3
         assert [b.since for b in src.calls] == [100, 0]
     asyncio.run(go())
+
+
+def test_fresh_page_before_bootstrap_uses_recent_ring_not_entire_log():
+    async def go():
+        class Source(FakeSource):
+            async def call(self, body):
+                raise AssertionError('fresh page must not request durable replay from zero')
+        c = centre(Source())
+        assert await c.replay_events(0) == ([], None)  # panel snapshot raced bootstrap
+        c.record(ev(594690, 'notice', {'text': 'recent'}))
+        events, gap = await c.replay_events(0)
+        assert [e['seq'] for e in events] == [594690] and gap is None
+    asyncio.run(go())
+
+
+def test_slow_replay_applies_backpressure_and_keeps_health_responsive():
+    async def go():
+        c = centre(FakeSource())
+        # A lazy sequence also verifies the producer cannot run ahead of drain.
+        produced = 0
+        def replay():
+            nonlocal produced
+            for n in range(10000):
+                produced += 1
+                yield ev(n + 1, 'notice', {'text': 'x' * 1024})
+        async def replay_events(since, session):
+            return replay(), None
+        c.replay_events = replay_events
+        web = WebServer(c, token='t0k')
+        port = await web.start('127.0.0.1', 0)
+        blocked = asyncio.Event()
+        class SlowWriter:
+            def write(self, data):
+                pass
+            async def drain(self):
+                blocked.set()
+                await asyncio.Event().wait()  # browser stopped consuming
+        task = asyncio.create_task(web._events(SlowWriter(), 0, None))
+        try:
+            await asyncio.wait_for(blocked.wait(), 1)
+            assert produced == 1  # not the whole replay in the socket buffer
+            code, body = await asyncio.wait_for(http(port, 'GET', '/api/health'), 1)
+            assert code == 200 and json.loads(body)['ok']
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            assert not c._event_subs  # disconnect/cancel releases the subscriber
+        finally:
+            task.cancel()
+            await web.close()
+    asyncio.run(go())
