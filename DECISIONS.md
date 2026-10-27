@@ -1234,15 +1234,34 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `git clone` do. gh's download and clone subcommands read on GitHub, so the store check took a line whose
   every part reads as a read for a read and never looked at their output paths: `gh release download -O
   ~/.exo/policies/gates.yaml --clobber` overwrote the gate policy, `-O ~/.exo/update/allowed_signers`
-  replaced the signed-update trust pin (#133), `gh run download` and `gh attestation download` with
-  `-D`/`--dir` filled `state/`, and `gh repo clone` or `gh gist clone` with a store directory filled it too,
-  where `curl -o` and `git clone` on the same paths ask. Now the store check reads their output paths as
-  writes — `-O`/`--output` and `-D`/`--dir` in every spelling, the clone's directory word, also with `--`
-  before it — wherever the line stands: under `sudo`, in `bash -c` or a `$( )`, and past a `-R` before the
-  subcommand (#399). The line grows a `store_write` part and keeps the gh read as its other part (D-075), so
-  a deny, `reserved:` entry, rule or matrix cell on the gh reading still holds, and the decision is the
-  principal-only floor. `-O -` prints to stdout and stays a read, and so does a path outside the store and
-  every other gh read.
+  replaced the signed-update trust pin (#133), `gh run download` with `-D`/`--dir` filled `state/`, `gh
+  attestation download` (which has no such option) filled the current folder after a `cd` into the store,
+  and `gh repo clone` or `gh gist clone` with a store directory filled it too, where `curl -o` and `git
+  clone` on the same paths ask. Now the store check reads their output paths as writes — `-O`/`--output`
+  and `-D`/`--dir` in every spelling, the clone's directory word, also with `--` before it, and the current
+  folder after a `cd` — wherever the line stands: under `sudo`, in a `$( )`, and past a `-R` before the
+  subcommand (#399). In `bash -c` the line already asked before, as opaque code with a store write. The
+  line grows a `store_write` part and keeps the gh read as its other part (D-075), so a deny, `reserved:`
+  entry, rule or matrix cell on the gh reading still holds, and the decision is the principal-only floor.
+  `-O -` prints to stdout and stays a read, and so does a path outside the store and every other gh read.
+  Amended the same day (review 5658467251, the #461 follow-up): over an ssh or mosh hop the store write now
+  leads the remote line and the gh read is a part below it, and the hop gave the host (#399) only to the
+  line's own parts, so the read lost the host its empty other target took when it led. A deny or rule on
+  `{category: read, target: host}` asked where it denied before (`ssh host gh release download v1 -R pub/x
+  -O ~/.exo/policies/gates.yaml`, `gh repo clone` and `gh run download` into the store, the `sudo` and
+  `mosh` forms), and a deny on `{category: opaque_exec, target: host}` asked on the `eval` and stdin forms;
+  gate_diff counted 421 pairs on 150 actions, all on hops. Each part nested below a hop with an empty target
+  now has a copy on the host among the line's parts (as #320's: no parts, no post), and the host joins a
+  nested part's empty other target. Every part keeps its own target, so each entry that matched before still
+  matches and the host's entries match too. A part that led over the gh read and took the host has a copy
+  on the host the same way: each of mosh's local helpers (`--ssh`, `--client`, `--server` with `--local`)
+  that does not lead, and the part that runs ssh's stdin where the remote line leads (`echo x | ssh $H gh
+  release download ..`, the whole part and its own copies). `ssh -o RemoteCommand=` raised only the remote
+  line's lead to internal, so the gh read below the store write stayed private: every part of that line is
+  raised now, as for the hop's own command (D-075), on a copy. So the deny, rule, reserved entry or matrix
+  cell on the gh reading, including a host target on a hop, holds as before #461 or stricter (gate_diff:
+  0 pairs lowered against main before #461 on the review's corpus and on the follow-up's hop forms). The
+  remote line is always copied before (also with `mosh --local`), so a stored result is never changed.
 - *Amendment 2026-10-24 (issue #542):* an explicit `gates.escalate` must be a mapping, and its `categories`, when
   present, must be a list. A malformed value raises `PolicyError` during normalization and store policy loading,
   rather than silently retaining defaults or using substring membership on a string. Omitted settings, an empty
