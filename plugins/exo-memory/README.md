@@ -11,7 +11,6 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 | `on_turn_start`, `sync_turn` | `utterance` events in the ledger. User turns are authored by the principal, assistant turns by the agent id. The turn also goes to the episodic log. |
 | `on_memory_write` | A `note` event of type `memory_write`. |
 | `on_delegation` | An `action` event of type `delegation`, and a `work` line in the episodic log. |
-
 | `sync_turn` (capture) | The core has no pre-compress call, so each turn also runs `exo.capture` over a short window of recent turns and writes `ruling`, `verdict` and `question` events (config `capture_turns`). |
 | `on_pre_compress` | Finds rulings, corrections and open decisions with `exo.capture`. Writes `ruling`, `verdict` and `question` events, then returns a short block for the compressor to keep verbatim. Checkpoint API v2. |
 | `on_session_end` | A `note` event of type `consolidate_pending`. |
