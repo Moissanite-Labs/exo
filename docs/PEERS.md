@@ -63,7 +63,9 @@ trusts the key or the principal a presence file names. It checks each message ag
   and receipts, and a send to it: the text leaves only when the peer's presence entry verifies against a key
   pinned for that name — the entry carries the seat key's signature, so a file that copied the pinned key beside
   a socket of its own is refused — and the first answer, signed by the receiving seat like a later receipt, is
-  verified against it before anything is published (#523, the sender's half of this rule). It never signs a ledger
+  verified against it before anything is published (#523, the sender's half of this rule). The first answer is
+  signed as `kind: "reply"` and a later receipt as `kind: "receipt"`, and neither is taken for the other (#603
+  review). It never signs a ledger
   (D-040). A key for a name that is no seat of this home counts as a peer pin too: one pinned with a plain
   `exo keys pin NAME PUB`, or a `.pub` copied into `keys/`.
 - **No key for the name.** The presence file's key shows only that the signature is consistent. The message is held
@@ -220,13 +222,37 @@ names another principal, and a tool call may write a presence file too. None of 
 names its principal.
 
 A presence file still says where a daemon listens, and a program that goes through the gate may write one. A
-forged one under a peer's name no longer receives the messages sent to that name: every daemon signs its presence
-entry with its seat key, and before the text ships `send` re-reads the file and verifies that signature against
-the keys this home pins for the name (the sender's half of the "Peer keys" rule), sending to the socket of the
-entry that verified and nothing when no entry verifies — so the pinned key's public half copied into a file
-beside a socket of its own gets no text either. The first answer to a send is a receipt signed by the receiving
-seat, like a later receipt is; if it does not verify against the keys pinned for that seat here, nothing is
-published and the send fails. Between two current daemons this is invisible; a daemon whose presence file or
-first receipt is unsigned, as an older `exo`'s are, cannot be sent to while its seat's key is pinned here—and a
-name no key is pinned for still follows the receive side's trust ladder, message and reply alike, on an unsigned
-file like any other (D-026 amendments: #132, then #523).
+forged file under a peer's name no longer receives the messages sent to that name: every daemon signs its presence
+entry with its seat key, and before the text ships `send` re-reads the file and verifies that signature (over the
+entry as written) against the keys this home pins for the name (the sender's half of the "Peer keys" rule),
+sending to the socket of the entry that verified and nothing when no entry verifies — so the pinned key's public
+half copied into a file beside a socket of its own gets no text either. The first answer to a send is signed by
+the receiving seat, like a later receipt is; if it does not verify against the keys pinned for that seat here,
+nothing is published and the send fails, though the text has already reached that socket. Between two current daemons
+this is invisible; a daemon whose presence file or first answer is unsigned, as an older `exo`'s are, or signed by a key
+made again that this home has not re-pinned (`exo keys pin --replace`), cannot be sent to while its seat's key is pinned
+here—and a name no key is pinned for still follows the receive side's trust ladder, message and reply alike, on an
+unsigned file like any other (D-026 amendments: #132, then #523).
+
+The first answer is signed for any envelope, one that does not verify too, so that an honest sender still learns
+why its message was refused. It is signed as `kind: "reply"` and a later receipt as `kind: "receipt"`: a first
+reply offered to `receipt` is refused, so a socket client that names a held message's id in a junk envelope gets a
+signed `denied` that a sender on this build or later refuses (the check is the sender's: an older sender still takes
+it), and a receipt offered as a first reply is refused too. An older `exo`'s receipt names no kind and is still taken. A
+first reply from a #523 build of `exo` names no kind either, and both sides tell it apart by the `mode` and `session`
+fields under its signature, which no receipt has: `receipt` refuses it, and the send path takes it as a reply, so a send
+to a #523 build still completes. That matters because the first reply is checked after the text has gone: when a send
+fails on its reply, the peer may already have the message, and only the outcome is refused (D-026 amendment, #603
+review).
+
+The signature binds the socket path an entry names, not the process listening there. A program running as you
+can rename a live daemon's socket aside (its listener keeps serving the new name), listen at the old path itself
+and pass each connection through: the entry still verifies, the send succeeds and the outcome is published, and
+that program has read the message text. Without a relay the text leaks the same way, and only then does the
+send fail on the unsigned answer: a program that takes over a live daemon's socket path, or that writes a
+stopped daemon's saved signed entry back and listens at its path. So a forged file no longer receives the
+messages, but a listener at the path a genuine entry names still does. This is not new with #523. A
+fix needs the listener itself checked, by comparing the peer credentials of the connection (`SO_PEERCRED`,
+`LOCAL_PEERPID`) with the pid the signed entry names, or the body encrypted to the pinned key; a signed challenge
+does not help, since a relay passes it through to the real daemon. Until then, a program outside the gate that
+runs as you can read peer message text (#637).
