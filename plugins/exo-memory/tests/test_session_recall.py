@@ -105,3 +105,41 @@ def test_shared_search_filters_private_descendants_before_result_limit():
         assert [h['session'] for h in AgentLogView(db, 'razi').search('orchard', n=1)] == [child.id]
     finally:
         db.close()
+
+
+def test_large_recent_skip_refills_without_unbounded_python_scan():
+    db = SessionStore()
+    current = db.create_session(agent='razi')
+    other = db.create_session(agent='razi')
+    private = db.create_session(agent='razi', kind='private')
+    child = db.create_session(agent='razi', parent=private.id)
+    for _ in range(5):
+        db.append_message(other.id, Message.user('orchard ' + 'filler ' * 100))
+    for _ in range(1000):
+        db.append_message(current.id, Message.user('orchard'))
+    db.append_message(child.id, Message.user('orchard'))
+    view = AgentLogView(db, 'razi')
+    original = db.search
+    returned = []
+
+    def measured(*args, **kwargs):
+        hits = original(*args, **kwargs)
+        returned.append(len(hits))
+        return hits
+
+    db.search = measured
+    try:
+        assert len(view.search('orchard', n=5, skip_recent=1000, session_id=current.id)) == 5
+        assert returned == [5]  # SQL filters before LIMIT; only requested hits enter Python.
+        assert view.search('orchard', n=0) == view.search('orchard', n=-1) == []
+        assert len(view.search('orchard', n=5, skip_recent=2000, session_id=current.id)) == 5
+        assert len(view.search('orchard', n=5, skip_recent=1001)) == 5
+        assert all(h['session'] == other.id for h in view.search('orchard', n=5, skip_recent=1001))
+        assert all(h['session'] == current.id for h in view.search('orchard', n=5, skip_recent=0, session_id=current.id))
+        assert all(h['session'] == current.id for h in view.search('orchard', n=5, skip_recent=1000, session_id='unknown'))
+        db._q('UPDATE messages SET hidden=1 WHERE session=? AND pos=(SELECT MAX(pos) FROM messages WHERE session=?)',
+              (current.id, current.id))
+        assert len(view.search('orchard', n=5, skip_recent=999, session_id=current.id)) == 5
+        assert all(h['session'] == other.id for h in view.search('orchard', n=5, skip_recent=999, session_id=current.id))
+    finally:
+        db.close()
