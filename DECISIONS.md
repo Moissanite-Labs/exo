@@ -2834,10 +2834,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line (`opaque_exec allow -> delete ask`): a command read behind a quoted assignment now asks or denies as it does
   alone, and an unknown program (the quoted word read as before) asks beside a push that logged.
   The everyday cost is a script that calls a local tool the gate does not know after a
-  push or a post (`git push origin feature && notify-send done`): it asks where it logged. Not covered: the text of
-  `env -S` or `--split-string` is read as a shell line, not as env's argv, so a leading assignment quoted whole there
-  (`env -S "'X=a b' rm -rf /srv/data"`) still reads as an unknown program, which asks under the defaults, as on main
-  (#591).
+  push or a post (`git push origin feature && notify-send done`): it asks where it logged. The text of `env -S` or
+  `--split-string` is read as a shell line and, since #591 on main, as env's argv too, so a leading assignment
+  quoted whole there (`env -S "'X=a b' rm -rf /srv/data"`) no longer hides the command either.
   On main 2cc0c32f (2026-10-25), which took #311, #447, #454 and #316, `gate.readings` lists the line read as
   before, with its own floor and its reading from before #311, after the line's own readings. So `no_grant`,
   `call_approvers` and `body_unseen` read its parts as `decide` does, and so do the hook's body files, its required
@@ -2870,6 +2869,23 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `~/.exo/$(printf policies)/default.yaml`), a quoted one (`~/.exo/pol'icies'/gates.yaml`) and the home's
   `config.json` so hidden, written behind each quoted prefix style, after a push and behind `sudo`, are store writes
   on the new reading alone too, as on main.
+  On main 15e60ddb (2026-10-26), which took #514 (each store path a write names is a target), #493 (an ssh host
+  stands for an empty target), #515 (a camelCase tool read as its words) and #328 (a quoted heredoc delimiter with a
+  space), the simple command's store scan keeps each store path either reading's scan meets, the quoted word's
+  first, so a target entry on a later store path reaches the write as on main. The reading as before #471 is its own
+  call (`classify` reads it beside the line, each with `_classify_reading`'s budgets and folders), so it keeps
+  main's joined reading, its reading as before D-074 and its targets, and `binds_exact` binds the line as that
+  reading binds (review 5659099075 of #546). The command behind a quoted word now gets main's later readings too: an
+  ssh host behind `X='a b'` is a target of the line, so a rule on it denies `X='a b' ssh buildhost gh pr view 5`,
+  which main read as an unknown program and asked.
+  On main fa5dfcd8 (2026-10-27), which took #591 (the text of `env -S` read as env's own argv too), #585 (the lexer
+  reads a `$` form after a backslash-newline), #588 (`$[..]` read as `$((..))`), #612, #516, #579 and #586 (the
+  hook's two policy files merged as one stricter reading), the merge changes none of this amendment's code. Each of
+  those readings is made inside a reading of the call, so the line read as before #471 makes it too, and the `env
+  -S` argv reading sits beside the quoted prefix readings: `X='a b' env -S "'Y=c d' rm -rf /srv/data"` is a delete
+  that `deny: [delete]` denies, also after a push or behind `sudo`, where main reads the quoted word as the program
+  and asks, or logs beside the push. The hook's grant check for the line read as before reads its reserved hits
+  under the pinned and the changed file both, also on each side #586 asks alone, so it only keeps an ask.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule
