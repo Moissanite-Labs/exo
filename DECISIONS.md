@@ -3001,3 +3001,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   scheduled turns, SOUL refresh, metadata edits, allowlists, source precedence and invalid settings.
 - **Docs:** `docs/SKILL-DISCOVERY.md`, user guide §1, developer guide §6, harness reference, docs map
   and changelog. Whitepaper coverage is deferred to its next batch.
+*Amendment 2026-10-26 (issue #599):* metadata reads are also bounded per turn. At most `max_files`
+(default 256, range 0–4096) indexed files are read per selection, in sorted name order; later names
+are unavailable for that turn, and the block notes the cap when the character budget has room.
+Rejected a path+mtime+size metadata cache: rereading each turn is what makes same-stat edits take
+effect, and a shared cache would add mutable state behind concurrent session and scheduled turns.

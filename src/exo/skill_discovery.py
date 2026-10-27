@@ -1,7 +1,7 @@
 """Optional local skill ranking. Selection is a per-turn value, never shared session state.
 
-Only the runtime's enabled index is eligible. Metadata is reread, within a per-file
-bound, so edits do not need cache invalidation. New skills still require a restart.
+Only the runtime's enabled index is eligible. Metadata is reread, within per-file and
+per-turn bounds, so edits do not need cache invalidation. New skills still require a restart.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from exo.core.skills import MAX_DESC, Skill, SkillIndex, parse_frontmatter
 HEADER = ("# Relevant skills\nLoad full instructions with the `skill` tool before using a skill. "
           "You can also load an enabled skill by name even when it is not listed here.")
 MAX_METADATA_BYTES = 16_384
+MAX_METADATA_FILES = 256  # reads per turn; a larger catalog truncates, it does not read more
 MAX_QUERY_CHARS = 8_192
 _WORDS = re.compile(r"[^\W_]+", re.UNICODE)
 
@@ -29,19 +30,23 @@ class Settings:
     enabled: bool = False
     max_chars: int = 2_048
     top_k: int = 6
+    max_files: int = MAX_METADATA_FILES
 
     @classmethod
     def of(cls, value: Any) -> Settings:
-        if not isinstance(value, dict) or set(value) - {"enabled", "max_chars", "top_k"}:
-            raise ConfigError("skill_discovery must be an object with enabled, max_chars and top_k only")
+        if not isinstance(value, dict) or set(value) - {"enabled", "max_chars", "top_k", "max_files"}:
+            raise ConfigError("skill_discovery must be an object with enabled, max_chars, top_k and max_files only")
         enabled, limit, count = value.get("enabled", False), value.get("max_chars", 2_048), value.get("top_k", 6)
+        files = value.get("max_files", MAX_METADATA_FILES)
         if type(enabled) is not bool:
             raise ConfigError("skill_discovery.enabled must be a boolean")
         if type(limit) is not int or not 0 <= limit <= 32_768:
             raise ConfigError("skill_discovery.max_chars must be an integer from 0 to 32768")
         if type(count) is not int or not 0 <= count <= 50:
             raise ConfigError("skill_discovery.top_k must be an integer from 0 to 50")
-        return cls(enabled, limit, count)
+        if type(files) is not int or not 0 <= files <= 4_096:
+            raise ConfigError("skill_discovery.max_files must be an integer from 0 to 4096")
+        return cls(enabled, limit, count, files)
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,8 @@ class SkillDiscovery:
 
         The complete returned block, including heading and separators, fits the
         character ceiling. Too-small budgets return no block, never a cut name.
+        At most ``max_files`` indexed files are read, in sorted name order; the
+        rest are unavailable for the turn, like unreadable files.
         """
         cfg = self.settings
         limit = cfg.max_chars - 2  # the loop inserts one blank line before the block
@@ -92,7 +99,13 @@ class SkillDiscovery:
         query = query[:MAX_QUERY_CHARS]
         terms = sorted(set(_words(query)))
         rows, unavailable = [], []
-        for name, skill in sorted(tuple(self.index.skills.items())):
+        indexed = sorted(tuple(self.index.skills.items()))
+        reads = 0
+        for name, skill in indexed:
+            if reads >= cfg.max_files:  # past the cap the name is only marked, never read
+                unavailable.append(name)
+                continue
+            reads += 1
             description = _description(skill)
             if description is None:
                 unavailable.append(name)
@@ -133,6 +146,10 @@ class SkillDiscovery:
                 row += ": " + (detail if len(detail) <= room else detail[:max(0, room - 1)] + "…")
             text += row
             selected.append(name)
+        if len(indexed) > cfg.max_files:  # name the cap in the block when the budget has room left
+            note = f"[read cap: {reads} of {len(indexed)} indexed files this turn]"
+            if len(text) + 1 + len(note) <= limit:
+                text += "\n" + note
         return Selection(text, tuple(selected), len(rows), tuple(unavailable))
 
     def render(self, session: str, query: str) -> str:
