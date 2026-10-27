@@ -27,6 +27,11 @@ FLOOR = [
     ("search_replace", {"path": "~/.exo/policies/gates.yaml", "search": "ask", "replace": "bypass"}),
     ("findAndReplace", {"path": "~/.exo/policies/gates.yaml", "oldString": "ask", "newString": "bypass"}),
     ("find_and_replace", {"path": "~/.exo/config.json", "old_string": '"ask"', "new_string": '"bypass"'}),
+    # #591: a reading of an `env -S` text as before is credentials while the call's first reading is not (env
+    # refuses the text, or runs a program named -S): the floor sees every such reading, as main e0968a2b's one did
+    ("terminal", {"command": "env -S \"'X=a b' gh auth token \\d\""}),
+    ("terminal", {"command": "env -- -S \"'X=a b' muse login\""}),
+    ("terminal", {"command": "env -S \"'X=a b' muse login 'unclosed\""}),
 ]
 
 
