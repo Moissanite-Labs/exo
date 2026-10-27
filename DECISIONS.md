@@ -1322,6 +1322,36 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   every tightening) and over the other sections alone (lower than after #542 for a section looser than the defaults);
   a malformed list's names count, tighten only; merging the old and new decisions of two valid files is a separate
   issue.
+- *Amendment 2026-10-26 (issue #586):* the D-038 old/new merge covers two valid files now, not only a session with
+  a policy error (#557). The changed file used to win only with a strictly higher outcome; at an equal outcome the
+  pinned decision stood with its own violations and exposure, and a standing grant was looked up against that one
+  decision. Two grant behaviours then ran a call lower than either file alone: an unbound grant on the changed
+  file's `reserved` hit ran a call the pinned file logs (`git push origin main` logs under
+  `escalate: {categories: [payment]}`; the changed file adds `reserved: [vcs_push]`, and a standing `vcs_push`
+  grant on `origin` runs it), and a grant bound to the exact line ran a call the pinned policy asks for without
+  that binding (a pinned `categories: {local_write: ask}` asks for `sudo echo hi > /tmp/f` unbound; the changed
+  file names `read` in a valid escalate, the displaced part asks, the line binds, and the grant runs it). Now the
+  old and new decisions merge as one stricter reading (`gate.stricter`, as #557 merges them beside a policy
+  error): the widest exposure, a third party if either has one, every violation, every reserved part, and the same
+  tie order — the other side stands at an equal outcome only when it lists a violation the standing one lacks.
+  A standing grant applies only where each side's own decision (with the decision model's verdict) also asks and
+  finds one, each side by its own lookup, as #557 found: an unbound and a bound grant for one line are found by
+  different lookups, so requiring one grant of both would run the call lower than main where one side binds and
+  the other does not. So the merged ask runs only where both sides would run it, and a change that only binds the
+  line (a wider exposure, a displaced part that asks) cannot let a grant cover a call the pinned policy asks for.
+  Decisions that change for valid policies: at an equal outcome the changed side's violations stand on the card
+  and the exposure is the widest of the two, so an ask can bind to the exact line where the pinned decision alone
+  did not, and list a posting or scrub finding it did not; no outcome is lower than either side's, and a single
+  valid file decides as before, grants included. Ruled in review 5644671413 on #569 (point 3): two valid files
+  stayed out of that PR because they change decisions for valid policies and needed their own differential and
+  probe. The differential against main 3bf26afc (11,440 pairs, no variants) found nothing lowered — it cannot see
+  this branch; the hook probe (the real Gate of both trees, 800 cells: 10 valid file pairs x 10 lines x no,
+  unbound, bound and both grants, with and without a decision-model ask) found 0 lower than main, and 6 pairs that
+  take the wider exposure at an equal outcome (`gh pr close 5 -R acme-org/app` beside a scope that no longer holds
+  asks with the wider exposure). Tests: `plugins/exo-gate/tests/test_hook.py`
+  (`test_valid_files_grant_*`, `test_a_single_valid_file_still_decides_alone`,
+  `test_two_valid_files_keep_the_changed_violation_at_an_equal_outcome`,
+  `test_two_valid_files_take_the_widest_exposure_and_keep_a_reserved_part`).
 - *Amendment 2026-10-26 (issue #494):* a file tool's store path is read under every key it names a path by, and a
   move of a folder that holds the store is a store write with no secret beside it, as `mv` is. The generic
   file-tool branch read a store path only under `path` and the other `_PATH_ARG_KEYS` names, and passed

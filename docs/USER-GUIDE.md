@@ -402,7 +402,8 @@ What the gate asks about, and why:
   lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
-  This covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length
+  A standing "always" grant covers a call only where the old and the new policy would both run it (#586). This
+  covers `approvals.yaml` too: a seat you remove cannot answer the next ask, and a shorter "always" length
   (or 0) applies at once. A seat you add waits for `/gate accept`.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
   act on a public place. Reading and local edits do not. Your `policies/gates.yaml` can change any cell.
