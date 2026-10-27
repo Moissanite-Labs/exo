@@ -18,6 +18,8 @@ export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
+  let statusVersion = 0;
+  const statusUpdates = new Map();
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
   const landed = new Set();   // user messages the core has added to a conversation
@@ -144,11 +146,17 @@ export function mount(root) {
         flash(b.text); return;
       default: break;
     }
+    // Keep background threads current too: returning to one must not revive a
+    // cached "idle" or "live" flag from before its last turn event.
+    if (ev.type === "turn.started" || ev.type === "turn.completed") {
+      rememberStatus(ev.session, ev.type === "turn.started" ? "live" : "idle");
+      drawSessions();
+    }
     if (!mine) return;
     switch (ev.type) {
-      case "turn.started": busy = true; help.note({ busy: true }); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); break;
+      case "turn.started": setBusy(true); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); break;
       case "turn.completed": {
-        busy = false; drawStatus(); loadContext();
+        setBusy(false); drawStatus(); loadContext();
         const tm = b.timing || {};
         help.note({ busy: false, turns: items.filter((i) => i.kind === "user").length, longTurn: (tm.wall_ms || 0) - (tm.tool_ms || 0) - (tm.approval_ms || 0) >= 60000 });
         break;
@@ -355,6 +363,26 @@ export function mount(root) {
       h("button", { class: "xc-btn", onclick: () => { it.editing = false; redraw(it); } }, "Cancel"))));
   }
 
+  function setBusy(value) {
+    busy = !!value;
+    help.note({ busy });
+  }
+
+  function rememberStatus(id, status) {
+    if (status !== "live" && status !== "idle") return;
+    const session = sessions.find(s => s.id === id);
+    if (!session && id !== current) return;
+    statusUpdates.set(id, { version: ++statusVersion, status });
+    if (session) session.status = status;
+  }
+
+  function snapshotBusy(info, fallback) {
+    // SessionGet is newer than the list/cache read before it. Older cores may
+    // omit status, in which case retain the last known list/event status.
+    const status = info && (info.status === "live" || info.status === "idle") ? info.status : fallback && fallback.status;
+    return status === "live";
+  }
+
   function drawStatus() {
     const cell = (label, ...v) => h("span", null, h("span", { class: "xc-i" }, label), h("span", { class: "xc-v" }, ...v));
     const out = [h("span", { class: "xc-state" + (busy ? " on" : "") }, h("span", { class: "xc-dot" + (busy ? " on" : "") }), busy ? "working" : "idle")];
@@ -439,7 +467,18 @@ export function mount(root) {
   // ---------------------------------------------------------------- actions
 
   async function refreshSessions() {
-    try { sessions = (await api("GET", "/api/chat/sessions")).sessions; drawSessions(); } catch (e) { fail(e); }
+    const cutoff = statusVersion;
+    try {
+      const fresh = (await api("GET", "/api/chat/sessions")).sessions || [];
+      for (const session of fresh) {
+        const observed = statusUpdates.get(session.id);
+        if (observed && observed.version > cutoff) session.status = observed.status;
+      }
+      sessions = fresh;
+      const visible = new Set(fresh.map(s => s.id));
+      for (const id of statusUpdates.keys()) if (!visible.has(id) && id !== current) statusUpdates.delete(id);
+      drawSessions();
+    } catch (e) { fail(e); }
   }
 
   async function open(id) {
@@ -447,7 +486,9 @@ export function mount(root) {
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
+    current = id; loading = true; pending = []; items = [];
+    setBusy(snapshotBusy(null, sessions.find(s => s.id === id)));
+    cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
@@ -455,15 +496,21 @@ export function mount(root) {
       items = fromMessages(d.messages || []);
       dropSteers(id, had, d.steers);
       loadedSeq = d.seq || 0;
-      const live = sessions.find((s) => s.id === id);
-      busy = !!(live && live.status === "live");
+      const live = sessions.find(s => s.id === id);
+      setBusy(snapshotBusy(d.session, live));
+      if (d.session) rememberStatus(id, d.session.status);
       model = (d.session && d.session.model) || "";
-    } catch (e) { fail(e); }
-    loading = false;
-    drawLog(); drawStatus(); loadContext();
-    const buffered = pending; pending = [];
-    buffered.forEach(handle);
-    syncApprovals();
+    } catch (e) {
+      if (current === id && generation === snapshotGeneration) fail(e);
+    } finally {
+      if (current === id && generation === snapshotGeneration) {
+        loading = false;
+        drawSessions(); drawLog(); drawStatus(); loadContext();
+        const buffered = pending; pending = [];
+        buffered.forEach(handle);
+        syncApprovals();
+      }
+    }
   }
 
   async function recover() {
@@ -478,11 +525,13 @@ export function mount(root) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
         dropSteers(id, had, d.steers);
         loadedSeq = Math.min(cutoff, d.seq || 0);
-        busy = sessions.some((s) => s.id === id && s.status === "live");
-        model = d.session.model || model;
+        const live = sessions.find(s => s.id === id);
+        setBusy(snapshotBusy(d.session, live));
+        if (d.session) rememberStatus(id, d.session.status);
+        model = (d.session && d.session.model) || model;
       }
       panelsOpen = bus.openPanels();
-    } catch (e) { fail(e); }
+    } catch (e) { if (id === current && generation === snapshotGeneration) fail(e); }
     finally {
       if (id === current && generation === snapshotGeneration) {
         loading = false; drawSessions(); drawLog(); drawStatus(); drawSide();
