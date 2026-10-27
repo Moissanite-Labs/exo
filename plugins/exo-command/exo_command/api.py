@@ -7,7 +7,7 @@ centre's source. A core that does not handle a command yet answers 501.
   GET  /api/chat/sessions                  session.list
   POST /api/chat/sessions                  session.create        {title, seat, model, cwd}
   GET  /api/chat/sessions/<id>             session.get           the transcript so far, and the ids of queued steers
-  POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
+  POST /api/chat/sessions/<id>/send        turn.send             {text, mode, max_rounds?}
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
   POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
@@ -171,7 +171,12 @@ async def _transcript(c, p, q, body):
 async def _send(c, p, q, body):
     text = _str(body, "text", required=True, limit=MAX_TEXT)
     mode = _choice(body, "mode", MODES, "send")
-    return await c.source.call(s.TurnSend(session=p[2], text=text, mode=mode))
+    limit = body.get("max_rounds")
+    if limit is not None and (type(limit) is not int or limit < 0):
+        raise BadRequest("max_rounds must be a nonnegative integer")
+    if limit is not None and mode == "steer":
+        raise BadRequest("a steer cannot change a running turn's round limit; omit max_rounds")
+    return await c.source.call(s.TurnSend(session=p[2], text=text, mode=mode, max_rounds=limit))
 
 
 async def _models(c, p, q, body):
@@ -301,7 +306,7 @@ async def _schedule_edit(c, p, q, body):
 
 
 # ---------------------------------------------------------------- completion (D-037)
-WEB_COMMANDS = {"context": "what the next model call carries, part by part",
+WEB_COMMANDS = {"rounds": "tool-round limit for new turns in this window: default|off|number", "context": "what the next model call carries, part by part",
                 "model": "pick or set the shared main model; default <ref> saves the default",
                 "default": "pick or set the default model for new threads",
                 "findings": "open harness findings", "trace": "how the harness performed this session",

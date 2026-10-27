@@ -73,6 +73,15 @@ picks the seat, `--title TEXT` names a new thread, and `--cwd DIRECTORY` chooses
 threads. For a local connection, a new thread defaults to this terminal window's current directory, including
 when it joins a core whose seat has another default. A resumed thread keeps its saved directory. With `--url`,
 `--cwd` names a directory on the server; `@file` completion and attachments still use the client's local directory.
+
+`--max-rounds 0` removes the tool-round cap for new turns sent from this window; a positive number sets a limit.
+This counts tool rounds rather than elapsed time: a large finite limit can also allow a long-running turn.
+`/rounds` works in both the terminal and web composer. It changes the setting for later turns without changing a turn already running.
+Each web page keeps its own setting until reload; it is not saved to the session. Only a principal connection
+may request an override. A turn with no limit can keep running after its window closes; reopen its thread and use
+`/stop` to interrupt it. Scheduled runs, wakes and delegated children keep their existing limits.
+
+
 Keys:
 
 | Key or prefix | Does |
@@ -131,6 +140,7 @@ The technical reference, with arguments and where each command is implemented, i
 |---|---|
 | `/new` | Start a new thread: a fresh focus, the same memory. |
 | `/tab [directory]` | Open another terminal window with a new thread in that directory, leaving this thread open. With no directory, use this thread's working directory. |
+| `/rounds [default\|off\|number]` | Choose the tool-round limit for new turns sent from this window. `off` removes the limit; `default` restores the core default. A running turn keeps its original limit. |
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |

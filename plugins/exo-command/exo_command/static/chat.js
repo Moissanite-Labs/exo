@@ -13,6 +13,7 @@ import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem 
 import * as permissions from "./permissions.js";
 
 export function mount(root) {
+  let maxRounds = null; // this mounted window only; never persisted or shared between tabs
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
@@ -596,6 +597,17 @@ export function mount(root) {
       if (await modelCommand(args, defaults)) { if (input.value.trim() === text) input.value = ""; help.sent(text); }
       return;
     }
+    if (command && command.name === "rounds") {
+      const value = command.args.trim().toLowerCase();
+      if (value === "default") maxRounds = null;
+      else if (value === "off") maxRounds = 0;
+      else if (/^[0-9]+$/.test(value) && Number.isSafeInteger(Number(value))) maxRounds = Number(value);
+      else if (value) { flash("usage: /rounds [default|off|nonnegative number]"); return; }
+      input.value = ""; help.sent(text);
+      flash("tool-round limit for new turns in this window: " + (maxRounds === null ? "default" : maxRounds === 0 ? "unlimited" : maxRounds) +
+        ". The limit counts tool rounds, not time. A turn can continue after this window closes; /stop stops it.");
+      return;
+    }
     const lay = command && command.name === "layout" ? [null, command.args] : null;
     if (lay) {
       input.value = ""; help.sent(text);
@@ -637,7 +649,7 @@ export function mount(root) {
       }
       input.value = ""; help.sent(text);
       const steering = busy, sid = current;
-      const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send" });
+      const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send", ...(!steering && maxRounds !== null ? { max_rounds: maxRounds } : {}) });
       if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; drawSteers(); }
       flash("");
     } catch (e) { fail(e); }
