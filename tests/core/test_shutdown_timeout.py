@@ -722,6 +722,41 @@ def test_a_hard_stop_while_peers_stop_is_raised_after_the_bounded_attempt(tmp_pa
     asyncio.run(run())
 
 
+def test_an_ordinary_step_error_does_not_stop_the_owner_close_from_closing_again(tmp_path, monkeypatch, caplog):
+    """Only a hard stop ends the retries. A job that could not be stopped is named in the warning, and the owner's
+    close still finishes once the tool returns, with the cleanup run once."""
+    hold, started, release = _held()
+    engine, order = _engine(tmp_path, hold)
+    engine.claim_writer()
+    monkeypatch.setattr(shutdown, "SHUTDOWN_TIMEOUT", 0.2)
+    close_jobs, failed = engine.jobs.close, OSError("could not stop a job")
+
+    async def fails_once():
+        engine.jobs.close = close_jobs
+        await close_jobs()
+        raise failed
+
+    engine.jobs.close = fails_once
+
+    async def run():
+        session = await engine.loop.create_session(cwd=str(tmp_path))
+        engine.start_turn(session.id, "hold")
+        assert await asyncio.to_thread(started.wait, 5)
+        with caplog.at_level(logging.WARNING, logger="exo.application"):
+            closing = asyncio.create_task(engine.close())
+            try:
+                deadline = time.monotonic() + 5
+                while "closing again" not in caplog.text and not closing.done() and time.monotonic() < deadline:
+                    await asyncio.sleep(0.01)
+                assert not closing.done() and "could not stop a job" in caplog.text
+            finally:
+                release.set()
+            await asyncio.wait_for(closing, 10)  # it returns: the error was named, and closing again completed
+        assert order == ["cleanup"] and engine._writer is None and engine.store._conn is None
+
+    asyncio.run(run())
+
+
 def test_a_steer_that_arrives_after_close_began_is_refused_not_queued(tmp_path):
     """A turn still takes steers until its cancellation runs. A steer sent in that window is refused, so it is not
     accepted and then lost with the turn."""
