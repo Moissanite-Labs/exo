@@ -27,6 +27,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - The core coupling counter counts relative imports such as `from .. import envscrub` like their absolute forms. Existing exclusions, duplicate handling and caps are unchanged.
 
+- `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last
+  segment of a dotted key. Both now mask a secret at any level of the key path (a secret-shaped name, a container
+  under one, and a literal under `env` or `headers`), and `config set` refuses the same shapes. `${VAR}` references
+  and `*_env` names are still shown and accepted (#691).
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
