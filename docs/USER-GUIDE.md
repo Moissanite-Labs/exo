@@ -122,6 +122,11 @@ The web page has its own sub-pages for Tasks, Schedule, Command and Providers. I
 `/layout` does. Double-click a thread in the list to rename it. Anything else you type there goes to the agent as a
 message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
 
+On the web, a connected page can still show that its core is unavailable. Chat labels last known activity
+and keeps your draft while it reconnects. If the activity refresh fails, choose Retry activity. Send waits
+for a fresh session snapshot. Try stop can request an interrupt when only the web feed or snapshot is
+unavailable. Confirmed core loss disables it. Reconnecting does not send your draft.
+
 ## 3. Slash commands
 
 Type `/help` in the terminal client for the live list. This table is the same list.
