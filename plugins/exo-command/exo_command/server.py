@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import api
 from . import providers as prov
-from .service import SECTIONS, CommandCentre
+from .service import SECTIONS, CommandCentre, CoreConnection
 from .source import SourceError, core_message
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -269,7 +269,7 @@ class WebServer:
                 return await self._json(writer, 404, {"error": "not found"})
             return await self._file(writer, f)
         if path == "/api/health" and method == "GET":
-            return await self._json(writer, 200, {"ok": True, "connected": c.connected, "error": c.last_error,
+            return await self._json(writer, 200, {"ok": True, "connected": c.connected, "core_state": c.core_state, "error": c.last_error,
                                                   "seq": c.state.seq, "settings": c.settings.public()})
         if path == "/api/snapshot" and method == "GET":
             only = [x.strip() for x in q["sections"][0].split(",")] if q.get("sections") else None
@@ -376,8 +376,9 @@ class WebServer:
     async def _events(self, writer, since: int, session: Optional[str]) -> None:
         """Every protocol event after ``since`` as ``id: seq`` + ``data: <event json>``, then live ones."""
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
-                     + SECURITY_HEADERS.encode() + b"Connection: close\r\n\r\n: exo-command events\n\n")
+                     + SECURITY_HEADERS.encode() + b"Connection: close\r\n\r\n: exo-command events\n")
         q = self.centre.subscribe_events()
+        writer.write(_core_frame(self.centre.core_state))
         try:
             events, gap = await self.centre.replay_events(since, session)
             sent = 0 if gap and gap["reset"] else since
@@ -397,6 +398,10 @@ class WebServer:
                     continue
                 if ev is None:
                     return
+                if isinstance(ev, CoreConnection):
+                    writer.write(_core_frame(ev.state))
+                    await writer.drain()
+                    continue
                 if ev["seq"] <= sent or (session and ev.get("session") not in (None, session)):
                     continue
                 sent = ev["seq"]
@@ -473,6 +478,11 @@ def _origin(host: str, port: int) -> str:
 def _loopback_shown(host: str) -> bool:
     """Whether the address `exo web` shows for this bind passes the loopback Host check of /api/launch."""
     return prov._host_name(urlsplit(_origin(host, 0)).netloc) in prov.LOOPBACK_NAMES
+
+
+def _core_frame(state: str) -> bytes:
+    # No raw exception, protocol event ID or cursor advancement belongs here.
+    return b"event: core-state\ndata: " + json.dumps({"state": state}).encode() + b"\n\n"
 
 
 def _frame(ev: Dict[str, Any]) -> bytes:
