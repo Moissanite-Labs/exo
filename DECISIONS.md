@@ -1230,6 +1230,53 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- *Amendment 2026-10-27 (issue #594, #609 and its review 5662072421):* a glob in a secret store's folder reads
+  the store, and a `target:` entry matches every store a credentials line names. #609 (merged as 5a5a535d) tested a
+  globbed folder against the folder of each glob sample (`_glob_folder_hit`), so `cat ~/.ss?/*`, `cat ~/.aw?/*`
+  and `cat ~/.exo/key?/*` ask where they read with no ask. Its rules: (1) bash's `*`, `?` and `[..]` never match a
+  leading dot, so a part matches a dot folder only when it starts with a literal dot (`~/.s*/*` and `~/.*/*` can
+  reach `~/.ssh`; `~/[.]ssh/*` and `~/*/*` cannot, and stay reads); (2) a match needs a part that starts with a
+  literal dot or three literal characters across the matched parts, so `src/*/*` stays ordinary; (3) when the
+  folder matched is a secret store by name (`_SENSITIVE_PATH`: `.ssh`, `.aws`, `.gnupg`, `.exo/keys`), any glob
+  file part below it asks, as below the literal folder; (4) a file part that ends in `.pub` stays out, as for a
+  literal folder (`cat ~/.ss?/*.pub` is a read, `cat ~/.ss?/*.pu?` asks). The follow-up adds: (5) a glob folder
+  that goes deeper than a secret folder asks too, its leading parts matched with the same discipline, since a
+  folder below a store is a store (`cat ~/.gnup?/private-keys-v1.d/*`, `cat ~/.aw?/sso/cache/*`,
+  `cat ~/.ss?/keys/*`, `cat ~/.exo/key?/old/*`, `cat ~/.gnup?/*/*` and `read_file ~/.gnup?/private-keys-v1.d/*`
+  were read/allow, also under `deny: [credentials]`); a folder that is not a secret by name still matches at its
+  own depth only (`cat ~/.config/*/x/*` stays a read), and a secret folder that matches wins over an ordinary one.
+  (6) The regression review 5662072421 found: a credentials line takes the first store-naming word as its target,
+  and since #609 a secret-folder glob counts as one, so it came first and a `target:` deny, `reserved:` entry or
+  rule on a later literal store stopped matching. `cat ~/.ss?/* ~/.aws/credentials` under
+  `deny: ["target:*/.aws/*"]`, `cat ~/.aw?/* ~/.ssh/id_rsa` under `deny: ["target:*/.ssh/*"]` and a rule on
+  target `*/.aws/*` with decision `deny` went deny -> ask, and `reserved: ["target:*/.ssh/*"]` lost its entry (717
+  lowered pairs on 270 actions in the review's run). Now every other store the line names (each word or brace word
+  `_shell_credential_hit` finds, not only the first) is a `credentials` part with that store as its target
+  (`other_store`), beside the line's own target, which stays the first. The deny, reserved and rule entries read
+  every part (D-075, #191), so they match any store on the line. This also lifts #313 group 4 below for literal
+  stores: `cat ~/.aws/* ~/.ssh/id_rsa` and `cat ~/.aws/credentials; cat ~/.ssh/id_rsa`, which asked under
+  `deny: ["target:*/.ssh/*"]` on main and before #609, are denied. Where a Keychain read, an environment dump or a
+  secret variable is the line's first hit, the stores after it are listed as well, so
+  `security find-generic-password -w -s x; cat ~/.ssh/id_rsa`, `env; cat ~/.ssh/id_rsa` and
+  `cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` are denied there too. The ssh hop's host copy (#320) and a shell
+  call's folder read (#311) pass these parts over, so each reads the line as main does. Each part only adds a match.
+  Where a glob below a secret folder comes first it is the line's target now
+  (`cat ~/.gnup?/private-keys-v1.d/* ~/.ssh/id_rsa`), with the store after it a part, so the decisions stay.
+  gate_diff (main's script) ran main e0968a2b against this change: the built-in corpus (12,065 actions x 88
+  policies, 1,061,720 pairs) 0 lowered, 698 stricter pairs on 27 actions; 1,583 aimed lines and calls under the
+  built-in policies and 57 target, reserved, rule, scope, category and matrix policies (229,535 pairs) 0 lowered,
+  21,770 stricter pairs on 915 actions. The hook, in enforce, observe and bypass under six policies, decides none
+  of 360 probe calls lower. The folders a glob is tested against are built once per set of samples
+  (`_glob_folders`), not once per glob word, so a line of 500 ordinary globbed-folder words (`src/*/x1*`)
+  classifies in 0.11s where main takes 0.52s. A line that names a store now reads every later word for a store
+  too, where main stopped at the first: 500 globbed store words take 0.15s (main 0.02s), still linear.
+  Rejected: deciding the line again on each other store as an `alt_target` (#399), which would also bind every
+  approval of the line to its exact text and word the card "it may land on". Limits: the samples bound what a glob
+  folder reaches, so a store with no sample (`cat ~/.cla*/.cred*`, `cat ~/.config/gclou?/*.json`), one outside the
+  home folder (`cat /home/u/.ss?/*`), a relative glob folder after `cd` (`cd ~/x && cat ../.ss?/*`), a literal file
+  part below a glob folder (`cat ~/.ss?/config`) and a glob that names the store folder itself
+  (`tar cf /tmp/x.tar ~/.ss?`) still read, as on main; `$EXO_HOME/principals/*/run/*` still reads. Tests:
+  `tests/security/test_gate_glob_store_folder_594.py`, `tests/security/test_gate_glob_target_second_store_609.py`.
 - *Amendment 2026-10-26 (issue #579):* a prompt-string transformation is code the gate cannot see, unless the
   line assigns the variable a literal value. `${name@P}` expands the value as a prompt string, and with
   `promptvars` on, the default, that runs its command substitutions and expands its parameters, so the gate
@@ -2723,7 +2770,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   line asks either way. (4) A line's credentials target is the first store it names and a `cat` part has no target, so a
   `target:` entry for a second store on the line no longer matches
   (`cat /proc/self/task/1/environ; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]` asks, as
-  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does). The differential does not count a fifth change,
+  `cat ~/.aws/credentials; cat ~/.ssh/id_rsa` already does; since the #609 follow-up of 2026-10-27 each other store
+  on the line is a `credentials` part with its own target, so both are denied again). The differential does not count a fifth change,
   because the outcome stays an ask. (5) Beside a store write the line is `credentials`, not `store_write`. A seat
   that `approvals.yaml` delegates `credentials` to may then answer what only the principal answered
   (`cat /proc/self/task/1/environ; echo x > ~/.exo/policies/gates.yaml`). Main does the same for any secret on
@@ -4754,8 +4802,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   another command, a store write or a secret, a file tool's own category or file, a `/dev` or `/proc` target, or a
   key read after `tar -C`.
   Not done: an allow, log or ask cell, third-party escalation and the floors on a part (#437), a `target:` entry
-  for a second store on a credentials line (#313 group 4), and checking policy patterns when the policy loads
-  (#466).
+  for a second store on a credentials line (#313 group 4, done by the D-038 amendment of 2026-10-27 for #609),
+  and checking policy patterns when the policy loads (#466).
   A relative key read keeps the name as written as its target, as `tar -C ~/.exo -czf - keys/seat` already does,
   so `target:*/.exo/keys/*` matches neither.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
