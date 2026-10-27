@@ -4912,7 +4912,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   system opens (`~/.EXO/*`, `~/*/RUN/x`) — and stays as written when it holds one, as bash matches it against
   the entries case-sensitively (`[HOME=x]*`, `~/.e*O/*`; `_fold_glob`). `EXO_GATE_CASE_SENSITIVE=1` reads main
   d800f33c's case-sensitive names instead, for a file system whose `.exO` is a different folder; the tests pin
-  both readings.
+  both readings. An ssh hop whose remote command names a case-variant store path keeps the host beside the
+  line's own action in the reserved parts (`_fold_made`), as main listed it while the path read as an ordinary
+  one.
 - **Cost:** on a case-sensitive file system a distinct `.exO` folder asks, and `cert.PEM` or `NOTES.ENV` count
   as keys and env files — the fail-closed side, as for a glob that could name one. A case variant of a store
   folder before a wildcard asks as a `cd` into it does (`ls ~/.EXO/*`).
