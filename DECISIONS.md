@@ -4840,6 +4840,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `docs/ui/WEB.md`, `plugins/exo-command/README.md`, `CHANGELOG.md`.
 
 ## D-080 (2026-10-16) One meaning for `Usage.input_tokens`, and what the per-child token budget counts
+
+- **Amendment (2026-10-27, #732):** the web keeps last-call input usage separate from the last `/context`
+  next-call estimate. Usage events never overwrite that estimate or its reported capacity. Both labels
+  identify their source state. Parent usage rollups do not count as one model call. No provider limit, routing or token accounting rule changes.
+
 - **Status:** Accepted 2026-10-16. It replaces the `input_includes_cache` flag that D-032 #6 added for pricing.
 - **Why:** the two transports filled `Usage.input_tokens` differently. Anthropic reports only the uncached input,
   with cache reads and writes apart. The OpenAI transport copied `prompt_tokens`, which already holds the cached

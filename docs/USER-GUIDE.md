@@ -117,6 +117,11 @@ It shows approvals, decisions waiting on you, live sessions, tasks, projects and
 `docs/media/web-*.png`, and the Providers tab is `docs/ui/web-providers.png`. Details are in `docs/ui/WEB.md` and
 `plugins/exo-command/README.md`.
 
+The web memory gauge and side panel show the last next-call estimate from `/context`. The separately
+labelled last-call input count comes from `model.call` events. A later tool round can change that count
+without refreshing the estimate. A call with no reported input usage clears the last-call count and cache share.
+Neither display promises a live measurement of the next prompt.
+
 The web page has its own sub-pages for Tasks, Schedule, Command and Providers. Its composer runs `/context`,
 `/findings`, `/trace`, `/new`, `/rename` and `/layout`. Type `/` for the menu. The Layout button in the page does what
 `/layout` does. Double-click a thread in the list to rename it. Anything else you type there goes to the agent as a
