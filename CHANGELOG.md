@@ -7,6 +7,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Web Chat separates core loss from a reconnecting page and labels last known activity. Drafts survive,
+  Retry activity refreshes a failed snapshot, and Try stop remains available during a feed-only outage.
+
 - The web composer's command list names `/tab` again (#661): the command joined the terminal client in #621
   but never entered the completion table the web route reads its client commands from.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).

@@ -24,6 +24,18 @@ replays from the last event it applied, so no reply or approval card is lost. Th
 events. After a longer gap, such as a long outage while the core kept working, it replays the newest 5,000 as on
 start, so an approval asked before them does not show.
 
+## Core availability and activity
+
+The browser connection and the core connection are separate. The web header uses a named `core-state` stream
+frame for core availability. This frame has no event id and does not advance the replay cursor. A core feed
+that ends, including normal EOF, marks the core unavailable.
+
+Chat retains last known activity, drafts, queued steers and pending approvals during an outage. Working
+animation and Send require a usable core connection and a fresh session snapshot. A failed refresh offers
+Retry activity. Stop remains available as Try stop when only the web feed or activity snapshot is unavailable.
+Confirmed core loss disables it. Reconnecting does not resend a message. With an explicit attached socket,
+it does not start a core.
+
 ## Opening the page and the page token (D-039)
 
 `exo web` makes a random page token for each launch and keeps it in memory only. It prints the page address with
