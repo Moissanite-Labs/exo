@@ -10,9 +10,9 @@ reading (`gate.no_grant`, `gate.readings`). A post whose only floor is in a read
 fixes, and a call with no floor reading is still auto-approved, camelCase or not.
 
 Review 5675164403 of #703: the floor reads each part too, so a snake shell call whose own folder argument is a secret
-folder (#311) also asks once in bypass. Its line keeps its own category (`read`) and the store read is a part, so
-bypass ran it before #703. Its plain spelling (`cat ~/.kube/config`) asked already. Temp stores, a temp HOME and a
-mock context; nothing is executed.
+folder (#311) also asks once in bypass. Its line keeps its own category (`read` for `cat` and `ls`), and the store
+read is a part, so bypass ran it before #703. Its plain spelling (`cat ~/.kube/config`) asked already. Temp stores,
+a temp HOME and a mock context; nothing is executed.
 """
 import os
 
