@@ -18,6 +18,7 @@ export function mount(root) {
   let maxRounds = null; // this mounted window only; never persisted or shared between tabs
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", routeNotice = null, model = "", cost = null;
+  let contextGeneration = 0, contextState = "unknown";
   let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let coreUsable = true, activityFresh = true, coreState = "connected", webUsable = true;
   let statusVersion = 0;
@@ -197,7 +198,7 @@ export function mount(root) {
     }
     if (!mine) return;
     switch (ev.type) {
-      case "turn.started": setBusy(true); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); break;
+      case "turn.started": invalidateContext(); setBusy(true); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); drawSide(true); break;
       case "turn.completed": {
         if (routeNotice) flash("");
         setBusy(false); drawStatus(); loadContext();
@@ -214,7 +215,7 @@ export function mount(root) {
       case "model.call":
         if (routeNotice && b.call_id === routeNotice && !b.error && b.stop_reason !== "interrupted") flash("");
         help.note({ providerError: !!b.error });
-        if (b.route) { model = b.route; capacity = capacities[model] || null; }
+        if (b.route) { if (model !== b.route) invalidateContext(); model = b.route; capacity = capacities[model] || null; }
         if (b.requested) requested = b.requested;
         lastCallTokens = null; cacheShare = null;
         if (b.usage) instruments(b.usage);
@@ -233,7 +234,7 @@ export function mount(root) {
         loadContext();
         sys("memory", "log " + b.start + "-" + b.end + " folded \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "context.compacted":
-        capacity = null; loadContext();
+        loadContext();
         sys("context", "compacted \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "peer.message": card({ kind: "peer", id: b.msg_id || "peer" + items.length, sender: b.sender, text: b.text, trust: b.trust, mode: b.mode }); break;
       case "taste.updated": push({ kind: "taste", id: "taste-" + b.rule_id + "-" + ev.seq, action: b.action, text: b.text, path: b.path }); break;
@@ -296,24 +297,36 @@ export function mount(root) {
     const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(current) + "/command", { name, args: args || "" });
     return d.output;
   }
+  function invalidateContext(state = "unknown") {
+    ++contextGeneration;
+    ctx = null; ctxTokens = null; contextState = state;
+    capacity = model ? (capacities[model] ?? null) : null;
+  }
   function applyContext(out) {
     const metrics = contextMetrics(out);
-    if (!metrics) return;
-    ctx = metrics; ctxTokens = ctx.total; capacity = ctx.capacity;
+    if (!metrics) return false;
+    ctx = metrics; ctxTokens = ctx.total; contextState = "ready";
     capacities[ctx.model] = ctx.capacity;
+    capacity = model ? (capacities[model] ?? null) : null;
     drawStatus(); drawSide(true);
+    return true;
   }
   async function loadContext() {
     const id = current;
     if (!id) return;
-    capacity = null;
-    drawStatus();
+    invalidateContext("pending");
+    const generation = contextGeneration, route = model;
+    drawStatus(); drawSide(true);
     try {
       const out = await runCommand("context", "json");
-      if (id !== current) return;
-      applyContext(out);
+      if (id !== current || generation !== contextGeneration || route !== model) return;
+      if (!applyContext(out)) contextState = "unavailable";
       drawStatus(); drawSide(true); if (!items.length) drawHero();
-    } catch (e) { if (id === current) { capacity = null; drawStatus(); } }
+    } catch (e) {
+      if (id !== current || generation !== contextGeneration || route !== model) return;
+      contextState = "unavailable";
+      drawStatus(); drawSide(true);
+    }
     try {
       const out = await runCommand("findings", "count");
       if (id === current && out && typeof out.open === "number") { findings = out.open; help.note({ findings }); drawStatus(); }
@@ -455,8 +468,9 @@ export function mount(root) {
       const remaining = estimateCapacity ? Math.max(0, estimateCapacity - ctxTokens) : 0;
       out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "memory"),
         estimateCapacity ? h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: "context capacity: " + fmtTok(estimateCapacity) + " tokens" }, h("i", { style: "width:" + pct + "%" })) : null,
-        h("span", { class: "xc-v" }, estimateCapacity ? "Estimated next call: " + fmtTok(ctxTokens) + " of " + fmtTok(estimateCapacity) + ". " + fmtTok(remaining) + " left." : "Estimated next call: about " + fmtTok(ctxTokens) + ". Limit unknown.")));
+        h("span", { class: "xc-v" }, (estimateCapacity ? "Estimated next call: " + fmtTok(ctxTokens) + " of " + fmtTok(estimateCapacity) + ". " + fmtTok(remaining) + " left." : "Estimated next call: about " + fmtTok(ctxTokens) + ". Limit unknown.") + (ctx.model ? " Next model: " + ctx.model + "." : ""))));
     }
+    if (ctxTokens == null) out.push(cell("memory", contextUnknown()));
     if (lastCallTokens != null) out.push(cell("last call", fmtTok(lastCallTokens) + " input tokens"));
     if (cacheShare != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "cache"), h("span", { class: "xc-v" }, Math.round(cacheShare * 100) + "%")));
     if (findings != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "findings"), h("span", { class: "xc-v" + (findings ? " xc-via" : "") }, String(findings))));
@@ -516,15 +530,19 @@ export function mount(root) {
   function gaugeRow(label, n, max, hot) {
     return h("div", { class: "xc-gr" }, h("span", { class: "xc-i" }, label), h("span", { class: "xc-gauge" + (hot ? " hot" : "") }, h("i", { style: "width:" + Math.max(n ? 2 : 0, Math.min(100, Math.round(100 * n / max))) + "%" })), h("span", { class: "xc-v" }, fmtTok(n)));
   }
+  function contextUnknown() {
+    return "Next-call estimate " + (contextState === "pending" ? "pending" : contextState === "unavailable" ? "unavailable" : "unknown") +
+      (capacity ? ". Capacity " + fmtTok(capacity) + " tokens." : ". Limit unknown.");
+  }
   function instrumentColumn() {
     const mem = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Memory"));
     if (ctx) {
       const max = Math.max(ctx.total, 1);
-      mem.append(h("div", { class: "xc-big" }, h("span", null, fmtTok(ctx.total)), h("span", { class: "xc-i" }, "estimated tokens for next call")),
+      mem.append(h("div", { class: "xc-big" }, h("span", null, fmtTok(ctx.total)), h("span", { class: "xc-i" }, "estimated tokens for next call" + (ctx.model ? " · " + ctx.model : ""))),
         gaugeRow("system", ctx.system, max), gaugeRow("tree", ctx.tree, max), gaugeRow("threads", ctx.notes, max), gaugeRow("tail", ctx.tail, max),
         h("div", { class: "xc-pm" }, "tree \u00B7 " + ctx.summaries + " summaries over " + ctx.nodes + " nodes" + (ctx.pending ? " \u00B7 " + ctx.pending + " pending" : "")),
         h("div", { class: "xc-pm" }, "log \u00B7 " + ctx.log + " entries, folded up to " + ctx.frontier));
-    } else mem.append(h("div", { class: "xc-pm" }, lastCallTokens != null ? fmtTok(lastCallTokens) + " tokens on the last call" : "no report yet"));
+    } else mem.append(h("div", { class: "xc-pm" }, contextUnknown()));
     const cl = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Last calls"));
     if (calls.length) calls.forEach((k) => cl.append(h("div", { class: "xc-call" + (k.error ? " xc-bad" : "") },
       h("span", { class: "xc-v" }, short((k.route || k.requested || "no route").split(":").pop(), 22)),
@@ -562,6 +580,7 @@ export function mount(root) {
     modelPicker.hidden = true; ++pickerGeneration;
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
+    invalidateContext();
     capacity = null;
     current = id; loading = true; pending = []; items = [];
     setBusy(snapshotBusy(null, sessions.find(s => s.id === id)));
@@ -601,6 +620,7 @@ export function mount(root) {
       sessions = freshSessions;
       // A transcript snapshot cannot restore missed per-call usage; replay newer events below.
       lastCallTokens = null; cacheShare = null;
+      invalidateContext();
       if (d) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
         dropSteers(id, had, d.steers);
@@ -666,7 +686,7 @@ export function mount(root) {
       const lan = defaults && e.status === 403 && !["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
       throw lan ? Error("/default saves provider settings, which only a page opened at 127.0.0.1 or localhost may change (D-034). /model works here.") : e;
     } finally { changingModel = false; }
-    if (!defaults && current === sid) { model = ref; capacity = capacities[ref] || null; requested = ""; drawStatus(); }
+    if (!defaults && current === sid) { invalidateContext(); model = ref; capacity = capacities[ref] || null; requested = ""; drawStatus(); drawSide(true); }
     if (sid !== current || generation !== pickerGeneration) { await refreshSessions(); return; }
     closePicker();
     await refreshSessions();
@@ -767,11 +787,19 @@ export function mount(root) {
     if (slash) {
       if (!current) { flash("open a thread first for /" + slash[1]); return; }
       input.value = ""; help.sent(text);
+      const reportSession = current, reportRoute = model;
+      if (slash[1] === "context") { invalidateContext("pending"); drawStatus(); drawSide(true); }
+      const reportGeneration = contextGeneration;
       try {
         const out = await runCommand(slash[1], slash[1] === "context" ? "json" : slash[2]);
-        if (slash[1] === "context") applyContext(out);
+        if (reportSession !== current || (slash[1] === "context" && (reportRoute !== model || reportGeneration !== contextGeneration))) return;
+        if (slash[1] === "context" && !applyContext(out)) { contextState = "unavailable"; drawStatus(); drawSide(true); }
         push({ kind: "report", id: "rep" + Date.now(), title: slash[1] + (slash[1] === "context" ? " \u00B7 next call" : ""), text: typeof out === "string" ? out : (out && out.text) || JSON.stringify(out, null, 1) });
-      } catch (e) { fail(e); }
+      } catch (e) {
+        if (reportSession !== current || (slash[1] === "context" && reportGeneration !== contextGeneration)) return;
+        if (slash[1] === "context") { contextState = "unavailable"; drawStatus(); drawSide(true); }
+        fail(e);
+      }
       return;
     }
     try {
@@ -866,7 +894,7 @@ export function mount(root) {
     const restored = coreUsable && !wasUsable && st.synced > 0;
     if (st.synced !== synced || restored) { synced = st.synced; recover(); }
   });
-  const off = () => { renameActive = false; renameInput.value = ""; stopPaneLayout(); ++pickerGeneration; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { renameActive = false; renameInput.value = ""; stopPaneLayout(); ++contextGeneration; ++pickerGeneration; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");

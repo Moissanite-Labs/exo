@@ -1,5 +1,7 @@
 # Changelog
 
+- Web: distinguish known route capacity from a pending or unavailable next-call estimate (#732).
+
 - Web: keep last-call usage separate from the labelled last next-call context estimate (#732).
 
 All notable changes to Exo. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions
@@ -38,6 +40,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   persist in the browser or desktop pane bridge, with visible save failures and a reset control.
 
 - The Command page refreshes its snapshot when its event stream opens again, even if no new event arrives (#708).
+
+- Providers refreshes the default readout and provider marker after a save without clearing the model search or losing its focus.
 - Context: `_carry_pins` reads the parent's pins fresh from disk, so a pin the parent undid does not resurrect in a child bound from it (#645).
 - A `$((` bash reads as a command substitution is read as one now (#553). bash closes the `$( ` at the first `)`
   outside quotes, backquotes, `$( )` bodies and comments, and reads the span as arithmetic only when the text

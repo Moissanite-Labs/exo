@@ -160,6 +160,10 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   with an unknown capacity kept unknown), separately labelled last-call input tokens from
   `model.call`, cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
+  A new turn, route change or context refresh invalidates the previous estimate. While the report is
+  pending or unavailable, both memory displays say so and may show the current route capacity alone.
+  They show no utilization gauge until a matching report supplies both the estimate and its capacity.
+  The next-model label comes from that report and can differ from the last-served fallback model.
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed; click
   to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded · 1781 → 153 tok`
   and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic (a `notice` that starts with

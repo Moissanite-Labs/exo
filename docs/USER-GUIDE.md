@@ -133,7 +133,10 @@ the label says `last known`. Stop and Send keep their existing behavior. Answer 
 The web memory gauge and side panel show the last next-call estimate from `/context`. The separately
 labelled last-call input count comes from `model.call` events. A later tool round can change that count
 without refreshing the estimate. A call with no reported input usage clears the last-call count and cache share.
-Neither display promises a live measurement of the next prompt.
+Neither display promises a live measurement of the next prompt. A new turn, model change or report refresh clears
+the estimate. Pending or failed reports can leave a known capacity visible, without a used-token estimate
+or gauge. A late report from a superseded request or conversation cannot supply the new estimate. The next-model
+label names the model in the context report, which can differ from the last-served fallback route.
 
 The web page has its own sub-pages for Tasks, Schedule, Command and Providers. Its composer runs `/context`,
 `/findings`, `/trace`, `/new`, `/rename` and `/layout`. Type `/` for the menu. The Layout button in the page does what

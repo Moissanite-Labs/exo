@@ -12,7 +12,7 @@ def page():
     pytest.importorskip('websockets.sync.client')
     web = Served(FakeSource())
     browser = Browser()
-    browser.goto(web.url())
+    browser.goto(web.url('providers'))
     browser.wait('document.readyState === "complete"')
     try:
         yield browser
@@ -86,15 +86,15 @@ def test_empty_loading_error_and_pending_duplicate_guards(page):
 
 def mount_view(page, view, applied='true'):
     page.eval(r'''(async()=>{
-      window.posts=[];
+      window.posts=[];window.defaultProvider="alpha";
       const models={models:[{route:'alpha:sonnet',name:'Sonnet',provider:'Alpha'}],
                     available:[{route:'beta:sonnet',name:'Sonnet',provider:'Beta'}]};
       window.fetch=async (path,opt={})=>{
         if(opt.method==='POST') posts.push({path,body:JSON.parse(opt.body||'{}')});
         let data={};
         if(path.endsWith('/models'))data=models;
-        else if(path==='/api/providers')data={providers:[],ready:true};
-        else if(path==='/api/providers/default')data={applied:''' + applied + r'''};
+        else if(path==='/api/providers')data={providers:['alpha','beta'].map(provider=>({provider,ready:true,default:provider===defaultProvider,needs:'cli'})),ready:true};
+        else if(path==='/api/providers/default'){defaultProvider=JSON.parse(opt.body).ref.split(':')[0];data={applied:''' + applied + r'''}}
         else if(path==='/api/complete/commands')data={commands:[{name:'model'},{name:'default'}],core:[],client:[],guidance:false};
         else if(path==='/api/chat/sessions')data={sessions:[{id:'s1',model:'alpha:sonnet'},{id:'s2',model:'alpha:sonnet'}]};
         else if(/^\/api\/chat\/sessions\/s[12]$/.test(path))data={session:{id:path.split('/').pop(),model:'alpha:sonnet'},messages:[],seq:0};
@@ -111,10 +111,10 @@ def test_providers_search_saves_exact_default_only_after_enter(page):
     mount_view(page, 'providers')
     page.wait('!!document.querySelector("[role=combobox]")')
     search(page, 'beta sonnet')
-    assert page.eval('posts.length') == 0
+    assert page.eval('posts.filter(p=>p.path.startsWith("/api/providers/")).length') == 0
     key(page, 'Enter')
-    page.wait('posts.length === 1')
-    assert page.eval('posts') == [{'path': '/api/providers/default', 'body': {'ref': 'beta:sonnet', 'role': 'main'}}]
+    page.wait('posts.filter(p=>p.path.startsWith("/api/providers/")).length === 1')
+    assert page.eval('posts.filter(p=>p.path.startsWith("/api/providers/"))') == [{'path': '/api/providers/default', 'body': {'ref': 'beta:sonnet', 'role': 'main'}}]
     page.wait('document.querySelector(".xc-model-status").textContent.includes("Default set")')
 
 
@@ -196,4 +196,23 @@ def test_providers_next_start_reply_is_not_shown_as_applied_now(page):
     search(page, 'beta')
     key(page, 'Enter')
     page.wait('document.querySelector(".xc-model-status").textContent.includes("core will use it on next start")')
-    assert page.eval('posts') == [{'path': '/api/providers/default', 'body': {'ref': 'beta:sonnet', 'role': 'main'}}]
+    assert page.eval('posts.filter(p=>p.path.startsWith("/api/providers/"))') == [{'path': '/api/providers/default', 'body': {'ref': 'beta:sonnet', 'role': 'main'}}]
+
+
+
+@pytest.mark.parametrize('apply_with', ['enter', 'button'])
+def test_providers_default_refresh_updates_readout_and_row_without_losing_search(page, apply_with):
+    mount_view(page, 'providers')
+    page.wait('!!document.querySelector("[role=combobox]")')
+    search(page, 'beta sonnet')
+    if apply_with == 'enter':
+        key(page, 'Enter')
+    else:
+        page.eval('document.querySelector(".xc-prov-def .xc-primary").click()')
+    page.wait('document.querySelector(".xc-prow.def .xc-prow-name")?.textContent === "beta"')
+    assert page.eval('document.querySelector(".xc-phead-read").textContent.includes("Defaultbeta")')
+    assert page.eval('document.activeElement.classList.contains("xc-model-search") && document.activeElement.value === "beta sonnet"')
+    assert page.eval('document.querySelectorAll("[role=option]").length') == 1
+    assert page.eval('document.querySelector(".xc-model-current").closest("[role=option]").textContent.includes("beta:sonnet")')
+    assert page.eval('posts.filter(p=>p.path.startsWith("/api/providers/"))') == [
+        {'path': '/api/providers/default', 'body': {'ref': 'beta:sonnet', 'role': 'main'}}]
