@@ -6384,3 +6384,16 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   passes its own tasks and the learner, and `Loop.interrupt_all`, `Loop.busy`, `Scheduler.tasks` and
   `PluginManager.closed` are public. The counts are 39 and 8 again. The counted lines rise to 16,252 (main
   15,833), which D-083 reports and does not assert. Behaviour is unchanged.
+- **Amendment 2026-10-28 (rebased onto main `f28934a3`):** two merged changes meet this PR's code.
+  - *Start retry (#726, D-010 amendment).* Main clears a start that failed or was cancelled, so the next
+    command starts again, and close always closes MCP. `start()` keeps this PR's refusal first. close()
+    cancels a start in progress, and main's code then clears it. A command after that fails with `closed`,
+    so peers and MCP do not start again. Outside close, the retry works as on main.
+  - *Continuity checkpoint (#761, D-086 amendment).* Main attaches a default-on `work_checkpoint` in compose.
+    It is not a profile capability. Like the work notebook, its own setting decides in every profile and
+    without one. It reads the durable session records, which every profile keeps, and adds no tool, process
+    or network use. Its setting is checked before plugins load, as on main. It attaches after the notebook,
+    inside the startup rollback. Scheduled and delegated loops share the workspace prompt here, and the
+    checkpoint still records ordinary root threads only.
+  - *Count.* The counted core is 16,267 lines (main `f28934a3`: 15,847), which D-083 reports and does not
+    assert. Product imports and private-state reads stay at 39 and 8.

@@ -206,3 +206,29 @@ def test_abort_startup_refuses_an_engine_whose_loop_still_runs_a_turn(tmp_path):
     engine.loop.state("direct").running = False
     engine.abort_startup()
     assert engine.store._conn is None
+
+
+# ---- main's continuity checkpoint (#761) inside the composition this PR wraps ----
+
+def test_a_failed_checkpoint_attach_rolls_back_like_any_later_step(tmp_path, monkeypatch):
+    """The checkpoint attaches after the work notebook, inside the startup rollback."""
+    import exo.work_checkpoint as work_checkpoint
+    home, marker = setup(tmp_path, monkeypatch)
+    engines = track_engines(monkeypatch)
+    monkeypatch.setattr(work_checkpoint, "attach", fail)
+    with pytest.raises(ValueError, match="startup failed"):
+        compose.create()
+    engine = engines[0]
+    assert marker.read_text() == "closed\n"
+    assert engine._writer is None and engine.store._conn is None and engine.jobs._pool._shutdown
+    writer = agentlog.claim_writer(home, engine.agent)
+    agentlog.release_writer(writer)
+
+
+def test_a_bad_checkpoint_setting_fails_before_any_plugin_loads(tmp_path, monkeypatch):
+    """As on main, the checkpoint setting is checked before plugins import or a store opens."""
+    from exo.config import ConfigError
+    home, marker = setup(tmp_path, monkeypatch, work_checkpoint={"enabled": "yes"})
+    with pytest.raises(ConfigError, match="work_checkpoint.enabled"):
+        compose.create()
+    assert not marker.exists() and not (home / "sessions.sqlite").exists()

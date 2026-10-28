@@ -427,7 +427,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   get the turn's author (D-088, #498).
 - A command that reaches the engine after `close()` has begun fails with `closed`. Before, a `peers` command
   handled while close killed background jobs started the peer service again, and close returned with it
-  running (D-088, `docs/HARNESS.md`).
+  running (D-088, `docs/HARNESS.md`). This holds after main's start retry (#726): a start that close cancelled
+  is not retried, so peers and MCP do not start again.
+- Harness profiles keep main's continuity checkpoint: `work_checkpoint.enabled` decides in every profile, as
+  `work_notes.enabled` does (D-088, `docs/HARNESS.md`, `docs/WORK-CHECKPOINT.md`).
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.

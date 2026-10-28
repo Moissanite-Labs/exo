@@ -533,6 +533,53 @@ def test_close_cancels_an_mcp_start_in_progress(tmp_path):
     asyncio.run(run())
 
 
+def test_a_start_that_close_cancelled_is_not_retried(tmp_path):
+    """Main clears a failed or cancelled start, so the next command starts again (#726). close() cancels a start in
+    progress. A command after that is refused, and neither peers nor MCP start again: start() checks the closing
+    flag before it looks at the cleared start. tests/integration/test_engine_start_retry.py keeps the retry."""
+    from exo.protocol import schema as s
+    from exo.server.app import Dispatcher
+
+    engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})
+    events = []
+
+    class Mcp:
+        def __init__(self):
+            self.entered = asyncio.Event()
+
+        async def start(self, registry):
+            events.append("mcp start")
+            self.entered.set()
+            await asyncio.Event().wait()
+
+        async def close(self):
+            events.append("mcp close")
+
+    class Peers(_Peers):
+        autostart = True
+
+        async def start(self, *args):
+            events.append("peers start")
+
+    async def run():
+        engine.mcp, engine.peers = Mcp(), Peers()
+        dispatcher = Dispatcher(engine)
+        listing = s.Command.of(s.SessionList())
+        waiting = asyncio.ensure_future(dispatcher.run(listing))
+        await asyncio.wait_for(engine.mcp.entered.wait(), 5)
+        await asyncio.wait_for(engine.close(), 5)
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        assert engine._started is None  # cleared, as main clears any cancelled start
+        again = await dispatcher.run(listing)
+        assert not again.ok and again.error.code == "closed"
+        with pytest.raises(CommandFailed, match="closing"):
+            await engine.start()
+        assert events == ["peers start", "mcp start", "mcp close"] and engine.peers.stops == 1
+
+    asyncio.run(run())
+
+
 def test_close_retrieves_the_error_of_a_turn_that_failed_while_it_was_cancelled(tmp_path):
     import gc
     engine = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={})

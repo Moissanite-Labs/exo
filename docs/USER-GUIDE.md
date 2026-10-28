@@ -48,7 +48,8 @@ The approval gate stays enabled in every profile. Profiles do not change the gat
 policy. Existing installs keep their behavior until you select a profile. A profile loads only
 the plugins it names and those in `core_plugins`. `show` and `use` list any other plugin
 you installed that it will not load. Profiles retain your saved integration settings and
-conversation history.
+conversation history. They do not turn working notes or continuity checkpoints on or off:
+`work_notes.enabled` and `work_checkpoint.enabled` decide in every profile.
 
 `coding` and `full` also read repository `AGENTS.md` guidance for each session's working
 directory. `AGENTS.override.md` takes priority at the same directory. This reads instructions.

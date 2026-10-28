@@ -123,7 +123,7 @@ def test_legacy_keeps_discovery_and_existing_runtime_defaults(tmp_path, monkeypa
     try:
         assert not isinstance(engine.jobs, DisabledJobs) and not isinstance(engine.agents, DisabledDelegator)
         assert engine.scheduler is not None and engine.peers is not None
-        assert engine.loop.workspace_extra is None
+        assert engine.workspace_instructions is None and engine.work_checkpoint is not None  # main's default
         assert "skill" in engine.registry.names()
     finally:
         asyncio.run(engine.close())
@@ -285,3 +285,32 @@ def test_a_required_executor_plugin_outside_the_profile_names_core_plugins(tmp_p
     with pytest.raises(ExecutorConfigurationError, match=r"disables a required executor plugin \(vendor-audit\).*core_plugins"):
         compose.create()
     assert not (cfg.home / "sessions.sqlite").exists()
+
+
+# ---- main's continuity checkpoint (#761, D-086 amendment) under profiles ----
+
+def test_child_loops_share_the_checkpoint_prompt_but_it_records_only_root_threads(tmp_path, monkeypatch):
+    """The checkpoint follows its own key in every profile, as the work notebook does, so lean keeps it. It joins
+    the workspace prompt that this PR gives scheduled and delegated loops, and it still records root threads only."""
+    from exo.core.models.fake import FakeProvider
+    cfg = configured(tmp_path, monkeypatch)
+    cfg.set("harness.enable", ["scheduler"])
+    cfg.save()
+
+    async def run():
+        engine = compose.create()
+        engine.loop.provider = FakeProvider(["scheduled report", "hello back"])
+        try:
+            assert engine.work_checkpoint is not None
+            job = engine.scheduler.add("every 1h", "Report on this workspace", title="Report")
+            assert await engine.scheduler.run(job, "scheduled-test") == "done"
+            scheduled = [row["id"] for row in engine.store._q("SELECT id FROM sessions WHERE kind='scheduled'")]
+            assert len(scheduled) == 1 and engine.loop.workspace_extra(scheduled[0], str(tmp_path)) == ""
+            thread = await engine.loop.create_session(cwd=str(tmp_path), agent=engine.agent)
+            await engine.loop.send(thread.id, "hello")
+            rows = engine.store._q("SELECT session FROM work_checkpoints")
+            assert [row["session"] for row in rows] == [thread.id]
+        finally:
+            await engine.close()
+
+    asyncio.run(run())

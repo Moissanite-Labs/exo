@@ -116,6 +116,14 @@ to delegation, so disable `delegation` to stop it.
 The scheduler can be enabled independently of delegation and background jobs. Scheduled
 turns also use workspace instructions when that capability is enabled.
 
+Working notes and continuity checkpoints are not capabilities. Their own settings decide in
+every profile and without one: `work_notes.enabled` (off by default, D-086) and
+`work_checkpoint.enabled` (on by default, D-086 amendment). A checkpoint is built from the
+durable session records, which every profile keeps. It adds no tool, process or network use.
+compose checks the checkpoint setting before plugins load, and attaches it after the notebook,
+inside the startup rollback. Scheduled and delegated loops share the workspace prompt, but
+the checkpoint records ordinary root threads only. See [WORK-CHECKPOINT.md](WORK-CHECKPOINT.md).
+
 Some shared implementation modules remain bundled/imported by the core. Runtime profiles
 are not an installation-size optimizer or an OS sandbox. Third-party Python plugins are
 trusted host code and can allocate their own resources. `web` controls the plugin's core
@@ -170,7 +178,9 @@ engine. The engine owns shutdown ordering and startup rollback.
 Engine shutdown runs in this order:
 
 1. It refuses new commands, turns, tools and background jobs. A command fails with
-   `closed`, so it cannot start a service again. A job that ends from here on is
+   `closed`, so it cannot start a service again. A start in progress is cancelled. The
+   next command retries a failed or cancelled start (D-010 amendment), but not once close
+   has begun. A job that ends from here on is
    recorded for its thread and never starts a turn. Active turns are cancelled.
 2. It stops channels, peers, background jobs (their process groups), the scheduler and MCP.
 3. It waits up to five seconds for turns, synchronous tool workers and learning reviews.
