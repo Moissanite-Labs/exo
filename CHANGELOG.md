@@ -23,6 +23,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- Repeated tool-call warnings and findings can appear during an active turn, rather than waiting for completion. The argument-based warning is deduplicated per tool and turn and does not stop work or change round limits (#749).
+
 - Failed model calls no longer count as recovered fallbacks or produce findings claiming the call fell back. Successful recovery and legacy trace inference remain visible (#748).
 
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).

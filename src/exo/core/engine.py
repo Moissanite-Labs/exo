@@ -89,7 +89,9 @@ class HubBus:
         self.engine = engine
 
     async def emit(self, body: Any, session: str | None = None) -> s.Event:
-        return self.engine.hub.publish(body, session)
+        event = self.engine.hub.publish(body, session)
+        self.engine.observe_repeat(event)
+        return event
 
 
 class CoreRuntime:
@@ -185,6 +187,7 @@ class CoreRuntime:
         self.thresholds = trace.Thresholds.of(trace_cfg)
         self.findings = Findings(self.store, self.thresholds)
         self._trace_on = trace_cfg.get("enabled", True) is not False
+        self.repeat_watch = trace.RepeatWatch()
         trace.add_sink(self._on_harness_error)
         self.peer_cfg = PeerConfig.of({**(peers or {}), **(seat.peers if seat else {})})  # D-026
         self.peer_cfg_dir = peers_dir
@@ -770,16 +773,35 @@ class CoreRuntime:
             self.findings.file(f"harness.error:{body.where}:{body.error_type}", f"Harness error in {body.where}",
                                severity="bug", detail=f"{body.error_type}: {body.message}", session=session)
 
-    async def observe_turn(self, session: str, turn_id: str) -> None:
-        """After a turn: apply the anomaly rules (no model call), file findings, verify fixed ones."""
+    def observe_repeat(self, event: s.Event) -> None:
+        """Only current-loop events: no historical trace query on each tool completion."""
         if not self._trace_on:
             return
-        if (t := trace.last_turn(self.store, session)) is None:
-            return
-        flags = trace.detect(t, self.thresholds)
-        for f in flags:
-            self.findings.file_flag(f)
-        self.findings.observe(t, {f.signature for f in flags})
+        try:
+            if (flag := self.repeat_watch.feed(event)) is not None:
+                try:
+                    self.findings.file_flag(flag)
+                    self.repeat_watch.filed(flag)
+                finally:
+                    self.hub.publish(s.Notice(text=flag.title + ". Repeated call warning. Check progress. This warning does not stop the turn.",
+                                              level="warn"), event.session)
+        except Exception as exc:
+            trace.report("in-turn repeat observation", exc, event.session)
+
+    async def observe_turn(self, session: str, turn_id: str) -> None:
+        """After a turn: apply the anomaly rules (no model call), file findings, verify fixed ones."""
+        try:
+            if not self._trace_on:
+                return
+            if (t := trace.last_turn(self.store, session)) is None:
+                return
+            flags = trace.detect(t, self.thresholds)
+            for f in flags:
+                if not self.repeat_watch.already_filed(f):
+                    self.findings.file_flag(f)
+            self.findings.observe(t, {f.signature for f in flags})
+        finally:
+            self.repeat_watch.finish(session, turn_id)
 
     def trace_text(self, session: str | None, last: int = 10, calls: bool = False) -> str:
         """What ``exo_trace`` and ``/trace`` show (exo.diagnostics.trace_text)."""
