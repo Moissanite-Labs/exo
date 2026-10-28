@@ -267,3 +267,26 @@ def test_slow_mobile_selection_never_steals_later_search_focus():
             assert b.eval("[document.querySelector('.xc-thread-search').selectionStart,document.querySelector('.xc-thread-search').selectionEnd]") == [1, 3]
     finally:
         srv.close()
+
+
+@pytest.mark.parametrize('layout', ['inverse', 'classic'])
+def test_pending_home_frame_cannot_override_a_newer_reader_position(layout):
+    src = WorkspaceSource(pairs=0); srv = Served(src)
+    try:
+        with Browser(width=1200, height=900) as b:
+            b.goto(srv.url()); b.eval(f"localStorage.setItem('xc-layout',{json.dumps(layout)})"); b.goto(srv.url())
+            b.wait("!!document.querySelector('.xc-sess[aria-current=true]')")
+            b.eval('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+            put(b, '.xc-composer .xc-input', 'keep the draft', 2, 6)
+            b.eval('window.nativeFrame=requestAnimationFrame;window.heldFrames=[];window.requestAnimationFrame=callback=>heldFrames.push(callback)')
+            srv.call(srv.centre.record, {'seq': 1, 'type': 'message.delta', 'session': 's1',
+                'body': {'message_id': 'long-stream', 'text': 'An unchanged prefix. ' + 'A long response is still being written. ' * 1800}})
+            b.wait("document.querySelector('.xc-streaming')?.textContent.length>50000")
+            # A real reader scrolls after the first output is rendered but before its delayed home callback runs.
+            before = b.eval("(()=>{const log=document.querySelector('.xc-log');log.scrollTop=400;return {top:log.scrollTop,frames:heldFrames.length}})()")
+            assert before['frames'] >= 1 and before['top'] == 400
+            b.eval('heldFrames.splice(0).forEach(callback=>callback(performance.now()));window.requestAnimationFrame=window.nativeFrame')
+            assert b.eval("document.querySelector('.xc-log').scrollTop") == before['top']
+            assert b.eval("[document.querySelector('.xc-composer .xc-input').value,document.querySelector('.xc-composer .xc-input').selectionStart,document.querySelector('.xc-composer .xc-input').selectionEnd]") == ['keep the draft', 2, 6]
+    finally:
+        srv.close()
