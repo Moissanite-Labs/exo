@@ -42,10 +42,9 @@ Do not create another objective store, scheduler or permission system for this U
 
 ## Underway source branches
 
-These slices are under development in canonical Exo on
-`feat/operator-continuity-20261027` and `feat/thread-drafts-20261027`. The desktop
-checkout was audited without edits. These slices are not described here as merged,
-installed or independently accepted.
+Four slices are implemented for review in canonical Exo. The desktop checkout
+was audited without edits. These branches are not merged or installed, and do not
+establish acceptance of every gate below.
 
 - [Issue 683](https://github.com/aska-digital/exo/issues/683): a bounded checkpoint
   derived from saved records for interruption and compaction continuity. It does
@@ -55,6 +54,16 @@ installed or independently accepted.
   `plugins/exo-command/exo_command/static/chat.js`: draft text stays with its
   originating thread during navigation. Drafts are held in memory. This does not
   promise recovery after reload, quit, crash or a different local origin.
+- Durable queued steering on `fix/durable-steer-763-20261027`: accepted corrections
+  and cancellations are saved before acknowledgement. Terminal and web clients
+  restore queued text and controls after reconnect. Reading a session starts no
+  work. The guarantee covers saved queue records and transcript insertion, not
+  exactly-once external effects. See [DURABLE-STEERING.md](DURABLE-STEERING.md).
+- Working notes on `feat/working-notes-inspector-20261027`: a web inspector shows
+  the existing notebook's goal, steps, blockers, sources, revisions and stale
+  status. It preserves the composer and labels notes as agent-authored claims.
+  Reading does not enable or write notes. This is the inspection portion of gate 1,
+  not a complete objective-recovery contract.
 
 Desktop [issue 30](https://github.com/aska-digital/exo-desktop/issues/30) tracks
 interface restoration. [Issue 31](https://github.com/aska-digital/exo-desktop/issues/31)
@@ -113,7 +122,8 @@ specified, a real client run. Each capability remains separately reviewable.
 
 ## Delivery boundary
 
-Finish and independently review the checkpoint and draft slices first. Then
-expose the notebook and delegate controls through the shared client. Record each
-later gate's evidence separately. Native persistence and packaging need native
-acceptance before the desktop promises recovery across launches.
+Review the checkpoint, draft, steering and notebook-inspector slices separately,
+then verify their composition against current main. Shared client work continues
+with delegate supervision and evidence inspection. Record each later gate's
+evidence separately. Native persistence and packaging need native acceptance
+before the desktop promises recovery across launches.
