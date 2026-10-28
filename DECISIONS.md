@@ -4693,7 +4693,11 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   something the model never asked for, and a call cut short at `max_tokens` ran as an empty one. They now arrive
   as `BadArguments`, an empty dict with the reason. The registry answers that call with an error result before any
   hook or the tool runs, and the model can call again. An empty dict keeps a replay valid on both wires and keeps
-  `ToolCall`'s fields as they are. `docs/TOOLS.md` "Arguments that did not parse".
+  `ToolCall`'s fields as they are. `docs/TOOLS.md` "Arguments that did not parse". The flattened prompt of
+  `muse-cli` (D-051) kept only user and assistant text, so a call with no tools but earlier tool rounds in its
+  history lost every tool call and result, and an assistant turn that only called tools. They now go in as text,
+  `[tool call <name>] <arguments>` and `[tool result <name>]` blocks. `docs/PROVIDERS.md` "Use a Muse Code
+  subscription".
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its

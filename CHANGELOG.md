@@ -223,6 +223,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A tool call whose arguments are not a JSON object, such as JSON cut short at `max_tokens`, gets an error
   result that names the problem. It used to run the tool with no arguments (exo-desktop #52).
 
+- `muse-cli` keeps earlier tool calls and results in its flattened prompt, as text. It used to drop them, and
+  an assistant turn that only called tools (exo-desktop #52).
+
 - Gate: on a store line, a rule written for another command no longer lifts a part's deny (#547). Under `matrix:
   {irreversible: {internal: deny, private: deny, public: deny}}` and `{match: {command: '^git push'}, decision:
   allow}`, `git push --force origin main && gh gist create ~/.exo/plugins/foo/__init__.py` asked the principal
