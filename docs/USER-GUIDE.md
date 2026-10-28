@@ -545,6 +545,7 @@ folder is not inside a git repo.
 - `/trace` shows one row per turn: time, model that served, calls, fallbacks, tools, tokens and cost.
 - `exo trace [SESSION] [--last N] [--calls] [--json]` shows the same from a shell.
 - `/findings` and `exo findings` list problems Exo found in its own work, such as a slow turn or a model fallback.
+- `exo findings backlog [--limit N] [--json]` counts the unresolved ones by severity and by age, and lists the oldest.
 
 Details and the cost rules: `docs/TRACE.md`.
 
