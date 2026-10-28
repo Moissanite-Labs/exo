@@ -181,6 +181,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 - Malformed peer presence records no longer break discovery or hide other live peers (#638).
 
+- Encrypted group envelopes for another seat and unreadable encrypted bodies no longer create placeholder bus turns; the inbox cursor still advances (desktop audit #53).
+
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
 

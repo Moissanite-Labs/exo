@@ -3984,6 +3984,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   matter. `docs/ui/WEB.md` "Opening the page and the page token".
 
 ## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
+- *Amendment 2026-10-28 (desktop audit #53):* the bus channel skips encrypted envelopes sealed to another seat and unreadable encrypted bodies before session allocation or core ingress. The inbox cursor still advances; reader tools retain their placeholders. A core-call failure still retries the envelope.
 - **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and
   consolidation and `principal_said` checked the kind, not the author, so an agent-written "always force push to
   main" became a belief proposal that promotion rule 1 would accept. (b) Per-turn capture got bare role and content,
