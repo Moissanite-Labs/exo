@@ -975,10 +975,10 @@ def _nest_end(s: str, i: int, pending: list[_Heredoc]) -> tuple[int, list[_Hered
             w.quoted = w.dollar = True
             stack.append(_Open('"', owner=w))
             return k + 1
-        m = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
-        if m:
-            j = k + len(m.group(0))
-            w.add("$" + m.group(0), 0, 1 + len(m.group(0)))
+        parameter = re.match(r"[A-Za-z_]\w*|[0-9@*#?$!-]", s[k:])
+        if parameter:
+            j = k + len(parameter.group(0))
+            w.add("$" + parameter.group(0), 0, 1 + len(parameter.group(0)))
         else:
             j = i + 1
             w.add(s, i, j)
@@ -3932,9 +3932,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 c.parts = [*c.parts, replace(top, target=dest, parts=[], text="", title="", text_file="", own_signals=[
                     s for s in (top.signals if top.own_signals is None else top.own_signals) if s != "unseen_body"])]
             elif top is not None and _fold_made(top.target) and \
-                    (old := _most_severe([p for p in c.parts
+                    (prior_action := _most_severe([p for p in c.parts
                                           if p.category not in ("credentials", "store_write")])) is not None and \
-                    old.target != dest:
+                    prior_action.target != dest:
                 # #601: the fold made the part that took the line's category, so the decision on the alt target
                 # (#399) — the copy of the action on the host — no longer carries it: the line read as an ordinary
                 # delete there before (`ssh host 'rm -rf ~/.EXO/policies'` listed (delete, host) among its reserved
@@ -3942,8 +3942,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 # kept it while the path read as an ordinary one, and the plain-spelling rows keep every part they
                 # had: a name an expansion made a store of reads the same in either spelling (_fold_made). A copy
                 # with no parts and no post, as #320's.
-                c.parts = [*c.parts, replace(old, target=dest, parts=[], text="", title="", text_file="", own_signals=[
-                    s for s in (old.signals if old.own_signals is None else old.own_signals) if s != "unseen_body"])]
+                c.parts = [*c.parts, replace(prior_action, target=dest, parts=[], text="", title="", text_file="", own_signals=[
+                    s for s in (prior_action.signals if prior_action.own_signals is None else prior_action.own_signals) if s != "unseen_body"])]
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
         # An ssh that passes a stdin on gives its remote command that stdin, and an ssh there that runs it runs it
