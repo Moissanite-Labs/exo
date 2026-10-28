@@ -18,6 +18,7 @@ export function slashInput(text) {
 export function commandUsage({ name, args }) {
   if (name === "new" && !["", "private"].includes(args)) return "usage: /new [private]";
   if (name === "rename" && !args) return "usage: /rename <title>";
+  if (name === "work" && !["", "show", "history"].includes(args)) return "usage: /work [show|history]";
   if (name === "context" && args) return "usage: /context";
   if (name === "trace" && args && !/^\d+$/.test(args)) return "usage: /trace [count]";
   if (name === "findings" && args && !["all", "open", "fixed", "verified", "reopened", "count"].includes(args)) return "usage: /findings [state]";

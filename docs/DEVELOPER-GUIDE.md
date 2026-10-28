@@ -40,6 +40,13 @@ runtime resources, then attaches the gated tool, per-session prompt and handoff
 source. Updates compare revisions inside one transaction. Keep note authorship
 as `agent`, preserve session scope, and use existing gate and executor dispatch.
 The adapter and limits are documented in [WORK-NOTEBOOK.md](WORK-NOTEBOOK.md).
+The web inspector lives in `plugins/exo-command/exo_command/static/work_notes.js` and uses
+only the session-scoped read-command route for `work show|history`. Keep the principal,
+gate and configured executor checks in the core. Never read notebook storage in the web
+server or enable/write notes from the inspector. Its generation counter invalidates late
+responses after another read, thread switch, close or unmount. Turn completion refreshes
+only an open inspector. The component does not modify the composer. Browser and API
+coverage is in `plugins/exo-command/tests/test_work_notes_web.py`.
 
 | Path | What lives there |
 |---|---|

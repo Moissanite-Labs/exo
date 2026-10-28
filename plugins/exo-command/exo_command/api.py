@@ -47,7 +47,7 @@ from .source import SourceError, core_message
 MAX_TEXT = 50_000
 MODES = ("send", "queue", "steer")
 VERDICTS = ("accept", "edit", "reject", "should_have_been")
-READ_COMMANDS = ("context", "findings", "trace")   # read-only reports the core answers itself
+READ_COMMANDS = ("context", "findings", "trace", "work")   # read-only reports the core answers itself
 PERMISSION_MODES = ("bypass", "ask")
 PANEL_ACTIONS = ("opened", "dismissed", "acted", "ignored")
 SCHEDULE_ACTIONS = ("list", "add", "remove", "pause", "resume", "run_now")
@@ -188,7 +188,10 @@ async def _model(c, p, q, body):
 
 async def _command(c, p, q, body):
     name = _choice(body, "name", READ_COMMANDS)
-    return await c.source.call(s.CommandRun(name=name, args=_str(body, "args", limit=40), session=p[2]))
+    args = _str(body, "args", limit=40)
+    if name == "work" and args.strip() not in ("", "show", "history"):
+        raise BadRequest("usage: /work [show|history]")
+    return await c.source.call(s.CommandRun(name=name, args=args, session=p[2]))
 
 
 async def _unsteer(c, p, q, body):
@@ -301,7 +304,7 @@ async def _schedule_edit(c, p, q, body):
 
 
 # ---------------------------------------------------------------- completion (D-037)
-WEB_COMMANDS = {"context": "what the next model call carries, part by part",
+WEB_COMMANDS = {"work": "inspect saved agent working notes; history lists revisions", "context": "what the next model call carries, part by part",
                 "model": "pick or set the shared main model; default <ref> saves the default",
                 "default": "pick or set the default model for new threads",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
@@ -322,8 +325,10 @@ async def _complete_commands(c, p, q, body):
     rows = []
     for name, desc in WEB_COMMANDS.items():
         slot = cm.plan(name, [])
-        rows.append({"name": name, "description": desc, "args": cm.ARG_HINTS.get(name, ""),
+        rows.append({"name": name, "description": desc, "args": "[show|history]" if name == "work" else cm.ARG_HINTS.get(name, ""),
                      "choices": [{"value": v, "meta": m} for v, m in (slot.choices if slot else ())]})
+        if name == "work":
+            rows[-1]["choices"] = [{"value": "show", "meta": "current working notes"}, {"value": "history", "meta": "revision metadata"}]
     guidance: bool | None = True
     try:
         got = await c.source.call(s.ConfigGet(key="guidance.enabled"))

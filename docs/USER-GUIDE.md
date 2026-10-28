@@ -25,10 +25,13 @@ Setting up your own store and the first interview are in `docs/ONBOARDING.md`. T
 
 **Saved working notes.** Enable them with `exo config set work_notes.enabled true`
 and restart Exo. Ask the agent to keep the task's goal, constraints, steps and
-evidence in its working notes. `/work` shows them in the TUI or `exo chat`, and
+evidence in its working notes. `/work` shows them in the TUI, `exo chat` or web Chat, and
 `/work history` lists revisions. Resuming the same conversation restores a short
 snapshot. Forks start with empty notes. Undo marks affected notes stale. These
-are the agent's notes and never grant approval. See [working notes](WORK-NOTEBOOK.md).
+are the agent's notes and never grant approval. In web Chat, **Working notes** opens a
+read-only inspector with the goal, steps, blockers, next action, sources, revision and
+stale status. Its buttons preserve your draft. Ask the agent to correct stale notes in
+a message; source records do not independently verify a claim. See [working notes](WORK-NOTEBOOK.md).
 
 If Claude Code is installed (the `claude` command is on your PATH) and logged in, you need no key. While the
 main model has no key (by default Anthropic, then OpenRouter) and you have not chosen one, Exo uses your Claude

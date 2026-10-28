@@ -11,6 +11,7 @@ import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOU
 
 import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 import * as permissions from "./permissions.js";
+import { createWorkNotes } from "./work_notes.js";
 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
@@ -65,6 +66,9 @@ export function mount(root) {
   const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
   const sideEl = h("aside", { class: "xc-side" });
+  const workNotes = createWorkNotes({ onVisibility: () => drawSide() });
+  const sideContents = h("div", { class: "xc-side-contents" });
+  sideEl.replaceChildren(workNotes.element, sideContents);
   const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Ask, or give a task. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
   const stopBtn = h("button", { class: "xc-btn", onclick: () => interrupt() }, "Stop");
@@ -105,7 +109,7 @@ export function mount(root) {
   }
   arrange();
   root.replaceChildren(h("div", { class: "xc-chat" },
-    h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), renameEditor, listEl, layoutBtn),
+    h("nav", { class: "xc-chat-left" }, newBtn, workNotes.button, h("div", { class: "xc-label" }, "Threads"), renameEditor, listEl, layoutBtn),
     mainEl,
     sideEl));
 
@@ -188,7 +192,7 @@ export function mount(root) {
       case "turn.started": busy = true; help.note({ busy: true }); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); break;
       case "turn.completed": {
         if (routeNotice) flash("");
-        busy = false; drawStatus(); loadContext();
+        busy = false; drawStatus(); loadContext(); workNotes.refresh();
         const tm = b.timing || {};
         help.note({ busy: false, turns: items.filter((i) => i.kind === "user").length, longTurn: (tm.wall_ms || 0) - (tm.tool_ms || 0) - (tm.approval_ms || 0) >= 60000 });
         break;
@@ -476,8 +480,8 @@ export function mount(root) {
   function drawSide(onlyInstruments) {
     const mine = panelsOpen.filter((p) => !p.session || p.session === current);
     if (onlyInstruments && mine.length) return;
-    sideEl.replaceChildren(...(mine.length ? mine.map((p) => { const n = renderPanel(p, { act: panelAct, dismiss: panelDismiss }); if (!seen.has(p.panel_id)) n.classList.add("xc-in"); return n; }) : instrumentColumn()));
-    sideEl.classList.toggle("xc-has", mine.length > 0);
+    sideContents.replaceChildren(...(mine.length ? mine.map((p) => { const n = renderPanel(p, { act: panelAct, dismiss: panelDismiss }); if (!seen.has(p.panel_id)) n.classList.add("xc-in"); return n; }) : instrumentColumn()));
+    sideEl.classList.toggle("xc-has", mine.length > 0 || workNotes.isOpen());
     for (const p of mine) if (!seen.has(p.panel_id)) { seen.add(p.panel_id); respondPanel(p, "opened", {}, true); }
   }
 
@@ -492,7 +496,7 @@ export function mount(root) {
     modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
+    current = id; workNotes.setSession(id); loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
@@ -665,6 +669,10 @@ export function mount(root) {
       } catch (e) { fail(e); }
       return;
     }
+    if (command && command.name === "work") {
+      if (!current) { flash("open a thread first for /work"); return; }
+      input.value = ""; help.sent(text); workNotes.show(command.args || "show"); return;
+    }
     const slash = command && ["context", "findings", "trace"].includes(command.name) ? [null, command.name, command.args] : null;
     if (slash) {
       if (!current) { flash("open a thread first for /" + slash[1]); return; }
@@ -758,7 +766,7 @@ export function mount(root) {
   const offState = bus.onState((st) => {
     if (st.synced !== synced) { synced = st.synced; recover(); }
   });
-  const off = () => { renameActive = false; renameInput.value = ""; ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { renameActive = false; renameInput.value = ""; ++snapshotGeneration; offBus(); offState(); help.stop(); workNotes.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
   sessionStorage.removeItem("xc-open");
