@@ -314,3 +314,24 @@ def test_child_loops_share_the_checkpoint_prompt_but_it_records_only_root_thread
             await engine.close()
 
     asyncio.run(run())
+
+
+def test_the_workspace_prompt_keeps_main_s_order_instructions_notes_then_checkpoint(tmp_path, monkeypatch):
+    """compose attaches the instructions, then the notebook, then the checkpoint, so the prompt reads in main's
+    order. Each block wraps the one before it."""
+    configured(tmp_path, monkeypatch, "coding", learn={"enabled": False}, work_notes={"enabled": True})
+    (tmp_path / "AGENTS.md").write_text("WORKSPACE GUIDANCE")
+
+    async def run():
+        engine = compose.create()
+        try:
+            engine.work_notebook.render = lambda session: "NOTEBOOK BLOCK"
+            engine.work_checkpoint.render = lambda session, cwd="": "CHECKPOINT BLOCK"
+            session = await engine.loop.create_session(cwd=str(tmp_path), agent=engine.agent)
+            text = engine.loop.workspace_extra(session.id, str(tmp_path))
+            assert text.index("WORKSPACE GUIDANCE") < text.index("NOTEBOOK BLOCK") < text.index("CHECKPOINT BLOCK")
+            assert text.endswith("NOTEBOOK BLOCK\n\nCHECKPOINT BLOCK")
+        finally:
+            await engine.close()
+
+    asyncio.run(run())
