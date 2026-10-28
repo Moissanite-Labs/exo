@@ -3358,6 +3358,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `[::1]:<port>`, for the page too. Origin and Sec-Fetch-Site checks stay. Only the page shell is served without
   the token. The token stays per launch, in memory, delivered in the URL fragment that `exo web` prints and opens.
   `asgi.py` is deleted (unused).
+  *Amendment 2026-10-28 (issue #740):* the approval POST checks that its parsed JSON is an object before reading
+  `decision`. Arrays, null and scalars get a 400 JSON error and send no `approval.respond` to the core, as the
+  shared POST body reader already requires. Malformed JSON keeps its `bad json` response; token checks and valid
+  approval answers are unchanged. `docs/ui/WEB.md` "Opening the page and the page token".
   *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
   was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
   `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
