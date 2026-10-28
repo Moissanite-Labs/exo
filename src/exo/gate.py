@@ -156,6 +156,9 @@ class Classification:
     # The signals this part carried before _combine gave it every part's (#396), so the posting checks can tell its
     # own unseen body from another post's. None for a part never combined: its signals are then its own.
     own_signals: list[str] | None = field(default=None, repr=False, compare=False)
+    # The same call read with each quoted prefix assignment as the program, as before #471, when the call has one
+    # (classify): decide decides that reading too and keeps the stricter.
+    before: "Classification | None" = field(default=None, repr=False, compare=False)
     # The same call as the gate read it before #311, where a shell call's own folder argument made it credentials as
     # a whole (#209), and last, on a line also read with a `$` form's backslash-newline joined, the less severe of that
     # reading and the line as written (#584). decide takes every reading and the strictest outcome stands.
@@ -188,6 +191,7 @@ class Classification:
         d.pop("setters")
         d.pop("inherits")
         d.pop("own_signals")
+        d.pop("before")
         d.pop("also")
         if d["alt_targets"]:
             d["alt_targets"] = [redact_userinfo(t) for t in d["alt_targets"]]
@@ -245,6 +249,11 @@ def _make(category: str, tool: str = "", **kw) -> Classification:
 # part made for that command carries it (Classification.own), the parts of a nested line their own command's text.
 # _classify_shell fills the slot for each simple command and empties it for the rest. None outside a shell line.
 _own_text: contextvars.ContextVar[list[str | None] | None] = contextvars.ContextVar("exo_gate_own_text", default=None)
+# #471: True while classify reads a call as before #471, each quoted prefix assignment as the program
+# (_strip_prefix_words); and the one-item list classify sets for the first reading, which notes that a quoted one was
+# read as an assignment.
+_as_before: contextvars.ContextVar[bool] = contextvars.ContextVar("exo_gate_as_before", default=False)
+_quoted_seen: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("exo_gate_quoted_seen", default=None)
 
 
 class _StandIn(str):
@@ -391,6 +400,7 @@ _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
 _ASSIGN = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=.*", re.S)
+_ASSIGN_HEAD = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=")   # its NAME= as written in the source, unquoted
 # `name()` is looked for only where a word starts, so a long word is not rescanned from each character
 _FUNC_NAMES = re.compile(r"\bfunction\s+([^\s(){};&|<>]+)|(?<![^\s(){};&|<>'\"])([^\s(){};&|<>'\"]+)\s*\(\s*\)")
 _ANSI_C = re.compile(rb"\\(?:([abeEfnrtv\\'\"?])|([0-7]{1,3})|x\{([0-9A-Fa-f]*)\}?|x([0-9A-Fa-f]{1,2})"
@@ -472,6 +482,7 @@ class _Cmd:
                                  # closer's redirections), which bash expands before the compound runs (#465)
     stdin_unknown: bool = False  # a stdin the gate cannot read reaches it: a compound's feed or its wrapper's (#316)
     stdin_apart: bool = False    # a wrapper runs it with the wrapper's stdin, which is not its line's (#316)
+    arith_for: int = -1          # on a `{` right after a `for ((..))` header: the command that holds that `for` (#479)
 
 
 class _OutSub(str):
@@ -1252,6 +1263,24 @@ _shell_seen: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_g
 # The folder a line entered by `cd` into the store or a descriptor folder (_classify_simple's store_cwd and fd_cwd),
 # for the $( ), backticks and <( ) it runs there (#465): (True, the descriptor folder or ""), or None.
 _cd_into: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("exo_gate_cd_into", default=None)
+# Set while classify reads a call (#479): [again, met]. A loop body runs again after its own `cd` into a store folder,
+# so the commands before that `cd` run there on a later pass. On the call's first reading (`again` off) a line with
+# such a loop sets `met`, and classify then reads the call again with `again` on, where each such loop's second pass
+# adds its parts (_loop_again) and sets `met` when it adds any. A third item counts the lines classify_shell reads
+# afresh (#479 verify): up on the first reading, down from the second reading's budget (_LOOP_BUDGET) on the second,
+# which a line past it ends (_LoopBudget). None outside classify.
+_loop_pass: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_loop_pass", default=None)
+# The second reading's budget (#479 verify), in lines classify_shell reads afresh: this many more than the first
+# reading read. A nest of loops in $( ) (`while :; do echo $(while ..; done); cp ..; cd ~/.exo/policies; done`)
+# reads each body in two folders on every level, and the memo (_shell_seen) keys a line by the budgets left too, so
+# such a nest cost that reading several times what the first one did (about 6 times main's time from 5 levels deep).
+# Past the budget the call fails closed (_loop_reading), so the second reading reads afresh about as many lines as
+# main's reading does, plus this many.
+_LOOP_BUDGET = 64
+
+
+class _LoopBudget(Exception):
+    pass
 
 # Whether the next line read is fed a stdin whose text the gate cannot read (#316): a >( ) body, a $( ) that
 # inherits such a stdin, the remote command of an ssh that passes its stdin on. The mark travels here, not as a
@@ -1370,6 +1399,9 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
     o_first = o_body = o_end = -1   # cur's own text: where its tokens start, where those after its reserved words do, its end
     o_tok = -1                      # the index of cur's last token
     p_at = -1                       # where the pipeline cur is in starts, when only simple commands came before it
+    parens = 0                      # `(` tokens open here, counted apart from the compounds (#479 verify)
+    ariths: list = []               # per `for ((` still open: (parens before its `((`, the command holding the `for`)
+    arith = -1                      # the command holding a `for` whose `((..))` just closed, until the next token
 
     def end(piped: bool = False) -> None:
         nonlocal cur, shut, lead, head, o_first, o_body, o_end, o_tok, p_at
@@ -1405,9 +1437,21 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
 
     while i < len(toks):
         kind, v = toks[i]
+        if arith >= 0 and (kind, v) != ("op", ";"):
+            # #479 verify: a `{` after `for ((..))` (a `;` or newline between) is the loop's body, whatever words
+            # the arithmetic holds; _parse reads its pieces as commands, which may start with a reserved word.
+            if kind == "w" and not v.quoted and v.text == "{" and not cur.words:
+                cur.arith_for = arith
+            arith = -1
         if kind in ("redir", "hd") and cur.words:
             cur.words[-1].redir_after = True
         if kind == "op":
+            if v == "(":
+                parens += 1
+            elif v == ")" and parens:
+                parens -= 1
+                if ariths and ariths[-1][0] == parens:
+                    arith = ariths.pop()[1]
             last = cur.words[-1] if cur.words else None
             # a NAME=( after an earlier NAME=(..) is still an operand of that earlier command
             opens = (after if after is not None else cur) if last and not last.quoted and last.text.endswith("=") else None
@@ -1444,6 +1488,8 @@ def _parse_line(src: str) -> tuple[list[_Cmd], list[str], bool]:
                 end()   # `for NAME do` (no `in`, no `;`): bash opens the body here, as after `for NAME;` (#436)
             cw = not v.quoted and _command_word(cur.words, head, pre)
             loop = v if cw and v.text in ("for", "select") else loop     # also `function f { for x do` (#436)
+            if not v.quoted and v.text == "for" and toks[i + 1:i + 3] == [("op", "("), ("op", "(")]:
+                ariths.append((parens, len(cmds)))     # cur, which holds this `for`, is cmds[len(cmds)] once ended
             if not v.quoted and _command_word(cur.words, lead, 0):
                 if v.text in _COMPOUND_OPENERS:
                     push((v.text, len(cmds), cmds[-1] if cur.piped_in and cmds else None))
@@ -3034,16 +3080,33 @@ def _http_kind(argv: list[str], cmd: str) -> Classification:
     return _make("web_post", summary=f"{method} to {host}", **kw)
 
 
-def _strip_prefix_words(words: list, sudos: list | None = None) -> tuple[list, bool, str | None]:
+def _prefix_assign(w: "_Word", own_argv: bool, quoted_value: bool) -> bool:
+    """Whether the prefix word ``w`` is an assignment: its NAME= unquoted in the source, only the value quoted (#471),
+    while ``quoted_value`` (not in the reading as before #471, where a quoted word is the program); and any word of
+    the form NAME=VALUE in env's or sudo's own argv (``own_argv``). A line continuation in the name is no quoting:
+    bash drops it first. _strip_prefix_words and _env_split_lines (#591) read the prefixes alike."""
+    return bool(_ASSIGN.fullmatch(w.text)) and (own_argv or not w.quoted or quoted_value and bool(_ASSIGN_HEAD.match(
+        re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", w.raw))))
+
+
+def _strip_prefix_words(words: list, quoted_value: bool | None = None,
+                        sudos: list | None = None) -> tuple[list, bool, str | None]:
     """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text).
-    env and sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too.
+    A word is an assignment when its NAME= is unquoted in the source; only the value may be quoted, so
+    `X='a b' cmd` runs cmd and `'X=a' cmd` runs `X=a` (#471). With quoted_value False (by default while
+    classify reads a call as before, _as_before), any quoted word is the program, as before #471. env and
+    sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too.
     ``sudos`` gets (program, the words, the index there of the word after it) for each sudo or doas met (#491,
     _sudo_shells). It walks the words by index: a chain of prefixes costs one pass, not one copy per word."""
+    if quoted_value is None:
+        quoted_value = not _as_before.get()
     sudo = own_argv = False
     i, n = 0, len(words)
     while i < n:
         t = words[i].text
-        if (own_argv or not words[i].quoted) and _ASSIGN.fullmatch(t):
+        if _prefix_assign(words[i], own_argv, quoted_value):
+            if words[i].quoted and not own_argv and (seen := _quoted_seen.get()) is not None:
+                seen[0] = True
             i += 1
             continue
         base = t.rsplit("/", 1)[-1]
@@ -3381,10 +3444,10 @@ def _env_split_lines(words: list, raw: bool = False) -> list[str]:
     the word it sits in (_shell_parts: `$BR --force` is two words to env). No line without one, when env would
     refuse the text, or when no word of it closes before an expansion (`env -S "$CMD"`). With ``raw``, the text as
     main reads -S's (an attached one alone, else the words from it on, joined) and the option word (_env_s_text)."""
-    i, own_argv = 0, False
+    i, own_argv, quoted_value = 0, False, not _as_before.get()
     while i < len(words):
         w = words[i]
-        if (own_argv or not w.quoted) and _ASSIGN.fullmatch(w.text):
+        if _prefix_assign(w, own_argv, quoted_value):     # a quoted prefix assignment hides no -S text (#471)
             i += 1
             continue
         base = w.text.rsplit("/", 1)[-1]
@@ -3849,7 +3912,14 @@ def _sets_state(k: _Cmd) -> bool:
         return False
     if all(_ASSIGN.fullmatch(w.text) for w in words):
         return True
-    rest, _, split = _strip_prefix_words(words)
+    # #471: a quoted prefix assignment was read as the program before (`X="$Y" ls`, a program from a variable); a
+    # setter under either reading counts, so an allow rule must still name it
+    return any(_program_sets_state(words, r[0], r[2]) for r in (_strip_prefix_words(words),
+                                                                _strip_prefix_words(words, False)))
+
+
+def _program_sets_state(words: list, rest: list, split: str | None) -> bool:
+    """_sets_state for the words left after the prefixes (``rest``) in one reading of them."""
     if split is not None:
         return False                              # `env -S`: a command line, read as one
     if not rest:                                  # prefixes only: `exec 3>f` sets the fds later commands get
@@ -4153,8 +4223,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
         words = []                                   # a for header lists words, not programs
     before = words
+    # #471: the old reading below scans the folder as it was before a `cd` the new reading reads, and signs the
+    # late parts the new reading adds
+    n_late, octx = len(ctx.get("late", [])), dict(ctx)
     sudos: list = []                            # each sudo or doas on the way (#491)
-    words, sudo, split = _strip_prefix_words(words, sudos)
+    words, sudo, split = _strip_prefix_words(words, sudos=sudos)
     parts: list[Classification] = []
     if words and words[0].text in ("read", "printf"):
         # `read` and `printf -v` fill names with a value the gate does not see, so a literal the line set for
@@ -4200,6 +4273,19 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
+    # #471: before, a quoted prefix assignment (`X='a b' cmd`) was read as the program, an unknown one that asks, and
+    # cmd was not read. That reading stays beside cmd's, and the parts read from cmd are signed, so decide also decides
+    # the line with the parts read before on top (_QUOTED): no decision is looser than before. Also when cmd is an
+    # `env -S` (words is [] then), so the quoted word's value is still scanned for store paths and env-inject names.
+    old_words = _strip_prefix_words(before, False)[0]
+    old_parts: list[Classification] = []
+    if len(old_words) > len(words):
+        signed: dict = {}
+        if "late" in ctx:
+            ctx["late"][n_late:] = [_signed(p, _QUOTED, signed) for p in ctx["late"][n_late:]]
+        old_parts = _classify_program(old_words, k, cmd, depth, ctx, piped) + \
+            _exec_options(before, old_words, k, cmd, depth, ctx, piped)
+        parts = [_signed(p, _QUOTED, signed) for p in parts] + old_parts
     if sudo:
         parts[0].signals.append("sudo")
         _run_privileged(parts[0])
@@ -4229,11 +4315,18 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(_make("local_write", summary=f"write {t.text}"[:120], target=t.text, link=t.text, command=cmd))
             if sudo:
                 ctx.setdefault("sudo_writes", []).append(parts[-1])     # #454, _classify_shell
-    hits = _store_touch(k, words, parts, ctx)
-    # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
-    # so a `target:/dev*` entry still matches it, as it matches any other write there
-    if hits and ctx.get("fd_cwd") and ctx["fd_cwd"] not in hits:
-        hits.append(ctx["fd_cwd"])
+    # #471: the quoted assignment word is scanned as before, first, with that reading's parts and folder, so a store
+    # path in its value (or the folder a `cd` left) still counts as main read it; then cmd, with its own. Each store
+    # path either scan meets stays (#514)
+    old_ids = {id(p) for p in old_parts}
+    hits = list(dict.fromkeys(
+        (_store_touch(k, old_words, [p for p in parts if _QUOTED not in p.signals], octx)
+         if len(old_words) > len(words) else [])
+        + _store_touch(k, words, [p for p in parts if id(p) not in old_ids], ctx)))
+    if hits:
+        # #464: after `cd /dev`, a write the gate pins to a store path keeps the descriptor folder as a target too,
+        # so a `target:/dev*` entry still matches it, as it matches any other write there (either reading's folder)
+        hits += [d for d in dict.fromkeys((octx.get("fd_cwd"), ctx.get("fd_cwd"))) if d and d not in hits]
     for t in hits:
         # #217: a descriptor path is a store write because the gate cannot see what it names, not because the
         # command is known to write there (`gh ... --body-file /dev/stdin` reads it), so the card says just that
@@ -4248,6 +4341,19 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         for p in parts:
             p.signals += ["indirection", "locale translation"]
     return parts
+
+
+_QUOTED = "quoted assignment"     # a part read from the command behind a quoted prefix assignment (#471)
+
+
+def _signed(c: Classification, signal: str, memo: dict) -> Classification:
+    """A copy of ``c`` and of the parts it was built from, each carrying ``signal`` (#471). Parts are shared, so they
+    are copied, each once (memo)."""
+    if id(c) not in memo:
+        memo[id(c)] = replace(c, signals=[*c.signals, signal], parts=[],
+                              own_signals=None if c.own_signals is None else [*c.own_signals, signal])
+        memo[id(c)].parts = [_signed(p, signal, memo) for p in c.parts]
+    return memo[id(c)]
 
 
 def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
@@ -4358,8 +4464,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if target and (_shell_hits(target, seen, "dir", _store_dir_hit) != [] or _unknown_store(target, seen, inside=True)):
             ctx["store_cwd"] = True
             into = _expand_text(dest).strip()
-            if _fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")):
+            fd = bool(_fd_path(into) or _FD_DIR.fullmatch(os.path.normpath(into or ".")))
+            if fd:
                 ctx.setdefault("fd_cwd", into)     # #217: the card names the descriptor folder, not "the store"
+            ctx.setdefault("cd_dirs", []).append(into if fd else "")   # each one, for a loop's second pass (#479)
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -4924,10 +5032,11 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             elif kind:
                 parts.append(_opaque(f"{what} sets {key}, which {_GIT_CONFIG_DOES[kind]}"[:120], cmd))
 
-    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env, sudo or timeout; a partly
-    # quoted one is left in `words`), export's arguments, a bare assignment the rest of the line inherits, and
-    # the ones hidden in an expansion, arithmetic or a redirection (`${PATH:=.}`, `$((PATH=10))`, `{PATH}>f`);
-    # never an argument that merely looks like one (`grep EDITOR=x`). Only a real program position runs a value.
+    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env, sudo or timeout; one whose name
+    # is quoted is left in `words` and read here too, #471), export's arguments, a bare assignment the rest of the
+    # line inherits, and the ones hidden in an expansion, arithmetic or a redirection (`${PATH:=.}`, `$((PATH=10))`,
+    # `{PATH}>f`); never an argument that merely looks like one (`grep EDITOR=x`). Only a real program position runs
+    # a value.
     n = len(before) - len(words)
     while n < len(before) and _ASSIGN.fullmatch(before[n].text):
         n += 1
@@ -6186,6 +6295,10 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     # The budgets only fall: a line met after one fell is read again. A $( ) after `cd` into the store is read in it.
     key = ("shell", cmd, depth, _budgets(), _cd_into.get(), fed)
     if key not in seen:
+        if (loops := _loop_pass.get()) is not None:      # #479 verify: the second reading's budget
+            loops[2] += -1 if loops[0] else 1
+            if loops[2] < 0:
+                raise _LoopBudget
         own = _own_text.set([None])           # this line's own slot, not the one of the line around it (#394)
         try:
             seen[key] = _classify_shell(cmd, depth, fed)
@@ -6270,6 +6383,157 @@ def _classify_sub(sub: str, depth: int, fed: bool, line: bool = False) -> Classi
     return c
 
 
+def _read_cmd(k: _Cmd, prev: _Cmd | None, cmd: str, depth: int, ctx: dict, slot: list) -> list[Classification]:
+    """The parts of one simple command k of line ``cmd``, read in the line's order: ``prev`` is the command before it,
+    ``ctx`` what the line has set so far, ``slot`` the line's own text slot (#394). _classify_shell reads each command
+    so, and so does a loop's second pass (#479)."""
+    piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
+    # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
+    ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
+    slot[0] = k.own
+    own = _literal_assigns(k, ctx["literals"])
+    late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
+    if not late:
+        ctx["literals"].update(own)    # what this command sets, the next ${..@P} reads (#579)
+    got = _classify_simple(k, cmd, depth, ctx, piped)
+    if late:
+        ctx["literals"].update(own)
+    if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
+        got = _given_stdin(got, _stdin_own(k), ctx)
+    return got
+
+
+_LOOP_WORDS = frozenset({"while", "until", "for", "select"})
+
+
+def _loop_word(k: _Cmd) -> int:
+    """Where the `while`, `until`, `for` or `select` is among the reserved words k starts with (`do for x in ..`), or
+    after a `coproc [NAME]` or `function NAME` that starts k, where _parse opens a compound too; or -1."""
+    for i, w in enumerate(k.words):
+        if w.quoted or not (w.text in _OPENERS or w.text in _LOOP_WORDS):
+            break
+        if w.text in _LOOP_WORDS:
+            return i
+    first = k.words[0] if k.words else None
+    if first is not None and not first.quoted and first.text in ("coproc", "function"):
+        return next((i for i in (1, 2) if i < len(k.words) and not k.words[i].quoted
+                     and k.words[i].text in _LOOP_WORDS), -1)
+    return -1
+
+
+def _brace_head(cmds: list[_Cmd], b: int) -> int:
+    """#479 verify: the header of the `for` or `select` loop whose body is the `{ ..; }` group that cmds[b] starts, or
+    -1. bash takes such a group as the body (`for i in 1 2; { ..; }`, `select x in a b; { ..; }`, `for ((..)) { ..; }`)
+    and runs it once per pass in the same shell, as a `do ..; done` body. _parse opens no loop there. For `for ((..))`
+    _parse marks the `{` that follows the header's closing `))` (_Cmd.arith_for: the command holding the `for`, however
+    many commands it reads the arithmetic as and whatever words they start with, `do` or `while` as a variable too).
+    Else the header is the command just before the group (`for x [in ..]`, after `do` or a `coproc` too), with no
+    `do` after its name."""
+    first = cmds[b].words[0] if cmds[b].words else None
+    if first is None or first.quoted or first.text != "{":
+        return -1
+    if cmds[b].arith_for >= 0:
+        return cmds[b].arith_for
+    if b == 0 or (w := _loop_word(cmds[b - 1])) < 0:
+        return -1
+    words = cmds[b - 1].words
+    return b - 1 if words[w].text in ("for", "select") and not any(
+        not x.quoted and x.text == "do" for x in words[w + 1:]) else -1
+
+
+def _loop_spans(cmds: list[_Cmd], went: list[tuple[int, str]]) -> list[tuple[int, int]]:
+    """#479: (first command, closer) of each outermost loop on the line that holds a `cd` into a store folder after
+    its first command (``went``: the command of each such `cd`, in order). A loop inside another is part of it. A
+    `for` or `select` loop with a `{ ..; }` body counts as one with `do ..; done` (_brace_head, #479 verify)."""
+    spans: list[tuple[int, int]] = []
+    for e, k in enumerate(cmds):
+        if k.opens is None:
+            continue
+        lead = [w.text for w in itertools.takewhile(lambda w: not w.quoted and w.text in _OPENERS, k.words)]
+        if not lead:
+            continue
+        if lead[-1] == "done" and _loop_word(cmds[k.opens[0]]) >= 0:
+            s = k.opens[0]
+        elif lead[-1] == "}" and (s := _brace_head(cmds, k.opens[0])) >= 0:
+            pass
+        else:
+            continue
+        while spans and spans[-1][0] >= s:      # an inner loop, closed before the one around it
+            spans.pop()
+        spans.append((s, e))
+    at = [n for n, _ in went]
+    return [(s, e) for s, e in spans if (i := bisect.bisect_right(at, s)) < len(at) and at[i] <= e]
+
+
+def _loop_again(cmds: list[_Cmd], spans: list[tuple[int, int]], went: list[tuple[int, str]], cmd: str, depth: int,
+                line: tuple, into: tuple | None, seed_of: Callable[[int], tuple | None]) -> list[Classification]:
+    """#479: the parts of the second pass of each loop in ``spans`` (_loop_spans). bash runs a loop body again after
+    its own `cd` into a store folder, so on a later pass every command in it runs there, those before the `cd` too.
+    The line is read again in its order, with the store folder entered where each such loop starts, named by the
+    loop's first `cd` into a descriptor folder when it has one (fd_cwd, #217), and the loop's commands and the
+    substitutions in them are taken from that reading. bash expands a `for` or `select` word list and the
+    redirections of the loop's closer once, before the first pass, so those are left out. A substitution the line
+    already read in that folder is not read again (``seed_of``: the folder _classify_shell read each one in). As on
+    the line, a `cd` out of the store later in the body is not followed: fails closed. ``line`` is the line's
+    (subs, stdin_unknown, inherits, given) as _classify_shell has them, and ``into`` the folder it was entered in."""
+    subs, stdin_unknown, inherits, given = line
+    ctx: dict = {"subs": subs, "stdin_unknown": stdin_unknown, "subs_fed": inherits, "literals": {}}
+    if into:
+        ctx["store_cwd"] = True
+        if into[1]:
+            ctx["fd_cwd"] = into[1]
+    starts, at = dict(spans), [n for n, _ in went]
+    out: list[Classification] = []
+    again: list[tuple[range, list[range], tuple]] = []    # per loop: its substitutions, those bash expands once, folder
+    slot = _own_text.get() or [None]
+    prev: _Cmd | None = None
+    end, once = -1, False
+    token = _cd_into.set(None) if into else None
+    try:
+        for n, k in enumerate(cmds[:spans[-1][1] + 1]):
+            if n in starts:
+                end, lo = starts[n], cmds[n - 1].subs_met if n else 0
+                ctx["store_cwd"] = True
+                i = bisect.bisect_right(at, n)
+                while i < len(at) and at[i] <= end and not went[i][1]:
+                    i += 1
+                if i < len(at) and at[i] <= end:
+                    ctx.setdefault("fd_cwd", went[i][1])
+                w = _loop_word(k)
+                once = k.words[w].text in ("for", "select") and \
+                    any(not x.quoted and x.text == "in" for x in k.words[w + 2:w + 3])
+                closer = cmds[end]
+                shut = closer.opens[1] if closer.opens else closer.subs_met     # _loop_spans: a closer has opens
+                skip = ([range(lo, k.subs_met)] if once else []) + [range(shut, closer.subs_met)]
+                again.append((range(lo, closer.subs_met), skip, (True, ctx.get("fd_cwd") or "")))
+            late = len(ctx.get("late", ()))
+            got = _read_cmd(k, prev, cmd, depth, ctx, slot)
+            if n < end and not (once and n in starts):
+                out += got + ctx.get("late", [])[late:]
+            prev = k
+    finally:
+        if token is not None:
+            _cd_into.reset(token)
+    slot[0] = None
+    for span, skip, seed in again:
+        for j in span:
+            if any(j in r for r in skip) or seed_of(j) == seed:
+                continue
+            token = _cd_into.set(seed)
+            try:
+                got = [_classify_sub(subs[j], depth + 1, inherits, stdin_unknown) if depth < _DEPTH else _too_deep(cmd)]
+            finally:
+                _cd_into.reset(token)
+            out += _given_stdin(got, lambda: None, ctx) if given or isinstance(subs[j], _OutSub) else got
+    return out
+
+
+def _part_key(p: Classification) -> tuple:
+    """What a policy reads of one part, so a loop's second pass (#479) adds only the parts the line does not have."""
+    return (p.category, p.reversibility, p.exposure, p.third_party, p.cost, p.summary, p.target, p.own, p.text,
+            p.title, p.text_file, tuple(p.signals), tuple(p.alt_targets), tuple(p._command_views))
+
+
 def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classification:
     # A run of stand-in lines (_Lexer._cut), also one written by hand, is one unread part, taken in one step so that no
     # number of them recurses. The lines after it end here-doc bodies, and are read as any line.
@@ -6296,26 +6560,15 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # #465: a $( ) runs where its command runs, so one in the `cd` that entered the store or before it does not run
     # there. They are the first subs_met of the line's subs, which the lexer lists in the order of the line.
     upto, at = (0, -1) if into else (-1, -1)
+    went: list[tuple[int, str]] = []     # #479: (command, folder) of each `cd` or `pushd` into a store folder
     token = _cd_into.set(None) if into else None     # a line nested in this one (ssh, bash -c) has its own folder
     try:
         for n, k in enumerate(cmds):
-            piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
-            # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
-            ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
-            slot[0] = k.own
-            own = _literal_assigns(k, ctx["literals"])
-            late = _applies_late(k)     # an exporter's arguments expand before its assignments apply (#579)
-            if not late:
-                ctx["literals"].update(own)    # what this command sets, the next ${..@P} reads (#579)
-            got = _classify_simple(k, cmd, depth, ctx, piped)
-            if late:
-                ctx["literals"].update(own)
-            if k.fed or k.piped_in or _own_stdin(k):          # a nested shell in it reads this stdin (#394)
-                got = _given_stdin(got, _stdin_own(k), ctx)
-            parts += got
+            parts += _read_cmd(k, prev, cmd, depth, ctx, slot)
             prev = k
             if upto < 0 and ctx.get("store_cwd"):
                 upto, at = k.subs_met, n
+            went += [(n, d) for d in ctx.get("cd_dirs", ())[len(went):]]
     finally:
         if token is not None:
             _cd_into.reset(token)
@@ -6329,8 +6582,11 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
     # own commands, a subshell or a later `cd` out is not followed: fails closed.
     there = (True, ctx.get("fd_cwd") or "") if ctx.get("store_cwd") else None
     early = [range(k.opens[1], k.subs_met) for k in cmds if k.opens and k.opens[0] <= at] if there else []
+
+    def seed_of(j: int) -> tuple | None:
+        return there if there and j >= upto and not any(j in r for r in early) else None
     for j, sub in enumerate(subs):
-        seed = there if there and j >= upto and not any(j in r for r in early) else None
+        seed = seed_of(j)
         token = _cd_into.set(seed) if seed else None
         try:
             got = [_classify_sub(sub, depth + 1, inherits, stdin_unknown) if depth < _DEPTH else _too_deep(cmd)]
@@ -6338,6 +6594,19 @@ def _classify_shell(cmd: str, depth: int, stdin_unknown: bool = False) -> Classi
             if token is not None:
                 _cd_into.reset(token)
         parts += _given_stdin(got, lambda: None, ctx) if given or isinstance(sub, _OutSub) else got
+    # #479: a loop that holds a `cd` into a store folder runs its commands before that `cd` there on a later pass.
+    # The call's first reading only notes such a loop; its second reading (classify) adds that pass's parts.
+    # A line read in a store folder already (a $( ) after the `cd`, into) read each command and $( ) there, so a second
+    # pass reads nothing new unless a loop names a descriptor folder the line was not read in: it is not read again.
+    if went and (again := _loop_pass.get()) is not None and (spans := _loop_spans(cmds, went)):
+        if not again[0]:
+            again[1] = True
+        elif not into or not into[1] and any(d and any(s < n <= e for s, e in spans) for n, d in went):
+            pass2 = _loop_again(cmds, spans, went, cmd, depth, (subs, stdin_unknown, inherits, given), into, seed_of)
+            keys = {_part_key(p) for q in parts for p in _each_part(q)}
+            pass2 = [m for m in pass2 if any(_part_key(p) not in keys for p in _each_part(m))]   # only what is new
+            parts += pass2
+            again[1] = again[1] or bool(pass2)
     parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
@@ -8113,9 +8382,31 @@ def _joined_call(action: Any) -> tuple[str, dict] | None:
 
 
 def classify(action: Any, cwd: str | None = None) -> Classification:
-    """Classify one tool call from its name and arguments (_classify_reading). Pure; never raises on odd args. Its
-    first reading reads each `env -S` text, beside the text as a shell line, as the line env runs (#591 follow-up to
-    #634, _env_split_lines), and a spelling main missed (`--split`, `-i0vS`) as `-S TEXT` (_env_s_text). Where it
+    """Classify one tool call from its name and arguments (_split_reading, _classify_reading). Pure; never raises on
+    odd args. #471: a call that reads a quoted prefix assignment as one (`X='a b' cmd`) is also read as before, with
+    the word as the program, in a call of its own (``before``): what that reading changes for the commands after it
+    (a `cd`, a `coproc`) then leaves the line as before, and decide keeps the stricter of the two. Each of the two is
+    read with its `env -S` texts as _split_reading reads them (#591), so the reading as before is the call as read
+    before #471, `env -S` readings (``split_readings``) and all."""
+    seen = [False]
+    token = _quoted_seen.set(seen)
+    try:
+        c = _split_reading(action, cwd)
+    finally:
+        _quoted_seen.reset(token)
+    if seen[0]:
+        token2 = _as_before.set(True)
+        try:
+            c.before = _split_reading(action, cwd)
+        finally:
+            _as_before.reset(token2)
+    return c
+
+
+def _split_reading(action: Any, cwd: str | None = None) -> Classification:
+    """One reading of the quoted prefix assignments (classify, #471), with its `env -S` texts read each way (#591).
+    Its first reading reads each `env -S` text, beside the text as a shell line, as the line env runs (#591 follow-up
+    to #634, _env_split_lines), and a spelling main missed (`--split`, `-i0vS`) as `-S TEXT` (_env_s_text). Where it
     read a line or such a spelling, the call is read again with each text a shell line only: with #634's reading of
     the text's leading words (_env_split_argv), as main read it (mode 1), also where only a reading as main's found
     one (a nested text a missed spelling hid, verify 2 of #707); as before #634 (mode 0); and with every spelling
@@ -8145,7 +8436,8 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
 @_brace_budget
 @_in_tool_folder
 def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
-    """Classify one tool call in one reading of its `env -S` texts (classify). When a gh command in it has
+    """Classify one tool call in one reading of its quoted prefix assignments (#471) and of its `env -S` texts
+    (_split_reading), with its own budgets. When a gh command in it has
     its subcommand past an option (_gh_verb_order), or a gh api method gh reads otherwise (_gh_api_method), the call
     is also read as before #399, with each gh command's third word for its subcommand, and that reading is its
     ``floor``. A shell line with a `$` form split by a backslash-newline, there or in a line read again from it, is
@@ -8159,24 +8451,73 @@ def _classify_reading(action: Any, cwd: str | None = None) -> Classification:
     caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
     call = _joined_call(action)                                     # (#584) the same call with its $ forms joined
     seen = [False, False]
-    token = _joining.set(seen)
+    loops: list[int] = [False, False, 0]                            # (#479) a loop with a `cd` into the store
+    token, noted = _joining.set(seen), _loop_pass.set(loops)
     try:
         c = _read_core(action, cwd)
     finally:
+        _loop_pass.reset(noted)
         _joining.reset(token)
     if seen[1] and call is not None:
         left, memo, token = _brace_left.set(None), _shell_seen.set(None), _joining.set([True, False])
+        noted = _loop_pass.set(loops)
         try:
             j = _brace_budget(_read_core)(call, cwd)                # joined reading of the same call (#584)
         finally:
+            _loop_pass.reset(noted)
             _joining.reset(token)
             _shell_seen.reset(memo)
             _brace_left.reset(left)
-        first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
-        x = first
-        while x.also is not None:
-            x = x.also
-        x.also, c = last, first
+        c = _beside(c, j)
+    if loops[1]:
+        c = _loop_reading(c, [action] + ([call] if seen[1] and call is not None else []), cwd,
+                          _LOOP_BUDGET + loops[2])
+    return c
+
+
+def _beside(c: Classification, j: Classification) -> Classification:
+    """Readings c and j of one call: the more severe leads (on a tie, c), and the other ends its ``also`` readings,
+    so decide keeps the stricter (#584)."""
+    first, last = (j, c) if _severity(j) > _severity(c) else (c, j)
+    x = first
+    while x.also is not None:
+        x = x.also
+    x.also = last
+    return first
+
+
+def _loop_reading(c: Classification, calls: list, cwd: str | None, budget: int) -> Classification:
+    """#479: the call read as before (c), with a second reading of each of ``calls`` (the call, and its joined form
+    when classify read one, #584) beside it, in which each loop that holds a `cd` into a store folder also has the
+    parts of its second pass (_loop_again). Each reading has budgets and memos of its own. A reading that adds no
+    part is left out. The reading as before stays as it is: decide keeps the strictest, so a line never decides
+    lower. When the second reading leads, it keeps the D-074 ``ordinary`` reading the reading as before had.
+    A second reading that reads afresh more lines than ``budget`` (_LOOP_BUDGET, #479 verify) fails closed: in its
+    place is one store write that stands for the passes it did not read, which asks the principal alone and denies
+    under `deny: [store_write]`."""
+    for n, call in enumerate(calls):
+        added: list[int] = [True, False, budget]
+        left, memo = _brace_left.set(None), _shell_seen.set(None)
+        token, again = _joining.set([n > 0, False]), _loop_pass.set(added)
+        try:
+            x = _brace_budget(_read_core)(call, cwd)
+        except _LoopBudget:
+            x = _make("store_write", tool=c.tool, command=c.command, own=None,
+                      target="a path inside the store (after cd)",
+                      summary="a loop that enters the Exo store runs again there; past the gate's budget, not read")
+            x.signals += ["exo store", "unread loop pass"]
+            added[1], added[2] = True, -1
+        finally:
+            _loop_pass.reset(again)
+            _joining.reset(token)
+            _shell_seen.reset(memo)
+            _brace_left.reset(left)
+        if added[1]:
+            if x.ordinary is None:
+                x.ordinary = c.ordinary
+            c = _beside(c, x)
+        if added[2] < 0:
+            break                                  # its joined form has the same loops: one such reading is enough
     return c
 
 
@@ -8793,7 +9134,7 @@ def body_unseen(c: Classification) -> bool:
     """Whether an outbound body, title or field on the line is out of the gate's sight (#208): a part with the
     ``unseen_body`` signal, or a post's body file nobody read into its text. Such a post asks under the posting
     rules, never gets a standing grant, and a required executor refuses it. Each reading of the line counts
-    (readings: as read before #399 or #311), so a line unseen as the gate read it then stays unseen."""
+    (readings: as read before #399, #311 or #471), so a line unseen as the gate read it then stays unseen."""
     return any("unseen_body" in p.signals or (p.text_file and not p.text
                                               and (p.category in OUTBOUND or p.category == "vcs_merge"))
                for x in readings(c) for p in _each_part(x))
@@ -8835,10 +9176,12 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     view but not the text, reserved actions, escalations (budget, third party, listed categories),
     posting violations (a body the gate cannot read is one) and the operator floor. A deny entry wins
     over everything, and so does a category line or rule that denies any part of a compound line. A line
-    with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
-    `context` may carry `spent_today` for the daily budget, and `held_body_files`: the body files the caller left
-    unread because the line does more than post (#343), whose posts get UNSEEN_ON_LINE for their unseen note, and
-    UNSEEN_BODY beside it when they are also unseen another way.
+    with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands. So is a line with a part read
+    behind a quoted prefix assignment, also decided with the part on top that the gate read there before #471, and
+    the call read as before #471 (Classification.before) is decided too, and the two merge as #399's readings do
+    (_strictest). `context` may carry `spent_today` for the daily budget, and `held_body_files`: the body files the
+    caller left unread because the line does more than post (#343), whose posts get UNSEEN_ON_LINE for their unseen
+    note, and UNSEEN_BODY beside it when they are also unseen another way.
 
     On a compound line, a rule keyed on `command` that would lower the line (its decision is below the matrix cell
     and category line, or it is an allow or log rule that names opaque_exec) must match the line as before and also
@@ -8865,14 +9208,19 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
     ctx = dict(context or {})
+    if c.before is not None:
+        # #471: the call read as before, each quoted prefix assignment the program; the folder a `cd` behind one left
+        # and the parts read after it then decide as they did before. The two merge as #399's readings do, so each
+        # violation stays listed as often as one of them lists it (two posts to one PR that both miss the footer).
+        return _strictest([decide(replace(c, before=None), pol, ctx), decide(c.before, pol, ctx)], ["", ""])
     rs = readings(c)
     if len(rs) > 1:
         # #311: the call as read before (a shell call's folder made it credentials as a whole, #209), and #399: the
         # line as the gate read it before gh's subcommand search, D-074: the call with the Exo home's config.json
-        # an ordinary file, and #591: the call with each env -S text read as before, are decided too, so none
-        # decides lower.
-        return _strictest([decide(replace(r, also=None, floor=None, ordinary=None, split_readings=[]), pol, ctx)
-                           for r in rs],
+        # an ordinary file, #591: the call with each env -S text read as before, and #471: the call as read before
+        # (a quoted prefix assignment the program), are decided too, so none decides lower.
+        return _strictest([decide(replace(r, also=None, floor=None, ordinary=None, before=None, split_readings=[]),
+                                  pol, ctx) for r in rs],
                           [""] + [f" (for {redact_userinfo(r.summary or r.category)})" for r in rs[1:]])
     if c.alt_targets:
         # #399: decided on each target the gate cannot rule out.
@@ -8977,7 +9325,9 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     # #188: a command bash runs only as it reads a value again may outrank a deny on the line; naming opaque_exec
     # does not lower that ask.
     reread = "reread" in eff.signals
-    if (eff.category == "opaque_exec" or "indirection" in eff.signals) and (reread or not opaque_named):
+    # #471: an unknown program on the line asks too, also beside a more severe part that logs.
+    if (eff.category == "opaque_exec" or "indirection" in eff.signals or "unknown program" in eff.signals) and \
+            (reread or not opaque_named):
         bump("ask", "runs code the gate cannot fully see (" + (c.summary or "indirection") + ")", "opaque")
     reserved = _part_hits(gates.get("reserved") or [], eff)
     if reserved:
@@ -9110,6 +9460,21 @@ def _decide(c: Classification, pol: Mapping, ctx: dict, passed: list[Mapping] | 
     d = Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
                  exposure=eff.exposure, third_party=eff.third_party,
                  reserved=list(dict.fromkeys((p.category, p.target) for p, _ in reserved)), hidden=hidden)
+    if _QUOTED in c.signals:
+        # #471: the parts read behind a quoted prefix assignment were hidden before, and the other parts decided the
+        # steps that read the dominant part (the matrix cell, category lines, rules, escalation). Decide the line with
+        # the one of those _combine would put on top too, and keep the stricter. Its text is left to that part, which
+        # the posting checks still read, so no violation is listed twice.
+        read = [p for p in _each_part(c) if _QUOTED not in (p.signals if p.own_signals is None else p.own_signals)]
+        top = next((p for p in read if p.category == "credentials"), None) or \
+            next((p for p in read if p.category == "store_write"), None) or _most_severe(read)
+        if top is not None and top is not c:
+            alt = _decide(replace(c, category=top.category, reversibility=top.reversibility, exposure=top.exposure,
+                                  third_party=top.third_party, cost=top.cost, summary=top.summary, target=top.target,
+                                  link=top.link, text="", title="", text_file="", own=top.own, own_signals=[],
+                                  signals=[x for x in c.signals if x != _QUOTED]), pol, ctx, passed)
+            if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
+                d = alt
     if "locale translation" in c.signals and c.category != "opaque_exec":
         # A $".." word can turn into any code (#136): decide the line as opaque_exec too, and keep the stricter.
         # `replace` keeps the parts as classifications, so their deny and reserved entries still apply. That
@@ -9552,21 +9917,24 @@ def binds_exact(c: Classification, d: Decision | None = None) -> bool:
     that may land on another target (``alt_targets``), so a grant on one of its targets never covers it, and a line
     with a ``floor``, whose stricter reading may be another act, with ``also`` readings (#311, #584) or an
     ``ordinary`` reading (D-074) or ``split_readings`` (#591). A sudo write also binds when its displaced part names
-    a target or asks with that part leading (#454)."""
+    a target or asks with that part leading (#454). A line also read as before #471 (``before``) binds as that
+    reading does, its own ``split_readings`` included."""
     q = c.displaced
     return (is_outward(c, d) or c.category == "opaque_exec" or no_grant(c) or "indirection" in c.signals
-            or bool(c.alt_targets) or c.floor is not None or c.also is not None or c.ordinary is not None
-            or bool(c.split_readings)
-            or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks)))
+            or "unknown program" in c.signals or bool(c.alt_targets) or c.floor is not None or c.also is not None
+            or c.ordinary is not None or bool(c.split_readings)
+            or bool(q is not None and (q.target or q.alt_targets or d is not None and d.displaced_asks))
+            or (c.before is not None and binds_exact(c.before, d)))
 
 
 def readings(c: Classification) -> list[Classification]:
     """Each way the gate reads the call, the call first: as it read it before #311 (``also``: a shell call's own
     folder argument made it credentials as a whole, #209), as it read it before #399 (``floor``: each gh command's
     third word for its subcommand, gh api's first `-X` word), and the floor as read before #311; then each reading of
-    the call as read before D-074 (``ordinary``: the Exo home's config.json an ordinary file, #125), and each reading
+    the call as read before D-074 (``ordinary``: the Exo home's config.json an ordinary file, #125), each reading
+    of the call as read before #471 (``before``: each quoted prefix assignment the program), and each reading
     of the call with its `env -S` texts read as before (``split_readings``, #591: a shell line only, and #634's
-    leading words). `decide` keeps the
+    leading words); each of these with its own readings. `decide` keeps the
     strictest of them, and so does each check past it: no_grant, call_approvers, body_unseen and the exo-gate hook's
     body files and required executor. A line with a `$` form split by a backslash-newline (#584) is read joined and
     as written: the more severe of the two leads (on a tie, the line as written) and the other ends its ``also``
@@ -9579,7 +9947,7 @@ def readings(c: Classification) -> list[Classification]:
         if x is not None and not any(x is r for r in out):
             out.append(x)
             todo += [x.floor, x.also]
-    for other in (c.ordinary, *c.split_readings):
+    for other in (c.ordinary, c.before, *c.split_readings):
         if other is not None and not any(other is r for r in out):
             out += [r for r in readings(other) if not any(r is e for e in out)]
     return out
@@ -9594,8 +9962,9 @@ def no_grant(c: Classification) -> bool:
 def call_approvers(c: Classification, pinned: Mapping | None, changed: Mapping | None = None) -> list[str]:
     """Who may answer an ask on ``c``: the approvers strictest_approvers allows for its category and also for each
     other NO_GRANT category among its parts, so a store read the line keeps as a part (#311) is answered by those
-    who may answer credentials. A call the gate reads more than one way (readings: ``also``, ``floor``) is answered
-    only by those who may answer each reading too. The principal is first in each, so the list is never empty."""
+    who may answer credentials. A call the gate reads more than one way (readings: ``also``, ``floor``, ``before``) is
+    answered only by those who may answer each reading too. The principal is first in each, so the list is never
+    empty."""
     out = strictest_approvers(c.category, pinned, changed)
     cats = [r.category for r in readings(c)] + [p.category for r in readings(c) for p in _each_part(r)
                                                  if p.category in NO_GRANT]

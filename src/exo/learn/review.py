@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -61,9 +60,27 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+_JSON_STARTS = 64   # brace and bracket positions tried before the whole text is parsed as is
+
+
 def parse_json(text: str) -> Any:
-    m = re.search(r"\{.*\}|\[.*\]", text or "", re.S)
-    return json.loads(m.group(0) if m else text)
+    """Decode the first JSON value in model output, ignoring anything after it.
+
+    The old greedy match ran to the last brace in the text, so a trailing
+    brace in prose after the value dropped valid output. Decoding is tried
+    from each brace or bracket in turn, and the first start that decodes
+    wins, so a bracketed note such as `[draft]` before the value does not
+    hide it.
+    """
+    raw = text or ""
+    decoder = json.JSONDecoder()
+    starts = (i for i, ch in enumerate(raw) if ch in "{[")
+    for _, start in zip(range(_JSON_STARTS), starts):
+        try:
+            return decoder.raw_decode(raw, start)[0]
+        except ValueError:
+            continue
+    return json.loads(raw)
 
 
 def watermark(ledger: Any) -> int:

@@ -320,6 +320,33 @@ console.log(JSON.stringify({out, lines}));''')
     assert all(got["lines"])
 
 
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_js_key_advice_follows_the_error_category(tmp_path):
+    """#756: a transport failure never sends someone to the Providers page; a refusal does; an unreadable one is general."""
+    got = node(tmp_path, '''
+const ask = (err) => { const r = new c.Guide({clock: () => 1000}).rules({providerError: err})[0]; return r ? r.text : ""; };
+console.log(JSON.stringify({
+  kinds: ["ReadError: peer closed", "HTTP 401: Incorrect API key provided", "HTTP 429: rate limited", "", true]
+    .map((e) => c.providerErrorKind(e)),
+  transport: ask("ReadError: peer closed connection without sending complete message body"),
+  timeout: ask("ReadTimeout: the provider did not answer in 120 s"),
+  stream: ask("stream ended without a response"),
+  auth: ask("HTTP 401: Incorrect API key provided"),
+  denied: ask("AuthenticationError: invalid x-api-key"),
+  quota: ask("HTTP 429: rate limited"),
+  other: ask("provider did not return complete token usage"),
+  flag: ask(true),
+}));''')
+    assert got["kinds"] == ["transport", "auth", "other", "", ""]
+    # a transport failure is never the keys
+    for kind in ("transport", "timeout", "stream", "quota", "other"):
+        assert "key" not in got[kind].lower() and "providers" not in got[kind].lower(), (kind, got[kind])
+    assert got["transport"] != got["auth"] and got["auth"] != got["other"] and got["transport"] != got["other"]
+    for kind in ("auth", "denied"):
+        assert "check your keys on the Providers page" in got[kind]
+    assert got["flag"] == got["other"]
+
+
 def test_escape_never_stops_a_turn_in_the_page():
     """D-043: Escape closes/cancels local UI, never interrupts a turn. DOM stopPropagation is harmless."""
     static = Path(__file__).resolve().parents[1] / "exo_command" / "static"
