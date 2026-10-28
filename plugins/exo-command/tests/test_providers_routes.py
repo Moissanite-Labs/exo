@@ -300,3 +300,46 @@ def test_passing_test_reloads_the_core_so_the_chat_retries_at_once(monkeypatch):
     assert reloads_after_failure == []
     assert st2 == 200 and up["ok"] and up["core_reloaded"] is True
     assert [c.args for c in src.calls if isinstance(c, s.CommandRun)] == ["reload ollama"]
+
+
+# ------------------------------------------------- D-091: the model list says which failure it was
+
+
+class Failing(Src):
+    """The core fails the model list itself; every other call behaves."""
+
+    def __init__(self, exc):
+        super().__init__()
+        self.exc = exc
+
+    async def call(self, body):
+        if type(body).TYPE == "models.list":
+            raise self.exc
+        return await super().call(body)
+
+
+@pytest.mark.parametrize("case, kind, retryable, says", [
+    ("connect", "transport", True, "not reachable"),
+    ("no-socket", "transport", True, "not reachable"),
+    ("forbidden", "authority", False, "principal"),
+    ("unauthorized", "authority", False, "principal"),
+    ("internal", "other", False, "router is busy"),
+])
+def test_model_list_names_the_failure_and_only_offers_a_retry_it_can_honour(case, kind, retryable, says):
+    """A transport failure can be retried; a core that answered and refused cannot, so the page must not offer it
+    one. The picker keeps its shape either way (200, both lists present), so the caller never sees a bare error."""
+    from exo.server.engine import CommandFailed
+    from exo_command.source import SourceError
+    exc = {"connect": ConnectionError("core down"),
+           "no-socket": FileNotFoundError(2, "no such socket"),
+           "forbidden": SourceError("forbidden", "only the principal may list models"),
+           "unauthorized": SourceError("unauthorized", "token expired"),
+           "internal": CommandFailed("internal", "router is busy")}[case]
+
+    async def go(web, port):
+        return await raw(port, "GET", "/api/providers/models", ok_headers(port))
+    status, data, text = serve(go, Failing(exc))
+    assert status == 200 and data["models"] == [] and data["available"] == []
+    assert data["error_class"] == kind and data["retryable"] is retryable
+    assert says in data["error"] and "Traceback" not in data["error"]
+    assert "ConnectError" not in text and "Errno" not in text

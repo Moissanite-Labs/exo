@@ -8,6 +8,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Added a gate PR preflight job that runs plugin acceptance and the base comparator, retaining its differential artifact (#423). Hosted execution and required-check configuration remain pending.
 
 ### Fixed
+- The Providers page says why the model list failed instead of showing only a bare exception name, and
+  offers "Try again" only when a retry can help. A core that answers and refuses the caller is no longer
+  reported as unreachable, and a failed load keeps the last good list, so the default picker stays usable
+  (D-091).
 
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
 - Foreground shell commands now mark nonzero exits, timeouts and interruptions as tool errors while retaining

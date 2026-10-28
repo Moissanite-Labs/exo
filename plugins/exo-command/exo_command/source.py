@@ -6,23 +6,45 @@ module needs only the Exo core; ``httpx`` is pulled in only when a ``ClientSourc
 """
 from __future__ import annotations
 
-from typing import Any, AsyncIterator, Dict, Optional, Protocol
+from typing import Any, AsyncIterator, Dict, Optional, Protocol, Tuple
 
 from exo.protocol import schema as s
 
 
+UNREACHABLE = ("Exo core is not reachable. `exo web` starts it for you; if this stays, run `exo serve` in a "
+               "terminal or check $EXO_HOME/logs/exod.log.")
+"""The one sentence for a core that never answered. No address, no errno, no exception name."""
+
+REFUSAL_CODES = ("forbidden", "unauthorized")
+"""Error codes a core answers with when the caller may not do this. The request arrived and was refused; asking
+again changes nothing, so this is not a transport failure and no amount of retrying fixes it (D-091)."""
+
+TRANSPORT_NAMES = ("ConnectError", "ConnectTimeout", "ReadError", "ReadTimeout", "RemoteProtocolError", "WriteError",
+                   "WriteTimeout")
+"""Exception class names that mean the core never answered. Named, not imported: httpx is optional here."""
+
+
+def core_failure(exc: BaseException) -> Tuple[str, str]:
+    """``(kind, sentence)`` for a core call that failed. ``kind`` is ``"authority"`` when the core answered and
+    refused the caller, ``"transport"`` when it never answered, ``"other"`` when the core reported a failure of
+    its own. The caller shows the sentence; only ``kind`` decides whether a retry can help (D-091)."""
+    name = type(exc).__name__
+    if getattr(exc, "code", "") in REFUSAL_CODES:
+        return "authority", ("The core refused this request: it needs principal authority. Open the page from the "
+                             "link `exo web` printed, or make this seat the principal with `exo init`.")
+    if name == "PrincipalRefused":  # D-060: the core answers but failed the peer check; often a core from before it
+        return "authority", ("{}. If an older Exo core is still running, restart it: run `exo stop` (or close the "
+                             "Exo window that runs it), then reopen this page.".format(str(exc).rstrip(".")))
+    if isinstance(exc, (ConnectionError, FileNotFoundError)) or name in TRANSPORT_NAMES:
+        return "transport", UNREACHABLE
+    if isinstance(exc, RuntimeError):
+        return "other", str(exc)
+    return "other", "{}: {}".format(name, exc)
+
+
 def core_message(exc: BaseException) -> str:
     """A sentence for the page; never a raw ConnectError."""
-    name = type(exc).__name__
-    if name == "PrincipalRefused":  # D-060: the core answers but failed the peer check; often a core from before it
-        return ("{}. If an older Exo core is still running, restart it: run `exo stop` (or close the Exo window "
-                "that runs it), then reopen this page.".format(str(exc).rstrip(".")))
-    if isinstance(exc, (ConnectionError, FileNotFoundError)) or name in ("ConnectError", "ReadError", "RemoteProtocolError"):
-        return ("Exo core is not reachable. `exo web` starts it for you; if this stays, run `exo serve` in a "
-                "terminal or check $EXO_HOME/logs/exod.log.")
-    if isinstance(exc, RuntimeError):
-        return str(exc)
-    return "{}: {}".format(name, exc)
+    return core_failure(exc)[1]
 
 
 class SourceError(Exception):
