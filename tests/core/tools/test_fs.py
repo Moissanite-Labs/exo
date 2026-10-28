@@ -249,3 +249,64 @@ def test_fuzzy_replace_all_on_adjacent_indented_lines():
     content = "def f():\n    if a:\n        return  1\n    if a:\n        return  1\n"
     new, n, _s, err = fuzzy_find_and_replace(content, "if a:\n    return 1", "if a:\n    return 2", replace_all=True)
     assert err is None and n == 2 and new == content.replace("return  1", "return 2")
+
+
+def test_missing_file_returns_bounded_nearby_names_without_contents(run, tmp_path):
+    (tmp_path / "settings.py").write_text("content must not appear")
+    (tmp_path / "unrelated.txt").write_text("other content")
+    result = run("read_file", path="setings.py")
+    assert result.is_error and "settings.py" in result.text()
+    assert "glob" in result.text()
+    assert "content must not appear" not in result.text()
+
+
+def test_missing_file_hints_skip_hidden_secret_and_symlink_names(run, tmp_path):
+    (tmp_path / ".settings.py").write_text("hidden")
+    (tmp_path / "credentials.json").write_text("synthetic")
+    (tmp_path / "id_rsa").write_text("synthetic")
+    (tmp_path / "settings.py").write_text("visible")
+    (tmp_path / "settings-link.py").symlink_to(tmp_path / "settings.py")
+    result = run("read_file", path="setings.py")
+    assert "settings.py" in result.text()
+    assert all(name not in result.text() for name in [".settings.py", "credentials.json", "id_rsa", "settings-link.py"])
+
+
+def test_missing_file_outside_cwd_does_not_enumerate_nearby_names(run, tmp_path):
+    outside = tmp_path.parent / (tmp_path.name + "-outside")
+    outside.mkdir()
+    (outside / "private-fixture.txt").write_text("synthetic")
+    result = run("read_file", path=str(outside / "missing.txt"))
+    assert result.is_error and "glob" in result.text()
+    assert "private-fixture.txt" not in result.text()
+
+
+def test_missing_parent_still_has_an_actionable_error(run):
+    result = run("read_file", path="not-a-folder/missing.py")
+    assert result.is_error and "glob" in result.text()
+
+
+def test_missing_file_hint_bounds_directory_work_and_escapes_names(run, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from exo.core.tools.builtin import fs
+    visited = []
+    class Entries:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return None
+        def __iter__(self):
+            for index in range(10000):
+                visited.append(index)
+                yield SimpleNamespace(name=f"setting{index}.py", is_symlink=lambda: False,
+                                      is_file=lambda **kwargs: True, is_dir=lambda **kwargs: False)
+    monkeypatch.setattr(fs.os, "scandir", lambda path: Entries())
+    result = run("read_file", path="settings.py")
+    assert result.is_error and "sample limited" in result.text()
+    assert len(visited) <= 257 and len(result.text()) < 1000
+
+
+def test_missing_file_hint_does_not_render_control_characters(run, tmp_path):
+    (tmp_path / "settings\ninjected.py").write_text("synthetic")
+    result = run("read_file", path="setings.py")
+    assert "settings\\ninjected.py" in result.text()
+    assert "settings\ninjected.py" not in result.text()
