@@ -286,3 +286,98 @@ def test_undo_of_delivered_message_never_requeues_same_identity(rig):
     assert loop.state(sid).steer == []
     assert store.deliver_steers(sid, "t2") == []
     assert all(m.id != msg.id for m in store.messages(sid))
+
+
+@pytest.mark.parametrize("operation", ["persist", "cancel", "deliver"])
+def test_commit_refusal_rolls_back_queue_transition_and_preserves_retry(rig, operation):
+    store, loop, sid = rig
+    message = Message.user("commit must precede acceptance")
+    if operation != "persist":
+        loop.steer(sid, message)
+    refused = []
+
+    def authorizer(action, arg1, arg2, database, source):
+        if action == sqlite3.SQLITE_TRANSACTION and arg1 == "COMMIT" and not refused:
+            refused.append(True)
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    def transition():
+        if operation == "persist":
+            return loop.steer(sid, message)
+        if operation == "cancel":
+            return loop.unsteer(sid, message.id)
+        return store.deliver_steers(sid, "t-delivery")
+
+    store._db.set_authorizer(authorizer)
+    try:
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            transition()
+    finally:
+        store._db.set_authorizer(None)
+    assert refused == [True]
+    assert not store._db.in_transaction
+    assert [m.text() for m in store.messages(sid)] == ["original task"]
+    assert loop.state(sid).steer == ([] if operation == "persist" else [message])
+    assert transition()  # a failed commit left no hidden active transaction or half-applied transition
+    if operation == "persist":
+        assert loop.state(sid).steer == [message]
+    else:
+        assert loop.state(sid).steer == []
+    assert [m.text() for m in store.messages(sid)] == (
+        ["original task", message.text()] if operation == "deliver" else ["original task"])
+    assert store.verify_log("default")["ok"]
+
+
+def test_transaction_preserves_original_error_when_rollback_also_refused(rig):
+    store, _, _ = rig
+    original = RuntimeError("operation rejected")
+
+    def authorizer(action, arg1, arg2, database, source):
+        return sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_TRANSACTION and arg1 == "ROLLBACK" else sqlite3.SQLITE_OK
+
+    def fail(db):
+        raise original
+
+    store._db.set_authorizer(authorizer)
+    try:
+        with pytest.raises(RuntimeError, match="operation rejected") as failure:
+            store._tx(fail)
+        assert failure.value is original
+    finally:
+        store._db.set_authorizer(None)
+        if store._db.in_transaction:
+            store._db.execute("ROLLBACK")
+
+
+@pytest.mark.parametrize("file_backed", [True, False])
+def test_commit_and_rollback_refusal_discards_unaccepted_queue_connection(tmp_path, file_backed):
+    store = SessionStore(tmp_path / "poisoned.sqlite" if file_backed else ":memory:")
+    loop = Loop(store, FakeProvider([]))
+    sid = store.create_session(agent="default").id
+    loop.state(sid).accepting_steers = True
+    poisoned = store._db
+    refused = []
+
+    def authorizer(action, arg1, arg2, database, source):
+        if action == sqlite3.SQLITE_TRANSACTION and arg1 in ("COMMIT", "ROLLBACK"):
+            refused.append(arg1)
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    poisoned.set_authorizer(authorizer)
+    try:
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            loop.steer(sid, Message.user("must never be consumed without acceptance"))
+        assert refused == ["COMMIT", "ROLLBACK"]
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            poisoned.execute("SELECT 1")
+        if file_backed:
+            assert loop.state(sid).steer == []  # reopen committed file state; rejected input cannot appear accepted
+            assert loop.steer(sid, Message.user("accepted after recovery"))
+            assert [m.text() for m in loop.state(sid).steer] == ["accepted after recovery"]
+        else:
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                _ = loop.state(sid).steer  # an in-memory database cannot be silently recreated empty
+    finally:
+        store.close()
