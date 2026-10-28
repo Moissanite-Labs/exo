@@ -45,8 +45,8 @@ def _store_write_part(c):
     return any(p.category == "store_write" for r in gate.readings(c) for p in gate._each_part(r))
 
 
-# The issue's rows: each was an allowed read on main cd371aed (`select` and the `$( )` row asked, but did not deny under
-# `deny: [store_write]`).
+# The issue's rows. On main cd371aed, and still on main 3570be0e, the first three are allowed reads, also under
+# `deny: [store_write]`; the `select` row asks as opaque_exec and the `$( )` row as credentials, and neither denies.
 ISSUE_ROWS = [
     "for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
     "while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
@@ -96,9 +96,10 @@ MORE_ROWS = [
     "coproc W while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
 ]
 # bash also takes a `{ ..; }` group as the body of a `for` or `select` loop, `for ((..))` too, and runs it once per pass
-# in the same shell, so its `cd` holds on the next pass as in a do/done body (verify of #479). On main f28934a3 the
-# first, `for i;`, `for ((;;))` and newline rows were allowed reads under every policy, most others asked as
-# opaque_exec or credentials, and none but the `> /tmp/out` row (a store write there already) denied under
+# in the same shell, so its `cd` holds on the next pass as in a do/done body (verify of #479). On main f28934a3 and
+# 3570be0e, nine of these 18 rows are allowed reads, also under `deny: [store_write]` (the first, `for i;`,
+# `for ((;;))`, the newline row, the three nested ones, the pushd row and the `if` row); seven ask as opaque_exec and
+# the `$( )` row as credentials, and none but the `> /tmp/out` row (a store write there already) denies under
 # `deny: [store_write]`.
 BRACE_ROWS = [
     "for i in 1 2; { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }",
@@ -122,8 +123,8 @@ BRACE_ROWS = [
 ]
 # Second verify: in `for ((..))` a reserved word is a plain variable name, and each `|` or `;` in the arithmetic is a
 # command of its own to _parse, so the header is found from the `((` itself, not from the commands before the group.
-# bash runs each of these bodies twice (printf-only probes). On main f28934a3 each asked as opaque_exec and was not
-# denied under `deny: [store_write]`; permissions bypass auto-allowed it.
+# bash runs each of these bodies twice (printf-only probes). On main f28934a3 and 3570be0e each asks as opaque_exec
+# and is not denied under `deny: [store_write]`; permissions bypass auto-allows it.
 _PAD = "|0" * 20
 ARITH_ROWS = [
     f"for (({n}=0; {n}<2; {n}++)) {{ cp /tmp/evil gates.yaml; cd ~/.exo/policies; }}"
@@ -137,6 +138,27 @@ ARITH_ROWS = [
     "for x in 1; do for ((done=0; done<2; done++)) { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }; done",
     "for ((i=0;i<2;i++)) { for ((do=0; do<1; do++)) { cp /tmp/evil gates.yaml; }; cd ~/.exo/policies; }",
 ]
+# Review 5689293944 on #838: what the header's `(` and `)` count may meet. bash reads a quoted paren (in "..", '..' or a
+# $( )), a base `2#10`, nested parens, a $(( )), a `<(` or `<<` that is arithmetic there, and a header over lines as
+# part of the header, and a paren in a comment after the `))` as a comment; it runs each of these bodies twice
+# (printf-only probes). The gate's lexer keeps a quoted paren inside its word, so it is no `(` or `)` token to count.
+# On main 3570be0e each asks as opaque_exec or credentials and is not denied under `deny: [store_write]`.
+_B = "{ cp /tmp/evil gates.yaml; cd ~/.exo/policies; }"
+HEADER_ROWS = [
+    'for ((i=0; i<${x#")"}; i++)) ' + _B,
+    'for ((i=0; i<${x%"("}; i++)) ' + _B,
+    "for ((i=0; i<${x%'('}; i++)) " + _B,
+    "for ((i=0; i<2; i=i+$(printf ')' >/dev/null; printf 1))) " + _B,
+    "for ((i=0; i<2#10; i++)) " + _B,
+    "for ((i=0; i<((1+1)); i++)) " + _B,
+    "for ((i=0; i<$((1+1)); i++)) " + _B,
+    "for ((i=0; i<(2); i++)) " + _B,
+    "for ((i=1; i<4; i=i<<1)) " + _B,
+    "for ((i=0;\ni<2;\ni++))\n" + _B,
+    "for ((i=0; i<2; i++)) # ) c\n" + _B,
+    "for ((i=0; i<2; i++)) # ( c\n" + _B,
+]
+ARITH_ROWS += HEADER_ROWS
 BRACE_ROWS += ARITH_ROWS
 CONTROL = "cd ~/.exo/policies; cp /tmp/evil gates.yaml"
 
@@ -182,7 +204,7 @@ def test_a_loop_into_a_descriptor_folder_names_that_folder(line):
     assert gate.decide(c).outcome == "ask", line
 
 
-# Guards: lines whose reading this change must leave as it was on main (cd371aed and f28934a3).
+# Guards: lines whose reading this change must leave as it was on main (cd371aed, f28934a3 and 3570be0e).
 @pytest.mark.parametrize("line,category,outcome", [
     ("for i in 1 2; do cp /tmp/evil gates.yaml; done", "read", "allow"),               # no cd in the loop
     ("for i in 1 2; do cp /tmp/evil gates.yaml; cd /tmp/proj; done", "read", "allow"),  # a cd into a plain folder
@@ -231,6 +253,24 @@ def test_a_cd_through_a_variable_is_a_known_limit(line):
     "time while :; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done",
 ])
 def test_a_loop_behind_time_is_a_known_limit(line):
+    c = _bash(line)
+    assert (c.category, gate.decide(c).outcome, gate.decide(c, DENY).outcome) == ("opaque_exec", "ask", "ask"), line
+    assert c.also is None and not _store_write_part(c), line
+
+
+# Review 5689293944 on #838: headers the gate's lexer reads apart from bash, which decide as on main 3570be0e. In
+# bash a `#` inside `((..))` is no comment: a word that starts with it fails the update expression after the first
+# pass, so the body runs once (printf-only probes), while the lexer takes the rest of the line as a comment. A known
+# limit: the lexer reads a `<<` in the header as a here-doc, whose body takes the next line, so a `{ ..; }` on that
+# line is not marked as the loop's body and its second pass is not read, on main as here, though bash runs it twice
+# (`<<` is a shift there). Its commands are still read once, as on main: an `rm` or a store path in it asks or
+# denies as on its own. On one line the second pass is read (HEADER_ROWS).
+@pytest.mark.parametrize("line", [
+    "for ((i=0; i<2; i++ #x)) { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }",
+    "for ((i=0; i<2; i++ #))\n{ cp /tmp/evil gates.yaml; cd ~/.exo/policies; }",
+    "for ((i=1; i<4; i=i<<1))\n{ cp /tmp/evil gates.yaml; cd ~/.exo/policies; }",
+])
+def test_a_header_the_lexer_reads_apart_from_bash_decides_as_on_main(line):
     c = _bash(line)
     assert (c.category, gate.decide(c).outcome, gate.decide(c, DENY).outcome) == ("opaque_exec", "ask", "ask"), line
     assert c.also is None and not _store_write_part(c), line
@@ -285,6 +325,40 @@ def test_the_second_reading_of_a_loop_nest_costs_about_what_the_first_does(monke
     assert whole <= 3 * first + 0.3, (whole, first)
 
 
+def test_a_classify_inside_a_classify_keeps_the_outer_calls_loop_list(monkeypatch):
+    # Review 5689293944 on #838. A line read inside the call (`bash -c`) counts on the call's own _loop_pass list, on
+    # each reading. A classify called while one reads (D-074's `ordinary` reading does so) sets a list of its own and
+    # resets it, so the outer list is the same object with the same items after it. None is left set after classify,
+    # also when the reading raises.
+    outer = "for i in 1 2; do bash -c 'echo hi'; cp /tmp/evil gates.yaml; cd ~/.exo/policies; done"
+    real, lists, kept = gate._classify_shell, {}, []
+
+    def shell(cmd, depth, *a):
+        loops = gate._loop_pass.get()
+        lists.setdefault((cmd, loops[0]), []).append(id(loops))
+        if cmd == outer:
+            before = list(loops)
+            inner = gate.classify({"tool": "bash", "args": {"command": ISSUE_ROWS[1]}})
+            assert inner.category == "store_write"
+            kept.append((gate._loop_pass.get() is loops, before == list(loops)))
+        return real(cmd, depth, *a)
+
+    monkeypatch.setattr(gate, "_classify_shell", shell)
+    c = _bash(outer)
+    assert _store_write_part(c) and gate._loop_pass.get() is None
+    assert kept == [(True, True), (True, True)]                      # the first reading and the second
+    for again in (False, True):
+        assert lists[(outer, again)] == lists[("echo hi", again)], again
+    assert lists[(outer, False)] != lists[(outer, True)]
+
+    def boom(cmd, depth, *a):
+        raise RuntimeError("probe")
+    monkeypatch.setattr(gate, "_classify_shell", boom)
+    with pytest.raises(RuntimeError):
+        _bash(outer)
+    assert gate._loop_pass.get() is None
+
+
 # The hook: the line asks the principal, and permissions bypass keeps the store floor.
 class MockCtx:
     def __init__(self, settings):
@@ -298,10 +372,12 @@ class MockCtx:
         self.hooks.setdefault(name, []).append(cb)
 
 
-def _gate(tmp_path, bypass):
+def _gate(tmp_path, bypass, gates=None):
     root = tmp_path / "store"
     (root / "policies").mkdir(parents=True)
     (root / "policies" / "approvals.yaml").write_text('approvers:\n  default: [principal, "seat:builder"]\n')
+    if gates is not None:
+        (root / "policies" / "gates.yaml").write_text(gates)
     key = tmp_path / "gate.key"
     crypto.save_key(crypto.keygen(), key)
     ctx = MockCtx({"principal_store": str(root), "key_path": str(key), "decision_model": False, "mode": "enforce"})
@@ -335,6 +411,32 @@ def test_the_hook_asks_the_principal_and_bypass_keeps_the_floor(tmp_path, bypass
             [row] = [e["body"] for e in led.iter(kind="action") if e["body"].get("phase") == "decision"]
         assert row["outcome"] == "ask" and row["bypass"] == {"floor": "store_write"}, row
         assert g.permissions.auto_approved == 0 and g.permissions.floor_asks == 1
+
+
+@pytest.mark.parametrize("bypass", [False, True])
+def test_the_hook_asks_the_principal_for_a_nest_past_the_budget(tmp_path, bypass):
+    # Review 5689293944 on #838: the smallest nest whose second reading runs past _LOOP_BUDGET (5 levels; 4 stays
+    # within it). The unread passes are one store write, so the hook asks the principal once, in bypass too (there the
+    # floor it names is main's reading, credentials, which leads).
+    line = _nest(5)
+    assert _unread(_bash(line)) and not _unread(_bash(_nest(4)))
+    g, ctx, root = _gate(tmp_path, bypass)
+    r = _run(ctx, line)
+    assert r is not None and r["action"] == "approve" and r["approvers"] == ["principal"], r
+    assert r.get("once") is True and r.get("binding"), r
+    if bypass:
+        with Ledger(root / "ledger.sqlite") as led:
+            [row] = [e["body"] for e in led.iter(kind="action") if e["body"].get("phase") == "decision"]
+        assert row["outcome"] == "ask" and row["bypass"] == {"floor": "credentials"}, row
+        assert g.permissions.auto_approved == 0 and g.permissions.floor_asks == 1
+
+
+@pytest.mark.parametrize("bypass", [False, True])
+def test_the_hook_denies_a_nest_past_the_budget_under_deny_store_write(tmp_path, bypass):
+    # The unread passes reach the hook: under `deny: [store_write]` it blocks the nest, where main 3570be0e asks.
+    _, ctx, _ = _gate(tmp_path, bypass, gates="deny: [store_write]\n")
+    r = _run(ctx, _nest(5))
+    assert r is not None and r["action"] == "block", r
 
 
 def test_the_hook_still_allows_a_loop_with_no_cd_into_the_store(tmp_path):
