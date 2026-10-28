@@ -806,3 +806,5 @@ body { margin: 0; background: #08090a; }
 .xc-work-notes ul, .xc-work-notes ol { padding-left: 18px; }
 .xc-work-notes li { margin: 5px 0; }
 .xc-work-stale, .xc-work-error { border-left: 2px solid var(--accent); padding-left: 8px; }
+
+.xc-side-contents { display: flex; flex-direction: column; gap: 12px; min-width: 0; }

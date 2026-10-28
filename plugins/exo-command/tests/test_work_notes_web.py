@@ -204,12 +204,19 @@ def test_keyboard_focus_survives_controls_and_background_refresh(tmp_path):
             assert b.eval("document.activeElement.textContent") == "Refresh"
             put(b, "preserve my selection", 2, 8)
             b.eval("""(()=>{const fetch0=window.fetch;window.backgroundReads=0;
-              window.fetch=(url,options)=>{if(String(url).endsWith('/command') && JSON.parse(options.body).name==='work')window.backgroundReads++;return fetch0(url,options);};})()""")
+              window.finishedFindings=0;
+              window.fetch=(url,options)=>{if(String(url).endsWith('/command')){const name=JSON.parse(options.body).name;if(name==='work')window.backgroundReads++;if(name==='findings')return fetch0(url,options).then(r=>{window.finishedFindings++;return r;});}return fetch0(url,options);};})()""")
             srv.call(srv.centre.record, {"seq": 1, "type": "turn.completed", "session": "s1", "body": {"turn_id": "t1", "stop_reason": "end"}})
             b.wait("window.backgroundReads === 1")
             b.wait("!!document.querySelector('.xc-work-history')")
             assert b.eval("document.activeElement === document.querySelector('.xc-input')")
             assert b.eval("[document.querySelector('.xc-input').selectionStart,document.querySelector('.xc-input').selectionEnd]") == [2, 8]
+            b.wait("window.finishedFindings >= 1")
+            b.eval("[...document.querySelectorAll('.xc-work-notes button')].find(x=>x.textContent==='History').focus()")
+            srv.call(srv.centre.record, {"seq": 2, "type": "turn.completed", "session": "s1", "body": {"turn_id": "t2", "stop_reason": "end"}})
+            b.wait("window.backgroundReads === 2 && window.finishedFindings >= 2")
+            b.wait("!!document.querySelector('.xc-work-history')")
+            assert b.eval("document.activeElement.textContent") == "History"
             assert b.eval("document.documentElement.scrollWidth <= innerWidth")
             assert b.eval("getComputedStyle(document.querySelector('.xc-side')).display !== 'none'")
             press(b, "Current notes"); b.wait("!!document.querySelector('.xc-work-stale')")

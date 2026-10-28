@@ -197,7 +197,7 @@ def test_a_dismissed_panel_stays_dismissed(tmp_path):
     panels = '''import {h} from "./dom.mjs";
 export const renderPanel=(p,on)=>h("section",{class:"panel","data-panel":p.panel_id,dismiss:()=>on.dismiss(p)},p.panel_id);'''
     _run(tmp_path, r'''
-const side=()=>nodes.filter(x=>x.attrs.class==="xc-side").at(-1).children.map(x=>x.attrs["data-panel"]).filter(Boolean);
+const side=()=>nodes.filter(x=>x.attrs.class==="xc-side-contents").at(-1).children.map(x=>x.attrs["data-panel"]).filter(Boolean);
 const opened=id=>requests.filter(x=>x.path==="/api/ui/respond" && x.body.panel_id===id && x.body.action==="opened").length;
 assert.deepEqual(side(),["p_A"]);
 await nodes.find(x=>x.attrs["data-panel"]==="p_A").attrs.dismiss();await settle();
