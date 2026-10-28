@@ -1888,9 +1888,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   expands them first (`while read f; do cd ~/.exo/state; done < <(sort list)` stays a read). As for the line's own
   commands, a subshell `cd`, a later `cd` out of the store and a `cd` in a function body are not followed, so those
   fail closed (`(cd ~/.exo) && echo $(sort x)` asks). A loop that enters the store runs its earlier commands there
-  on its next pass, which is not followed either (#480). A line nested in the substitution
-  keeps its own folder: an `ssh` remote command runs on its host, while a local `bash -c` in the substitution is
-  itself a command in the store. A `declare` or `local` value that bash runs again after the `cd`
+  on its next pass, which was not followed either (#480) until the #479 amendment of 2026-10-28. A line nested in
+  the substitution keeps its own folder: an `ssh` remote command runs on its host, while a local `bash -c` in the
+  substitution is itself a command in the store. A `declare` or `local` value that bash runs again after the `cd`
   (`declare -a x='($(cp /tmp/evil gates.yaml))'`) is classified in the folder as well. Each text is still
   classified once per depth in a call (#334), now once for each folder as well, so the same `$( )` read outside
   the store and in it on one line is read in both. This needs the D-075 amendment for #464: without it, a command
@@ -3730,6 +3730,98 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   *Revisit if:* a `${x:-$((cmd))}` should read the commands in its default word — a `$((` inside a `${..}` body is
   still read as the brace's visible text, as the same line with a plain `$( )` there is (both were `allow` on main
   and stay so), which is the `${..}` default word's own gap, not this one.
+- *Amendment 2026-10-28 (issue #479, also #480):* a loop body that `cd`s into the store runs its earlier commands
+  there on its next pass, and the gate reads them so now. The gate read a line's commands once, in order, and a
+  command counted as in the store only after the `cd` that entered it (#465 seeds substitutions the same way), so
+  `for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies; done` and its `while :` and `until false` forms,
+  where the `cp` rewrites the policy file on the second pass, were allowed reads on main cd371aed, also under
+  `deny: [store_write]`; the `select` row and `while :; do echo $(cp /tmp/evil gates.yaml); cd ~/.exo/policies;
+  done` asked there, but did not deny; so it still was on main f28934a3. Now, when a `for`, `select`, `while` or
+  `until` body (a `coproc` one too) holds a `cd` or `pushd` into the store or a descriptor folder after the loop's
+  first command (nested loops, the loop's condition, a nested line and the forms the `cd` check reads included:
+  `"$HOME/.exo/policies"`, `$EXO_HOME/policies`, `${X:-~/.exo/policies}`, `~/.exo/pol*`, `/dev`, `/dev/fd`),
+  `classify` reads the call a second time. A `for` or `select` loop whose body is a `{ ..; }` group (`for i in 1 2;
+  { ..; }`, `for i; { ..; }`, `select x in a b; { ..; }`, `for ((i=0;i<2;i++)) { ..; }`, also after `;` or a
+  newline) counts as one with a `do ..; done` body (verify of #479): bash runs the group once per pass in the same
+  shell, but `_parse` opens no loop there, so `_brace_head` finds the header just before the group, and a group
+  that is no loop's body (one after a `done`, a plain `{ ..; }`, an arithmetic command's `(( i++ )); { ..; }`)
+  runs once and is not read again. For `for ((..))`, `_parse` itself marks the `{` that follows the header's
+  closing `))`, a `;` or newline between (`_Cmd.arith_for`, second verify of #479): it counts the `(` and `)`
+  tokens apart from the compounds, so whatever the arithmetic holds is skipped. The first verify's search back
+  from the group stopped at a piece that starts with a reserved word and looked back 16 commands, but in `(( ))`
+  a reserved word is a plain variable name (`for ((do=0; do<2; do++)) { ..; }`, `while`, `done`, `if`) and each
+  `|` or `&&` there is a command of its own to `_parse`, so those headers and one of more than 15 pieces were
+  missed (asked as `opaque_exec`, auto-allowed under bypass, as on main) and now deny under `deny:
+  [store_write]` as the do/done form does. On main f28934a3 `for i in 1 2; { cp /tmp/evil gates.yaml; cd
+  ~/.exo/policies; }` was an allowed read under every policy, auto-allowed by the hook in every mode, and the
+  `select` and `for ((..))` forms asked as `opaque_exec` without a `deny: [store_write]` deny. On the second
+  reading `_classify_shell` reads the line again in its order (`_loop_again`), with the folder entered where the
+  outermost such loop starts, named by that loop's first descriptor `cd` (fd_cwd, #217), and adds the parts of the
+  loop's commands and substitutions that the line does not already have. A line already read in a store folder
+  (a `$( )` after the `cd`) read every command there, so it is not read again unless a loop names a descriptor
+  folder the line was not read in. bash expands a `for` or `select` word list and the redirections of the loop's
+  `done` (or `}`) once, before the first pass, so those keep their folder, and so does a command before the loop.
+  A later `cd` out in the body (`cd -`, `cd /tmp`) is not followed: fails closed, as a subshell `cd` does; a `cd -`
+  that goes back into the store on a later pass is covered by the same reading. The second reading is kept beside
+  the first as #584's joined reading is (`_beside`): the more severe leads, the other ends its `also` readings, and
+  `decide`, `no_grant`,
+  `call_approvers` and the exo-gate hook read each (`gate.readings`), so the issue's rows are `store_write`, ask
+  the principal alone, are never granted, keep the D-065 bypass floor and deny under `deny: [store_write]`. The
+  first reading is main's reading of the call, unchanged, so no line decides lower; a line with no such loop is
+  read once, as before, and when the second reading adds no part it is dropped. When the second reading leads it
+  takes the first's D-074 `ordinary` reading if it has none of its own. `classify_shell` alone still reads a line
+  once. The second reading has a budget (`_LOOP_BUDGET`, verify of #479): it may read afresh (each line, `$( )`
+  body and nested line `classify_shell` has not read in the same state) 64 lines more than the first reading did.
+  A nest of loops in `$( )`, each with a `cd` into the store, reads each body in two folders on every level, and
+  the memo keys a line by the budgets left too, so the verifier measured it at about 6 times main's time from 5 to
+  13 levels deep (main 7.6 s, branch 48.5 s at 12 levels, under load). Past the budget the second reading stops
+  (`_LoopBudget`) and one `store_write` part with no own text stands for the passes it did not read: it asks the
+  principal alone, no grant covers it, the bypass floor holds and `deny: [store_write]` denies it, beside main's
+  reading, which stays as it was. Measured CPU time (`time.process_time`, the best of three runs, main f28934a3 vs
+  this branch, load average 10 to 29 on 4 CPUs): the issue's row 5 ms to 19 ms; that nest 5 levels deep 0.09 s to
+  0.30 s, 8 levels 0.39 s to 1.05 s, 12 levels 2.97 s to 6.25 s (past the budget from 5 levels); the brace form 8
+  levels deep 0.53 s to 1.23 s; 200 nested `for` loops 0.09 s to 0.24 s; 1,500 such loops side by side on one line
+  2.24 s to 6.55 s (each loop's commands are read once more, linear in the line; the second reading adds no part
+  there and is dropped, since the first loop's `cd` already puts the rest in the store); a `for ((..)) { ..; }`
+  header with 200 `|` pieces 0.02 s to 0.07 s. The budget bounds each classify, and a call whose Exo-home
+  `config.json` counts as the store has a D-074 `ordinary` reading that is a classify of its own, with its own
+  second reading and budget, so both readings pay the multiplier: the nest six levels deep with a `cp` into
+  `~/.exo/config.json` took 1.10 s against 0.29 s on main (about 4 times, second verify; letting that reading share
+  the outer budget was left out, as it is bounded). Known limits: a `cd` through a variable set earlier or through
+  the loop variable (`d=~/.exo/policies; for i in 1 2; do cp /tmp/evil gates.yaml; cd $d; done`, `for d in /tmp
+  ~/.exo/policies; do ..; cd $d; done`) is not followed, as on a line without a loop, since the `cd` check reads no
+  variable's value where it is set (the verifier's low finding, kept as a limit); a function the loop calls is not
+  followed into, though its call is then a command in the store and asks; a loop behind `time` (`time for ..`) is
+  not a compound to `_parse`, as on main, so it has no second reading: it asks as `opaque_exec` without a `deny:
+  [store_write]` deny, a seat the approvers name may answer it, and under permissions bypass the exo-gate hook
+  auto-allows it, all as on main f28934a3. The #479 differential against main f28934a3 (main's
+  `scripts/gate_diff.py`, each tree in its own process, `--jobs 2 --timeout 0`): the built-in corpus with
+  `--no-variants`, 12,763 actions under the 88 policies (1,123,144 pairs), lowers 0 pairs and tightens 7,129 pairs
+  on 122 actions, mostly `read allow` to `store_write ask` (6,120), `local_write allow` to `store_write ask` (302),
+  `read allow` to `store_write deny` (160), `shell allow` to `store_write ask` (157) and `opaque_exec allow` to
+  `opaque_exec ask` (130); 377 pairs keep their outcome with another detail. An aimed corpus of 11,424 loop lines
+  (`--only-corpus`, 22,848 actions with their shell-tool forms: 9 bodies, a write before or after the `cd`, 11
+  folders (the store spelt six ways, `/dev`, `/dev/fd`, two plain folders and `$d`), `cd`, `pushd` and a `cd` then
+  `cd -`, 16 loop forms (`do ..; done` and `{ ..; }` bodies, `for x;`, `for ((..))` with and without `;`,
+  `select`, `while`, `until`, `coproc`, nested, behind `time`, a word list's `$( )`) and 6 wrappers (`bash -c`,
+  `$( )`, a pipe, `if`, a write before, a closer's redirection)) under the 88 policies and 105 more (deny,
+  reserved, category, rule, command-rule, target and matrix entries on ten categories; 193 in all, 4,409,664 pairs)
+  lowered 0 pairs and tightened 606,376 pairs on 7,792 actions before the second verify, mostly `read allow`
+  (300,979), `local_write allow` (183,467) and `shell allow` (24,636) to `store_write ask`. The second verify's
+  `_parse` change can only touch a line with a `for ((`, so the aimed run was repeated on every line of that corpus
+  and of 4,950 new ones that holds a `((` (7,092 lines, 14,184 actions: the earlier `for ((..))` forms, a reserved
+  word as the variable, a `!`, 20 `|`, `&&` or `||` pieces, a newline or comment before the body, a subshell, a
+  nested `do` loop, and the guards `(( i++ )); { ..; }`, a group after a `for ((;;)) { :; }` and after a `do ..;
+  done`) under the same 193 policies (2,737,512 pairs): 0 lowered, 135,509 tightened on 4,752 actions, mostly
+  `read allow` to `store_write ask` (32,301), `opaque_exec allow` to `opaque_exec ask` (23,940) and `opaque_exec
+  ask` to `opaque_exec deny` (21,402); 19,783 pairs keep their outcome with another detail. Every line of the new
+  corpus (16,374) with no `cd` into a store folder (4,806 lines: the plain folders `/tmp/proj` and `../src` and the
+  variable `$d`, and the guards) keeps main's number of readings, category and decisions (default and `deny:
+  [store_write]`) exactly. No classify or decide errors. Tests: `tests/security/test_gate_loop_cd_store_479.py`
+  (97 of its 157 tests fail on main f28934a3; one of them, the cost test, only because main has no
+  `_loop_reading` to patch).
+  *Revisit if:* the gate learns a variable's value where it is set: a `cd $d` into the store in a loop then needs
+  no other change.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
