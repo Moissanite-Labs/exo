@@ -4203,9 +4203,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   store or secret write these tools make (each patch operation too), named or through a linked folder, with no
   grant and the principal alone for the store, so a refusal in the tool would reverse #241. A session started
   inside a store folder still writes it by relative names as before (the known limit under "The tool's own
-  folder" in `docs/GATE.md`). `scripts/gate_diff.py` from main over 83,402 actions and 88 policies finds nothing
-  lowered and nothing tightened: 14 pairs keep their outcome with another detail changed.
-  Tests: `tests/security/test_gate_file_tool_links.py` (24 of 25 rows fail on main).
+  folder" in `docs/GATE.md`). `scripts/gate_diff.py` from main over 86,982 actions and 88 policies finds nothing
+  lowered and nothing tightened: 14 pairs keep their outcome with another detail changed. That run is on Linux,
+  where `/tmp` is not a link. The cost: the gate cannot tell a planted link from a system one. On macOS `/tmp` is a
+  link to `/private/tmp`, so `write_file /tmp/x` adds a part for `/private/tmp/x`. An allow rule matches the call as
+  spelt, and the part is decided on its own (#191). So a policy that denies `local_write` and allows
+  `target:/tmp/*` now denies that write, naming the place, until it allows `target:/private/tmp/*` too. The default
+  policy still allows it.
+  Tests: `tests/security/test_gate_file_tool_links.py` (25 of 26 rows fail on main).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

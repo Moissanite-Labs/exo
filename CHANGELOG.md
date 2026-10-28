@@ -363,7 +363,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   but the call's target and question named only the path as spelt. So `deny: ["target:*/shared/*"]` denied the
   absolute path yet allowed `o/plain.txt` with `o` a link to that folder, and the ask for `cfg/authorized_keys`
   never named `~/.ssh`. Each such path now adds a `local_write` part whose target is where the write lands, and
-  the question names that place.
+  the question names that place. A system link counts too: on macOS a policy that denies `local_write` and allows
+  `target:/tmp/*` must now allow `target:/private/tmp/*` as well.
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
 - `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last
