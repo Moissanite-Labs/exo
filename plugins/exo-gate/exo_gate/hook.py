@@ -65,8 +65,6 @@ DEFAULTS: Dict[str, Any] = {
     "decision_model": True,     # ask the decision role to tighten (never loosen) rule outcomes
 }
 _MAX_BODY_FILE = 256 * 1024
-# Tools that cannot change anything; on an internal error these still run.
-_SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
 _RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 
@@ -610,11 +608,8 @@ class Gate:
             except Exception:
                 pass
             if self.settings.mode == "observe" and not (secret or store):
-                # Observe mode only watches: the action goes ahead by design, and the
-                # error is logged above.
-                return None
-            # A read tool (or any tool) whose classification raised must fail CLOSED (ask),
-            # not open. Previously read tools returned None here and were silently allowed.
+                return None     # observe mode only watches: the action goes ahead, and the error is logged above
+            # Any other call asks, reads included, and the card is once-only so no answer becomes a grant (D-084).
             card = {"action": "approve", "message": f"exo-gate could not classify {tool_name} ({exc}). "
                                                     "Approve only if you expected this action. Default if no reply: skip.",
                     "rule_key": f"exo-gate:error:{tool_name}", "once": True}
