@@ -15,6 +15,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Successful pipelines with an earlier-stage failure note remain successful (#791).
 
 ### Added
+- `exo findings backlog [--limit N] [--json]` counts unresolved findings (open, reopened, fixed awaiting
+  re-verification) by severity and by age, and lists the oldest, at most 100. It reads one snapshot without the
+  write lock, so it neither waits for nor holds up a core that is filing a finding (#797, refs #684).
 - Web workspace design with coordinated dark and light themes, readable conversation typography,
   a full-width writing area, persistent accessible navigation and a saved Appearance choice.
   Loaded conversations can be searched and filtered; Show latest messages restores the newest item

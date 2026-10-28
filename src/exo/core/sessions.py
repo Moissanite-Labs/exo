@@ -211,6 +211,16 @@ class SessionStore:
             self._db.execute("COMMIT")
             return out
 
+    def _read(self, fn: Callable[[sqlite3.Connection], Any]) -> Any:
+        """One snapshot for several SELECTs. A deferred BEGIN takes no write lock, so under WAL it neither waits for
+        nor blocks a writer in another process, as ``_tx`` does."""
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                return fn(self._db)
+            finally:
+                self._db.execute("ROLLBACK")
+
     # ---------------------------------------------------------------- sessions
 
     def create_session(self, title: str = "", seat: str | None = None, model: str | None = None,
