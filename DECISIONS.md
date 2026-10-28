@@ -5223,3 +5223,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   ceiling off, the same six pass on a tree that counts 15,828, where they fail on `main` at `13cea687`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md` §27,
   `docs/DOCS-MAP.md`, `CHANGELOG.md`.
+
+## D-084 (2026-10-27) An internal gate error asks once, and only once
+- **Status:** Accepted 2026-10-27 (ported from exo-desktop #23, fail-closed gate errors).
+- **Why:** a classification error used to let read tools through silently, and an error card answered "always" could stand as a grant for later errors.
+- **Decision:** when classification fails, the hook asks with an approval card, including for reads. The card is once-only in every case. A failed classification that still read a store write or a secret goes to the principal alone, in every mode. Observe mode still lets non-store actions ahead by design, logged. The safe-on-error read set for side calls is unchanged.
+- **Docs:** `docs/GATE.md` "Who may approve" gains the error-card paragraph.
