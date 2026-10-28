@@ -109,6 +109,7 @@ class CoreRuntime:
                  context_factory: Callable[[ContextTree], TurnContext] | None = None,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None,
+                 provider_auth: dict[str, tuple[Callable, ...]] | None = None,
                  attach_peers: Any = None, attach_scheduler: Any = None, **loop_kw: Any) -> None:
         # Fail before opening stores, loading adapters or registering host handlers.
         required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
@@ -172,7 +173,7 @@ class CoreRuntime:
         elif seat and "spend" in seat.models and selection.source is None:
             raise ValueError("model-spend policy belongs to the principal, not a seat")
         self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env,
-                                         principal=active_principal)
+                                         principal=active_principal, provider_auth=provider_auth)
         self._automatic_main = "main" not in (models.get("roles") or {}) and not (seat and seat.tier)
         self.registry = registry or default_registry(executor=executor, executor_required=required)
         self.registry.executor = executor

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import ipaddress
+import json
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -103,9 +104,29 @@ async def handle(centre, method: str, path: str, body: Dict[str, Any],
     """One provider route, after ``guard`` passed. Never returns or raises with a key value in it."""
     parts = [p for p in path.split("/") if p][2:]       # after "api/providers"
     try:
+        if parts == ["chatgpt"] and method in ("GET", "POST"):
+            # No local fallback: the selected core owns both authority and credential scope.
+            request = {"action": "status"} if method == "GET" else {k: body[k] for k in ("action", "profile") if k in body}
+            try:
+                result = await centre.source.call(s.CommandRun(name="chatgpt", args=json.dumps(request)))
+            except Exception as error:
+                if getattr(error, "code", "") in ("not_found", "unsupported"):
+                    return 409, {"error": "This core does not support ChatGPT connections. Upgrade the core first."}
+                raise
+            output = result.get("output") if isinstance(result, dict) else None
+            if not isinstance(output, dict) or output.get("supported") is not True:
+                return 409, {"error": "This core does not support ChatGPT connections. Upgrade the core first."}
+            return 200, output
         if not parts and method == "GET":
             router = await asyncio.to_thread(router_factory)
             table = await asyncio.to_thread(ps.rows, router)
+            try:
+                core = await centre.source.call(s.CommandRun(name="providers", args=""))
+                live = (core.get("output") or {}).get("providers") or []
+                authenticated = {r["provider"]: r for r in live if r.get("needs") == "chatgpt"}
+                table = [authenticated.get(r["provider"], r) for r in table]
+            except Exception:
+                pass  # existing key setup remains available; connection actions still require the core
             ready = any(r["ready"] and r["transport"] != "decision" and (not r["roles"] or "main" in r["roles"])
                         for r in table)
             return 200, {"providers": table, "ready": ready, "store": ps.default_store()}

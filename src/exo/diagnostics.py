@@ -222,6 +222,25 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         info = eng.store.update_session(b.session, title=title)
         eng.hub.publish(s.SessionUpdated(session=info), b.session)
         return {"session": to_dict(info)}
+    if b.name == "chatgpt":
+        if not is_principal(current_caller()):
+            raise CommandFailed("forbidden", "ChatGPT connection changes require principal authority")
+        try:
+            from exo import chatgpt_auth
+            request = json.loads(b.args or '{}')
+            action = request.get("action", "status")
+            auth = chatgpt_auth.service(eng.home, eng.agent)
+            if action == "status":
+                return auth.status()
+            if action == "start":
+                return await asyncio.to_thread(auth.start, request.get("profile"))
+            if action == "cancel":
+                return auth.cancel()
+            if action == "disconnect":
+                return await asyncio.to_thread(auth.disconnect, request.get("profile"))
+            raise ValueError()
+        except Exception:
+            raise CommandFailed("bad_request", "ChatGPT connection action failed. Check the connection or try again.") from None
     if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
         word, _, rest = b.args.strip().partition(" ")
         if word == "reload":

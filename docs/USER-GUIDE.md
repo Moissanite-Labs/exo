@@ -41,6 +41,11 @@ Or type `/providers` in the terminal client, or open the Providers tab in `exo w
 type it after the command name. If no provider works, `exo` and `exo web` tell you. Details and the security of
 the web route: `docs/PROVIDERS.md`.
 
+For a ChatGPT subscription, open Providers and choose **Continue with ChatGPT**. Sign in in your browser,
+then select an account and one of its models. This is a separate connection from an OpenAI API key.
+**Manage usage** opens your ChatGPT usage settings. See `docs/CHATGPT-PROVIDER.md` for accounts and limits.
+The direct Meta API provider uses the same protected API-key entry as other hosted providers.
+
 A Muse Code subscription (`muse-cli`) serves only the `aux` role, the side work such as context summaries and the
 learning review. It cannot be your main model, so it does not replace a key or the Claude Code login. Its setup and
 limits are in `docs/PROVIDERS.md` ("Use a Muse Code subscription").

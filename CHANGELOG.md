@@ -10,6 +10,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Providers can connect a ChatGPT subscription through browser sign-in, keep separate protected account
+  registrations, refresh tokens, and list the selected account's models. Subscription-selected turns
+  do not silently fall back to API-key billing. Direct Meta API routes use the new Responses transport
+  for streamed replies, reasoning and local tool calls. Both require live provider acceptance after
+  user sign-in or key entry (`docs/CHATGPT-PROVIDER.md`, discussions #802 and #804).
 
 - Full-access audits redact raw command strings before JSON encoding and preserve entries whose masked keys collide. Grant changes record the previous session. Terminal restarts do not reapply `--full-access`.
 - Principal-only `/permissions full <session-id>` authorizes all tool calls in one selected session, including background turns, with a required redacted audit before each allow. Other sessions remain gated unless the principal explicitly selects `full all`. Ask revokes full (#623).

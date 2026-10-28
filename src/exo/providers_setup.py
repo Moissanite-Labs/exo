@@ -352,7 +352,10 @@ def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
             if cli else None
         logged_in = muse_cli.login_state(router.env)["logged_in"] if transport == "muse-cli" and installed else None
         last = state.get(name) if isinstance(state.get(name), dict) else None
-        if names:
+        if spec.get("auth") == "chatgpt":
+            available = getattr(router, "provider_auth", {}).get(name)
+            needs, has = "chatgpt", bool(available and available[0]())
+        elif names:
             needs, has = "key", bool(where)
         elif cli:
             needs, has = "cli", bool(installed) and logged_in is not False
@@ -366,6 +369,8 @@ def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
             status = "verified"
         elif needs == "key":
             status = "key found" if has else "no key"
+        elif needs == "chatgpt":
+            status = "ChatGPT connected" if has else "Connect ChatGPT"
         elif needs == "cli":
             status = "installed" if has else ("not logged in" if installed else "not installed")
         else:

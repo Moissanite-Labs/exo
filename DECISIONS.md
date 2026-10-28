@@ -1080,6 +1080,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   opens such a path, and the core's shell tool refuses a NUL in argv, so the line could not run anyway.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-28 (ChatGPT plan usage):** the web Providers view can create a separate ChatGPT
+  connection using OpenAI's documented open-source sign-in flow. Tokens stay in protected local storage;
+  only status crosses the web boundary. The application supplies credential callbacks to the core router,
+  so provider transport does not import product setup code. The account's model list supplies subscription
+  routes. Selecting ChatGPT plan usage prevents automatic fallback into API-key billing. Browser sign-in
+  and a real tool continuation remain live acceptance checks, separate from fixture tests.
 - **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
   printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
   repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments

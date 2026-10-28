@@ -216,3 +216,18 @@ def test_muse_credential_floor_survives_paths_wrappers_lowering_and_grants(cmd, 
 def test_other_muse_commands_are_not_credentials(cmd):
     """Only login, auth and logout are credential commands. The rest is an unknown program, which asks anyway."""
     assert classify(sh(cmd)).category != "credentials"
+
+
+@pytest.mark.parametrize('action', [
+    ('execute_code', {'code': 'from exo.chatgpt_auth import service; service("/tmp/fake", "test").headers()'}),
+    sh('python -c "from exo import chatgpt_auth; chatgpt_auth.service(\'/tmp/fake\', \'test\').headers()"'),
+])
+def test_chatgpt_secret_module_keeps_credential_floor_and_cannot_get_a_grant(action, tmp_path):
+    c = classify(action)
+    assert c.category == 'credentials'
+    d = decide(c, normalize_policies({'gates': {'categories': {'credentials': 'allow', 'opaque_exec': 'allow'},
+        'rules': [{'match': {'tool': action[0]}, 'decision': 'allow'}]}}))
+    assert d.outcome == 'ask'
+    grants = GrantStore(tmp_path / 'grants.json')
+    assert grants.add(c.category, c.target, 'fake-binding', 30, 'principal') is None
+    assert grants.match(c.category, c.target, 'fake-binding', outward=gate.binds_exact(c, d)) is None
