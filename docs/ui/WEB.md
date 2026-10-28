@@ -6,6 +6,21 @@ labels, `·` as the separator, orange only for the one thing that matters, cold 
 Presentation only: no protocol change, the JS behaviour is the same, no build step, no new dependency, no font
 or file from outside.
 
+## Conversation drafts and unconfirmed sends (D-045)
+
+Each conversation keeps its own unsent text and selection while the page is open. Switching threads or
+visiting another web view restores that conversation's draft. New thread starts with its own composer;
+returning to the source conversation restores its draft. The initial composer belongs to the conversation
+created by its first submission. Drafts live only in JavaScript memory, never browser storage or the core.
+Reloading or closing the page discards them.
+
+While a submission is pending, Send says “Sending…” and repeated Enter does not submit it twice. You can
+keep drafting or visit another conversation. If the reply fails, the original text returns to an unchanged
+empty composer. If you wrote something newer, “Restore text” adds the failed text ahead of that newer
+draft when you choose it. Recovery stays with the originating conversation, including through view changes.
+Check the transcript before sending again: an unconfirmed reply may have reached the core. Nothing retries
+automatically. “Dismiss” removes the recovery notice; it does not erase the current draft.
+
 ## Connecting to the core (D-036)
 
 `exo web` needs one core for the agent. It looks for `$EXO_HOME/run/exod.sock` (`exo serve`), then
