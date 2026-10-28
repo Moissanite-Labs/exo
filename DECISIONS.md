@@ -508,10 +508,31 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   A bus seat keeps the old shape on purpose: the bus routes by seat through the relay the send already posts to,
   never through a socket a presence file names, so a forged file cannot redirect a bus send, and the bus ack
   carries no outcome of the peer's own (its `delivered` names the relay's seq), so there is no first receipt to
-  verify. Stricter than before for one honest setup: a daemon whose presence file or first receipt is unsigned, as
+  verify. Stricter than before for two honest setups: a daemon whose presence file or first receipt is unsigned, as
   an older `exo`'s are, cannot be sent to while a key is pinned for its seat; update it, or leave its seat
-  unpinned, and the trust ladder applies. Rejected: requiring a pinned key for every name, which breaks messaging
-  an unpinned peer of another home until `exo keys pin --peer`, a step the receive side does not ask for either.
+  unpinned, and the trust ladder applies. And a seat whose key was made again cannot be sent to until this home
+  pins the new key (`exo keys pin --replace`, USER-GUIDE §7). Rejected: requiring a pinned key for every name,
+  which breaks messaging an unpinned peer of another home until `exo keys pin --peer`, a step the receive side
+  does not ask for either.
+  *Amendment 2026-10-26 (#603 review, a signed first reply is not a receipt):* the #523 amendment signed the first
+  reply in "the same doc shape a later receipt uses", and `deliver` signs it for any envelope, one that does not
+  verify too, with the `msg_id` the envelope names. A client of beta's socket read a held message's id from beta's
+  `list`, sent beta a junk envelope with that id, and handed the signed `denied` to alpha's `receipt`, which
+  published `denied` for a message still held at beta. That broke the #132 rule that a later receipt comes only
+  from the seat the message went to. The two docs now sign their kind: `deliver`'s reply carries `kind: "reply"`
+  and `notify_sender`'s receipt `kind: "receipt"` (Hermes' peers module calls the same two, so it follows).
+  `receipt` takes a doc whose kind is `receipt`, or one with no kind as an older `exo` signs its receipts, unless
+  that kind-less doc carries `mode` or `session`: a #523 first reply signs those fields and no receipt ever has, so
+  a #523 build's reply cannot pass as a receipt either. The send path takes a reply by the same rule (`doc_kind`):
+  `kind: "reply"`, or a kind-less doc that signs `mode` or `session`, so a receipt, an older `exo`'s included, is
+  no first reply, and a send to a #523 build still completes. Refusing that kind-less reply would gain nothing and
+  cost a duplicate: the reply is checked after the text has gone, so a send that fails on its reply has already
+  reached the peer, and only the outcome is refused (USER-GUIDE §7 says so). A reply is
+  still signed for an envelope that does not verify: signing it only for a verified envelope would leave an honest
+  sender whose key the receiver does not hold, or holds an old copy of, with an unsigned `denied` it must refuse,
+  so it would learn nothing of why. Two review nits ride along: the presence signature is checked over the entry's
+  JSON as written, so a newer `exo` that signs a field this one does not know still verifies, and a first reply
+  that is not a mapping fails the send as a refused reply.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -3373,6 +3394,14 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   `[::1]:<port>`, for the page too. Origin and Sec-Fetch-Site checks stay. Only the page shell is served without
   the token. The token stays per launch, in memory, delivered in the URL fragment that `exo web` prints and opens.
   `asgi.py` is deleted (unused).
+  *Amendment 2026-10-28 (issue #740):* the approval POST checks that its parsed JSON is an object before reading
+  `decision`. Arrays, null and scalars get a 400 JSON error and send no `approval.respond` to the core, as the
+  shared POST body reader already requires. Malformed JSON keeps its `bad json` response; token checks and valid
+  approval answers are unchanged. `docs/ui/WEB.md` "Opening the page and the page token".
+  *Amendment 2026-10-28 (follow-up to #751):* the approval and shared POST body readers catch JSON decoder
+  recursion errors as input errors. Arrays and objects beyond the decoder nesting limit, within the body-size
+  limit, receive the readers' existing 400 JSON errors without a core command or provider dispatch. Token checks
+  keep their existing order. `docs/ui/WEB.md` "Opening the page and the page token".
   *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
   was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
   `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
@@ -3917,6 +3946,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-27:** chat notices belong to their selected session. Additive optional notice source
+  and model-call identity fields let a successful matching call clear its route warning without clearing
+  newer general notices or command errors. Turn completion clears only outstanding route warnings.
 - **Amendment 2026-10-27 (#722):** an accepted internal `Loop.steer` message receives an ID before it
   enters the queue. A supplied ID is preserved through snapshots, cancellation and delivery. A refused steer
   receives no new ID and changes no queued message. No command or protocol field changes.
@@ -4572,6 +4604,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   whole, which the next turn's call can cut.
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
+- **Amendment 2026-10-27 (Discussion #733):** each web thread exposes a Rename button and an explicit title
+  editor with Save, Cancel, Enter and Escape. This uses the existing principal-only rename command without
+  selecting that thread or replacing the current composer draft. Native JavaScript prompts are not required.
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
   calls `update_session(title=...)` and announces the change with the existing `session.updated` event. The protocol
   stays at its cap of 30 commands and 30 events. Only the principal may rename (D-052); anyone else gets `forbidden`.
@@ -5170,6 +5205,9 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   changelog. Whitepaper coverage is deferred to the next batch.
 
 ## D-083 (2026-10-26, amended 2026-10-27) The core budget prices coupling, not only lines, and has no ceiling
+- **Counter clarification 2026-10-27:** after resolving a relative import to `exo`, inspect its imported names
+  with the same real-module lookup as `from exo import ...`. This closes a spelling gap without counting exported
+  symbols, changing exclusions or counting repeated dependencies twice. Existing counts and caps remain 39 and 8.
 - **Status:** Accepted 2026-10-26 by the lead (reversible), amended 2026-10-27 by the principal's ruling "we're
   dropping the ceiling for now as we build out the codebase, it was too restrictive". It amends D-077: the line
   ceiling is off, and two of the engine split's step 4 numbers are assertions instead of printouts. The floor and its
@@ -5231,3 +5269,13 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Why:** a classification error used to let read tools through silently, and an error card answered "always" could stand as a grant for later errors.
 - **Decision:** when classification fails, the hook asks with an approval card, including for reads. The card is once-only in every case. A failed classification that still read a store write or a secret goes to the principal alone, in every mode. Observe mode still lets non-store actions ahead by design, logged. The safe-on-error read set for side calls is unchanged.
 - **Docs:** `docs/GATE.md` "Who may approve" gains the error-card paragraph.
+
+
+## D-089 (2026-10-28) One shared implementation, then reviewed desktop syncs
+- **Status:** Accepted by the principal, effective for new work. [Decision discussion](https://github.com/aska-digital/exo/discussions/746).
+- **Decision:** shared core, plugins, web UI and their docs and tests are implemented and reviewed in Exo. Native desktop shell, packaging and sync tooling belong in Exo Desktop. The fork takes batches of merged Exo commits through a reviewed sync PR. Automation prepares drafts and never pushes or merges directly into main.
+- **Why:** parallel implementation PRs duplicate review and allow fixes, policy and parent branches to drift apart.
+- **Existing work:** authors retain ownership. Preserve unfinished PRs and unique desktop files until the canonical change is merged and downstream integration is verified. An urgent alpha carry names its canonical PR, owner and reconciliation step.
+- **Rejected:** routine duplicate feature PRs, unreviewed automatic main updates and closing legacy work solely because routing changed.
+- **Revisit if:** repository consolidation or a separately versioned desktop dependency removes the need for a fork. No such migration is authorized by this decision.
+- **Docs and user impact:** `docs/REPOSITORY-WORKFLOW.md`, developer guide section 8, repository agent instructions and the fork's continuity guide. No runtime or user setting changes.
