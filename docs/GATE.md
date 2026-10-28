@@ -428,16 +428,6 @@ a credentials or store-write part goes to those allowed for its category and for
 may answer both the line's category and credentials. A line that reads a secret and writes the store
 is the principal's alone.
 
-### An internal gate error asks once (D-084)
-
-When the gate itself fails to classify a call, the hook asks instead of allowing it, including
-for read tools, which used to be silently allowed. The card is once-only in every case, so
-answering "always" cannot create a standing grant for later gate errors. When the failed
-classification still read a store write or a secret, only the principal answers, in every mode
-(D-033). In observe mode the action still goes ahead by design when no store write or secret was
-read, and the error is logged; anything else asks. The safe-on-error read set for side calls is
-unchanged.
-
 A call the gate reads more than one way lists only those each reading's categories allow
 (`gate.readings`): a gh line also read as before #399 ("Where a gh command lands"), a shell call
 also read as before #311 ("The working folder"), or both.
@@ -491,6 +481,26 @@ tool that only reads (`read_file ~/.ssh/id_rsa`), copies the store (`copy_file` 
 `~/.ssh/x`, as `cp -r` does), or writes a secret outside the store (`write_file ~/.ssh/config`),
 has no such part and keeps the delegation. The hook's error fallback reads the parts too (see
 "The store is credentials").
+
+## An internal gate error asks once (D-084)
+
+When the gate's own checks raise (classification, a policy rule, the secret check), the hook
+asks with a card instead of allowing the call. Read tools ask too. The card is once-only in every
+mode, bypass included: the core offers allow and deny, and no answer becomes a standing grant, so
+the next such error asks again. When the gate still reads the call as a store write or a secret,
+only the principal answers, in every mode (D-033). A secret check that raises counts as a secret.
+In observe mode a call the gate does not read as a store write or a secret goes ahead, and the
+error is logged. Under a required executor the call is blocked instead (D-020). When classification
+itself raised, the gate cannot see a store path or a secret named inside a shell command (the
+secret check reads only path arguments): a store write or a command such as `cat ~/.ssh/id_rsa`
+then gets a card any approver may answer, or goes ahead in observe mode, as before D-084, unless
+the secret check finds a secret.
+
+The card waits for an answer. An unattended run stops at it until someone answers or the turn is
+stopped: `approvals.ask` has no timeout, and "Default if no reply: skip" is only the card's text.
+Code: `Gate.pre_tool_call` in `plugins/exo-gate/exo_gate/hook.py`. Tests:
+`plugins/exo-gate/tests/test_hook.py`, `plugins/exo-gate/tests/test_bypass.py`,
+`tests/integration/test_required_gate.py`.
 
 ## Who answered: the connection, not the body (D-039)
 
@@ -1103,8 +1113,8 @@ loosens an outcome. Turn it off with the plugin setting `decision_model: false` 
   not a `model.call` event yet, so `/trace` and the turn's cost do not show it.
 
 Exo's own read-only tools are `read`: `read_file`, `grep`, `glob`, `skill` (loads a skill's instructions),
-`memory_zoom`, `exo_trace` and `ui` (a panel beside the chat). An internal gate error does not stop them (unless a
-required executor is set), and a secret-store path in their arguments still makes the call `credentials`. Before,
+`memory_zoom`, `exo_trace` and `ui` (a panel beside the chat). An internal gate error asks for them once, as for any
+tool (D-084), and a secret-store path in their arguments still makes the call `credentials`. Before,
 `skill` was an unknown tool, so a new user's first screen could be an approval card for loading the intro skill.
 
 Tests: `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/test_decision_spare.py`.
@@ -2827,8 +2837,8 @@ reason the policy loader does not check, the hook's fallback card still asks the
 principal alone, once, in observe mode too (#464; a pattern that does not compile is refused when
 the policy loads now, #466). A store read that a shell call's own folder adds
 as a part counts too, and so does each other reading of the call (`gate.no_grant`, #311, #399).
-Other calls keep their fallback: a read tool
-runs, observe mode runs the call, and enforce mode asks (#466). Reads of the store stay `read`, except `keys/` and the run folder's secrets
+Other calls keep their fallback: observe mode runs the call, and enforce mode asks once, a read
+tool too (D-084). Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,
 `rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`) is `credentials`. That covers moving or replacing
@@ -3054,9 +3064,9 @@ agent gets the list of fixes and goes on.
 ledger before the broker runs it, and the installation exists to keep a person in that loop. If required mode
 starts after bypass was switched on, bypass is inert.
 
-**Not covered.** An internal gate error still falls back to asking (the gate could not classify the call, so it
-cannot know the call is off the floor). Bypass changes what the gate asks; it is not a sandbox, and the D-039 limit
-on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` and `Gate._bypass` in
+**Not covered.** An internal gate error still falls back to a once-only card, reads included (the gate could
+not classify the call, so it cannot know the call is off the floor; D-084). Bypass changes what the gate asks; it
+is not a sandbox, and the D-039 limit on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` and `Gate._bypass` in
 `plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
 `tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
 `plugins/exo-command/tests/test_permissions_web.py`.

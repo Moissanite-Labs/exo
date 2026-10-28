@@ -300,6 +300,31 @@ def test_error_card_on_secret_read_names_principal_approver(tmp_path, monkeypatc
     asyncio.run(asyncio.wait_for(main(), 5))
 
 
+@pytest.mark.parametrize("tool, args", [("bash", {"command": "ls"}), ("read_file", {"path": "x"})])
+def test_an_error_card_answered_always_gives_no_standing_grant(tmp_path, monkeypatch, tool, args):
+    # D-084: the card is once-only, so the core offers allow and deny, an "always" stands for no grant and runs
+    # nothing, and the next call the gate cannot classify asks again.
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, "ordinary", store=False)
+    async def main():
+        try:
+            asked = []
+            async def always(*args, **kwargs):
+                asked.append(kwargs.get("options"))
+                return "allow_always"
+            monkeypatch.setattr(engine.approvals, "ask", always)
+            def fail(*args, **kwargs):
+                raise RuntimeError("classifier failed")
+            monkeypatch.setattr(gate, "_rules", fail)
+            for n in range(2):
+                result = await engine.run_tool(ToolCall(f"c{n}", tool, dict(args)), {})
+                assert result.is_error
+            assert ran == [] and engine.approvals.always == set()
+            assert asked == [["allow", "deny"], ["allow", "deny"]]
+        finally:
+            await asyncio.wait_for(engine.close(), 5)
+    asyncio.run(asyncio.wait_for(main(), 5))
+
+
 @pytest.mark.parametrize("symlink", [False, True])
 @pytest.mark.parametrize("read_body_files", [False, True])
 def test_required_body_file_blocks_without_host_read_even_when_inspection_disabled(tmp_path, monkeypatch,
