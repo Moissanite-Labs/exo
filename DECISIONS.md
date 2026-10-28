@@ -3266,6 +3266,25 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   plain spelling (group 1). No run had a classify or decide error. The many-short-words cost is now 3.6 to 4.6 times
   main's CPU time (best of three, main and this branch in turn), against 3.3 to 3.4 before the merge, since #601 folds
   each name these reads match.
+  *2026-10-28 (#513, the merge of main eb0ba7e2):* (z) Main merged #706 (the #609 follow-up), which gives each store a
+  secret line names past its first a credentials part of its own (`other_store`), so a `target:` entry, a `reserved:`
+  entry or a rule on any of them matches. Main now denies the plain lines of group 2 under an entry for the second
+  store (`cat ~/.kube/config; cat ~/.ssh/id_rsa` under `deny: [target:*/.ssh/*]`), and the merge denies the odd ones
+  too. Both parts are kept: main's for each later store, read in the lexical form, and this branch's for main's
+  target. The ssh hop's copy for the host passes over both. A text with a backslash that names a store only in its
+  lexical form is listed by the name the shell reads, unless that name is the line's target. So
+  `cat ~/.ssh/id_rsa < ~/.kube/\config` is denied under `deny: [target:*/.kube/config]`, as its plain spelling is on
+  main, where main asks. Main also lists a line's own store again where the target is the word as written and its
+  list spells `~` out, or where the store is in a quoted `bash -c` text: `cat ~/.kube/\config` and
+  `bash -c 'cat < ~/.kube/config'` count two `credentials` hits under `reserved: [target:*/.kube/config]`, where
+  `cat ~/.kube/config` counts one. The merge keeps main's count, and the tests compare those lines by the categories
+  they hit. Main's script (eb0ba7e2) compared main eb0ba7e2 with the merge under the 88 built-in policies, on the
+  built-in set with its variants (88,591 actions). It lowered 17 pairs on 17 actions. Each is
+  `ssh prod 'rm -rf ~/.kube//config'` in a form the script makes, and each loses the host's `delete` hit under
+  `reserved: [delete, force_push]`, as main's plain spelling does (group 1). Neither tree had a classify or decide
+  error. The many-short-words cost is 3.1 to 3.8 times main's CPU time at the merge, and 3.0 to 3.9 times the merge
+  base's at 76f33d16 (best of three, the four trees in turn). So the cost is this branch's own, and the merge adds
+  none.
   *Amendment 2026-10-22 (issue #454):* bash opens a redirection's file as the calling user before `sudo` or `doas`
   runs, so `sudo echo hi > /tmp/f` writes `/tmp/f` either way. Sudo makes the command's own part costly, and the
   write stayed reversible, so the command's `read` outranked it. The line was a `read`. A `categories:` line, a rule

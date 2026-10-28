@@ -835,10 +835,15 @@ first store. It weighs as main's line did: a heavier command deeper in the line 
 (#468), so `cat ~/.kube//config; cat ~/.ssh/id_rsa; ssh prod 'rm -rf /'` is denied under a deny rule on `*/.ssh/*`
 and `irreversible`, as on main. On a remote line, ssh gives the host a copy of the line's first part that has no
 target (#320), and main's target part does not take its place. So `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa'` is
-denied under `deny: [{category: read, target: prod}]`, as on main. A line main read the same way gets no part: under
-that entry `cat ~/.kube/config ~/.ssh/id_rsa` asks, here and on main. A shell call's own folders work the same way
-(#311, "The tool's own folder"). The read's target is the first folder that names a store, and that can be a
-spelling main did not read. Main's folder then stays a part too (#513 review). So `bash` with `cwd: ~/.config//gcloud` and
+denied under `deny: [{category: read, target: prod}]`, as on main. A line main read the same way gets no such part.
+Since the #609 follow-up each other store a line names is a part of its own too ("A glob in a store's folder", below),
+and those stores are read in the spellings #446 reads. So `cat ~/.ssh/id_rsa < ~/.kube/\config` is denied under
+`deny: [target:*/.kube/config]`, as its plain spelling is on main. The host's copy passes over those parts as well,
+so `ssh prod 'cat ~/.kube//config ~/.ssh/id_rsa ~/.aws/credentials'` is denied under
+`deny: [{category: read, target: prod}]` and under `deny: [target:*/.aws/*]`, as on main. A shell call's own folders
+work the same way (#311, "The tool's own folder"). The read's target is the first folder that names a store,
+and that can be a spelling main did not read. Main's folder then stays a part too (#513 review). So `bash` with
+`cwd: ~/.config//gcloud` and
 `workdir: ~/.ssh` is denied under `deny: [target:*/.ssh*]`, as on main, while `cwd: ~/.config/gcloud` there asks,
 here and on main.
 A call also reads its folders beside a line that reads a store, and each read is a part (#320). So
