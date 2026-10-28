@@ -1,7 +1,7 @@
 {
   "base": "64bfee2c4e075e91f7789a97fec7c2c8dd82407d",
   "scope": "Pure classifier and local hook acceptance; no command execution or outward request",
-  "validation": "5 passed, 17 strict xfailed; --runxfail exposes 17 failed, 5 passed",
+  "validation": "8 passed,20 strict xfailed; --runxfail exposes20 failed,8 passed",
   "cases": [
     {
       "issue": 449,
@@ -153,6 +153,29 @@
       "expected": "process/descriptor note, no redundant absolute-path hint",
       "observed": "generic absolute-path hint; once-only card retained",
       "strict_xfail": true
+    },
+    {
+      "issue": 437,
+      "case": "internal_then_public_comment",
+      "expected": "ask",
+      "observed": "log",
+      "gap": true
+    },
+    {
+      "issue": 437,
+      "case": "internal_then_public_close",
+      "expected": "ask",
+      "observed": "log",
+      "gap": true
+    },
+    {
+      "issue": 437,
+      "case": "internal_then_public_semicolon",
+      "expected": "ask",
+      "observed": "log",
+      "gap": true
     }
-  ]
+  ],
+  "extension_437_base": "f28934a3f6bfcaec3a5e29223f7354df788afe07",
+  "extension_437_controls": "all-internal compound logs; standalone public comment and close ask;3pass3strictxfail on currentmainf28934a3"
 }
