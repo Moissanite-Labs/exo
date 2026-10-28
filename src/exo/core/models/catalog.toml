@@ -25,6 +25,12 @@ transport = "openai"
 base_url = "https://api.openai.com/v1"
 key_env = "OPENAI_API_KEY"
 
+# First-party DeepSeek. Discover account-authorized IDs; do not guess model aliases or prices.
+[providers.deepseek]
+transport = "deepseek"
+base_url = "https://api.deepseek.com/v1"
+key_env = "DEEPSEEK_API_KEY"
+
 # Local OpenAI-compatible servers: no key, the small-model and device path.
 [providers.llamacpp]
 transport = "openai"

@@ -632,3 +632,7 @@ Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` f
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.
+
+First-party DeepSeek uses the existing Providers setup with `DEEPSEEK_API_KEY`. Discover its account's model
+IDs and select one explicitly. See [First-party DeepSeek API](PROVIDERS.md#first-party-deepseek-api) for setup
+and the thinking-history behavior of tool calls.

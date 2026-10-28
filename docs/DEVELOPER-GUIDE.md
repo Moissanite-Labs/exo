@@ -1078,3 +1078,7 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+The `deepseek` transport extends Chat Completions for first-party thinking history. Its offline fixtures in
+`tests/core/models/test_deepseek.py` cover prior-answer replay, tool-result pairing, usage, discovery and the
+provider's effort mapping. See [First-party DeepSeek API](PROVIDERS.md#first-party-deepseek-api).

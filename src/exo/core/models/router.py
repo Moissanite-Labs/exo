@@ -30,6 +30,7 @@ from exo.core.models.base import error_event
 from exo.core.models.claude_cli import ClaudeCliProvider
 from exo.core.models.muse_cli import MuseCliProvider
 from exo.core.models.decision import DecisionProvider
+from exo.core.models.deepseek import DeepSeekProvider
 from exo.core.models.keys import lookup_key
 from exo.model_spend import SpendJournal, configured
 from exo.core.models.spend import admitted_stream
@@ -53,7 +54,7 @@ BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
 REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key or login: waiting will not fix it
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
-              "decision": DecisionProvider}
+              "decision": DecisionProvider, "deepseek": DeepSeekProvider}
 CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
 
 

@@ -39,7 +39,7 @@ def remote_models(router: Router, provider: str, *, get: Callable[..., Any] | No
     spec = router.providers.get(provider)
     if spec is None:
         raise ValueError(f'unknown provider {provider!r}')
-    if spec.get('transport', 'openai') != 'openai':
+    if spec.get('transport', 'openai') not in ('openai', 'deepseek'):
         raise ValueError(f'provider {provider!r} has no OpenAI-style /models endpoint')
     envs = spec.get('key_env') or []
     envs = [envs] if isinstance(envs, str) else list(envs)
@@ -77,7 +77,7 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
             if router._allows(name, "main") and router.credentials(name):
                 out += [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]
             continue
-        if (spec.get('transport', 'openai') != 'openai' or spec.get('local') or st.get('key') != 'yes'
+        if (spec.get('transport', 'openai') not in ('openai', 'deepseek') or spec.get('local') or st.get('key') != 'yes'
                 or (st.get('roles') and 'main' not in st['roles'])):  # e.g. decision-only providers
             continue
         f = cache_dir / f'{name}.json'

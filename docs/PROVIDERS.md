@@ -378,3 +378,19 @@ started, and a CLI must be installed and logged in.
 
 No command prints a key value. A key from the environment, the Keychain (macOS), the Secret Service (Linux) or keys.env is read only by the real CLI;
 tests build engines with `env={}` so a shell key never causes spend.
+
+## First-party DeepSeek API
+
+Use `exo providers add deepseek` to save a `DEEPSEEK_API_KEY` through the existing masked setup. The
+provider calls `https://api.deepseek.com/v1/chat/completions`. `exo models --remote deepseek` lists the
+models available to that credential; choose the returned model ID explicitly. Existing role choices stay
+unchanged. Model prices and context limits remain unknown until supplied by verified metadata or configuration.
+
+Requests carrying tools replay every prior assistant `reasoning_content`, including earlier final answers
+and earlier user turns. Requests without tools use ordinary chat history. With no effort option, DeepSeek
+keeps its server default. Explicit `none` disables thinking; `minimal`/`low` map to `low`,
+`medium`/`high`/`xhigh` to `high`, and `max`/`ultra` to `max`, following its documented mapping.
+The saved-effort control has its own supported-model contract; this transport does not extend that UI.
+
+Sources: [thinking and tool history](https://api-docs.deepseek.com/guides/thinking_mode/) and
+[model discovery](https://api-docs.deepseek.com/api/list-models/). Validation uses offline HTTP fixtures.
