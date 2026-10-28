@@ -37,6 +37,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   cached under a key the next night does not trust. A 120-item night with one accepted candidate made 256 responder
   calls, 173 before (+48%). Tests: `tests/eval/test_eval_climb.py`, `tests/learn/test_learn_nightly.py`.
   **Docs:** `docs/LEARNING.md` "The slow loop", `DECISIONS.md` (D-012).
+- Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
+
+- `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last
+  segment of a dotted key. Both now mask a secret at any level of the key path (a secret-shaped name, a container
+  under one, and a literal under `env` or `headers`), and `config set` refuses the same shapes. `${VAR}` references
+  and `*_env` names are still shown and accepted (#691).
 - Permissions bypass keeps its floor for a camelCase tool again, and the registry's high-risk ask reaches one
   (review 5662071801 of #602). #515 (#602) reads a camelCase tool name by its hump words, so the call leads with
   that category and its store write, secret read or `unknown` is in its unsplit `floor` reading. Two exo-gate hook
@@ -51,6 +57,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   posting fixes stays held. Snake names and camelCase calls with no floor reading decide as before. Hook probe
   against main e0968a2b: 1360 lines, 164 changed, 0 lowered. Tests: `plugins/exo-gate/tests/test_camel_floor_hook.py`.
   **Docs:** `docs/GATE.md`, `DECISIONS.md` (D-065, D-038), `docs/DEVELOPER-GUIDE.md` §3.
+- `/tab` tells the user when the new window loses a permission flag (#669). The flag is dropped from the
+  new command, but the new window keeps `--seat` and `EXO_HOME`, so it joins this core (D-028, D-039) and
+  the core's permission mode still applies there, bypass included: the warning says that rather than
+  claiming the window asks for each action, which reviewers showed it does not. `restart.dropped_permission_flags`
+  reads the same command source `new_command` starts from (`EXO_RESTART_CMD`, else the current
+  arguments), follows argparse's abbreviated long flags, and the client posts one warning naming the
+  flags it dropped and where the core's mode stands. Warning only: the flags are still dropped, which
+  stays the safe default.
 - Ruff F541 fixed in the dollar-paren gate tests (#662): two f-strings in
   tests/security/test_gate_dollar_paren_cmdsub.py carried no interpolated values. Dropping the unused
   `f` prefix preserves the test cases and removes the two findings.
