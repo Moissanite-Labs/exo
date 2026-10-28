@@ -366,6 +366,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the question names that place. A system link counts too: on macOS a policy that denies `local_write` and allows
   `target:/tmp/*` must now allow `target:/private/tmp/*` as well. A standing grant on the path as spelt no longer
   covers such a write when a reserved entry matches the place it lands in.
+
 - Internal steer messages receive an ID as soon as the running turn accepts them, so snapshots, cancellation and delivery keep the same identity (#722).
 
 - `exo config get` and `exo config show` masked nothing on the command line, and the JSON API judged only the last
