@@ -299,7 +299,8 @@ Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long t
 with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
 DevTools (`tests/browser.py`, skipped when Chrome is missing). When a wrapped status and composer exceed the available
 height, the chat column scrolls and retains space for the independently scrolling log. The page has no big composer
-pane; that is terminal only.
+pane; that is terminal only. On narrow screens the log keeps its responsive height, and the slash-command menu keeps
+its bounded height when the chat column scrolls.
 
 ## Cost and jobs (D-032)
 

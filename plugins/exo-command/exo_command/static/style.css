@@ -445,6 +445,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
   .xc-main { padding: 12px; }
   .xc-hero::after { width: 144px; height: 144px; top: auto; bottom: 20px; right: 16px; transform: none; }
   .xc-chat { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(440px, 1fr); height: auto; min-height: 0; }
+  .xc-stage { flex-basis: auto; }
   .xc-chat-left { max-height: none; overflow: visible; padding: 10px 0 0; gap: 8px; }
   .xc-conversations { flex: none; }
   .xc-conversations[open] { max-height: min(50vh, 360px); overflow-y: auto; }
@@ -504,7 +505,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); color-scheme: var(--s
 .xc-ghost[hidden] { display: none; }
 .xc-ghost-typed { visibility: hidden; }
 .xc-ghost-dim { color: var(--fg-3); }
-.xc-menu { border-top: 1px solid var(--line); background: var(--deep); padding: 4px 22px 8px; font: 12.5px/1.6 var(--xc-mono); max-height: 14.5em; overflow-y: auto; }
+.xc-menu { border-top: 1px solid var(--line); background: var(--deep); padding: 4px 22px 8px; font: 12.5px/1.6 var(--xc-mono); max-height: 14.5em; overflow-y: auto; flex-shrink: 0; }
 .xc-menu[hidden] { display: none; }
 .xc-menu-row { display: flex; gap: 12px; padding: 0 0 0 10px; border-left: 2px solid transparent; color: var(--fg-3); white-space: nowrap; cursor: pointer; }
 .xc-menu-row.on { border-left-color: var(--accent); color: var(--fg-2); }
