@@ -9,6 +9,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- The catalog's cache-read rate for `anthropic:claude-sonnet-5-5` is corrected from 0.20 to 0.10 per million
+  tokens. The vendor page prices a cache read at 0.05x base input on Opus 5.5 and Sonnet 5.5 ($0.20 and
+  $0.10 respectively) and 0.025x on Fable 5.1, not at the 0.1x default the code applies to an unlisted model.
+  Opus already carried 0.20; Sonnet carried 0.20, which over-charged cache reads by double (D-090).
 - A call is charged the clock-window rates in force when it started, not the ones in force when its usage
   landed, so a stream that runs past a window boundary is not billed at the next window's rate (D-090).
 - Fork-copy context lookups use a derived indexed original position instead of reparsing every message JSON on each call; existing rows backfill without changing signed message data (#450).
