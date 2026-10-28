@@ -400,6 +400,15 @@ MULTI_STORE_TARGETS = [
      "~/.exo/policies/gates.yaml"),
     ({"tool": "delete_file", "args": {"paths": ["~/.exo/policies/a.yaml", "~/.exo/policies/gates.yaml"]}},
      "~/.exo/policies/gates.yaml"),
+    # #611 review: a patch's later store file was only a local write part, so the entry asked with no hit
+    ({"tool": "apply_patch", "args": {"patch":
+                                      "*** Begin Patch\n*** Update File: ~/.exo/policies/a.yaml\n@@\n-a\n+b\n"
+                                      "*** Update File: ~/.exo/policies/gates.yaml\n@@\n-a\n+b\n*** End Patch\n"}},
+     "~/.exo/policies/gates.yaml"),
+    ({"tool": "write_file", "args": {"path": "~/.exo/policies/a.yaml", "patch":
+                                     "*** Begin Patch\n*** Update File: ~/.exo/policies/gates.yaml\n@@\n-a\n+b\n"
+                                     "*** End Patch\n"}},
+     "~/.exo/policies/gates.yaml"),
 ]
 
 
@@ -412,6 +421,84 @@ def test_a_target_entry_on_a_later_store_path_matches(monkeypatch, action, store
     assert gate.decide(c).outcome == "ask", action
     d = gate.decide(c, gate.normalize_policies({"gates": {"deny": ["target:*/gates.yaml"]}}))
     assert (d.outcome, d.rule) == ("deny", "deny"), (action, d)
+    entry = {"category": "store_write", "target": "*/gates.yaml"}
+    d = gate.decide(c, gate.normalize_policies({"gates": {"deny": [entry]}}))
+    assert d.outcome == "deny", (action, d)
+    d = gate.decide(c, gate.normalize_policies({"gates": {"reserved": [entry]}}))
+    assert (d.outcome, len(d.reserved)) == ("ask", 1), (action, d)
+
+
+# #611 review 5662072103: once #514 scanned every word, the first command marked each braced spelling it met as
+# checked for the whole line, so a later command that wrote the same spelling got no store part of its own, and its
+# write went to the first command's text. A rule matching only that command (`^cp `) then passed the own-text test
+# (#394), and a store_write or matrix deny asked. Each command now gets the spelling's hits for its own part, so the
+# braced line decides as the unbraced one does. `cp /var/tmp/a {S}` lost the part the same way before #514.
+REPEAT_SPELLING = "~/.exo/policies/{g,h}.yaml"
+REPEAT_WRITERS = ["printf x > {S}", "tee {S} < /var/tmp/x", "sudo tee {S} < /var/tmp/x", "truncate -s0 {S}",
+                  "scp host:/tmp/x {S}"]
+REPEAT_POLICIES = {f"{deny}+{dec} ^cp": {"gates": {**gate_deny, "rules": [
+    {"match": {"command": "^cp "}, "decision": dec, "reason": "cp"}]}}
+    for deny, gate_deny in (("store_write deny", {"categories": {"store_write": "deny"}}),
+                            ("matrix deny", {"matrix": {"costly": {"private": "deny"}}}))
+    for dec in ("allow", "log", "ask")}
+
+
+@pytest.mark.parametrize("first", ["cp ~/.exo/policies/a.yaml {S}", "cp /var/tmp/a {S}"])
+@pytest.mark.parametrize("writer", REPEAT_WRITERS)
+def test_a_repeated_braced_store_path_keeps_its_own_part(monkeypatch, first, writer):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    braced = f"{first}; {writer}".replace("{S}", REPEAT_SPELLING)
+    c = classify(braced)
+    own = writer.replace("{S}", REPEAT_SPELLING)
+    assert any(p.category == "store_write" and p.own == own for p in gate._each_part(c)), (braced, own)
+    plain = classify(braced.replace(REPEAT_SPELLING, "~/.exo/policies/g.yaml"))
+    for name, pol in REPEAT_POLICIES.items():
+        norm = gate.normalize_policies(pol)
+        assert gate.decide(c, norm).outcome == gate.decide(plain, norm).outcome == "deny", (name, braced)
+
+
+@pytest.mark.parametrize("spelling", ["~/.EXO/policies/{g,h}.yaml", "~/.exo/Policies/{G,H}.yaml"])
+def test_a_repeated_case_variant_braced_store_path_keeps_its_own_part(monkeypatch, spelling):
+    # #635 reads a store name in any letter case; a repeated case-variant spelling keeps its own part the same way
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    monkeypatch.delenv("EXO_GATE_CASE_SENSITIVE", raising=False)
+    line = f"cp ~/.exo/policies/a.yaml {spelling}; printf x > {spelling}"
+    c = classify(line)
+    assert any(p.category == "store_write" and p.own == f"printf x > {spelling}" for p in gate._each_part(c)), c
+    for name, pol in REPEAT_POLICIES.items():
+        assert gate.decide(c, gate.normalize_policies(pol)).outcome == "deny", (name, line)
+
+
+def test_a_repeated_braced_store_path_changes_nothing_else(monkeypatch):
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    pol = gate.normalize_policies(REPEAT_POLICIES["store_write deny+allow ^cp"])
+    # the spelling once (the rule matches the line, and the floor asks), a repeat inside one command, and a repeat
+    # that only reads the store: as before, and as the unbraced line
+    for line, out in ((f"cp ~/.exo/policies/a.yaml {REPEAT_SPELLING}", "ask"),
+                      (f"printf x > {REPEAT_SPELLING} 2> {REPEAT_SPELLING}", "deny"),
+                      (f"cp ~/.exo/policies/a.yaml {REPEAT_SPELLING}; cat {REPEAT_SPELLING}", "ask"),
+                      (f"cat {REPEAT_SPELLING}; cat {REPEAT_SPELLING}", "allow")):
+        c = classify(line)
+        plain = classify(line.replace(REPEAT_SPELLING, "~/.exo/policies/g.yaml"))
+        assert gate.decide(c, pol).outcome == gate.decide(plain, pol).outcome == out, (line, c)
+    # a spelling with no store path in it stays a local write wherever it repeats
+    c = classify("cp /var/tmp/a /var/tmp/{g,h}; printf x > /var/tmp/{g,h}")
+    assert not [p for p in gate._each_part(c) if p.category == "store_write"], c
+    # a cd into a braced store folder still makes the writes after it store writes, also after a second cd there
+    c = classify("cd ~/.exo/{policies,x}; cd ~/.exo/{policies,x}; printf x > g")
+    assert c.category == "store_write" and gate.decide(c, pol).outcome == "deny", c
+
+
+def test_many_repeats_of_a_braced_store_path_stay_bounded(monkeypatch):
+    # Each repeat's hits come from a budget of their own, so 40 repeats of a spelling of 676 store paths make a
+    # bounded number of parts, and a repeat past the budget is still a store write with its own text.
+    monkeypatch.setenv("EXO_HOME", os.path.expanduser("~/.exo"))
+    pol = gate.normalize_policies(REPEAT_POLICIES["store_write deny+allow ^cp"])
+    cmds = [f"cp ~/.exo/policies/{{a..z}}{{a..z}}.yaml /var/tmp/{i}" for i in range(40)]
+    c = classify("; ".join(cmds))
+    stores = [p for p in gate._each_part(c) if p.category == "store_write"]
+    assert len(stores) < 2 * gate._BRACE_BUDGET and cmds[-1] in {p.own for p in stores}, len(stores)
+    assert gate.decide(c).outcome == "ask" and gate.decide(c, pol).outcome == "ask", c
 
 
 def test_two_redirect_targets_each_become_a_part(monkeypatch):
