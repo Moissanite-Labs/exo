@@ -349,6 +349,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - JSON beyond the decoder nesting limit in web approval, chat and provider POSTs returns the existing
   400 JSON input error instead of closing the connection without a response (follow-up to #751).
 
+- The Hermes import's watermark now records which session sources it read. A run that reads a source the last
+  one skipped (cron, say) starts again from the first row, so the older rows of that source are no longer missed.
+  Rows already imported are not added twice (exo-desktop #54).
+
 - Web approval requests with a JSON array, null or scalar return a 400 JSON error instead of closing
   the connection without a response. They send no approval answer to the core (#740).
 
