@@ -148,8 +148,9 @@ answered"). Any other caller, a tool subprocess on the socket or the principal's
    steered or queued into a turn that was already running (yours included), nor an auto turn that you or a job
    typed into. The agent can still answer with the `bus_post` tool, which the gate checks like any post.
 
-A body sealed to this seat that cannot be opened (malformed, or sealed to a key this seat no longer holds) arrives
-as `<encrypted body could not be opened>`. It is checked and held like any message, and the inbox moves past it.
+The channel skips encrypted envelopes sealed to another seat, even when their audience is a shared group.
+It also skips bodies that cannot be opened or verified. These envelopes advance the inbox cursor without
+creating a session, approval or placeholder turn. The bus reader still displays an unreadable-body placeholder.
 
 ## What a peer cannot do
 
