@@ -561,6 +561,7 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Not done:** web client view, receipts for bus sends, held messages across restarts, live gateway test.
 
 ## D-028 (2026-10-12) One agent, one continuous memory
+- *Amendment 2026-10-28 (#450):* fork copies retain a derived indexed original position. Context lookups no longer parse each copy JSON; the one-time backfill leaves signed data and log hashes untouched.
 - **Why (A, verbatim):** "well if the harness is built according to my vision for the implemenation of the optchat
   memory system all sessions should technically be the same agent with continuous memory". Exo had taken the turn
   model (D-013) but kept sessions: a summary tree per session, `/new` as a blank mind, exo-memory's daily log as a
