@@ -106,7 +106,10 @@ and `note` events of type `consolidate_pending`. Then:
 - **Conflict:** an event that opposes a belief goes through the conflict rule. The default,
   `newer_wins_unless_guarded`, lets the newer one win unless the old belief guards something irreversible or
   public. In that case it raises a numbered `question` and holds the proposal until an `answer` arrives. Nothing is
-  overwritten silently.
+  overwritten silently. No client asks that question yet (exo-desktop #54). You decide a held proposal with
+  `exo proposals accept` or `reject`, and that closes its question. An answer you write by hand still works at the
+  next run: `exo log append answer --author principal --ref <question id> --text 2` releases the newer proposal for
+  your review, and `--text 1` rejects it and keeps the older belief.
 
 **Outputs.** `belief_proposed` events, and drafts in `<store>/proposals/`: `<id>.md` (the node as it would be
 written), `<id>.diff` (when it edits a node) and `<id>.json`. Decided drafts move to `proposals/archive/`. Each run

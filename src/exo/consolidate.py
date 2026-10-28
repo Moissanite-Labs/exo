@@ -24,6 +24,7 @@ with `exo_note`, or one a peer's text produced, is skipped and counted in `not_p
 - **Conflict:** an event that opposes a known belief goes through the store's conflict rule.
   The default is newer wins unless the older belief guards something irreversible or public; then
   a numbered `question` event is raised and the new proposal is held until an `answer` arrives.
+  No client asks that question yet: a direct accept or reject decides the held proposal and closes it.
   Nothing is overwritten silently: "newer wins" still lands as a reviewed supersede proposal.
 
 Outputs: `belief_proposed` events, and draft files in `<store>/proposals/`: `<pid>.md` (the node
@@ -801,6 +802,8 @@ def load_state(ledger: Ledger) -> State:
             st.seen_evidence.update(e["id"] for e in p.evidence)
         elif k == "belief_accepted" and b.get("proposal_id") in st.beliefs:
             pid = b["proposal_id"]
+            if b.get("question"):
+                st.resolved.add(b["question"])
             st.beliefs[pid].status = "accepted"
             st.beliefs[pid].node_id = b.get("node_id")
             st.decided[pid] = {"status": "accepted", "event": ev["id"], "node_id": b.get("node_id")}
@@ -1241,6 +1244,13 @@ def _archive(pdir: Path, pid: str, dry: bool = False) -> None:
             shutil.move(str(f), arch / f.name)
 
 
+def _question_of(p: Proposal) -> dict:
+    """{"question": id} for a proposal held by a conflict question, so deciding it closes the question too.
+    No client asks a belief_conflict question yet: a direct accept or reject is how a held proposal ends."""
+    q = (p.conflict or {}).get("question")
+    return {"question": q} if q else {}
+
+
 def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: str | None = None,
                     now: str | None = None) -> dict:
     """Write the proposal into its node (create or append), lint it, then log `belief_accepted`.
@@ -1277,6 +1287,7 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
             body["supersedes"] = p.supersedes
         if status == "held":
             body["conflict_resolved_by"] = "direct accept"
+        body.update(_question_of(p))
         refs = [r for r in (st.beliefs[p.id].event_id,) if r]
         ev = ledger.append("belief_accepted", body, author or ledger.author or "principal",
                            refs=refs)
@@ -1308,8 +1319,8 @@ def proposal_reject(store: PrincipalStore, ledger: Ledger, pid: str, reason: str
     if status not in ("proposed", "held"):
         raise ConsolidateError(f"proposal {p.id} is already {status}")
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
-    ev = ledger.append("note", {"type": "belief_rejected", "proposal_id": p.id, "reason": reason.strip()},
-                       author or ledger.author or "principal", refs=refs)
+    ev = ledger.append("note", {"type": "belief_rejected", "proposal_id": p.id, "reason": reason.strip(),
+                                **_question_of(p)}, author or ledger.author or "principal", refs=refs)
     _archive(store.root / "proposals", p.id)
     return {"proposal_id": p.id, "event": ev["id"]}
 
@@ -1501,6 +1512,7 @@ def _accept_skill(store: PrincipalStore, ledger: Ledger, st: State, p: Proposal,
             "claim": p.claim, "type": p.type, "domain": p.domain, "confidence": p.confidence, "ptype": "skill"}
     if status == "held":
         body["conflict_resolved_by"] = "direct accept"
+    body.update(_question_of(p))
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
     try:
         ev = ledger.append("belief_accepted", body, author or ledger.author

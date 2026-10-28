@@ -64,7 +64,8 @@ fact, or question (when the signal is unclear). Limits live in `learn.fast_loop`
 `exo.learn.promote.apply_policy` checks mandatory constraints before the direct-ruling shortcut. The rule
 numbers stay fixed for ledger records:
 
-- Rule 3: a conflict already held by consolidation stays held. Its existing question awaits your answer.
+- Rule 3: a conflict already held by consolidation stays held. No client asks its question yet, so you accept or
+  reject the proposal with `exo proposals`, and that closes the question (exo-desktop #54).
 - Rule 2: guarded proposals (irreversible, public, financial, third party) never promote on their own.
   They become a question once, even when they cite a ruling or answer you wrote.
 - Rule 5: skill patches always need the held-out eval gate. Types in `eval_gate_for` and domains in

@@ -227,6 +227,10 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   takes a key back. A ledger that no longer holds that row in its place is read again from the first row. With 10,000
   captured rows in the ledger, each turn's capture took about 70 ms. Now the first turn after a start takes that once,
   and each later turn under 1 ms.
+  *Amendment 2026-10-28 (exo-desktop #54):* no client asks a `belief_conflict` question yet, so an answer cannot
+  release a held conflict proposal in normal use. A direct `exo proposals accept` or `reject` is how it ends, and it
+  now records the question id, which closes the question. A hand-written `answer` that refs the question still
+  works. Putting the question in the ask queue is a follow-up.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code

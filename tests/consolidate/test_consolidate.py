@@ -642,3 +642,30 @@ def test_a_failed_accept_of_a_new_node_leaves_no_file(template_store, led, monke
     assert p.node_id not in (template_store.root / "INDEX.md").read_text()
     out = C.proposal_accept(template_store, led, p.id)
     assert out["action"] == "create" and out["node_id"] == p.node_id
+
+
+# --- a conflict question closes when its proposal is decided (exo-desktop #54) ---------------------------
+
+@pytest.mark.parametrize("decide", ["accept", "reject"])
+def test_deciding_a_held_proposal_closes_its_question(template_store, led, decide):
+    """No client asks a belief_conflict question yet, so a direct accept or reject is how a held proposal ends."""
+    led.append("ruling", {"text": "Never sign external comments with agent names."}, "principal")
+    run(template_store, led)
+    led.append("ruling", {"text": "Always sign external comments with agent names."}, "principal")
+    res = run(template_store, led)
+    (qid,), (pid,) = res.questions, res.proposals
+    assert {v.id: v.status for v in C.proposals_list(template_store, led)}[pid] == "held"
+    if decide == "accept":
+        C.proposal_accept(template_store, led, pid, author="principal")
+        closing = list(led.iter(kind="belief_accepted"))[-1]["body"]
+        assert closing["conflict_resolved_by"] == "direct accept"
+    else:
+        C.proposal_reject(template_store, led, pid, "keep the older one", author="principal")
+        closing = [e for e in led.iter(kind="note") if e["body"].get("type") == "belief_rejected"][-1]["body"]
+    assert closing["question"] == qid
+    assert qid in C.load_state(led).resolved
+    led.append("answer", {"text": "1", "choice": 1}, "principal", refs=[qid])   # a late answer changes nothing
+    later = run(template_store, led)
+    assert later.released == [] and later.rejected == []
+    assert {v.id: v.status for v in C.proposals_list(template_store, led, include_decided=True)}[pid] == \
+        ("accepted" if decide == "accept" else "rejected")

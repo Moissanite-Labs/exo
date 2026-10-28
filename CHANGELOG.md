@@ -223,6 +223,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the placeholder text "(answer not in the transcript)". An accept whose answer was found still counts
   (exo-desktop #54).
 
+- A held conflict proposal can be decided. No client asks its `belief_conflict` question yet, so the docs now
+  name `exo proposals accept` or `reject` as the way to end it, and either one closes the question in the ledger
+  (exo-desktop #54).
+
 - Gate: on a store line, a rule written for another command no longer lifts a part's deny (#547). Under `matrix:
   {irreversible: {internal: deny, private: deny, public: deny}}` and `{match: {command: '^git push'}, decision:
   allow}`, `git push --force origin main && gh gist create ~/.exo/plugins/foo/__init__.py` asked the principal
