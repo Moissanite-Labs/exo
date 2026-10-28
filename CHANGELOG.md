@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Web Chat exposes saved working notes through a read-only inspector and `/work [show|history]`.
+  It shows goal, steps, blockers, next action, sources, revisions and stale status as agent-authored
+  claims; preserves composer drafts; and uses the existing principal, gate and executor read path
+  without enabling or writing notes (D-086).
 - Optional session working notes with transcript evidence references, revision conflicts, restart
   recovery and bounded prompt/handoff snapshots. Undo marks affected notes stale. `/work` reads them
   through the normal gate and executor (`docs/WORK-NOTEBOOK.md`, D-086, #506).

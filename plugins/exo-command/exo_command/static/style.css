@@ -793,3 +793,16 @@ body { margin: 0; background: #08090a; }
 .xc-md [data-align="right"] { text-align: right; }
 .xc-md .xc-code { white-space: pre; max-width: 100%; overflow-x: auto; }
 .xc-table-cell { min-width: 6rem; max-width: 28rem; overflow-wrap: anywhere; white-space: normal; }
+
+.xc-work-open { margin: 8px 0; }
+.xc-work-notes { overflow-wrap: anywhere; scroll-margin-top: 130px; }
+.xc-work-notes[hidden] { display: none; }
+.xc-work-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.xc-work-head h3 { margin: 0; font-size: 14px; }
+.xc-work-notes .xc-btn { padding: 6px 8px; }
+.xc-work-field { margin: 16px 0; }
+.xc-work-notes h4 { margin: 10px 0 5px; font-size: 12px; color: var(--fg-2); }
+.xc-work-notes p { margin: 6px 0; }
+.xc-work-notes ul, .xc-work-notes ol { padding-left: 18px; }
+.xc-work-notes li { margin: 5px 0; }
+.xc-work-stale, .xc-work-error { border-left: 2px solid var(--accent); padding-left: 8px; }

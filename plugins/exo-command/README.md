@@ -19,6 +19,11 @@ Panels:
    Ported from the Continuum plugin.
 6. **Cost per session.** Folded from `usage.updated` events, by session, seat and model.
 
+Chat also offers **Working notes** and `/work [show|history]` to inspect optional saved
+agent-authored notes for its current conversation. The read-only inspector preserves the
+composer and displays revisions, source references and stale-after-undo warnings. It uses
+the existing principal, gate and executor path; it never enables notes or writes revisions.
+
 ## Run it
 
 ```sh
