@@ -464,6 +464,31 @@ def test_model_reflector_seam_and_fallback(template_store, led, corrections):
     assert isinstance(C.RuleReflector(), C.Reflector) and res.proposals
 
 
+@pytest.mark.parametrize("wrap", [
+    "Note [draft]: {}",
+    'Options ["a", "b"] then {}',
+    "Scores [1, 2, 3]: {}",
+    "[{}]",
+    "See [1]: {} } and a trailing brace }",
+])
+def test_model_reflector_reads_the_object_past_brackets_in_prose(wrap):
+    # #835 review: a bracket or an array before the object must not hide it, as the greedy match did not.
+    answer = json.dumps({"wants": "unsigned comments", "avoid": None, "because": "names leak",
+                         "implication": "public text", "domain": "mind", "type": "preference",
+                         "title": "Unsigned"})
+    obs = C.Observation("e", 1, "2026-10-11T00:00:00Z", "correction", "verdict:edit", "Use tables.", "use tables")
+    ctx = C.ReflectContext(["mind"], C.DEFAULT_POLICY, "2026-10-11")
+    got = C.ModelReflector(lambda p: wrap.replace("{}", answer)).reflect(obs, ctx)
+    assert got.reflector == "model" and got.wants == "unsigned comments"
+
+
+def test_model_reflector_without_an_object_falls_back():
+    obs = C.Observation("e", 1, "2026-10-11T00:00:00Z", "correction", "verdict:edit", "Use tables.", "use tables")
+    ctx = C.ReflectContext(["mind"], C.DEFAULT_POLICY, "2026-10-11")
+    for raw in ('["unsigned comments"]', "{not json} [1, 2]", "{" * 200):
+        assert C.ModelReflector(lambda p, r=raw: r).reflect(obs, ctx).reflector == "rules"
+
+
 def test_parse_instruction_forms():
     assert C.parse_instruction("Use tables, not bullet lists, because they scan faster.") == \
         ("use tables", "bullet lists", "they scan faster")

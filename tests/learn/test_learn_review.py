@@ -18,6 +18,14 @@ def test_parse_json_keeps_a_value_with_trailing_braces():
         parse_json("this is not json at all")
 
 
+def test_parse_json_skips_a_bracket_in_prose_that_is_not_json():
+    # #835 review: a start that does not decode, such as "[draft]", no longer hides the value after it.
+    assert parse_json('Note [draft]: {"objection": "one-off"}') == {"objection": "one-off"}
+    assert parse_json('See {this} and [that]: {"proposals": []} }') == {"proposals": []}
+    with pytest.raises(Exception):
+        parse_json("[draft] {not json either}")
+
+
 def reply(items):
     return json.dumps({"proposals": items})
 

@@ -60,17 +60,26 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+_JSON_STARTS = 64   # brace and bracket positions tried before the whole text is parsed as is
+
+
 def parse_json(text: str) -> Any:
     """Decode the first JSON value in model output, ignoring anything after it.
 
     The old greedy match ran to the last brace in the text, so a trailing
-    brace in prose after the value dropped valid output. Decoding from the
-    first brace or bracket keeps the value and ignores the tail.
+    brace in prose after the value dropped valid output. Decoding is tried
+    from each brace or bracket in turn, and the first start that decodes
+    wins, so a bracketed note such as `[draft]` before the value does not
+    hide it.
     """
     raw = text or ""
-    starts = [i for i in (raw.find("{"), raw.find("[")) if i >= 0]
-    if starts:
-        return json.JSONDecoder().raw_decode(raw[min(starts):])[0]
+    decoder = json.JSONDecoder()
+    starts = (i for i, ch in enumerate(raw) if ch in "{[")
+    for _, start in zip(range(_JSON_STARTS), starts):
+        try:
+            return decoder.raw_decode(raw, start)[0]
+        except ValueError:
+            continue
     return json.loads(raw)
 
 
