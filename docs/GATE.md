@@ -428,6 +428,16 @@ a credentials or store-write part goes to those allowed for its category and for
 may answer both the line's category and credentials. A line that reads a secret and writes the store
 is the principal's alone.
 
+### An internal gate error asks once (D-084)
+
+When the gate itself fails to classify a call, the hook asks instead of allowing it, including
+for read tools, which used to be silently allowed. The card is once-only in every case, so
+answering "always" cannot create a standing grant for later gate errors. When the failed
+classification still read a store write or a secret, only the principal answers, in every mode
+(D-033). In observe mode the action still goes ahead by design when no store write or secret was
+read, and the error is logged; anything else asks. The safe-on-error read set for side calls is
+unchanged.
+
 A call the gate reads more than one way lists only those each reading's categories allow
 (`gate.readings`): a gh line also read as before #399 ("Where a gh command lands"), a shell call
 also read as before #311 ("The working folder"), or both.
