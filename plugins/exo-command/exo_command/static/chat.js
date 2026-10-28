@@ -29,6 +29,8 @@ export function mount(root) {
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
   const sideEl = h("aside", { class: "xc-side" });
   const workNotes = createWorkNotes({ onVisibility: () => drawSide() });
+  const sideContents = h("div", { class: "xc-side-contents" });
+  sideEl.replaceChildren(workNotes.element, sideContents);
   const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Ask, or give a task. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
   const stopBtn = h("button", { class: "xc-btn", onclick: () => interrupt() }, "Stop");
@@ -431,7 +433,7 @@ export function mount(root) {
   function drawSide(onlyInstruments) {
     const mine = panelsOpen.filter((p) => !p.session || p.session === current);
     if (onlyInstruments && mine.length) return;
-    sideEl.replaceChildren(workNotes.element, ...(mine.length ? mine.map((p) => { const n = renderPanel(p, { act: panelAct, dismiss: panelDismiss }); if (!seen.has(p.panel_id)) n.classList.add("xc-in"); return n; }) : instrumentColumn()));
+    sideContents.replaceChildren(...(mine.length ? mine.map((p) => { const n = renderPanel(p, { act: panelAct, dismiss: panelDismiss }); if (!seen.has(p.panel_id)) n.classList.add("xc-in"); return n; }) : instrumentColumn()));
     sideEl.classList.toggle("xc-has", mine.length > 0 || workNotes.isOpen());
     for (const p of mine) if (!seen.has(p.panel_id)) { seen.add(p.panel_id); respondPanel(p, "opened", {}, true); }
   }
