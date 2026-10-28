@@ -11,6 +11,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Successful pipelines with an earlier-stage failure note remain successful (#791).
 
 ### Added
+
+- A read-only source-path audit for the five feature merges in #741, separating content/mode
+  presence from ancestry and flagging incomplete metadata or shallow history.
 - Automatic continuity checkpoints index recent tool and job records after interruption,
   compaction and restart. `/checkpoint` shows the bounded index; uncertain effects stay explicit,
   private and child sessions are excluded, and no tools are replayed (`docs/WORK-CHECKPOINT.md`, #683 slice).

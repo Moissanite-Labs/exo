@@ -1078,3 +1078,10 @@ Mount listeners update a remounted chat when an older request finishes. Never pe
 storage or automatically retry an unconfirmed send. `composer.restore()` resets suggestions/history browsing
 without changing the restored selection. Run `plugins/exo-command/tests/test_drafts_web.py` with Chrome for
 thread selection, view remount, rejected-send, duplicate-submit and new-thread race coverage.
+
+## Feature landing audit
+
+Use `scripts/audit_feature_landings.py` and `docs/FEATURE-LANDING-AUDIT.md` to distinguish source
+path presence from merge ancestry for the five PRs in #741. The read-only report pins exact commits
+and rejects incomplete source/history. It does not replace behavioral composition tests or
+independent review and does not justify overwriting newer files with old source.
