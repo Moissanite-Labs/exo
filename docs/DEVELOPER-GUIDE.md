@@ -293,7 +293,9 @@ not break an older callback. A failing callback is logged and
 skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
-`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`). A call whose arguments did not parse as
+a JSON object never reaches the tool hooks: the registry answers it with an error (`docs/TOOLS.md` "Arguments that
+did not parse").
 
 `KNOWN_UNFIRED_HOOKS` names hooks present in Hermes contracts or earlier Exo declarations that Exo does not
 fire: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`, `on_session_end`,

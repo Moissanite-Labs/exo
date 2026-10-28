@@ -4688,7 +4688,12 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   fallback. OpenAI-compatible transports sent Exo's `max` and `ultra` as `"max"`, which OpenAI and OpenRouter
   refuse. They send `xhigh` now, the top of that scale. A legacy Anthropic model got a 1,024-token thinking budget
   even when `max_tokens` was 1,024 or less, and the API wants the budget below `max_tokens`. Thinking stays off
-  there now. `docs/CORE-V2-INTERFACES.md` "Core types", "Reasoning levels".
+  there now. `docs/CORE-V2-INTERFACES.md` "Core types", "Reasoning levels". Tool arguments that did not
+  parse as a JSON object became `{}`, so the tool ran with no arguments. A tool with nothing required then did
+  something the model never asked for, and a call cut short at `max_tokens` ran as an empty one. They now arrive
+  as `BadArguments`, an empty dict with the reason. The registry answers that call with an error result before any
+  hook or the tool runs, and the model can call again. An empty dict keeps a replay valid on both wires and keeps
+  `ToolCall`'s fields as they are. `docs/TOOLS.md` "Arguments that did not parse".
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Amendment 2026-10-28:** the gate-diff nohup test uses the same `/proc/self/cmdline` capability guard as its
