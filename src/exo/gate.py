@@ -3735,6 +3735,24 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         c = _make("store_write", summary=what[:120], target=t, link=t, command=cmd)
         c.signals.append("exo store")
         parts.append(c)
+    # less can write its stdin to a logfile. Read only the output option as a write, not its input paths.
+    if words and words[0].text.rsplit("/", 1)[-1] in ("less", "more"):
+        paths = _option_values([w.text for w in words], ("-o", "-O", "--log-file", "--LOG-FILE"),
+                               takes="bhljknNpPtTxy", least=10)
+        sources = {w.text: w for w in words[1:]}
+        for word in words[1:]:
+            if word.text.startswith(("-o", "-O")):
+                sources.setdefault(word.text[2:], word)
+            if "=" in word.text:
+                sources.setdefault(word.text.partition("=")[2], word)
+        for path in paths:
+            if not path:
+                continue
+            source = sources.get(path, _Word(path))
+            target = replace(source, text=path, raw=path, fd="")
+            output = _Cmd(words=([_Word("sudo")] if sudo else []) + [_Word(":")],
+                          redirs=[(">", target)], own=k.own)
+            parts += _classify_simple(output, cmd, depth, ctx)
     if any(w.locale for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]):
         # The words are classified as decoded, so category, target and vetoes still see them, but a message
         # catalog can replace them: the indirection signal asks unless opaque_exec is named.

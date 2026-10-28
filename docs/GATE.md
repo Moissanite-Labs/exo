@@ -1894,7 +1894,8 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   whatever runs it, so it is kept out of this (#330). The
   same check reads ssh's own options, such as its log file (`-E`), only when the line ssh runs
   is more than reads (#484): `ssh -E ~/.exo/state/log host ls` is allowed. less's log file
-  (`-o`, `-O`, `--log-file`) is read the same way: `cat f | less -o ~/.exo/state/y` is allowed.
+  (`-o`, `-O`, `--log-file`) is a separate output write (#487): a logfile inside the store asks,
+  while an input file is still read as input.
   A rebind in that line
   counts as a read, so `ssh -E ~/.exo/state/log host 'hash -p /x ls'` asks as `opaque_exec`, not
   as a store write.
@@ -3025,3 +3026,8 @@ on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` 
 `plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
 `tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
 `plugins/exo-command/tests/test_permissions_web.py`.
+
+
+### Security repair #487
+
+less and compatible more logfile options are read as output writes, preserving store and local-write policy checks without treating their input files as outputs. Classifier tests treat these command strings as data and never execute them.

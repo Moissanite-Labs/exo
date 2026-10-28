@@ -35,6 +35,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Fixed
 
+- less and compatible more logfile options are read as output writes, preserving store and local-write policy checks without treating their input files as outputs (#487).
+
 - The core retries its start after a failed or cancelled start instead of failing every later command
   (exo-desktop #14, orda-aska). The provider readiness probe that runs when no main role is configured could
   raise once and leave every later command with the same `internal` error until exod restarted. A start cut
