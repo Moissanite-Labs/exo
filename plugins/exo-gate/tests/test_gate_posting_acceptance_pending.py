@@ -37,6 +37,12 @@ PUSH = "git push --force origin main"
 STORE = "~/.exo/plugins/foo/__init__.py"
 
 CASES = [
+    Case(437, "internal_then_public_comment", shell("gh pr comment 5 -R myorg/app --body $'ok\\nF' && gh pr comment 6 -R other/repo --body $'fine\\nF'"),
+         POLICY, "ask"),
+    Case(437, "internal_then_public_close", shell("gh pr comment 5 -R myorg/app --body $'ok\\nF' && gh issue close 9 -R other/repo"),
+         POLICY, "ask"),
+    Case(437, "internal_then_public_semicolon", shell("gh pr comment 5 -R myorg/app --body $'ok\\nF'; gh pr comment 6 -R pub/repo --body $'fine\\nF'"),
+         POLICY, "ask"),
     Case(449, "transfer_destination_operand", shell("gh issue transfer 5 pub/other -R myorg/app"),
          DESTINATION_DENY, "deny"),
     Case(449, "transfer_destination_with_issue_url", shell("gh issue transfer https://github.com/myorg/app/issues/5 pub/other"),
@@ -68,6 +74,7 @@ CASES = [
 ]
 
 KNOWN_GAPS = {
+    "internal_then_public_comment", "internal_then_public_close", "internal_then_public_semicolon",
     "transfer_destination_operand", "transfer_destination_with_issue_url", "public_merge_subject_scrub",
     "public_merge_body_scrub", "api_merge_commit_title", "api_merge_commit_message",
     "api_repo_merge_commit_message", "mcp_merge_commit_text", "store_gist_does_not_lower_matrix_deny",
@@ -149,3 +156,14 @@ def test_skipped_absolute_body_file_explains_its_actual_limit(tmp_path, kind, re
 def test_skipped_body_file_keeps_its_once_only_approval(tmp_path, kind):
     card = skipped_file_card(tmp_path, kind)
     assert card["action"] == "approve" and card["once"] is True, card
+
+
+def test_437_all_internal_compound_stays_log():
+    line = "gh pr comment 5 -R myorg/app --body $'ok\\nF' && gh pr comment 6 -R myorg/other --body $'fine\\nF'"
+    assert inspect(shell(line), POLICY).outcome == "log"
+
+
+@pytest.mark.parametrize("line", ["gh pr comment 6 -R other/repo --body $'fine\\nF'",
+                                   "gh issue close 9 -R other/repo"])
+def test_437_standalone_public_operations_stay_ask(line):
+    assert inspect(shell(line), POLICY).outcome == "ask"
