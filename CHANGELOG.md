@@ -64,6 +64,34 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `docs/CORE.md`, `docs/OPTIMIZATION.md`, `docs/DOCS-MAP.md`, `docs/WHITEPAPER.md` sections 11 and 27.
 
 ### Fixed
+- A loop body that `cd`s into the store is read as running its earlier commands there on the next pass (#479, also
+  #480). The gate read the body once, in order, so `for i in 1 2; do cp /tmp/evil gates.yaml; cd ~/.exo/policies;
+  done` and its `while :` and `until false` forms, which rewrite the policy file on the second pass, were allowed
+  reads on main f28934a3, also under `deny: [store_write]` (the `select` form and the `$( )` form asked but were not
+  denied), and so was the brace-bodied `for i in 1 2; { cp /tmp/evil gates.yaml; cd ~/.exo/policies; }`. When a
+  `for`, `select`, `while` or `until` body (a `coproc` one too) holds a `cd` or `pushd` into the store or a
+  descriptor folder after the loop's first command, `classify` now reads the call a second time with that folder
+  entered where the outermost such loop starts, and keeps that reading beside main's (`gate.readings`; the more
+  severe leads): the rows are `store_write`, ask the principal alone, keep the bypass floor and deny under `deny:
+  [store_write]`. A `for` or `select` loop with a `{ ..; }` body (`for i in 1 2; { ..; }`, `select x in a b; {
+  ..; }`, `for ((..)) { ..; }`) counts as a `do ..; done` one; a `for ((..))` header is found from its own `((..))`,
+  so a reserved word as its variable (`for ((do=0; do<2; do++)) { ..; }`), a `!` or any number of `|`, `&&` or
+  `||` pieces in it do not hide the body. Nested loops, a loop condition, `cd -` or a `cd` out after the write,
+  `pushd`, the store spelt as `"$HOME/.exo/policies"`, `$EXO_HOME/policies`, `${X:-..}` or a glob, and a loop in a
+  `$( )` or `bash -c` count. A `for` word list, the loop's `done` or `}` redirections and a command before the loop
+  run once and keep their folder. Known limits, as on main: a `cd` through a variable set earlier or the loop
+  variable is not followed, and a loop behind `time` is not read again (it asks as `opaque_exec`, a seat may answer
+  it and permissions bypass auto-allows it). The second reading may read afresh 64 lines more than the first; past
+  that (a nest of loops in `$( )` five levels deep, which cost about 6 times main's time) it fails closed with one
+  `store_write` part for the passes it did not read, so a deeper nest costs about 2 to 3 times main's CPU time (8
+  levels: 1.05 s, main 0.39 s; 12 levels: 6.2 s, main 3.0 s), and about 4 times when the nest also writes
+  `~/.exo/config.json`, whose D-074 reading is a classify of its own (6 levels: 1.10 s, main 0.29 s). Main's
+  reading of every call is kept unchanged, so nothing decides lower: main's `scripts/gate_diff.py` against f28934a3
+  lowers 0 of 1,123,144 built-in pairs (7,129 tightened on 122 actions), 0 of 4,409,664 pairs on an aimed corpus
+  of 11,424 loop lines under 193 policies before the second verify (606,376 tightened on 7,792 actions), and 0 of
+  2,737,512 pairs on the 7,092 lines with a `((` of that corpus and 4,950 new arithmetic-header lines (135,509
+  tightened on 4,752 actions). Tests: `tests/security/test_gate_loop_cd_store_479.py`. **Docs:** `docs/GATE.md`
+  "The store is credentials (D-038)", `DECISIONS.md` (D-038 amendment of 2026-10-28), `docs/DOCS-MAP.md`.
 
 - `exo config show`, `exo config get` and `config.get` mask a value shaped like a key that also holds a
   `${VAR}`, such as `${USER}:sk-...` in a file written by hand. `config set` refused it, but the masking skipped
