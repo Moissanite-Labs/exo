@@ -15,7 +15,7 @@ and off-peak is most of the week. Such an entry lists the windows in ``[[models.
     output = 1.20
     cache_read = 0.006
     source = "https://api-docs.deepseek.com/quick_start/pricing/"
-    verified = "2026-10-29"
+    verified = "2026-10-28"
 
     [[models."deepseek:deepseek-flash".window]]
     days = ["mon", "tue", "wed", "thu", "fri"]
