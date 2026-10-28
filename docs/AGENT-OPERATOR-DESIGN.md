@@ -58,7 +58,7 @@ establish acceptance of every gate below.
   and cancellations are saved before acknowledgement. Terminal and web clients
   restore queued text and controls after reconnect. Reading a session starts no
   work. The guarantee covers saved queue records and transcript insertion, not
-  exactly-once external effects. See [DURABLE-STEERING.md](DURABLE-STEERING.md).
+  exactly-once external effects. See the [steering contract on its review branch](https://github.com/aska-digital/exo/blob/c59b81bd778671f51046ff599ad5703574279d10/docs/DURABLE-STEERING.md).
 - Working notes on `feat/working-notes-inspector-20261027`: a web inspector shows
   the existing notebook's goal, steps, blockers, sources, revisions and stale
   status. It preserves the composer and labels notes as agent-authored claims.
